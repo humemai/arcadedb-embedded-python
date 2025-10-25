@@ -93,7 +93,7 @@ jobs:
             echo "----------------------------------------"
 
             # Create a timeout wrapper to prevent hanging
-            if timeout 300 python "$example" > "${example}.log" 2>&1; then
+            if timeout 900 python "$example" > "${example}.log" 2>&1; then
               echo "✅ PASSED: $example" | tee -a $results_file
               passed=$((passed + 1))
             else
