@@ -21,6 +21,29 @@ def get_jar_path() -> str:
     return str(jar_dir)
 
 
+def get_bundled_jre_path() -> str | None:
+    """
+    Get the path to bundled JRE if available.
+
+    Returns:
+        Path to bundled JRE's java executable, or None if not bundled.
+    """
+    package_dir = Path(__file__).parent
+    jre_dir = package_dir / "jre"
+
+    # Check if JRE directory exists
+    if not jre_dir.exists():
+        return None
+
+    # Look for java executable in standard JRE locations
+    java_executable = jre_dir / "bin" / "java"
+
+    if java_executable.exists():
+        return str(java_executable)
+
+    return None
+
+
 def start_jvm():
     """Start the JVM with ArcadeDB JARs if not already started."""
     if jpype.isJVMStarted():
@@ -36,6 +59,18 @@ def start_jvm():
         )
 
     classpath = os.pathsep.join(jar_files)
+
+    # Check for bundled JRE
+    bundled_jre = get_bundled_jre_path()
+    jvm_path = None
+
+    if bundled_jre:
+        # Use bundled JRE - need to find libjvm.so
+        jre_dir = Path(bundled_jre).parent.parent  # Go from bin/java to jre root
+        # Look for libjvm.so in lib/server directory (standard location)
+        libjvm_path = jre_dir / "lib" / "server" / "libjvm.so"
+        if libjvm_path.exists():
+            jvm_path = str(libjvm_path)
 
     # Allow customization via environment variables
     max_heap = os.environ.get("ARCADEDB_JVM_MAX_HEAP", "4g")
@@ -61,9 +96,14 @@ def start_jvm():
         jvm_args.extend(extra_args.split())
 
     try:
-        jpype.startJVM(*jvm_args, classpath=classpath)
+        if jvm_path:
+            # Use bundled JRE
+            jpype.startJVM(jvm_path, *jvm_args, classpath=classpath)
+        else:
+            # Use system Java
+            jpype.startJVM(*jvm_args, classpath=classpath)
     except Exception as e:
-        raise ArcadeDBError(f"Failed to start JVM: {e}")
+        raise ArcadeDBError(f"Failed to start JVM: {e}") from e
 
 
 def shutdown_jvm():
