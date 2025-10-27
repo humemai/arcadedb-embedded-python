@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arcadedb-embed"
-version = "0.0.1"
+version = "0.0.0"
 description = "ArcadeDB embedded Python package"
 readme = "README.md"
 requires-python = ">=3.8"
