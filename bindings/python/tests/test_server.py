@@ -9,7 +9,7 @@ These tests use the JAVA API for server operations:
 Note: These tests do NOT test HTTP API access patterns.
 For HTTP API testing, see test_server_patterns.py
 
-These tests require server support (minimal or full distributions).
+These tests require server support (available in our base package).
 """
 
 import time

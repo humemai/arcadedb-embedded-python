@@ -6,8 +6,8 @@ This script should be run as part of the build process to ensure
 all necessary JAR files are included in the wheel.
 
 Environment Variables:
-    ARCADEDB_DISTRIBUTION: Distribution type (minimal, headless, full)
-                          Default: minimal
+    ARCADEDB_VARIANT: Package variant (base, jre)
+                     Default: base
 """
 
 import os
@@ -16,18 +16,19 @@ from pathlib import Path
 
 
 def find_jar_files():
-    """Find all necessary ArcadeDB JAR files based on distribution type."""
-    # Get distribution type from environment variable
-    distribution = os.environ.get("ARCADEDB_DISTRIBUTION", "minimal").lower()
+    """Find all necessary ArcadeDB JAR files from minimal distribution."""
+    # Get variant type from environment variable (for logging purposes)
+    variant = os.environ.get("ARCADEDB_VARIANT", "base").lower()
 
-    if distribution not in ["minimal", "headless", "full"]:
-        print(f"⚠️  Warning: Invalid distribution '{distribution}', using 'minimal'")
-        distribution = "minimal"
+    if variant not in ["base", "jre"]:
+        print(f"⚠️  Warning: Invalid variant '{variant}', using 'base'")
+        variant = "base"
 
-    print(f"📦 Building for distribution: {distribution}")
+    print(f"📦 Building variant: {variant}")
+    print("📦 Using minimal distribution JAR set")
 
     # Look for JAR files copied from the ArcadeDB Docker image
-    # The Dockerfile copies JARs from the distribution-specific image to these locations
+    # The Dockerfile copies JARs from the minimal distribution image to these locations
     quick_paths = [
         Path("/build/jars"),  # Docker build location
         Path("/home/arcadedb/lib"),  # Direct from ArcadeDB image
@@ -101,11 +102,11 @@ def copy_jars_to_package():
 
 def main():
     """Main function."""
-    distribution = os.environ.get("ARCADEDB_DISTRIBUTION", "minimal").lower()
+    variant = os.environ.get("ARCADEDB_VARIANT", "base").lower()
 
     print("🎮 ArcadeDB Python Package Setup")
     print("=" * 40)
-    print(f"📦 Distribution: {distribution}")
+    print(f"📦 Variant: {variant}")
     print()
 
     if copy_jars_to_package():
@@ -114,7 +115,7 @@ def main():
         print("\n❌ Setup failed!")
         print("💡 Make sure to run this via build-all.sh:")
         print("   cd bindings/python")
-        print("   ./build-all.sh headless")
+        print("   ./build-all.sh base")
         return 1
 
     return 0

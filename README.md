@@ -2,10 +2,9 @@
 
 > **Python bindings for [ArcadeDB](https://github.com/ArcadeData/arcadedb)** - A multi-model database supporting Graph, Document, Key/Value, Vector, and Time Series models with extreme performance.
 
-[![PyPI - Headless](https://img.shields.io/badge/PyPI-headless-blue)](https://pypi.org/project/arcadedb-embedded-headless/)
-[![PyPI - Minimal](https://img.shields.io/badge/PyPI-minimal-blue)](https://pypi.org/project/arcadedb-embedded-minimal/)
-[![PyPI - Full](https://img.shields.io/badge/PyPI-full-blue)](https://pypi.org/project/arcadedb-embedded/)
-[![Tests](https://img.shields.io/badge/tests-44%2F44%20passing-brightgreen)](https://github.com/humemai/arcadedb-embedded-python/actions)
+[![PyPI - Base](https://img.shields.io/badge/PyPI-arcadedb--embed-blue)](https://pypi.org/project/arcadedb-embed/)
+[![PyPI - JRE](https://img.shields.io/badge/PyPI-arcadedb--embed--jre-blue)](https://pypi.org/project/arcadedb-embed-jre/)
+[![Tests](https://img.shields.io/badge/tests-43%2F43%20passing-brightgreen)](https://github.com/humemai/arcadedb-embedded-python/actions)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 
 **📖 [Documentation](https://humemai.github.io/arcadedb-embedded-python/) | 🐛 [Issues](https://github.com/humemai/arcadedb-embedded-python/issues)**
@@ -17,12 +16,14 @@
 ### Installation
 
 ```bash
-pip install arcadedb-embedded-headless  # Recommended for production
-pip install arcadedb-embedded-minimal   # With Studio UI for development
-pip install arcadedb-embedded           # With Gremlin + GraphQL
+pip install arcadedb-embed      # Base package (requires Java 21+)
+pip install arcadedb-embed-jre  # With bundled JRE (coming soon)
 ```
 
-**Requirements:** Python 3.8+ and [Java 21+](https://adoptium.net/) (JRE)
+**Requirements:**
+
+- **Base package:** Python 3.8+ and [Java 21+](https://adoptium.net/) (JRE)
+- **JRE package:** Python 3.8+ only (JRE bundled)
 
 **💡 Tip:** See "JVMCI is not enabled" warnings? Install [GraalVM](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#eliminate-polyglot-warnings-optional) to fix them
 
@@ -122,23 +123,26 @@ result = db.query("sql", """
 
 ✅ **Embedded Mode** - Runs in your Python process (no server needed)
 ✅ **Multi-Model** - Graph, Document, Key/Value, Vector, Time Series
-✅ **Query Languages** - SQL, Cypher, Gremlin (full distribution), MongoDB
+✅ **Query Languages** - SQL, Cypher, Gremlin, MongoDB (all included)
 ✅ **ACID Transactions** - Full transactional support
 ✅ **Vector Search** - HNSW indexing for embeddings
+✅ **Studio UI** - Web-based database browser (base package)
 ✅ **Self-Contained** - All JARs bundled, no external dependencies
-✅ **Production Ready** - 44/44 tests passing, actively maintained
+✅ **Production Ready** - 43/43 tests passing, actively maintained
 
 ---
 
-## Distribution Comparison
+## Package Variants
 
-| Distribution | Size | Studio UI | Gremlin | Use Case |
-|-------------|------|-----------|---------|----------|
-| **Headless** | ~94MB | ❌ | ❌ | Production, CI/CD |
-| **Minimal** | ~97MB | ✅ | ❌ | Development with UI |
-| **Full** | ~158MB | ✅ | ✅ | All features |
+| Package | Size | Java Required | Studio UI | Use Case |
+|---------|------|---------------|-----------|----------|
+| **arcadedb-embed** | ~97MB | Java 21+ | ✅ | Development & Production |
+| **arcadedb-embed-jre** | ~170MB | None | ✅ | Simplified deployment |
 
-All distributions use the same import: `import arcadedb_embedded as arcadedb`
+Both packages include the same features: SQL, Cypher, Gremlin, Studio UI, and all core functionality.
+The only difference is Java runtime dependency.
+
+All packages use the same import: `import arcadedb_embedded as arcadedb`
 
 ---
 
@@ -154,6 +158,7 @@ All distributions use the same import: `import arcadedb_embedded as arcadedb`
 This fork provides **embedded Python bindings** using JPype to bridge Python and the Java-based ArcadeDB engine.
 
 **Main ArcadeDB Resources:**
+
 - 📖 [Official Documentation](https://docs.arcadedb.com)
 - 🐳 [Docker Images](https://hub.docker.com/r/arcadedata/arcadedb)
 - 💬 [Community Discord](https://discord.gg/w2Npx2B7hZ)

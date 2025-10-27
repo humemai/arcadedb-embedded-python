@@ -1,6 +1,6 @@
 #!/bin/bash
-# Unified build script for all ArcadeDB Python distributions
-# Builds headless, minimal, and full distributions in Docker
+# ArcadeDB Python Package Build Script
+# Builds arcadedb-embed variants (base and jre) from minimal distribution
 
 set -e
 
@@ -13,28 +13,29 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Parse command line arguments
-DISTRIBUTION="${1:-all}"
+VARIANT="${1:-base}"
 
 print_header() {
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║  🎮 ArcadeDB Python Bindings - Docker Build Script         ║${NC}"
+    echo -e "${BLUE}║  🎮 ArcadeDB Python Package - Docker Build Script          ║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
 print_usage() {
-    echo "Usage: $0 [DISTRIBUTION]"
+    echo "Usage: $0 [VARIANT]"
     echo ""
-    echo "DISTRIBUTION:"
-    echo "  all         Build all three distributions (default)"
-    echo "  headless    Build headless distribution only (recommended for production)"
-    echo "  minimal     Build minimal distribution (includes Studio UI)"
-    echo "  full        Build full distribution (includes Gremlin + GraphQL)"
+    echo "VARIANT:"
+    echo "  base        Build base package (requires Java 21+) - default"
+    echo "  jre         Build package with bundled JRE (coming soon)"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Build all distributions"
-    echo "  $0 headless           # Build only headless"
-    echo "  $0 full               # Build only full"
+    echo "  $0                    # Build base variant (default)"
+    echo "  $0 base               # Build base variant explicitly"
+    echo "  $0 jre                # Build JRE variant (future)"
+    echo ""
+    echo "Note: Both variants are based on ArcadeDB minimal distribution"
+    echo "      (includes Studio UI, excludes Gremlin/GraphQL)"
     echo ""
 }
 
@@ -47,11 +48,19 @@ fi
 
 print_header
 
-# Validate distribution argument
-if [[ ! "$DISTRIBUTION" =~ ^(all|headless|minimal|full)$ ]]; then
-    echo -e "${RED}❌ Invalid distribution: $DISTRIBUTION${NC}"
+# Validate variant argument
+if [[ ! "$VARIANT" =~ ^(base|jre)$ ]]; then
+    echo -e "${RED}❌ Invalid variant: $VARIANT${NC}"
     echo ""
     print_usage
+    exit 1
+fi
+
+# For now, only base variant is supported
+if [[ "$VARIANT" == "jre" ]]; then
+    echo -e "${RED}❌ JRE variant not yet implemented${NC}"
+    echo -e "${YELLOW}💡 Currently only 'base' variant is available${NC}"
+    echo -e "${YELLOW}💡 JRE variant coming in future release${NC}"
     exit 1
 fi
 
@@ -70,51 +79,64 @@ if ! command -v docker &> /dev/null; then
 fi
 
 echo -e "${CYAN}📋 Build Configuration:${NC}"
-echo -e "   Distribution: ${YELLOW}$DISTRIBUTION${NC}"
+echo -e "   Variant: ${YELLOW}$VARIANT${NC}"
+echo -e "   Base Distribution: ${YELLOW}minimal${NC}"
 echo -e "   Build Method: ${YELLOW}Docker${NC}"
 echo ""
 
-# Function to build a single distribution
-build_distribution() {
-    local dist=$1
-    local dist_name=""
+# Function to build the package variant
+build_variant() {
+    local variant=$1
+    local variant_name=""
+    local package_name=""
+    local description=""
 
-    case $dist in
-        headless)
-            dist_name="Headless (Recommended)"
+    case $variant in
+        base)
+            variant_name="Base Package (requires Java 21+)"
+            package_name="arcadedb-embed"
+            description="ArcadeDB embedded Python package - requires Java 21+ (minimal distribution: Studio + core database)"
             ;;
-        minimal)
-            dist_name="Minimal (with Studio)"
+        jre)
+            variant_name="JRE Package (bundled JRE)"
+            package_name="arcadedb-embed-jre"
+            description="ArcadeDB embedded Python package with bundled JRE - no Java installation required (minimal distribution: Studio + core database)"
             ;;
-        full)
-            dist_name="Full (with Gremlin + GraphQL)"
+        *)
+            echo -e "${RED}❌ Unknown variant: $variant${NC}"
+            exit 1
             ;;
     esac
 
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}Building: ${YELLOW}$dist_name${NC}"
+    echo -e "${BLUE}Building: ${YELLOW}$variant_name${NC}"
+    echo -e "${BLUE}Package: ${YELLOW}$package_name${NC}"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 
     echo -e "${YELLOW}🐳 Building in Docker...${NC}"
 
-    # Build Docker image with distribution as build arg
-    echo -e "${CYAN}📦 Building Docker image for $dist distribution...${NC}"
+    # Build Docker image for the variant
+    echo -e "${CYAN}📦 Building Docker image for $variant variant...${NC}"
     docker build \
-        --build-arg DISTRIBUTION=$dist \
+        --build-arg VARIANT=$variant \
+        --build-arg PACKAGE_NAME=$package_name \
+        --build-arg PACKAGE_DESCRIPTION="$description" \
         --build-arg ARCADEDB_TAG=$DOCKER_TAG \
         --target export \
-        -t arcadedb-python-bindings-$dist-export \
+        -t arcadedb-python-package-$variant-export \
         -f Dockerfile.build \
         ../..
 
     # Also build the tester stage (runs tests)
     echo -e "${CYAN}🧪 Running tests in Docker...${NC}"
     docker build \
-        --build-arg DISTRIBUTION=$dist \
+        --build-arg VARIANT=$variant \
+        --build-arg PACKAGE_NAME=$package_name \
+        --build-arg PACKAGE_DESCRIPTION="$description" \
         --build-arg ARCADEDB_TAG=$DOCKER_TAG \
         --target tester \
-        -t arcadedb-python-bindings-$dist \
+        -t arcadedb-python-package-$variant \
         -f Dockerfile.build \
         ../..
 
@@ -123,7 +145,7 @@ build_distribution() {
 
     # Extract the wheel from the export container
     echo -e "${CYAN}📋 Extracting wheel file...${NC}"
-    CONTAINER_ID=$(docker create arcadedb-python-bindings-$dist-export)
+    CONTAINER_ID=$(docker create arcadedb-python-package-$variant-export)
     docker cp ${CONTAINER_ID}:/build/dist/. ./dist/
     docker rm ${CONTAINER_ID}
 
@@ -138,36 +160,25 @@ build_distribution() {
     echo ""
 }
 
-# Main build logic
-if [ "$DISTRIBUTION" = "all" ]; then
-    echo -e "${CYAN}📦 Building all distributions...${NC}"
-    echo ""
-
-    build_distribution "headless"
-    build_distribution "minimal"
-    build_distribution "full"
-
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${GREEN}🎉 All distributions built successfully!${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-else
-    build_distribution "$DISTRIBUTION"
-
-    echo -e "${GREEN}🎉 Build completed successfully!${NC}"
-fi
-
+# Main build logic - simplified for single variant
+echo -e "${CYAN}📦 Building $VARIANT variant...${NC}"
 echo ""
-echo -e "${CYAN}📦 Built packages:${NC}"
+
+build_variant "$VARIANT"
+
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}🎉 Build completed successfully!${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "${CYAN}📦 Built package:${NC}"
 if [ -d "dist" ]; then
     ls -lh dist/*.whl 2> /dev/null | awk '{print "   " $9 " (" $5 ")"}'
 fi
 
 echo ""
 echo -e "${BLUE}💡 Next steps:${NC}"
-echo -e "   📦 Install a package:"
-echo -e "      ${YELLOW}pip install dist/arcadedb_embedded_headless-*.whl${NC}"
-echo -e "      ${YELLOW}pip install dist/arcadedb_embedded_minimal-*.whl${NC}"
-echo -e "      ${YELLOW}pip install dist/arcadedb_embedded_full-*.whl${NC}"
+echo -e "   📦 Install the package:"
+echo -e "      ${YELLOW}pip install dist/arcadedb_embed-*.whl${NC}"
 echo ""
 echo -e "   🧪 Run tests:"
 echo -e "      ${YELLOW}pytest tests/${NC}"

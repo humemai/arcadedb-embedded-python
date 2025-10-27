@@ -37,18 +37,14 @@ jobs:
 
   build:
     needs: test  # Wait for tests to pass
-    name: Build Python Distribution (${{ matrix.distribution }})
+    name: Build Python Package (${{ matrix.variant }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        distribution: [headless, minimal, full]
+        variant: [base]  # Only base variant for now, jre coming soon
         include:
-          - distribution: headless
-            environment: pypi-headless
-          - distribution: minimal
-            environment: pypi-minimal
-          - distribution: full
-            environment: pypi-full
+          - variant: base
+            environment: pypi-base
 
     steps:
       - name: Checkout code
@@ -57,65 +53,31 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
-      - name: Build ${{ matrix.distribution }} distribution
+      - name: Build ${{ matrix.variant }} variant
         run: |
           cd bindings/python
-          ./build-all.sh ${{ matrix.distribution }}
+          ./build-all.sh ${{ matrix.variant }}
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: wheel-${{ matrix.distribution }}
+          name: wheel-${{ matrix.variant }}
           path: bindings/python/dist/*.whl
           retention-days: 5
 
-  publish-headless:
-    name: Publish arcadedb-embedded-headless to PyPI
+  publish-base:
+    name: Publish arcadedb-embed to PyPI
     needs: [check-release, build]
     if: needs.check-release.outputs.is-python-release == 'true'
     runs-on: ubuntu-latest
-    environment: pypi-headless
+    environment: pypi-base
     permissions:
       id-token: write
     steps:
-      - name: Download headless wheel
+      - name: Download base wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
-          name: wheel-headless
-          path: dist/
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
-
-  publish-minimal:
-    name: Publish arcadedb-embedded-minimal to PyPI
-    needs: [check-release, build]
-    if: needs.check-release.outputs.is-python-release == 'true'
-    runs-on: ubuntu-latest
-    environment: pypi-minimal
-    permissions:
-      id-token: write
-    steps:
-      - name: Download minimal wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
-        with:
-          name: wheel-minimal
-          path: dist/
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
-
-  publish-full:
-    name: Publish arcadedb-embedded to PyPI
-    needs: [check-release, build]
-    if: needs.check-release.outputs.is-python-release == 'true'
-    runs-on: ubuntu-latest
-    environment: pypi-full
-    permissions:
-      id-token: write
-    steps:
-      - name: Download full wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
-        with:
-          name: wheel-full
+          name: wheel-base
           path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1

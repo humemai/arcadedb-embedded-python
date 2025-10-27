@@ -1,24 +1,20 @@
-# Multi-stage Docker build for ArcadeDB Python bindings
-# Supports building all three distributions: headless, minimal, full
+# Docker build for ArcadeDB Python package
+# Builds arcadedb-embed package variants (base and jre) from minimal distribution
 #
 # REQUIRED BUILD ARGS (passed from build-all.sh):
-#   DISTRIBUTION - one of: headless, minimal, full
+#   VARIANT - one of: base, jre
+#   PACKAGE_NAME - e.g., arcadedb-embed, arcadedb-embed-jre
+#   PACKAGE_DESCRIPTION - package description
 #   ARCADEDB_TAG - version tag from pom.xml (e.g., 25.10.1-SNAPSHOT)
 
-ARG DISTRIBUTION
-ARG ARCADEDB_TAG
+ARG VARIANT=base
+ARG PACKAGE_NAME=arcadedb-embed
+ARG PACKAGE_DESCRIPTION="ArcadeDB embedded Python package"
+ARG ARCADEDB_TAG=24.11.1
 
-# Stage 1: Use prebuilt ArcadeDB image to obtain compiled JARs
-# ArcadeDB publishes three separate images:
-#   - arcadedata/arcadedb-headless (minimal JARs, no Studio)
-#   - arcadedata/arcadedb-minimal (includes Studio, excludes Gremlin/GraphQL/MongoDB/Redis)
-#   - arcadedata/arcadedb (full distribution with all features)
-FROM arcadedata/arcadedb:${ARCADEDB_TAG} AS java-builder-full
-FROM arcadedata/arcadedb-minimal:${ARCADEDB_TAG} AS java-builder-minimal
-FROM arcadedata/arcadedb-headless:${ARCADEDB_TAG} AS java-builder-headless
-
-# Select the right builder based on DISTRIBUTION arg (passed from build-all.sh)
-FROM java-builder-${DISTRIBUTION} AS java-builder
+# Stage 1: Use prebuilt ArcadeDB minimal image to obtain compiled JARs
+# We only use the minimal distribution now (includes Studio, core database)
+FROM arcadedata/arcadedb-minimal:${ARCADEDB_TAG} AS java-builder
 
 # nothing to do here; jars will be copied from /home/arcadedb/lib in the python-builder stage
 
@@ -58,43 +54,30 @@ COPY ../../pom.xml /arcadedb/pom.xml
 RUN pip install --no-cache-dir build wheel setuptools jpype1
 
 # Re-declare build args for this stage (required after FROM)
-ARG DISTRIBUTION
+ARG VARIANT
+ARG PACKAGE_NAME
+ARG PACKAGE_DESCRIPTION
 ARG ARCADEDB_TAG
-ENV ARCADEDB_DISTRIBUTION=${DISTRIBUTION}
+ENV ARCADEDB_VARIANT=${VARIANT}
 
 # Extract version and copy JARs
 # Version is passed from build-all.sh via ARCADEDB_TAG build arg
-RUN echo "📌 Building distribution: ${DISTRIBUTION}" && \
+RUN echo "📌 Building variant: ${VARIANT}" && \
+    echo "📌 Package name: ${PACKAGE_NAME}" && \
     echo "📌 Docker tag used: ${ARCADEDB_TAG}" && \
     python3 write_version.py /arcadedb/pom.xml && \
     python3 setup_jars.py && \
     echo "📦 JAR files copied"
 
 # Build the wheel
-# Extract PEP 440 version from pom.xml
+# Extract PEP 440 version from pom.xml and use build args for package metadata
 RUN export ARCADEDB_VERSION=$(python3 extract_version.py --format=pep440 /arcadedb/pom.xml) && \
     echo "📦 Python package version: ${ARCADEDB_VERSION}" && \
-    case ${DISTRIBUTION} in \
-        headless) \
-            PACKAGE_NAME="arcadedb-embedded-headless" && \
-            DESCRIPTION="ArcadeDB embedded Python bindings - Headless distribution (excludes Gremlin, GraphQL, MongoDB/Redis wire protocols, and Studio)" \
-            ;; \
-        minimal) \
-            PACKAGE_NAME="arcadedb-embedded-minimal" && \
-            DESCRIPTION="ArcadeDB embedded Python bindings - Minimal distribution (excludes Gremlin, GraphQL, MongoDB/Redis wire protocols)" \
-            ;; \
-        full) \
-            PACKAGE_NAME="arcadedb-embedded" && \
-            DESCRIPTION="ArcadeDB embedded Python bindings - Full distribution (includes Gremlin, GraphQL, MongoDB/Redis wire protocols, and Studio)" \
-            ;; \
-        *) \
-            PACKAGE_NAME="arcadedb-embedded" && \
-            DESCRIPTION="ArcadeDB embedded Python bindings" \
-            ;; \
-    esac && \
+    echo "📦 Package name: ${PACKAGE_NAME}" && \
+    echo "📦 Package description: ${PACKAGE_DESCRIPTION}" && \
     sed -i 's|^name = .*|name = "'"${PACKAGE_NAME}"'"|' pyproject.toml && \
     sed -i 's|^version = .*|version = "'"${ARCADEDB_VERSION}"'"|' pyproject.toml && \
-    sed -i 's|^description = .*|description = "'"${DESCRIPTION}"'"|' pyproject.toml && \
+    sed -i 's|^description = .*|description = "'"${PACKAGE_DESCRIPTION}"'"|' pyproject.toml && \
     python3 -m build --wheel && \
     echo "✅ Wheel built successfully!" && \
     ls -lh dist/

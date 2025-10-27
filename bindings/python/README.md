@@ -13,7 +13,7 @@ Native Python bindings for ArcadeDB - the multi-model database that supports Gra
 Quick links:
 - [Installation Guide](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/)
 - [Quick Start Tutorial](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/quickstart/)
-- [Distribution Comparison](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/distributions/)
+- [Package Variants](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/packages/)
 - [User Guide](https://humemai.github.io/arcadedb-embedded-python/latest/guide/core/database/)
 - [API Reference](https://humemai.github.io/arcadedb-embedded-python/latest/api/database/)
 - [Examples](https://humemai.github.io/arcadedb-embedded-python/latest/examples/)
@@ -27,17 +27,17 @@ Quick links:
 Choose based on your needs:
 
 ```bash
-# Headless (recommended) - Core database, no Studio UI
-pip install arcadedb-embedded-headless
+# Base package (requires Java 21+) - Includes Studio UI and all features
+pip install arcadedb-embed
 
-# Minimal - Adds Studio web UI for development
-pip install arcadedb-embedded-minimal
-
-# Full - Adds Gremlin + GraphQL (coming soon)
-pip install arcadedb-embedded
+# JRE package (no Java required) - Same features with bundled JRE (coming soon)
+pip install arcadedb-embed-jre
 ```
 
-**Requirements**: Java 21+ must be installed ([details](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#java-runtime-environment-jre))
+**Requirements:**
+
+- **Base package**: Java 21+ must be installed ([details](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#java-runtime-environment-jre))
+- **JRE package**: No external dependencies (coming soon)
 
 !!! tip "Eliminate JVMCI Warnings"
     See warnings about "JVMCI is not enabled"? Install [GraalVM](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#eliminate-polyglot-warnings-optional) to fix them.
@@ -165,13 +165,15 @@ Apache License 2.0 - see [LICENSE](../../LICENSE)
 
 ## 🔗 Links
 
-- **Documentation**: https://humemai.github.io/arcadedb-embedded-python/latest/
-- **PyPI (Headless)**: https://pypi.org/project/arcadedb-embedded-headless/
-- **PyPI (Minimal)**: https://pypi.org/project/arcadedb-embedded-minimal/
-- **GitHub**: https://github.com/humemai/arcadedb
-- **ArcadeDB Main Docs**: https://docs.arcadedb.com
-- **Issues**: https://github.com/humemai/arcadedb/issues
+- **Documentation**: <https://humemai.github.io/arcadedb-embedded-python/latest/>
+- **PyPI (Base)**: <https://pypi.org/project/arcadedb-embed/>
+- **PyPI (JRE)**: <https://pypi.org/project/arcadedb-embed-jre/> (coming soon)
+- **GitHub**: <https://github.com/humemai/arcadedb-embedded-python>
+- **ArcadeDB Main Docs**: <https://docs.arcadedb.com>
+- **Issues**: <https://github.com/humemai/arcadedb-embedded-python/issues>
 
 ---
 
-**Made with ❤️ by the ArcadeDB community**
+## Community
+
+Made with ❤️ by the ArcadeDB community
