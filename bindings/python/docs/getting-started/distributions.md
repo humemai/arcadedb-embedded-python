@@ -1,112 +1,54 @@
-# Distribution Comparison
+# Package Options
 
-All three ArcadeDB Python packages are **embedded** - they run the database directly in your Python process via JPype. The difference is which Java JARs are bundled.
+ArcadeDB Python provides **embedded** packages that run the database directly in your Python process via JPype. We currently offer one main package with an optional JRE variant coming soon.
 
 ## Quick Comparison
 
-| Feature | Headless | Minimal | Full |
-|---------|----------|---------|------|
-| **Package Name** | `arcadedb-embedded-headless` | `arcadedb-embedded-minimal` | `arcadedb-embedded` |
-| **Wheel Size** | ~94 MB | ~97 MB | ~158 MB |
-| **Studio Web UI** | ❌ No | ✅ Yes | ✅ Yes |
-| **SQL** | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Cypher** | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Gremlin** | ❌ No | ❌ No | ✅ Yes |
-| **GraphQL** | ❌ No | ❌ No | ✅ Yes |
-| **PostgreSQL Wire** | ✅ Yes | ✅ Yes | ✅ Yes |
-| **MongoDB Wire** | ❌ No | ❌ No | ✅ Yes |
-| **Redis Wire** | ❌ No | ❌ No | ✅ Yes |
-| **HTTP REST API** | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Test Results** | 36/43 passed | 40/43 passed | 43/43 passed |
-| **PyPI Status** | ✅ Available | ✅ Available | ⏳ Coming Soon |
+| Package | Size | Java Required | Studio UI | Query Languages | Status |
+|---------|------|---------------|-----------|----------------|--------|
+| **arcadedb-embedded** | ~123MB | Java 21+ | ✅ | SQL, Cypher, Gremlin, MongoDB | ✅ Available |
+| **arcadedb-embedded-jre** | ~170MB | ❌ | ✅ | SQL, Cypher, Gremlin, MongoDB | ⏳ Coming Soon |
 
-## Headless Distribution
+## Main Package
 
-**Best for:** Production applications, minimal dependencies
+**Best for:** Most use cases - development and production
 
 ```bash
-pip install arcadedb-embedded-headless
+pip install arcadedb-embedded
 ```
 
 ### What's Included
 
-- **Core Database**: SQL and Cypher query engines
-- **PostgreSQL Wire Protocol**: Connect with PostgreSQL clients
-- **HTTP REST API**: Programmatic access via HTTP
-- **All Database Models**: Graph, Document, Key/Value, Vector, Time Series
+- **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
+- **Query Languages**: SQL, Cypher, Gremlin, MongoDB
+- **Studio Web UI**: Visual database explorer and query editor
+- **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
+- **Vector Search**: HNSW indexing for embeddings
+- **Data Import**: CSV, JSON, Neo4j importers
 
 ### What's NOT Included
 
-- ❌ Studio web UI (use code/API only)
-- ❌ Gremlin query language
-- ❌ GraphQL support
-- ❌ MongoDB/Redis wire protocols
+- ❌ **gRPC Wire Protocol**: Excluded to keep package size manageable
+
+We don't need gRPC at this moment, and we might add it in future versions if needed.
 
 ### Test Results
 
-**36 out of 43 tests pass** (7 tests skipped):
+**43 out of 43 tests pass** (0 tests skipped):
 
 - ✅ All core database operations work
-- ✅ SQL and Cypher queries work
-- ⏭️ Cypher tests skipped (Cypher engine not in headless)
-- ⏭️ Gremlin tests skipped (Gremlin not available)
-- ⏭️ Server tests skipped (HTTP server not included)
+- ✅ SQL, Cypher, and Gremlin queries work
+- ✅ HTTP server and Studio UI work
+- ✅ Vector search and import operations work
+- ✅ All features available except gRPC
 
 ### Use Cases
 
 - Production Python applications
-- Headless servers and containers
-- Applications that don't need visual debugging
-- Minimal dependency footprint
-
-### Example
-
-```python
-import arcadedb_embedded as arcadedb
-
-# Direct database access - no UI needed
-with arcadedb.create_database("/tmp/mydb") as db:
-    db.command("sql", "CREATE DOCUMENT TYPE User")
-    with db.transaction():
-        db.command("sql", "INSERT INTO User SET name = 'Alice'")
-
-    result = db.query("sql", "SELECT FROM User")
-    print(f"Users: {len(result)}")
-```
-
-## Minimal Distribution
-
-**Best for:** Development, learning, visual debugging
-
-```bash
-pip install arcadedb-embedded-minimal
-```
-
-### What's Included
-
-Everything in **Headless** plus:
-
-- ✅ **Studio Web UI** (~2 MB): Visual database explorer
-  - Query editor with syntax highlighting
-  - Schema visualization
-  - Data browsing and editing
-  - Graph visualization
-
-### Test Results
-
-**40 out of 43 tests pass** (3 tests skipped):
-
-- ✅ All core database operations work
-- ✅ SQL and Cypher queries work
-- ✅ HTTP server and Studio UI work
-- ⏭️ Gremlin tests skipped (Gremlin not available)
-
-### Use Cases
-
-- Development and testing
-- Learning ArcadeDB features
-- Visual database exploration
-- Debugging queries and data
+- Development and debugging
+- Multi-model database needs
+- Graph, document, and vector applications
+- Any scenario requiring SQL, Cypher, or Gremlin
 
 ### Accessing Studio UI
 
@@ -127,71 +69,31 @@ server.stop()
 !!! tip "Studio in Browser"
     Once the server starts, open your browser to `http://localhost:2480` to access the Studio UI.
 
-## Full Distribution
+## JRE Package (Coming Soon)
 
-**Best for:** Gremlin graphs, GraphQL APIs, MongoDB/Redis compatibility
+**Best for:** Simplified deployment, no Java setup required
 
 ```bash
-pip install arcadedb-embedded
+pip install arcadedb-embedded-jre
 ```
 
-!!! warning "Coming Soon"
-    The full distribution is pending PyPI size limit approval. Will be available soon!
+### Key Features
 
-### What's Included
-
-Everything in **Minimal** plus:
-
-- ✅ **Gremlin** (~60 MB): Apache TinkerPop graph traversal language
-- ✅ **GraphQL** (~4 MB): GraphQL query endpoint
-- ✅ **MongoDB Wire Protocol**: Connect with MongoDB clients
-- ✅ **Redis Wire Protocol**: Connect with Redis clients
-
-### Test Results
-
-**43 out of 43 tests pass** (0 tests skipped):
-
-- ✅ All core database operations work
-- ✅ SQL, Cypher, and Gremlin queries work
-- ✅ HTTP server and Studio UI work
-- ✅ All features available
+- **Same functionality** as the main package
+- **Bundled JRE**: No Java installation required
+- **Larger size**: ~170MB (includes ~50MB minimal JRE)
+- **Platform-specific**: Separate wheels per platform (Linux, macOS, Windows)
 
 ### Use Cases
 
-- Applications using Gremlin graph traversals
-- GraphQL API integration
-- MongoDB client compatibility
-- Redis client compatibility
-- Complete feature set
-
-### Gremlin Example
-
-```python
-import arcadedb_embedded as arcadedb
-
-with arcadedb.create_database("/tmp/graphdb") as db:
-    # Create vertices and edges
-    db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE Knows")
-
-    with db.transaction():
-        db.command("sql", "CREATE VERTEX Person SET name = 'Alice'")
-        db.command("sql", "CREATE VERTEX Person SET name = 'Bob'")
-        db.command("sql", """
-            CREATE EDGE Knows FROM
-                (SELECT FROM Person WHERE name = 'Alice')
-            TO
-                (SELECT FROM Person WHERE name = 'Bob')
-        """)
-
-    # Use Gremlin for graph traversals
-    result = db.query("gremlin", "g.V().has('name', 'Alice').out('Knows').values('name')")
-    print(f"Alice knows: {list(result)}")  # ['Bob']
-```
+- Cloud deployments without Java dependencies
+- Docker containers for minimal setup
+- Desktop applications for non-developers
+- Any scenario where Java setup is challenging
 
 ## Same Import for All
 
-Regardless of distribution, the import is always:
+Regardless of package, the import is always:
 
 ```python
 import arcadedb_embedded as arcadedb
@@ -199,88 +101,66 @@ import arcadedb_embedded as arcadedb
 
 This means you can:
 
-- **Develop** with Minimal (Studio UI for debugging)
-- **Deploy** with Headless (smaller, production-ready)
-- **Upgrade** to Full (when you need Gremlin/GraphQL)
+- **Develop** with the main package (includes Studio UI)
+- **Deploy** with either variant based on Java availability
+- **Switch** between packages without code changes
 
-No code changes required!
+## Which Package Should You Choose?
 
-## Which Distribution Should You Choose?
+**Start with the main package:**
 
-<div class="grid" markdown>
+- Production-ready and tested
+- All features included (~123MB)
+- Only requires Java 21+ installed
+- Available now on PyPI
 
-!!! success "Start with Headless"
-    For most Python applications:
+**Upgrade to JRE package when available:**
 
-    - Production-ready and tested
-    - Smallest size (~94 MB)
-    - All core features included
-    - Available now on PyPI
-
-!!! info "Upgrade to Minimal for Development"
-    If you need visual debugging:
-
-    - Only ~3 MB larger
-    - Studio UI for exploration
-    - Great for learning
-    - Available now on PyPI
-
-!!! warning "Wait for Full if Needed"
-    Only if you specifically need:
-
-    - Gremlin graph traversals
-    - GraphQL endpoint
-    - MongoDB/Redis compatibility
-    - Coming soon to PyPI!
-
-</div>
+- If Java installation is challenging
+- For simplified Docker deployments
+- Coming soon with cross-platform support
 
 ## Size Breakdown
 
-### Headless (~94 MB)
+### Main Package (~123MB)
 
 - Core Database: ~60 MB
-- SQL/Cypher Engines: ~15 MB
-- PostgreSQL Wire: ~5 MB
-- HTTP Server: ~10 MB
-- Dependencies: ~4 MB
-
-### Minimal (~97 MB)
-
-- Everything in Headless: ~94 MB
+- Query Engines (SQL/Cypher/Gremlin): ~25 MB
 - Studio UI: ~3 MB
+- Wire Protocols: ~15 MB
+- Dependencies: ~20 MB
 
-### Full (~158 MB)
+### JRE Package (~170MB)
 
-- Everything in Minimal: ~97 MB
-- Gremlin (TinkerPop): ~60 MB
-- GraphQL: ~4 MB
-- MongoDB/Redis Wire: ~2 MB
+- Everything in Main Package: ~123 MB
+- Bundled Minimal JRE: ~47 MB
+
+**Note**: gRPC wire protocol (~38MB) is excluded from both packages to keep size manageable.
 
 ## Installation Tips
 
-### Switch Distributions
+### Switch Packages
 
-Uninstall the current distribution first:
+Uninstall the current package first:
 
 ```bash
-# Uninstall any existing distribution
-pip uninstall arcadedb-embedded arcadedb-embedded-headless arcadedb-embedded-minimal
+pip uninstall arcadedb-embedded arcadedb-embedded-headless arcadedb-embedded-minimal arcadedb-embedded
 
-# Install the one you want
-pip install arcadedb-embedded-headless
+# Install the new package
+pip install arcadedb-embedded
 ```
 
-### Check Installed Distribution
+### Check Installed Package
 
 ```python
 import arcadedb_embedded as arcadedb
 print(f"Version: {arcadedb.__version__}")
 
-# Check which JARs are available
-from arcadedb_embedded.jvm import get_jvm
-jvm = get_jvm()
-# JVM will load JARs from your installed distribution
+# Check which features are available
+with arcadedb.create_database("/tmp/test") as db:
+    # All query engines should be available
+    result = db.query("sql", "SELECT 1")
+    print("Database working correctly")
 ```
 
 ## Next Steps
@@ -288,4 +168,4 @@ jvm = get_jvm()
 - [Installation Guide](installation.md) - Detailed install instructions
 - [Quick Start](quickstart.md) - Get started in 5 minutes
 - [Server Mode](../guide/server.md) - Using the HTTP server with Studio UI
-- [Gremlin Guide](../guide/graphs.md) - Graph traversals (Full distribution)
+- [Query Languages](../guide/queries.md) - SQL, Cypher, and Gremlin examples

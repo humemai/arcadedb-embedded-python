@@ -201,4 +201,4 @@ Each example should have:
 - `test_importer.py` - CSV, JSON, Neo4j import
 - `test_concurrency.py` - Threading, file locking
 - `test_server_patterns.py` - Access patterns, embedded vs HTTP
-- `test_gremlin.py` - Gremlin query language (full distribution)
+- `test_gremlin.py` - Gremlin query language

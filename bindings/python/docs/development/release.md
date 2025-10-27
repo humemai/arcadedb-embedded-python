@@ -200,31 +200,92 @@ git push origin python-embedded
 - Update any integration guides
 - Optionally add release to CHANGELOG.md
 
+## Python Versioning Strategy
+
+### Overview
+
+The Python bindings use an **automated versioning system** that extracts versions from ArcadeDB's `pom.xml` and converts them to PEP 440 compliant Python versions. This ensures version consistency across the entire project while supporting both development and release workflows.
+
+### Key Principles
+
+1. **Single Source of Truth**: Version is only defined in `pom.xml` - everything else extracts it automatically
+2. **PEP 440 Compliance**: All Python versions follow Python packaging standards
+3. **Development/Release Distinction**: Different handling for `-SNAPSHOT` vs release versions
+4. **Automated Conversion**: No manual version editing required in Python files
+
+### Version Conversion Rules
+
+| Maven Version (pom.xml) | Python Version | Use Case |
+|-------------------------|----------------|----------|
+| `25.10.1-SNAPSHOT` | `25.10.1.dev0` | Development builds |
+| `25.9.1` | `25.9.1` | Release builds |
+| `25.9.1` (with --python-patch 1) | `25.9.1.post1` | Python-specific patches |
+| `25.9.1` (with --python-patch 2) | `25.9.1.post2` | Additional Python patches |
+
+### Development Mode vs Release Mode
+
+**Development Mode** (SNAPSHOT versions):
+
+- Triggered by: `-SNAPSHOT` suffix in `pom.xml`
+- Conversion: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0`
+- Purpose: Pre-release development builds
+- Example: `25.10.1-SNAPSHOT` → `25.10.1.dev0`
+
+**Release Mode** (clean versions):
+
+- Triggered by: No `-SNAPSHOT` suffix in `pom.xml`
+- Conversion: `X.Y.Z` → `X.Y.Z` (or `X.Y.Z.postN` for Python patches)
+- Purpose: Official releases to PyPI
+- Example: `25.9.1` → `25.9.1` or `25.9.1.post1`
+
+### Python-Specific Patches
+
+For Python-only bug fixes that don't require a new ArcadeDB version:
+
+```bash
+# Build with Python patch number
+./build-all.sh base --python-patch 1
+
+# Results in version: 25.9.1.post1 (if base ArcadeDB version is 25.9.1)
+```
+
+### Implementation Details
+
+The conversion is handled by `bindings/python/extract_version.py` (see file for detailed implementation). Key features:
+
+- **Automatic Detection**: Distinguishes development vs release mode automatically
+- **Command Line Interface**: Supports `--python-patch` parameter for .postN versions
+- **Error Handling**: Validates input and provides clear error messages
+- **Flexible Usage**: Can be called from build scripts, Docker, or manually
+
 ## Version Numbering
 
 Python bindings follow the ArcadeDB main project version from `pom.xml`:
 
-- **Format**: `MAJOR.MINOR.PATCH`
-- **POM version**: `X.Y.Z-SNAPSHOT` (development)
+- **Format**: `MAJOR.MINOR.PATCH[.devN|.postN]`
+- **POM version**: `X.Y.Z-SNAPSHOT` (development) or `X.Y.Z` (release)
 - **Git tag**: `vX.Y.Z-python` (follows git best practices with `v` prefix)
 - **Release tag**: `vX.Y.Z-python` (GitHub Release)
-- **PyPI version**: `X.Y.Z` (extracted automatically, no `v` prefix)
+- **PyPI version**: `X.Y.Z[.devN|.postN]` (extracted automatically, no `v` prefix)
 - **Docs version**: `X.Y.Z` (extracted from tag, no `v` prefix)
 
 **How version is determined:**
 
-1. Set in `pom.xml` root: `<version>X.Y.Z-SNAPSHOT</version>`
-2. `extract_version.py` converts: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0` (PEP 440)
+1. Set in `pom.xml` root: `<version>X.Y.Z-SNAPSHOT</version>` or `<version>X.Y.Z</version>`
+2. `extract_version.py` converts based on mode:
+   - Development: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0`
+   - Release: `X.Y.Z` → `X.Y.Z` (or `X.Y.Z.postN` with --python-patch)
 3. Create annotated tag: `git tag -a vX.Y.Z-python -m "Python release vX.Y.Z"`
 4. GitHub Release tag: `vX.Y.Z-python` (with `v` prefix)
 5. Workflows extract: `vX.Y.Z-python` → `X.Y.Z` (strip prefix/suffix)
-6. Used everywhere: PyPI (`X.Y.Z`), docs (`/X.Y.Z/`)
+6. Used everywhere: PyPI (`X.Y.Z[.devN|.postN]`), docs (`/X.Y.Z/`)
 
 **When to bump:**
 
 - **MAJOR**: Breaking API changes
 - **MINOR**: New features, non-breaking
 - **PATCH**: Bug fixes only
+- **Python Patch**: Python-only fixes using `.postN` suffix
 
 **Note**: Version is only in ONE place (`pom.xml`) - everything else extracts it automatically!
 
@@ -306,7 +367,7 @@ mike set-default 25.9.0 --push
 **Size limit exceeded:**
 
 - Full distribution might hit PyPI limits (~158 MB)
-- Request size increase: https://pypi.org/help/#file-size-limit
+- Request size increase: <https://pypi.org/help/#file-size-limit>
 - Or distribute via GitHub releases only
 
 **Authentication error:**

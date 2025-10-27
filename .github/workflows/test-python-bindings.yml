@@ -131,8 +131,8 @@ jobs:
 
           echo "### Expected Behavior:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Base package**: All 43 tests should pass (includes SQL, Cypher, Gremlin, Studio)" >> $GITHUB_STEP_SUMMARY
-          echo "- **JRE package**: Same as base but with bundled JRE (coming soon)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Main package**: All 43 tests should pass (includes SQL, Cypher, Gremlin, Studio)" >> $GITHUB_STEP_SUMMARY
+          echo "- **JRE package**: Same as main but with bundled JRE (coming soon)" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload test results
         if: always()
@@ -166,7 +166,7 @@ jobs:
           if [ "${{ needs.test.result }}" = "success" ]; then
             echo "✅ **All variants passed testing!**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "The ArcadeDB Python package (base variant) has been successfully built and tested." >> $GITHUB_STEP_SUMMARY
+            echo "The ArcadeDB Python package (current variant) has been successfully built and tested." >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Some variants failed testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

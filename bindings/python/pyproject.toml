@@ -3,12 +3,12 @@ requires = ["setuptools>=61.0", "wheel", "jpype1"]
 build-backend = "setuptools.build_meta"
 
 # This file is a template. During build, the following fields are dynamically set:
-# - name: Set based on variant (arcadedb-embed or arcadedb-embed-jre)
+# - name: Set based on variant (arcadedb-embedded or arcadedb-embedded-jre)
 # - version: Extracted from parent pom.xml via extract_version.py
 # - description: Set based on variant features
 
 [project]
-name = "arcadedb-embed"
+name = "arcadedb-embedded"
 version = "0.0.0"
 description = "ArcadeDB embedded Python package"
 readme = "README.md"

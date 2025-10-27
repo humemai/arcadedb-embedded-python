@@ -27,16 +27,16 @@ Quick links:
 Choose based on your needs:
 
 ```bash
-# Base package (requires Java 21+) - Includes Studio UI and all features
-pip install arcadedb-embed
+# Main package (requires Java 21+) - Includes Studio UI and all features
+pip install arcadedb-embedded
 
 # JRE package (no Java required) - Same features with bundled JRE (coming soon)
-pip install arcadedb-embed-jre
+pip install arcadedb-embedded-jre
 ```
 
 **Requirements:**
 
-- **Base package**: Java 21+ must be installed ([details](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#java-runtime-environment-jre))
+- **Main package**: Java 21+ must be installed ([details](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#java-runtime-environment-jre))
 - **JRE package**: No external dependencies (coming soon)
 
 !!! tip "Eliminate JVMCI Warnings"
@@ -70,9 +70,9 @@ with arcadedb.create_database("/tmp/mydb") as db:
 
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network)
 - 🌐 **Server Mode**: Optional HTTP server with Studio web interface
-- 📦 **Self-contained**: All JAR files bundled (no external dependencies)
+- 📦 **Self-contained**: All dependencies bundled (~123MB, gRPC excluded)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
-- 🔍 **Multiple query languages**: SQL, Cypher, Gremlin (full only), MongoDB
+- 🔍 **Multiple query languages**: SQL, Cypher, Gremlin, MongoDB
 - ⚡ **High performance**: Direct JVM integration via JPype
 - 🔒 **ACID transactions**: Full transaction support
 - 🎯 **Vector storage**: Store and query vector embeddings with HNSW indexing
@@ -80,19 +80,20 @@ with arcadedb.create_database("/tmp/mydb") as db:
 
 ---
 
-## 📦 Distribution Options
+## 📦 Package Options
 
-All three packages are **embedded** - they run ArcadeDB in your Python process:
+ArcadeDB Python provides an **embedded** package that runs the database in your Python process:
 
-| Distribution | Package | Size | Studio UI | Gremlin | Status |
-|-------------|---------|------|-----------|---------|--------|
-| **Headless** | `arcadedb-embedded-headless` | ~94MB | ❌ | ❌ | ✅ Available |
-| **Minimal** | `arcadedb-embedded-minimal` | ~97MB | ✅ | ❌ | ✅ Available |
-| **Full** | `arcadedb-embedded` | ~158MB | ✅ | ✅ | ⏳ Coming Soon |
+| Package | Size | Java Required | Studio UI | Query Languages | Status |
+|---------|------|---------------|-----------|----------------|--------|
+| **arcadedb-embedded** | ~123MB | Java 21+ | ✅ | SQL, Cypher, Gremlin, MongoDB | ✅ Available |
+| **arcadedb-embedded-jre** | ~170MB | ❌ | ✅ | SQL, Cypher, Gremlin, MongoDB | ⏳ Coming Soon |
+
+Both packages include the same features. The only difference is Java runtime dependency.
+
+**Note**: gRPC wire protocol is excluded to keep package size manageable. We may add it in future versions if needed.
 
 All use the same import: `import arcadedb_embedded as arcadedb`
-
-**[📊 Detailed comparison](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/distributions/)**
 
 ---
 
@@ -119,22 +120,26 @@ See [tests/README.md](tests/README.md) for detailed test documentation.
 ```bash
 cd bindings/python/
 
-# Build all three distributions
-./build-all.sh
+# Build main package
+./build-all.sh base     # ~123 MB (default)
 
-# Or build specific distribution
-./build-all.sh headless    # ~94 MB
-./build-all.sh minimal     # ~97 MB
-./build-all.sh full        # ~158 MB
+# Build with bundled JRE (coming soon)
+./build-all.sh jre      # ~170 MB
 ```
 
 Built wheels will be in `dist/`. **[Build instructions](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#building-from-source)**
+
+!!! note "Package Contents"
+    The package includes all ArcadeDB features except gRPC wire protocol. We don't need gRPC at this moment, and we might add it in future versions if needed.
+
+!!! note "Versioning"
+    Versions are automatically extracted from the main ArcadeDB `pom.xml`. See [versioning strategy](https://humemai.github.io/arcadedb-embedded-python/latest/development/release/#python-versioning-strategy) for details on development vs release mode handling.
 
 ---
 
 ## 📋 Package Structure
 
-```
+```text
 arcadedb_embedded/
 ├── __init__.py          # Public API exports
 ├── core.py              # Database and DatabaseFactory
@@ -166,8 +171,8 @@ Apache License 2.0 - see [LICENSE](../../LICENSE)
 ## 🔗 Links
 
 - **Documentation**: <https://humemai.github.io/arcadedb-embedded-python/latest/>
-- **PyPI (Base)**: <https://pypi.org/project/arcadedb-embed/>
-- **PyPI (JRE)**: <https://pypi.org/project/arcadedb-embed-jre/> (coming soon)
+- **PyPI (Main)**: <https://pypi.org/project/arcadedb-embedded/>
+- **PyPI (JRE)**: <https://pypi.org/project/arcadedb-embedded-jre/> (coming soon)
 - **GitHub**: <https://github.com/humemai/arcadedb-embedded-python>
 - **ArcadeDB Main Docs**: <https://docs.arcadedb.com>
 - **Issues**: <https://github.com/humemai/arcadedb-embedded-python/issues>

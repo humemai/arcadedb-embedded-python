@@ -46,7 +46,7 @@ Other:
   - STRING, BOOLEAN, DATE, DATETIME, BINARY, EMBEDDED, LIST
 
 Requirements:
-- arcadedb-embedded (any distribution: headless, minimal, or full)
+- arcadedb-embedded
 - MovieLens dataset (downloaded via download_sample_data.py)
 - JRE 21+
 - Sufficient JVM heap memory (8GB recommended for large dataset)

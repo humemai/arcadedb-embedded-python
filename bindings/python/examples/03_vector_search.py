@@ -30,7 +30,7 @@ Potential Use Cases (when stable):
 - Question answering (find relevant context)
 
 Requirements:
-- arcadedb-embedded (any distribution)
+- arcadedb-embedded
 - NumPy (for vector operations and mock embeddings)
 
 Note: This example uses mock embeddings for demonstration. In production:

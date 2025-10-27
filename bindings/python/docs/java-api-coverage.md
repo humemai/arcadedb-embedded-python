@@ -17,7 +17,7 @@ The Python bindings provide **excellent coverage for common use cases** (~85% of
 | **Transactions** | 90% | ✅ Excellent |
 | **Server Mode** | 70% | ✅ Good |
 | **Data Import** | 30% | ⚠️ Limited |
-| **Graph API** | 10% | ❌ Minimal |
+| **Graph API** | 10% | ❌ Limited |
 | **Schema API** | 0% | ❌ Not Implemented |
 | **Index Management** | 5% | ❌ Minimal |
 | **Advanced Features** | 5% | ❌ Minimal |
@@ -49,9 +49,9 @@ The Python bindings provide **excellent coverage for common use cases** (~85% of
 All query languages fully supported:
 - ✅ SQL
 - ✅ Cypher
-- ✅ Gremlin (full distribution)
+- ✅ Gremlin
 - ✅ MongoDB query syntax
-- ✅ GraphQL (full distribution)
+- ✅ GraphQL
 
 **ResultSet & Results:**
 - ✅ Pythonic iteration (`__iter__`, `__next__`)

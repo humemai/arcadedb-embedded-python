@@ -44,17 +44,14 @@ import arcadedb_embedded
 
 **Solution:**
 
-Uninstall all variants first:
+Uninstall all old packages first:
 ```bash
-pip uninstall -y arcadedb-embedded arcadedb-embedded-headless arcadedb-embedded-minimal
+pip uninstall -y arcadedb-embedded arcadedb-embedded-headless arcadedb-embedded-minimal arcadedb-embedded
 ```
 
-Then install the one you need:
+Then install the current package:
 ```bash
-# Smallest (~94MB, no Gremlin/GraphQL)
-pip install arcadedb-embedded-headless
-
-# Full features (~158MB, includes everything)
+# Current package (~123MB, includes all features except gRPC)
 pip install arcadedb-embedded
 ```
 

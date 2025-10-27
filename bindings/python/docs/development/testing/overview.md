@@ -4,10 +4,9 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 
 ## Quick Statistics
 
-!!! success "Test Results by Distribution"
-    - **Headless**: ✅ 36 passed, 7 skipped (Cypher, Gremlin, Server tests)
-    - **Minimal**: ✅ 40 passed, 3 skipped (Cypher, Gremlin tests)
-    - **Full**: ✅ 43 passed, 0 skipped (all features available)
+!!! success "Test Results"
+    - **Current package**: ✅ 43 passed, 0 skipped
+    - All features available (SQL, Cypher, Gremlin, Studio UI, Vector search)
 
     **Total: 43 tests** across 6 test files, 100% passing
 
