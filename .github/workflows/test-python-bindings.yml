@@ -13,31 +13,28 @@ on:
   # Allow manual trigger
   workflow_dispatch:
     inputs:
-      distribution:
-        description: 'Distribution to test (all, headless, minimal, or full)'
+      variant:
+        description: 'Package variant to test (all, base, or jre)'
         required: false
         default: 'all'
         type: choice
         options:
           - all
-          - headless
-          - minimal
-          - full
+          - base
+          - jre
 
 jobs:
   test:
-    name: Test ${{ matrix.distribution }} distribution
+    name: Test ${{ matrix.variant }} variant
     runs-on: ubuntu-latest
     strategy:
       # Don't cancel other matrix jobs if one fails
       fail-fast: false
       matrix:
-        distribution: [headless, minimal, full]
+        variant: [base]  # Only base variant for now, jre coming soon
         # Filter based on workflow_dispatch input if present
         exclude:
-          - distribution: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.distribution != 'all' && github.event.inputs.distribution != 'headless' && 'headless' || '' }}
-          - distribution: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.distribution != 'all' && github.event.inputs.distribution != 'minimal' && 'minimal' || '' }}
-          - distribution: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.distribution != 'all' && github.event.inputs.distribution != 'full' && 'full' || '' }}
+          - variant: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.variant != 'all' && github.event.inputs.variant != 'base' && 'base' || '' }}
 
     steps:
       - name: Checkout code
@@ -46,19 +43,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
-      - name: Build and test ${{ matrix.distribution }} distribution
+      - name: Build and test ${{ matrix.variant }} variant
         run: |
           cd bindings/python
-          echo "🔨 Building ${{ matrix.distribution }} distribution..."
-          ./build-all.sh ${{ matrix.distribution }}
+          echo "🔨 Building ${{ matrix.variant }} variant..."
+          ./build-all.sh ${{ matrix.variant }}
         env:
-          DISTRIBUTION: ${{ matrix.distribution }}
+          VARIANT: ${{ matrix.variant }}
 
       - name: Extract wheel for additional testing
         run: |
           cd bindings/python
           mkdir -p test-install
-          cp dist/*${{ matrix.distribution }}*.whl test-install/ || cp dist/*.whl test-install/
+          cp dist/*${{ matrix.variant }}*.whl test-install/ || cp dist/*.whl test-install/
 
       - name: Set up Python for host testing
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
@@ -80,7 +77,7 @@ jobs:
         id: pytest
         run: |
           cd bindings/python
-          echo "🧪 Testing ${{ matrix.distribution }} distribution..."
+          echo "🧪 Testing ${{ matrix.variant }} variant..."
 
           # Run pytest with verbose output
           pytest tests/ -v --tb=short --color=yes 2>&1 | tee pytest-output.txt
@@ -90,7 +87,7 @@ jobs:
             echo "❌ Tests FAILED"
             exit 1
           elif grep -q "passed" pytest-output.txt || grep -q "skipped" pytest-output.txt; then
-            echo "✅ Tests PASSED (may include skipped tests based on distribution)"
+            echo "✅ Tests PASSED - All 43 tests should pass in our variant"
 
             # Count results
             PASSED=$(grep -oP '\d+(?= passed)' pytest-output.txt || echo "0")
@@ -115,7 +112,7 @@ jobs:
         run: |
           cd bindings/python
 
-          echo "## 🧪 Test Results: ${{ matrix.distribution }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 🧪 Test Results: ${{ matrix.variant }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ steps.pytest.outcome }}" = "success" ]; then
@@ -132,17 +129,16 @@ jobs:
           echo "| ❌ Failed | ${{ steps.pytest.outputs.failed || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          echo "### Expected Behavior by Distribution:" >> $GITHUB_STEP_SUMMARY
+          echo "### Expected Behavior:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Headless**: Some tests skipped (no server/Gremlin features)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Minimal**: Few tests skipped (no Gremlin, has server/Studio)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Full**: Minimal skipped tests (all features available)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Base package**: All 43 tests should pass (includes SQL, Cypher, Gremlin, Studio)" >> $GITHUB_STEP_SUMMARY
+          echo "- **JRE package**: Same as base but with bundled JRE (coming soon)" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: test-results-${{ matrix.distribution }}
+          name: test-results-${{ matrix.variant }}
           path: |
             bindings/python/pytest-output.txt
             bindings/python/.coverage
@@ -151,11 +147,11 @@ jobs:
       - name: Upload wheel artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: wheel-${{ matrix.distribution }}-test
+          name: wheel-${{ matrix.variant }}-test
           path: bindings/python/dist/*.whl
           retention-days: 7
 
-  # Summary job that checks all distributions
+  # Summary job that checks all variants
   test-summary:
     name: Test Summary
     needs: test
@@ -168,11 +164,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.test.result }}" = "success" ]; then
-            echo "✅ **All distributions passed testing!**" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **All variants passed testing!**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "All three Python distributions (headless, minimal, full) have been successfully built and tested." >> $GITHUB_STEP_SUMMARY
+            echo "The ArcadeDB Python package (base variant) has been successfully built and tested." >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ **Some distributions failed testing**" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Some variants failed testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Please check the individual test jobs for details." >> $GITHUB_STEP_SUMMARY
             exit 1

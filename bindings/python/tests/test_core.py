@@ -1,6 +1,6 @@
 """
 Core functionality tests for ArcadeDB Python bindings.
-These tests work with ALL distributions (headless, minimal, full).
+These tests work with our base package (includes SQL, Cypher, Gremlin, Studio).
 """
 
 import arcadedb_embedded as arcadedb
@@ -356,7 +356,7 @@ def test_cypher_queries(temp_db_path):
             assert "Bob" in names
         except arcadedb.ArcadeDBError as e:
             if "Query engine 'cypher' was not found" in str(e):
-                pytest.skip("Cypher query engine not available in this distribution")
+                pytest.skip("Cypher not available (unexpected in base package)")
             raise
 
 

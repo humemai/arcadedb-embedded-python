@@ -1,6 +1,6 @@
 """
 Gremlin tests for ArcadeDB Python bindings.
-These tests require Gremlin support (full distribution only).
+These tests now work with our base package (includes Gremlin support).
 """
 
 import arcadedb_embedded as arcadedb

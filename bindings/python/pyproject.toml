@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel", "jpype1"]
 build-backend = "setuptools.build_meta"
 
 # This file is a template. During build, the following fields are dynamically set:
-# - name: Set based on distribution (headless, minimal, or full)
+# - name: Set based on variant (arcadedb-embed or arcadedb-embed-jre)
 # - version: Extracted from parent pom.xml via extract_version.py
-# - description: Set based on distribution features
+# - description: Set based on variant features
 
 [project]
-name = "arcadedb-embedded"
-version = "0.0.0"
-description = "ArcadeDB embedded Python bindings"
+name = "arcadedb-embed"
+version = "0.0.1"
+description = "ArcadeDB embedded Python package"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "Apache-2.0"}
@@ -69,6 +69,6 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
 markers = [
-    "server: tests that require server support (minimal/full)",
-    "gremlin: tests that require Gremlin support (full only)",
+    "server: tests that require server/studio support",
+    "integration: tests that require external components",
 ]

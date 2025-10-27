@@ -50,13 +50,13 @@ def temp_dir_factory():
 
 
 def has_server_support():
-    """Check if server support is available (minimal or full distribution)."""
+    """Check if server support is available (available in our base package)."""
     try:
         import os
 
         import arcadedb_embedded
 
-        # Check if studio JAR exists (indicates minimal or full distribution)
+        # Check if studio JAR exists (indicates server support)
         jar_dir = os.path.join(os.path.dirname(arcadedb_embedded.__file__), "jars")
         if not os.path.exists(jar_dir):
             return False
@@ -67,7 +67,7 @@ def has_server_support():
 
 
 def has_gremlin_support():
-    """Check if Gremlin support is available (full distribution)."""
+    """Check if Gremlin support is available (available in our base package)."""
     try:
         # Try to find Gremlin-related classes
         import os
@@ -86,9 +86,9 @@ def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line(
         "markers",
-        "server: tests that require server support (minimal/full distributions)",
+        "server: tests that require server support (available in base package)",
     )
     config.addinivalue_line(
         "markers",
-        "gremlin: tests that require Gremlin support (full distribution only)",
+        "gremlin: tests that require Gremlin support (available in base package)",
     )
