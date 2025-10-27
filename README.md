@@ -2,8 +2,8 @@
 
 > **Python bindings for [ArcadeDB](https://github.com/ArcadeData/arcadedb)** - A multi-model database supporting Graph, Document, Key/Value, Vector, and Time Series models with extreme performance.
 
-[![PyPI - Base](https://img.shields.io/badge/PyPI-arcadedb--embed-blue)](https://pypi.org/project/arcadedb-embed/)
-[![PyPI - JRE](https://img.shields.io/badge/PyPI-arcadedb--embed--jre-blue)](https://pypi.org/project/arcadedb-embed-jre/)
+[![PyPI - Base](https://img.shields.io/badge/PyPI-arcadedb--embedded-blue)](https://pypi.org/project/arcadedb-embedded/)
+[![PyPI - JRE](https://img.shields.io/badge/PyPI-arcadedb--embedded--jre-blue)](https://pypi.org/project/arcadedb-embedded-jre/)
 [![Tests](https://img.shields.io/badge/tests-43%2F43%20passing-brightgreen)](https://github.com/humemai/arcadedb-embedded-python/actions)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 
@@ -16,13 +16,12 @@
 ### Installation
 
 ```bash
-pip install arcadedb-embed      # Base package (requires Java 21+)
-pip install arcadedb-embed-jre  # With bundled JRE (coming soon)
-```
+pip install arcadedb-embedded        # Requires Java 21+
+pip install arcadedb-embedded-jre  # With bundled JRE (coming soon)
 
 **Requirements:**
 
-- **Base package:** Python 3.8+ and [Java 21+](https://adoptium.net/) (JRE)
+- **Main package:** Python 3.8+ and [Java 21+](https://adoptium.net/) (JRE)
 - **JRE package:** Python 3.8+ only (JRE bundled)
 
 **💡 Tip:** See "JVMCI is not enabled" warnings? Install [GraalVM](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#eliminate-polyglot-warnings-optional) to fix them
@@ -126,8 +125,8 @@ result = db.query("sql", """
 ✅ **Query Languages** - SQL, Cypher, Gremlin, MongoDB (all included)
 ✅ **ACID Transactions** - Full transactional support
 ✅ **Vector Search** - HNSW indexing for embeddings
-✅ **Studio UI** - Web-based database browser (base package)
-✅ **Self-Contained** - All JARs bundled, no external dependencies
+✅ **Studio UI** - Web-based database browser (included)
+✅ **Self-Contained** - All dependencies bundled (123MB, gRPC excluded)
 ✅ **Production Ready** - 43/43 tests passing, actively maintained
 
 ---
@@ -136,10 +135,10 @@ result = db.query("sql", """
 
 | Package | Size | Java Required | Studio UI | Use Case |
 |---------|------|---------------|-----------|----------|
-| **arcadedb-embed** | ~97MB | Java 21+ | ✅ | Development & Production |
-| **arcadedb-embed-jre** | ~170MB | None | ✅ | Simplified deployment |
+| **arcadedb-embedded** | ~123MB | Java 21+ | ❌ | Optimized deployment |
+| **arcadedb-embedded-jre** | ~170MB | None | ✅ | Simplified deployment |
 
-Both packages include the same features: SQL, Cypher, Gremlin, Studio UI, and all core functionality.
+Both packages include the same features: SQL, Cypher, Gremlin, Studio UI, and all core functionality except gRPC wire protocol.
 The only difference is Java runtime dependency.
 
 All packages use the same import: `import arcadedb_embedded as arcadedb`

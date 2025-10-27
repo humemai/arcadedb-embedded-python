@@ -17,7 +17,7 @@ Record Types Used:
 - Not using VERTEX/EDGE types (those are for graph operations)
 
 Requirements:
-- arcadedb-embedded (any distribution: headless, minimal, or full)
+- arcadedb-embedded
 - JRE 21+
 
 Note: This example creates a database at ./my_test_databases/task_db/

@@ -1,20 +1,22 @@
 # Docker build for ArcadeDB Python package
-# Builds arcadedb-embed package variants (base and jre) from minimal distribution
+# Builds arcadedb-embedded package variants (base and jre) with custom JAR filtering
+# Uses original ArcadeDB distribution but excludes gRPC wire protocol to optimize size
 #
 # REQUIRED BUILD ARGS (passed from build-all.sh):
 #   VARIANT - one of: base, jre
-#   PACKAGE_NAME - e.g., arcadedb-embed, arcadedb-embed-jre
+#   PACKAGE_NAME - e.g., arcadedb-embedded, arcadedb-embedded-jre
 #   PACKAGE_DESCRIPTION - package description
 #   ARCADEDB_TAG - version tag from pom.xml (e.g., 25.10.1-SNAPSHOT)
+#                  Default below is fallback; build-all.sh extracts and passes actual version
 
 ARG VARIANT=base
-ARG PACKAGE_NAME=arcadedb-embed
+ARG PACKAGE_NAME=arcadedb-embedded
 ARG PACKAGE_DESCRIPTION="ArcadeDB embedded Python package"
-ARG ARCADEDB_TAG=24.11.1
+ARG ARCADEDB_TAG=25.10.1-SNAPSHOT
 
-# Stage 1: Use prebuilt ArcadeDB minimal image to obtain compiled JARs
-# We only use the minimal distribution now (includes Studio, core database)
-FROM arcadedata/arcadedb-minimal:${ARCADEDB_TAG} AS java-builder
+# Stage 1: Use prebuilt ArcadeDB image to obtain compiled JARs
+# We use the original distribution and selectively exclude only gRPC for Python use cases
+FROM arcadedata/arcadedb:${ARCADEDB_TAG} AS java-builder
 
 # nothing to do here; jars will be copied from /home/arcadedb/lib in the python-builder stage
 

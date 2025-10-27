@@ -1,6 +1,8 @@
 #!/bin/bash
 # ArcadeDB Python Package Build Script
-# Builds arcadedb-embed variants (base and jre) from minimal distribution
+#!/bin/bash
+set -euo pipefail
+# Builds arcadedb-embedded variants (base and jre) with custom JAR filtering
 
 set -e
 
@@ -34,8 +36,8 @@ print_usage() {
     echo "  $0 base               # Build base variant explicitly"
     echo "  $0 jre                # Build JRE variant (future)"
     echo ""
-    echo "Note: Both variants are based on ArcadeDB minimal distribution"
-    echo "      (includes Studio UI, excludes Gremlin/GraphQL)"
+    echo "Note: Package includes all ArcadeDB features except gRPC wire protocol"
+    echo "      (gRPC excluded to keep size manageable - may add in future if needed)"
     echo ""
 }
 
@@ -80,7 +82,7 @@ fi
 
 echo -e "${CYAN}📋 Build Configuration:${NC}"
 echo -e "   Variant: ${YELLOW}$VARIANT${NC}"
-echo -e "   Base Distribution: ${YELLOW}minimal${NC}"
+echo -e "   Base Source: ${YELLOW}ArcadeDB with custom filtering${NC}"
 echo -e "   Build Method: ${YELLOW}Docker${NC}"
 echo ""
 
@@ -94,13 +96,13 @@ build_variant() {
     case $variant in
         base)
             variant_name="Base Package (requires Java 21+)"
-            package_name="arcadedb-embed"
-            description="ArcadeDB embedded Python package - requires Java 21+ (minimal distribution: Studio + core database)"
+            package_name="arcadedb-embedded"
+            description="ArcadeDB embedded Python package - requires Java 21+ (includes all features except gRPC)"
             ;;
         jre)
             variant_name="JRE Package (bundled JRE)"
-            package_name="arcadedb-embed-jre"
-            description="ArcadeDB embedded Python package with bundled JRE - no Java installation required (minimal distribution: Studio + core database)"
+            package_name="arcadedb-embedded-jre"
+            description="ArcadeDB embedded Python package with bundled JRE - no Java installation required (includes all features except gRPC)"
             ;;
         *)
             echo -e "${RED}❌ Unknown variant: $variant${NC}"
@@ -178,7 +180,7 @@ fi
 echo ""
 echo -e "${BLUE}💡 Next steps:${NC}"
 echo -e "   📦 Install the package:"
-echo -e "      ${YELLOW}pip install dist/arcadedb_embed-*.whl${NC}"
+echo -e "      ${YELLOW}pip install dist/arcadedb_embedded-*.whl${NC}"
 echo ""
 echo -e "   🧪 Run tests:"
 echo -e "      ${YELLOW}pytest tests/${NC}"

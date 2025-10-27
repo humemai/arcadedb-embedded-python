@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 def find_jar_files():
-    """Find all necessary ArcadeDB JAR files from minimal distribution."""
+    """Find all necessary ArcadeDB JAR files using custom filtering."""
     # Get variant type from environment variable (for logging purposes)
     variant = os.environ.get("ARCADEDB_VARIANT", "base").lower()
 
@@ -25,16 +25,16 @@ def find_jar_files():
         variant = "base"
 
     print(f"📦 Building variant: {variant}")
-    print("📦 Using minimal distribution JAR set")
+    print("📦 Including all JARs except gRPC wire protocol (optimal balance)")
 
     # Look for JAR files copied from the ArcadeDB Docker image
-    # The Dockerfile copies JARs from the minimal distribution image to these locations
+    # The Dockerfile copies JARs from the full distribution image to these locations
     quick_paths = [
         Path("/build/jars"),  # Docker build location
         Path("/home/arcadedb/lib"),  # Direct from ArcadeDB image
     ]
 
-    found_jars = []
+    all_jars = []
 
     # Check for jars from Docker image
     for quick in quick_paths:
@@ -42,22 +42,43 @@ def find_jar_files():
             jars = list(map(str, quick.glob("*.jar")))
             if jars:
                 print("✅ Found {} JAR files in: {}".format(len(jars), quick))
-                found_jars.extend(jars)
+                all_jars.extend(jars)
                 break
 
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_jars = []
-    for jar in found_jars:
-        jar_name = Path(jar).name
-        # Skip test and source JARs to reduce size
-        if "-tests.jar" in jar_name or "-sources.jar" in jar_name:
-            continue
-        if jar not in seen:
-            seen.add(jar)
-            unique_jars.append(jar)
+    # Simple filtering: exclude only gRPC wire protocol (too big, not needed)
+    if all_jars:
+        included_jars = []
+        excluded_jars = []
 
-    return unique_jars
+        for jar in all_jars:
+            jar_name = Path(jar).name
+            # Only exclude gRPC wire protocol
+            if "arcadedb-grpcw-" in jar_name:
+                excluded_jars.append(jar)
+            else:
+                included_jars.append(jar)
+
+        print("\n📊 JAR Filtering Results:")
+        print(f"   Total found: {len(all_jars)}")
+        print(f"   Included: {len(included_jars)}")
+        print(f"   Excluded: {len(excluded_jars)}")
+
+        if excluded_jars:
+            print("\n❌ Excluded JARs (gRPC protocol not needed):")
+            for jar in excluded_jars:
+                jar_name = Path(jar).name
+                size_mb = Path(jar).stat().st_size / 1024 / 1024
+                print(f"   - {jar_name} ({size_mb:.1f}MB)")
+
+        print("\n✅ Included JARs:")
+        for jar in included_jars:
+            jar_name = Path(jar).name
+            size_mb = Path(jar).stat().st_size / 1024 / 1024
+            print(f"   - {jar_name} ({size_mb:.1f}MB)")
+
+        return included_jars
+
+    return []
 
 
 def copy_jars_to_package():

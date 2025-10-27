@@ -4,7 +4,7 @@ This guide explains how to work with the MkDocs Material documentation for Arcad
 
 ## Documentation Structure
 
-```
+```text
 bindings/python/
 ├── docs/              # Documentation source
 │   ├── index.md       # Homepage
@@ -28,7 +28,7 @@ cd bindings/python
 mkdocs serve
 ```
 
-Then open: **http://127.0.0.1:8000/arcadedb/**
+Then open: <http://127.0.0.1:8000/arcadedb/>
 
 Any changes to `.md` files will automatically refresh in your browser!
 
@@ -77,7 +77,7 @@ Documentation is versioned using [mike](https://github.com/jimporter/mike) and a
 ```bash
 # 1. Make documentation changes on python-embedded branch
 # 2. Build and test wheels
-./build-all.sh headless
+./build-all.sh base
 pytest
 
 # 3. Commit and push changes
@@ -136,8 +136,8 @@ Documentation versions **match PyPI package versions**:
 
 | Release Tag | Docs Version | PyPI Packages |
 |-------------|--------------|---------------|
-| `python-X.Y.Z` | `X.Y.Z` | `arcadedb-embedded-*==X.Y.Z` |
-| Example: `v25.9.1-python` | `25.9.1` | `arcadedb-embedded-*==25.9.1` |
+| `python-X.Y.Z` | `X.Y.Z` | `arcadedb-embedded==X.Y.Z` |
+| Example: `v25.9.1-python` | `25.9.1` | `arcadedb-embedded==25.9.1` |
 
 This ensures users always see documentation matching their installed package version.
 
@@ -209,24 +209,21 @@ This ensures users always see documentation matching their installed package ver
 #### Code Block Highlighting
 
 ```python
-# Line highlighting
-```python hl_lines="2 3"
 import arcadedb_embedded as arcadedb
 db = arcadedb.create_database("./mydb")  # (1)!
 db.close()
 ```
 
 1. Creates a new database in the current directory
-```
-\```
 
 #### Tables
 
 ```markdown
-| Feature | Headless | Minimal | Full |
-|---------|----------|---------|------|
-| SQL | ✅ Yes | ✅ Yes | ✅ Yes |
-| Gremlin | ❌ No | ❌ No | ✅ Yes |
+| Feature | Current Package | Notes |
+|---------|----------------|--------|
+| SQL | ✅ Yes | All SQL features |
+| Gremlin | ✅ Yes | Graph queries |
+| Studio UI | ✅ Yes | Web interface |
 ```
 
 #### Internal Links
@@ -253,9 +250,10 @@ When documenting API methods, use this structure:
 Brief one-line description.
 
 **Signature:**
+
 ```python
 method_name(param1: type, param2: type = default) -> ReturnType
-\```
+```
 
 **Parameters:**
 
@@ -271,14 +269,14 @@ method_name(param1: type, param2: type = default) -> ReturnType
 - `ExceptionType`: When this exception occurs
 
 **Example:**
+
 ```python
 result = obj.method_name("value", param2=True)
-\```
+```
 
 **See Also:**
 
 - [Related Method](related.md)
-\```
 
 ## Testing Documentation
 

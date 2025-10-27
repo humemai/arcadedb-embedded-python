@@ -8,9 +8,8 @@ Comprehensive test suite for the ArcadeDB Python embedded bindings.
 ## Quick Stats
 
 - **43 tests** across 6 test files
-- ✅ **Headless**: 36 passed, 7 skipped
-- ✅ **Minimal**: 40 passed, 3 skipped
-- ✅ **Full**: 43 passed, 0 skipped
+- ✅ **Current package**: 43 passed, 0 skipped
+- Package includes all ArcadeDB features (SQL, Cypher, Gremlin, Studio)
 
 ## Running Tests
 
@@ -40,7 +39,7 @@ pytest -k "transaction" -v
 | `test_concurrency.py` | 4 | File locking, thread safety, multi-process |
 | `test_server_patterns.py` | 6 | Embedded, server-managed, HTTP performance |
 | `test_importer.py` | 13 | CSV, JSON, JSONL, Neo4j import |
-| `test_gremlin.py` | 1 | Gremlin query language (full only) |
+| `test_gremlin.py` | 1 | Gremlin query language |
 
 ## Documentation Links
 

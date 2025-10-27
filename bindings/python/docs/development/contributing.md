@@ -9,11 +9,8 @@ Thank you for your interest in contributing to ArcadeDB Python bindings! This gu
 git clone https://github.com/humemai/arcadedb.git
 cd arcadedb/bindings/python
 
-# Build all distributions (requires Docker)
-./build-all.sh all
-
-# Or build specific distribution
-./build-all.sh headless
+# Build the package (requires Docker)
+./build-all.sh base
 
 # Install in development mode
 pip install -e .
@@ -106,7 +103,7 @@ arcadedb/bindings/python/
 │   ├── test_core.py               # Core tests
 │   ├── test_server.py             # Server tests
 │   ├── test_importer.py           # Importer tests
-│   ├── test_gremlin.py            # Gremlin tests (full only)
+│   ├── test_gremlin.py            # Gremlin tests
 │   ├── test_concurrency.py        # Concurrency tests
 │   └── test_server_patterns.py    # Server pattern tests
 ├── docs/                          # MkDocs documentation
@@ -132,13 +129,8 @@ arcadedb/bindings/python/
 ### Docker Build (Recommended)
 
 ```bash
-# Build all distributions
-./build-all.sh all
-
-# Build specific distribution
-./build-all.sh headless   # ~94 MB, SQL/Cypher only
-./build-all.sh minimal    # ~97 MB, adds Studio UI
-./build-all.sh full       # ~158 MB, adds Gremlin/GraphQL
+# Build the current package
+./build-all.sh base
 
 # Output: dist/*.whl
 ```
@@ -146,16 +138,16 @@ arcadedb/bindings/python/
 **What the build does:**
 
 1. Extracts ArcadeDB version from parent `pom.xml`
-2. Downloads appropriate JAR files for distribution
-3. Packages Python code with JARs
+2. Downloads appropriate JAR files with custom filtering
+3. Packages Python code with optimized JARs (excludes only gRPC)
 4. Runs tests in isolated Docker environment
 5. Creates wheel file in `dist/`
 
 ### Local Build
 
 ```bash
-# Download JARs for headless distribution
-python setup_jars.py headless
+# Download JARs with custom filtering
+python setup_jars.py
 
 # Build wheel
 python -m build
@@ -201,7 +193,7 @@ pytest tests/test_server.py
 # Importer
 pytest tests/test_importer.py
 
-# Gremlin (requires full distribution)
+# Gremlin tests
 pytest tests/test_gremlin.py -m gremlin
 ```
 
@@ -688,28 +680,22 @@ We follow ArcadeDB core version:
 python extract_version.py
 ```
 
-2. **Build Distributions**
+2. **Build Package**
 
 ```bash
-# Build all distributions
-./build-all.sh all
+# Build the package
+./build-all.sh base
 
 # Verify wheels
 ls -lh dist/
 ```
 
-3. **Test Installations**
+3. **Test Installation**
 
 ```bash
-# Test each wheel
-pip install dist/arcadedb_embedded_headless-*.whl
-python -c "import arcadedb_embedded; print('✅ Headless OK')"
-
-pip install dist/arcadedb_embedded_minimal-*.whl
-python -c "import arcadedb_embedded; print('✅ Minimal OK')"
-
-pip install dist/arcadedb_embedded_full-*.whl
-python -c "import arcadedb_embedded; print('✅ Full OK')"
+# Test the wheel
+pip install dist/arcadedb_embed-*.whl
+python -c "import arcadedb_embedded; print('✅ Package OK')"
 ```
 
 4. **Publish to PyPI**
@@ -722,7 +708,7 @@ pip install twine
 twine upload --repository testpypi dist/*
 
 # Test install from Test PyPI
-pip install --index-url https://test.pypi.org/simple/ arcadedb-embedded-headless
+pip install --index-url https://test.pypi.org/simple/ arcadedb-embedded
 
 # Upload to production PyPI
 twine upload dist/*
