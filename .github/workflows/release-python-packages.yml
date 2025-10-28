@@ -307,11 +307,7 @@ jobs:
           # Create simple index directory structure
           mkdir -p simple/arcadedb-embedded
 
-          # Get all releases
-          echo "📋 Fetching all releases..."
-          gh release list --limit 100 --json tagName,isPrerelease,assets > releases.json
-
-          # Generate index.html
+          # Generate index.html header
           cat > simple/arcadedb-embedded/index.html <<'EOF'
           <!DOCTYPE html>
           <html>
@@ -323,13 +319,15 @@ jobs:
               <h1>Links for arcadedb-embedded</h1>
           EOF
 
-          # Add links for each wheel from each release
-          jq -r '.[] | select(.assets | length > 0) |
-            .tagName as $tag |
-            .assets[] |
-            select(.name | endswith(".whl")) |
-            "<a href=\"https://github.com/${{ github.repository }}/releases/download/\($tag)/\(.name)\">\(.name)</a><br/>"' \
-            releases.json >> simple/arcadedb-embedded/index.html
+          # Get all releases and add wheel links
+          echo "📋 Fetching all releases..."
+          gh release list --limit 100 --json tagName | jq -r '.[].tagName' | while read -r tag; do
+            echo "  Processing release: $tag"
+            # Get wheel assets for this release
+            gh release view "$tag" --json assets --jq '.assets[] | select(.name | endswith(".whl")) | .name' | while read -r wheel; do
+              echo "<a href=\"https://github.com/${{ github.repository }}/releases/download/$tag/$wheel\">$wheel</a><br/>" >> simple/arcadedb-embedded/index.html
+            done
+          done
 
           # Close HTML
           cat >> simple/arcadedb-embedded/index.html <<'EOF'

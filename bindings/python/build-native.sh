@@ -183,8 +183,10 @@ echo -e "${CYAN}🏷️  Platform tag: ${YELLOW}${PLAT_NAME}${NC}"
 if [[ "$PLATFORM" == darwin/* ]]; then
     export _PYTHON_HOST_PLATFORM="macosx-${MACOSX_VERSION}-${ARCH_TAG}"
     export ARCHFLAGS="-arch ${ARCH_TAG}"
+    export MACOSX_DEPLOYMENT_TARGET="${MACOSX_VERSION}"
     echo -e "${CYAN}🏷️  macOS platform override: ${YELLOW}${_PYTHON_HOST_PLATFORM}${NC}"
     echo -e "${CYAN}🏷️  ARCHFLAGS: ${YELLOW}${ARCHFLAGS}${NC}"
+    echo -e "${CYAN}🏷️  MACOSX_DEPLOYMENT_TARGET: ${YELLOW}${MACOSX_DEPLOYMENT_TARGET}${NC}"
 fi
 
 # Build wheel
