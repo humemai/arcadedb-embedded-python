@@ -36,9 +36,14 @@ jobs:
 
           # Download JARs from official Docker image
           echo "📦 Downloading JARs from arcadedata/arcadedb:$ARCADEDB_TAG..."
-          docker run --rm -v "$(pwd)/src/arcadedb_embedded/jars:/output" \
-            arcadedata/arcadedb:$ARCADEDB_TAG \
-            sh -c 'cp /home/arcadedb/lib/*.jar /output/'
+
+          # Create output directory
+          mkdir -p src/arcadedb_embedded/jars
+
+          # Create a temporary container and copy JARs from it
+          CONTAINER_ID=$(docker create arcadedata/arcadedb:$ARCADEDB_TAG)
+          docker cp $CONTAINER_ID:/home/arcadedb/lib/. src/arcadedb_embedded/jars/
+          docker rm $CONTAINER_ID
 
           # Verify JARs were downloaded
           ls -lh src/arcadedb_embedded/jars/
