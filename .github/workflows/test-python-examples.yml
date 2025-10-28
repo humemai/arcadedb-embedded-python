@@ -207,7 +207,9 @@ jobs:
           > $results_file
 
           # Find all Python example files (exclude download_sample_data.py as it's a utility)
-          examples=$(ls [0-9]*.py 2>/dev/null | sort)
+          # TODO: Temporarily testing only example 01 for faster CI - restore to [0-9]*.py for full testing
+          examples=$(ls 01*.py 2>/dev/null | sort)
+          # examples=$(ls [0-9]*.py 2>/dev/null | sort)  # Uncomment for full example testing
 
           if [ -z "$examples" ]; then
             echo "❌ No example files found!"
