@@ -210,38 +210,42 @@ jobs:
           # Get wheel size and analyze contents
           WHEEL_FILE=$(ls dist/*.whl 2>/dev/null | head -n1)
           if [ -n "$WHEEL_FILE" ]; then
-            WHEEL_SIZE_BYTES=$(stat -c%s "$WHEEL_FILE" 2>/dev/null || stat -f%z "$WHEEL_FILE" 2>/dev/null)
-            WHEEL_SIZE_MB=$(echo "scale=1; $WHEEL_SIZE_BYTES / 1024 / 1024" | bc)
+            # Get wheel size (portable way)
+            if stat -c%s "$WHEEL_FILE" 2>/dev/null; then
+              # Linux
+              WHEEL_SIZE_BYTES=$(stat -c%s "$WHEEL_FILE")
+            else
+              # macOS/BSD
+              WHEEL_SIZE_BYTES=$(stat -f%z "$WHEEL_FILE")
+            fi
+            WHEEL_SIZE_MB=$(python3 -c "print(f'{$WHEEL_SIZE_BYTES / 1024 / 1024:.1f}')")
 
             # Unzip and analyze components (wheel is a zip file)
             TEMP_DIR=$(mktemp -d)
             unzip -q "$WHEEL_FILE" -d "$TEMP_DIR"
 
-            # List structure for debugging
-            echo "📁 Wheel structure:"
-            ls -la "$TEMP_DIR"/ || true
-            find "$TEMP_DIR" -type d -name "jre" || true
-
             # Calculate JRE size (look for jre/ directory anywhere)
             JRE_DIR=$(find "$TEMP_DIR" -type d -name "jre" | head -n1)
             if [ -n "$JRE_DIR" ] && [ -d "$JRE_DIR" ]; then
-              JRE_SIZE_BYTES=$(du -sb "$JRE_DIR" 2>/dev/null | cut -f1)
-              JRE_SIZE_MB=$(echo "scale=1; $JRE_SIZE_BYTES / 1024 / 1024" | bc)
+              # Use du with -k for KB (portable across Linux/macOS)
+              JRE_SIZE_KB=$(du -sk "$JRE_DIR" | cut -f1)
+              JRE_SIZE_MB=$(python3 -c "print(f'{$JRE_SIZE_KB / 1024:.1f}')")
             else
               JRE_SIZE_MB="N/A"
             fi
 
             # Calculate JAR size (*.jar files)
-            JAR_SIZE_BYTES=$(find "$TEMP_DIR" -name "*.jar" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
-            if [ -n "$JAR_SIZE_BYTES" ] && [ "$JAR_SIZE_BYTES" != "0" ]; then
-              JAR_SIZE_MB=$(echo "scale=1; $JAR_SIZE_BYTES / 1024 / 1024" | bc)
+            JAR_COUNT=$(find "$TEMP_DIR" -name "*.jar" | wc -l | tr -d ' ')
+            if [ "$JAR_COUNT" -gt 0 ]; then
+              JAR_SIZE_KB=$(find "$TEMP_DIR" -name "*.jar" -exec du -k {} + | awk '{sum+=$1} END {print sum}')
+              JAR_SIZE_MB=$(python3 -c "print(f'{$JAR_SIZE_KB / 1024:.1f}')")
             else
               JAR_SIZE_MB="N/A"
             fi
 
             # Calculate installed size (total uncompressed)
-            INSTALLED_SIZE_BYTES=$(du -sb "$TEMP_DIR" 2>/dev/null | cut -f1)
-            INSTALLED_SIZE_MB=$(echo "scale=0; $INSTALLED_SIZE_BYTES / 1024 / 1024" | bc)
+            INSTALLED_SIZE_KB=$(du -sk "$TEMP_DIR" | cut -f1)
+            INSTALLED_SIZE_MB=$(python3 -c "print(f'{$INSTALLED_SIZE_KB / 1024:.0f}')")
 
             rm -rf "$TEMP_DIR"
 
