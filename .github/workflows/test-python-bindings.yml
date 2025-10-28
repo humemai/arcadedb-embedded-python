@@ -42,11 +42,20 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      # Docker is needed on all platforms to download ArcadeDB JARs
+      - name: Set up Docker (macOS)
+        if: startsWith(matrix.platform, 'darwin/')
+        run: |
+          # Docker Desktop is pre-installed on macOS runners but may need to be started
+          # GitHub's macos runners have Docker available
+          docker version || echo "Docker not available"
+
       - name: Set up Docker Buildx (Linux only)
         if: matrix.platform == 'linux/amd64'
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
       - name: Build and test arcadedb-embedded (${{ matrix.platform }})
+        shell: bash
         run: |
           cd bindings/python
           echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }}..."
