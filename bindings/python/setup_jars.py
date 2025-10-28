@@ -83,7 +83,7 @@ def find_jar_files():
         print(f"   Excluded: {len(excluded_jars)}")
 
         if excluded_jars:
-            print("\n❌ Excluded JARs (gRPC protocol not needed):")
+            print("\n❌ Excluded JARs:")
             for jar in excluded_jars:
                 jar_name = Path(jar).name
                 size_mb = Path(jar).stat().st_size / 1024 / 1024

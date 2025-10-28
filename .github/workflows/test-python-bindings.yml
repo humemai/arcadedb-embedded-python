@@ -264,7 +264,7 @@ jobs:
           fi
 
           echo "- **Platform**: ${{ matrix.platform }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Features**: All ArcadeDB features except gRPC wire protocol" >> $GITHUB_STEP_SUMMARY
+          echo "- **Features**: All ArcadeDB features (some JARs excluded, see jar_exclusions.txt)" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload test results
         if: always()

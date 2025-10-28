@@ -139,7 +139,7 @@ arcadedb/bindings/python/
 
 1. Extracts ArcadeDB version from parent `pom.xml`
 2. Downloads appropriate JAR files with custom filtering
-3. Packages Python code with optimized JARs (excludes only gRPC)
+3. Packages Python code with optimized JARs (see `jar_exclusions.txt`)
 4. Runs tests in isolated Docker environment
 5. Creates wheel file in `dist/`
 
