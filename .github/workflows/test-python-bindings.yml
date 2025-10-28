@@ -203,40 +203,36 @@ jobs:
           cd bindings/python
           echo "🧪 Testing arcadedb-embedded (with bundled JRE)..."
 
-          # Run pytest with verbose output
-          pytest tests/ -v --tb=short --color=yes 2>&1 | tee pytest-output.txt
+          # Run pytest with JUnit XML output for structured results
+          set +e  # Don't exit on test failures
+          pytest tests/ -v --tb=short --color=yes --junitxml=test-results.xml
+          PYTEST_EXIT_CODE=$?
+          set -e
 
-          # Check results
-          if grep -q "failed" pytest-output.txt; then
-            echo "❌ Tests FAILED"
-            exit 1
-          elif grep -q "passed" pytest-output.txt || grep -q "skipped" pytest-output.txt; then
-            echo "✅ Tests PASSED"
-
-            # Count results (cross-platform: use sed instead of grep -P)
-            # Format: "===== 43 passed, 2 skipped in 1.23s =====" or "===== 43 passed in 1.23s ====="
-            # Use [^0-9] to match non-digit before number to avoid greedy matching
-            PASSED=$(sed -n 's/.* \([0-9][0-9]*\) passed.*/\1/p' pytest-output.txt | tail -1)
-            SKIPPED=$(sed -n 's/.* \([0-9][0-9]*\) skipped.*/\1/p' pytest-output.txt | tail -1)
-            FAILED=$(sed -n 's/.* \([0-9][0-9]*\) failed.*/\1/p' pytest-output.txt | tail -1)
+          # Parse JUnit XML for test counts (cross-platform XML parsing)
+          if [ -f "test-results.xml" ]; then
+            # Extract counts from testsuite element
+            PASSED=$(grep -oE 'tests="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
+            FAILED=$(grep -oE 'failures="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
+            SKIPPED=$(grep -oE 'skipped="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
 
             # Default to 0 if not found
             PASSED=${PASSED:-0}
-            SKIPPED=${SKIPPED:-0}
             FAILED=${FAILED:-0}
+            SKIPPED=${SKIPPED:-0}
 
             echo "passed=$PASSED" >> $GITHUB_OUTPUT
             echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
             echo "failed=$FAILED" >> $GITHUB_OUTPUT
 
-            # Exit with error if any failures
-            if [ "$FAILED" != "0" ]; then
-              exit 1
-            fi
+            echo "✅ Test results: $PASSED passed, $SKIPPED skipped, $FAILED failed"
           else
-            echo "⚠️ Unexpected test output"
+            echo "⚠️ test-results.xml not found"
             exit 1
           fi
+
+          # Exit with pytest's exit code
+          exit $PYTEST_EXIT_CODE
 
       - name: Generate test summary
         if: always()
