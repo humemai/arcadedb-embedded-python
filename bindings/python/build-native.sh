@@ -53,12 +53,28 @@ if ! command -v jlink &> /dev/null; then
     exit 1
 fi
 
+# Check for Docker (needed to download JARs from ArcadeDB image)
+if ! command -v docker &> /dev/null; then
+    echo -e "${RED}❌ Docker not found${NC}"
+    echo -e "${YELLOW}💡 Docker is required to download ArcadeDB JARs from the official image${NC}"
+    echo -e "${YELLOW}💡 Please install Docker: https://www.docker.com/get-started${NC}"
+    exit 1
+fi
+
 echo ""
 
 # Step 1: Download ArcadeDB JARs from Docker image
 echo -e "${CYAN}📥 Downloading ArcadeDB JARs from Docker image...${NC}"
 TEMP_JARS=$(mktemp -d)
-docker run --rm arcadedata/arcadedb:${ARCADEDB_TAG} tar -cf - -C /home/arcadedb lib | tar -xf - -C "$TEMP_JARS"
+
+if ! docker run --rm arcadedata/arcadedb:${ARCADEDB_TAG} tar -cf - -C /home/arcadedb lib | tar -xf - -C "$TEMP_JARS"; then
+    echo -e "${RED}❌ Failed to download JARs from Docker image${NC}"
+    echo -e "${YELLOW}💡 Make sure Docker is running and you have internet access${NC}"
+    rm -rf "$TEMP_JARS"
+    exit 1
+fi
+
+rm -rf "$SCRIPT_DIR/temp_jars"
 mv "$TEMP_JARS/lib" "$SCRIPT_DIR/temp_jars"
 rm -rf "$TEMP_JARS"
 echo -e "${GREEN}✅ JARs downloaded${NC}"
@@ -111,11 +127,18 @@ else
 fi
 echo -e "${CYAN}📦 Python package version: ${YELLOW}${PYTHON_VERSION}${NC}"
 
-# Update pyproject.toml
-sed -i.bak "s|^version = .*|version = \"${PYTHON_VERSION}\"|" "$SCRIPT_DIR/pyproject.toml"
-sed -i.bak "s|^name = .*|name = \"${PACKAGE_NAME}\"|" "$SCRIPT_DIR/pyproject.toml"
-sed -i.bak "s|^description = .*|description = \"${PACKAGE_DESCRIPTION}\"|" "$SCRIPT_DIR/pyproject.toml"
-rm -f "$SCRIPT_DIR/pyproject.toml.bak"
+# Update pyproject.toml (handle macOS BSD sed vs GNU sed)
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS uses BSD sed
+    sed -i '' "s|^version = .*|version = \"${PYTHON_VERSION}\"|" "$SCRIPT_DIR/pyproject.toml"
+    sed -i '' "s|^name = .*|name = \"${PACKAGE_NAME}\"|" "$SCRIPT_DIR/pyproject.toml"
+    sed -i '' "s|^description = .*|description = \"${PACKAGE_DESCRIPTION}\"|" "$SCRIPT_DIR/pyproject.toml"
+else
+    # Linux/Windows use GNU sed
+    sed -i "s|^version = .*|version = \"${PYTHON_VERSION}\"|" "$SCRIPT_DIR/pyproject.toml"
+    sed -i "s|^name = .*|name = \"${PACKAGE_NAME}\"|" "$SCRIPT_DIR/pyproject.toml"
+    sed -i "s|^description = .*|description = \"${PACKAGE_DESCRIPTION}\"|" "$SCRIPT_DIR/pyproject.toml"
+fi
 
 # Step 5: Build wheel with proper platform tag
 echo -e "${CYAN}🔨 Building wheel...${NC}"
