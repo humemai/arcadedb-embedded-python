@@ -92,10 +92,9 @@ ENV PATH=$PATH:$JAVA_HOME/bin
 
 WORKDIR /build
 
-# Copy compiled JARs from the prebuilt ArcadeDB image
-# The official image places JARs under /home/arcadedb/lib
+# Copy filtered JARs from jre-builder (already has exclusions applied)
 RUN mkdir -p /build/jars
-COPY --from=java-builder /home/arcadedb/lib /build/jars/
+COPY --from=jre-builder /build/jars /build/jars/
 
 # Copy JRE from jre-builder stage
 COPY --from=jre-builder /build/jre /build/jre/

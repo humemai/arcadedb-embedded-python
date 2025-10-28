@@ -117,18 +117,26 @@ echo -e "${CYAN}📦 Preparing package...${NC}"
 EXCLUSIONS_FILE="$SCRIPT_DIR/jar_exclusions.txt"
 if [[ -f "$EXCLUSIONS_FILE" ]]; then
     echo -e "${YELLOW}🗑️  Removing excluded JARs from jar_exclusions.txt...${NC}"
+    EXCLUSION_COUNT=0
     while IFS= read -r pattern || [[ -n "$pattern" ]]; do
         # Skip empty lines and comments
         if [[ -n "$pattern" ]] && [[ ! "$pattern" =~ ^# ]]; then
+            echo -e "${CYAN}   Processing pattern: $pattern${NC}"
             # Remove matching JARs
+            shopt -s nullglob # Make glob expand to nothing if no matches
             for jar in "$JARS_DIR"/$pattern; do
                 if [[ -f "$jar" ]]; then
                     rm -f "$jar"
                     echo -e "${YELLOW}   - Removed: $(basename "$jar")${NC}"
+                    ((EXCLUSION_COUNT++))
+                else
+                    echo -e "${CYAN}   - Pattern matched but not a file: $jar${NC}"
                 fi
             done
+            shopt -u nullglob
         fi
     done < "$EXCLUSIONS_FILE"
+    echo -e "${GREEN}✅ Removed $EXCLUSION_COUNT JAR(s)${NC}"
 fi
 
 # Build and copy JRE
