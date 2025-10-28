@@ -69,6 +69,8 @@ jobs:
         include:
           - platform: linux/amd64
             runs-on: ubuntu-latest
+          - platform: linux/arm64
+            runs-on: ubuntu-latest
           - platform: darwin/amd64
             runs-on: macos-13
           - platform: darwin/arm64
@@ -92,14 +94,20 @@ jobs:
           path: bindings/python/src/arcadedb_embedded/jars
 
       - name: Set up Java (for native builds on macOS/Windows)
-        if: matrix.platform != 'linux/amd64'
+        if: matrix.platform != 'linux/amd64' && matrix.platform != 'linux/arm64'
         uses: actions/setup-java@7a6d8a8234af8eb26422e24e3006232cccaa061b # v4.6.0
         with:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Set up QEMU (for linux/arm64 emulation)
+        if: matrix.platform == 'linux/arm64'
+        uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3.2.0
+        with:
+          platforms: linux/arm64
+
       - name: Set up Docker Buildx (Linux only)
-        if: matrix.platform == 'linux/amd64'
+        if: matrix.platform == 'linux/amd64' || matrix.platform == 'linux/arm64'
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
       - name: Install Python build dependencies
