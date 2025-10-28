@@ -31,7 +31,7 @@ This document describes the build architecture for creating platform-specific Py
 
 ### Build Strategy
 
-We use a **hybrid build approach**:
+We use a **hybrid build approach** to create platform-specific wheels:
 
 1. **Linux platforms:** Docker native builds
    - linux/amd64: Native Docker on `ubuntu-24.04`
@@ -42,6 +42,48 @@ We use a **hybrid build approach**:
    - Uses platform-specific GitHub Actions runners
    - Native `jlink` creates correct JRE for each platform
    - Pre-filtered JARs from artifact (eliminates glob issues)
+
+**Critical:** All wheels are **platform-specific** (not `py3-none-any`). This is achieved by:
+
+1. **setup.py with BinaryDistribution class**: Overrides default behavior
+2. **Platform-specific JRE**: Each wheel contains native binaries
+3. **Platform tags**: Automatically set by setuptools based on JRE contents
+
+### Why Platform-Specific Wheels Matter
+
+Initially, we were creating `py3-none-any` wheels because:
+
+- `pyproject.toml` alone doesn't communicate platform-specificity to setuptools
+- Without `setup.py`, setuptools assumes "pure Python" package
+- Result: All platforms got same wheel name, pip couldn't select correct one
+
+**The Solution - setup.py**:
+
+```python
+from setuptools import setup
+from setuptools.dist import Distribution
+
+class BinaryDistribution(Distribution):
+    """Distribution which always forces a binary package with platform name"""
+    def has_ext_modules(self):
+        return True  # Tells setuptools: "I have platform-specific content!"
+
+setup(
+    distclass=BinaryDistribution,
+    # ... rest of setup
+)
+```
+
+This simple class tells setuptools "this package has binary content" which:
+
+- Triggers platform-specific wheel naming
+- Makes pip download the correct wheel for each platform
+- Enables platform tags like `macosx_11_0_arm64`, `manylinux_2_17_x86_64`, etc.
+
+**Without setup.py**: All platforms → `arcadedb_embedded-X.Y.Z-py3-none-any.whl` (wrong!)
+**With setup.py**: Each platform → `arcadedb_embedded-X.Y.Z-py3-none-<platform>.whl` (correct!)
+
+See `bindings/python/setup.py` for the complete implementation.
 
 ### Why This Works
 

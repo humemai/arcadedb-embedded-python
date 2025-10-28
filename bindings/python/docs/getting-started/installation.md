@@ -1,130 +1,73 @@
 # Installation
 
-## Choose Your Distribution
+## Quick Installation
 
-All three packages are **embedded** - they run ArcadeDB directly in your Python process. Choose based on which features you need:
+The `arcadedb-embedded` package is **self-contained** with a bundled JRE - **no Java installation required!**
 
-=== "Headless (Recommended)"
+```bash
+# Temporarily install from GitHub Pages (awaiting PyPI size limit approval)
+pip install arcadedb-embedded \
+  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
+  --extra-index-url https://pypi.org/simple/
+```
 
-    **Core database functionality - perfect for production**
+!!! note "Temporary GitHub Pages Installation"
+    We're temporarily hosting wheels on GitHub Pages while awaiting PyPI size limit approval (our wheels are ~160MB, default limit is 100MB).
 
-    ```bash
-    pip install arcadedb-embedded-headless
-    ```
+    - `--index-url`: Primary index (GitHub Pages for arcadedb-embedded)
+    - `--extra-index-url`: Secondary index (PyPI for dependencies like JPype1)
 
-    - ✅ Size: ~94MB
-    - ✅ SQL, Cypher queries
-    - ✅ PostgreSQL wire protocol
-    - ✅ HTTP REST API
-    - ❌ No Studio UI
-
-    **Best for:**
-
-    - Production applications
-    - Python applications where you don't need the web UI
-    - Minimal dependencies
-
-=== "Minimal"
-
-    **Adds Studio web UI for development**
-
-    ```bash
-    pip install arcadedb-embedded-minimal
-    ```
-
-    - ✅ Size: ~97MB
-    - ✅ Everything in Headless
-    - ✅ **Studio web UI** for visual debugging
-
-    **Best for:**
-
-    - Development and learning
-    - Visual database exploration
-    - Debugging with the Studio UI
-
-=== "Full"
-
-    **Adds Gremlin + GraphQL support**
-
+    Once PyPI approves our size limit request, installation will be simpler:
     ```bash
     pip install arcadedb-embedded
     ```
 
-    !!! warning "Coming Soon"
-        Full distribution is pending PyPI size limit approval. Will be available soon!
+**Requirements:**
 
-    - ✅ Size: ~158MB
-    - ✅ Everything in Minimal
-    - ✅ **Gremlin** query language
-    - ✅ **GraphQL** support
-    - ✅ MongoDB & Redis wire protocols
+- **Python 3.8+ only** - No Java installation required!
+- **Supported Platforms**: Prebuilt wheels for **6 platforms**
+  - Linux: x86_64, ARM64
+  - macOS: Intel (x86_64), Apple Silicon (ARM64)
+  - Windows: x86_64, ARM64
 
-    **Best for:**
+## What's Included
 
-    - Applications using Gremlin graph queries
-    - GraphQL integration
-    - MongoDB/Redis compatibility
+The `arcadedb-embedded` package (~155-161MB wheel, ~215-230MB installed) includes everything you need:
 
-## Same Import for All Distributions
+- **ArcadeDB JARs**: 167.4MB (identical across all platforms)
+- **Bundled JRE**: 47-63MB (platform-specific Java 21 runtime via jlink)
+- **Python Package**: ~5MB
 
-Regardless of which distribution you install, the import is always:
+**Platform Details:**
 
-```python
-import arcadedb_embedded as arcadedb
-```
+| Platform | Wheel Size | JRE Size | Installed Size |
+|----------|-----------|----------|----------------|
+| Windows ARM64 | 155.1M | 47.3M | ~215M |
+| macOS ARM64 | 156.7M | 53.9M | ~221M |
+| macOS Intel | 157.8M | 55.3M | ~223M |
+| Windows x64 | 157.4M | 51.5M | ~219M |
+| Linux ARM64 | 159.9M | 61.8M | ~229M |
+| Linux x64 | 160.9M | 62.7M | ~230M |
 
-This means you can switch between distributions without changing your code!
+**Features Included:**
 
-## Requirements
+- ✅ **No Java Installation Required**: Bundled platform-specific JRE
+- ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
+- ✅ **Query Languages**: SQL, Cypher, Gremlin, MongoDB
+- ✅ **Studio Web UI**: Visual database explorer and query editor
+- ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
+- ✅ **Vector Search**: HNSW indexing for embeddings
+- ✅ **Data Import**: CSV, JSON, Neo4j importers
 
-### Java Runtime Environment (JRE)
+!!! tip "Platform Selection"
+    pip automatically selects the correct platform-specific wheel for your system. You don't need to specify the platform manually.
 
-!!! warning "Java Required"
-    You need Java Runtime Environment (JRE) 21+ installed. The wheels bundle all JAR files, but need a JVM to run them.
-
-=== "Ubuntu/Debian"
-
-    ```bash
-    sudo apt-get update
-    sudo apt-get install default-jre-headless
-    ```
-
-    Verify installation:
-
-    ```bash
-    java -version
-    # Should show: openjdk version "21.0.x" or higher
-    ```
-
-=== "macOS"
-
-    ```bash
-    brew install openjdk
-    ```
-
-    Verify installation:
-
-    ```bash
-    java -version
-    # Should show: openjdk version "21.0.x" or higher
-    ```
-
-=== "Windows"
-
-    1. Download OpenJDK from [Adoptium](https://adoptium.net/)
-    2. Run the installer (choose JRE, not full JDK)
-    3. Verify installation in Command Prompt:
-
-    ```cmd
-    java -version
-    ```
-
-### Python Version
+## Python Version
 
 - **Supported**: Python 3.8, 3.9, 3.10, 3.11, 3.12
 - **Recommended**: Python 3.10 or higher
 
-### Dependencies
+## Dependencies
 
 All Python dependencies are automatically installed:
 
@@ -138,23 +81,29 @@ After installation, verify everything works:
 ```python
 import arcadedb_embedded as arcadedb
 print(f"ArcadeDB Python bindings version: {arcadedb.__version__}")
+
+# Test database creation
+with arcadedb.create_database("/tmp/test") as db:
+    result = db.query("sql", "SELECT 1 as test")
+    print(f"Database working: {result[0].get_property('test') == 1}")
 ```
 
 Expected output (version will match what you installed):
 
-```
+```text
 ArcadeDB Python bindings version: X.Y.Z
+Database working: True
 ```
 
 ## Eliminate Polyglot Warnings (Optional)
 
 !!! tip "GraalVM Eliminates JVMCI Warnings"
-    If you see warnings about "JVMCI is not enabled", install **GraalVM**. This warning appears when using ArcadeDB's polyglot scripting features (e.g., JavaScript in queries). GraalVM may also provide modest performance improvements for some workloads.
+    If you see warnings about "JVMCI is not enabled", you can optionally install **GraalVM** for a cleaner experience. **However, the bundled JRE works perfectly fine** - these warnings only appear when using ArcadeDB's polyglot scripting features (e.g., JavaScript in queries) and don't affect normal database operations.
 
 **Installation (Linux/macOS):**
 
 ```bash
-# Install via SDKMAN
+# Install via SDKMAN (optional)
 sdk install java 21.0.9-graal
 sdk use java 21.0.9-graal
 
@@ -162,69 +111,73 @@ sdk use java 21.0.9-graal
 java -version  # Should show: Oracle GraalVM
 ```
 
-**What it fixes:** OpenJDK lacks JVMCI (JVM Compiler Interface), which GraalVM's Polyglot engine needs for JIT compilation of embedded scripts. Core database operations work fine either way.
+**What it fixes:** OpenJDK lacks JVMCI (JVM Compiler Interface), which GraalVM's Polyglot engine needs for JIT compilation of embedded scripts. Core database operations work fine with the bundled JRE either way.
 
 ## Building from Source
 
-If you want to build the wheels yourself:
+If you want to build the wheels yourself, see [Build Architecture Documentation](../development/build-architecture.md) for comprehensive instructions.
 
-!!! info "Docker Required"
-    Building requires Docker - it handles all dependencies (Java, Maven, Python build tools).
+Quick build:
 
 ```bash
 cd bindings/python/
 
-# Build all three distributions
+# Build for your current platform (auto-detected)
 ./build.sh
 
-# Or build specific distribution
-./build.sh headless    # ~94 MB
-./build.sh minimal     # ~97 MB
-./build.sh full        # ~158 MB
+# Or build with Docker for Linux
+docker-compose up arcadedb-python-build
 ```
 
 Built wheels will be in `dist/`:
 
-```
+```text
 dist/
-├── arcadedb_embedded_headless-X.Y.Z-py3-none-any.whl
-├── arcadedb_embedded_minimal-X.Y.Z-py3-none-any.whl
-└── arcadedb_embedded_full-X.Y.Z-py3-none-any.whl
+└── arcadedb_embedded-X.Y.Z-py3-none-<platform>.whl
 ```
 
-Install locally (version extracted from `pom.xml`):
+Install locally:
 
 ```bash
-pip install dist/arcadedb_embedded_headless-*.whl
+pip install dist/arcadedb_embedded-*.whl
 ```
 
 ## Troubleshooting
 
-### Java Not Found
+### Installation Fails with "No matching distribution"
 
-If you get `Java runtime not found` error:
+If pip can't find the package:
 
-1. Install JRE (see requirements above)
-2. Set `JAVA_HOME` environment variable:
+1. Make sure you're using the correct installation command with both index URLs:
+   ```bash
+   pip install arcadedb-embedded \
+     --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
+     --extra-index-url https://pypi.org/simple/
+   ```
 
-```bash
-# Linux/macOS
-export JAVA_HOME=/usr/lib/jvm/default-java
+2. Check your platform is supported:
+   ```bash
+   python -c "import platform; print(platform.machine(), platform.system())"
+   ```
+   Supported: x86_64/amd64/AMD64, aarch64/arm64/ARM64 on Linux, macOS, Windows
 
-# Windows
-set JAVA_HOME=C:\Program Files\Java\jdk-21
-```
+3. Check your Python version:
+   ```bash
+   python --version  # Should be 3.8 or higher
+   ```
 
 ### Import Errors
 
 If `import arcadedb_embedded` fails:
 
 ```bash
-# Uninstall all distributions first
-pip uninstall arcadedb-embedded arcadedb-embedded-headless arcadedb-embedded-minimal
+# Uninstall first
+pip uninstall arcadedb-embedded
 
-# Reinstall chosen distribution
-pip install arcadedb-embedded-headless
+# Reinstall
+pip install arcadedb-embedded \
+  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
+  --extra-index-url https://pypi.org/simple/
 ```
 
 ### Version Conflicts
@@ -236,11 +189,14 @@ If you see version conflicts with JPype:
 pip install --upgrade JPype1
 
 # Reinstall ArcadeDB
-pip install --force-reinstall arcadedb-embedded-headless
+pip install --force-reinstall arcadedb-embedded \
+  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
+  --extra-index-url https://pypi.org/simple/
 ```
 
 ## Next Steps
 
 - [Quick Start Guide](quickstart.md) - Get started in 5 minutes
-- [Distribution Comparison](distributions.md) - Detailed comparison
+- [Package Overview](distributions.md) - Detailed package information
 - [User Guide](../guide/core/database.md) - Learn all features
+- [Build Architecture](../development/build-architecture.md) - How platform-specific wheels are built

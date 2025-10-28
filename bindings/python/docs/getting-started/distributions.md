@@ -1,48 +1,64 @@
 # Package Overview
 
-ArcadeDB Python provides an **embedded** package that runs the database directly in your Python process via JPype with a bundled JRE - **no Java installation required!**
+ArcadeDB Python provides a **self-contained embedded** package that runs the database directly in your Python process with a bundled JRE - **no Java installation required!**
 
 ## The Package
 
-| Package | Size | Java Required | Studio UI | Query Languages |
-|---------|------|---------------|-----------|----------------|
-| **arcadedb-embedded** | 162MB wheel (~240MB installed) | ❌ No | ✅ | SQL, Cypher, Gremlin, MongoDB |
+| Package | Wheel Size | Installed Size | Java Required | Studio UI | Query Languages |
+|---------|-----------|----------------|---------------|-----------|----------------|
+| **arcadedb-embedded** | 155-161MB | ~215-230MB | ❌ No | ✅ | SQL, Cypher, Gremlin, MongoDB |
 
 **Installation:**
 
 ```bash
-pip install arcadedb-embedded
+# Temporarily install from GitHub Pages (awaiting PyPI size limit approval)
+pip install arcadedb-embedded \
+  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
+  --extra-index-url https://pypi.org/simple/
 ```
 
 **Requirements:** Python 3.8+ only - No Java installation needed!
 
 ## What's Inside
 
-The package (162MB wheel, ~240MB installed) includes everything you need:
+The package includes everything you need:
 
-- **ArcadeDB JARs** (~123MB): Core database with all features
-- **Bundled JRE** (~39MB): Custom Java 21 runtime (jlink, 21 modules)
-- **Total:** 162MB compressed wheel, ~240MB when installed
+- **ArcadeDB JARs** (167.4MB): Core database with all features
+- **Bundled JRE** (47-63MB): Platform-specific Java 21 runtime (via jlink)
+- **Python Package** (~5MB): Python wrapper and utilities
+
+**Total:** 155-161MB compressed wheel (varies by platform), ~215-230MB when installed
 
 ## Platform Support
 
-Pre-built wheels are currently available for **6 platforms**:
+Pre-built **platform-specific** wheels are available for **6 platforms**:
 
-- ✅ **Linux**: x86-64, ARM64 (native)
-- ✅ **macOS**: x86-64 (Intel), ARM64 (Apple Silicon)
-- ✅ **Windows**: x86-64, ARM64
+| Platform | Wheel Size | JRE Size | Installed Size | Tests |
+|----------|-----------|----------|----------------|-------|
+| Windows ARM64 | 155.1M | 47.3M | ~215M | 43/43 ✅ |
+| macOS ARM64 (Apple Silicon) | 156.7M | 53.9M | ~221M | 43/43 ✅ |
+| macOS Intel (x86_64) | 157.8M | 55.3M | ~223M | 43/43 ✅ |
+| Windows x64 | 157.4M | 51.5M | ~219M | 43/43 ✅ |
+| Linux ARM64 | 159.9M | 61.8M | ~229M | 43/43 ✅ |
+| Linux x64 | 160.9M | 62.7M | ~230M | 43/43 ✅ |
 
-All platforms use native runners (no emulation) and include platform-specific bundled JRE - no external Java required!
+**Key Features:**
 
-## Features
+- ✅ All platforms use **platform-specific wheels** (not universal)
+- ✅ pip automatically selects the correct wheel for your system
+- ✅ Each platform has its own bundled JRE optimized for that architecture
+- ✅ All 6 platforms tested and verified (43/43 tests passing)
+- ✅ Built on native runners (no emulation) for optimal performance
 
-## Features
+## What's Included
 
-**Included:**
+## What's Included
 
-- ✅ **No Java Installation Required**: Bundled JRE (~63MB) included
+**Core Features:**
+
+- ✅ **No Java Installation Required**: Platform-specific JRE bundled (~47-63MB)
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
-- ✅ **Query Languages**: SQL, Cypher, Gremlin, MongoDB
+- ✅ **Query Languages**: SQL, Cypher, Gremlin, MongoDB (all included)
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
 - ✅ **Vector Search**: HNSW indexing for embeddings
@@ -50,30 +66,30 @@ All platforms use native runners (no emulation) and include platform-specific bu
 
 **Optimized:**
 
-- Some components are excluded to keep package size manageable (see `jar_exclusions.txt` for details)
+- Some components are excluded to optimize package size (e.g., gRPC wire protocol)
+- See `jar_exclusions.txt` in the repository for details
 
 ## Test Results
 
-**43 out of 43 tests pass** (100% success rate):
+**43 out of 43 tests pass** on all platforms (100% success rate):
 
-- ✅ All core database operations work
-- ✅ SQL, Cypher, and Gremlin queries work
-- ✅ HTTP server and Studio UI work
-- ✅ Vector search and import operations work
-- ✅ All included features validated
+- ✅ All core database operations
+- ✅ SQL, Cypher, and Gremlin queries
+- ✅ HTTP server and Studio UI
+- ✅ Vector search and import operations
+- ✅ All platforms validated
 
 ## Use Cases
 
 Perfect for:
 
 - Production Python applications
-- Development and debugging
+- Development and debugging (with Studio UI)
 - Cloud deployments (no Java setup needed!)
 - Docker containers
 - Desktop applications
-- Multi-model database needs
-- Graph, document, and vector applications
-- Any scenario requiring SQL, Cypher, or Gremlin
+- Multi-model database needs (Graph, Document, Vector, Time Series)
+- Any scenario requiring SQL, Cypher, or Gremlin queries
 
 ## Accessing Studio UI
 
@@ -106,14 +122,27 @@ Simple and consistent across all platforms!
 
 ## Size Breakdown
 
-Total package size: **162MB wheel (~240MB installed)**
+Total package size varies by platform: **155-161MB wheel, ~215-230MB installed**
 
-- **ArcadeDB JARs**: ~123 MB (core database, query engines, Studio UI, protocols)
-- **Bundled JRE**: ~39 MB (custom Java 21 runtime via jlink, 21 modules)
-- **Compressed wheel**: 162 MB
-- **Installed size**: ~240 MB
+**Common components (identical across platforms):**
 
-**Note**: Some components are excluded to optimize package size (see `jar_exclusions.txt` for details).
+- **ArcadeDB JARs**: 167.4 MB (83 files - core database, query engines, Studio UI, protocols)
+
+**Platform-specific components:**
+
+- **Bundled JRE**: 47-63 MB (varies by platform, see table above)
+- **Python package**: ~5 MB
+
+**Why sizes vary by platform:**
+
+- JRE binaries differ by platform (different native code)
+- ARM platforms tend to have slightly smaller JREs
+- All platforms use the same JAR files (167.4MB)
+
+**Optimizations:**
+
+- Some components excluded for size (e.g., gRPC wire protocol ~38MB)
+- See `jar_exclusions.txt` in repository for details
 
 ## Installation Tips
 
@@ -125,13 +154,34 @@ print(f"Version: {arcadedb.__version__}")
 
 # Verify database works
 with arcadedb.create_database("/tmp/test") as db:
-    result = db.query("sql", "SELECT 1")
-    print("Database working correctly!")
+    result = db.query("sql", "SELECT 1 as test")
+    print(f"Database working: {result[0].get_property('test') == 1}")
+```
+
+### Platform Detection
+
+pip automatically selects the correct platform-specific wheel:
+
+```bash
+# On Linux x64, installs: arcadedb_embedded-X.Y.Z-py3-none-manylinux_2_17_x86_64.whl
+# On macOS ARM64, installs: arcadedb_embedded-X.Y.Z-py3-none-macosx_11_0_arm64.whl
+# On Windows x64, installs: arcadedb_embedded-X.Y.Z-py3-none-win_amd64.whl
+# etc.
+```
+
+You can verify which platform you're on:
+
+```python
+import platform
+print(f"System: {platform.system()}")
+print(f"Machine: {platform.machine()}")
+print(f"Python: {platform.python_version()}")
 ```
 
 ## Next Steps
 
 - [Installation Guide](installation.md) - Detailed install instructions
 - [Quick Start](quickstart.md) - Get started in 5 minutes
+- [Build Architecture](../development/build-architecture.md) - How platform-specific wheels are built
 - [Server Mode](../guide/server.md) - Using the HTTP server with Studio UI
-- [Query Languages](../guide/queries.md) - SQL, Cypher, and Gremlin examples
+- [Query Languages](../guide/core/queries.md) - SQL, Cypher, and Gremlin examples

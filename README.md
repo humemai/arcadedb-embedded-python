@@ -17,14 +17,16 @@
 ### Installation
 
 ```bash
-# Install from GitHub (recommended until PyPI size limit is approved)
-pip install arcadedb-embedded --index-url https://humemai.github.io/arcadedb-embedded-python/simple/
+# Temporarily install from GitHub Pages (awaiting PyPI size limit approval)
+pip install arcadedb-embedded \
+  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
+  --extra-index-url https://pypi.org/simple/
 
-# Or install from PyPI (once size limit is approved)
-pip install arcadedb-embedded
+# Once PyPI approves our size limit request, installation will be simpler:
+# pip install arcadedb-embedded
 ```
 
-> **Note:** We're temporarily using GitHub Pages while awaiting PyPI size limit approval (~160MB wheels, default limit 100MB).
+> **Note:** We're temporarily using GitHub Pages while awaiting PyPI size limit approval (~160MB wheels, default limit 100MB). The `--extra-index-url` ensures dependencies like JPype1 are installed from PyPI.
 
 **Requirements:**
 

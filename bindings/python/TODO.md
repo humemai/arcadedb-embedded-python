@@ -11,12 +11,21 @@
 
 - ✅ **6-Platform Support**: linux (x64/arm64), macOS (Intel/Apple Silicon), Windows (x64/arm64)
 - ✅ **Platform-Specific Wheels**: Correct wheel tags (manylinux, macosx, win) - no more py3-none-any
+- ✅ **Architecture-Specific macOS Wheels**: Separate x86_64 and arm64 (not universal2)
+- ✅ **setup.py for Platform Tags**: BinaryDistribution class forces platform-specific wheels
 - ✅ **Build System**: Native runners for all platforms, Docker for Linux (manylinux compliance)
 - ✅ **Testing**: 43/43 tests passing on all 6 platforms
 - ✅ **Tag-Driven Releases**: Manual git tags trigger full release workflow
-- ✅ **GitHub Releases**: All 6 wheels attached automatically
+- ✅ **GitHub Releases**: All 6 wheels attached automatically (independent of PyPI)
 - ✅ **GitHub Pages PyPI Index**: pip-compatible index at https://humemai.github.io/arcadedb-embedded-python/simple/
-- ✅ **Distribution**: Users can install with `pip install arcadedb-embedded --index-url https://humemai.github.io/arcadedb-embedded-python/simple/`
+- ✅ **Automatic Index Updates**: Workflow updates PyPI index on gh-pages after each release
+- ✅ **PyPI 0.0.1 Removal**: Old dummy package deleted to prevent conflicts
+- ✅ **Distribution**: Users can install with:
+  ```bash
+  pip install arcadedb-embedded \
+    --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
+    --extra-index-url https://pypi.org/simple/
+  ```
 
 **Installation works today!** Just pending PyPI size limit approval for direct PyPI distribution.
 
@@ -45,9 +54,10 @@ Current docs show old 3-variant system (headless/minimal/full). Need to update:
 #### 2. Update Build Architecture Documentation
 **File**: `bindings/python/docs/development/build-architecture.md`
 
+- ✅ Document runner versions (ubuntu-24.04, macos-15-intel, etc.)
 - [ ] Document setup.py requirement for platform-specific wheels
 - [ ] Explain BinaryDistribution class and why it's needed
-- [ ] Document actual wheel naming per platform (manylinux_2_17_x86_64 etc)
+- [ ] Document macOS environment variables (_PYTHON_HOST_PLATFORM, ARCHFLAGS, MACOSX_DEPLOYMENT_TARGET)
 - [ ] Explain why py3-none-any was created before and how setup.py fixes it
 
 #### 3. Update Examples Documentation

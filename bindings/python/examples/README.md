@@ -182,7 +182,10 @@ Includes:
 
 1. **Install ArcadeDB Python bindings:**
    ```bash
-   pip install arcadedb-embedded
+   # Temporarily install from GitHub Pages (awaiting PyPI size limit approval)
+   pip install arcadedb-embedded \
+     --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
+     --extra-index-url https://pypi.org/simple/
    ```
 
 2. **Navigate to examples directory:**

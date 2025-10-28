@@ -4,18 +4,17 @@ Get up and running with ArcadeDB Python bindings in 5 minutes!
 
 ## Installation
 
-First, install the headless distribution (recommended for getting started):
+Install the self-contained package with bundled JRE:
 
 ```bash
-pip install arcadedb-embedded-headless
+# Temporarily install from GitHub Pages (awaiting PyPI size limit approval)
+pip install arcadedb-embedded \
+  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
+  --extra-index-url https://pypi.org/simple/
 ```
 
-!!! warning "Java Required"
-    Make sure you have Java 21+ installed:
-    ```bash
-    java -version
-    ```
-    If not installed, see [Installation Guide](installation.md#java-runtime-environment-jre).
+!!! note "No Java Installation Required"
+    The package includes a bundled platform-specific JRE. You don't need to install Java separately!
 
 ## Access Methods
 

@@ -774,11 +774,12 @@ export JAVA_HOME=/path/to/jdk-21
 # Clean build artifacts
 rm -rf dist/ build/ *.egg-info
 
-# Remove cached JARs
+# Remove cached JARs and JRE
 rm -rf src/arcadedb_embedded/jars/
+rm -rf src/arcadedb_embedded/jre/
 
 # Rebuild
-./build.sh headless
+./build.sh
 ```
 
 ### Test Failures
