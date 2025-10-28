@@ -6,14 +6,46 @@ This script should be run as part of the build process to ensure
 all necessary JAR files and the bundled JRE are included in the wheel.
 """
 
+import fnmatch
 import shutil
 from pathlib import Path
+
+
+def load_jar_exclusions():
+    """Load JAR exclusion patterns from jar_exclusions.txt."""
+    exclusions_file = Path(__file__).parent / "jar_exclusions.txt"
+    patterns = []
+
+    if exclusions_file.exists():
+        with open(exclusions_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                # Skip empty lines and comments
+                if line and not line.startswith("#"):
+                    patterns.append(line)
+
+    return patterns
+
+
+def should_exclude_jar(jar_name, exclusion_patterns):
+    """Check if a JAR should be excluded based on exclusion patterns."""
+    for pattern in exclusion_patterns:
+        if fnmatch.fnmatch(jar_name, pattern):
+            return True
+    return False
 
 
 def find_jar_files():
     """Find all necessary ArcadeDB JAR files using custom filtering."""
     print("📦 Building arcadedb-embedded with bundled JRE")
-    print("📦 Including all JARs except gRPC wire protocol (optimal balance)")
+
+    # Load exclusion patterns
+    exclusion_patterns = load_jar_exclusions()
+    if exclusion_patterns:
+        print(
+            f"📋 Loaded {len(exclusion_patterns)} exclusion pattern(s) "
+            "from jar_exclusions.txt"
+        )
 
     # Look for JAR files copied from the ArcadeDB Docker image
     # The Dockerfile copies JARs from the full distribution image to these locations
@@ -33,15 +65,14 @@ def find_jar_files():
                 all_jars.extend(jars)
                 break
 
-    # Simple filtering: exclude only gRPC wire protocol (too big, not needed)
+    # Filter JARs based on exclusion patterns
     if all_jars:
         included_jars = []
         excluded_jars = []
 
         for jar in all_jars:
             jar_name = Path(jar).name
-            # Only exclude gRPC wire protocol
-            if "arcadedb-grpcw-" in jar_name:
+            if should_exclude_jar(jar_name, exclusion_patterns):
                 excluded_jars.append(jar)
             else:
                 included_jars.append(jar)
