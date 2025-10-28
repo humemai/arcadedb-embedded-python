@@ -34,7 +34,7 @@ This document describes the build architecture for creating platform-specific Py
 We use a **hybrid build approach**:
 
 1. **Linux platforms:** Docker native builds
-   - linux/amd64: Native Docker on `ubuntu-latest`
+   - linux/amd64: Native Docker on `ubuntu-24.04`
    - linux/arm64: Native Docker on `ubuntu-24.04-arm` (GitHub ARM64 runner)
    - Builds platform-specific JRE via `jlink`
 
