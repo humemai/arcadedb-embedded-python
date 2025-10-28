@@ -6,6 +6,7 @@ Handles JVM initialization and JAR file management.
 
 import glob
 import os
+import platform
 from pathlib import Path
 
 import jpype
@@ -65,12 +66,23 @@ def start_jvm():
     jvm_path = None
 
     if bundled_jre:
-        # Use bundled JRE - need to find libjvm.so
+        # Use bundled JRE - need to find JVM library (platform-specific)
         jre_dir = Path(bundled_jre).parent.parent  # Go from bin/java to jre root
-        # Look for libjvm.so in lib/server directory (standard location)
-        libjvm_path = jre_dir / "lib" / "server" / "libjvm.so"
-        if libjvm_path.exists():
-            jvm_path = str(libjvm_path)
+
+        # Platform-specific JVM library paths
+        system = platform.system()
+        if system == "Windows":
+            # Windows: bin/server/jvm.dll
+            jvm_lib_path = jre_dir / "bin" / "server" / "jvm.dll"
+        elif system == "Darwin":
+            # macOS: lib/server/libjvm.dylib
+            jvm_lib_path = jre_dir / "lib" / "server" / "libjvm.dylib"
+        else:
+            # Linux: lib/server/libjvm.so
+            jvm_lib_path = jre_dir / "lib" / "server" / "libjvm.so"
+
+        if jvm_lib_path.exists():
+            jvm_path = str(jvm_lib_path)
 
     # Allow customization via environment variables
     max_heap = os.environ.get("ARCADEDB_JVM_MAX_HEAP", "4g")
