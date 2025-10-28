@@ -131,6 +131,8 @@ Supported platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64
 
 > **Note:** `linux/arm64` uses QEMU emulation for builds. Additional platforms like `windows/arm64` may be added in future releases if demand justifies it.
 
+> **Developer Note:** See [BUILD.md](BUILD.md) for comprehensive documentation of the multi-platform build architecture, including how we achieve platform-specific JRE bundling across 5 platforms on GitHub Actions.
+
 !!! note "Package Contents"
     The package includes optimized ArcadeDB JARs. Some components are excluded for size optimization - see `jar_exclusions.txt` for details.
 

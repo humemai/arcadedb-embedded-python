@@ -1,8 +1,0 @@
-# Ignore build output
-output/
-*.log
-
-# Ignore test package artifacts (JRE, JARs, wheels, venvs)
-test-package/
-dist/
-*.whl
