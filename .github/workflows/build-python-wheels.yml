@@ -1,0 +1,240 @@
+name: Build Python Wheels
+
+on:
+  # Allow being called by other workflows
+  workflow_call:
+    inputs:
+      version:
+        description: 'Python package version (e.g., 25.10.1.dev0)'
+        required: false
+        type: string
+    outputs:
+      wheel-count:
+        description: 'Number of wheels built'
+        value: ${{ jobs.summary.outputs.wheel-count }}
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Python package version (leave empty to use pom.xml)'
+        required: false
+        type: string
+
+jobs:
+  # First job: Download ArcadeDB JARs once
+  download-jars:
+    name: Download and Filter JARs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Download JARs from ArcadeDB Docker image
+        shell: bash
+        run: |
+          cd bindings/python
+
+          # Detect ArcadeDB version from pom.xml
+          ARCADEDB_TAG=$(python3 extract_version.py --format=docker)
+          echo "📌 ArcadeDB version: $ARCADEDB_TAG"
+
+          # Download JARs from official Docker image
+          echo "📦 Downloading JARs from arcadedata/arcadedb:$ARCADEDB_TAG..."
+
+          mkdir -p src/arcadedb_embedded/jars
+
+          # Create temporary container and copy JARs
+          CONTAINER_ID=$(docker create arcadedata/arcadedb:$ARCADEDB_TAG)
+          docker cp $CONTAINER_ID:/home/arcadedb/lib/. src/arcadedb_embedded/jars/
+          docker rm $CONTAINER_ID
+
+          ls -lh src/arcadedb_embedded/jars/
+          JAR_COUNT=$(ls -1 src/arcadedb_embedded/jars/*.jar 2>/dev/null | wc -l)
+          echo "✅ Downloaded $JAR_COUNT JAR files"
+
+      - name: Filter JARs based on exclusions
+        shell: bash
+        run: |
+          cd bindings/python
+
+          JARS_DIR="src/arcadedb_embedded/jars"
+          EXCLUSIONS_FILE="jar_exclusions.txt"
+
+          if [[ -f "$EXCLUSIONS_FILE" ]]; then
+            echo "🗑️  Filtering JARs using $EXCLUSIONS_FILE..."
+            EXCLUSION_COUNT=0
+
+            while IFS= read -r pattern || [[ -n "$pattern" ]]; do
+              # Skip empty lines and comments
+              if [[ -n "$pattern" ]] && [[ ! "$pattern" =~ ^# ]]; then
+                echo "   Pattern: $pattern"
+
+                # Remove matching JARs
+                for jar in "$JARS_DIR"/$pattern; do
+                  if [[ -f "$jar" ]]; then
+                    rm -f "$jar"
+                    echo "   - Removed: $(basename "$jar")"
+                    ((EXCLUSION_COUNT++))
+                  fi
+                done
+              fi
+            done < "$EXCLUSIONS_FILE"
+
+            JAR_COUNT_AFTER=$(ls -1 "$JARS_DIR"/*.jar 2>/dev/null | wc -l)
+            echo "✅ Filtered: removed $EXCLUSION_COUNT JAR(s), $JAR_COUNT_AFTER remaining"
+          else
+            echo "⚠️  No jar_exclusions.txt found"
+          fi
+
+      - name: Upload filtered JARs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: arcadedb-jars
+          path: bindings/python/src/arcadedb_embedded/jars/*.jar
+          retention-days: 1
+
+  # Build wheels for all platforms
+  build:
+    name: Build Wheel (${{ matrix.platform }})
+    runs-on: ${{ matrix.runs-on }}
+    needs: download-jars
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-latest
+          - platform: linux/arm64
+            runs-on: ubuntu-latest
+          - platform: darwin/amd64
+            runs-on: macos-13
+          - platform: darwin/arm64
+            runs-on: macos-latest
+          - platform: windows/amd64
+            runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Download filtered JARs
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: arcadedb-jars
+          path: bindings/python/src/arcadedb_embedded/jars
+
+      - name: Set up Java (for native builds)
+        if: ${{ !startsWith(matrix.platform, 'linux/') }}
+        uses: actions/setup-java@7a6d8a8234af8eb26422e24e3006232cccaa061b # v4.6.0
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up QEMU (for linux/arm64)
+        if: matrix.platform == 'linux/arm64'
+        uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3.2.0
+        with:
+          platforms: linux/arm64
+
+      - name: Set up Docker Buildx (Linux only)
+        if: startsWith(matrix.platform, 'linux/')
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Install Python build tools
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install build wheel setuptools
+
+      - name: Create python3 symlink (Windows)
+        if: matrix.platform == 'windows/amd64'
+        shell: bash
+        run: |
+          PYTHON_DIR=$(dirname "$(which python)")
+          ln -s "$PYTHON_DIR/python.exe" "$PYTHON_DIR/python3.exe" || true
+          python3 --version
+
+      - name: Build wheel
+        shell: bash
+        env:
+          BUILD_VERSION: ${{ inputs.version }}
+        run: |
+          cd bindings/python
+          echo "🔨 Building wheel for ${{ matrix.platform }}..."
+
+          if [ -n "$BUILD_VERSION" ]; then
+            echo "📌 Using specified version: $BUILD_VERSION"
+          fi
+
+          ./build.sh ${{ matrix.platform }}
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wheel-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || 'windows-amd64' }}
+          path: bindings/python/dist/*.whl
+          retention-days: 7
+
+  # Summary job
+  summary:
+    name: Build Summary
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      wheel-count: ${{ steps.count.outputs.count }}
+    steps:
+      - name: Download all wheels
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: wheel-*
+          path: wheels/
+          merge-multiple: true
+
+      - name: Count wheels
+        id: count
+        run: |
+          WHEEL_COUNT=$(ls -1 wheels/*.whl | wc -l)
+          echo "count=$WHEEL_COUNT" >> $GITHUB_OUTPUT
+          echo "📦 Built $WHEEL_COUNT wheels"
+
+      - name: Display wheels
+        run: |
+          echo "## 🎉 Build Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Built **$(ls -1 wheels/*.whl | wc -l)** platform-specific wheels:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Wheel | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|------|" >> $GITHUB_STEP_SUMMARY
+
+          for wheel in wheels/*.whl; do
+            if [ -f "$wheel" ]; then
+              name=$(basename "$wheel")
+              size=$(ls -lh "$wheel" | awk '{print $5}')
+
+              # Detect platform
+              if [[ "$name" == *"manylinux"*"x86_64"* ]]; then
+                platform="linux/amd64"
+              elif [[ "$name" == *"manylinux"*"aarch64"* ]]; then
+                platform="linux/arm64"
+              elif [[ "$name" == *"macosx"*"x86_64"* ]]; then
+                platform="darwin/amd64"
+              elif [[ "$name" == *"macosx"*"arm64"* ]]; then
+                platform="darwin/arm64"
+              elif [[ "$name" == *"win_amd64"* ]]; then
+                platform="windows/amd64"
+              else
+                platform="unknown"
+              fi
+
+              echo "| $platform | \`$name\` | $size |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done

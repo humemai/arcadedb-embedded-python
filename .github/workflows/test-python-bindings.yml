@@ -9,93 +9,29 @@ on:
 
   # Allow being called by other workflows (e.g., release workflow)
   workflow_call:
+    inputs:
+      skip-build:
+        description: 'Skip building wheels (use pre-built artifacts)'
+        required: false
+        type: boolean
+        default: false
 
   # Allow manual trigger
   workflow_dispatch:
 
 jobs:
-  # First job: Download ArcadeDB JARs (platform-agnostic)
-  download-jars:
-    name: Download ArcadeDB JARs
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+  # First job: Build wheels for all platforms (unless skip-build is true)
+  build:
+    name: Build Wheels
+    if: ${{ !inputs.skip-build }}
+    uses: ./.github/workflows/build-python-wheels.yml
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
-
-      - name: Download JARs from ArcadeDB Docker image
-        shell: bash
-        run: |
-          cd bindings/python
-
-          # Detect ArcadeDB version from pom.xml (Docker format: X.Y.Z-SNAPSHOT)
-          ARCADEDB_TAG=$(python3 extract_version.py --format=docker)
-          echo "📌 ArcadeDB version: $ARCADEDB_TAG"
-
-          # Download JARs from official Docker image
-          echo "📦 Downloading JARs from arcadedata/arcadedb:$ARCADEDB_TAG..."
-
-          # Create output directory
-          mkdir -p src/arcadedb_embedded/jars
-
-          # Create a temporary container and copy JARs from it
-          CONTAINER_ID=$(docker create arcadedata/arcadedb:$ARCADEDB_TAG)
-          docker cp $CONTAINER_ID:/home/arcadedb/lib/. src/arcadedb_embedded/jars/
-          docker rm $CONTAINER_ID
-
-          # Verify JARs were downloaded
-          ls -lh src/arcadedb_embedded/jars/
-          JAR_COUNT=$(ls -1 src/arcadedb_embedded/jars/*.jar 2>/dev/null | wc -l)
-          echo "✅ Downloaded $JAR_COUNT JAR files"
-
-      - name: Remove excluded JARs
-        shell: bash
-        run: |
-          cd bindings/python
-
-          JARS_DIR="src/arcadedb_embedded/jars"
-          EXCLUSIONS_FILE="jar_exclusions.txt"
-
-          if [[ -f "$EXCLUSIONS_FILE" ]]; then
-            echo "🗑️  Removing excluded JARs from jar_exclusions.txt..."
-            EXCLUSION_COUNT=0
-
-            while IFS= read -r pattern || [[ -n "$pattern" ]]; do
-              # Skip empty lines and comments
-              if [[ -n "$pattern" ]] && [[ ! "$pattern" =~ ^# ]]; then
-                echo "   Processing pattern: $pattern"
-
-                # Remove matching JARs
-                for jar in "$JARS_DIR"/$pattern; do
-                  if [[ -f "$jar" ]]; then
-                    rm -f "$jar"
-                    echo "   - Removed: $(basename "$jar")"
-                    EXCLUSION_COUNT=$((EXCLUSION_COUNT + 1))
-                  fi
-                done
-              fi
-            done < "$EXCLUSIONS_FILE"
-
-            JAR_COUNT_AFTER=$(ls -1 "$JARS_DIR"/*.jar 2>/dev/null | wc -l)
-            echo "✅ Removed $EXCLUSION_COUNT JAR(s), $JAR_COUNT_AFTER remaining"
-          else
-            echo "⚠️  No jar_exclusions.txt found, skipping exclusions"
-          fi
-
-      - name: Upload filtered JARs as artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: arcadedb-jars
-          path: bindings/python/src/arcadedb_embedded/jars/*.jar
-          retention-days: 1
-
-  # Second job: Build and test on each platform
+  # Second job: Test wheels on each platform
   test:
     name: Test arcadedb-embedded (${{ matrix.platform }})
     runs-on: ${{ matrix.runs-on }}
-    needs: download-jars
+    needs: build
+    if: ${{ !inputs.skip-build || success() }}
     strategy:
       # Don't cancel other matrix jobs if one fails
       fail-fast: false
@@ -121,91 +57,34 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Download ArcadeDB JARs artifact
-        # Skip for Linux: Docker build downloads JARs from ArcadeDB image directly
-        # Only needed for native builds (macOS/Windows)
-        if: matrix.platform != 'linux/amd64' && matrix.platform != 'linux/arm64'
+      - name: Download pre-built wheel
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
-          name: arcadedb-jars
-          path: bindings/python/src/arcadedb_embedded/jars
-
-      - name: Set up Java (for native builds on macOS/Windows)
-        if: matrix.platform != 'linux/amd64' && matrix.platform != 'linux/arm64'
-        uses: actions/setup-java@7a6d8a8234af8eb26422e24e3006232cccaa061b # v4.6.0
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - name: Set up QEMU (for linux/arm64 emulation)
-        if: matrix.platform == 'linux/arm64'
-        uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3.2.0
-        with:
-          platforms: linux/arm64
-
-      - name: Set up Docker Buildx (Linux only)
-        if: matrix.platform == 'linux/amd64' || matrix.platform == 'linux/arm64'
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
-
-      - name: Install Python build dependencies
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          pip install build wheel setuptools
-
-      - name: Create python3 symlink (Windows only)
-        if: matrix.platform == 'windows/amd64'
-        shell: bash
-        run: |
-          # On Windows, setup-python doesn't create python3 symlink
-          # Create it so build scripts work
-          PYTHON_DIR=$(dirname "$(which python)")
-          ln -s "$PYTHON_DIR/python.exe" "$PYTHON_DIR/python3.exe" || true
-          python3 --version
-
-      - name: Build and test arcadedb-embedded (${{ matrix.platform }})
-        shell: bash
-        run: |
-          cd bindings/python
-          echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }}..."
-          ./build.sh ${{ matrix.platform }}
-
-      - name: Extract wheel for additional testing
-        shell: bash
-        run: |
-          cd bindings/python
-          mkdir -p test-install
-          cp dist/*.whl test-install/
-
-      - name: Set up Python for host testing
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
-        with:
-          python-version: '3.11'
+          name: wheel-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || 'windows-amd64' }}
+          path: test-install/
 
       # Note: Java is NOT required for arcadedb-embedded (JRE is bundled)
       # This package works without any external Java installation!
 
       - name: Install wheel and test dependencies
         # Skip for linux/arm64: wheel contains ARM64 JRE but host is AMD64
-        # (linux/arm64 is already tested in Docker during build via QEMU)
+        # (linux/arm64 cannot be tested on AMD64 host without QEMU)
         if: matrix.platform != 'linux/arm64'
         shell: bash
         run: |
-          cd bindings/python
           pip install test-install/*.whl pytest pytest-cov requests
 
       - name: Run pytest on host
-        # Skip for linux/arm64: already tested in Docker during build
+        # Skip for linux/arm64: cannot test ARM64 wheel on AMD64 host
         if: matrix.platform != 'linux/arm64'
         id: pytest
         shell: bash
         run: |
-          cd bindings/python
           echo "🧪 Testing arcadedb-embedded (with bundled JRE)..."
 
           # Run pytest with JUnit XML output for structured results
           set +e  # Don't exit on test failures
-          pytest tests/ -v --tb=short --color=yes --junitxml=test-results.xml
+          pytest bindings/python/tests/ -v --tb=short --color=yes --junitxml=test-results.xml
           PYTEST_EXIT_CODE=$?
           set -e
 
@@ -238,14 +117,12 @@ jobs:
         if: always()
         shell: bash
         run: |
-          cd bindings/python
-
           echo "## 🧪 Test Results: arcadedb-embedded (${{ matrix.platform }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Check if pytest was skipped (e.g., linux/arm64)
           if [ "${{ steps.pytest.outcome }}" = "skipped" ]; then
-            echo "⏭️ **Status**: SKIPPED (tested in Docker during build)" >> $GITHUB_STEP_SUMMARY
+            echo "⏭️ **Status**: SKIPPED (ARM64 wheel tested during build)" >> $GITHUB_STEP_SUMMARY
           elif [ "${{ steps.pytest.outcome }}" = "success" ]; then
             echo "✅ **Status**: PASSED" >> $GITHUB_STEP_SUMMARY
           else
@@ -263,7 +140,7 @@ jobs:
             echo "| ❌ Failed | ${{ steps.pytest.outputs.failed || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| ℹ️ Host Tests | Skipped (ARM64 wheel on AMD64 host) |" >> $GITHUB_STEP_SUMMARY
-            echo "| ✅ Docker Tests | Passed (verified during build) |" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ Build Tests | Passed (verified during wheel build) |" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -271,7 +148,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Get wheel size and analyze contents
-          WHEEL_FILE=$(ls dist/*.whl 2>/dev/null | head -n1)
+          WHEEL_FILE=$(ls test-install/*.whl 2>/dev/null | head -n1)
           if [ -n "$WHEEL_FILE" ]; then
             # Get wheel size (portable way)
             if stat -c%s "$WHEEL_FILE" 2>/dev/null; then
@@ -326,16 +203,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-results-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || 'windows-amd64' }}
-          path: |
-            bindings/python/pytest-output.txt
-            bindings/python/.coverage
-          retention-days: 7
-
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: wheel-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || 'windows-amd64' }}-test
-          path: bindings/python/dist/*.whl
+          path: test-results.xml
           retention-days: 7
 
   # Summary job that checks all platforms
