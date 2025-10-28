@@ -122,18 +122,14 @@ if [[ -f "$EXCLUSIONS_FILE" ]]; then
         # Skip empty lines and comments
         if [[ -n "$pattern" ]] && [[ ! "$pattern" =~ ^# ]]; then
             echo -e "${CYAN}   Processing pattern: $pattern${NC}"
-            # Remove matching JARs
-            shopt -s nullglob # Make glob expand to nothing if no matches
-            for jar in "$JARS_DIR"/$pattern; do
+            # Use find instead of glob for better cross-platform compatibility
+            while IFS= read -r jar; do
                 if [[ -f "$jar" ]]; then
                     rm -f "$jar"
                     echo -e "${YELLOW}   - Removed: $(basename "$jar")${NC}"
                     ((EXCLUSION_COUNT++))
-                else
-                    echo -e "${CYAN}   - Pattern matched but not a file: $jar${NC}"
                 fi
-            done
-            shopt -u nullglob
+            done < <(find "$JARS_DIR" -maxdepth 1 -name "$pattern" -type f 2> /dev/null)
         fi
     done < "$EXCLUSIONS_FILE"
     echo -e "${GREEN}✅ Removed $EXCLUSION_COUNT JAR(s)${NC}"
