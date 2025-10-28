@@ -141,15 +141,15 @@ if [[ "$USE_NATIVE" == false ]]; then
         exit 1
     fi
 else
-    # Native build - check for Java
+    # Native build - check for Java (needed to BUILD the bundled JRE)
     if ! command -v java &> /dev/null; then
         echo -e "${RED}❌ Java is not installed${NC}"
-        echo -e "${YELLOW}💡 Please install Java 21 or later (JDK, not just JRE)${NC}"
+        echo -e "${YELLOW}💡 Please install Java 21+ JDK to BUILD the package (creates bundled JRE)${NC}"
         exit 1
     fi
     if ! command -v jlink &> /dev/null; then
         echo -e "${RED}❌ jlink not found${NC}"
-        echo -e "${YELLOW}💡 Please install a full JDK (jlink is required)${NC}"
+        echo -e "${YELLOW}💡 Please install a full JDK (jlink creates the bundled JRE)${NC}"
         exit 1
     fi
 fi
@@ -157,7 +157,7 @@ fi
 echo -e "${CYAN}📋 Build Configuration:${NC}"
 echo -e "   Package: ${YELLOW}arcadedb-embedded${NC}"
 echo -e "   Platform: ${YELLOW}${PLATFORM}${NC}"
-echo -e "   JRE: ${YELLOW}Bundled (no Java required)${NC}"
+echo -e "   JRE: ${YELLOW}Bundled (end users need no Java)${NC}"
 echo -e "   Build Method: ${YELLOW}${BUILD_METHOD}${NC}"
 echo ""
 
