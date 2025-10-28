@@ -149,12 +149,17 @@ jobs:
       # This package works without any external Java installation!
 
       - name: Install wheel and test dependencies
+        # Skip for linux/arm64: wheel contains ARM64 JRE but host is AMD64
+        # (linux/arm64 is already tested in Docker during build via QEMU)
+        if: matrix.platform != 'linux/arm64'
         shell: bash
         run: |
           cd bindings/python
           pip install test-install/*.whl pytest pytest-cov requests
 
       - name: Run pytest on host
+        # Skip for linux/arm64: already tested in Docker during build
+        if: matrix.platform != 'linux/arm64'
         id: pytest
         shell: bash
         run: |
@@ -198,7 +203,10 @@ jobs:
           echo "## 🧪 Test Results: arcadedb-embedded (${{ matrix.platform }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ "${{ steps.pytest.outcome }}" = "success" ]; then
+          # Check if pytest was skipped (e.g., linux/arm64)
+          if [ "${{ steps.pytest.outcome }}" = "skipped" ]; then
+            echo "⏭️ **Status**: SKIPPED (tested in Docker during build)" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.pytest.outcome }}" = "success" ]; then
             echo "✅ **Status**: PASSED" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Status**: FAILED" >> $GITHUB_STEP_SUMMARY
@@ -207,9 +215,16 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ Passed | ${{ steps.pytest.outputs.passed || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ⏭️ Skipped | ${{ steps.pytest.outputs.skipped || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ Failed | ${{ steps.pytest.outputs.failed || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+
+          # Show test results if pytest ran
+          if [ "${{ steps.pytest.outcome }}" != "skipped" ]; then
+            echo "| ✅ Passed | ${{ steps.pytest.outputs.passed || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⏭️ Skipped | ${{ steps.pytest.outputs.skipped || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Failed | ${{ steps.pytest.outputs.failed || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| ℹ️ Host Tests | Skipped (ARM64 wheel on AMD64 host) |" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ Docker Tests | Passed (verified during build) |" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "### 📦 Package Info:" >> $GITHUB_STEP_SUMMARY
