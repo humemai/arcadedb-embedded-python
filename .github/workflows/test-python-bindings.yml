@@ -31,7 +31,7 @@ jobs:
           cd bindings/python
 
           # Detect ArcadeDB version from pom.xml
-          ARCADEDB_TAG=$(../../extract_version.py)
+          ARCADEDB_TAG=$(python3 extract_version.py)
           echo "📌 ArcadeDB version: $ARCADEDB_TAG"
 
           # Download JARs from official Docker image
