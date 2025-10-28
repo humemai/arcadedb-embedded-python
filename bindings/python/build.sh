@@ -145,11 +145,21 @@ echo -e "${CYAN}🎯 Target platform: ${YELLOW}${PLATFORM}${NC}"
 echo -e "${CYAN}🎯 JRE platform: ${YELLOW}${TARGET_PLATFORM}${NC}"
 echo ""
 
+# Determine Docker build platform (always Linux for cross-compilation)
+# We build ON linux/amd64 or linux/arm64, but FOR any target platform
+DOCKER_PLATFORM="${PLATFORM}"
+if [[ "$PLATFORM" == darwin/* ]] || [[ "$PLATFORM" == windows/* ]]; then
+    # Cross-compiling for macOS/Windows - build on Linux
+    DOCKER_PLATFORM="linux/amd64"
+    echo -e "${CYAN}🔧 Cross-compiling: Building on linux/amd64 for ${YELLOW}${PLATFORM}${NC}"
+    echo ""
+fi
+
 # Build Docker image
 echo -e "${CYAN}📦 Building Docker image...${NC}"
 
 docker build \
-    --platform "$PLATFORM" \
+    --platform "$DOCKER_PLATFORM" \
     --build-arg PACKAGE_NAME="$PACKAGE_NAME" \
     --build-arg PACKAGE_DESCRIPTION="$DESCRIPTION" \
     --build-arg ARCADEDB_TAG="$DOCKER_TAG" \
@@ -163,7 +173,7 @@ docker build \
 # Run tests
 echo -e "${CYAN}🧪 Running tests in Docker...${NC}"
 docker build \
-    --platform "$PLATFORM" \
+    --platform "$DOCKER_PLATFORM" \
     --build-arg PACKAGE_NAME="$PACKAGE_NAME" \
     --build-arg PACKAGE_DESCRIPTION="$DESCRIPTION" \
     --build-arg ARCADEDB_TAG="$DOCKER_TAG" \
