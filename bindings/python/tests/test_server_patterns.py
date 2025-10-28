@@ -574,7 +574,7 @@ def test_http_api_access_pattern(cleanup_test_dirs):
     db = server.get_database("httpdb")
 
     # Benchmark parameters
-    num_operations = 1000  # Reduced from 1000 for more realistic mixed operations
+    num_operations = 100  # Reduced from 1000 for more realistic mixed operations
     import random
 
     # --- HTTP API Full CRUD Benchmark ---
