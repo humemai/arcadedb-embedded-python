@@ -33,44 +33,75 @@
 
 ## 📋 Remaining Tasks
 
-### High Priority: Documentation Updates
+### ~~High Priority: Documentation Updates~~ ✅ Complete!
 
-#### 1. Update Installation Documentation
+All documentation has been updated to reflect the new single-package system:
+
+#### ~~1. Update Installation Documentation~~ ✅ Complete
 **File**: `bindings/python/docs/getting-started/installation.md`
 
-Current docs show old 3-variant system (headless/minimal/full). Need to update:
-
-- [ ] Remove all references to old variants (headless/minimal/full)
-- [ ] Update to single package: `arcadedb-embedded`
-- [ ] Show GitHub Pages installation (current method):
+- ✅ Removed all references to old variants (headless/minimal/full)
+- ✅ Updated to single package: `arcadedb-embedded`
+- ✅ Show GitHub Pages installation (current method):
   ```bash
-  pip install arcadedb-embedded --index-url https://humemai.github.io/arcadedb-embedded-python/simple/
+  pip install arcadedb-embedded \
+    --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
+    --extra-index-url https://pypi.org/simple/
   ```
-- [ ] Note PyPI size limit pending approval
-- [ ] Update to "No Java required" (bundled JRE)
-- [ ] Update platform support table (6 platforms)
-- [ ] Update wheel sizes (~155-161MB)
+- ✅ Note PyPI size limit pending approval
+- ✅ Updated to "No Java required" (bundled JRE)
+- ✅ Updated platform support table (6 platforms)
+- ✅ Updated wheel sizes (~155-161MB)
 
-#### 2. Update Build Architecture Documentation
+#### ~~2. Update Build Architecture Documentation~~ ✅ Complete
 **File**: `bindings/python/docs/development/build-architecture.md`
 
 - ✅ Document runner versions (ubuntu-24.04, macos-15-intel, etc.)
-- [ ] Document setup.py requirement for platform-specific wheels
-- [ ] Explain BinaryDistribution class and why it's needed
-- [ ] Document macOS environment variables (_PYTHON_HOST_PLATFORM, ARCHFLAGS, MACOSX_DEPLOYMENT_TARGET)
-- [ ] Explain why py3-none-any was created before and how setup.py fixes it
+- ✅ Document setup.py requirement for platform-specific wheels
+- ✅ Explain BinaryDistribution class and why it's needed
+- ✅ Document platform-specific wheel naming (not py3-none-any)
+- ✅ Explain why py3-none-any was created before and how setup.py fixes it
 
-#### 3. Update Examples Documentation
+#### ~~3. Update Examples Documentation~~ ✅ Complete
 **File**: `bindings/python/examples/README.md`
 
-- [ ] Update installation commands to use GitHub Pages index
-- [ ] Remove any references to old variant system
+- ✅ Updated installation commands to use GitHub Pages index
+- ✅ Removed any references to old variant system
 
-#### 4. Update CONTRIBUTING.md
-**File**: `CONTRIBUTING.md` (root)
+#### ~~4. Update CONTRIBUTING.md~~ ✅ Complete
+**File**: `bindings/python/docs/development/contributing.md`
 
-- [ ] Update build instructions (no variant parameter)
-- [ ] Update to single package workflow
+- ✅ Updated build instructions (no variant parameter)
+- ✅ Updated to single package workflow
+
+#### ~~5. Update Root README.md~~ ✅ Complete
+**File**: `README.md`
+
+- ✅ Updated quick start installation with both index URLs
+- ✅ Added note about PyPI size limit approval
+
+#### ~~6. Update Python README~~ ✅ Complete
+**File**: `bindings/python/README.md`
+
+- ✅ Updated installation with both index URLs
+- ✅ Added explanation of --index-url and --extra-index-url
+
+#### ~~7. Update Package Overview~~ ✅ Complete
+**File**: `bindings/python/docs/getting-started/distributions.md`
+
+- ✅ Updated for single package with platform-specific wheels
+- ✅ Updated platform details table
+- ✅ Updated size breakdown
+
+#### ~~8. Update Quick Start~~ ✅ Complete
+**File**: `bindings/python/docs/getting-started/quickstart.md`
+
+- ✅ Changed from headless to full package
+- ✅ Updated installation command with GitHub Pages
+
+**Documentation Commit**: `6af065c7b` (2025-10-28)
+
+---
 
 ### Medium Priority: Pending External Approvals
 
@@ -80,6 +111,7 @@ Current docs show old 3-variant system (headless/minimal/full). Need to update:
 - [ ] Wait for PyPI team response (requested 250MB limit)
 - [ ] Once approved: Test direct PyPI publication
 - [ ] Update docs to show standard `pip install arcadedb-embedded` as primary method
+- [ ] Keep GitHub Pages as mirror/backup option
 - [ ] Keep GitHub Pages as backup/mirror
 
 ### Low Priority: Optional Improvements
