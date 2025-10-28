@@ -145,7 +145,11 @@ else
     sed -i "s|^description = .*|description = \"${PACKAGE_DESCRIPTION}\"|" "$SCRIPT_DIR/pyproject.toml"
 fi
 
-# Step 5: Build wheel with proper platform tag
+# Step 5: Generate version file
+echo -e "${CYAN}📝 Generating _version.py...${NC}"
+python3 "$SCRIPT_DIR/write_version.py" "$SCRIPT_DIR/../../pom.xml"
+
+# Step 6: Build wheel with proper platform tag
 echo -e "${CYAN}🔨 Building wheel...${NC}"
 
 # Determine platform tag for wheel
@@ -189,7 +193,7 @@ fi
 
 echo -e "${GREEN}✅ Wheel built${NC}"
 
-# Step 6: Clean up temp files
+# Step 7: Clean up temp files
 echo -e "${CYAN}🧹 Cleaning up...${NC}"
 rm -rf "$SCRIPT_DIR/temp_jre"
 
