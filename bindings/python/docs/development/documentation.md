@@ -77,7 +77,7 @@ Documentation is versioned using [mike](https://github.com/jimporter/mike) and a
 ```bash
 # 1. Make documentation changes on python-embedded branch
 # 2. Build and test wheels
-./build-all.sh base
+./build.sh base
 pytest
 
 # 3. Commit and push changes

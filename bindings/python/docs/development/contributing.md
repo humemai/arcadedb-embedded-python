@@ -10,7 +10,7 @@ git clone https://github.com/humemai/arcadedb.git
 cd arcadedb/bindings/python
 
 # Build the package (requires Docker)
-./build-all.sh base
+./build.sh base
 
 # Install in development mode
 pip install -e .
@@ -118,7 +118,7 @@ arcadedb/bindings/python/
 ├── setup_jars.py                  # JAR download script
 ├── extract_version.py             # Version extraction
 ├── write_version.py               # Version writing
-├── build-all.sh                   # Build script
+├── build.sh                   # Build script
 ├── Dockerfile.build               # Build container
 ├── docker-compose.yml             # Docker services
 └── mkdocs.yml                     # Documentation config
@@ -130,7 +130,7 @@ arcadedb/bindings/python/
 
 ```bash
 # Build the current package
-./build-all.sh base
+./build.sh base
 
 # Output: dist/*.whl
 ```
@@ -684,7 +684,7 @@ python extract_version.py
 
 ```bash
 # Build the package
-./build-all.sh base
+./build.sh base
 
 # Verify wheels
 ls -lh dist/
@@ -778,7 +778,7 @@ rm -rf dist/ build/ *.egg-info
 rm -rf src/arcadedb_embedded/jars/
 
 # Rebuild
-./build-all.sh headless
+./build.sh headless
 ```
 
 ### Test Failures

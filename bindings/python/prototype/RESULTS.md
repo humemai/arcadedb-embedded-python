@@ -105,10 +105,16 @@ def get_bundled_jre_path() -> str | None:
 | **Total Wheel** | **162MB** | Complete self-contained package |
 | Base Package (no JRE) | ~100MB | For comparison |
 
+**JRE Size Reduction vs Full JRE:**
+
+- Full Eclipse Temurin JRE 21: ~158MB decompressed, ~60-80MB compressed
+- Our minimal JRE (21 modules): ~63MB decompressed, ~39MB in wheel
+- **Savings: 60% smaller** (decompressed), ~50% smaller (compressed)
+
 ### Next Steps
 
 1. **Integration into Main Build:**
-   - Add JRE variant to `build-all.sh`
+   - Add JRE variant to `build.sh`
    - Create separate `pyproject.toml` for JRE variant
    - Update GitHub Actions workflow
 
