@@ -4,6 +4,7 @@
 
 [![PyPI](https://img.shields.io/badge/PyPI-arcadedb--embedded-blue)](https://pypi.org/project/arcadedb-embedded/)
 [![Tests](https://img.shields.io/badge/tests-43%2F43%20passing-brightgreen)](https://github.com/humemai/arcadedb-embedded-python/actions)
+[![Platforms](https://img.shields.io/badge/platforms-6%20supported-orange)](https://github.com/humemai/arcadedb-embedded-python/actions)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 
@@ -23,7 +24,13 @@ pip install arcadedb-embedded
 
 - **Python 3.8+** only - No Java installation required! (JRE is bundled)
 
-**💡 Note:** Package includes a minimal JRE (~39MB compressed) optimized for ArcadeDB. See "JVMCI is not enabled" warnings? Install [GraalVM](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#eliminate-polyglot-warnings-optional) for optimal performance.
+**🌍 Platform Support:** Prebuilt wheels for **6 platforms**:
+
+- ✅ Linux (x86_64, ARM64)
+- ✅ macOS (Intel, Apple Silicon)
+- ✅ Windows (x86_64, ARM64)
+
+**💡 Note:** Package includes a platform-specific JRE (~47-63MB compressed) optimized for ArcadeDB. See "JVMCI is not enabled" warnings? Install [GraalVM](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#eliminate-polyglot-warnings-optional) for optimal performance.
 
 **Technology:** Uses [JPype](https://jpype.readthedocs.io/) to bridge Python and Java, providing direct access to ArcadeDB's embedded engine with minimal overhead.
 
@@ -120,20 +127,33 @@ result = db.query("sql", """
 ## Features
 
 ✅ **No Java Installation Required** - JRE bundled in package
+✅ **6 Platforms Supported** - Linux, macOS, Windows (Intel + ARM)
 ✅ **Embedded Mode** - Runs in your Python process (no server needed)
 ✅ **Multi-Model** - Graph, Document, Key/Value, Vector, Time Series
 ✅ **Query Languages** - SQL, Cypher, Gremlin, MongoDB (all included)
 ✅ **ACID Transactions** - Full transactional support
 ✅ **Vector Search** - HNSW indexing for embeddings
 ✅ **Studio UI** - Web-based database browser (included)
-✅ **Self-Contained** - Single package (162MB wheel, ~240MB installed)
-✅ **Production Ready** - 43/43 tests passing, actively maintained
+✅ **Self-Contained** - Single package (~155-161MB wheel, ~215-230MB installed)
+✅ **Production Ready** - 43/43 tests passing on all platforms
 
-**Package Contents:**
-- **JARs:** ~123MB (all ArcadeDB features except gRPC wire protocol)
-- **JRE:** ~39MB (minimal Java 21 runtime via jlink, 21 modules)
-- **Total:** 162MB compressed wheel, ~240MB when installed
-- **Total:** ~160MB installed
+**Package Contents (platform-specific):**
+
+- **JARs:** 167.4MB (identical across all platforms, gRPC excluded)
+- **JRE:** 47-63MB (platform-specific Java 21 runtime via jlink)
+- **Wheel:** 155-161MB compressed (varies by platform)
+- **Installed:** ~215-230MB uncompressed (varies by platform)
+
+**Platform Details:**
+
+| Platform | Wheel Size | JRE Size | Installed Size |
+|----------|-----------|----------|----------------|
+| Windows ARM64 | 155.1M | 47.3M | ~215M |
+| macOS ARM64 | 156.7M | 53.9M | ~221M |
+| macOS Intel | 157.8M | 55.3M | ~223M |
+| Windows x64 | 157.4M | 51.5M | ~219M |
+| Linux ARM64 | 159.9M | 61.8M | ~229M |
+| Linux x64 | 160.9M | 62.7M | ~230M |
 
 ---
 

@@ -4,24 +4,28 @@ This document describes the build architecture for creating platform-specific Py
 
 ## Overview
 
-**Goal:** Distribute a single `arcadedb-embedded` package that works on 5 platforms with **zero Java installation required**.
+**Goal:** Distribute a single `arcadedb-embedded` package that works on 6 platforms with **zero Java installation required**.
 
-**Achievement:** 5 platform-specific wheels (~157-160MB each) with bundled platform-specific JRE, built and tested on GitHub Actions.
+**Achievement:** 6 platform-specific wheels (~155-161MB each) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
 
 ## Supported Platforms
 
-| Platform | Wheel Size | Runner | Build Method | Notes |
-|----------|-----------|---------|--------------|-------|
-| **linux/amd64** | 160.9M | `ubuntu-latest` | Docker native | Most common Linux platform |
-| **linux/arm64** | 159.9M | `ubuntu-24.04-arm` | Docker native | ARM64 servers (GitHub hosted runner) |
-| **darwin/amd64** | 157.8M | `macos-13` | Native build | Intel Macs (2006-2020) |
-| **darwin/arm64** | 156.7M | `macos-latest` | Native build | Apple Silicon Macs (2020+) |
-| **windows/amd64** | 157.4M | `windows-latest` | Native build | 64-bit Windows |
+| Platform | Wheel Size | JRE Size | Runner | Build Method | Notes |
+|----------|-----------|----------|---------|--------------|-------|
+| **linux/amd64** | 160.9M | 62.7M | `ubuntu-24.04` | Docker native | Most common Linux platform |
+| **linux/arm64** | 159.9M | 61.8M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
+| **darwin/amd64** | 157.8M | 55.3M | `macos-15-intel` | Native build | Intel Macs (2006-2020) |
+| **darwin/arm64** | 156.7M | 53.9M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
+| **windows/amd64** | 157.4M | 51.5M | `windows-2025` | Native build | 64-bit Windows |
+| **windows/arm64** | 155.1M | 47.3M | `windows-11-arm` | Native build | ARM64 Windows (Surface, etc.) |
 
 **All platforms:**
-- 43 tests passing
-- 167.4M JARs (83 files, gRPC excluded)
-- ~40MB savings vs initial builds (195.9M → 157-160M)
+
+- ✅ 43/43 tests passing
+- ✅ 167.4M JARs (83 files, identical across platforms)
+- ✅ All native runners (no QEMU emulation)
+- ✅ ~40MB savings vs initial builds (195.9M → 155-161M)
+- ✅ Reproducible builds (pinned runner versions)
 
 ## Architecture
 
@@ -58,14 +62,15 @@ We use a **hybrid build approach**:
 ```yaml
 jobs:
   download-jars:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Downloads 84 ArcadeDB JARs, filters to 83, uploads artifact
 
   test:
     needs: download-jars
     strategy:
       matrix:
-        platform: [linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64]
+        platform: [linux/amd64, linux/arm64, darwin/amd64, darwin/arm64,
+                   windows/amd64, windows/arm64]
     # Builds platform-specific wheel, runs tests
 ```
 
@@ -272,8 +277,8 @@ bindings/python/
    - Uploads artifact for native builds
 
 2. **test job matrix** (lines 91-364)
-   - Builds all 5 platforms
-   - Platform-specific steps (QEMU, artifact download, tests)
+   - Builds all 6 platforms
+   - Platform-specific steps (native runners, artifact download, tests)
 
 3. **Test parsing** (lines 200-237)
    - JUnit XML generation and parsing
