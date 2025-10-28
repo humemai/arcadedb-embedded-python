@@ -36,13 +36,16 @@ COPY bindings/python/jar_exclusions.txt /build/jar_exclusions.txt
 
 # Remove excluded JARs based on jar_exclusions.txt
 RUN echo "🗑️  Removing excluded JARs..." && \
+    echo "📋 JAR count before exclusion: $(ls -1 /build/jars/*.jar | wc -l)" && \
     while IFS= read -r pattern; do \
         # Skip empty lines and comments
         if [ -n "$pattern" ] && [ "${pattern#\#}" = "$pattern" ]; then \
-            rm -f /build/jars/$pattern && \
-            echo "   - Removed: $pattern"; \
+            echo "   Processing pattern: $pattern" && \
+            # Use find and delete to show what's being removed
+            find /build/jars -name "$pattern" -type f -exec echo "   - Removing: {}" \; -delete; \
         fi \
-    done < /build/jar_exclusions.txt
+    done < /build/jar_exclusions.txt && \
+    echo "📋 JAR count after exclusion: $(ls -1 /build/jars/*.jar | wc -l)"
 
 # Build minimal JRE with jlink (21 modules)
 # Based on analysis of ArcadeDB dependencies
