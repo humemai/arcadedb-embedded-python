@@ -86,16 +86,53 @@ jobs:
         include:
           - platform: linux/amd64
             runs-on: ubuntu-latest
+            download-jars: true  # Only Linux downloads JARs
           - platform: darwin/amd64
             runs-on: macos-13
+            download-jars: false
           - platform: darwin/arm64
             runs-on: macos-latest
+            download-jars: false
           - platform: windows/amd64
             runs-on: windows-latest
+            download-jars: false
 
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Download ArcadeDB JARs (Linux only)
+        if: matrix.download-jars
+        shell: bash
+        run: |
+          cd bindings/python
+
+          # Detect ArcadeDB version
+          ARCADEDB_TAG=$(../../extract_version.py)
+          echo "📌 ArcadeDB version: $ARCADEDB_TAG"
+
+          # Download JARs from official Docker image
+          echo "📦 Downloading JARs from arcadedata/arcadedb:$ARCADEDB_TAG..."
+          docker run --rm -v "$(pwd)/src/arcadedb_embedded/jars:/output" \
+            arcadedata/arcadedb:$ARCADEDB_TAG \
+            sh -c 'cp /home/arcadedb/lib/*.jar /output/'
+
+          ls -lh src/arcadedb_embedded/jars/
+
+      - name: Upload JARs as artifact (Linux only)
+        if: matrix.download-jars
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: arcadedb-jars
+          path: bindings/python/src/arcadedb_embedded/jars/*.jar
+          retention-days: 1
+
+      - name: Download JARs artifact (non-Linux only)
+        if: ${{ ! matrix.download-jars }}
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: arcadedb-jars
+          path: bindings/python/src/arcadedb_embedded/jars
 
       - name: Set up Python
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
@@ -114,6 +151,7 @@ jobs:
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
       - name: Write version file for build
+        shell: bash
         run: |
           cd bindings/python
           # Use tag version directly

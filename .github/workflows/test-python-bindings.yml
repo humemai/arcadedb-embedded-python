@@ -14,9 +14,49 @@ on:
   workflow_dispatch:
 
 jobs:
+  # First job: Download ArcadeDB JARs (platform-agnostic)
+  download-jars:
+    name: Download ArcadeDB JARs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Download JARs from ArcadeDB Docker image
+        shell: bash
+        run: |
+          cd bindings/python
+
+          # Detect ArcadeDB version from pom.xml
+          ARCADEDB_TAG=$(../../extract_version.py)
+          echo "📌 ArcadeDB version: $ARCADEDB_TAG"
+
+          # Download JARs from official Docker image
+          echo "📦 Downloading JARs from arcadedata/arcadedb:$ARCADEDB_TAG..."
+          docker run --rm -v "$(pwd)/src/arcadedb_embedded/jars:/output" \
+            arcadedata/arcadedb:$ARCADEDB_TAG \
+            sh -c 'cp /home/arcadedb/lib/*.jar /output/'
+
+          # Verify JARs were downloaded
+          ls -lh src/arcadedb_embedded/jars/
+          JAR_COUNT=$(ls -1 src/arcadedb_embedded/jars/*.jar 2>/dev/null | wc -l)
+          echo "✅ Downloaded $JAR_COUNT JAR files"
+
+      - name: Upload JARs as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: arcadedb-jars
+          path: bindings/python/src/arcadedb_embedded/jars/*.jar
+          retention-days: 1
+
+  # Second job: Build and test on each platform
   test:
     name: Test arcadedb-embedded (${{ matrix.platform }})
     runs-on: ${{ matrix.runs-on }}
+    needs: download-jars
     strategy:
       # Don't cancel other matrix jobs if one fails
       fail-fast: false
@@ -35,20 +75,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      - name: Download ArcadeDB JARs artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: arcadedb-jars
+          path: bindings/python/src/arcadedb_embedded/jars
+
       - name: Set up Java (for native builds on macOS/Windows)
         if: matrix.platform != 'linux/amd64'
         uses: actions/setup-java@7a6d8a8234af8eb26422e24e3006232cccaa061b # v4.6.0
         with:
           distribution: 'temurin'
           java-version: '21'
-
-      # Docker is needed on all platforms to download ArcadeDB JARs
-      - name: Set up Docker (macOS)
-        if: startsWith(matrix.platform, 'darwin/')
-        run: |
-          # Docker Desktop is pre-installed on macOS runners but may need to be started
-          # GitHub's macos runners have Docker available
-          docker version || echo "Docker not available"
 
       - name: Set up Docker Buildx (Linux only)
         if: matrix.platform == 'linux/amd64'
@@ -62,6 +100,7 @@ jobs:
           ./build.sh ${{ matrix.platform }}
 
       - name: Extract wheel for additional testing
+        shell: bash
         run: |
           cd bindings/python
           mkdir -p test-install
@@ -76,12 +115,14 @@ jobs:
       # This package works without any external Java installation!
 
       - name: Install wheel and test dependencies
+        shell: bash
         run: |
           cd bindings/python
           pip install test-install/*.whl pytest pytest-cov requests
 
       - name: Run pytest on host
         id: pytest
+        shell: bash
         run: |
           cd bindings/python
           echo "🧪 Testing arcadedb-embedded (with bundled JRE)..."
