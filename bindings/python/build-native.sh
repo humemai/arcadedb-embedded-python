@@ -110,30 +110,8 @@ echo -e "${GREEN}✅ JRE built${NC}"
 JRE_SIZE=$(du -sh "$SCRIPT_DIR/temp_jre" | cut -f1)
 echo -e "${CYAN}📊 JRE size: ${YELLOW}${JRE_SIZE}${NC}"
 
-# Step 3: Copy JRE to package (JARs already in place)
+# Step 3: Copy JRE to package (JARs already filtered and in place from artifact)
 echo -e "${CYAN}📦 Preparing package...${NC}"
-
-# Remove excluded JARs based on jar_exclusions.txt
-EXCLUSIONS_FILE="$SCRIPT_DIR/jar_exclusions.txt"
-if [[ -f "$EXCLUSIONS_FILE" ]]; then
-    echo -e "${YELLOW}🗑️  Removing excluded JARs from jar_exclusions.txt...${NC}"
-    EXCLUSION_COUNT=0
-    while IFS= read -r pattern || [[ -n "$pattern" ]]; do
-        # Skip empty lines and comments
-        if [[ -n "$pattern" ]] && [[ ! "$pattern" =~ ^# ]]; then
-            echo -e "${CYAN}   Processing pattern: $pattern${NC}"
-            # Use find instead of glob for better cross-platform compatibility
-            while IFS= read -r jar; do
-                if [[ -f "$jar" ]]; then
-                    rm -f "$jar"
-                    echo -e "${YELLOW}   - Removed: $(basename "$jar")${NC}"
-                    ((EXCLUSION_COUNT++))
-                fi
-            done < <(find "$JARS_DIR" -maxdepth 1 -name "$pattern" -type f 2> /dev/null)
-        fi
-    done < "$EXCLUSIONS_FILE"
-    echo -e "${GREEN}✅ Removed $EXCLUSION_COUNT JAR(s)${NC}"
-fi
 
 # Build and copy JRE
 rm -rf "$SCRIPT_DIR/src/arcadedb_embedded/jre"

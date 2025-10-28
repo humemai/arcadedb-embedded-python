@@ -4,48 +4,19 @@ Setup script to copy ArcadeDB JAR files and bundled JRE to the Python package.
 
 This script should be run as part of the build process to ensure
 all necessary JAR files and the bundled JRE are included in the wheel.
+
+Note: JAR filtering is done upstream:
+  - Docker builds: Filtered in Dockerfile.build (jre-builder stage)
+  - Native builds: Filtered in download-jars GitHub Actions job
 """
 
-import fnmatch
 import shutil
 from pathlib import Path
 
 
-def load_jar_exclusions():
-    """Load JAR exclusion patterns from jar_exclusions.txt."""
-    exclusions_file = Path(__file__).parent / "jar_exclusions.txt"
-    patterns = []
-
-    if exclusions_file.exists():
-        with open(exclusions_file, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                # Skip empty lines and comments
-                if line and not line.startswith("#"):
-                    patterns.append(line)
-
-    return patterns
-
-
-def should_exclude_jar(jar_name, exclusion_patterns):
-    """Check if a JAR should be excluded based on exclusion patterns."""
-    for pattern in exclusion_patterns:
-        if fnmatch.fnmatch(jar_name, pattern):
-            return True
-    return False
-
-
 def find_jar_files():
-    """Find all necessary ArcadeDB JAR files using custom filtering."""
+    """Find all ArcadeDB JAR files (already filtered upstream)."""
     print("📦 Building arcadedb-embedded with bundled JRE")
-
-    # Load exclusion patterns
-    exclusion_patterns = load_jar_exclusions()
-    if exclusion_patterns:
-        print(
-            f"📋 Loaded {len(exclusion_patterns)} exclusion pattern(s) "
-            "from jar_exclusions.txt"
-        )
 
     # Look for JAR files copied from the ArcadeDB Docker image
     # The Dockerfile copies JARs from the full distribution image to these locations
@@ -61,43 +32,18 @@ def find_jar_files():
         if quick.exists():
             jars = list(map(str, quick.glob("*.jar")))
             if jars:
-                print("✅ Found {} JAR files in: {}".format(len(jars), quick))
+                print(f"✅ Found {len(jars)} JAR files in: {quick}")
                 all_jars.extend(jars)
                 break
 
-    # Filter JARs based on exclusion patterns
     if all_jars:
-        included_jars = []
-        excluded_jars = []
-
+        print("\n✅ JAR files (already filtered):")
         for jar in all_jars:
-            jar_name = Path(jar).name
-            if should_exclude_jar(jar_name, exclusion_patterns):
-                excluded_jars.append(jar)
-            else:
-                included_jars.append(jar)
-
-        print("\n📊 JAR Filtering Results:")
-        print(f"   Total found: {len(all_jars)}")
-        print(f"   Included: {len(included_jars)}")
-        print(f"   Excluded: {len(excluded_jars)}")
-
-        if excluded_jars:
-            print("\n❌ Excluded JARs:")
-            for jar in excluded_jars:
-                jar_name = Path(jar).name
-                size_mb = Path(jar).stat().st_size / 1024 / 1024
-                print(f"   - {jar_name} ({size_mb:.1f}MB)")
-
-        print("\n✅ Included JARs:")
-        for jar in included_jars:
             jar_name = Path(jar).name
             size_mb = Path(jar).stat().st_size / 1024 / 1024
             print(f"   - {jar_name} ({size_mb:.1f}MB)")
 
-        return included_jars
-
-    return []
+    return all_jars
 
 
 def copy_jars_to_package():
