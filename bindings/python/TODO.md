@@ -10,19 +10,22 @@
 This document tracks all pending work for the ArcadeDB Python bindings project, organized by priority.
 
 ### Current State
+
 - ✅ **Tag-driven release strategy** - implemented and ready
 - ✅ **JRE bundling** - validated and integrated into build system
 - ✅ **Single-package strategy** - JRE bundled by default in `arcadedb-embedded`
-- ✅ **Multi-platform CI/CD** - **COMPLETED with native runners + QEMU**
-  - **Solution Implemented**: Native runners for 4 platforms + QEMU for linux/arm64
-  - **Platforms Supported**: 5 platforms total
-    - linux/amd64 (Docker - manylinux compliance)
-    - linux/arm64 (Docker + QEMU emulation)
-    - darwin/amd64 (Native - macOS Intel)
-    - darwin/arm64 (Native - macOS Apple Silicon)
-    - windows/amd64 (Native - Windows x64)
-  - **Philosophy**: Maximize platform support using GitHub's free runners + QEMU
-- ✅ **Testing & Validation** - All platforms passing!
+- ✅ **Multi-platform CI/CD** - **COMPLETED with native runners for all 6 platforms**
+  - **Solution Implemented**: Native GitHub runners for all platforms
+  - **Platforms Supported**: **6 platforms total** ✅
+    - linux/amd64 (Docker - manylinux compliance on ubuntu-24.04)
+    - linux/arm64 (Docker - native ARM64 on ubuntu-24.04-arm)
+    - darwin/amd64 (Native - macOS Intel on macos-15-intel)
+    - darwin/arm64 (Native - macOS Apple Silicon on macos-15)
+    - windows/amd64 (Native - Windows x64 on windows-2025)
+    - windows/arm64 (Native - Windows ARM64 on windows-11-arm)
+  - **Philosophy**: Maximum platform support with native performance and reproducibility
+- ✅ **Testing & Validation** - All 6 platforms passing 43/43 tests!
+- ✅ **Pinned Runners** - All runner versions pinned for reproducible builds
 
 ### Key Decisions Made
 - ✅ **Release strategy:** Tag-driven versioning (manual git tags like `25.10.1.dev0`, `25.10.1`, `25.10.1.post0`)
@@ -39,66 +42,95 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 
 ## ✅ Multi-Platform Build System - COMPLETE!
 
-**Status:** ✅ COMPLETE - All 5 platforms working with optimized builds!
+**Status:** ✅ COMPLETE - All 6 platforms working with native runners!
 
-### Final Solution: Native Runners + QEMU for ARM64
+### Final Solution: Native GitHub Runners for All Platforms
 
-**Supported Platforms (5):**
-- ✅ **linux/amd64** - `ubuntu-latest` (Docker native build)
-- ✅ **linux/arm64** - `ubuntu-latest` (Docker + QEMU emulation)
-- ✅ **darwin/amd64** - `macos-13` (native build, Intel Mac)
-- ✅ **darwin/arm64** - `macos-latest` (native build, Apple Silicon)
-- ✅ **windows/amd64** - `windows-latest` (native build)
+**Supported Platforms (6):**
 
-### Accomplishments (CI run #87 - 2025-01-29)
+- ✅ **linux/amd64** - `ubuntu-24.04` (Docker native build)
+- ✅ **linux/arm64** - `ubuntu-24.04-arm` (Docker native, ARM64 runner)
+- ✅ **darwin/amd64** - `macos-15-intel` (native build, Intel Mac)
+- ✅ **darwin/arm64** - `macos-15` (native build, Apple Silicon)
+- ✅ **windows/amd64** - `windows-2025` (native build, x64)
+- ✅ **windows/arm64** - `windows-11-arm` (native build, ARM64)
+
+### Accomplishments (CI run #96 - 2025-10-28)
 
 **Final Wheel Sizes:**
-- linux/amd64: 160.9M ✅
-- linux/arm64: 159.9M ✅
-- darwin/amd64: 157.8M ✅
-- darwin/arm64: 156.7M ✅
-- windows/amd64: 157.4M ✅
+
+- linux/amd64: 160.9M (JRE: 62.7M) - 43/43 tests ✅
+- linux/arm64: 159.9M (JRE: 61.8M) - 43/43 tests ✅
+- darwin/amd64: 157.8M (JRE: 55.3M) - 43/43 tests ✅
+- darwin/arm64: 156.7M (JRE: 53.9M) - 43/43 tests ✅
+- windows/amd64: 157.4M (JRE: 51.5M) - 43/43 tests ✅
+- windows/arm64: 155.1M (JRE: 47.3M) - 43/43 tests ✅
 
 **All Platforms:**
-- 43 tests passing
-- 167.4M JARs (83 files, gRPC excluded)
-- ~40MB savings per wheel (was 195.9M, now ~157-160M)
+
+- ✅ 43/43 tests passing on all platforms
+- ✅ 167.4M JARs (83 files, identical across platforms, gRPC excluded)
+- ✅ ~40MB savings per wheel (was 195.9M, now ~155-161M)
+- ✅ All native runners (no QEMU emulation)
+- ✅ Pinned runner versions for reproducibility
 
 **Architecture Improvements:**
+
 1. **Single JAR filtering point**: download-jars job filters once (Ubuntu bash), uploads artifact
 2. **Artifact strategy**: Pre-filtered JARs for native builds, skip artifact for Docker
 3. **Structured test data**: pytest --junitxml for reliable cross-platform parsing
 4. **Code reduction**: Removed ~90 lines of duplicate filtering logic
-5. **QEMU support**: docker/setup-qemu-action@v3.2.0 for linux/arm64
+5. **Native ARM64 runners**: Switched from QEMU to GitHub ARM64 runners (3-4x faster)
+6. **Platform-specific JVM detection**: Added Windows/macOS/Linux JVM library paths
+7. **Pinned runner versions**: All platforms use specific runner versions for reproducibility
 
 ### Issues Resolved
+
 1. ✅ Docker python-builder copying wrong JARs → Fixed: copy from jre-builder not java-builder
 2. ✅ Linux artifact conflict → Fixed: skip artifact download for Docker builds
-3. ✅ linux/arm64 host testing → Fixed: skip host tests (architecture mismatch), Docker only
+3. ✅ linux/arm64 host testing → Fixed: enabled with native ARM64 runner
 4. ✅ Windows glob pattern failure → Fixed: moved JAR filtering upstream to Ubuntu
 5. ✅ JAR filtering duplication → Fixed: single upstream filter in download-jars job
 6. ✅ Test count parsing failure → Fixed: grep -P (GNU-only) → JUnit XML (POSIX)
 7. ✅ Bash counter increment → Fixed: set -e compatibility
+8. ✅ QEMU performance overhead → Fixed: switched to native ARM64 runners (15-20min → 5-7min)
+9. ✅ Windows ARM64 JVM detection → Fixed: platform-specific JVM library paths (jvm.dll vs libjvm.so)
+10. ✅ Runner version reproducibility → Fixed: pinned all runner versions (ubuntu-24.04, macos-15, etc.)
 
 ### Why This Approach Works
-1. GitHub Actions provides native macOS and Windows runners for free
+
+1. GitHub Actions provides native runners for all major platforms (including ARM64!)
 2. Docker provides consistent Linux builds with multi-platform support
-3. QEMU enables ARM64 emulation on AMD64 runners (slower but functional)
-4. Each platform builds with platform-specific JRE via native `jlink`
-5. True platform-specific wheels served by PyPI based on user's platform
-6. Single upstream JAR filtering eliminates duplication and cross-platform issues
+3. Each platform builds with platform-specific JRE via native `jlink`
+4. True platform-specific wheels served by PyPI based on user's platform
+5. Single upstream JAR filtering eliminates duplication and cross-platform issues
+6. Native ARM64 runners eliminate QEMU overhead (3-4x faster builds)
+7. Pinned runner versions ensure reproducible builds over time
+8. Platform-specific JVM detection enables all 6 platforms to work correctly
 
 ### Implementation Tasks
 
 #### Phase 3.6: Multi-Platform Optimization and Refinement - ✅ COMPLETE
 
-**NOTE:** Phase 3.6 original plan (refactor to native runners for 4 platforms) was superseded by improved solution:
-- Added linux/arm64 support via QEMU emulation (5 platforms total)
-- Implemented single upstream JAR filtering (jar_exclusions.txt)
-- Switched to JUnit XML for reliable cross-platform test parsing
-- Achieved ~40MB savings per wheel via gRPC exclusion
+**NOTE:** Phase 3.6 evolved significantly beyond original plan:
 
-**All tasks obsolete - replaced by superior implementation documented above.**
+**Original Plan:** Refactor to native runners for 4 platforms
+**Final Achievement:** 6 platforms with native runners and optimized builds
+
+**Accomplishments:**
+
+- ✅ Added linux/arm64 support (initially via QEMU, then native runner)
+- ✅ Added windows/arm64 support (6th platform with windows-11-arm runner)
+- ✅ Implemented single upstream JAR filtering (jar_exclusions.txt)
+- ✅ Switched to JUnit XML for reliable cross-platform test parsing
+- ✅ Achieved ~40MB savings per wheel via gRPC exclusion
+- ✅ Switched from QEMU to native GitHub ARM64 runners (3-4x performance improvement)
+- ✅ Fixed Windows ARM64 JVM detection (platform-specific library paths)
+- ✅ Pinned all runner versions for reproducible builds
+- ✅ Simplified JVM initialization (always uses bundled JRE)
+- ✅ 43/43 tests passing on all 6 platforms
+
+**All original tasks superseded by superior 6-platform implementation.**
 
 **Original Plan (Obsolete):**
 
@@ -151,14 +183,16 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 
 **Documentation Changes:**
 
-- [ ] **Update `README.md` (root and bindings/python/)**
-  - Platform support: 4 platforms (remove linux/arm64)
-  - Update build instructions for native builds
-  - Add note: "linux/arm64 may be added in future if demand justifies"
+- [x] **Update `README.md` (root and bindings/python/)** ✅
+  - Updated to 6 platforms (added windows/arm64)
+  - Added platform badges and comparison tables
+  - Updated all build instructions for native builds
+  - Removed all QEMU references
 
-- [ ] **Update `TODO.md`**
-  - Mark Phase 3.6 complete when done
-  - Update platform count throughout (4 not 5)
+- [x] **Update `TODO.md`** ✅
+  - Marked Phase 3.6 complete
+  - Updated platform count throughout (6 platforms)
+  - Updated accomplishments with CI run #96 results
 
 - [ ] **Update `bindings/python/docs/getting-started/distributions.md`**
   - Platform support table: 4 platforms
@@ -232,7 +266,8 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 - `bindings/python/README.md` - Same as root
 - `bindings/python/docs/ARCHITECTURE.md` - NEW: document JRE bundling
 - `bindings/python/docs/getting-started/*` - Update installation instructions
-- `bindings/python/CI_SETUP.md` - Archive/delete (dual-package approach)
+- `bindings/python/docs/development/build-architecture.md` - ✅ Moved from BUILD.md
+- `bindings/python/docs/development/ci-setup.md` - ✅ Moved from CI_SETUP.md
 - `CONTRIBUTING.md` - Update build instructions
 - Any other docs mentioning base/jre variants
 
@@ -256,9 +291,9 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 
 **Expected behavior:**
 ```bash
-./build.sh                        # Current platform with JRE (162MB)
+./build.sh                        # Current platform with JRE
 ./build.sh linux/amd64            # Specific platform
-./build.sh linux/arm64            # ARM64 with QEMU
+./build.sh linux/arm64            # Linux ARM64 (native)
 ```
 
 #### 3.1.2 Update `pyproject.toml`
@@ -317,7 +352,7 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 
 - [x] Add platform matrix: `[linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64]` - ✅ COMPLETE
 - [x] Update build command: `./build.sh ${{ matrix.platform }}` - ✅ COMPLETE
-- [x] Add QEMU setup for ARM64 platforms - ✅ COMPLETE
+- [x] Add native ARM64 runners for all platforms - ✅ COMPLETE
 - [x] Update artifact names to include platform - ✅ COMPLETE
 - [x] Add summary job for all platforms - ✅ COMPLETE
 - [x] Remove Java installation step (JRE bundled!) - ✅ COMPLETE (was already removed)
@@ -361,9 +396,9 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 - [ ] Optional: New file documenting JRE bundling architecture
 - [ ] List 21 Java modules included via jlink
 - [ ] Size breakdown (63MB JRE + 13MB JARs + 84MB Python/native)
-- [ ] Platform support details (5 platforms)
+- [x] Platform support details (6 platforms) ✅
 - [ ] Build process overview (Docker + jlink)
-- [ ] Cross-platform building approach (QEMU for ARM64)
+- [x] Cross-platform building approach (native runners for all platforms) ✅
 
 #### 3.3.4 Update `bindings/python/docs/` content
 - [x] `getting-started/distributions.md`: Updated to single package ✅
@@ -373,7 +408,8 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 #### 3.3.5 Update Other Documentation Files
 - [ ] `CONTRIBUTING.md`: Update build instructions (no variant parameter)
 - [ ] `bindings/python/TODO.md`: Already updated ✅
-- [ ] Remove/archive `bindings/python/CI_SETUP.md` (was for dual-package)
+- [x] Move `bindings/python/BUILD.md` → `docs/development/build-architecture.md` ✅
+- [x] Move `bindings/python/CI_SETUP.md` → `docs/development/ci-setup.md` ✅
 - [ ] Update prototype documentation references
 - [ ] Check for any other files referencing base/jre variants
 
@@ -400,7 +436,7 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 
 #### 3.4.4 Optional Cleanup Tasks
 - [ ] Archive prototype files to `bindings/python/docs/historical/` if desired
-- [ ] Delete `bindings/python/CI_SETUP.md` if no longer needed
+- [x] BUILD.md and CI_SETUP.md moved to docs/development/ ✅
 - [ ] Clean up `dist/` test wheels if desired
 
 ### Phase 3.5: Testing & Validation ⬅️ **NEXT PHASE**
@@ -429,8 +465,8 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 5. [ ] Delete test tag: `git tag -d 25.10.1.dev99 && git push origin :refs/tags/25.10.1.dev99`
 
 **Option B: Full Local Testing (Time-consuming)**
-- [ ] Build locally for all 5 platforms (requires Docker + QEMU)
-- [ ] Verify wheel size ~162MB for all platforms
+- [ ] Build locally for all 6 platforms (requires Docker for Linux builds)
+- [ ] Verify wheel sizes ~155-161MB for all platforms
 - [ ] Install each wheel in fresh environment
 - [ ] Run full test suite (43 tests) on each platform
 - [ ] Performance benchmarks (optional)
@@ -536,9 +572,9 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 ## 📝 Low Priority: Code Quality & Cleanup
 
 ### Documentation
-- [ ] Review all `.md` files in `bindings/python/`
-- [ ] Move detailed plans to `docs/` subdirectory
-- [ ] Keep only essential files in root (README.md, TODO.md)
+- [x] Review all `.md` files in `bindings/python/` ✅
+- [x] Move detailed plans to `docs/` subdirectory ✅
+- [x] Keep only essential files in root (README.md, TODO.md) ✅
 
 ### Code Quality
 - [ ] Fix lint errors in `extract_version.py`

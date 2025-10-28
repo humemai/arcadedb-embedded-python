@@ -26,15 +26,13 @@ The package (162MB wheel, ~240MB installed) includes everything you need:
 
 ## Platform Support
 
-Pre-built wheels are currently available for 5 platforms:
+Pre-built wheels are currently available for **6 platforms**:
 
-- **Linux**: x86-64, ARM64 (QEMU emulated)
-- **macOS**: x86-64 (Intel), ARM64 (Apple Silicon)
-- **Windows**: x86-64
+- ✅ **Linux**: x86-64, ARM64 (native)
+- ✅ **macOS**: x86-64 (Intel), ARM64 (Apple Silicon)
+- ✅ **Windows**: x86-64, ARM64
 
-> **Future Platforms:** `windows/arm64` may be added in future releases if demand justifies it.
-
-All platforms include a platform-specific bundled JRE - no external Java required!
+All platforms use native runners (no emulation) and include platform-specific bundled JRE - no external Java required!
 
 ## Features
 

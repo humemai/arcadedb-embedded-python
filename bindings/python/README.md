@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 43/43 Passing (100%)
+**Status**: ✅ Production Ready | **Tests**: 43/43 Passing (100%) | **Platforms**: 6 Supported
 
 ---
 
@@ -35,6 +35,10 @@ pip install --pre arcadedb-embedded
 **Requirements:**
 
 - **Python 3.8+ only** - No Java installation required!
+- **Supported Platforms**: Prebuilt wheels for **6 platforms**
+  - Linux: x86_64, ARM64
+  - macOS: Intel (x86_64), Apple Silicon (ARM64)
+  - Windows: x86_64, ARM64
 - **Development version**: Use `--pre` flag to install `.devN` versions
 
 !!! tip "Development Releases"
@@ -66,10 +70,11 @@ with arcadedb.create_database("/tmp/mydb") as db:
 
 ## ✨ Features
 
-- ☕ **No Java Installation Required**: Bundled JRE (~39MB compressed) included
+- ☕ **No Java Installation Required**: Bundled JRE (47-63MB per platform)
+- 🌍 **6 Platforms Supported**: Linux, macOS, Windows (x86_64 + ARM64)
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network)
 - 🌐 **Server Mode**: Optional HTTP server with Studio web interface
-- 📦 **Self-contained**: All dependencies bundled (162MB wheel: 123MB JARs + 39MB JRE)
+- 📦 **Self-contained**: All dependencies bundled (~155-161MB wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
 - 🔍 **Multiple query languages**: SQL, Cypher, Gremlin, MongoDB
 - ⚡ **High performance**: Direct JVM integration via JPype
@@ -81,13 +86,26 @@ with arcadedb.create_database("/tmp/mydb") as db:
 
 ## 📦 What's Inside
 
-The `arcadedb-embedded` package (162MB wheel, ~240MB installed) includes everything you need:
+The `arcadedb-embedded` package is platform-specific and self-contained:
 
-- **ArcadeDB JARs** (~123MB): Core database engine with all features
-- **Bundled JRE** (~39MB): Custom Java 21 runtime (jlink, 21 modules)
-- **Total:** 162MB compressed wheel, ~240MB when installed
+**Package Contents (all platforms):**
 
-**Note**: Some JARs are excluded to optimize package size. See `jar_exclusions.txt` for details.
+- **ArcadeDB JARs**: 167.4MB (identical across all platforms)
+- **Bundled JRE**: 47-63MB (platform-specific Java 21 runtime via jlink)
+- **Total Size**: ~155-161MB compressed wheel, ~215-230MB installed
+
+**Platform Details:**
+
+| Platform | Wheel Size | JRE Size | Installed Size | Tests |
+|----------|-----------|----------|----------------|-------|
+| Windows ARM64 | 155.1M | 47.3M | ~215M | 43/43 ✅ |
+| macOS ARM64 | 156.7M | 53.9M | ~221M | 43/43 ✅ |
+| macOS Intel | 157.8M | 55.3M | ~223M | 43/43 ✅ |
+| Windows x64 | 157.4M | 51.5M | ~219M | 43/43 ✅ |
+| Linux ARM64 | 159.9M | 61.8M | ~229M | 43/43 ✅ |
+| Linux x64 | 160.9M | 62.7M | ~230M | 43/43 ✅ |
+
+**Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See `jar_exclusions.txt` for details.
 
 Import: `import arcadedb_embedded as arcadedb`
 
@@ -111,7 +129,10 @@ See [tests/README.md](tests/README.md) for detailed test documentation.
 
 ## 🔧 Building from Source
 
-**Docker required** - it handles all dependencies (Java, Maven, Python build tools):
+**Requirements vary by platform:**
+
+- **Linux**: Docker (handles all dependencies)
+- **macOS/Windows**: Java 21+ JDK with jlink (to build the bundled JRE)
 
 ```bash
 cd bindings/python/
@@ -120,18 +141,27 @@ cd bindings/python/
 ./build.sh
 
 # Build for specific platform
-./build.sh linux/amd64
-./build.sh darwin/arm64
+./build.sh linux/amd64    # Requires Docker
+./build.sh darwin/arm64   # Requires Java JDK (native build)
+./build.sh windows/arm64  # Requires Java JDK (native build)
 # etc.
 ```
 
 Built wheels will be in `dist/`. **[Build instructions](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#building-from-source)**
 
-Supported platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`
+**Supported platforms:**
 
-> **Note:** `linux/arm64` uses QEMU emulation for builds. Additional platforms like `windows/arm64` may be added in future releases if demand justifies it.
+- `linux/amd64` (Docker build on native x64 runner)
+- `linux/arm64` (Docker build on native ARM64 runner)
+- `darwin/amd64` (Native build on macOS Intel)
+- `darwin/arm64` (Native build on macOS Apple Silicon)
+- `windows/amd64` (Native build on Windows x64)
+- `windows/arm64` (Native build on Windows ARM64)
 
-> **Developer Note:** See [BUILD.md](BUILD.md) for comprehensive documentation of the multi-platform build architecture, including how we achieve platform-specific JRE bundling across 5 platforms on GitHub Actions.
+
+> **Developer Note:** See [docs/development/build-architecture.md](docs/development/build-architecture.md) for comprehensive documentation of the multi-platform build architecture, including how we achieve platform-specific JRE bundling across all 6 platforms on GitHub Actions.
+
+## Development
 
 !!! note "Package Contents"
     The package includes optimized ArcadeDB JARs. Some components are excluded for size optimization - see `jar_exclusions.txt` for details.
