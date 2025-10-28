@@ -13,8 +13,12 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 - ✅ **Tag-driven release strategy** - implemented and ready
 - ✅ **JRE bundling** - validated and integrated into build system
 - ✅ **Single-package strategy** - JRE bundled by default in `arcadedb-embedded`
-- ✅ **Multi-platform CI/CD** - simplified for single-package approach (all 5 platforms)
-- 🔄 **Testing & Validation** - ready for end-to-end testing before release
+- 🚧 **Multi-platform CI/CD** - **NEEDS MAJOR REFACTORING**
+  - **Current Issue**: All 5 platform builds create identical linux-x64 wheels (jlink limitation)
+  - **Solution**: Native runners for 4 platforms (linux/amd64, darwin/amd64, darwin/arm64, windows/amd64)
+  - **Future Optional**: linux/arm64, windows/arm64 (require additional CI infrastructure)
+  - **Philosophy**: Only support what we can test natively with GitHub's free runners
+- 🔄 **Testing & Validation** - blocked until platform-specific builds are fixed
 
 ### Key Decisions Made
 - ✅ **Release strategy:** Tag-driven versioning (manual git tags like `25.10.1.dev0`, `25.10.1`, `25.10.1.post0`)
@@ -26,6 +30,146 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 - ✅ **Windows builds:** Native (no Docker, use `actions/setup-java`)
 - ✅ **Examples testing:** Optimized triggers (PR to main + workflow_call + manual)
 - ✅ **Documentation:** Deploy only for stable versions (skip `.devN` versions)
+
+---
+
+## 🔧 URGENT: Fix Multi-Platform Build System
+
+**Status:** CRITICAL BUG - All 5 platform builds create identical linux-x64 wheels!
+
+### Problem Discovery (2025-10-28)
+
+**Root Cause:** The current Docker-based build uses `jlink` which can ONLY create JREs for the platform it's running on.
+
+**Current Broken Behavior:**
+- All 5 matrix builds run on `ubuntu-latest` (linux-x64)
+- Docker `--platform` flag is passed but ignored by `jlink`
+- `jlink` always creates linux-x64 JRE (from the host JDK)
+- Result: 5 identical wheels with linux-x64 JRE
+- SHA256 checksums differ slightly (timestamps) but binaries are the same
+- All tests pass because all wheels have linux-x64 JRE running on ubuntu-latest
+
+**Why We Didn't Notice:**
+- Tests all passed (they're all testing the same linux-x64 wheel)
+- Wheel sizes were identical (expected for same content)
+- Platform matrix looked correct (but wasn't actually building different platforms)
+
+### Solution: Native Runners (Option 2 - Simple and Effective!)
+
+**Philosophy: Only support what we can test natively**
+
+**Currently Supported Platforms (4):**
+- ✅ **linux/amd64** - `ubuntu-latest` (free, native)
+- ✅ **darwin/amd64** - `macos-13` (free with limits, native Intel Mac)
+- ✅ **darwin/arm64** - `macos-latest` (free with limits, native M1/M2 Mac)
+- ✅ **windows/amd64** - `windows-latest` (free with limits, native Windows)
+
+**Future Optional Platforms (2):**
+- 🔮 **linux/arm64** - Requires self-hosted runner or paid service
+- 🔮 **windows/arm64** - Requires `windows-11-arm64` runner (currently in beta)
+
+**Why This Approach:**
+1. GitHub Actions provides native macOS and Windows runners for free
+2. Each platform builds and tests on its native hardware
+3. No Docker cross-compilation complexity
+4. No QEMU emulation slowness
+5. True platform-specific JREs via native `jlink` on each platform
+6. Can add linux/arm64 and windows/arm64 later if demand justifies:
+   - linux/arm64: Self-hosted runner or paid service (e.g., Actuated)
+   - windows/arm64: GitHub's `windows-11-arm64` runner (currently in beta)
+
+### Implementation Tasks
+
+#### Phase 3.6: Refactor to Native Runners
+
+**Build System Changes:**
+
+- [ ] **Update `build.sh`**
+  - Remove Docker-based build for darwin/windows
+  - Add native build mode (use system Java + jlink directly)
+  - Keep Docker build only for linux platforms
+  - Auto-detect: if running on macOS → native build, if Linux → Docker
+
+- [ ] **Create platform-specific wheel tags**
+  - linux/amd64: `manylinux_2_17_x86_64`
+  - darwin/amd64: `macosx_10_9_x86_64`
+  - darwin/arm64: `macosx_11_0_arm64`
+  - windows/amd64: `win_amd64`
+  - Use `--plat-name` flag in `python -m build --wheel`
+
+- [ ] **Update `Dockerfile.build`**
+  - Keep only for linux builds
+  - Remove TARGET_PLATFORM logic (not needed with native runners)
+  - Simplify to single linux-x64 build
+
+**CI/CD Changes:**
+
+- [ ] **Update `.github/workflows/test-python-bindings.yml`**
+  ```yaml
+  strategy:
+    matrix:
+      include:
+        - platform: linux/amd64
+          runs-on: ubuntu-latest
+        - platform: darwin/amd64
+          runs-on: macos-13
+        - platform: darwin/arm64
+          runs-on: macos-latest
+        - platform: windows/amd64
+          runs-on: windows-latest
+  ```
+
+- [ ] **Update `.github/workflows/release-python-packages.yml`**
+  - Same matrix changes as test workflow
+  - Update wheel count validation: expect 4 wheels (not 5)
+  - Remove QEMU setup (not needed)
+  - Remove Docker Buildx setup for darwin/windows builds
+
+- [ ] **Update `.github/workflows/test-python-examples.yml`**
+  - Same matrix changes
+  - Each platform tests on its native runner
+
+**Documentation Changes:**
+
+- [ ] **Update `README.md` (root and bindings/python/)**
+  - Platform support: 4 platforms (remove linux/arm64)
+  - Update build instructions for native builds
+  - Add note: "linux/arm64 may be added in future if demand justifies"
+
+- [ ] **Update `TODO.md`**
+  - Mark Phase 3.6 complete when done
+  - Update platform count throughout (4 not 5)
+
+- [ ] **Update `bindings/python/docs/getting-started/distributions.md`**
+  - Platform support table: 4 platforms
+  - Expected wheel sizes (will vary by platform now!)
+
+### Testing Plan
+
+1. [ ] Create test branch: `fix/native-platform-builds`
+2. [ ] Implement changes incrementally
+3. [ ] Test locally on available platforms
+4. [ ] Create test tag: `25.10.1.dev99`
+5. [ ] Verify GitHub Actions creates 4 different wheels
+6. [ ] Download and inspect wheels (different SHA256, different JRE binaries)
+7. [ ] Test one wheel per platform if possible
+8. [ ] Merge to `prototype-jre-bundling`
+9. [ ] Delete test tag
+
+### Expected Outcomes
+
+**Before (Broken):**
+- 5 wheels with identical linux-x64 JRE
+- SHA256: slightly different (timestamps)
+- Size: 160.8M all platforms (identical)
+- Tests: all pass (same binary)
+
+**After (Fixed):**
+- 4 wheels with platform-specific JREs
+- SHA256: completely different (different binaries)
+- Size: varies by platform (darwin JRE slightly larger, windows slightly smaller)
+- Tests: all pass on native platforms
+- PyPI: serves correct wheel based on user's platform
 
 ---
 

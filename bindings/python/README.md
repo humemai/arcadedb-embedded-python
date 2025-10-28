@@ -127,7 +127,9 @@ cd bindings/python/
 
 Built wheels will be in `dist/`. **[Build instructions](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#building-from-source)**
 
-Supported platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`
+Supported platforms: `linux/amd64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`
+
+> **Note:** Additional platforms (`linux/arm64`, `windows/arm64`) may be added in future releases if demand justifies the additional CI infrastructure.
 
 !!! note "Package Contents"
     The package includes all ArcadeDB features except gRPC wire protocol. We don't need gRPC at this moment, and we might add it in future versions if needed.
