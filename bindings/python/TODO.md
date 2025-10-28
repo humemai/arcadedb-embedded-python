@@ -19,7 +19,7 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
     - linux/amd64 (Docker - manylinux compliance)
     - linux/arm64 (Docker + QEMU emulation)
     - darwin/amd64 (Native - macOS Intel)
-    - darwin/arm64 (Native - macOS M1/M2)
+    - darwin/arm64 (Native - macOS Apple Silicon)
     - windows/amd64 (Native - Windows x64)
   - **Philosophy**: Maximize platform support using GitHub's free runners + QEMU
 - ✅ **Testing & Validation** - All platforms passing!
@@ -65,8 +65,8 @@ This document tracks all pending work for the ArcadeDB Python bindings project, 
 **Currently Supported Platforms (4):**
 - ✅ **linux/amd64** - `ubuntu-latest` (free, native)
 - ✅ **darwin/amd64** - `macos-13` (free with limits, native Intel Mac)
-- ✅ **darwin/arm64** - `macos-latest` (free with limits, native M1/M2 Mac)
-- ✅ **windows/amd64** - `windows-latest` (free with limits, native Windows)
+- ✅ **darwin/arm64** - `macos-latest` (free with limits, native Apple Silicon Mac)
+- ✅ **windows/amd64** - `windows-latest` (free with limits, native x64)
 
 **Future Optional Platforms (2):**
 - 🔮 **linux/arm64** - Requires self-hosted runner or paid service

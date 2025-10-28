@@ -33,7 +33,7 @@ print_usage() {
     echo "  linux/amd64    Linux x86_64 (Docker build)"
     echo "  linux/arm64    Linux ARM64 (Docker build with QEMU)"
     echo "  darwin/amd64   macOS x86_64 (native build on macOS)"
-    echo "  darwin/arm64   macOS ARM64 M1/M2 (native build on macOS)"
+    echo "  darwin/arm64   macOS ARM64 Apple Silicon (native build on macOS)"
     echo "  windows/amd64  Windows x86_64 (native build on Windows)"
     echo ""
     echo "Build Methods:"

@@ -14,7 +14,7 @@ The CI/CD workflows now support building and releasing **2 variants** across **5
 - **linux-x64**: Linux on x86_64 (Intel/AMD 64-bit)
 - **linux-arm64**: Linux on ARM64 (Apple Silicon, AWS Graviton, etc.)
 - **darwin-x64**: macOS on Intel
-- **darwin-arm64**: macOS on Apple Silicon (M1/M2/M3)
+- **darwin-arm64**: macOS on Apple Silicon (M1, M2, M3, M4, etc.)
 - **windows-x64**: Windows on x86_64
 
 ### Total Artifacts
