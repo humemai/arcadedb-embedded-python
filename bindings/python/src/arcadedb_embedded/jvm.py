@@ -22,27 +22,46 @@ def get_jar_path() -> str:
     return str(jar_dir)
 
 
-def get_bundled_jre_path() -> str | None:
+def get_bundled_jre_lib_path() -> str:
     """
-    Get the path to bundled JRE if available.
+    Get the path to bundled JRE's JVM library.
 
     Returns:
-        Path to bundled JRE's java executable, or None if not bundled.
+        Path to the JVM library (platform-specific: jvm.dll, libjvm.dylib,
+        or libjvm.so).
+
+    Raises:
+        ArcadeDBError: If the bundled JRE or JVM library is not found.
     """
     package_dir = Path(__file__).parent
     jre_dir = package_dir / "jre"
 
     # Check if JRE directory exists
     if not jre_dir.exists():
-        return None
+        raise ArcadeDBError(
+            f"Bundled JRE not found at {jre_dir}. "
+            "The package may be corrupted or incomplete."
+        )
 
-    # Look for java executable in standard JRE locations
-    java_executable = jre_dir / "bin" / "java"
+    # Platform-specific JVM library paths
+    system = platform.system()
+    if system == "Windows":
+        # Windows: bin/server/jvm.dll
+        jvm_lib_path = jre_dir / "bin" / "server" / "jvm.dll"
+    elif system == "Darwin":
+        # macOS: lib/server/libjvm.dylib
+        jvm_lib_path = jre_dir / "lib" / "server" / "libjvm.dylib"
+    else:
+        # Linux: lib/server/libjvm.so
+        jvm_lib_path = jre_dir / "lib" / "server" / "libjvm.so"
 
-    if java_executable.exists():
-        return str(java_executable)
+    if not jvm_lib_path.exists():
+        raise ArcadeDBError(
+            f"JVM library not found at {jvm_lib_path}. "
+            "The package may be corrupted or incomplete."
+        )
 
-    return None
+    return str(jvm_lib_path)
 
 
 def start_jvm():
@@ -61,28 +80,8 @@ def start_jvm():
 
     classpath = os.pathsep.join(jar_files)
 
-    # Check for bundled JRE
-    bundled_jre = get_bundled_jre_path()
-    jvm_path = None
-
-    if bundled_jre:
-        # Use bundled JRE - need to find JVM library (platform-specific)
-        jre_dir = Path(bundled_jre).parent.parent  # Go from bin/java to jre root
-
-        # Platform-specific JVM library paths
-        system = platform.system()
-        if system == "Windows":
-            # Windows: bin/server/jvm.dll
-            jvm_lib_path = jre_dir / "bin" / "server" / "jvm.dll"
-        elif system == "Darwin":
-            # macOS: lib/server/libjvm.dylib
-            jvm_lib_path = jre_dir / "lib" / "server" / "libjvm.dylib"
-        else:
-            # Linux: lib/server/libjvm.so
-            jvm_lib_path = jre_dir / "lib" / "server" / "libjvm.so"
-
-        if jvm_lib_path.exists():
-            jvm_path = str(jvm_lib_path)
+    # Get bundled JRE's JVM library path
+    jvm_path = get_bundled_jre_lib_path()
 
     # Allow customization via environment variables
     max_heap = os.environ.get("ARCADEDB_JVM_MAX_HEAP", "4g")
@@ -108,12 +107,8 @@ def start_jvm():
         jvm_args.extend(extra_args.split())
 
     try:
-        if jvm_path:
-            # Use bundled JRE
-            jpype.startJVM(jvm_path, *jvm_args, classpath=classpath)
-        else:
-            # Use system Java
-            jpype.startJVM(*jvm_args, classpath=classpath)
+        # Always use bundled JRE
+        jpype.startJVM(jvm_path, *jvm_args, classpath=classpath)
     except Exception as e:
         raise ArcadeDBError(f"Failed to start JVM: {e}") from e
 
