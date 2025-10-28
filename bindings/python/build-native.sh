@@ -53,31 +53,39 @@ if ! command -v jlink &> /dev/null; then
     exit 1
 fi
 
-# Check for Docker (needed to download JARs from ArcadeDB image)
-if ! command -v docker &> /dev/null; then
-    echo -e "${RED}❌ Docker not found${NC}"
-    echo -e "${YELLOW}💡 Docker is required to download ArcadeDB JARs from the official image${NC}"
-    echo -e "${YELLOW}💡 Please install Docker: https://www.docker.com/get-started${NC}"
-    exit 1
-fi
-
 echo ""
 
-# Step 1: Download ArcadeDB JARs from Docker image
-echo -e "${CYAN}📥 Downloading ArcadeDB JARs from Docker image...${NC}"
-TEMP_JARS=$(mktemp -d)
+# Step 1: Download ArcadeDB JARs (if not already present)
+JARS_DIR="$SCRIPT_DIR/src/arcadedb_embedded/jars"
+if [[ -d "$JARS_DIR" ]] && [[ $(ls -1 "$JARS_DIR"/*.jar 2> /dev/null | wc -l) -gt 0 ]]; then
+    echo -e "${GREEN}✅ Using existing JARs from: $JARS_DIR${NC}"
+    JAR_COUNT=$(ls -1 "$JARS_DIR"/*.jar | wc -l)
+    echo -e "${CYAN}📦 Found $JAR_COUNT JAR files${NC}"
+else
+    # Check for Docker (needed to download JARs from ArcadeDB image)
+    if ! command -v docker &> /dev/null; then
+        echo -e "${RED}❌ Docker not found and JARs not present${NC}"
+        echo -e "${YELLOW}💡 Either:${NC}"
+        echo -e "${YELLOW}   1. Install Docker to download JARs: https://www.docker.com/get-started${NC}"
+        echo -e "${YELLOW}   2. Or manually place JARs in: $JARS_DIR${NC}"
+        exit 1
+    fi
 
-if ! docker run --rm arcadedata/arcadedb:${ARCADEDB_TAG} tar -cf - -C /home/arcadedb lib | tar -xf - -C "$TEMP_JARS"; then
-    echo -e "${RED}❌ Failed to download JARs from Docker image${NC}"
-    echo -e "${YELLOW}💡 Make sure Docker is running and you have internet access${NC}"
+    echo -e "${CYAN}📥 Downloading ArcadeDB JARs from Docker image...${NC}"
+    TEMP_JARS=$(mktemp -d)
+
+    if ! docker run --rm arcadedata/arcadedb:${ARCADEDB_TAG} tar -cf - -C /home/arcadedb lib | tar -xf - -C "$TEMP_JARS"; then
+        echo -e "${RED}❌ Failed to download JARs from Docker image${NC}"
+        echo -e "${YELLOW}💡 Make sure Docker is running and you have internet access${NC}"
+        rm -rf "$TEMP_JARS"
+        exit 1
+    fi
+
+    mkdir -p "$JARS_DIR"
+    cp "$TEMP_JARS/lib"/*.jar "$JARS_DIR/"
     rm -rf "$TEMP_JARS"
-    exit 1
+    echo -e "${GREEN}✅ JARs downloaded to: $JARS_DIR${NC}"
 fi
-
-rm -rf "$SCRIPT_DIR/temp_jars"
-mv "$TEMP_JARS/lib" "$SCRIPT_DIR/temp_jars"
-rm -rf "$TEMP_JARS"
-echo -e "${GREEN}✅ JARs downloaded${NC}"
 
 # Step 2: Build minimal JRE with jlink
 echo -e "${CYAN}🔨 Building minimal JRE with jlink...${NC}"
@@ -98,25 +106,22 @@ echo -e "${GREEN}✅ JRE built${NC}"
 JRE_SIZE=$(du -sh "$SCRIPT_DIR/temp_jre" | cut -f1)
 echo -e "${CYAN}📊 JRE size: ${YELLOW}${JRE_SIZE}${NC}"
 
-# Step 3: Copy JARs and JRE to package
+# Step 3: Copy JRE to package (JARs already in place)
 echo -e "${CYAN}📦 Preparing package...${NC}"
-rm -rf "$SCRIPT_DIR/src/arcadedb_embedded/jars"
+
+# Clean up: Remove gRPC wire protocol JAR if present (not needed)
+if ls "$JARS_DIR"/arcadedb-grpcw-*.jar 1> /dev/null 2>&1; then
+    rm -f "$JARS_DIR"/arcadedb-grpcw-*.jar
+    echo -e "${YELLOW}🗑️  Removed gRPC wire protocol JAR (not needed)${NC}"
+fi
+
+# Build and copy JRE
 rm -rf "$SCRIPT_DIR/src/arcadedb_embedded/jre"
-mkdir -p "$SCRIPT_DIR/src/arcadedb_embedded/jars"
 mkdir -p "$SCRIPT_DIR/src/arcadedb_embedded/jre"
-
-# Copy JARs (excluding gRPC wire protocol)
-for jar in "$SCRIPT_DIR/temp_jars"/*.jar; do
-    jar_name=$(basename "$jar")
-    if [[ "$jar_name" != *"arcadedb-grpcw-"* ]]; then
-        cp "$jar" "$SCRIPT_DIR/src/arcadedb_embedded/jars/"
-    fi
-done
-
-# Copy JRE
 cp -R "$SCRIPT_DIR/temp_jre"/* "$SCRIPT_DIR/src/arcadedb_embedded/jre/"
 
-echo -e "${GREEN}✅ Package prepared${NC}"
+JAR_COUNT=$(ls -1 "$JARS_DIR"/*.jar | wc -l)
+echo -e "${GREEN}✅ Package prepared (${JAR_COUNT} JARs + JRE)${NC}"
 
 # Step 4: Write version to pyproject.toml
 echo -e "${CYAN}📝 Writing version...${NC}"
@@ -186,7 +191,6 @@ echo -e "${GREEN}✅ Wheel built${NC}"
 
 # Step 6: Clean up temp files
 echo -e "${CYAN}🧹 Cleaning up...${NC}"
-rm -rf "$SCRIPT_DIR/temp_jars"
 rm -rf "$SCRIPT_DIR/temp_jre"
 
 echo ""
