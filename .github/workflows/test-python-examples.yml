@@ -36,10 +36,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      - name: Set up Docker Buildx
+      - name: Set up Java (for native builds on macOS/Windows)
+        if: matrix.platform != 'linux/amd64' && matrix.platform != 'linux/arm64'
+        uses: actions/setup-java@7a6d8a8234af8eb26422e24e3006232cccaa061b # v4.6.0
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Docker Buildx (Linux only)
+        if: matrix.platform == 'linux/amd64' || matrix.platform == 'linux/arm64'
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
       - name: Build arcadedb-embedded (${{ matrix.platform }})
+        shell: bash
         run: |
           cd bindings/python
           echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }}..."
@@ -53,17 +62,20 @@ jobs:
       # Note: Java is NOT required - arcadedb-embedded has bundled JRE!
 
       - name: Install ArcadeDB Python bindings
+        shell: bash
         run: |
           cd bindings/python
           pip install dist/*embed*.whl
 
       - name: Install example dependencies
+        shell: bash
         run: |
           # Install dependencies needed by examples
           pip install numpy requests
 
       - name: Run all examples
         id: run_examples
+        shell: bash
         env:
           # Increase JVM heap for large CSV imports (example 04)
           ARCADEDB_JVM_MAX_HEAP: "8g"
@@ -187,6 +199,7 @@ jobs:
 
       - name: Generate test summary
         if: always()
+        shell: bash
         run: |
           cd bindings/python/examples
 
@@ -260,6 +273,7 @@ jobs:
     if: always()
     steps:
       - name: Check test results
+        shell: bash
         run: |
           echo "## 🎯 Overall Examples Test Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
