@@ -155,12 +155,17 @@ jobs:
             exit 1
           fi
 
+          # Show checksums to verify wheels are different
+          echo ""
+          echo "🔐 Wheel checksums (SHA256):"
+          sha256sum dist/*.whl
+
           # Report wheel sizes with actual component breakdown
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 📦 Built Wheels" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Wheel Size | JRE Size | JARs Size | Installed Size |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|------------|----------|-----------|----------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Wheel Size | JRE Size | JARs Size | Installed Size | SHA256 (first 8 chars) |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------------|----------|-----------|----------------|------------------------|" >> $GITHUB_STEP_SUMMARY
 
           for WHEEL_FILE in dist/*.whl; do
             WHEEL_NAME=$(basename "$WHEEL_FILE")
@@ -205,9 +210,12 @@ jobs:
             INSTALLED_SIZE_BYTES=$(du -sb "$TEMP_DIR" | cut -f1)
             INSTALLED_SIZE_MB=$(echo "scale=0; $INSTALLED_SIZE_BYTES / 1024 / 1024" | bc)
 
+            # Calculate SHA256 checksum
+            CHECKSUM=$(sha256sum "$WHEEL_FILE" | cut -d' ' -f1 | cut -c1-8)
+
             rm -rf "$TEMP_DIR"
 
-            echo "| $PLATFORM | ${WHEEL_SIZE_MB}M | ${JRE_SIZE_MB}M | ${JAR_SIZE_MB}M | ~${INSTALLED_SIZE_MB}M |" >> $GITHUB_STEP_SUMMARY
+            echo "| $PLATFORM | ${WHEEL_SIZE_MB}M | ${JRE_SIZE_MB}M | ${JAR_SIZE_MB}M | ~${INSTALLED_SIZE_MB}M | \`$CHECKSUM\` |" >> $GITHUB_STEP_SUMMARY
           done
 
           echo "" >> $GITHUB_STEP_SUMMARY
