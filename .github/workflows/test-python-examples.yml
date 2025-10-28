@@ -12,9 +12,85 @@ on:
   workflow_dispatch:
 
 jobs:
+  # First job: Download ArcadeDB JARs (platform-agnostic)
+  download-jars:
+    name: Download ArcadeDB JARs
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Download JARs from ArcadeDB Docker image
+        shell: bash
+        run: |
+          cd bindings/python
+
+          # Detect ArcadeDB version from pom.xml (Docker format: X.Y.Z-SNAPSHOT)
+          ARCADEDB_TAG=$(python3 extract_version.py --format=docker)
+          echo "📌 ArcadeDB version: $ARCADEDB_TAG"
+
+          # Download JARs from official Docker image
+          echo "📦 Downloading JARs from arcadedata/arcadedb:$ARCADEDB_TAG..."
+
+          # Create output directory
+          mkdir -p src/arcadedb_embedded/jars
+
+          # Create a temporary container and copy JARs from it
+          CONTAINER_ID=$(docker create arcadedata/arcadedb:$ARCADEDB_TAG)
+          docker cp $CONTAINER_ID:/home/arcadedb/lib/. src/arcadedb_embedded/jars/
+          docker rm $CONTAINER_ID
+
+          echo "✅ Downloaded $(ls -1 src/arcadedb_embedded/jars/*.jar | wc -l) JARs"
+
+      - name: Remove excluded JARs
+        shell: bash
+        run: |
+          cd bindings/python
+
+          JARS_DIR="src/arcadedb_embedded/jars"
+          EXCLUSIONS_FILE="jar_exclusions.txt"
+
+          if [[ -f "$EXCLUSIONS_FILE" ]]; then
+            echo "🗑️  Removing excluded JARs from jar_exclusions.txt..."
+            EXCLUSION_COUNT=0
+
+            while IFS= read -r pattern || [[ -n "$pattern" ]]; do
+              # Skip empty lines and comments
+              if [[ -n "$pattern" ]] && [[ ! "$pattern" =~ ^# ]]; then
+                echo "   Processing pattern: $pattern"
+
+                # Remove matching JARs
+                for jar in "$JARS_DIR"/$pattern; do
+                  if [[ -f "$jar" ]]; then
+                    rm -f "$jar"
+                    echo "   - Removed: $(basename "$jar")"
+                    EXCLUSION_COUNT=$((EXCLUSION_COUNT + 1))
+                  fi
+                done
+              fi
+            done < "$EXCLUSIONS_FILE"
+
+            JAR_COUNT_AFTER=$(ls -1 "$JARS_DIR"/*.jar 2>/dev/null | wc -l)
+            echo "✅ Removed $EXCLUSION_COUNT JAR(s), $JAR_COUNT_AFTER remaining"
+          else
+            echo "⚠️  No jar_exclusions.txt found, skipping exclusions"
+          fi
+
+      - name: Upload filtered JARs as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: arcadedb-jars
+          path: bindings/python/src/arcadedb_embedded/jars/*.jar
+          retention-days: 1
+
+  # Second job: Test examples on each platform
   test-examples:
     name: Test Python Examples (${{ matrix.platform }})
     runs-on: ${{ matrix.runs-on }}
+    needs: download-jars
     strategy:
       fail-fast: false
       matrix:
@@ -35,6 +111,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Download JARs artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: arcadedb-jars
+          path: bindings/python/src/arcadedb_embedded/jars
 
       - name: Set up Java (for native builds on macOS/Windows)
         if: matrix.platform != 'linux/amd64' && matrix.platform != 'linux/arm64'
