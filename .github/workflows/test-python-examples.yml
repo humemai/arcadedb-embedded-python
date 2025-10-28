@@ -170,6 +170,20 @@ jobs:
           # Install dependencies needed by examples
           pip install numpy requests
 
+      - name: Install timeout command (macOS only)
+        if: matrix.platform == 'darwin/amd64' || matrix.platform == 'darwin/arm64'
+        shell: bash
+        run: |
+          # macOS doesn't have timeout command by default, use coreutils
+          brew install coreutils
+
+      - name: Set UTF-8 encoding (Windows only)
+        if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
+        shell: bash
+        run: |
+          # Set UTF-8 encoding to handle emoji characters
+          echo "PYTHONIOENCODING=utf-8" >> $GITHUB_ENV
+
       - name: Run all examples
         id: run_examples
         shell: bash
@@ -200,6 +214,13 @@ jobs:
             exit 1
           fi
 
+          # Detect timeout command (macOS uses gtimeout, Linux uses timeout)
+          if command -v gtimeout &> /dev/null; then
+            TIMEOUT_CMD="gtimeout"
+          else
+            TIMEOUT_CMD="timeout"
+          fi
+
           # Run each example
           for example in $examples; do
             # For example 04, test both small and large datasets
@@ -220,7 +241,7 @@ jobs:
                   timeout_duration=3600
                 fi
 
-                if timeout $timeout_duration python "$example" --size "$size" > "$log_file" 2>&1; then
+                if $TIMEOUT_CMD $timeout_duration python "$example" --size "$size" > "$log_file" 2>&1; then
                   echo "✅ PASSED: $example_name" | tee -a $results_file
                   passed=$((passed + 1))
                 else
@@ -245,7 +266,7 @@ jobs:
               echo "----------------------------------------"
 
               # Create a timeout wrapper to prevent hanging
-              if timeout 1800 python "$example" > "${example}.log" 2>&1; then
+              if $TIMEOUT_CMD 1800 python "$example" > "${example}.log" 2>&1; then
                 echo "✅ PASSED: $example" | tee -a $results_file
                 passed=$((passed + 1))
               else
@@ -348,7 +369,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: example-logs-${{ matrix.platform }}
+          name: example-logs-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || matrix.platform == 'windows/amd64' && 'windows-amd64' || 'windows-arm64' }}
           path: |
             bindings/python/examples/*.log
             bindings/python/examples/example-results.txt
@@ -358,7 +379,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: example-databases-${{ matrix.platform }}
+          name: example-databases-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || matrix.platform == 'windows/amd64' && 'windows-amd64' || 'windows-arm64' }}
           path: bindings/python/examples/my_test_databases/
           retention-days: 3
 
