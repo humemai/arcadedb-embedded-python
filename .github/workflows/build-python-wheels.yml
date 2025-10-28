@@ -78,7 +78,7 @@ jobs:
                   if [[ -f "$jar" ]]; then
                     rm -f "$jar"
                     echo "   - Removed: $(basename "$jar")"
-                    ((EXCLUSION_COUNT++))
+                    EXCLUSION_COUNT=$((EXCLUSION_COUNT + 1))
                   fi
                 done
               fi
