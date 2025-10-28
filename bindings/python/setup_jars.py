@@ -1,30 +1,18 @@
 #!/usr/bin/env python3
 """
-Setup script to copy ArcadeDB JAR files to the Python package.
+Setup script to copy ArcadeDB JAR files and bundled JRE to the Python package.
 
 This script should be run as part of the build process to ensure
-all necessary JAR files are included in the wheel.
-
-Environment Variables:
-    ARCADEDB_VARIANT: Package variant (base, jre)
-                     Default: base
+all necessary JAR files and the bundled JRE are included in the wheel.
 """
 
-import os
 import shutil
 from pathlib import Path
 
 
 def find_jar_files():
     """Find all necessary ArcadeDB JAR files using custom filtering."""
-    # Get variant type from environment variable (for logging purposes)
-    variant = os.environ.get("ARCADEDB_VARIANT", "base").lower()
-
-    if variant not in ["base", "jre"]:
-        print(f"⚠️  Warning: Invalid variant '{variant}', using 'base'")
-        variant = "base"
-
-    print(f"📦 Building variant: {variant}")
+    print("📦 Building arcadedb-embedded with bundled JRE")
     print("📦 Including all JARs except gRPC wire protocol (optimal balance)")
 
     # Look for JAR files copied from the ArcadeDB Docker image
@@ -121,24 +109,69 @@ def copy_jars_to_package():
     return copied_count > 0
 
 
+def copy_jre():
+    """Copy bundled JRE to the Python package."""
+    print("\n🔧 Copying bundled JRE...")
+    print("=" * 40)
+
+    package_dir = Path(__file__).parent
+    jre_source = Path("/build/jre")
+    jre_dest = package_dir / "src" / "arcadedb_embedded" / "jre"
+
+    # Check if JRE source exists
+    if not jre_source.exists():
+        print(f"❌ Error: JRE source directory not found: {jre_source}")
+        print("   Expected JRE to be built by jre-builder stage in Docker")
+        return False
+
+    # Remove existing JRE directory if it exists
+    if jre_dest.exists():
+        print(f"🧹 Removing existing JRE directory: {jre_dest}")
+        shutil.rmtree(jre_dest)
+
+    # Copy JRE directory
+    print(f"📦 Copying JRE from {jre_source} to {jre_dest}...")
+    shutil.copytree(jre_source, jre_dest, symlinks=True)
+
+    # Calculate JRE size
+    total_size = sum(f.stat().st_size for f in jre_dest.rglob("*") if f.is_file())
+    file_count = sum(1 for f in jre_dest.rglob("*") if f.is_file())
+
+    print("✅ Successfully copied JRE")
+    print(f"📊 JRE size: {total_size / 1024 / 1024:.1f} MB")
+    print(f"📊 Files: {file_count}")
+
+    # Verify java executable exists
+    java_exe = jre_dest / "bin" / "java"
+    if java_exe.exists():
+        print(f"✅ Java executable found: {java_exe}")
+    else:
+        print(f"⚠️  Warning: Java executable not found at {java_exe}")
+
+    return True
+
+
 def main():
     """Main function."""
-    variant = os.environ.get("ARCADEDB_VARIANT", "base").lower()
-
     print("🎮 ArcadeDB Python Package Setup")
     print("=" * 40)
-    print(f"📦 Variant: {variant}")
+    print("📦 Package: arcadedb-embedded (with bundled JRE)")
     print()
 
-    if copy_jars_to_package():
-        print("\n🎉 Setup completed successfully!")
-    else:
+    # Copy JAR files
+    if not copy_jars_to_package():
         print("\n❌ Setup failed!")
-        print("💡 Make sure to run this via build-all.sh:")
+        print("💡 Make sure to run this via build.sh:")
         print("   cd bindings/python")
-        print("   ./build-all.sh base")
+        print("   ./build.sh")
         return 1
 
+    # Copy bundled JRE (always included)
+    if not copy_jre():
+        print("\n❌ JRE copy failed!")
+        return 1
+
+    print("\n🎉 Setup completed successfully!")
     return 0
 
 

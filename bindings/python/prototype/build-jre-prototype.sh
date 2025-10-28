@@ -13,7 +13,7 @@ echo ""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 
-# Auto-detect Docker tag from pom.xml (same logic as build-all.sh)
+# Auto-detect Docker tag from pom.xml (same logic as build.sh)
 echo "🔍 Detecting version from pom.xml..."
 ARCADEDB_TAG=$(python3 "${SCRIPT_DIR}/../extract_version.py" --format=docker)
 echo "📌 ArcadeDB version detected: ${ARCADEDB_TAG}"

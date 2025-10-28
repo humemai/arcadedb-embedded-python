@@ -175,12 +175,12 @@ If you want to build the wheels yourself:
 cd bindings/python/
 
 # Build all three distributions
-./build-all.sh
+./build.sh
 
 # Or build specific distribution
-./build-all.sh headless    # ~94 MB
-./build-all.sh minimal     # ~97 MB
-./build-all.sh full        # ~158 MB
+./build.sh headless    # ~94 MB
+./build.sh minimal     # ~97 MB
+./build.sh full        # ~158 MB
 ```
 
 Built wheels will be in `dist/`:

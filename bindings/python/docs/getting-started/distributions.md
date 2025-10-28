@@ -1,40 +1,62 @@
-# Package Options
+# Package Overview
 
-ArcadeDB Python provides **embedded** packages that run the database directly in your Python process via JPype. We currently offer one main package with an optional JRE variant coming soon.
+ArcadeDB Python provides an **embedded** package that runs the database directly in your Python process via JPype with a bundled JRE - **no Java installation required!**
 
-## Quick Comparison
+## The Package
 
-| Package | Size | Java Required | Studio UI | Query Languages | Status |
-|---------|------|---------------|-----------|----------------|--------|
-| **arcadedb-embedded** | ~123MB | Java 21+ | ✅ | SQL, Cypher, Gremlin, MongoDB | ✅ Available |
-| **arcadedb-embedded-jre** | ~170MB | ❌ | ✅ | SQL, Cypher, Gremlin, MongoDB | ⏳ Coming Soon |
+| Package | Size | Java Required | Studio UI | Query Languages |
+|---------|------|---------------|-----------|----------------|
+| **arcadedb-embedded** | 162MB wheel (~240MB installed) | ❌ No | ✅ | SQL, Cypher, Gremlin, MongoDB |
 
-## Main Package
-
-**Best for:** Most use cases - development and production
+**Installation:**
 
 ```bash
 pip install arcadedb-embedded
 ```
 
-### What's Included
+**Requirements:** Python 3.8+ only - No Java installation needed!
 
-- **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
-- **Query Languages**: SQL, Cypher, Gremlin, MongoDB
-- **Studio Web UI**: Visual database explorer and query editor
-- **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
-- **Vector Search**: HNSW indexing for embeddings
-- **Data Import**: CSV, JSON, Neo4j importers
+## What's Inside
 
-### What's NOT Included
+The package (162MB wheel, ~240MB installed) includes everything you need:
+
+- **ArcadeDB JARs** (~123MB): Core database with all features
+- **Bundled JRE** (~39MB): Custom Java 21 runtime (jlink, 21 modules)
+- **Total:** 162MB compressed wheel, ~240MB when installed
+
+## Platform Support
+
+Pre-built wheels are available for:
+
+- **Linux**: x86-64, ARM64
+- **macOS**: x86-64 (Intel), ARM64 (Apple Silicon)
+- **Windows**: x86-64
+
+All platforms include the same bundled JRE - no external Java required!
+
+## Features
+
+## Features
+
+**Included:**
+
+- ✅ **No Java Installation Required**: Bundled JRE (~63MB) included
+- ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
+- ✅ **Query Languages**: SQL, Cypher, Gremlin, MongoDB
+- ✅ **Studio Web UI**: Visual database explorer and query editor
+- ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
+- ✅ **Vector Search**: HNSW indexing for embeddings
+- ✅ **Data Import**: CSV, JSON, Neo4j importers
+
+**Not Included:**
 
 - ❌ **gRPC Wire Protocol**: Excluded to keep package size manageable
 
 We don't need gRPC at this moment, and we might add it in future versions if needed.
 
-### Test Results
+## Test Results
 
-**43 out of 43 tests pass** (0 tests skipped):
+**43 out of 43 tests pass** (100% success rate):
 
 - ✅ All core database operations work
 - ✅ SQL, Cypher, and Gremlin queries work
@@ -42,15 +64,22 @@ We don't need gRPC at this moment, and we might add it in future versions if nee
 - ✅ Vector search and import operations work
 - ✅ All features available except gRPC
 
-### Use Cases
+## Use Cases
+
+## Use Cases
+
+Perfect for:
 
 - Production Python applications
 - Development and debugging
+- Cloud deployments (no Java setup needed!)
+- Docker containers
+- Desktop applications
 - Multi-model database needs
 - Graph, document, and vector applications
 - Any scenario requiring SQL, Cypher, or Gremlin
 
-### Accessing Studio UI
+## Accessing Studio UI
 
 ```python
 from arcadedb_embedded import create_server
@@ -69,86 +98,28 @@ server.stop()
 !!! tip "Studio in Browser"
     Once the server starts, open your browser to `http://localhost:2480` to access the Studio UI.
 
-## JRE Package (Coming Soon)
+## Import Statement
 
-**Best for:** Simplified deployment, no Java setup required
-
-```bash
-pip install arcadedb-embedded-jre
-```
-
-### Key Features
-
-- **Same functionality** as the main package
-- **Bundled JRE**: No Java installation required
-- **Larger size**: ~170MB (includes ~50MB minimal JRE)
-- **Platform-specific**: Separate wheels per platform (Linux, macOS, Windows)
-
-### Use Cases
-
-- Cloud deployments without Java dependencies
-- Docker containers for minimal setup
-- Desktop applications for non-developers
-- Any scenario where Java setup is challenging
-
-## Same Import for All
-
-Regardless of package, the import is always:
+The import is always:
 
 ```python
 import arcadedb_embedded as arcadedb
 ```
 
-This means you can:
-
-- **Develop** with the main package (includes Studio UI)
-- **Deploy** with either variant based on Java availability
-- **Switch** between packages without code changes
-
-## Which Package Should You Choose?
-
-**Start with the main package:**
-
-- Production-ready and tested
-- All features included (~123MB)
-- Only requires Java 21+ installed
-- Available now on PyPI
-
-**Upgrade to JRE package when available:**
-
-- If Java installation is challenging
-- For simplified Docker deployments
-- Coming soon with cross-platform support
+Simple and consistent across all platforms!
 
 ## Size Breakdown
 
-### Main Package (~123MB)
+Total package size: **162MB wheel (~240MB installed)**
 
-- Core Database: ~60 MB
-- Query Engines (SQL/Cypher/Gremlin): ~25 MB
-- Studio UI: ~3 MB
-- Wire Protocols: ~15 MB
-- Dependencies: ~20 MB
+- **ArcadeDB JARs**: ~123 MB (core database, query engines, Studio UI, protocols)
+- **Bundled JRE**: ~39 MB (custom Java 21 runtime via jlink, 21 modules)
+- **Compressed wheel**: 162 MB
+- **Installed size**: ~240 MB
 
-### JRE Package (~170MB)
-
-- Everything in Main Package: ~123 MB
-- Bundled Minimal JRE: ~47 MB
-
-**Note**: gRPC wire protocol (~38MB) is excluded from both packages to keep size manageable.
+**Note**: gRPC wire protocol is excluded to keep package size manageable.
 
 ## Installation Tips
-
-### Switch Packages
-
-Uninstall the current package first:
-
-```bash
-pip uninstall arcadedb-embedded arcadedb-embedded-headless arcadedb-embedded-minimal arcadedb-embedded
-
-# Install the new package
-pip install arcadedb-embedded
-```
 
 ### Check Installed Package
 
@@ -156,11 +127,10 @@ pip install arcadedb-embedded
 import arcadedb_embedded as arcadedb
 print(f"Version: {arcadedb.__version__}")
 
-# Check which features are available
+# Verify database works
 with arcadedb.create_database("/tmp/test") as db:
-    # All query engines should be available
     result = db.query("sql", "SELECT 1")
-    print("Database working correctly")
+    print("Database working correctly!")
 ```
 
 ## Next Steps

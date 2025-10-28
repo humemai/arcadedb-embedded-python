@@ -24,9 +24,9 @@ On `python-embedded` branch:
 cd bindings/python
 
 # Build all distributions
-./build-all.sh headless
-./build-all.sh minimal
-./build-all.sh full
+./build.sh headless
+./build.sh minimal
+./build.sh full
 
 # Test each distribution
 pip install dist/arcadedb_embedded_headless-*.whl
@@ -244,7 +244,7 @@ For Python-only bug fixes that don't require a new ArcadeDB version:
 
 ```bash
 # Build with Python patch number
-./build-all.sh base --python-patch 1
+./build.sh base --python-patch 1
 
 # Results in version: 25.9.1.post1 (if base ArcadeDB version is 25.9.1)
 ```
@@ -302,7 +302,7 @@ vim pom.xml  # Change to X.Y.Z+1-SNAPSHOT
 
 # 3. Test thoroughly
 cd bindings/python
-./build-all.sh full && pytest
+./build.sh full && pytest
 
 # 4. Commit and create hotfix release
 git commit -am "Hotfix: description"

@@ -2,10 +2,10 @@
 
 > **Python bindings for [ArcadeDB](https://github.com/ArcadeData/arcadedb)** - A multi-model database supporting Graph, Document, Key/Value, Vector, and Time Series models with extreme performance.
 
-[![PyPI - Base](https://img.shields.io/badge/PyPI-arcadedb--embedded-blue)](https://pypi.org/project/arcadedb-embedded/)
-[![PyPI - JRE](https://img.shields.io/badge/PyPI-arcadedb--embedded--jre-blue)](https://pypi.org/project/arcadedb-embedded-jre/)
+[![PyPI](https://img.shields.io/badge/PyPI-arcadedb--embedded-blue)](https://pypi.org/project/arcadedb-embedded/)
 [![Tests](https://img.shields.io/badge/tests-43%2F43%20passing-brightgreen)](https://github.com/humemai/arcadedb-embedded-python/actions)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 
 **📖 [Documentation](https://humemai.github.io/arcadedb-embedded-python/) | 🐛 [Issues](https://github.com/humemai/arcadedb-embedded-python/issues)**
 
@@ -16,15 +16,14 @@
 ### Installation
 
 ```bash
-pip install arcadedb-embedded        # Requires Java 21+
-pip install arcadedb-embedded-jre  # With bundled JRE (coming soon)
+pip install arcadedb-embedded
+```
 
 **Requirements:**
 
-- **Main package:** Python 3.8+ and [Java 21+](https://adoptium.net/) (JRE)
-- **JRE package:** Python 3.8+ only (JRE bundled)
+- **Python 3.8+** only - No Java installation required! (JRE is bundled)
 
-**💡 Tip:** See "JVMCI is not enabled" warnings? Install [GraalVM](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#eliminate-polyglot-warnings-optional) to fix them
+**💡 Note:** Package includes a minimal JRE (~39MB compressed) optimized for ArcadeDB. See "JVMCI is not enabled" warnings? Install [GraalVM](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#eliminate-polyglot-warnings-optional) for optimal performance.
 
 **Technology:** Uses [JPype](https://jpype.readthedocs.io/) to bridge Python and Java, providing direct access to ArcadeDB's embedded engine with minimal overhead.
 
@@ -120,28 +119,21 @@ result = db.query("sql", """
 
 ## Features
 
+✅ **No Java Installation Required** - JRE bundled in package
 ✅ **Embedded Mode** - Runs in your Python process (no server needed)
 ✅ **Multi-Model** - Graph, Document, Key/Value, Vector, Time Series
 ✅ **Query Languages** - SQL, Cypher, Gremlin, MongoDB (all included)
 ✅ **ACID Transactions** - Full transactional support
 ✅ **Vector Search** - HNSW indexing for embeddings
 ✅ **Studio UI** - Web-based database browser (included)
-✅ **Self-Contained** - All dependencies bundled (123MB, gRPC excluded)
+✅ **Self-Contained** - Single package (162MB wheel, ~240MB installed)
 ✅ **Production Ready** - 43/43 tests passing, actively maintained
 
----
-
-## Package Variants
-
-| Package | Size | Java Required | Studio UI | Use Case |
-|---------|------|---------------|-----------|----------|
-| **arcadedb-embedded** | ~123MB | Java 21+ | ❌ | Optimized deployment |
-| **arcadedb-embedded-jre** | ~170MB | None | ✅ | Simplified deployment |
-
-Both packages include the same features: SQL, Cypher, Gremlin, Studio UI, and all core functionality except gRPC wire protocol.
-The only difference is Java runtime dependency.
-
-All packages use the same import: `import arcadedb_embedded as arcadedb`
+**Package Contents:**
+- **JARs:** ~123MB (all ArcadeDB features except gRPC wire protocol)
+- **JRE:** ~39MB (minimal Java 21 runtime via jlink, 21 modules)
+- **Total:** 162MB compressed wheel, ~240MB when installed
+- **Total:** ~160MB installed
 
 ---
 

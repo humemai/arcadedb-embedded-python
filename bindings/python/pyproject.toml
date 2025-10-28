@@ -2,22 +2,20 @@
 requires = ["setuptools>=61.0", "wheel", "jpype1"]
 build-backend = "setuptools.build_meta"
 
-# This file is a template. During build, the following fields are dynamically set:
-# - name: Set based on variant (arcadedb-embedded or arcadedb-embedded-jre)
-# - version: Extracted from parent pom.xml via extract_version.py
-# - description: Set based on variant features
+# This file defines the package metadata for arcadedb-embedded.
+# During build, the version is extracted from parent pom.xml via extract_version.py
 
 [project]
 name = "arcadedb-embedded"
 version = "0.0.0"
-description = "ArcadeDB embedded Python package"
+description = "ArcadeDB embedded multi-model database with bundled JRE - no Java installation required"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "Apache-2.0"}
 authors = [
     {name = "Arcade Data Ltd", email = "info@arcadedata.com"}
 ]
-keywords = ["database", "graph", "document", "multi-model", "nosql", "arcadedb", "embedded"]
+keywords = ["database", "graph", "document", "multi-model", "nosql", "arcadedb", "embedded", "jre", "java"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -49,10 +47,11 @@ vector = [
 ]
 
 [project.urls]
-Homepage = "https://arcadedb.com"
-Documentation = "https://docs.arcadedb.com"
-Repository = "https://github.com/ArcadeData/arcadedb"
+Homepage = "https://github.com/humemai/arcadedb-embedded-python"
+Documentation = "https://humemai.github.io/arcadedb-embedded-python/"
+Repository = "https://github.com/humemai/arcadedb-embedded-python"
 "Bug Tracker" = "https://github.com/humemai/arcadedb-embedded-python/issues"
+"ArcadeDB Upstream" = "https://github.com/ArcadeData/arcadedb"
 
 [tool.setuptools]
 packages = ["arcadedb_embedded"]
@@ -60,7 +59,10 @@ package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.package-data]
-arcadedb_embedded = ["jars/*.jar"]
+arcadedb_embedded = [
+    "jars/*.jar",
+    "jre/**/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

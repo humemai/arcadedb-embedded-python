@@ -1,11 +1,9 @@
 name: Test Python Examples
 
 on:
-  # Run on any push to any branch
-  push:
-
-  # Run on any pull request
+  # Run on pull requests to main
   pull_request:
+    branches: [main]
 
   # Allow being called by other workflows (e.g., release workflow)
   workflow_call:
@@ -15,32 +13,38 @@ on:
 
 jobs:
   test-examples:
-    name: Test Python Examples
+    name: Test Python Examples (${{ matrix.platform }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      - name: Set up QEMU (for ARM64 emulation)
+        if: contains(matrix.platform, 'arm64')
+        uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3.2.0
+        with:
+          platforms: arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
-      - name: Build base variant
+      - name: Build arcadedb-embedded (${{ matrix.platform }})
         run: |
           cd bindings/python
-          echo "🔨 Building base variant for examples..."
-          ./build-all.sh base
+          echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }}..."
+          ./build.sh ${{ matrix.platform }}
 
       - name: Set up Python
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           python-version: '3.11'
 
-      - name: Install Java (required for JPype)
-        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
-        with:
-          distribution: 'temurin'
-          java-version: '21'
+      # Note: Java is NOT required - arcadedb-embedded has bundled JRE!
 
       - name: Install ArcadeDB Python bindings
         run: |
@@ -180,7 +184,7 @@ jobs:
         run: |
           cd bindings/python/examples
 
-          echo "## 🎮 Python Examples Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎮 Python Examples Test Results (${{ matrix.platform }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           total="${{ steps.run_examples.outputs.total || '0' }}"
@@ -228,7 +232,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: example-logs
+          name: example-logs-${{ matrix.platform }}
           path: |
             bindings/python/examples/*.log
             bindings/python/examples/example-results.txt
@@ -238,6 +242,31 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: example-databases
+          name: example-databases-${{ matrix.platform }}
           path: bindings/python/examples/my_test_databases/
           retention-days: 3
+
+  # Summary job that checks all platforms
+  test-examples-summary:
+    name: Examples Test Summary
+    needs: test-examples
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          echo "## 🎯 Overall Examples Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.test-examples.result }}" = "success" ]; then
+            echo "✅ **All platforms passed example testing!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "All examples ran successfully across all 5 platforms." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Platforms tested**: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Some platforms failed example testing**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Please check the individual platform jobs for details." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
