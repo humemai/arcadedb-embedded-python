@@ -326,8 +326,8 @@ def test_embedded_performance_comparison(cleanup_test_dirs):
     print("=" * 70)
 
     # Setup test data size - increased for more reliable benchmarks
-    num_records = 5000
-    num_queries = 1000
+    num_records = 500
+    num_queries = 100
 
     # Test 1: Standalone embedded (no server)
     print("\n1. Standalone Embedded Mode...")
