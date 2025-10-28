@@ -13,7 +13,7 @@ This document describes the build architecture for creating platform-specific Py
 | Platform | Wheel Size | Runner | Build Method | Notes |
 |----------|-----------|---------|--------------|-------|
 | **linux/amd64** | 160.9M | `ubuntu-latest` | Docker native | Most common Linux platform |
-| **linux/arm64** | 159.9M | `ubuntu-latest` | Docker + QEMU | ARM64 servers, Raspberry Pi 4+ |
+| **linux/arm64** | 159.9M | `ubuntu-24.04-arm` | Docker native | ARM64 servers (GitHub hosted runner) |
 | **darwin/amd64** | 157.8M | `macos-13` | Native build | Intel Macs (2006-2020) |
 | **darwin/arm64** | 156.7M | `macos-latest` | Native build | Apple Silicon Macs (2020+) |
 | **windows/amd64** | 157.4M | `windows-latest` | Native build | 64-bit Windows |
@@ -29,9 +29,9 @@ This document describes the build architecture for creating platform-specific Py
 
 We use a **hybrid build approach**:
 
-1. **Linux platforms:** Docker multi-stage builds
-   - Consistent environment across amd64/arm64
-   - QEMU emulation for arm64 on amd64 runners
+1. **Linux platforms:** Docker native builds
+   - linux/amd64: Native Docker on `ubuntu-latest`
+   - linux/arm64: Native Docker on `ubuntu-24.04-arm` (GitHub ARM64 runner)
    - Builds platform-specific JRE via `jlink`
 
 2. **macOS/Windows platforms:** Native builds
@@ -46,9 +46,10 @@ We use a **hybrid build approach**:
 - Running `jlink` on macOS-amd64 → Creates macOS-amd64 JRE ✅
 - Running `jlink` on Windows → Creates Windows JRE ✅
 - Running `jlink` in Docker on linux-x64 → Creates linux-x64 JRE ✅
-- Running `jlink` with `--platform linux/arm64` → **Still creates linux-x64 JRE** ❌
+- Running `jlink` in Docker on linux-arm64 → Creates linux-arm64 JRE ✅
+- Running `jlink` with `--platform linux/arm64` on x64 → **Still creates linux-x64 JRE** ❌
 
-**Solution:** Run builds on native hardware for each platform (or QEMU for ARM64).
+**Solution:** Run builds on native hardware for each platform.
 
 ## Build Pipeline
 
@@ -86,12 +87,12 @@ jobs:
 **Platform-specific build and test:**
 
 #### Linux Platforms (Docker)
-1. Setup QEMU (for arm64 only)
-2. Run Docker multi-stage build:
+1. Run Docker multi-stage build on native ARM64/AMD64 runner
+2. Build platform-specific wheel:
    - `jre-builder`: Creates platform-specific JRE via `jlink`
    - `python-builder`: Builds wheel with bundled JRE
 3. Skip artifact download (Docker gets JARs directly)
-4. Skip host tests for arm64 (architecture mismatch)
+4. Tests run on same native platform
 
 #### macOS/Windows Platforms (Native)
 1. Download pre-filtered JARs artifact
@@ -214,19 +215,25 @@ python -m build --wheel
 
 **Simplification:** Removed ~30 lines of JAR filtering logic (now uses pre-filtered artifact)
 
-## QEMU for ARM64
+## GitHub ARM64 Runners (linux/arm64)
 
-### Setup
+### Native ARM64 Support
+
+As of late 2024, GitHub Actions provides **free native ARM64 runners** for public repositories:
 
 ```yaml
-- name: Set up QEMU
-  if: matrix.platform == 'linux/arm64'
-  uses: docker/setup-qemu-action@v3.2.0
-  with:
-    platforms: arm64
+- platform: linux/arm64
+  runs-on: ubuntu-24.04-arm  # Native ARM64 runner
 ```
 
-### Build
+### Benefits
+
+- **Native performance:** No emulation overhead (3-4x faster than QEMU)
+- **True platform builds:** `jlink` creates actual ARM64 JRE
+- **Free for public repos:** Part of GitHub Actions free tier
+- **Consistent with other platforms:** Same build process as linux/amd64
+
+### Build Process
 
 ```bash
 docker build \
@@ -236,16 +243,7 @@ docker build \
   .
 ```
 
-### Testing
-
-**Host tests skipped** for arm64 (can't run ARM64 wheel on AMD64 host):
-```yaml
-- name: Test installed package
-  if: matrix.platform != 'linux/arm64'  # Skip host test for ARM64
-  run: pytest tests/
-```
-
-**Docker tests still run** (emulated environment matches wheel architecture)
+Since the runner itself is ARM64, Docker builds run natively without emulation.
 
 ## File Structure
 
@@ -386,27 +384,24 @@ pytest tests/
 ### Build Times
 
 - **Linux/amd64:** ~3-5 minutes (native Docker)
-- **Linux/arm64:** ~15-20 minutes (QEMU emulation, slow)
+- **Linux/arm64:** ~5-7 minutes (native ARM64 runner, fast!)
 - **macOS:** ~5-7 minutes (native build)
 - **Windows:** ~6-8 minutes (native build)
 
-### QEMU Overhead
-
-ARM64 builds are 3-4x slower due to emulation, but still practical for CI.
+All builds now run on native hardware for optimal performance.
 
 ## Future Improvements
 
-1. **Self-hosted ARM64 runner:** Would eliminate QEMU overhead for linux/arm64
-2. **Windows ARM64:** Add when GitHub runner becomes generally available
-3. **Build caching:** Cache JRE creation step (currently rebuilds every time)
-4. **Parallel JRE builds:** Build JREs for all platforms in parallel
-5. **Size optimization:** Further investigate JRE modules (currently 21 modules, ~63MB)
+1. **Windows ARM64:** Add when GitHub runner becomes generally available (`windows-11-arm64`)
+2. **Build caching:** Cache JRE creation step (currently rebuilds every time)
+3. **Parallel JRE builds:** Build JREs for all platforms in parallel
+4. **Size optimization:** Further investigate JRE modules (currently 21 modules, ~63MB)
 
 ## References
 
 - **jlink documentation:** https://docs.oracle.com/en/java/javase/21/docs/specs/man/jlink.html
 - **GitHub Actions runners:** https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners
-- **QEMU action:** https://github.com/docker/setup-qemu-action
+- **GitHub ARM64 runners:** https://github.blog/changelog/2024-06-03-actions-arm-based-linux-and-windows-runners-are-now-in-public-beta/
 - **pytest JUnit XML:** https://docs.pytest.org/en/stable/how-to/output.html#creating-junitxml-format-files
 
 ## Credits
