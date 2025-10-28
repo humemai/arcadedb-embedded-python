@@ -186,9 +186,10 @@ jobs:
             TEMP_DIR=$(mktemp -d)
             unzip -q "$WHEEL_FILE" -d "$TEMP_DIR"
 
-            # Calculate component sizes
-            if [ -d "$TEMP_DIR"/arcadedb/jre ]; then
-              JRE_SIZE_BYTES=$(du -sb "$TEMP_DIR"/arcadedb/jre | cut -f1)
+            # Calculate component sizes (find jre directory anywhere)
+            JRE_DIR=$(find "$TEMP_DIR" -type d -name "jre" | head -n1)
+            if [ -n "$JRE_DIR" ] && [ -d "$JRE_DIR" ]; then
+              JRE_SIZE_BYTES=$(du -sb "$JRE_DIR" | cut -f1)
               JRE_SIZE_MB=$(echo "scale=1; $JRE_SIZE_BYTES / 1024 / 1024" | bc)
             else
               JRE_SIZE_MB="N/A"

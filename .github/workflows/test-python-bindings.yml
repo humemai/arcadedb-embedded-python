@@ -130,9 +130,15 @@ jobs:
             TEMP_DIR=$(mktemp -d)
             unzip -q "$WHEEL_FILE" -d "$TEMP_DIR"
 
-            # Calculate JRE size (in jre/ directory)
-            if [ -d "$TEMP_DIR"/arcadedb/jre ]; then
-              JRE_SIZE_BYTES=$(du -sb "$TEMP_DIR"/arcadedb/jre 2>/dev/null | cut -f1)
+            # List structure for debugging
+            echo "📁 Wheel structure:"
+            ls -la "$TEMP_DIR"/ || true
+            find "$TEMP_DIR" -type d -name "jre" || true
+
+            # Calculate JRE size (look for jre/ directory anywhere)
+            JRE_DIR=$(find "$TEMP_DIR" -type d -name "jre" | head -n1)
+            if [ -n "$JRE_DIR" ] && [ -d "$JRE_DIR" ]; then
+              JRE_SIZE_BYTES=$(du -sb "$JRE_DIR" 2>/dev/null | cut -f1)
               JRE_SIZE_MB=$(echo "scale=1; $JRE_SIZE_BYTES / 1024 / 1024" | bc)
             else
               JRE_SIZE_MB="N/A"
