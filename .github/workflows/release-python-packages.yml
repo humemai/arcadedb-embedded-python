@@ -76,132 +76,38 @@ jobs:
     uses: ./.github/workflows/test-python-bindings.yml
     secrets: inherit
 
-  build:
-    needs: [validate-version, test, test-examples]  # Wait for validation and tests
-    name: Build arcadedb-embedded (${{ matrix.platform }})
-    runs-on: ${{ matrix.runs-on }}
-    environment: pypi
+  # Reuse wheels from test job (no need to rebuild!)
+  prepare-wheels:
+    needs: [validate-version, test, test-examples]
+    name: Prepare Wheels for Release (${{ matrix.platform }})
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - platform: linux/amd64
-            runs-on: ubuntu-24.04
-            download-jars: true  # Only Linux downloads JARs
-          - platform: linux/arm64
-            runs-on: ubuntu-24.04-arm
-            download-jars: false  # Use JARs from linux/amd64
-          - platform: darwin/amd64
-            runs-on: macos-15-intel
-            download-jars: false
-          - platform: darwin/arm64
-            runs-on: macos-15
-            download-jars: false
-          - platform: windows/amd64
-            runs-on: windows-2025
-            download-jars: false
-          - platform: windows/arm64
-            runs-on: windows-11-arm
-            download-jars: false
+        platform:
+          - linux-amd64
+          - linux-arm64
+          - darwin-amd64
+          - darwin-arm64
+          - windows-amd64
+          - windows-arm64
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-
-      - name: Download ArcadeDB JARs (Linux only)
-        if: matrix.download-jars
-        shell: bash
-        run: |
-          cd bindings/python
-
-          # Detect ArcadeDB version (Docker format: X.Y.Z-SNAPSHOT)
-          ARCADEDB_TAG=$(python3 extract_version.py --format=docker)
-          echo "📌 ArcadeDB version: $ARCADEDB_TAG"
-
-          # Download JARs from official Docker image
-          echo "📦 Downloading JARs from arcadedata/arcadedb:$ARCADEDB_TAG..."
-
-          # Create output directory
-          mkdir -p src/arcadedb_embedded/jars
-
-          # Create a temporary container and copy JARs from it
-          CONTAINER_ID=$(docker create arcadedata/arcadedb:$ARCADEDB_TAG)
-          docker cp $CONTAINER_ID:/home/arcadedb/lib/. src/arcadedb_embedded/jars/
-          docker rm $CONTAINER_ID
-
-          ls -lh src/arcadedb_embedded/jars/
-
-      - name: Upload JARs as artifact (Linux only)
-        if: matrix.download-jars
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: arcadedb-jars-release
-          path: bindings/python/src/arcadedb_embedded/jars/*.jar
-          retention-days: 1
-
-      - name: Download JARs artifact (non-Linux only)
-        if: ${{ ! matrix.download-jars }}
+      - name: Download wheel from test job
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
-          name: arcadedb-jars-release
-          path: bindings/python/src/arcadedb_embedded/jars
+          name: wheel-${{ matrix.platform }}-test
+          path: dist/
 
-      - name: Set up Python
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
-        with:
-          python-version: '3.11'
-
-      - name: Set up Java (for native builds on macOS/Windows)
-        if: matrix.platform != 'linux/amd64' && matrix.platform != 'linux/arm64'
-        uses: actions/setup-java@7a6d8a8234af8eb26422e24e3006232cccaa061b # v4.6.0
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - name: Set up Docker Buildx (Linux only)
-        if: matrix.platform == 'linux/amd64' || matrix.platform == 'linux/arm64'
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
-
-      - name: Install Python build dependencies
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          pip install build wheel setuptools
-
-      - name: Create python3 symlink (Windows only)
-        if: matrix.platform == 'windows/amd64'
-        shell: bash
-        run: |
-          # On Windows, setup-python doesn't create python3 symlink
-          PYTHON_DIR=$(dirname "$(which python)")
-          ln -s "$PYTHON_DIR/python.exe" "$PYTHON_DIR/python3.exe" || true
-          python3 --version
-
-      - name: Write version file for build
-        shell: bash
-        run: |
-          cd bindings/python
-          # Use tag version directly
-          echo "${{ needs.validate-version.outputs.python-version }}" > .build_version.txt
-          echo "📦 Building version: ${{ needs.validate-version.outputs.python-version }}"
-
-      - name: Build arcadedb-embedded (${{ matrix.platform }})
-        shell: bash
-        run: |
-          cd bindings/python
-          ./build.sh ${{ matrix.platform }}
-        env:
-          BUILD_VERSION: ${{ needs.validate-version.outputs.python-version }}
-
-      - name: Upload wheel artifact
+      - name: Re-upload wheel for release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: wheel-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || 'windows-amd64' }}
-          path: bindings/python/dist/*.whl
+          name: wheel-${{ matrix.platform }}
+          path: dist/*.whl
           retention-days: 5
 
   publish:
     name: Publish arcadedb-embedded to PyPI
-    needs: [validate-version, build]
+    needs: [validate-version, prepare-wheels]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
