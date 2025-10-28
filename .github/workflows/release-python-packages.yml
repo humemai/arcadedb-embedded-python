@@ -220,12 +220,12 @@ jobs:
           echo "📦 Wheels:"
           ls dist/*.whl
 
-          # Count wheels (should be 5: one for each platform)
+          # Count wheels (should be 6: one for each platform)
           WHEEL_COUNT=$(ls dist/*.whl | wc -l)
-          echo "📊 Wheel count: $WHEEL_COUNT (expected: 5)"
+          echo "📊 Wheel count: $WHEEL_COUNT (expected: 6)"
 
-          if [ "$WHEEL_COUNT" -ne 5 ]; then
-            echo "❌ Expected 5 wheels (5 platforms), got $WHEEL_COUNT"
+          if [ "$WHEEL_COUNT" -ne 6 ]; then
+            echo "❌ Expected 6 wheels (6 platforms), got $WHEEL_COUNT"
             exit 1
           fi
 
