@@ -155,6 +155,64 @@ jobs:
             exit 1
           fi
 
+          # Report wheel sizes with actual component breakdown
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Built Wheels" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Wheel Size | JRE Size | JARs Size | Installed Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------------|----------|-----------|----------------|" >> $GITHUB_STEP_SUMMARY
+
+          for WHEEL_FILE in dist/*.whl; do
+            WHEEL_NAME=$(basename "$WHEEL_FILE")
+            WHEEL_SIZE_BYTES=$(stat -c%s "$WHEEL_FILE")
+            WHEEL_SIZE_MB=$(echo "scale=1; $WHEEL_SIZE_BYTES / 1024 / 1024" | bc)
+
+            # Extract platform from filename
+            if [[ "$WHEEL_NAME" == *"manylinux"*"x86_64"* ]]; then
+              PLATFORM="linux/amd64"
+            elif [[ "$WHEEL_NAME" == *"manylinux"*"aarch64"* ]]; then
+              PLATFORM="linux/arm64"
+            elif [[ "$WHEEL_NAME" == *"macosx"*"x86_64"* ]]; then
+              PLATFORM="darwin/amd64"
+            elif [[ "$WHEEL_NAME" == *"macosx"*"arm64"* ]]; then
+              PLATFORM="darwin/arm64"
+            elif [[ "$WHEEL_NAME" == *"win_amd64"* ]]; then
+              PLATFORM="windows/amd64"
+            else
+              PLATFORM="unknown"
+            fi
+
+            # Analyze wheel contents
+            TEMP_DIR=$(mktemp -d)
+            unzip -q "$WHEEL_FILE" -d "$TEMP_DIR"
+
+            # Calculate component sizes
+            if [ -d "$TEMP_DIR"/arcadedb/jre ]; then
+              JRE_SIZE_BYTES=$(du -sb "$TEMP_DIR"/arcadedb/jre | cut -f1)
+              JRE_SIZE_MB=$(echo "scale=1; $JRE_SIZE_BYTES / 1024 / 1024" | bc)
+            else
+              JRE_SIZE_MB="N/A"
+            fi
+
+            JAR_SIZE_BYTES=$(find "$TEMP_DIR" -name "*.jar" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
+            if [ -n "$JAR_SIZE_BYTES" ] && [ "$JAR_SIZE_BYTES" != "0" ]; then
+              JAR_SIZE_MB=$(echo "scale=1; $JAR_SIZE_BYTES / 1024 / 1024" | bc)
+            else
+              JAR_SIZE_MB="N/A"
+            fi
+
+            INSTALLED_SIZE_BYTES=$(du -sb "$TEMP_DIR" | cut -f1)
+            INSTALLED_SIZE_MB=$(echo "scale=0; $INSTALLED_SIZE_BYTES / 1024 / 1024" | bc)
+
+            rm -rf "$TEMP_DIR"
+
+            echo "| $PLATFORM | ${WHEEL_SIZE_MB}M | ${JRE_SIZE_MB}M | ${JAR_SIZE_MB}M | ~${INSTALLED_SIZE_MB}M |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note**: Sizes are uncompressed except for Wheel Size (compressed)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
       - name: Verify wheel versions
         run: |
           for WHEEL_FILE in dist/*.whl; do
