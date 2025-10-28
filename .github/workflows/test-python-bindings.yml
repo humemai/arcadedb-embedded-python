@@ -117,10 +117,48 @@ jobs:
           echo "| ❌ Failed | ${{ steps.pytest.outputs.failed || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          echo "### Package Info:" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Package Info:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Package**: arcadedb-embedded (~160MB)" >> $GITHUB_STEP_SUMMARY
-          echo "- **JRE**: Bundled (no Java installation required)" >> $GITHUB_STEP_SUMMARY
+
+          # Get wheel size and analyze contents
+          WHEEL_FILE=$(ls dist/*.whl 2>/dev/null | head -n1)
+          if [ -n "$WHEEL_FILE" ]; then
+            WHEEL_SIZE_BYTES=$(stat -c%s "$WHEEL_FILE" 2>/dev/null || stat -f%z "$WHEEL_FILE" 2>/dev/null)
+            WHEEL_SIZE_MB=$(echo "scale=1; $WHEEL_SIZE_BYTES / 1024 / 1024" | bc)
+
+            # Unzip and analyze components (wheel is a zip file)
+            TEMP_DIR=$(mktemp -d)
+            unzip -q "$WHEEL_FILE" -d "$TEMP_DIR"
+
+            # Calculate JRE size (in jre/ directory)
+            if [ -d "$TEMP_DIR"/arcadedb/jre ]; then
+              JRE_SIZE_BYTES=$(du -sb "$TEMP_DIR"/arcadedb/jre 2>/dev/null | cut -f1)
+              JRE_SIZE_MB=$(echo "scale=1; $JRE_SIZE_BYTES / 1024 / 1024" | bc)
+            else
+              JRE_SIZE_MB="N/A"
+            fi
+
+            # Calculate JAR size (*.jar files)
+            JAR_SIZE_BYTES=$(find "$TEMP_DIR" -name "*.jar" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
+            if [ -n "$JAR_SIZE_BYTES" ] && [ "$JAR_SIZE_BYTES" != "0" ]; then
+              JAR_SIZE_MB=$(echo "scale=1; $JAR_SIZE_BYTES / 1024 / 1024" | bc)
+            else
+              JAR_SIZE_MB="N/A"
+            fi
+
+            # Calculate installed size (total uncompressed)
+            INSTALLED_SIZE_BYTES=$(du -sb "$TEMP_DIR" 2>/dev/null | cut -f1)
+            INSTALLED_SIZE_MB=$(echo "scale=0; $INSTALLED_SIZE_BYTES / 1024 / 1024" | bc)
+
+            rm -rf "$TEMP_DIR"
+
+            echo "- **Wheel Size**: ${WHEEL_SIZE_MB}M (compressed)" >> $GITHUB_STEP_SUMMARY
+            echo "- **JRE Size**: ${JRE_SIZE_MB}M (uncompressed)" >> $GITHUB_STEP_SUMMARY
+            echo "- **JARs Size**: ${JAR_SIZE_MB}M (uncompressed)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Installed Size**: ~${INSTALLED_SIZE_MB}M (total uncompressed)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "- **Platform**: ${{ matrix.platform }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Features**: All ArcadeDB features except gRPC wire protocol" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload test results
@@ -136,7 +174,7 @@ jobs:
       - name: Upload wheel artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: wheel-${{ matrix.platform }}-test
+          name: wheel-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || 'windows-amd64' }}-test
           path: bindings/python/dist/*.whl
           retention-days: 7
 
