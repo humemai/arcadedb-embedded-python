@@ -51,7 +51,7 @@ pip uninstall -y arcadedb-embedded arcadedb-embedded-headless arcadedb-embedded-
 
 Then install the current package:
 ```bash
-# Current package (~123MB, includes all features except gRPC)
+# Current package (~123MB with optimized JARs, see jar_exclusions.txt)
 pip install arcadedb-embedded
 ```
 

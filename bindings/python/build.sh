@@ -48,7 +48,7 @@ print_usage() {
     echo ""
     echo "Package features:"
     echo "  ✅ Bundled platform-specific JRE (no Java required)"
-    echo "  ✅ All ArcadeDB features except gRPC wire protocol"
+    echo "  ✅ Optimized JAR selection (see jar_exclusions.txt)"
     echo "  ✅ Multi-platform support (5 platforms)"
     echo "  📦 Size: ~160MB (JRE ~63MB, JARs ~13MB, overhead ~84MB)"
     echo ""

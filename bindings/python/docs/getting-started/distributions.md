@@ -50,11 +50,9 @@ All platforms include a platform-specific bundled JRE - no external Java require
 - ✅ **Vector Search**: HNSW indexing for embeddings
 - ✅ **Data Import**: CSV, JSON, Neo4j importers
 
-**Not Included:**
+**Optimized:**
 
-- ❌ **gRPC Wire Protocol**: Excluded to keep package size manageable
-
-We don't need gRPC at this moment, and we might add it in future versions if needed.
+- Some components are excluded to keep package size manageable (see `jar_exclusions.txt` for details)
 
 ## Test Results
 
@@ -64,9 +62,7 @@ We don't need gRPC at this moment, and we might add it in future versions if nee
 - ✅ SQL, Cypher, and Gremlin queries work
 - ✅ HTTP server and Studio UI work
 - ✅ Vector search and import operations work
-- ✅ All features available except gRPC
-
-## Use Cases
+- ✅ All included features validated
 
 ## Use Cases
 
@@ -119,7 +115,7 @@ Total package size: **162MB wheel (~240MB installed)**
 - **Compressed wheel**: 162 MB
 - **Installed size**: ~240 MB
 
-**Note**: gRPC wire protocol is excluded to keep package size manageable.
+**Note**: Some components are excluded to optimize package size (see `jar_exclusions.txt` for details).
 
 ## Installation Tips
 

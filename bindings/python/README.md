@@ -87,7 +87,7 @@ The `arcadedb-embedded` package (162MB wheel, ~240MB installed) includes everyth
 - **Bundled JRE** (~39MB): Custom Java 21 runtime (jlink, 21 modules)
 - **Total:** 162MB compressed wheel, ~240MB when installed
 
-**Note**: gRPC wire protocol is excluded to keep package size manageable. We may add it in future versions if needed.
+**Note**: Some JARs are excluded to optimize package size. See `jar_exclusions.txt` for details.
 
 Import: `import arcadedb_embedded as arcadedb`
 
@@ -132,7 +132,7 @@ Supported platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64
 > **Note:** `linux/arm64` uses QEMU emulation for builds. Additional platforms like `windows/arm64` may be added in future releases if demand justifies it.
 
 !!! note "Package Contents"
-    The package includes all ArcadeDB features except gRPC wire protocol. We don't need gRPC at this moment, and we might add it in future versions if needed.
+    The package includes optimized ArcadeDB JARs. Some components are excluded for size optimization - see `jar_exclusions.txt` for details.
 
 !!! note "Versioning"
     Versions are automatically extracted from the main ArcadeDB `pom.xml`. See [versioning strategy](https://humemai.github.io/arcadedb-embedded-python/latest/development/release/#python-versioning-strategy) for details on development vs release mode handling.
