@@ -157,9 +157,13 @@ case "$PLATFORM" in
         ;;
     darwin/amd64)
         PLAT_NAME="macosx_10_9_x86_64"
+        MACOSX_VERSION="10.9"
+        ARCH_TAG="x86_64"
         ;;
     darwin/arm64)
         PLAT_NAME="macosx_11_0_arm64"
+        MACOSX_VERSION="11.0"
+        ARCH_TAG="arm64"
         ;;
     windows/amd64)
         PLAT_NAME="win_amd64"
@@ -174,6 +178,14 @@ case "$PLATFORM" in
 esac
 
 echo -e "${CYAN}🏷️  Platform tag: ${YELLOW}${PLAT_NAME}${NC}"
+
+# Set environment variables to force correct platform tag for macOS
+if [[ "$PLATFORM" == darwin/* ]]; then
+    export _PYTHON_HOST_PLATFORM="macosx-${MACOSX_VERSION}-${ARCH_TAG}"
+    export ARCHFLAGS="-arch ${ARCH_TAG}"
+    echo -e "${CYAN}🏷️  macOS platform override: ${YELLOW}${_PYTHON_HOST_PLATFORM}${NC}"
+    echo -e "${CYAN}🏷️  ARCHFLAGS: ${YELLOW}${ARCHFLAGS}${NC}"
+fi
 
 # Build wheel
 python3 -m build --wheel --outdir "$SCRIPT_DIR/dist"
