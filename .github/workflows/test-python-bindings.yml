@@ -17,7 +17,7 @@ jobs:
   # First job: Download ArcadeDB JARs (platform-agnostic)
   download-jars:
     name: Download ArcadeDB JARs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -102,15 +102,17 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
           - platform: linux/arm64
             runs-on: ubuntu-24.04-arm
           - platform: darwin/amd64
-            runs-on: macos-13
+            runs-on: macos-15-intel
           - platform: darwin/arm64
-            runs-on: macos-latest
+            runs-on: macos-15
           - platform: windows/amd64
-            runs-on: windows-latest
+            runs-on: windows-2025
+          - platform: windows/arm64
+            runs-on: windows-11-arm
 
     steps:
       - name: Checkout code
@@ -148,7 +150,7 @@ jobs:
           pip install build wheel setuptools
 
       - name: Create python3 symlink (Windows only)
-        if: matrix.platform == 'windows/amd64'
+        if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
         shell: bash
         run: |
           # On Windows, setup-python doesn't create python3 symlink
@@ -307,7 +309,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: test-results-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || 'windows-amd64' }}
+          name: test-results-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || matrix.platform == 'windows/amd64' && 'windows-amd64' || 'windows-arm64' }}
           path: |
             bindings/python/pytest-output.txt
             bindings/python/.coverage
@@ -316,7 +318,7 @@ jobs:
       - name: Upload wheel artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: wheel-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || 'windows-amd64' }}-test
+          name: wheel-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || matrix.platform == 'windows/amd64' && 'windows-amd64' || 'windows-arm64' }}-test
           path: bindings/python/dist/*.whl
           retention-days: 7
 
@@ -324,7 +326,7 @@ jobs:
   test-summary:
     name: Test Summary
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: always()
     steps:
       - name: Check test results

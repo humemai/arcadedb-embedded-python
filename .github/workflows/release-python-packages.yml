@@ -9,7 +9,7 @@ jobs:
   # Validate version compatibility between tag and pom.xml
   validate-version:
     name: Validate Version Compatibility
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       python-version: ${{ steps.validate.outputs.python-version }}
       base-version: ${{ steps.validate.outputs.base-version }}
@@ -85,19 +85,22 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
             download-jars: true  # Only Linux downloads JARs
           - platform: linux/arm64
             runs-on: ubuntu-24.04-arm
             download-jars: false  # Use JARs from linux/amd64
           - platform: darwin/amd64
-            runs-on: macos-13
+            runs-on: macos-15-intel
             download-jars: false
           - platform: darwin/arm64
-            runs-on: macos-latest
+            runs-on: macos-15
             download-jars: false
           - platform: windows/amd64
-            runs-on: windows-latest
+            runs-on: windows-2025
+            download-jars: false
+          - platform: windows/arm64
+            runs-on: windows-11-arm
             download-jars: false
 
     steps:

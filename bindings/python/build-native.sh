@@ -164,6 +164,9 @@ case "$PLATFORM" in
     windows/amd64)
         PLAT_NAME="win_amd64"
         ;;
+    windows/arm64)
+        PLAT_NAME="win_arm64"
+        ;;
     *)
         echo -e "${RED}❌ Unsupported platform: ${PLATFORM}${NC}"
         exit 1
