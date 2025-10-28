@@ -282,3 +282,68 @@ jobs:
 
             ---
             **Based on ArcadeDB v${{ needs.validate-version.outputs.base-version }}**
+
+  update-pypi-index:
+    name: Update PyPI simple index on GitHub Pages
+    needs: [validate-version, github-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Generate PyPI simple index
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate-version.outputs.python-version }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Create simple index directory structure
+          mkdir -p simple/arcadedb-embedded
+
+          # Get all releases
+          echo "📋 Fetching all releases..."
+          gh release list --limit 100 --json tagName,isPrerelease,assets > releases.json
+
+          # Generate index.html
+          cat > simple/arcadedb-embedded/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>Links for arcadedb-embedded</title>
+              <meta name="pypi:repository-version" content="1.0">
+            </head>
+            <body>
+              <h1>Links for arcadedb-embedded</h1>
+          EOF
+
+          # Add links for each wheel from each release
+          jq -r '.[] | select(.assets | length > 0) |
+            .tagName as $tag |
+            .assets[] |
+            select(.name | endswith(".whl")) |
+            "<a href=\"https://github.com/${{ github.repository }}/releases/download/\($tag)/\(.name)\">\(.name)</a><br/>"' \
+            releases.json >> simple/arcadedb-embedded/index.html
+
+          # Close HTML
+          cat >> simple/arcadedb-embedded/index.html <<'EOF'
+            </body>
+          </html>
+          EOF
+
+          echo "✅ Generated PyPI simple index:"
+          cat simple/arcadedb-embedded/index.html
+
+      - name: Commit and push index
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add simple/
+          git commit -m "Update PyPI simple index for v${{ needs.validate-version.outputs.python-version }}" || echo "No changes to commit"
+          git push
