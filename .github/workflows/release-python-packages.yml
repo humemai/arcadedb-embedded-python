@@ -120,6 +120,7 @@ jobs:
     name: Publish arcadedb-embedded to PyPI
     needs: [validate-version, prepare-wheels]
     runs-on: ubuntu-latest
+    continue-on-error: true  # Don't block GitHub Release if PyPI upload fails (size limit)
     environment: pypi
     permissions:
       id-token: write
@@ -240,7 +241,7 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [validate-version, publish]
+    needs: [validate-version, prepare-wheels]
     runs-on: ubuntu-latest
     permissions:
       contents: write
