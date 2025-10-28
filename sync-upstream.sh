@@ -37,7 +37,7 @@ ${YELLOW}Protected Files (never overwritten):${NC}
   • README.md            - Fork-specific documentation
 
 ${YELLOW}After Sync:${NC}
-  1. Test: cd bindings/python && ./build.sh headless && pytest tests/
+  1. Test: cd bindings/python && ./build.sh linux/amd64 && pytest tests/
   2. Push: git push --force-with-lease origin main
 
 ${YELLOW}Troubleshooting:${NC}
@@ -194,7 +194,7 @@ echo -e "   ${CYAN}1. Review changes:${NC}"
 echo -e "      ${YELLOW}git log --oneline -10${NC}"
 echo ""
 echo -e "   ${CYAN}2. Test locally (REQUIRED):${NC}"
-echo -e "      ${YELLOW}cd bindings/python && ./build.sh headless${NC}"
+echo -e "      ${YELLOW}cd bindings/python && ./build.sh linux/amd64${NC}"
 echo -e "      ${YELLOW}pytest tests/ -v${NC}"
 echo ""
 echo -e "   ${CYAN}3. Push to your fork:${NC}"
