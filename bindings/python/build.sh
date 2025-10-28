@@ -144,7 +144,7 @@ TARGET_PLATFORM=$(echo "$PLATFORM" | sed 's|/|-|' | sed 's/amd64/x64/')
 echo -e "${CYAN}🎯 Target platform: ${YELLOW}${PLATFORM}${NC}"
 echo -e "${CYAN}🎯 JRE platform: ${YELLOW}${TARGET_PLATFORM}${NC}"
 echo ""
-A
+
 # Determine Docker build platform (always Linux for cross-compilation)
 # We build ON linux/amd64 or linux/arm64, but FOR any target platform
 DOCKER_PLATFORM="${PLATFORM}"
