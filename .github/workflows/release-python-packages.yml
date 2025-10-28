@@ -311,3 +311,48 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: [validate-version, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all wheels
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: wheel-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191 # v2.0.8
+        with:
+          files: dist/*.whl
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'dev') || contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+          body: |
+            ## 🎮 ArcadeDB Embedded Python Bindings v${{ needs.validate-version.outputs.python-version }}
+
+            ### 📦 Installation
+            ```bash
+            pip install arcadedb-embedded==${{ needs.validate-version.outputs.python-version }}
+            ```
+
+            ### 🌍 Supported Platforms (6)
+            - ✅ **Linux** (x86_64, ARM64)
+            - ✅ **macOS** (Intel, Apple Silicon)
+            - ✅ **Windows** (x64, ARM64)
+
+            ### 📚 Links
+            - [PyPI Package](https://pypi.org/project/arcadedb-embedded/${{ needs.validate-version.outputs.python-version }}/)
+            - [Documentation](https://github.com/${{ github.repository }})
+            - [Examples](https://github.com/${{ github.repository }}/tree/main/bindings/python/examples)
+
+            ### 🔽 Direct Downloads
+            Platform-specific wheels are attached below. Most users should install via pip (auto-selects correct wheel).
+
+            ---
+            **Based on ArcadeDB v${{ needs.validate-version.outputs.base-version }}**
