@@ -98,6 +98,17 @@ jobs:
           name: wheel-${{ matrix.platform }}-test
           path: dist/
 
+      - name: Verify wheel was downloaded
+        shell: bash
+        run: |
+          echo "📦 Checking for wheel-${{ matrix.platform }}-test..."
+          ls -lh dist/
+          if [ ! -f dist/*.whl ]; then
+            echo "❌ No wheel found for ${{ matrix.platform }}!"
+            exit 1
+          fi
+          echo "✅ Wheel found for ${{ matrix.platform }}"
+
       - name: Re-upload wheel for release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -113,12 +124,21 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - name: Download all wheels
+      - name: Download all wheels (separately to avoid overwrites)
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: wheel-*
-          path: dist/
-          merge-multiple: true
+          path: wheels-temp/
+          merge-multiple: false  # Keep in separate directories
+
+      - name: Collect wheels into single directory
+        shell: bash
+        run: |
+          mkdir -p dist
+          # Copy all wheels from subdirectories to dist/
+          find wheels-temp -name "*.whl" -exec cp {} dist/ \;
+          echo "📦 Collected wheels:"
+          ls -lh dist/
 
       - name: Verify wheels
         run: |

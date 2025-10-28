@@ -105,6 +105,7 @@ COPY --from=jre-builder /build/jre /build/jre/
 # Copy Python bindings source
 COPY bindings/python/src ./src
 COPY bindings/python/tests ./tests
+COPY bindings/python/setup.py .
 COPY bindings/python/setup_jars.py .
 COPY bindings/python/extract_version.py .
 COPY bindings/python/write_version.py .
