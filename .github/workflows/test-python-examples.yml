@@ -14,11 +14,23 @@ on:
 jobs:
   test-examples:
     name: Test Python Examples (${{ matrix.platform }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs-on }}
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64]
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-24.04
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+          - platform: darwin/amd64
+            runs-on: macos-15-intel
+          - platform: darwin/arm64
+            runs-on: macos-15
+          - platform: windows/amd64
+            runs-on: windows-2025
+          - platform: windows/arm64
+            runs-on: windows-11-arm
 
     steps:
       - name: Checkout code
