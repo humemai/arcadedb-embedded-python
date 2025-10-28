@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+# Set UTF-8 encoding for Windows compatibility with emoji characters
+export PYTHONIOENCODING=utf-8
+export LC_ALL=C.UTF-8 2> /dev/null || export LC_ALL=en_US.UTF-8 2> /dev/null || true
+
 # Colors
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'

@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Write version to _version.py file during build"""
+import io
 import sys
 from pathlib import Path
 
 from extract_version import extract_version_from_pom
+
+# Ensure UTF-8 output on Windows
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 
 def write_version_file(ver, out_path):
