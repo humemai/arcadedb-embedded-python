@@ -113,10 +113,22 @@ echo -e "${CYAN}📊 JRE size: ${YELLOW}${JRE_SIZE}${NC}"
 # Step 3: Copy JRE to package (JARs already in place)
 echo -e "${CYAN}📦 Preparing package...${NC}"
 
-# Clean up: Remove gRPC wire protocol JAR if present (not needed)
-if ls "$JARS_DIR"/arcadedb-grpcw-*.jar 1> /dev/null 2>&1; then
-    rm -f "$JARS_DIR"/arcadedb-grpcw-*.jar
-    echo -e "${YELLOW}🗑️  Removed gRPC wire protocol JAR (not needed)${NC}"
+# Remove excluded JARs based on jar_exclusions.txt
+EXCLUSIONS_FILE="$SCRIPT_DIR/jar_exclusions.txt"
+if [[ -f "$EXCLUSIONS_FILE" ]]; then
+    echo -e "${YELLOW}🗑️  Removing excluded JARs from jar_exclusions.txt...${NC}"
+    while IFS= read -r pattern || [[ -n "$pattern" ]]; do
+        # Skip empty lines and comments
+        if [[ -n "$pattern" ]] && [[ ! "$pattern" =~ ^# ]]; then
+            # Remove matching JARs
+            for jar in "$JARS_DIR"/$pattern; do
+                if [[ -f "$jar" ]]; then
+                    rm -f "$jar"
+                    echo -e "${YELLOW}   - Removed: $(basename "$jar")${NC}"
+                fi
+            done
+        fi
+    done < "$EXCLUSIONS_FILE"
 fi
 
 # Build and copy JRE

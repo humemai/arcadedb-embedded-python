@@ -31,9 +31,18 @@ WORKDIR /build
 RUN mkdir -p /build/jars
 COPY --from=java-builder /home/arcadedb/lib /build/jars/
 
-# Remove gRPC wire protocol JAR (not needed, saves ~40MB)
-RUN rm -f /build/jars/arcadedb-grpcw-*.jar && \
-    echo "🗑️  Removed gRPC wire protocol JAR (not needed)"
+# Copy JAR exclusion list
+COPY bindings/python/jar_exclusions.txt /build/jar_exclusions.txt
+
+# Remove excluded JARs based on jar_exclusions.txt
+RUN echo "🗑️  Removing excluded JARs..." && \
+    while IFS= read -r pattern; do \
+        # Skip empty lines and comments
+        if [ -n "$pattern" ] && [ "${pattern#\#}" = "$pattern" ]; then \
+            rm -f /build/jars/$pattern && \
+            echo "   - Removed: $pattern"; \
+        fi \
+    done < /build/jar_exclusions.txt
 
 # Build minimal JRE with jlink (21 modules)
 # Based on analysis of ArcadeDB dependencies
@@ -97,6 +106,7 @@ COPY bindings/python/tests ./tests
 COPY bindings/python/setup_jars.py .
 COPY bindings/python/extract_version.py .
 COPY bindings/python/write_version.py .
+COPY bindings/python/jar_exclusions.txt .
 COPY bindings/python/pyproject.toml ./
 COPY bindings/python/README.md ./
 
