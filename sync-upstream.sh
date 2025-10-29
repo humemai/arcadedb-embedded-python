@@ -61,7 +61,7 @@ check_status() {
     echo -e "${BLUE}📊 Fork Sync Status${NC}"
     echo ""
 
-    git fetch upstream --quiet
+    git fetch upstream --no-tags --quiet
 
     AHEAD=$(git rev-list --count upstream/main..HEAD)
     BEHIND=$(git rev-list --count HEAD..upstream/main)
@@ -116,7 +116,7 @@ echo ""
 
 # 1. Fetch latest upstream changes
 echo -e "${YELLOW}📥 Fetching upstream changes...${NC}"
-git fetch upstream
+git fetch upstream --no-tags
 
 # 2. Check current status
 echo -e "${YELLOW}📊 Checking current branch...${NC}"
