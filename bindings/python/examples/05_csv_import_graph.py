@@ -127,6 +127,18 @@ import arcadedb_embedded as arcadedb
 import numpy as np
 
 
+def escape_sql_string(value: str) -> str:
+    """Properly escape a string for SQL queries.
+
+    Must escape backslashes first, then single quotes.
+    Otherwise a value like '\' becomes '\'' which escapes the quote.
+    """
+    if value is None:
+        return ""
+    # First escape backslashes, then escape single quotes
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
 @dataclass
 class BenchmarkStats:
     """Statistics for a single operation."""
@@ -322,6 +334,40 @@ class VertexCreator:
                                 total_users,
                                 start_time,
                             )
+        elif self.use_java_api:
+            # Java API without async (synchronous transactions)
+            with arcadedb.open_database(
+                str(self.data_loader.source_db_path)
+            ) as source_db:
+                query = "SELECT DISTINCT userId FROM Rating ORDER BY userId"
+                batch_user_ids = []
+
+                for record in source_db.query("sql", query):
+                    user_id = record.get_property("userId")
+                    batch_user_ids.append(user_id)
+
+                    if len(batch_user_ids) >= self.batch_size:
+                        with self.db.transaction():
+                            for uid in batch_user_ids:
+                                vertex = self.db.new_vertex("User")
+                                vertex.set("userId", uid)
+                                vertex.save()
+                        user_count += len(batch_user_ids)
+                        batch_count += 1
+                        batch_user_ids = []
+                        self._report_progress(
+                            "User", batch_count, user_count, total_users, start_time
+                        )
+
+                # Handle remaining
+                if batch_user_ids:
+                    with self.db.transaction():
+                        for uid in batch_user_ids:
+                            vertex = self.db.new_vertex("User")
+                            vertex.set("userId", uid)
+                            vertex.save()
+                    user_count += len(batch_user_ids)
+                    batch_count += 1
         else:
             # SQL mode (always synchronous for vertices - async causes
             # ConcurrentModificationException due to multiple threads writing
@@ -374,8 +420,8 @@ class VertexCreator:
         movie_count = 0
         batch_count = 0
 
-        if self.use_java_api:
-            # Java API with BatchContext
+        if self.use_async and self.use_java_api:
+            # Java API with BatchContext (async)
             with arcadedb.BatchContext(
                 self.db, batch_size=self.batch_size, parallel=self.parallel_level
             ) as batch:
@@ -436,6 +482,70 @@ class VertexCreator:
                             start_time,
                             query_time,
                         )
+        elif self.use_java_api:
+            # Java API without async (synchronous transactions)
+            with arcadedb.open_database(
+                str(self.data_loader.source_db_path)
+            ) as source_db:
+                last_rid = "#-1:-1"
+                while True:
+                    query_start = time.time()
+                    query = f"""
+                        SELECT *, @rid as rid FROM Movie
+                        WHERE @rid > {last_rid}
+                        ORDER BY @rid
+                        LIMIT {self.batch_size}
+                    """
+                    chunk = list(source_db.query("sql", query))
+                    query_time = time.time() - query_start
+                    stats.add_query_time(query_time)
+                    if not chunk:
+                        break
+
+                    with self.db.transaction():
+                        for record in chunk:
+                            movie_id = record.get_property("movieId")
+                            title = (
+                                record.get_property("title")
+                                if record.has_property("title")
+                                else ""
+                            )
+                            genres = (
+                                record.get_property("genres")
+                                if record.has_property("genres")
+                                else ""
+                            )
+
+                            # Merge Link data
+                            props = {
+                                "movieId": movie_id,
+                                "title": title or "",
+                                "genres": genres or "",
+                            }
+                            link_data = links_data.get(movie_id)
+                            if link_data:
+                                if link_data["imdbId"] is not None:
+                                    props["imdbId"] = link_data["imdbId"]
+                                if link_data["tmdbId"] is not None:
+                                    props["tmdbId"] = link_data["tmdbId"]
+
+                            # Create vertex using Java API
+                            vertex = self.db.new_vertex("Movie")
+                            for key, value in props.items():
+                                vertex.set(key, value)
+                            vertex.save()
+
+                    movie_count += len(chunk)
+                    batch_count += 1
+                    last_rid = chunk[-1].get_property("rid")
+                    self._report_progress(
+                        "Movie",
+                        batch_count,
+                        movie_count,
+                        total_movies,
+                        start_time,
+                        query_time,
+                    )
         else:
             # SQL INSERT in batched transactions
             with arcadedb.open_database(
@@ -471,8 +581,8 @@ class VertexCreator:
                             )
 
                             # Escape SQL strings
-                            title = (title or "").replace("'", "\\'")
-                            genres = (genres or "").replace("'", "\\'")
+                            title = escape_sql_string(title or "")
+                            genres = escape_sql_string(genres or "")
 
                             sql = (
                                 f"INSERT INTO Movie SET "
@@ -486,7 +596,7 @@ class VertexCreator:
                             if link_data:
                                 if link_data["imdbId"] is not None:
                                     imdb_id = str(link_data["imdbId"])
-                                    imdb_id = imdb_id.replace("'", "\\'")
+                                    imdb_id = escape_sql_string(imdb_id)
                                     sql += f", imdbId = '{imdb_id}'"
                                 if link_data["tmdbId"] is not None:
                                     sql += f", tmdbId = {link_data['tmdbId']}"
@@ -728,7 +838,7 @@ class EdgeCreator:
                             user_rid = user_cache.get(user_id)
                             movie_rid = movie_cache.get(movie_id)
                             if user_rid and movie_rid:
-                                tag_escaped = tag.replace("'", "\\'")
+                                tag_escaped = escape_sql_string(tag)
                                 sql = (
                                     f"CREATE EDGE TAGGED "
                                     f"FROM {user_rid} TO {movie_rid} "
@@ -952,63 +1062,68 @@ EXPECTED_RESULTS = {
         ],
     },
     "large": {
-        # TODO: Fill in after first successful large run
         "counts": {
-            "users": None,
-            "movies": None,
-            "rated": None,
-            "tagged": None,
+            "users": 330975,
+            "movies": 86537,
+            "rated": 33155309,
+            "tagged": 2212213,
         },
         "samples": {
-            "user1_ratings": None,
-            "user1_tags": None,
-            "movie1_title": "Toy Story (1995)",  # Should be same
+            "user1_ratings": 60,
+            "user1_tags": 0,
+            "movie1_title": "Toy Story (1995)",
             "movie1_genres": "Adventure|Animation|Children|Comedy|Fantasy",
         },
         "queries": [
             {
                 "name": "Query 1: Movies rated by User #1 (SQL - Basic Traversal)",
-                "count": None,
+                "count": 60,
             },
             {
                 "name": "Query 2: Movies rated 5.0 by User #1 (SQL - Edge Property Filter)",
-                "count": None,
+                "count": 14,
             },
             {
                 "name": "Query 3: Rating statistics for top 5 active users (SQL - Aggregations)",
                 "count": 5,
-                "sample": {"top_user_id": None, "top_user_ratings": None},
+                "sample": {"top_user_id": 189614, "top_user_ratings": 32667},
             },
             {
                 "name": "Query 4: Top 10 most rated movies (SQL - Aggregations)",
                 "count": 10,
-                "sample": {"top_movie": None, "top_movie_count": None},
+                "sample": {
+                    "top_movie": "Shawshank Redemption, The (1994)",
+                    "top_movie_count": 119899,
+                },
             },
             {
                 "name": "Query 5: Top 10 most tagged movies (SQL - Aggregations)",
                 "count": 10,
-                "sample": {"top_movie": None, "top_movie_tags": None},
+                "sample": {
+                    "top_movie": "Star Wars: Episode IV - A New Hope (1977)",
+                    "top_movie_tags": 10604,
+                },
             },
             {
                 "name": "Query 6: Users who rated same movies as User #1 (SQL - MATCH Pattern)",
-                "count": None,
+                "count": 1806984,
             },
             {
                 "name": "Query 7: Users with similar taste to User #1 (SQL - MATCH + Aggregation)",
-                "count": None,
+                "count": 141927,
             },
             {
                 "name": "Query 8: Rating distribution across all ratings (SQL - Aggregation)",
-                "count": None,
+                "count": 10,
             },
             {
                 "name": "Query 9: User #1's top-rated movies (Cypher - Basic Pattern)",
-                "count": None,
+                "count": 40,
             },
             {
                 "name": "Query 10: Users who rated same movies as User #1 (Cypher - Pattern)",
-                "count": None,
-                "sample": {"top_user_id": None, "top_shared": None},
+                "count": 252903,
+                "sample": {"top_user_id": 189614, "top_shared": 58},
             },
         ],
     },
@@ -1027,6 +1142,243 @@ def get_expected_values(size: str) -> dict:
     result.update(EXPECTED_RESULTS[size].get("counts", {}))
     result.update(EXPECTED_RESULTS[size].get("samples", {}))
     return result
+
+
+def validate_counts_and_samples(
+    db: Any,
+    size: str,
+    expected_user_count: int,
+    expected_movie_count: int,
+    expected_rated_count: int,
+    expected_tagged_count: int,
+    check_baseline: bool = True,
+    indent: str = "",
+) -> tuple[dict, dict, bool]:
+    """Validate database counts and sample data against expected values.
+
+    This is a reusable validation function that can be called for both:
+    - Main database validation (Step 5)
+    - Roundtrip database validation (Step 7)
+
+    Args:
+        db: Database instance to validate
+        size: Dataset size ("small" or "large")
+        expected_user_count: Expected number of users
+        expected_movie_count: Expected number of movies
+        expected_rated_count: Expected number of RATED edges
+        expected_tagged_count: Expected number of TAGGED edges
+        check_baseline: Whether to compare against EXPECTED_RESULTS baseline
+        indent: String to prepend to each output line (for formatting)
+
+    Returns:
+        Tuple of (counts_dict, samples_dict, validation_passed)
+    """
+    # Count vertices
+    result = list(db.query("sql", "SELECT count(*) as count FROM User"))
+    user_count_check = result[0].get_property("count")
+    result = list(db.query("sql", "SELECT count(*) as count FROM Movie"))
+    movie_count_check = result[0].get_property("count")
+
+    # Count edges
+    result = list(db.query("sql", "SELECT count(*) as count FROM RATED"))
+    rated_count_check = result[0].get_property("count")
+    result = list(db.query("sql", "SELECT count(*) as count FROM TAGGED"))
+    tagged_count_check = result[0].get_property("count")
+
+    # Sample data validation: check a specific user's ratings
+    sample_user_query = """
+        SELECT out('RATED').size() as rating_count,
+               out('TAGGED').size() as tag_count
+        FROM User
+        WHERE userId = 1
+    """
+    sample_user_results = list(db.query("sql", sample_user_query))
+    if sample_user_results:
+        sample_user = sample_user_results[0]
+        user1_ratings = sample_user.get_property("rating_count")
+        user1_tags = sample_user.get_property("tag_count")
+    else:
+        user1_ratings = None
+        user1_tags = None
+
+    # Sample data validation: check a specific movie exists with properties
+    sample_movie_query = """
+        SELECT title, genres
+        FROM Movie
+        WHERE movieId = 1
+    """
+    movie_results = list(db.query("sql", sample_movie_query))
+    if movie_results:
+        sample_movie = movie_results[0]
+        movie1_title = sample_movie.get_property("title")
+        movie1_genres = sample_movie.get_property("genres")
+    else:
+        movie1_title = None
+        movie1_genres = None
+
+    print(f"{indent}✓ Vertex counts:")
+    print(f"{indent}  Users:  {user_count_check:,}")
+    print(f"{indent}  Movies: {movie_count_check:,}")
+    print(f"{indent}✓ Edge counts:")
+    print(f"{indent}  RATED:  {rated_count_check:,}")
+    print(f"{indent}  TAGGED: {tagged_count_check:,}")
+    print(f"{indent}✓ Sample data (User #1):")
+    print(f"{indent}  Ratings: {user1_ratings}")
+    print(f"{indent}  Tags:    {user1_tags}")
+    print(f"{indent}✓ Sample data (Movie #1):")
+    print(f"{indent}  Title:  {movie1_title}")
+    print(f"{indent}  Genres: {movie1_genres}")
+    print()
+
+    # Validation checks against expected counts (from creation)
+    validation_passed = True
+    if user_count_check != expected_user_count:
+        print(
+            f"{indent}❌ User count mismatch! "
+            f"Expected {expected_user_count}, got {user_count_check}"
+        )
+        validation_passed = False
+    if movie_count_check != expected_movie_count:
+        print(
+            f"{indent}❌ Movie count mismatch! "
+            f"Expected {expected_movie_count}, got {movie_count_check}"
+        )
+        validation_passed = False
+    if rated_count_check != expected_rated_count:
+        print(
+            f"{indent}❌ RATED edge count mismatch! "
+            f"Expected {expected_rated_count}, got {rated_count_check}"
+        )
+        validation_passed = False
+    if tagged_count_check != expected_tagged_count:
+        print(
+            f"{indent}❌ TAGGED edge count mismatch! "
+            f"Expected {expected_tagged_count}, got {tagged_count_check}"
+        )
+        validation_passed = False
+
+    if validation_passed:
+        print(f"{indent}✅ Basic validation passed!")
+    else:
+        print(f"{indent}⚠️  Some validation checks failed!")
+
+    # Compare against expected baseline values for this dataset size
+    if check_baseline:
+        expected = get_expected_values(size)
+        if expected and any(v is not None for v in expected.values()):
+            print()
+            print(f"{indent}Comparing against expected baseline for {size} dataset:")
+
+            expected_passed = True
+
+            # Check counts
+            if expected["users"] is not None:
+                if user_count_check != expected["users"]:
+                    print(
+                        f"{indent}  ❌ Users: expected {expected['users']}, "
+                        f"got {user_count_check}"
+                    )
+                    expected_passed = False
+                else:
+                    print(f"{indent}  ✓ Users: {user_count_check}")
+
+            if expected["movies"] is not None:
+                if movie_count_check != expected["movies"]:
+                    print(
+                        f"{indent}  ❌ Movies: expected {expected['movies']}, "
+                        f"got {movie_count_check}"
+                    )
+                    expected_passed = False
+                else:
+                    print(f"{indent}  ✓ Movies: {movie_count_check}")
+
+            if expected["rated"] is not None:
+                if rated_count_check != expected["rated"]:
+                    print(
+                        f"{indent}  ❌ RATED edges: expected {expected['rated']}, "
+                        f"got {rated_count_check}"
+                    )
+                    expected_passed = False
+                else:
+                    print(f"{indent}  ✓ RATED edges: {rated_count_check}")
+
+            if expected["tagged"] is not None:
+                if tagged_count_check != expected["tagged"]:
+                    print(
+                        f"{indent}  ❌ TAGGED edges: expected {expected['tagged']}, "
+                        f"got {tagged_count_check}"
+                    )
+                    expected_passed = False
+                else:
+                    print(f"{indent}  ✓ TAGGED edges: {tagged_count_check}")
+
+            # Check sample data
+            if expected["user1_ratings"] is not None:
+                if user1_ratings != expected["user1_ratings"]:
+                    print(
+                        f"{indent}  ❌ User #1 ratings: expected "
+                        f"{expected['user1_ratings']}, got {user1_ratings}"
+                    )
+                    expected_passed = False
+                else:
+                    print(f"{indent}  ✓ User #1 ratings: {user1_ratings}")
+            else:
+                print(f"{indent}  ℹ️  User #1 ratings: {user1_ratings} (no baseline)")
+
+            if expected["user1_tags"] is not None:
+                if user1_tags != expected["user1_tags"]:
+                    print(
+                        f"{indent}  ❌ User #1 tags: expected "
+                        f"{expected['user1_tags']}, got {user1_tags}"
+                    )
+                    expected_passed = False
+                else:
+                    print(f"{indent}  ✓ User #1 tags: {user1_tags}")
+            else:
+                print(f"{indent}  ℹ️  User #1 tags: {user1_tags} (no baseline)")
+
+            if expected["movie1_title"] is not None:
+                if movie1_title != expected["movie1_title"]:
+                    print(
+                        f"{indent}  ❌ Movie #1 title: expected "
+                        f"'{expected['movie1_title']}', got '{movie1_title}'"
+                    )
+                    expected_passed = False
+                else:
+                    print(f"{indent}  ✓ Movie #1 title: {movie1_title}")
+
+            if expected["movie1_genres"] is not None:
+                if movie1_genres != expected["movie1_genres"]:
+                    print(
+                        f"{indent}  ❌ Movie #1 genres: expected "
+                        f"'{expected['movie1_genres']}', got '{movie1_genres}'"
+                    )
+                    expected_passed = False
+                else:
+                    print(f"{indent}  ✓ Movie #1 genres: {movie1_genres}")
+
+            if expected_passed:
+                print(f"{indent}  ✅ All expected baseline values match!")
+            else:
+                print(f"{indent}  ⚠️  Some expected values don't match!")
+                validation_passed = False
+
+    # Package results
+    counts_dict = {
+        "users": user_count_check,
+        "movies": movie_count_check,
+        "rated": rated_count_check,
+        "tagged": tagged_count_check,
+    }
+
+    samples_dict = {
+        "user1_ratings": user1_ratings,
+        "user1_tags": user1_tags,
+        "movie1_title": movie1_title,
+        "movie1_genres": movie1_genres,
+    }
+
+    return counts_dict, samples_dict, validation_passed
 
 
 def create_schema(db: Any, create_indexes: bool = True):
@@ -1141,187 +1493,17 @@ def validate_and_query(
     print("=" * 70)
     print()
 
-    # Count vertices
-    result = list(db.query("sql", "SELECT count(*) as count FROM User"))
-    user_count_check = result[0].get_property("count")
-    result = list(db.query("sql", "SELECT count(*) as count FROM Movie"))
-    movie_count_check = result[0].get_property("count")
-
-    # Count edges
-    result = list(db.query("sql", "SELECT count(*) as count FROM RATED"))
-    rated_count_check = result[0].get_property("count")
-    result = list(db.query("sql", "SELECT count(*) as count FROM TAGGED"))
-    tagged_count_check = result[0].get_property("count")
-
-    # Sample data validation: check a specific user's ratings
-    sample_user_query = """
-        SELECT out('RATED').size() as rating_count,
-               out('TAGGED').size() as tag_count
-        FROM User
-        WHERE userId = 1
-    """
-    sample_user_results = list(db.query("sql", sample_user_query))
-    if sample_user_results:
-        sample_user = sample_user_results[0]
-        user1_ratings = sample_user.get_property("rating_count")
-        user1_tags = sample_user.get_property("tag_count")
-    else:
-        user1_ratings = None
-        user1_tags = None
-
-    # Sample data validation: check a specific movie exists with properties
-    sample_movie_query = """
-        SELECT title, genres
-        FROM Movie
-        WHERE movieId = 1
-    """
-    movie_results = list(db.query("sql", sample_movie_query))
-    if movie_results:
-        sample_movie = movie_results[0]
-        movie1_title = sample_movie.get_property("title")
-        movie1_genres = sample_movie.get_property("genres")
-    else:
-        movie1_title = None
-        movie1_genres = None
-
-    print("✓ Vertex counts:")
-    print(f"  Users:  {user_count_check:,}")
-    print(f"  Movies: {movie_count_check:,}")
-    print("✓ Edge counts:")
-    print(f"  RATED:  {rated_count_check:,}")
-    print(f"  TAGGED: {tagged_count_check:,}")
-    print("✓ Sample data (User #1):")
-    print(f"  Ratings: {user1_ratings}")
-    print(f"  Tags:    {user1_tags}")
-    print("✓ Sample data (Movie #1):")
-    print(f"  Title:  {movie1_title}")
-    print(f"  Genres: {movie1_genres}")
-    print()
-
-    # Validation checks
-    validation_passed = True
-    if user_count_check != user_count:
-        print(
-            f"❌ User count mismatch! " f"Expected {user_count}, got {user_count_check}"
-        )
-        validation_passed = False
-    if movie_count_check != movie_count:
-        print(
-            f"❌ Movie count mismatch! "
-            f"Expected {movie_count}, got {movie_count_check}"
-        )
-        validation_passed = False
-    if rated_count_check != edge_count:
-        print(
-            f"❌ RATED edge count mismatch! "
-            f"Expected {edge_count}, got {rated_count_check}"
-        )
-        validation_passed = False
-    if tagged_count_check != tagged_count:
-        print(
-            f"❌ TAGGED edge count mismatch! "
-            f"Expected {tagged_count}, got {tagged_count_check}"
-        )
-        validation_passed = False
-
-    if validation_passed:
-        print("✅ Basic validation passed!")
-    else:
-        print("⚠️  Some validation checks failed!")
-
-    # Compare against expected values for this dataset size
-    expected = get_expected_values(size)
-    if expected and any(v is not None for v in expected.values()):
-        print()
-        print(f"Comparing against expected baseline for {size} dataset:")
-
-        expected_passed = True
-
-        if expected["users"] is not None:
-            if user_count_check != expected["users"]:
-                print(
-                    f"  ❌ Users: expected {expected['users']}, "
-                    f"got {user_count_check}"
-                )
-                expected_passed = False
-            else:
-                print(f"  ✓ Users: {user_count_check}")
-
-        if expected["movies"] is not None:
-            if movie_count_check != expected["movies"]:
-                print(
-                    f"  ❌ Movies: expected {expected['movies']}, "
-                    f"got {movie_count_check}"
-                )
-                expected_passed = False
-            else:
-                print(f"  ✓ Movies: {movie_count_check}")
-
-        if expected["rated"] is not None:
-            if rated_count_check != expected["rated"]:
-                print(
-                    f"  ❌ RATED edges: expected {expected['rated']}, "
-                    f"got {rated_count_check}"
-                )
-                expected_passed = False
-            else:
-                print(f"  ✓ RATED edges: {rated_count_check}")
-
-        if expected["tagged"] is not None:
-            if tagged_count_check != expected["tagged"]:
-                print(
-                    f"  ❌ TAGGED edges: expected {expected['tagged']}, "
-                    f"got {tagged_count_check}"
-                )
-                expected_passed = False
-            else:
-                print(f"  ✓ TAGGED edges: {tagged_count_check}")
-
-        if expected["user1_ratings"] is not None:
-            if user1_ratings != expected["user1_ratings"]:
-                print(
-                    f"  ❌ User #1 ratings: expected "
-                    f"{expected['user1_ratings']}, got {user1_ratings}"
-                )
-                expected_passed = False
-            else:
-                print(f"  ✓ User #1 ratings: {user1_ratings}")
-
-        if expected["user1_tags"] is not None:
-            if user1_tags != expected["user1_tags"]:
-                print(
-                    f"  ❌ User #1 tags: expected "
-                    f"{expected['user1_tags']}, got {user1_tags}"
-                )
-                expected_passed = False
-            else:
-                print(f"  ✓ User #1 tags: {user1_tags}")
-
-        if expected["movie1_title"] is not None:
-            if movie1_title != expected["movie1_title"]:
-                print(
-                    f"  ❌ Movie #1 title: expected "
-                    f"'{expected['movie1_title']}', got '{movie1_title}'"
-                )
-                expected_passed = False
-            else:
-                print(f"  ✓ Movie #1 title: {movie1_title}")
-
-        if expected["movie1_genres"] is not None:
-            if movie1_genres != expected["movie1_genres"]:
-                print(
-                    f"  ❌ Movie #1 genres: expected "
-                    f"'{expected['movie1_genres']}', got '{movie1_genres}'"
-                )
-                expected_passed = False
-            else:
-                print(f"  ✓ Movie #1 genres: {movie1_genres}")
-
-        if expected_passed:
-            print("  ✅ All expected baseline values match!")
-        else:
-            print("  ⚠️  Some expected values don't match!")
-            validation_passed = False
+    # Use shared validation function
+    counts_dict, samples_dict, validation_passed = validate_counts_and_samples(
+        db=db,
+        size=size,
+        expected_user_count=user_count,
+        expected_movie_count=movie_count,
+        expected_rated_count=edge_count,
+        expected_tagged_count=tagged_count,
+        check_baseline=check_baseline,
+        indent="",
+    )
 
     print()
     print()
@@ -1338,21 +1520,6 @@ def validate_and_query(
     # Update overall validation status
     validation_passed = validation_passed and query_validation_passed
 
-    # Package results in EXPECTED_RESULTS format
-    counts_dict = {
-        "users": user_count_check,
-        "movies": movie_count_check,
-        "rated": rated_count_check,
-        "tagged": tagged_count_check,
-    }
-
-    samples_dict = {
-        "user1_ratings": user1_ratings,
-        "user1_tags": user1_tags,
-        "movie1_title": movie1_title,
-        "movie1_genres": movie1_genres,
-    }
-
     results = (counts_dict, samples_dict, query_results)
 
     elapsed = time.time() - start_time
@@ -1366,24 +1533,6 @@ def validate_and_query(
     print()
 
     return results, validation_passed
-
-
-def validate_results(
-    db: Any,
-    size: str,
-    user_count: int,
-    movie_count: int,
-    edge_count: int,
-    tagged_count: int,
-):
-    """
-    DEPRECATED: Use validate_and_query() instead.
-    Kept for backwards compatibility.
-    """
-    query_results, validation_passed = validate_and_query(
-        db, size, user_count, movie_count, edge_count, tagged_count, check_baseline=True
-    )
-    return validation_passed
 
 
 def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
@@ -1973,542 +2122,6 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     print()
 
     return results, all_passed
-    print()
-
-    # Query 2: High-Rated Movies by User (SQL with Edge Filtering)
-    print("Query 2: Movies rated 5.0 by User #1 (SQL - Edge Property Filter)")
-    print("-" * 70)
-    start = time.time()
-    result = db.query(
-        "sql",
-        """
-        SELECT expand(outE('RATED')[rating = 5.0].inV())
-        FROM User WHERE userId = 1
-        """,
-    )
-    high_rated = list(result)
-    elapsed = time.time() - start
-
-    query2_result = {
-        "name": "Query 2: Movies rated 5.0 by User #1 (SQL - Edge Property Filter)",
-        "count": len(high_rated),
-    }
-    results.append(query2_result)
-
-    print(f"  Found {len(high_rated)} movies with 5.0 rating in {elapsed:.3f}s")
-    if high_rated:
-        for i, movie in enumerate(high_rated[:3]):
-            print(f"  {i+1}. {movie.get_property('title')}")
-
-    if check_baseline and len(expected_queries) > 1:
-        expected_count = expected_queries[1].get("count")
-        if expected_count is not None and len(high_rated) != expected_count:
-            print(
-                f"  ❌ Count mismatch: expected {expected_count}, "
-                f"got {len(high_rated)}"
-            )
-            all_passed = False
-        elif expected_count is not None:
-            print(f"  ✓ Count matches baseline: {len(high_rated)}")
-    print()
-
-    # Query 3: Rating Statistics per User (SQL Aggregations)
-    print("Query 3: Rating statistics for top 5 active users (SQL - Aggregations)")
-    print("-" * 70)
-    start = time.time()
-    result = db.query(
-        "sql",
-        """
-     SELECT u.userId as userId,
-         COUNT(e) as num_ratings,
-         AVG(e.rating) as avg_rating,
-         MIN(e.rating) as min_rating,
-         MAX(e.rating) as max_rating
-     FROM (
-       MATCH {type: User, as: u}.outE('RATED'){as: e} RETURN u,e
-     )
-     GROUP BY u.userId
-     ORDER BY num_ratings DESC
-     LIMIT 5
-        """,
-    )
-    stats = list(result)
-    elapsed = time.time() - start
-
-    query3_result = {
-        "name": "Query 3: Rating statistics for top 5 active users (SQL - Aggregations)",
-        "count": len(stats),
-        "sample": {},
-    }
-    if stats:
-        top_user = stats[0]
-        query3_result["sample"]["top_user_id"] = top_user.get_property("userId")
-        query3_result["sample"]["top_user_ratings"] = top_user.get_property(
-            "num_ratings"
-        )
-    results.append(query3_result)
-
-    print(f"  Computed statistics for top users in {elapsed:.3f}s")
-    print(f"  {'User':<8} {'#Ratings':<10} {'Avg':<8} {'Min':<6} {'Max':<6}")
-    print(f"  {'-'*8} {'-'*10} {'-'*8} {'-'*6} {'-'*6}")
-    for record in stats:
-        user_id = record.get_property("userId")
-        num = record.get_property("num_ratings")
-        avg = record.get_property("avg_rating")
-        min_r = record.get_property("min_rating")
-        max_r = record.get_property("max_rating")
-        print(f"  {user_id:<8} {num:<10} {avg:<8.2f} {min_r:<6.1f} {max_r:<6.1f}")
-
-    if check_baseline and len(expected_queries) > 2:
-        expected_sample = expected_queries[2].get("sample", {})
-        exp_top_id = expected_sample.get("top_user_id")
-        exp_top_ratings = expected_sample.get("top_user_ratings")
-
-        if exp_top_id is not None and stats:
-            actual_top_id = stats[0].get_property("userId")
-            if actual_top_id != exp_top_id:
-                print(
-                    f"  ❌ Top user mismatch: expected {exp_top_id}, got {actual_top_id}"
-                )
-                all_passed = False
-            else:
-                print(f"  ✓ Top user matches baseline: {actual_top_id}")
-
-        if exp_top_ratings is not None and stats:
-            actual_ratings = stats[0].get_property("num_ratings")
-            if actual_ratings != exp_top_ratings:
-                print(
-                    f"  ❌ Top user ratings mismatch: expected {exp_top_ratings}, got {actual_ratings}"
-                )
-                all_passed = False
-            else:
-                print(f"  ✓ Top user ratings match baseline: {actual_ratings}")
-    print()
-
-    # Query 4: Most Rated Movies (SQL Aggregations)
-    print("Query 4: Top 10 most rated movies (SQL - Aggregations)")
-    print("-" * 70)
-    start = time.time()
-    result = db.query(
-        "sql",
-        """
-        SELECT m.movieId as movieId,
-               m.title as title,
-               COUNT(e) as num_ratings,
-               AVG(e.rating) as avg_rating
-        FROM (
-          MATCH {type: Movie, as: m}.inE('RATED'){as: e} RETURN m, e
-        )
-        GROUP BY m.movieId, m.title
-        ORDER BY num_ratings DESC
-        LIMIT 10
-        """,
-    )
-    top_movies = list(result)
-    elapsed = time.time() - start
-
-    query4_result = {
-        "name": "Query 4: Top 10 most rated movies (SQL - Aggregations)",
-        "count": len(top_movies),
-        "sample": {},
-    }
-    if top_movies:
-        top_movie = top_movies[0]
-        query4_result["sample"]["top_movie"] = top_movie.get_property("title")
-        query4_result["sample"]["top_movie_count"] = top_movie.get_property(
-            "num_ratings"
-        )
-    results.append(query4_result)
-
-    print(f"  Found top 10 movies in {elapsed:.3f}s")
-    print(f"  {'#':<4} {'Title':<50} {'Ratings':<10} {'Avg':<6}")
-    print(f"  {'-'*4} {'-'*50} {'-'*10} {'-'*6}")
-    for i, record in enumerate(top_movies, 1):
-        title = record.get_property("title")
-        num = record.get_property("num_ratings")
-        avg = record.get_property("avg_rating")
-        print(f"  {i:<4} {title:<50.50} {num:<10} {avg:<6.2f}")
-
-    if check_baseline and len(expected_queries) > 3:
-        expected_sample = expected_queries[3].get("sample", {})
-        exp_top_movie = expected_sample.get("top_movie")
-        exp_top_count = expected_sample.get("top_movie_count")
-
-        if exp_top_movie is not None and top_movies:
-            actual_movie = top_movies[0].get_property("title")
-            if actual_movie != exp_top_movie:
-                print(
-                    f"  ❌ Top movie mismatch: expected '{exp_top_movie}', got '{actual_movie}'"
-                )
-                all_passed = False
-            else:
-                print(f"  ✓ Top movie matches baseline: {actual_movie}")
-
-        if exp_top_count is not None and top_movies:
-            actual_count = top_movies[0].get_property("num_ratings")
-            if actual_count != exp_top_count:
-                print(
-                    f"  ❌ Top movie count mismatch: expected {exp_top_count}, got {actual_count}"
-                )
-                all_passed = False
-            else:
-                print(f"  ✓ Top movie count matches baseline: {actual_count}")
-    print()
-
-    # Query 5: Most Tagged Movies (SQL Aggregations)
-    print("Query 5: Top 10 most tagged movies (SQL - Aggregations)")
-    print("-" * 70)
-    start = time.time()
-    result = db.query(
-        "sql",
-        """
-        SELECT m.movieId as movieId,
-               m.title as title,
-               COUNT(e) as num_tags
-        FROM (
-          MATCH {type: Movie, as: m}.inE('TAGGED'){as: e} RETURN m, e
-        )
-        GROUP BY m.movieId, m.title
-        ORDER BY num_tags DESC
-        LIMIT 10
-        """,
-    )
-    tagged_movies = list(result)
-    elapsed = time.time() - start
-
-    query5_result = {
-        "name": "Query 5: Top 10 most tagged movies (SQL - Aggregations)",
-        "count": len(tagged_movies),
-        "sample": {},
-    }
-    if tagged_movies:
-        top_tagged = tagged_movies[0]
-        query5_result["sample"]["top_movie"] = top_tagged.get_property("title")
-        query5_result["sample"]["top_movie_tags"] = top_tagged.get_property("num_tags")
-    results.append(query5_result)
-
-    print(f"  Found top 10 tagged movies in {elapsed:.3f}s")
-    print(f"  {'#':<4} {'Title':<50} {'Tags':<6}")
-    print(f"  {'-'*4} {'-'*50} {'-'*6}")
-    for i, record in enumerate(tagged_movies, 1):
-        title = record.get_property("title")
-        num = record.get_property("num_tags")
-        print(f"  {i:<4} {title:<50.50} {num:<6}")
-
-    if check_baseline and len(expected_queries) > 4:
-        expected_sample = expected_queries[4].get("sample", {})
-        exp_top_movie = expected_sample.get("top_movie")
-        exp_top_tags = expected_sample.get("top_movie_tags")
-
-        if exp_top_movie is not None and tagged_movies:
-            actual_movie = tagged_movies[0].get_property("title")
-            if actual_movie != exp_top_movie:
-                print(
-                    f"  ❌ Most tagged mismatch: expected '{exp_top_movie}', got '{actual_movie}'"
-                )
-                all_passed = False
-            else:
-                print(f"  ✓ Most tagged matches baseline: {actual_movie}")
-
-        if exp_top_tags is not None and tagged_movies:
-            actual_tags = tagged_movies[0].get_property("num_tags")
-            if actual_tags != exp_top_tags:
-                print(
-                    f"  ❌ Tag count mismatch: expected {exp_top_tags}, got {actual_tags}"
-                )
-                all_passed = False
-            else:
-                print(f"  ✓ Tag count matches baseline: {actual_tags}")
-    print()
-
-    # Query 6: Collaborative Filtering - Same Movies (SQL MATCH)
-    print("Query 6: Users who rated same movies as User #1 (SQL - MATCH Pattern)")
-    print("-" * 70)
-    start = time.time()
-    result = db.query(
-        "sql",
-        """
-        SELECT friend.userId as other_user,
-               movie.title as common_movie,
-               a.rating as my_rating,
-               b.rating as their_rating
-        FROM (
-          MATCH {type: User, where: (userId = 1), as: me}
-                .outE('RATED'){as: a}
-                .inV(){as: movie}
-                .inE('RATED'){as: b}
-                .outV(){as: friend, where: (userId != 1)}
-          RETURN me, friend, movie, a, b
-        )
-        """,
-    )
-    collaborative = list(result)
-    elapsed = time.time() - start
-
-    query6_result = {
-        "name": "Query 6: Users who rated same movies as User #1 (SQL - MATCH Pattern)",
-        "count": len(collaborative),
-    }
-    results.append(query6_result)
-
-    print(f"  Found {len(collaborative)} collaborative patterns in {elapsed:.3f}s")
-    print(f"  {'User':<8} {'Movie':<40} {'My':<6} {'Their':<6}")
-    print(f"  {'-'*8} {'-'*40} {'-'*6} {'-'*6}")
-    for i, record in enumerate(collaborative):
-        if i >= 10:  # Only display first 10
-            break
-        other = record.get_property("other_user")
-        movie = record.get_property("common_movie")
-        my_r = record.get_property("my_rating")
-        their_r = record.get_property("their_rating")
-        print(f"  {other:<8} {movie:<40.40} {my_r:<6.1f} {their_r:<6.1f}")
-
-    if check_baseline and len(expected_queries) > 5:
-        expected_count = expected_queries[5].get("count")
-        if expected_count is not None and len(collaborative) != expected_count:
-            print(
-                f"  ❌ Count mismatch: expected {expected_count}, got {len(collaborative)}"
-            )
-            all_passed = False
-        elif expected_count is not None:
-            print(f"  ✓ Count matches baseline: {len(collaborative)}")
-    print()
-
-    # Query 7: Users with Similar Tastes (SQL MATCH with Aggregation)
-    print("Query 7: Users with similar taste to User #1 (SQL - MATCH + Aggregation)")
-    print("-" * 70)
-    start = time.time()
-    result = db.query(
-        "sql",
-        """
-        SELECT friend.userId as similar_user,
-               count(*) as shared_high_ratings
-        FROM (
-          MATCH {type: User, where: (userId = 1)}
-                .outE('RATED'){where: (rating >= 4.5), as: myRating}
-                .inV(){as: movie}
-                .inE('RATED'){where: (rating >= 4.5), as: theirRating}
-                .outV(){where: (userId != 1), as: friend}
-          RETURN friend
-        )
-        GROUP BY friend.userId
-        ORDER BY shared_high_ratings DESC
-        """,
-    )
-    similar_users = list(result)
-    elapsed = time.time() - start
-
-    query7_result = {
-        "name": "Query 7: Users with similar taste to User #1 (SQL - MATCH + Aggregation)",
-        "count": len(similar_users),
-    }
-    results.append(query7_result)
-
-    print(f"  Found {len(similar_users)} similar users in {elapsed:.3f}s")
-    print(f"  {'User':<8} {'Shared High Ratings':<20}")
-    print(f"  {'-'*8} {'-'*20}")
-    for i, record in enumerate(similar_users):
-        if i >= 10:  # Only display first 10
-            break
-        user = record.get_property("similar_user")
-        shared = record.get_property("shared_high_ratings")
-        print(f"  {user:<8} {shared:<20}")
-
-    if check_baseline and len(expected_queries) > 6:
-        expected_count = expected_queries[6].get("count")
-        if expected_count is not None and len(similar_users) != expected_count:
-            print(
-                f"  ❌ Count mismatch: expected {expected_count}, got {len(similar_users)}"
-            )
-            all_passed = False
-        elif expected_count is not None:
-            print(f"  ✓ Count matches baseline: {len(similar_users)}")
-    print()
-
-    # Query 8: Rating Distribution (SQL Aggregation)
-    print("Query 8: Rating distribution across all ratings (SQL - Aggregation)")
-    print("-" * 70)
-    start = time.time()
-    result = db.query(
-        "sql",
-        """
-        SELECT rating, count(*) as frequency
-        FROM RATED
-        GROUP BY rating
-        ORDER BY rating
-        """,
-    )
-    distribution = list(result)
-    elapsed = time.time() - start
-
-    query8_result = {
-        "name": "Query 8: Rating distribution across all ratings (SQL - Aggregation)",
-        "count": len(distribution),
-    }
-    results.append(query8_result)
-
-    print(f"  Computed distribution in {elapsed:.3f}s")
-    print(f"  {'Rating':<10} {'Frequency':<12} {'Bar':<40}")
-    print(f"  {'-'*10} {'-'*12} {'-'*40}")
-    if distribution:
-        max_freq = max(r.get_property("frequency") for r in distribution)
-    else:
-        max_freq = 1
-    for record in distribution:
-        rating = record.get_property("rating")
-        freq = record.get_property("frequency")
-        bar_len = int((freq / max_freq) * 40)
-        bar = "█" * bar_len
-        print(f"  {rating:<10.1f} {freq:<12,} {bar}")
-
-    if check_baseline and len(expected_queries) > 7:
-        expected_count = expected_queries[7].get("count")
-        if expected_count is not None and len(distribution) != expected_count:
-            print(
-                f"  ❌ Count mismatch: expected {expected_count}, got {len(distribution)}"
-            )
-            all_passed = False
-        elif expected_count is not None:
-            print(f"  ✓ Count matches baseline: {len(distribution)}")
-    print()
-
-    # Query 9: Basic Cypher Pattern
-    print("Query 9: User #1's top-rated movies (Cypher - Basic Pattern)")
-    print("-" * 70)
-    start = time.time()
-    result = db.query(
-        "cypher",
-        """
-        MATCH (u:User {userId: 1})-[r:RATED]->(m:Movie)
-        WHERE r.rating >= 4.0
-        RETURN m.title as title, r.rating as rating
-        ORDER BY r.rating DESC
-        """,
-    )
-    cypher_results = list(result)
-    elapsed = time.time() - start
-
-    query9_result = {
-        "name": "Query 9: User #1's top-rated movies (Cypher - Basic Pattern)",
-        "count": len(cypher_results),
-    }
-    results.append(query9_result)
-
-    print(f"  Found {len(cypher_results)} movies in {elapsed:.3f}s")
-    print(f"  {'#':<4} {'Title':<50} {'Rating':<8}")
-    print(f"  {'-'*4} {'-'*50} {'-'*8}")
-    for i, record in enumerate(cypher_results):
-        if i >= 10:  # Only display first 10
-            break
-        title = record.get_property("title")
-        rating = record.get_property("rating")
-        print(f"  {i+1:<4} {title:<50.50} {rating:<8.1f}")
-
-    if check_baseline and len(expected_queries) > 8:
-        expected_count = expected_queries[8].get("count")
-        if expected_count is not None and len(cypher_results) != expected_count:
-            print(
-                f"  ❌ Count mismatch: expected {expected_count}, got {len(cypher_results)}"
-            )
-            all_passed = False
-        elif expected_count is not None:
-            print(f"  ✓ Count matches baseline: {len(cypher_results)}")
-    print()
-
-    # Query 10: Collaborative Filtering (Cypher)
-    print("Query 10: Users who rated same movies as User #1 (Cypher - Pattern)")
-    print("-" * 70)
-    start = time.time()
-    result = db.query(
-        "cypher",
-        """
-        MATCH (u1:User {userId: 1})-[:RATED]->(m:Movie)<-[:RATED]-(u2:User)
-        WHERE u2.userId <> 1
-        RETURN u2.userId as other_user, count(m) as shared_movies
-        ORDER BY shared_movies DESC
-        """,
-    )
-    collab_cypher = list(result)
-    elapsed = time.time() - start
-
-    query10_result = {
-        "name": "Query 10: Users who rated same movies as User #1 (Cypher - Pattern)",
-        "count": len(collab_cypher),
-        "sample": {},
-    }
-    if collab_cypher:
-        top_user = collab_cypher[0]
-        query10_result["sample"]["top_user_id"] = top_user.get_property("other_user")
-        query10_result["sample"]["top_shared"] = top_user.get_property("shared_movies")
-    results.append(query10_result)
-
-    print(f"  Found {len(collab_cypher)} users in {elapsed:.3f}s")
-    print(f"  {'User':<8} {'Shared Movies':<15}")
-    print(f"  {'-'*8} {'-'*15}")
-    for i, record in enumerate(collab_cypher):
-        if i >= 10:  # Only display first 10
-            break
-        user = record.get_property("other_user")
-        shared = record.get_property("shared_movies")
-        print(f"  {user:<8} {shared:<15}")
-
-    if check_baseline and len(expected_queries) > 9:
-        expected_sample = expected_queries[9].get("sample", {})
-        exp_top_id = expected_sample.get("top_user_id")
-        exp_top_shared = expected_sample.get("top_shared")
-
-        if exp_top_id is not None and collab_cypher:
-            actual_top_id = collab_cypher[0].get_property("other_user")
-            if actual_top_id != exp_top_id:
-                print(
-                    f"  ❌ Top user mismatch: expected {exp_top_id}, got {actual_top_id}"
-                )
-                all_passed = False
-            else:
-                print(f"  ✓ Top user matches baseline: {actual_top_id}")
-
-        if exp_top_shared is not None and collab_cypher:
-            actual_shared = collab_cypher[0].get_property("shared_movies")
-            if actual_shared != exp_top_shared:
-                print(
-                    f"  ❌ Shared count mismatch: expected {exp_top_shared}, got {actual_shared}"
-                )
-                all_passed = False
-            else:
-                print(f"  ✓ Shared count matches baseline: {actual_shared}")
-    print()
-
-    # Print summary
-    print("=" * 70)
-    if check_baseline:
-        if all_passed:
-            print("✅ All results match baseline!")
-        else:
-            print("❌ Some results differ from baseline!")
-    else:
-        print("ℹ️  Baseline checking disabled (no expected values)")
-    print("=" * 70)
-    print()
-
-    # Output JSON for easy copy-paste into EXPECTED_RESULTS
-    print("📋 Query Results (JSON format for EXPECTED_RESULTS):")
-    print("-" * 70)
-    print(json.dumps(results, indent=8))
-    print("-" * 70)
-    print()
-
-    return results, all_passed
-
-
-def run_advanced_queries(db: Any, size: str):
-    """
-    DEPRECATED: Use validate_and_query() or run_and_validate_queries() instead.
-
-    This function is kept for backwards compatibility but just wraps
-    run_and_validate_queries().
-    """
-    _, validation_passed = run_and_validate_queries(db, size, check_baseline=True)
-    return validation_passed
 
 
 def main():
@@ -2565,11 +2178,6 @@ def main():
         default=None,
         help="Import from JSONL export instead of using source-db "
         "(e.g., ./exports/ml_small_db.jsonl.tgz)",
-    )
-    parser.add_argument(
-        "--skip-queries",
-        action="store_true",
-        help="Skip advanced graph queries (faster for benchmarking)",
     )
     parser.add_argument(
         "--export",
@@ -2717,46 +2325,34 @@ def main():
     print("Step 5: Validation & Query Testing")
     print("=" * 70)
 
-    query_results_before = []
-    validation_passed_before = False
+    with arcadedb.open_database(str(graph_db_path)) as db:
+        query_results_before, validation_passed_before = validate_and_query(
+            db,
+            args.size,
+            user_count,
+            movie_count,
+            rated_count,
+            tagged_count,
+            check_baseline=True,
+        )
 
-    if not args.skip_queries:
-        with arcadedb.open_database(str(graph_db_path)) as db:
-            query_results_before, validation_passed_before = validate_and_query(
-                db,
-                args.size,
-                user_count,
-                movie_count,
-                rated_count,
-                tagged_count,
-                check_baseline=True,
+    # Save query results for easy copy-paste
+    if query_results_before:
+        try:
+            results_file = save_query_results(
+                query_results_before, args.size, graph_db_path
             )
+            print(f"💾 Query results saved to: {results_file}")
+            print()
+        except Exception as e:
+            print(f"⚠️  Failed to save query results: {e}")
+            print()
 
-        # Save query results for easy copy-paste
-        if query_results_before:
-            try:
-                results_file = save_query_results(
-                    query_results_before, args.size, graph_db_path
-                )
-                print(f"💾 Query results saved to: {results_file}")
-                print()
-            except Exception as e:
-                print(f"⚠️  Failed to save query results: {e}")
-                print()
-
-        if validation_passed_before:
-            print("✅ Step 5: All validation & queries passed!")
-        else:
-            print("❌ Step 5: Some validations or queries failed!")
-        print()
+    if validation_passed_before:
+        print("✅ Step 5: All validation & queries passed!")
     else:
-        # Still run basic validation even if queries are skipped
-        with arcadedb.open_database(str(graph_db_path)) as db:
-            validate_results(
-                db, args.size, user_count, movie_count, rated_count, tagged_count
-            )
-        print("⏭️  Query testing skipped (--skip-queries flag)")
-        print()
+        print("❌ Step 5: Some validations or queries failed!")
+    print()
 
     # Step 6: Export Database (Optional)
     export_filename = None
@@ -2874,122 +2470,30 @@ def main():
                     print(f"   ⏱️  Rate: {import_rate:,.0f} records/sec")
                     print()
 
-                    # Verify record counts match
-                    print("   🔍 Verifying record counts...")
-                    validation_passed = True
-
-                    # Count vertices
-                    result = list(
-                        roundtrip_db.query("sql", "SELECT count(*) as count FROM User")
+                    # Use shared validation function
+                    print("   🔍 Verifying roundtrip database...")
+                    _, _, validation_passed = validate_counts_and_samples(
+                        db=roundtrip_db,
+                        size=args.size,
+                        expected_user_count=user_count,
+                        expected_movie_count=movie_count,
+                        expected_rated_count=rated_count,
+                        expected_tagged_count=tagged_count,
+                        check_baseline=True,
+                        indent="   ",
                     )
-                    rt_user_count = result[0].get_property("count")
-
-                    result = list(
-                        roundtrip_db.query("sql", "SELECT count(*) as count FROM Movie")
-                    )
-                    rt_movie_count = result[0].get_property("count")
-
-                    # Count edges
-                    result = list(
-                        roundtrip_db.query("sql", "SELECT count(*) as count FROM RATED")
-                    )
-                    rt_rated_count = result[0].get_property("count")
-
-                    result = list(
-                        roundtrip_db.query(
-                            "sql", "SELECT count(*) as count FROM TAGGED"
-                        )
-                    )
-                    rt_tagged_count = result[0].get_property("count")
-
-                    # Compare counts
-                    if rt_user_count == user_count:
-                        print(f"      ✅ Users: {rt_user_count:,} (matches)")
-                    else:
-                        print(
-                            f"      ❌ Users: {rt_user_count:,} (expected {user_count:,})"
-                        )
-                        validation_passed = False
-
-                    if rt_movie_count == movie_count:
-                        print(f"      ✅ Movies: {rt_movie_count:,} (matches)")
-                    else:
-                        print(
-                            f"      ❌ Movies: {rt_movie_count:,} (expected {movie_count:,})"
-                        )
-                        validation_passed = False
-
-                    if rt_rated_count == rated_count:
-                        print(f"      ✅ RATED edges: {rt_rated_count:,} (matches)")
-                    else:
-                        print(
-                            f"      ❌ RATED edges: {rt_rated_count:,} (expected {rated_count:,})"
-                        )
-                        validation_passed = False
-
-                    if rt_tagged_count == tagged_count:
-                        print(f"      ✅ TAGGED edges: {rt_tagged_count:,} (matches)")
-                    else:
-                        print(
-                            f"      ❌ TAGGED edges: {rt_tagged_count:,} (expected {tagged_count:,})"
-                        )
-                        validation_passed = False
-
-                    print()
-
-                    # Verify sample data
-                    print("   🔍 Verifying sample data (User #1)...")
-                    sample_user_query = """
-                        SELECT out('RATED').size() as rating_count,
-                               out('TAGGED').size() as tag_count
-                        FROM User
-                        WHERE userId = 1
-                    """
-                    sample_results = list(roundtrip_db.query("sql", sample_user_query))
-                    if sample_results:
-                        rt_user1_ratings = sample_results[0].get_property(
-                            "rating_count"
-                        )
-                        rt_user1_tags = sample_results[0].get_property("tag_count")
-
-                        # Get expected values
-                        expected = get_expected_values(args.size)
-                        exp_ratings = expected.get("user1_ratings", 0)
-                        exp_tags = expected.get("user1_tags", 0)
-
-                        if rt_user1_ratings == exp_ratings:
-                            print(
-                                f"      ✅ User #1 ratings: {rt_user1_ratings} (matches)"
-                            )
-                        else:
-                            print(
-                                f"      ❌ User #1 ratings: {rt_user1_ratings} (expected {exp_ratings})"
-                            )
-                            validation_passed = False
-
-                        if rt_user1_tags == exp_tags:
-                            print(f"      ✅ User #1 tags: {rt_user1_tags} (matches)")
-                        else:
-                            print(
-                                f"      ❌ User #1 tags: {rt_user1_tags} (expected {exp_tags})"
-                            )
-                            validation_passed = False
-
                     print()
 
                     # Run queries on roundtrip database and validate against baseline
-                    if not args.skip_queries:
-                        print("   🔍 Running queries on roundtrip database...")
-                        print()
+                    print("   🔍 Running queries on roundtrip database...")
+                    print()
 
-                        _, validation_passed_after = run_and_validate_queries(
-                            roundtrip_db, args.size, check_baseline=True
-                        )
+                    _, validation_passed_after = run_and_validate_queries(
+                        roundtrip_db, args.size, check_baseline=True
+                    )
 
-                        validation_passed = (
-                            validation_passed and validation_passed_after
-                        )
-                        print()
+                    validation_passed = validation_passed and validation_passed_after
+                    print()
 
                     # Report roundtrip times
                     total_roundtrip_time = export_time + roundtrip_import_time

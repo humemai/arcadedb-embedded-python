@@ -18,8 +18,8 @@ Semantic similarity search with HNSW indexing. Demonstrates API but not producti
 **[04 - CSV Import - Documents](04_csv_import_documents.md)** ✅
 Production CSV import with automatic type inference by Java, NULL handling, and index optimization. Imports MovieLens dataset (36M+ records) with comprehensive performance analysis and result validation with actual data samples.
 
-**[05 - CSV Import - Graph](05_csv_import_graph.md)** 🚧 **COMING SOON**
-Import MovieLens dataset as graph structures. Users and Movies become vertices, ratings and tags become edges. Demonstrates foreign key resolution and graph traversal patterns on familiar data.
+**[05 - CSV Import - Graph](05_csv_import_graph.md)** ✅
+Production graph creation from MovieLens dataset. Comprehensive performance analysis comparing Java API vs SQL, synchronous vs async, with/without indexes. 6 benchmark configurations, 10 validation queries, export/import roundtrip testing. Learn when to use Java API (bulk operations: 5,071 edges/sec) vs SQL (complex queries).
 
 **[06 - Vector Search - Movie Recommendations](06_vector_search_movies.md)** 🚧 **COMING SOON**
 Semantic similarity search with MovieLens data. Generate embeddings from movie titles/genres, find similar movies using HNSW index, combine with rating data for recommendations.
