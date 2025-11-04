@@ -1873,11 +1873,16 @@ if args.export and export_filename:
     print(f"   💡 Import settings: {import_params}")
     print()
 
+    # Initialize roundtrip_results to None in case import fails
+    roundtrip_results = None
+
     try:
         import_start = time.time()
 
         # Use SQL IMPORT DATABASE command with performance parameters
         import_path = os.path.abspath(actual_export_path)
+        # Convert Windows backslashes to forward slashes for SQL URI
+        import_path = import_path.replace("\\", "/")
         import_sql = f"IMPORT DATABASE file://{import_path} WITH {import_params}"
         roundtrip_db.command("sql", import_sql)
 
@@ -2045,20 +2050,23 @@ if args.export and export_filename:
     print("📊 FINAL VALIDATION: Comparing All Query Runs")
     print("=" * 70)
     print()
-    print("   Comparing results from:")
-    print("   1️⃣  Before indexes (Step 8)")
-    print("   2️⃣  After indexes (Step 10)")
-    print("   3️⃣  After roundtrip (Step 14)")
-    print()
 
-    all_three_match = True
+    # Only do final validation if roundtrip succeeded
+    if roundtrip_results is not None:
+        print("   Comparing results from:")
+        print("   1️⃣  Before indexes (Step 8)")
+        print("   2️⃣  After indexes (Step 10)")
+        print("   3️⃣  After roundtrip (Step 14)")
+        print()
 
-    for i, query_info in enumerate(TEST_QUERIES):
-        query_name = query_info[0]
+        all_three_match = True
 
-        before_idx = times_without_indexes[i]
-        after_idx = times_with_indexes[i]
-        after_roundtrip = roundtrip_results[i]
+        for i, query_info in enumerate(TEST_QUERIES):
+            query_name = query_info[0]
+
+            before_idx = times_without_indexes[i]
+            after_idx = times_with_indexes[i]
+            after_roundtrip = roundtrip_results[i]
 
         count_before = before_idx["count"]
         count_after = after_idx["count"]
@@ -2077,15 +2085,20 @@ if args.export and export_filename:
             all_three_match = False
         print()
 
-    if all_three_match:
-        print("   ✅ SUCCESS: All query results are consistent!")
-        print("      • Before indexes ✓")
-        print("      • After indexes ✓")
-        print("      • After export/import roundtrip ✓")
+        if all_three_match:
+            print("   ✅ SUCCESS: All query results are consistent!")
+            print("      • Before indexes ✓")
+            print("      • After indexes ✓")
+            print("      • After export/import roundtrip ✓")
+        else:
+            print("   ❌ FAILURE: Query results differ across runs!")
+            print("      This indicates a data integrity issue.")
+        print()
     else:
-        print("   ❌ FAILURE: Query results differ across runs!")
-        print("      This indicates a data integrity issue.")
-    print()
+        print("   ⚠️  Roundtrip validation skipped (import failed)")
+        print("      Cannot compare roundtrip results")
+        print()
+
     print("=" * 70)
     print()
 

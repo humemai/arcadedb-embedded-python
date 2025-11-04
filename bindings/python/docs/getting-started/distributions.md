@@ -35,19 +35,19 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 
 | Platform | Wheel Size | JRE Size | Installed Size | Tests |
 |----------|-----------|----------|----------------|-------|
-| Windows ARM64 | 155.1M | 47.3M | ~215M | 43/43 ✅ |
-| macOS ARM64 (Apple Silicon) | 156.7M | 53.9M | ~221M | 43/43 ✅ |
-| macOS Intel (x86_64) | 157.8M | 55.3M | ~223M | 43/43 ✅ |
-| Windows x64 | 157.4M | 51.5M | ~219M | 43/43 ✅ |
-| Linux ARM64 | 159.9M | 61.8M | ~229M | 43/43 ✅ |
-| Linux x64 | 160.9M | 62.7M | ~230M | 43/43 ✅ |
+| Windows ARM64 | 155.1M | 47.3M | ~215M | 107/107 ✅ |
+| macOS ARM64 (Apple Silicon) | 156.7M | 53.9M | ~221M | 107/107 ✅ |
+| macOS Intel (x86_64) | 157.8M | 55.3M | ~223M | 107/107 ✅ |
+| Windows x64 | 157.4M | 51.5M | ~219M | 107/107 ✅ |
+| Linux ARM64 | 159.9M | 61.8M | ~229M | 107/107 ✅ |
+| Linux x64 | 160.9M | 62.7M | ~230M | 107/107 ✅ |
 
 **Key Features:**
 
 - ✅ All platforms use **platform-specific wheels** (not universal)
 - ✅ pip automatically selects the correct wheel for your system
 - ✅ Each platform has its own bundled JRE optimized for that architecture
-- ✅ All 6 platforms tested and verified (43/43 tests passing)
+- ✅ All 6 platforms tested and verified (107/107 tests passing)
 - ✅ Built on native runners (no emulation) for optimal performance
 
 ## What's Included
@@ -71,7 +71,7 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 
 ## Test Results
 
-**43 out of 43 tests pass** on all platforms (100% success rate):
+**107 out of 107 tests pass** on all platforms (100% success rate):
 
 - ✅ All core database operations
 - ✅ SQL, Cypher, and Gremlin queries

@@ -973,7 +973,9 @@ def import_from_jsonl(jsonl_path: Path, target_db_path: Path) -> float:
     # Import using SQL command
     start_time = time.time()
     with arcadedb.open_database(str(target_db_path)) as db:
-        import_path = jsonl_path.absolute()
+        import_path = str(jsonl_path.absolute())
+        # Convert Windows backslashes to forward slashes for SQL URI
+        import_path = import_path.replace("\\", "/")
         print(f"  📥 Importing from: {import_path}")
         db.command("sql", f"import database file://{import_path}")
 
@@ -2451,6 +2453,8 @@ def main():
 
                     # Use SQL IMPORT DATABASE command
                     import_path = os.path.abspath(actual_export_path)
+                    # Convert Windows backslashes to forward slashes for SQL URI
+                    import_path = import_path.replace("\\", "/")
                     import_sql = f"IMPORT DATABASE file://{import_path}"
                     roundtrip_db.command("sql", import_sql)
 
