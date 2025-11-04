@@ -5,10 +5,10 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 ## Quick Statistics
 
 !!! success "Test Results"
-    - **Current package**: ✅ 43 passed, 0 skipped
+    - **Current package**: ✅ 107 passed, 0 skipped
     - All features available (SQL, Cypher, Gremlin, Studio UI, Vector search)
 
-    **Total: 43 tests** across 6 test files, 100% passing
+    **Total: 107 tests** across 6 test files, 100% passing
 
 ## What's Tested
 
@@ -143,7 +143,7 @@ pytest -m "not slow"
 When all tests pass, you should see:
 
 ```
-======================== 43 passed in 9.67s =========================
+======================== 107 passed in 9.67s =========================
 ```
 
 With some distributions, you may see skipped tests
