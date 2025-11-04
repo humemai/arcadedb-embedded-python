@@ -59,12 +59,12 @@
 # Index creation AFTER import (2-3x faster)
 ```
 
-### 5. **CSV Import: Graph (Vertices & Edges)** 🚧 (Priority: HIGH)
+### 5. **CSV Import: Graph (Vertices & Edges)** ✅ (Priority: HIGH)
 **File**: `05_csv_import_graph.py`
 **Target**: Graph analysts, ETL engineers
-**Concepts**: CSV → Vertices, CSV → Edges, foreign key resolution, relationship mapping, graph traversal
-**Why**: Graph import is different from documents, common migration scenario
-**Status**: 🚧 Planned
+**Concepts**: CSV → Vertices, CSV → Edges, foreign key resolution, relationship mapping, graph traversal, performance benchmarking
+**Why**: Graph import is different from documents, common migration scenario, critical for understanding Java API vs SQL performance
+**Status**: ✅ Complete - MovieLens dataset with comprehensive performance analysis
 **Dataset**: MovieLens (reuses data from Example 04)
 ```python
 # CSV → Vertices: Movie and User nodes from MovieLens dataset
@@ -73,8 +73,10 @@
 # Foreign key resolution (userId → User vertex, movieId → Movie vertex)
 # Edge properties (rating score, timestamp)
 # Graph queries: "Users who rated similar movies", "Movie recommendations"
+# Performance benchmarking: Java API vs SQL, sync vs async, with/without indexes
+# Key findings: java_noasync fastest (5,071 edges/sec), sync 2.5× faster than async
 ```
-**Note**: Builds on Example 04's dataset, showing how same data can be modeled as graph
+**Note**: ✅ Complete with 6 benchmark configurations, 10 validation queries, export/import roundtrip testing
 
 ### 6. **Vector Search: Movie Recommendations** 🚧 (Priority: MEDIUM)
 **File**: `06_vector_search_movies.py`
@@ -139,9 +141,9 @@
 - Graph basics ✅
 - Vector search ✅ (experimental)
 
-### Phase 2: Import Patterns with MovieLens (Examples 4-6)
+### Phase 2: Import Patterns with MovieLens (Examples 4-6) ✅ MOSTLY COMPLETE
 - CSV → Documents ✅ (Example 4 complete - MovieLens dataset)
-- CSV → Graph 🚧 (Example 5 planned - MovieLens as graph)
+- CSV → Graph ✅ (Example 5 complete - MovieLens as graph with comprehensive benchmarking)
 - Vector search on documents 🚧 (Example 6 planned - MovieLens movie similarity)
 
 ### Phase 3: Multi-Model Integration (Example 7)

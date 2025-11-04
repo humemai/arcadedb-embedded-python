@@ -431,16 +431,26 @@ if [ "$SIZE" = "small" ]; then
 
         # Check Step 7 (Roundtrip validation) - only if export was enabled
         if [ ! -z "$EXPORT_FLAG" ]; then
-            if grep -q "✅ Step 7: All validation & queries passed!" "$LOG"; then
-                echo "  Step 7 (Roundtrip):            ✅ PASS"
-            elif grep -q "❌ Step 7: Some validations or queries failed!" "$LOG"; then
-                echo "  Step 7 (Roundtrip):            ❌ FAIL"
+            # Check roundtrip import
+            if grep -q "✅ Import complete in" "$LOG"; then
+                echo "  Step 7a (Roundtrip Import):    ✅ PASS"
             elif grep -q "❌ Roundtrip validation failed:" "$LOG"; then
-                echo "  Step 7 (Roundtrip):            ❌ FAIL"
+                echo "  Step 7a (Roundtrip Import):    ❌ FAIL"
             elif grep -q "Step 7: Roundtrip validation skipped" "$LOG"; then
-                echo "  Step 7 (Roundtrip):            ⏭️  Skipped"
+                echo "  Step 7a (Roundtrip Import):    ⏭️  Skipped"
             else
-                echo "  Step 7 (Roundtrip):            ⚠️  Not found"
+                echo "  Step 7a (Roundtrip Import):    ⚠️  Not found"
+            fi
+
+            # Check roundtrip validation & queries
+            if grep -q "✅ Step 7: All validation & queries passed!" "$LOG"; then
+                echo "  Step 7b (Roundtrip V&Q):       ✅ PASS"
+            elif grep -q "❌ Step 7: Some validations or queries failed!" "$LOG"; then
+                echo "  Step 7b (Roundtrip V&Q):       ❌ FAIL"
+            elif grep -q "Step 7: Roundtrip validation skipped" "$LOG"; then
+                echo "  Step 7b (Roundtrip V&Q):       ⏭️  Skipped"
+            else
+                echo "  Step 7b (Roundtrip V&Q):       ⚠️  Not found"
             fi
         else
             echo "  Step 7 (Roundtrip):            ⏭️  Skipped"

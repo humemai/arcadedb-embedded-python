@@ -69,6 +69,37 @@ Both datasets include intentional NULL values for testing:
 
 For quick testing with the smaller dataset (124,003 records), use: `python download_sample_data.py --size small`
 
+## Usage
+
+```bash
+# Basic usage (large dataset by default)
+python 04_csv_import_documents.py
+
+# Use small dataset for quick testing
+python 04_csv_import_documents.py --size small
+
+# Configure parallel threads and batch size
+python 04_csv_import_documents.py --parallel 8 --batch-size 10000
+
+# Export database for reproducibility
+python 04_csv_import_documents.py --export
+
+# See all options
+python 04_csv_import_documents.py --help
+```
+
+**Key options:**
+- `--size {small,large}` - Dataset size (default: large)
+- `--parallel PARALLEL` - Number of parallel import threads (default: auto-detect)
+- `--batch-size BATCH_SIZE` - Records per commit batch (default: 5000)
+- `--export` - Export database to JSONL after import
+- `--db-name DB_NAME` - Custom database name (default: ml_{size}_db)
+
+**Recommendations:**
+- Parallel threads: 4-8 for best performance (auto-detected by default)
+- Batch size: 5000-50000 (larger = faster imports, more memory)
+- Export: Use `--export` to create reproducible benchmark databases
+
 ## Type Inference by Java
 
 The example uses **automatic type inference** by the Java CSV importer, which analyzes the data and selects optimal ArcadeDB types:
@@ -140,11 +171,21 @@ if null_genres > 0:
     print("   💡 Empty CSV cells correctly imported as SQL NULL")
 ```
 
-**Performance results:**
-- Movies: 224,189 records/sec
-- Ratings: 718,122 records/sec (largest file, highly optimized)
-- Links: 540,856 records/sec
-- Tags: 778,440 records/sec
+**Performance results (small dataset):**
+- Movies: 105,891 records/sec
+- Ratings: 484,788 records/sec (largest file, highly optimized)
+- Links: 374,692 records/sec
+- Tags: 167,409 records/sec
+- **Total: 356,330 records/sec average**
+
+**Performance results (large dataset):**
+- Movies: 288,457 records/sec
+- Ratings: 908,832 records/sec (largest file, highly optimized)
+- Links: 697,879 records/sec
+- Tags: 739,148 records/sec
+- **Total: 890,528 records/sec average**
+
+**Key insight:** Larger datasets show better performance due to more efficient batch processing and reduced per-record overhead.
 
 ### Step 8: Query Performance WITHOUT Indexes
 
