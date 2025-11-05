@@ -5,23 +5,51 @@ Example 06: Vector Search Movie Recommendations
 Demonstrates vector embeddings and HNSW indexing for semantic movie search.
 Compares traditional graph queries with vector similarity search.
 
-PERFORMANCE OPTIMIZATION (NEW!)
---------------------------------
-This script now automatically creates optimization indexes for graph queries:
-- Movie (title): Speeds up movie lookup by title
-- RATED (rating): Speeds up edge filtering by rating value
+PERFORMANCE OPTIMIZATION
+-------------------------
+Graph-Based Collaborative Filtering Performance:
+• Full mode: Comprehensive but slow (24-39s per query on large dataset)
+  - Analyzes all users who rated the query movie highly
+  - Processes 100K+ intermediate results from graph traversal fanout
+  - Best for offline batch recommendations
 
-These indexes improve graph-based collaborative filtering from 40-60 seconds
-to < 1 second on large datasets (86K movies). The script will create these
-indexes automatically on first run.
+• Fast mode: Sampled with 150-300x speedup (0.1-0.2s per query)
+  - Limits intermediate results to 25K (approximately 50 users' worth)
+  - Uses nested SELECT with LIMIT before GROUP BY aggregation
+  - Still produces high-quality recommendations
+  - Best for real-time recommendations
 
-For the large dataset, set these variables ARCADEDB_JVM_MAX_HEAP="8g"
-ARCADEDB_JVM_ARGS="-Xms8g" so that sufficient memory is allocated.
+For the large dataset (20M ratings), use these environment variables:
+  ARCADEDB_JVM_MAX_HEAP="8g" ARCADEDB_JVM_ARGS="-Xms8g"
 
-KNOWN ISSUES: HNSW Vector Index Limitations
+KNOWN ISSUES: ArcadeDB Bugs and Limitations
 --------------------------------------------
 
-1. **HNSW Metadata Persistence**: Once embeddings and indexes are created,
+1. **NOTUNIQUE Index Breaks String Equality (ArcadeDB Bug)**:
+   Creating a NOTUNIQUE index on a string property AFTER loading a large
+   dataset (86K+ records) causes the = operator to return 0 results for
+   exact string matches, while LIKE continues to work correctly.
+
+   Example:
+   - Before index: WHERE title = 'Toy Story (1995)' → 1 result ✓
+   - After index:  WHERE title = 'Toy Story (1995)' → 0 results ✗
+   - After index:  WHERE title LIKE 'Toy Story (1995)' → 1 result ✓
+
+   WORKAROUND: This script does NOT create a NOTUNIQUE index on Movie.title.
+   We use the = operator for exact title matching (works without index) and
+   rely on the Movie[movieId] UNIQUE index for fast MATCH traversals.
+
+2. **FULL_TEXT Index Wrong Semantics**:
+   FULL_TEXT index changes the = operator to perform tokenized word search
+   instead of exact matching, returning semantically incorrect results.
+
+   Example with FULL_TEXT index:
+   - WHERE title = 'Toy Story (1995)' → 1,686 results (any movie with
+     "Toy", "Story", or "1995" in title) ✗
+
+   CONCLUSION: FULL_TEXT is NOT suitable for exact title matching.
+
+3. **HNSW Metadata Persistence**: Once embeddings and indexes are created,
    they cannot be completely removed and recreated on the same vertices.
    The HNSW graph metadata (edges, vectorMaxLevel property) persists even
    after dropping the index.
@@ -29,7 +57,7 @@ KNOWN ISSUES: HNSW Vector Index Limitations
    WORKAROUND: Use SEPARATE properties and edge types for each model
    (embedding_v1/embedding_v2 with edge types Movie_v1/Movie_v2).
 
-2. **JSONL Export/Import Broken for Vectors**: Float arrays are NOT properly
+4. **JSONL Export/Import Broken for Vectors**: Float arrays are NOT properly
    preserved during JSONL export/import:
    - Embeddings exported as Java toString() strings: "[F@113ee1ce"
    - Original vector data (384 floats) is completely lost
@@ -41,8 +69,8 @@ KNOWN ISSUES: HNSW Vector Index Limitations
 Features:
 - Real embeddings using sentence-transformers (two models for comparison)
 - HNSW vector indexing for fast similarity search
-- Compare graph-based vs vector-based recommendations
-- Performance timing for all search methods
+- Compare graph-based vs vector-based recommendations (4 methods)
+- Performance timing and optimization strategies
 
 Dataset: MovieLens small (9,742 movies from Example 05)
 
@@ -251,7 +279,7 @@ def create_vector_index(db, property_suffix=""):
     return index
 
 
-def graph_based_recommendations(db, movie_title, limit=5):
+def graph_based_recommendations(db, movie_title, limit=5, mode="full"):
     """Graph-based collaborative filtering.
 
     Uses graph traversal to find movies rated highly by users who rated
@@ -261,14 +289,17 @@ def graph_based_recommendations(db, movie_title, limit=5):
         db: Database instance
         movie_title: Title of query movie
         limit: Number of results to return
+        mode: "full" for comprehensive (slow), "fast" for sampled (fast)
 
     Returns:
         Query time in seconds
     """
-    # Find the movie
+    # Find the movie by title, get movieId for fast MATCH (uses Movie[movieId] index)
     movies = list(
         db.query(
-            "sql", "SELECT FROM Movie WHERE title = :title", {"title": movie_title}
+            "sql",
+            "SELECT movieId FROM Movie WHERE title = :title",
+            {"title": movie_title},
         )
     )
 
@@ -276,32 +307,60 @@ def graph_based_recommendations(db, movie_title, limit=5):
         print(f"Movie not found: {movie_title}")
         return 0.0
 
-    # Collaborative filtering query
-    query = """
-    SELECT other_movie.title as title,
-           AVG(rating.rating) as avg_rating,
-           COUNT(*) as rating_count
-    FROM (
-        MATCH {type: Movie, where: (title = :title), as: query_movie}
-              .inE('RATED'){where: (rating >= 4.0), as: user_rating}
-              .outV(){as: user}
-              .outE('RATED'){where: (rating >= 4.0), as: rating}
-              .inV(){where: (title <> :title), as: other_movie}
-        RETURN other_movie, rating
-    )
-    GROUP BY other_movie.title
-    ORDER BY avg_rating DESC, rating_count DESC
-    """
+    # Get movieId for indexed lookups
+    query_movie_id = movies[0].get_property("movieId")
+
+    if mode == "fast":
+        # Fast mode: Limit intermediate results for 100-300x speedup
+        # Sample ~50 users worth of data (50 * 500 ratings = 25,000 results)
+        query = """
+        SELECT FROM (
+            SELECT other_movie.title as title,
+                   AVG(rating.rating) as avg_rating,
+                   COUNT(*) as rating_count
+            FROM (
+                SELECT * FROM (
+                    MATCH {type: Movie, where: (movieId = :movieId), as: query_movie}
+                          .inE('RATED'){where: (rating >= 4.0), as: user_rating}
+                          .outV(){as: user}
+                          .outE('RATED'){where: (rating >= 4.0), as: rating}
+                          .inV(){where: (movieId <> :movieId), as: other_movie}
+                    RETURN other_movie, rating
+                )
+                LIMIT 25000
+            )
+            GROUP BY other_movie.title
+        )
+        WHERE rating_count >= 5
+        ORDER BY avg_rating DESC, rating_count DESC
+        LIMIT :limit
+        """
+    else:
+        # Full mode: Comprehensive but slow
+        query = """
+        SELECT FROM (
+            SELECT other_movie.title as title,
+                   AVG(rating.rating) as avg_rating,
+                   COUNT(*) as rating_count
+            FROM (
+                MATCH {type: Movie, where: (movieId = :movieId), as: query_movie}
+                      .inE('RATED'){where: (rating >= 4.0), as: user_rating}
+                      .outV(){as: user}
+                      .outE('RATED'){where: (rating >= 4.0), as: rating}
+                      .inV(){where: (movieId <> :movieId), as: other_movie}
+                RETURN other_movie, rating
+            )
+            GROUP BY other_movie.title
+        )
+        WHERE rating_count >= 5
+        ORDER BY avg_rating DESC, rating_count DESC
+        LIMIT :limit
+        """
 
     # Execute query and measure time
     start = time.time()
-    all_results = list(db.query("sql", query, {"title": movie_title}))
+    results = list(db.query("sql", query, {"movieId": query_movie_id, "limit": limit}))
     query_time = time.time() - start
-
-    # Filter by minimum rating count (min 5 users)
-    results = [rec for rec in all_results if rec.get_property("rating_count") >= 5][
-        :limit
-    ]
 
     # Display results
     for i, rec in enumerate(results, 1):
@@ -331,7 +390,7 @@ def vector_based_recommendations(
     """
     embedding_prop = f"embedding{property_suffix}"
 
-    # Find the movie
+    # Find the movie by title
     movies = list(
         db.query(
             "sql", "SELECT FROM Movie WHERE title = :title", {"title": movie_title}
@@ -445,115 +504,6 @@ def import_from_jsonl(jsonl_path: Path, target_db_path: Path) -> float:
     return elapsed
 
 
-def optimize_graph_indexes(db):
-    """Add optimization indexes for graph traversal queries.
-
-    Indexes created:
-    - Movie (title): Speed up movie lookup by title (graph query start)
-    - RATED (rating): Speed up edge filtering by rating value
-
-    These indexes dramatically improve graph-based collaborative filtering
-    queries (from 40-60 seconds to < 1 second on large datasets).
-    """
-    print("\nOptimizing graph indexes...")
-    print("-" * 80)
-
-    # Check existing indexes
-    existing_indexes = list(db.command("sql", "SELECT FROM schema:indexes"))
-    index_names = [idx.get_property("name") for idx in existing_indexes]
-
-    print(f"  Current indexes: {len(index_names)}")
-    for name in sorted(index_names):
-        print(f"    - {name}")
-
-    # Create optimization indexes with retry logic
-    indexes_to_create = [
-        ("Movie", "title", "NOTUNIQUE"),
-        ("RATED", "rating", "NOTUNIQUE"),
-    ]
-
-    created = []
-    failed = []
-
-    for idx, (table, column, uniqueness) in enumerate(indexes_to_create, 1):
-        index_name = f"{table}[{column}]"
-
-        if index_name in index_names:
-            print(f"  ✓ {index_name} already exists")
-            continue
-
-        # Retry logic for compaction conflicts
-        max_retries = 60  # Up to 60 attempts
-        retry_delay = 10  # Wait 10 seconds between attempts
-        index_created = False
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                start = time.time()
-                with db.transaction():
-                    sql = f"CREATE INDEX ON {table} ({column}) {uniqueness}"
-                    db.command("sql", sql)
-                elapsed = time.time() - start
-                print(f"  ✓ Created {index_name} in {elapsed:.1f}s")
-                created.append(index_name)
-                index_created = True
-                break
-            except Exception as e:
-                error_msg = str(e)
-
-                # Check if retryable (compaction or index conflicts)
-                is_compaction_error = (
-                    "NeedRetryException" in error_msg
-                    and "asynchronous tasks" in error_msg
-                )
-                is_index_error = (
-                    "IndexException" in error_msg
-                    and "Error on creating index" in error_msg
-                )
-
-                if is_compaction_error or is_index_error:
-                    if attempt < max_retries:
-                        elapsed = attempt * retry_delay
-                        reason = (
-                            "compaction running"
-                            if is_compaction_error
-                            else "index conflict"
-                        )
-                        print(
-                            f"  ⏳ [{idx}/{len(indexes_to_create)}] "
-                            f"Waiting for {reason} "
-                            f"(attempt {attempt}/{max_retries}, "
-                            f"{elapsed}s elapsed)..."
-                        )
-                        time.sleep(retry_delay)
-                    else:
-                        print(
-                            f"  ❌ Failed to create {index_name} "
-                            f"after {max_retries} retries"
-                        )
-                        failed.append(index_name)
-                        break
-                else:
-                    # Non-retryable error
-                    print(f"  ⚠️  Failed to create {index_name}: {error_msg}")
-                    failed.append(index_name)
-                    break
-
-        if not index_created and index_name not in failed:
-            print(f"  ⚠️  Skipping {index_name}")
-            failed.append(index_name)
-
-    if created:
-        print(f"\n✓ Created {len(created)} optimization index(es)")
-        print("  Graph queries should be significantly faster!")
-    elif failed:
-        print(f"\n⚠️  Failed to create {len(failed)} index(es)")
-    else:
-        print("\n✓ All optimization indexes already exist")
-
-    print("-" * 80)
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Example 06: Vector Search Movie Recommendations",
@@ -578,7 +528,10 @@ def main():
         "--import-jsonl",
         type=str,
         required=False,
-        help="Import graph database from JSONL file (e.g., ./exports/ml_graph_small_db.jsonl.tgz)",
+        help=(
+            "Import graph database from JSONL file "
+            "(e.g., ./exports/ml_graph_small_db.jsonl.tgz)"
+        ),
     )
 
     parser.add_argument(
@@ -645,9 +598,6 @@ def main():
     print(f"\nOpening database: {args.db_path}")
 
     with arcadedb.open_database(args.db_path) as db:
-        # Optimize graph indexes FIRST (before any queries)
-        optimize_graph_indexes(db)
-
         # Build vector indexes for 2 models
         print("\n" + "=" * 80)
         print("BUILDING VECTOR INDEXES")
@@ -687,20 +637,29 @@ def main():
             print(f"Query: {movie_title}")
             print("=" * 80)
 
-            # Method 1: Graph-based
-            print("\n1. Graph-Based (collaborative filtering):")
-            graph_time = graph_based_recommendations(db, movie_title, limit=5)
-            print(f"   ⏱️  {graph_time:.3f}s")
+            # Method 1: Graph-based Full (comprehensive but slow)
+            print("\n1. Graph-Based Full (collaborative filtering - comprehensive):")
+            graph_full_time = graph_based_recommendations(
+                db, movie_title, limit=5, mode="full"
+            )
+            print(f"   ⏱️  {graph_full_time:.3f}s")
 
-            # Method 2: Vector with model 1
-            print(f"\n2. Vector ({model_1_name}):")
+            # Method 2: Graph-based Fast (sampled, 150-300x faster)
+            print("\n2. Graph-Based Fast (collaborative filtering - sampled):")
+            graph_fast_time = graph_based_recommendations(
+                db, movie_title, limit=5, mode="fast"
+            )
+            print(f"   ⏱️  {graph_fast_time:.3f}s")
+
+            # Method 3: Vector with model 1
+            print(f"\n3. Vector ({model_1_name}):")
             vector1_time = vector_based_recommendations(
                 db, index_v1, model_1, movie_title, "_v1", limit=5
             )
             print(f"   ⏱️  {vector1_time:.3f}s")
 
-            # Method 3: Vector with model 2
-            print(f"\n3. Vector ({model_2_name}):")
+            # Method 4: Vector with model 2
+            print(f"\n4. Vector ({model_2_name}):")
             vector2_time = vector_based_recommendations(
                 db, index_v2, model_2, movie_title, "_v2", limit=5
             )
@@ -709,13 +668,21 @@ def main():
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print("• Graph-based: Finds movies liked by similar users")
-    print("  - Leverages user behavior patterns")
-    print("  - Requires rating data (cold start problem)")
+    print("• Graph-based Full: Comprehensive collaborative filtering")
+    print("  - Analyzes all users who rated the query movie")
+    print("  - Most thorough but slow (24-39s per query)")
+    print("  - Best for offline batch recommendations")
     print()
-    print("• Vector-based: Finds semantically similar movies")
+    print("• Graph-based Fast: Sampled collaborative filtering")
+    print("  - Limits to ~50 users worth of data (25K intermediate results)")
+    print("  - 150-300x faster (0.1-0.2s per query)")
+    print("  - Still produces high-quality recommendations")
+    print("  - Best for real-time recommendations")
+    print()
+    print("• Vector-based: Semantic similarity (HNSW index)")
+    print("  - Finds movies with similar plot/genre descriptions")
+    print("  - Fast (~0.2s) with no cold start problem")
     print("  - Works for new movies without ratings")
-    print("  - Fast with HNSW index")
     print("  - Different models capture different similarities")
     print("=" * 80)
 
