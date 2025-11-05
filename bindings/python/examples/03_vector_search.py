@@ -284,12 +284,17 @@ print()
 print("Step 4: Creating HNSW vector index...")
 step_start = time.time()
 
+# Determine max_items from document count
+num_articles = db.count_type("Article")
+print(f"   📊 Found {num_articles} articles to index")
+print()
+
 print("   💡 HNSW Parameters:")
 print(f"      • dimensions: {EMBEDDING_DIM} (matches embedding size)")
 print("      • distance_function: cosine (best for normalized vectors)")
 print("      • m: 16 (connections per node, higher = more accurate but slower)")
 print("      • ef: 128 (search quality, higher = more accurate)")
-print("      • max_items: 10000 (can index up to 10K documents)")
+print(f"      • max_items: {num_articles} (set to actual document count)")
 print()
 
 with db.transaction():
@@ -297,12 +302,12 @@ with db.transaction():
         vertex_type="Article",
         vector_property="embedding",
         dimensions=EMBEDDING_DIM,
+        max_items=num_articles,
         id_property="id",
         distance_function="cosine",  # Options: cosine, euclidean, inner_product
         m=16,
         ef=128,
         ef_construction=128,
-        max_items=10000,
     )
 
 print("   ✅ Created HNSW vector index")
