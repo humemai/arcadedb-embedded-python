@@ -143,7 +143,7 @@ result = db.query("sql", """
 ✅ **Vector Search** - HNSW indexing for embeddings
 ✅ **Studio UI** - Web-based database browser (included)
 ✅ **Self-Contained** - Single package (~155-161MB wheel, ~215-230MB installed)
-✅ **Production Ready** - 107/107 tests passing on all platforms
+✅ **Production Ready** - 160/160 tests passing on all platforms
 
 **Package Contents (platform-specific):**
 

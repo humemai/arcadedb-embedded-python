@@ -14,12 +14,13 @@
 - ✅ **Architecture-Specific macOS Wheels**: Separate x86_64 and arm64 (not universal2)
 - ✅ **setup.py for Platform Tags**: BinaryDistribution class forces platform-specific wheels
 - ✅ **Build System**: Native runners for all platforms, Docker for Linux (manylinux compliance)
-- ✅ **Testing**: 107/107 tests passing on all 6 platforms
+- ✅ **Testing**: 160/160 tests passing on all 6 platforms
 - ✅ **Tag-Driven Releases**: Manual git tags trigger full release workflow
 - ✅ **GitHub Releases**: All 6 wheels attached automatically (independent of PyPI)
 - ✅ **GitHub Pages PyPI Index**: pip-compatible index at https://humemai.github.io/arcadedb-embedded-python/simple/
 - ✅ **Automatic Index Updates**: Workflow updates PyPI index on gh-pages after each release
 - ✅ **PyPI 0.0.1 Removal**: Old dummy package deleted to prevent conflicts
+- ✅ **Schema API Migration**: All examples (01-06) converted from SQL DDL to Pythonic Schema API
 - ✅ **Distribution**: Users can install with:
   ```bash
   pip install arcadedb-embedded \
@@ -33,73 +34,38 @@
 
 ## 📋 Remaining Tasks
 
-### ~~High Priority: Documentation Updates~~ ✅ Complete!
+### High Priority: Documentation Updates - DEFERRED
 
-All documentation has been updated to reflect the new single-package system:
+**Status:** Deferred until examples 07 and 08 are complete (work in progress)
 
-#### ~~1. Update Installation Documentation~~ ✅ Complete
-**File**: `bindings/python/docs/getting-started/installation.md`
+All documentation will be updated to reflect the new single-package system after completing the example suite:
 
-- ✅ Removed all references to old variants (headless/minimal/full)
-- ✅ Updated to single package: `arcadedb-embedded`
-- ✅ Show GitHub Pages installation (current method):
-  ```bash
-  pip install arcadedb-embedded \
-    --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
-    --extra-index-url https://pypi.org/simple/
-  ```
-- ✅ Note PyPI size limit pending approval
-- ✅ Updated to "No Java required" (bundled JRE)
-- ✅ Updated platform support table (6 platforms)
-- ✅ Updated wheel sizes (~155-161MB)
+#### Documentation Files Already Updated (Previously Completed)
 
-#### ~~2. Update Build Architecture Documentation~~ ✅ Complete
-**File**: `bindings/python/docs/development/build-architecture.md`
+The following files were updated in an earlier phase:
 
-- ✅ Document runner versions (ubuntu-24.04, macos-15-intel, etc.)
-- ✅ Document setup.py requirement for platform-specific wheels
-- ✅ Explain BinaryDistribution class and why it's needed
-- ✅ Document platform-specific wheel naming (not py3-none-any)
-- ✅ Explain why py3-none-any was created before and how setup.py fixes it
+- ✅ `bindings/python/docs/getting-started/installation.md` - Single package, GitHub Pages install
+- ✅ `bindings/python/docs/development/build-architecture.md` - Platform-specific wheels, setup.py
+- ✅ `bindings/python/examples/README.md` - GitHub Pages index
+- ✅ `bindings/python/docs/development/contributing.md` - Single package workflow
+- ✅ `README.md` (root) - GitHub Pages install, PyPI approval note
+- ✅ `bindings/python/README.md` - Index URLs explained
+- ✅ `bindings/python/docs/getting-started/distributions.md` - Platform details
+- ✅ `bindings/python/docs/getting-started/quickstart.md` - GitHub Pages install
 
-#### ~~3. Update Examples Documentation~~ ✅ Complete
-**File**: `bindings/python/examples/README.md`
+**Previous Documentation Commit**: `6af065c7b` (2025-10-28)
 
-- ✅ Updated installation commands to use GitHub Pages index
-- ✅ Removed any references to old variant system
+#### Documentation Files Still Needing Updates (After Examples 07-08)
 
-#### ~~4. Update CONTRIBUTING.md~~ ✅ Complete
-**File**: `bindings/python/docs/development/contributing.md`
+The following files still reference the old 3-variant system (headless/minimal/full) and will be updated after examples 07 and 08 are complete:
 
-- ✅ Updated build instructions (no variant parameter)
-- ✅ Updated to single package workflow
+- [ ] `bindings/python/docs/index.md` - Main landing page has old 3-package comparison table
+- [ ] `bindings/python/docs/development/architecture.md` - References variant detection
+- [ ] `bindings/python/docs/development/release.md` - **MAJOR**: Entire 3-package release workflow
+- [ ] `bindings/python/docs/development/troubleshooting.md` - Examples use headless variant
+- [ ] `bindings/python/docs/development/ci-setup.md` - Likely has old variant references
 
-#### ~~5. Update Root README.md~~ ✅ Complete
-**File**: `README.md`
-
-- ✅ Updated quick start installation with both index URLs
-- ✅ Added note about PyPI size limit approval
-
-#### ~~6. Update Python README~~ ✅ Complete
-**File**: `bindings/python/README.md`
-
-- ✅ Updated installation with both index URLs
-- ✅ Added explanation of --index-url and --extra-index-url
-
-#### ~~7. Update Package Overview~~ ✅ Complete
-**File**: `bindings/python/docs/getting-started/distributions.md`
-
-- ✅ Updated for single package with platform-specific wheels
-- ✅ Updated platform details table
-- ✅ Updated size breakdown
-
-#### ~~8. Update Quick Start~~ ✅ Complete
-**File**: `bindings/python/docs/getting-started/quickstart.md`
-
-- ✅ Changed from headless to full package
-- ✅ Updated installation command with GitHub Pages
-
-**Documentation Commit**: `6af065c7b` (2025-10-28)
+**Next Action**: Complete examples 07 and 08, then update these 5 doc files in one pass
 
 ---
 
@@ -113,6 +79,18 @@ All documentation has been updated to reflect the new single-package system:
 - [ ] Update docs to show standard `pip install arcadedb-embedded` as primary method
 - [ ] Keep GitHub Pages as mirror/backup option
 - [ ] Keep GitHub Pages as backup/mirror
+
+### Current Work in Progress
+
+#### Examples Suite Completion
+**Status**: In Progress
+
+- [ ] Example 07 - (work in progress)
+- [ ] Example 08 - (work in progress)
+
+**After examples 07-08 are complete**:
+1. Proceed with documentation updates listed above
+2. Ensure examples 07-08 use Pythonic Schema API (not SQL DDL)
 
 ### Low Priority: Optional Improvements
 

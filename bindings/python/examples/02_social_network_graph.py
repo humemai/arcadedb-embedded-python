@@ -111,31 +111,31 @@ def create_schema(db):
         # Create schema in a transaction (like the working example)
         with db.transaction():
             # Create Person vertex type
-            db.command("sql", "CREATE VERTEX TYPE Person")
+            db.schema.create_vertex_type("Person")
             print("  ✓ Created Person vertex type")
 
             # Create properties for Person (various data types, some optional/NULL)
-            db.command("sql", "CREATE PROPERTY Person.name STRING")
-            db.command("sql", "CREATE PROPERTY Person.age INTEGER")
-            db.command("sql", "CREATE PROPERTY Person.city STRING")
-            db.command("sql", "CREATE PROPERTY Person.joined_date DATE")
-            db.command("sql", "CREATE PROPERTY Person.email STRING")  # Optional
-            db.command("sql", "CREATE PROPERTY Person.phone STRING")  # Optional
-            db.command("sql", "CREATE PROPERTY Person.verified BOOLEAN")
-            db.command("sql", "CREATE PROPERTY Person.reputation FLOAT")  # Optional
+            db.schema.create_property("Person", "name", "STRING")
+            db.schema.create_property("Person", "age", "INTEGER")
+            db.schema.create_property("Person", "city", "STRING")
+            db.schema.create_property("Person", "joined_date", "DATE")
+            db.schema.create_property("Person", "email", "STRING")  # Optional
+            db.schema.create_property("Person", "phone", "STRING")  # Optional
+            db.schema.create_property("Person", "verified", "BOOLEAN")
+            db.schema.create_property("Person", "reputation", "FLOAT")  # Optional
             print("  ✓ Created Person properties (including optional fields)")
 
             # Create FRIEND_OF edge type
-            db.command("sql", "CREATE EDGE TYPE FRIEND_OF")
+            db.schema.create_edge_type("FRIEND_OF")
             print("  ✓ Created FRIEND_OF edge type")
 
             # Create properties for FRIEND_OF edge
-            db.command("sql", "CREATE PROPERTY FRIEND_OF.since DATE")
-            db.command("sql", "CREATE PROPERTY FRIEND_OF.closeness STRING")
+            db.schema.create_property("FRIEND_OF", "since", "DATE")
+            db.schema.create_property("FRIEND_OF", "closeness", "STRING")
             print("  ✓ Created FRIEND_OF properties")
 
-            # Create indexes for better performance (correct ArcadeDB syntax)
-            db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
+            # Create indexes for better performance using Schema API
+            db.schema.create_index("Person", ["name"], unique=False)
             print("  ✓ Created index on Person.name")
 
         print(f"  ⏱️  Time: {time.time() - step_start:.3f}s")
