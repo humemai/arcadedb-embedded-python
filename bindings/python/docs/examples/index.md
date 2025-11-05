@@ -21,8 +21,8 @@ Production CSV import with automatic type inference by Java, NULL handling, and 
 **[05 - CSV Import - Graph](05_csv_import_graph.md)** ✅
 Production graph creation from MovieLens dataset. Comprehensive performance analysis comparing Java API vs SQL, synchronous vs async, with/without indexes. 6 benchmark configurations, 10 validation queries, export/import roundtrip testing. Learn when to use Java API (bulk operations: 5,071 edges/sec) vs SQL (complex queries).
 
-**[06 - Vector Search - Movie Recommendations](06_vector_search_movies.md)** 🚧 **COMING SOON**
-Semantic similarity search with MovieLens data. Generate embeddings from movie titles/genres, find similar movies using HNSW index, combine with rating data for recommendations.
+**[06 - Vector Search - Movie Recommendations](06_vector_search_recommendations.md)** ✅
+Production-ready vector embeddings and HNSW indexing for semantic movie search. Compare 4 recommendation methods: graph-based collaborative filtering (full/sampled) vs vector similarity (2 models). Graph-based fast mode provides 150-300× speedup (0.2s vs 40-60s). Vector methods are fastest (0.01-0.04s) with no cold start problem.
 
 ### 🔍 Coming Soon
 
@@ -47,8 +47,8 @@ python 01_simple_document_store.py
 2. **Graph Operations** (02) - Understand relationships
 3. **Vector Search** (03) ⚠️ - AI/ML integration (experimental)
 4. **CSV Import - Documents** (04) - ETL to documents with MovieLens
-5. **CSV Import - Graph** (05) 🚧 - Same data as graph (coming soon)
-6. **Vector Search - Movies** (06) 🚧 - Semantic search on MovieLens (coming soon)
+5. **CSV Import - Graph** (05) - Same data as graph with performance benchmarks
+6. **Vector Search - Movies** (06) - Semantic search and recommendations
 7. **Multi-Model Stack Overflow** (07) 🚧 - Documents + Graph + Vectors (coming soon)
 8. **Server Mode** (08) 🚧 - Production deployment (coming soon)
 

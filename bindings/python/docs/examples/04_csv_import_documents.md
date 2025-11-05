@@ -1,4 +1,4 @@
-# Example 04: CSV Import - Documents
+# Example 04: CSV Import - Tables (Documents)
 
 **Production-ready CSV import with automatic type inference, NULL handling, and index optimization**
 

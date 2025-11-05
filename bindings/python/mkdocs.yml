@@ -138,7 +138,9 @@ nav:
   - 01 - Simple Document Store: examples/01_simple_document_store.md
   - 02 - Social Network Graph: examples/02_social_network_graph.md
   - 03 - Vector Search: examples/03_vector_search.md
-  - 04 - CSV Import (Documents): examples/04_csv_import_documents.md
+  - 04 - CSV Import (Tables): examples/04_csv_import_documents.md
+  - 05 - CSV Import (Graph): examples/05_csv_import_graph.md
+  - 06 - Vector Search (Movies): examples/06_vector_search_recommendations.md
 - User Guide:
   - Core Operations:
     - Database Management: guide/core/database.md
