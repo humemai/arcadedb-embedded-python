@@ -143,6 +143,7 @@ class Database:
         vertex_type: str,
         vector_property: str,
         dimensions: int,
+        max_items: int,
         id_property: str = "id",
         edge_type: str = "VectorProximity",
         deleted_property: str = "deleted",
@@ -150,7 +151,6 @@ class Database:
         m: int = 16,
         ef: int = 128,
         ef_construction: int = 128,
-        max_items: int = 10000,
     ) -> VectorIndex:
         """
         Create an HNSW vector index for similarity search.
@@ -162,6 +162,11 @@ class Database:
             vertex_type: Name of the vertex type containing vectors
             vector_property: Name of the property storing vector arrays
             dimensions: Dimensionality of the vectors
+            max_items: Maximum number of items the index can hold (required).
+                       The index pre-allocates memory based on this value.
+                       If you try to add more items, a SizeLimitExceededException
+                       is raised. Set this to your expected dataset size (e.g.,
+                       use db.count_type(vertex_type) or len(your_data)).
             id_property: Property to use as unique ID (default: "id")
             edge_type: Edge type for proximity graph (default: "VectorProximity")
             deleted_property: Property marking deleted items (default: "deleted")
@@ -173,20 +178,28 @@ class Database:
                 (default: 128)
             ef_construction: Size of dynamic candidate list during construction
                              (default: 128)
-            max_items: Maximum number of items in the index (default: 10000)
 
         Returns:
             VectorIndex object for performing similarity searches
 
         Example:
             >>> import numpy as np
+            >>> # Create schema
             >>> with db.transaction():
             ...     db.command("sql", "CREATE VERTEX TYPE Doc")
             ...     db.command("sql",
             ...                "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
             ...     db.command("sql", "CREATE PROPERTY Doc.id STRING")
             ...
-            >>> index = db.create_vector_index("Doc", "embedding", dimensions=384)
+            >>> # Determine max_items from your dataset
+            >>> num_docs = len(embeddings)  # or db.count_type("Doc")
+            >>>
+            >>> # Create index with correct max_items
+            >>> index = db.create_vector_index(
+            ...     "Doc", "embedding",
+            ...     dimensions=384,
+            ...     max_items=num_docs
+            ... )
             >>>
             >>> # Add vectors (as NumPy arrays or Python lists)
             >>> with db.transaction():
@@ -224,6 +237,9 @@ class Database:
         distance_func = distance_funcs[distance_function]
 
         try:
+            # Ensure max_items is a proper Python int (JPype will convert to Java int)
+            max_items = int(max_items)
+
             # Build HNSW RAM index
             builder = HnswVectorIndexRAM.newBuilder(
                 dimensions, distance_func, max_items
