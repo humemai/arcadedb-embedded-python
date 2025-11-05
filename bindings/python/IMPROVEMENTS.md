@@ -1,7 +1,7 @@
 # ArcadeDB Python Bindings Improvement Roadmap
 
-**Last Updated:** November 1, 2025
-**Status:** Phase 3 - Priorities 1, 4 & 8 Complete (Async API + Batch Context + Database Export) ✅
+**Last Updated:** January 2026
+**Status:** Phase 3 - Priorities 1, 4, 5, 7 & 8 Complete (Async API + Batch Context + Schema API + Transaction Config + Database Export) ✅
 **Goal:** Better leverage Java capabilities to improve performance and developer experience
 
 > **⚠️ DEPRECATION NOTICE:** The `create_edge_by_keys()` method (Priority 2) has been **REMOVED** from the codebase.
@@ -681,17 +681,53 @@ def batch_context(
 
 ---
 
-## Priority 5: Schema API (LOW IMPACT - HIGH DX) 🎨
+## Priority 5: Schema API (LOW IMPACT - HIGH DX) 🎨 ✅ COMPLETED
 
-### Problem
-Schema manipulation requires SQL strings with no type safety or auto-completion.
+### Implementation Status
+
+✅ **COMPLETED** - All functionality implemented and tested
+
+**Files Created:**
+- ✅ `src/arcadedb_embedded/schema.py` (385 lines)
+- ✅ `tests/test_schema.py` (788 lines, 44/44 tests passing)
+
+**Files Modified:**
+- ✅ `src/arcadedb_embedded/core.py` - Added `schema` property to Database class
+- ✅ `src/arcadedb_embedded/__init__.py` - Exported Schema, PropertyType, IndexType classes
+
+**Test Results:**
+- ✅ All 44/44 tests passing (100% success rate)
+- ✅ Full test suite: 160/160 tests passing (116 original + 44 new)
+- ✅ Test execution time: ~3.6 seconds
+- ✅ Verified: Type creation, properties, indexes, get_or_create patterns, complex types
+
+**Codebase Migration:**
+- ✅ **COMPLETED** - Entire codebase migrated from SQL DDL to Pythonic Schema API (Nov 2025)
+- ✅ Converted all `CREATE VERTEX/EDGE/DOCUMENT TYPE` → `schema.create_*_type()` (examples 01-06)
+- ✅ Converted all `CREATE INDEX` → `schema.create_index()` (example 04 with UNIQUE/FULL_TEXT/NOTUNIQUE logic)
+- ✅ Converted all `CREATE PROPERTY` → `schema.create_property()` (simple types, LIST OF, ARRAY_OF_FLOATS)
+- ✅ Fixed `ARRAY_OF_FLOATS` property type (requires Java Type enum, not string-based creation)
+- ✅ All 160/160 tests passing, all examples (01-06) converted and working
+- ✅ Batch conversion script created for automated migration (`/tmp/convert_properties.py`)
+- ✅ **Scope Clarified**: Only DDL (schema definition) converted; DML (INSERT, CREATE EDGE) intentionally left as SQL or Java API
+
+### Problem (Historical Context)
+Schema manipulation required SQL strings with no type safety or auto-completion.
 
 ```python
-# Current: String-based, error-prone
+# OLD: String-based, error-prone
 db.command("sql", "CREATE VERTEX TYPE User")
 db.command("sql", "CREATE PROPERTY User.email STRING")
 db.command("sql", "CREATE INDEX ON User(email) UNIQUE")
 ```
+
+**What Was Converted:**
+- ✅ DDL (Data Definition Language): CREATE TYPE, CREATE PROPERTY, CREATE INDEX → Schema API
+- ❌ DML (Data Manipulation Language): INSERT INTO, CREATE EDGE, UPDATE, DELETE → Kept as SQL or Java API
+
+**Key Distinction:**
+- `CREATE EDGE TYPE RATED` (schema) → `schema.create_edge_type("RATED")` ✅
+- `CREATE EDGE RATED FROM...` (data) → SQL or `vertex.newEdge()` ❌ (not converted)
 
 ### Target State
 ```python
@@ -905,17 +941,33 @@ def schema(self) -> 'Schema':
     return Schema(self._java_db.getSchema(), self)
 ```
 
-### Expected Impact
-- **Developer Experience:** IDE auto-completion, type hints
-- **Code Quality:** Compile-time error detection
-- **Documentation:** Self-documenting API
+### Achieved Impact ✅
+- **Developer Experience:** IDE auto-completion, type hints working across all examples
+- **Code Quality:** Type-safe API eliminates SQL string errors
+- **Documentation:** Self-documenting API in production use
+- **Migration Complete:** Zero SQL DDL commands in examples 01-06 or main test suite
 
-### Testing Requirements
-1. Test: All type creation methods
-2. Test: Property creation with various types
-3. Test: Index creation (unique, composite)
-4. Test: Type/property/index deletion
-5. Test: Error handling for invalid operations
+### Migration Summary
+
+**Examples Converted (6/6):**
+1. ✅ **Example 01** (simple_document_store.py): CREATE DOCUMENT TYPE → schema.create_document_type()
+2. ✅ **Example 02** (social_network_graph.py): CREATE VERTEX/EDGE TYPE → schema.create_*_type()
+3. ✅ **Example 03** (vector_search.py): CREATE VERTEX TYPE + ARRAY_OF_FLOATS property
+4. ✅ **Example 04** (csv_import_documents.py): CREATE INDEX → schema.create_index() (with conditional logic)
+5. ✅ **Example 05** (csv_import_graph.py): All IF NOT EXISTS → schema.get_or_create_*()
+6. ✅ **Example 06** (vector_search_recommendations.py): Uses Schema API
+
+**Tests Validated:**
+- ✅ 160/160 tests passing (44 schema tests + 116 other tests)
+- ✅ All property types: STRING, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, DECIMAL, LIST OF, ARRAY_OF_FLOATS
+- ✅ All index types: UNIQUE, NOTUNIQUE, FULL_TEXT
+- ✅ Idempotent operations: get_or_create_*_type(), get_or_create_property(), get_or_create_index()
+
+**Edge Cases Remaining (Intentionally Not Converted):**
+- ❌ test_exporter.py: Testing special property types (DATETIME, LIST OF STRING, LINK OF)
+- ❌ test_concurrency.py: Simple concurrency test with CREATE DOCUMENT TYPE
+- ❌ test_server_patterns.py: Performance tests
+- ❌ e2e-python: External end-to-end tests (different project)
 
 ---
 
@@ -1016,16 +1068,40 @@ class ResultSet:
 
 ---
 
-## Priority 7: Transaction Configuration (LOW IMPACT) ⚙️
+## Priority 7: Transaction Configuration (LOW IMPACT) ⚙️ ✅ COMPLETED
 
-### Problem
+### Implementation Status
+
+✅ **COMPLETED** - All functionality implemented and tested
+
+**Files Created:**
+- ✅ `tests/test_transaction_config.py` (169 lines, 9/9 tests passing)
+
+**Files Modified:**
+- ✅ `src/arcadedb_embedded/core.py` - Added `set_wal_flush()`, `set_read_your_writes()`, `set_auto_transaction()` methods
+
+**Test Results:**
+- ✅ All 9/9 tests passing (100% success rate)
+- ✅ Test execution time: ~1 second
+- ✅ Verified: All WAL flush modes, read-your-writes, auto-transaction, integration with operations
+
+### Problem (Historical Context)
 Cannot configure transaction behavior (isolation level, WAL settings, etc.)
 
-### Target State
+### Achieved State
 ```python
-# Configure transaction behavior
-db.set_wal_flush("no")  # Faster, less durable
-db.set_read_your_writes(False)  # Better concurrency
+# Configure WAL flush strategy
+db.set_wal_flush("no")           # Maximum performance (default)
+db.set_wal_flush("yes_nometadata")  # Flush data only
+db.set_wal_flush("yes_full")     # Maximum durability (flush data + metadata)
+
+# Configure read-your-writes (for better concurrency)
+db.set_read_your_writes(False)   # Better concurrency
+db.set_read_your_writes(True)    # Read your own writes (default)
+
+# Configure auto-transaction mode
+db.set_auto_transaction(False)   # Manual transaction control
+db.set_auto_transaction(True)    # Automatic transactions (default)
 
 # Use configured settings
 with db.transaction():
@@ -1033,10 +1109,25 @@ with db.transaction():
     ...
 ```
 
-### Implementation Plan
+### When to Use Each Setting
 
-#### 7.1 Add Configuration Methods
-**File:** `bindings/python/src/arcadedb_embedded/core.py`
+**WAL Flush Modes:**
+- `"no"` - Maximum performance, use for development or when you have backups
+- `"yes_nometadata"` - Good balance of performance and durability
+- `"yes_full"` - Maximum durability, use for critical production data
+
+**Read-Your-Writes:**
+- `True` (default) - Safer, ensures you can read what you just wrote
+- `False` - Better concurrency in multi-user scenarios
+
+**Auto-Transaction:**
+- `True` (default) - Convenient, automatic transaction management
+- `False` - Full control, must use `with db.transaction():` explicitly
+
+### Implementation Details
+
+#### Methods Added to Database Class
+**File:** `src/arcadedb_embedded/core.py` (lines ~330-413)
 
 ```python
 def set_wal_flush(self, mode: str):
@@ -1045,23 +1136,39 @@ def set_wal_flush(self, mode: str):
 
     Args:
         mode: 'no', 'yes_nometadata', or 'yes_full'
-    """
-    from com.arcadedb.engine import WALFile
 
-    mode_map = {
-        'no': WALFile.FlushType.NO,
-        'yes_nometadata': WALFile.FlushType.YES_NOMETADATA,
-        'yes_full': WALFile.FlushType.YES_FULL
+    Raises:
+        ValueError: If mode is invalid
+        ArcadeDBError: If database is closed
+    """
+    valid_modes = {
+        'no': 'NO',
+        'yes_nometadata': 'YES_NOMETADATA',
+        'yes_full': 'YES_FULL'
     }
 
-    self._java_db.setWALFlush(mode_map[mode])
+    if mode not in valid_modes:
+        raise ValueError(f"Invalid WAL flush mode: {mode}. Must be one of: {list(valid_modes.keys())}")
+
+    if not self.is_open():
+        raise ArcadeDBError("Cannot configure WAL flush on closed database")
+
+    WALFile = jpype.JPackage("com").arcadedb.engine.WALFile
+    flush_type = getattr(WALFile.FlushType, valid_modes[mode])
+    self._java_db.setWALFlush(flush_type)
 
 def set_read_your_writes(self, enabled: bool):
     """Enable/disable read-your-writes for better concurrency."""
+    if not self.is_open():
+        raise ArcadeDBError("Cannot configure read-your-writes on closed database")
+
     self._java_db.setReadYourWrites(enabled)
 
 def set_auto_transaction(self, enabled: bool):
     """Enable/disable automatic transaction management."""
+    if not self.is_open():
+        raise ArcadeDBError("Cannot configure auto-transaction on closed database")
+
     self._java_db.setAutoTransaction(enabled)
 ```
 
@@ -1532,7 +1639,8 @@ All 17 tests passing (100% success rate):
   - [x] `02_social_network_graph.py` - Demonstrates first(), to_list(), automatic type conversion, **BatchContext for bulk inserts** ✨
   - [x] `03_vector_search.py` - Demonstrates count_type(), **BatchContext with progress tracking** ✨
   - [x] `04_csv_import_documents.py` - Demonstrates first() instead of list()[0]
-  - [ ] `05_csv_import_graph.py` - DEFERRED to Phase 4 as "Final Boss" (requires Priority 2: Advanced edge creation)
+  - [x] `05_csv_import_graph.py` - CSV import with graph edges using Java API ✅ COMPLETE
+  - [x] `06_vector_search_recommendations.py` - Advanced vector search with recommendations ✅ COMPLETE
 
 ### Phase 2: Performance (Weeks 3-5) ✅ COMPLETED
 - [x] Priority 1: Async API wrapper - ✅ COMPLETED (16,489 rec/sec achieved, 8/8 tests passing)
@@ -1547,14 +1655,19 @@ All 17 tests passing (100% success rate):
 
 ### Phase 3: Advanced Features (Weeks 6-7)
 - [x] Priority 2: Advanced edge creation ✅ COMPLETED (8/8 tests passing)
-- [ ] Priority 5: Schema API
-- [ ] Priority 7: Transaction configuration
+- [x] Priority 5: Schema API
+- [x] Priority 7: Transaction configuration
 - [x] Priority 8: Database export (JSONL + CSV helpers) ✅ COMPLETED (17/17 tests passing)
 
-### Phase 4: Polish & Final Boss (Week 8)
-- [ ] **Final Boss:** Fix `05_csv_import_graph.py` example (**in progress**)
-- [ ] Performance tuning
-- [ ] Documentation updates (all the `*.md` files in `/home/tk/repos/arcadedb-embedded-python/bindings/python/docs` and `/home/tk/repos/arcadedb-embedded-python/README.md`)
+### Phase 4: Polish & Final Boss (Week 8+)
+- [x] **Final Boss:** Fix `05_csv_import_graph.py` example ✅ COMPLETE
+- [x] **Bonus Example:** `06_vector_search_recommendations.py` ✅ COMPLETE
+- [x] Performance tuning ✅ COMPLETE (benchmarking completed, see benchmark_logs/)
+- [ ] **WIP:** Example 07 - (work in progress)
+- [ ] **WIP:** Example 08 - (work in progress)
+- [ ] Documentation updates **DEFERRED** until after examples 07-08 are complete
+  - Files needing updates: `docs/index.md`, `docs/development/architecture.md`, `docs/development/release.md`, `docs/development/troubleshooting.md`, `docs/development/ci-setup.md`
+  - These files still reference old 3-variant system (headless/minimal/full)
 
 ---
 

@@ -565,9 +565,13 @@ def create_indexes(db, indexes, verbose=True):
         for attempt in range(1, max_retries + 1):
             try:
                 with db.transaction():
-                    db.command(
-                        "sql", f"CREATE INDEX ON {table} ({column}) {uniqueness}"
-                    )
+                    # Convert uniqueness string to Schema API parameters
+                    if uniqueness == "UNIQUE":
+                        db.schema.create_index(table, [column], unique=True)
+                    elif uniqueness == "FULL_TEXT":
+                        db.schema.create_index(table, [column], index_type="FULL_TEXT")
+                    else:  # NOTUNIQUE
+                        db.schema.create_index(table, [column], unique=False)
                 if verbose:
                     print(
                         f"   ✅ [{idx}/{len(indexes)}] "

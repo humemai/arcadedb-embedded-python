@@ -55,7 +55,7 @@ def test_csv_import_as_documents(temp_db_path, sample_csv_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create schema
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Person")
+            db.schema.create_document_type("Person")
 
         # Import CSV
         stats = arcadedb.import_csv(db, sample_csv_path, "Person")
@@ -79,7 +79,7 @@ def test_csv_import_as_vertices(temp_db_path, sample_csv_vertices_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create schema
         with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE Product")
+            db.schema.create_vertex_type("Product")
 
         # Import CSV as vertices
         stats = arcadedb.import_csv(
@@ -117,7 +117,7 @@ def test_csv_import_with_custom_delimiter(temp_db_path):
         with arcadedb.create_database(temp_db_path) as db:
             # Create schema
             with db.transaction():
-                db.command("sql", "CREATE DOCUMENT TYPE Item")
+                db.schema.create_document_type("Item")
 
             # Import TSV with tab delimiter
             stats = arcadedb.import_csv(db, temp_file.name, "Item", delimiter="\t")
@@ -140,7 +140,7 @@ def test_importer_class_api(temp_db_path, sample_csv_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create schema
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Person")
+            db.schema.create_document_type("Person")
 
         # Use Importer class
         importer = arcadedb.Importer(db)
@@ -173,7 +173,7 @@ def test_csv_type_inference(temp_db_path):
         with arcadedb.create_database(temp_db_path) as db:
             # Create schema
             with db.transaction():
-                db.command("sql", "CREATE DOCUMENT TYPE Product")
+                db.schema.create_document_type("Product")
 
             # Import
             stats = arcadedb.import_csv(db, temp_file.name, "Product")
@@ -211,7 +211,7 @@ def test_csv_import_with_nulls(temp_db_path):
     try:
         with arcadedb.create_database(temp_db_path) as db:
             with db.transaction():
-                db.command("sql", "CREATE DOCUMENT TYPE Person")
+                db.schema.create_document_type("Person")
 
             stats = arcadedb.import_csv(db, temp_file.name, "Person")
 
@@ -256,7 +256,7 @@ def test_format_auto_detection(temp_db_path, sample_csv_path):
     """Test that file format is auto-detected from extension."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Person")
+            db.schema.create_document_type("Person")
 
         importer = arcadedb.Importer(db)
 
@@ -270,7 +270,7 @@ def test_import_statistics(temp_db_path, sample_csv_path):
     """Test that import statistics are returned correctly."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Person")
+            db.schema.create_document_type("Person")
 
         stats = arcadedb.import_csv(db, sample_csv_path, "Person")
 
@@ -301,7 +301,7 @@ def test_large_csv_batch_commit(temp_db_path):
     try:
         with arcadedb.create_database(temp_db_path) as db:
             with db.transaction():
-                db.command("sql", "CREATE DOCUMENT TYPE Record")
+                db.schema.create_document_type("Record")
 
             # Import with small batch size
             stats = arcadedb.import_csv(
@@ -332,7 +332,7 @@ def test_csv_import_integration(temp_db_path):
         with arcadedb.create_database(temp_db_path) as db:
             # Create schema
             with db.transaction():
-                db.command("sql", "CREATE DOCUMENT TYPE Employee")
+                db.schema.create_document_type("Employee")
 
             # Import data
             stats = arcadedb.import_csv(db, temp_file.name, "Employee")

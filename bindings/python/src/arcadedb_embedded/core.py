@@ -328,6 +328,90 @@ class Database:
         except Exception as e:
             raise ArcadeDBError(f"Failed to check transaction status: {e}") from e
 
+    def set_wal_flush(self, mode: str):
+        """
+        Configure Write-Ahead Log (WAL) flush strategy.
+
+        Controls how aggressively changes are flushed to disk. This affects the
+        durability/performance trade-off for transactions.
+
+        Args:
+            mode: WAL flush mode, one of:
+                - 'no': No flush, maximum performance (default)
+                - 'yes_nometadata': Flush data but not metadata
+                - 'yes_full': Flush everything, maximum durability
+
+        Raises:
+            ValueError: If mode is not valid
+
+        Example:
+            >>> db.set_wal_flush('yes_full')  # Maximum durability
+            >>> db.set_wal_flush('no')  # Maximum performance
+        """
+        self._check_not_closed()
+        import jpype
+
+        valid_modes = {
+            "no": "NO",
+            "yes_nometadata": "YES_NOMETADATA",
+            "yes_full": "YES_FULL",
+        }
+        if mode not in valid_modes:
+            raise ValueError(
+                f"Invalid WAL flush mode: {mode}. "
+                f"Must be one of: {list(valid_modes.keys())}"
+            )
+
+        try:
+            WALFile = jpype.JPackage("com").arcadedb.engine.WALFile
+            flush_type = getattr(WALFile.FlushType, valid_modes[mode])
+            self._java_db.setWALFlush(flush_type)
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to set WAL flush mode: {e}") from e
+
+    def set_read_your_writes(self, enabled: bool):
+        """
+        Enable or disable read-your-writes consistency.
+
+        When enabled, uncommitted changes in the current transaction are visible
+        in subsequent reads. Disabling can improve concurrency but may show stale data.
+
+        Args:
+            enabled: True to enable read-your-writes, False to disable
+
+        Example:
+            >>> db.set_read_your_writes(True)  # Default behavior
+            >>> db.set_read_your_writes(False)  # Better concurrency
+        """
+        self._check_not_closed()
+        try:
+            self._java_db.setReadYourWrites(enabled)
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to set read-your-writes: {e}") from e
+
+    def set_auto_transaction(self, enabled: bool):
+        """
+        Enable or disable automatic transaction management.
+
+        When enabled, ArcadeDB automatically begins a transaction for operations
+        that require one. When disabled, you must manually call begin_transaction().
+
+        Args:
+            enabled: True to enable auto-transaction, False to disable
+
+        Example:
+            >>> db.set_auto_transaction(False)  # Manual transaction control
+            >>> db.begin_transaction()
+            >>> # ... do work ...
+            >>> db.commit()
+            >>> db.set_auto_transaction(True)  # Restore default
+        """
+        self._check_not_closed()
+        try:
+            self._java_db.setAutoTransaction(enabled)
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to set auto-transaction: {e}") from e
+
     def async_executor(self):
         """
         Get async executor for parallel operations.
@@ -366,6 +450,42 @@ class Database:
 
         # JPype converts 'async' to 'async_' to avoid Python keyword collision
         return AsyncExecutor(self._java_db.async_())
+
+    @property
+    def schema(self):
+        """
+        Get the schema manipulation API for this database.
+
+        The schema API provides type-safe access to schema operations:
+        - Type management (document, vertex, edge types)
+        - Property management (create, drop properties)
+        - Index management (create, drop indexes)
+
+        Returns:
+            Schema instance for this database
+
+        Example:
+            >>> # Create a vertex type with properties
+            >>> schema = db.schema
+            >>> schema.create_vertex_type("User")
+            >>> schema.create_property("User", "name", PropertyType.STRING)
+            >>> schema.create_property("User", "age", PropertyType.INTEGER)
+            >>>
+            >>> # Create an index
+            >>> schema.create_index("User", ["name"], unique=True)
+            >>>
+            >>> # Create edge type
+            >>> schema.create_edge_type("Follows")
+
+        Note:
+            Schema changes are immediately persisted and visible to all
+            database connections. Schema modifications should be done
+            carefully in production environments.
+        """
+        self._check_not_closed()
+        from .schema import Schema
+
+        return Schema(self._java_db.getSchema(), self)
 
     def batch_context(
         self,

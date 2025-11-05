@@ -1389,29 +1389,30 @@ def create_schema(db: Any, create_indexes: bool = True):
     start_time = time.time()
 
     # Create vertex types
-    db.command("sql", "CREATE VERTEX TYPE User IF NOT EXISTS")
-    db.command("sql", "CREATE VERTEX TYPE Movie IF NOT EXISTS")
+    db.schema.get_or_create_vertex_type("User")
+    db.schema.get_or_create_vertex_type("Movie")
 
     # Create edge types
-    db.command("sql", "CREATE EDGE TYPE RATED IF NOT EXISTS")
-    db.command("sql", "CREATE EDGE TYPE TAGGED IF NOT EXISTS")
+    db.schema.get_or_create_edge_type("RATED")
+    db.schema.get_or_create_edge_type("TAGGED")
 
     # Create properties
-    db.command("sql", "CREATE PROPERTY User.userId IF NOT EXISTS INTEGER")
-    db.command("sql", "CREATE PROPERTY Movie.movieId IF NOT EXISTS INTEGER")
-    db.command("sql", "CREATE PROPERTY Movie.title IF NOT EXISTS STRING")
-    db.command("sql", "CREATE PROPERTY Movie.genres IF NOT EXISTS STRING")
-    db.command("sql", "CREATE PROPERTY Movie.imdbId IF NOT EXISTS STRING")
-    db.command("sql", "CREATE PROPERTY Movie.tmdbId IF NOT EXISTS INTEGER")
-    db.command("sql", "CREATE PROPERTY RATED.rating IF NOT EXISTS FLOAT")
-    db.command("sql", "CREATE PROPERTY RATED.timestamp IF NOT EXISTS LONG")
-    db.command("sql", "CREATE PROPERTY TAGGED.tag IF NOT EXISTS STRING")
-    db.command("sql", "CREATE PROPERTY TAGGED.timestamp IF NOT EXISTS LONG")
+    db.schema.get_or_create_property("User", "userId", "INTEGER")
+    db.schema.get_or_create_property("Movie", "movieId", "INTEGER")
+    db.schema.get_or_create_property("Movie", "title", "STRING")
+    db.schema.get_or_create_property("Movie", "genres", "STRING")
+    db.schema.get_or_create_property("Movie", "imdbId", "STRING")
+    db.schema.get_or_create_property("Movie", "tmdbId", "INTEGER")
+    db.schema.get_or_create_property("RATED", "rating", "FLOAT")
+    db.schema.get_or_create_property("RATED", "timestamp", "LONG")
+    db.schema.get_or_create_property("TAGGED", "tag", "STRING")
+    db.schema.get_or_create_property("TAGGED", "timestamp", "LONG")
 
     if create_indexes:
         print("Creating indexes...")
-        db.command("sql", "CREATE INDEX IF NOT EXISTS ON User (userId) UNIQUE")
-        db.command("sql", "CREATE INDEX IF NOT EXISTS ON Movie (movieId) UNIQUE")
+        # Use get_or_create_index for idempotent index creation
+        db.schema.get_or_create_index("User", ["userId"], unique=True)
+        db.schema.get_or_create_index("Movie", ["movieId"], unique=True)
         print("✓ Indexes created")
     else:
         print("⚠️  Indexes disabled (--no-index)")

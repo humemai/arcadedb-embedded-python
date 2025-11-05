@@ -95,20 +95,20 @@ step_start = time.time()
 with db.transaction():
     # Create vertex type for documents
     # We use VERTEX (not DOCUMENT) so we can potentially create relationships
-    db.command("sql", "CREATE VERTEX TYPE Article")
+    db.schema.create_vertex_type("Article")
 
     # Properties
-    db.command("sql", "CREATE PROPERTY Article.id STRING")
-    db.command("sql", "CREATE PROPERTY Article.title STRING")
-    db.command("sql", "CREATE PROPERTY Article.content STRING")
-    db.command("sql", "CREATE PROPERTY Article.category STRING")
+    db.schema.create_property("Article", "id", "STRING")
+    db.schema.create_property("Article", "title", "STRING")
+    db.schema.create_property("Article", "content", "STRING")
+    db.schema.create_property("Article", "category", "STRING")
 
     # Vector property - MUST be ARRAY_OF_FLOATS for HNSW index
     # In production, this would be 384, 768, or 1536 dimensions
-    db.command("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
+    db.schema.create_property("Article", "embedding", "ARRAY_OF_FLOATS")
 
-    # Index for fast lookups
-    db.command("sql", "CREATE INDEX ON Article (id) UNIQUE")
+    # Index for fast lookups using Schema API
+    db.schema.create_index("Article", ["id"], unique=True)
 
 print("   ✅ Created Article vertex type with embedding property")
 print("   💡 Vector property type: ARRAY_OF_FLOATS (required for HNSW)")
