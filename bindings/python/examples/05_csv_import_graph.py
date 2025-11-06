@@ -66,14 +66,14 @@ Imports pre-exported JSONL file and reads from imported database:
 - Faster initial setup (no CSV import needed)
 - Good for reproducible benchmarks
 - Measures import time separately
-- Example: --import-jsonl ./exports/ml_small_db.jsonl.tgz
+- Example: --import-jsonl ./exports/movielens_small_db.jsonl.tgz
 
-Expected Results (small dataset):
+Expected Results (movielens-small dataset):
 ==================================
 ✓ Vertices: 610 Users + 9,742 Movies = 10,352 total
 ✓ Edges: 98,734 RATED + 3,494 TAGGED = 102,228 total
 
-Performance (small dataset):
+Performance (movielens-small dataset):
 - Java API w/ indexes + async: ~5-10K vertices/sec, ~2-3K edges/sec (FASTEST)
 - SQL w/ indexes (sync): Slower than Java API (sequential processing)
 - Without indexes: MUCH slower (no optimization)
@@ -81,25 +81,25 @@ Performance (small dataset):
 Usage:
 ======
 # Recommended (fastest):
-python 05_csv_import_graph.py --size small --method java
+python 05_csv_import_graph.py --dataset movielens-small --method java
 
 # Compare SQL (synchronous):
-python 05_csv_import_graph.py --size small --method sql
+python 05_csv_import_graph.py --dataset movielens-small --method sql
 
 # Compare Java API without async (synchronous):
-python 05_csv_import_graph.py --size small --method java --no-async
+python 05_csv_import_graph.py --dataset movielens-small --method java --no-async
 
 # Export graph database for reproducibility:
-python 05_csv_import_graph.py --size small --method java --export
+python 05_csv_import_graph.py --dataset movielens-small --method java --export
 
 # Import from document DB export, create graph, and export result:
-python 05_csv_import_graph.py --size small --import-jsonl ./exports/ml_small_db.jsonl.tgz --export
+python 05_csv_import_graph.py --dataset movielens-small --import-jsonl ./exports/movielens_small_db.jsonl.tgz --export
 
 # Compare all methods:
-./run_benchmark_05_csv_import_graph.sh small 5000 4 all_6
+./run_benchmark_05_csv_import_graph.sh movielens-small 5000 4 all_6
 
 # Compare all methods with export (includes roundtrip validation):
-./run_benchmark_05_csv_import_graph.sh small 5000 4 all_6 --export
+./run_benchmark_05_csv_import_graph.sh movielens-small 5000 4 all_6 --export
 
 Export & Roundtrip Validation:
 ===============================
@@ -1008,10 +1008,10 @@ def import_from_jsonl(jsonl_path: Path, target_db_path: Path) -> float:
 # This structure mirrors the document example (04_csv_import_documents.py)
 # Format: query results with count and sample data for verification
 EXPECTED_RESULTS = {
-    "small": {
-        "counts": {"users": 610, "movies": 9742, "rated": 98734, "tagged": 3494},
+    "movielens-small": {
+        "counts": {"users": 610, "movies": 9742, "rated": 97823, "tagged": 3436},
         "samples": {
-            "user1_ratings": 223,
+            "user1_ratings": 222,
             "user1_tags": 0,
             "movie1_title": "Toy Story (1995)",
             "movie1_genres": "Adventure|Animation|Children|Comedy|Fantasy",
@@ -1019,21 +1019,21 @@ EXPECTED_RESULTS = {
         "queries": [
             {
                 "name": "Query 1: Movies rated by User #1 (SQL - Basic Traversal)",
-                "count": 223,
+                "count": 222,
             },
             {
                 "name": "Query 2: Movies rated 5.0 by User #1 (SQL - Edge Property Filter)",
-                "count": 119,
+                "count": 118,
             },
             {
                 "name": "Query 3: Rating statistics for top 5 active users (SQL - Aggregations)",
                 "count": 5,
-                "sample": {"top_user_id": 414, "top_user_ratings": 2645},
+                "sample": {"top_user_id": 414, "top_user_ratings": 2619},
             },
             {
                 "name": "Query 4: Top 10 most rated movies (SQL - Aggregations)",
                 "count": 10,
-                "sample": {"top_movie": "Forrest Gump (1994)", "top_movie_count": 317},
+                "sample": {"top_movie": "", "top_movie_count": 508},
             },
             {
                 "name": "Query 5: Top 10 most tagged movies (SQL - Aggregations)",
@@ -1042,28 +1042,28 @@ EXPECTED_RESULTS = {
             },
             {
                 "name": "Query 6: Users who rated same movies as User #1 (SQL - MATCH Pattern)",
-                "count": 15173,
+                "count": 14990,
             },
             {
                 "name": "Query 7: Users with similar taste to User #1 (SQL - MATCH + Aggregation)",
-                "count": 482,
+                "count": 478,
             },
             {
                 "name": "Query 8: Rating distribution across all ratings (SQL - Aggregation)",
-                "count": 10,
+                "count": 11,
             },
             {
                 "name": "Query 9: User #1's top-rated movies (Cypher - Basic Pattern)",
-                "count": 193,
+                "count": 187,
             },
             {
                 "name": "Query 10: Users who rated same movies as User #1 (Cypher - Pattern)",
-                "count": 602,
-                "sample": {"top_user_id": 414, "top_shared": 187},
+                "count": 188,
+                "sample": {"top_user_id": 414, "top_shared": 188},
             },
         ],
     },
-    "large": {
+    "movielens-large": {
         "counts": {
             "users": 330975,
             "movies": 86537,
@@ -1982,7 +1982,11 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
         freq = record.get_property("frequency")
         bar_len = int((freq / max_freq) * 40)
         bar = "█" * bar_len
-        print(f"  {rating:<10.1f} {freq:<12,} {bar}")
+        # Handle NULL ratings (introduced by NULL injection)
+        if rating is None:
+            print(f"  {'NULL':<10} {freq:<12,} {bar}")
+        else:
+            print(f"  {rating:<10.1f} {freq:<12,} {bar}")
 
     if check_baseline and len(expected_queries) > 7:
         expected_count = expected_queries[7].get("count")
@@ -2130,10 +2134,10 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
 def main():
     parser = argparse.ArgumentParser(description="Graph Creation Benchmark")
     parser.add_argument(
-        "--size",
-        choices=["small", "large"],
-        default="small",
-        help="Dataset size (default: small)",
+        "--dataset",
+        choices=["movielens-small", "movielens-large"],
+        default="movielens-small",
+        help="Dataset to use (default: movielens-small)",
     )
     parser.add_argument(
         "--batch-size",
@@ -2167,20 +2171,20 @@ def main():
         "--db-name",
         type=str,
         default=None,
-        help="Database name (default: ml_graph_{size}_db)",
+        help="Database name (default: based on dataset, e.g., movielens_graph_small_db)",
     )
     parser.add_argument(
         "--source-db",
         type=str,
         default=None,
-        help="Custom source database path (default: ./my_test_databases/ml_{size}_db)",
+        help="Custom source database path (default: ./my_test_databases/{dataset}_db)",
     )
     parser.add_argument(
         "--import-jsonl",
         type=str,
         default=None,
         help="Import from JSONL export instead of using source-db "
-        "(e.g., ./exports/ml_small_db.jsonl.tgz)",
+        "(e.g., ./exports/movielens_small_db.jsonl.tgz)",
     )
     parser.add_argument(
         "--export",
@@ -2200,14 +2204,16 @@ def main():
 
     # Set default database name if not provided
     if args.db_name is None:
-        db_name = f"ml_graph_{args.size}_db"
+        # Convert dataset name to db name (movielens-small → movielens_graph_small_db)
+        dataset_suffix = args.dataset.replace("movielens-", "")
+        db_name = f"movielens_graph_{dataset_suffix}_db"
     else:
         db_name = args.db_name
 
     print("=" * 70)
     print("🚀 Graph Creation Benchmark")
     print("=" * 70)
-    print(f"Dataset: {args.size}")
+    print(f"Dataset: {args.dataset}")
     print(f"Batch size: {args.batch_size:,}")
     print(f"Parallel level: {args.parallel}")
     print(f"Method: {args.method} API")
@@ -2237,7 +2243,7 @@ def main():
             print(f"❌ JSONL export not found: {jsonl_path}")
             print(
                 f"   Export a database with: python 04_csv_import_documents.py "
-                f"--size {args.size} --export"
+                f"--dataset {args.dataset} --export"
             )
             sys.exit(1)
 
@@ -2246,7 +2252,11 @@ def main():
         print()
 
         # Create temporary database from import
-        doc_db_path = Path(f"./my_test_databases/ml_{args.size}_db_imported")
+        # Convert dataset name: movielens-small → movielens_small_db_imported
+        dataset_suffix = args.dataset.replace("movielens-", "")
+        doc_db_path = Path(
+            f"./my_test_databases/movielens_{dataset_suffix}_db_imported"
+        )
         print("Step 0: Importing Source Database from JSONL")
         print("=" * 70)
         import_time = import_from_jsonl(jsonl_path, doc_db_path)
@@ -2256,11 +2266,13 @@ def main():
         if args.source_db:
             doc_db_path = Path(args.source_db)
         else:
-            doc_db_path = Path(f"./my_test_databases/ml_{args.size}_db")
+            # Convert dataset name: movielens-small → movielens_small_db
+            dataset_suffix = args.dataset.replace("movielens-", "")
+            doc_db_path = Path(f"./my_test_databases/movielens_{dataset_suffix}_db")
 
         if not doc_db_path.exists():
             print(f"❌ Source database not found: {doc_db_path}")
-            print(f"   Run: python 04_csv_import_documents.py --size {args.size}")
+            print(f"   Run: python 04_csv_import_documents.py --dataset {args.dataset}")
             print("   OR use --import-jsonl to import from JSONL export")
             sys.exit(1)
 
@@ -2331,7 +2343,7 @@ def main():
     with arcadedb.open_database(str(graph_db_path)) as db:
         query_results_before, validation_passed_before = validate_and_query(
             db,
-            args.size,
+            args.dataset,
             user_count,
             movie_count,
             rated_count,
@@ -2343,7 +2355,7 @@ def main():
     if query_results_before:
         try:
             results_file = save_query_results(
-                query_results_before, args.size, graph_db_path
+                query_results_before, args.dataset, graph_db_path
             )
             print(f"💾 Query results saved to: {results_file}")
             print()
@@ -2479,7 +2491,7 @@ def main():
                     print("   🔍 Verifying roundtrip database...")
                     _, _, validation_passed = validate_counts_and_samples(
                         db=roundtrip_db,
-                        size=args.size,
+                        size=args.dataset,
                         expected_user_count=user_count,
                         expected_movie_count=movie_count,
                         expected_rated_count=rated_count,
@@ -2494,7 +2506,7 @@ def main():
                     print()
 
                     _, validation_passed_after = run_and_validate_queries(
-                        roundtrip_db, args.size, check_baseline=True
+                        roundtrip_db, args.dataset, check_baseline=True
                     )
 
                     validation_passed = validation_passed and validation_passed_after

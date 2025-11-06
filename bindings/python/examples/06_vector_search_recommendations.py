@@ -77,11 +77,11 @@ Dataset: MovieLens small (9,742 movies from Example 05)
 Usage:
     # Import from JSONL export (recommended)
     python 06_vector_search_recommendations.py \\
-        --import-jsonl ./exports/ml_graph_small_db.jsonl.tgz
+        --import-jsonl ./exports/movielens_graph_small_db.jsonl.tgz
 
     # Use existing database
     python 06_vector_search_recommendations.py \\
-        --source-db my_test_databases/ml_graph_small_db
+        --source-db my_test_databases/movielens_graph_small_db
 """
 
 import argparse
@@ -514,14 +514,14 @@ def main():
         "--db-path",
         required=True,
         type=str,
-        help="Working database path (e.g., ml_graph_small_db_vectors)",
+        help="Working database path (e.g., movielens_graph_small_db_vectors)",
     )
 
     parser.add_argument(
         "--source-db",
         required=True,
         type=str,
-        help="Source graph database path (e.g., ml_graph_small_db)",
+        help="Source graph database path (e.g., movielens_graph_small_db)",
     )
 
     parser.add_argument(
@@ -530,7 +530,7 @@ def main():
         required=False,
         help=(
             "Import graph database from JSONL file "
-            "(e.g., ./exports/ml_graph_small_db.jsonl.tgz)"
+            "(e.g., ./exports/movielens_graph_small_db.jsonl.tgz)"
         ),
     )
 

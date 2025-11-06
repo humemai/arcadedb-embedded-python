@@ -38,8 +38,8 @@ pip install arcadedb-embedded
 The example automatically downloads the dataset if it doesn't exist. You can also use a pre-existing document database from Example 04.
 
 **Two dataset sizes available:**
-- **ml-large**: ~330K users, ~86K movies, ~33M edges (~971 MB CSV) - Realistic performance testing
-- **ml-small**: ~610 users, ~9,700 movies, ~100K edges (~3.2 MB CSV) - Quick testing
+- **movielens-large**: ~330K users, ~86K movies, ~33M edges (~971 MB CSV) - Realistic performance testing
+- **movielens-small**: ~610 users, ~9,700 movies, ~100K edges (~3.2 MB CSV) - Quick testing
 
 ## Usage
 

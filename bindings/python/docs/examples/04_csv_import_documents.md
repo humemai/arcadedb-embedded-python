@@ -40,13 +40,13 @@ The example automatically downloads the dataset if it doesn't exist. You can als
 
 ```bash
 cd bindings/python/examples
-python download_sample_data.py --size large # Large dataset
-python download_sample_data.py --size small # Small dataset
+python download_data.py movielens-large # movielens large dataset
+python download_data.py movielens-small # movielens small dataset
 ```
 
 **Two dataset sizes available:**
-- **ml-large**: ~86,000 movies, ~33M ratings (~265 MB) - Realistic performance testing
-- **ml-small**: ~9,700 movies, ~100,000 ratings (~1 MB) - Quick testing
+- **movielens-large**: ~86,000 movies, ~33M ratings (~265 MB) - Realistic performance testing
+- **movielens-small**: ~9,700 movies, ~100,000 ratings (~1 MB) - Quick testing
 
 Both datasets include intentional NULL values for testing:
 - `movies.csv`: ~3% NULL genres
@@ -67,7 +67,7 @@ Both datasets include intentional NULL values for testing:
 
 **Total records**: 36,333,551 documents
 
-For quick testing with the smaller dataset (124,003 records), use: `python download_sample_data.py --size small`
+For quick testing with the smaller dataset (124,003 records), use: `python download_data.py movielens-small`
 
 ## Usage
 
@@ -93,7 +93,7 @@ python 04_csv_import_documents.py --help
 - `--parallel PARALLEL` - Number of parallel import threads (default: auto-detect)
 - `--batch-size BATCH_SIZE` - Records per commit batch (default: 5000)
 - `--export` - Export database to JSONL after import
-- `--db-name DB_NAME` - Custom database name (default: ml_{size}_db)
+- `--db-name DB_NAME` - Custom database name (default: movielens_{size}_db)
 
 **Recommendations:**
 - Parallel threads: 4-8 for best performance (auto-detected by default)
@@ -104,7 +104,7 @@ python 04_csv_import_documents.py --help
 
 The example uses **automatic type inference** by the Java CSV importer, which analyzes the data and selects optimal ArcadeDB types:
 
-### Example Inference Results (ml-large)
+### Example Inference Results (movielens-large)
 
 ```
 📋 Movie (movies.csv):
@@ -139,7 +139,7 @@ data_dir = Path(__file__).parent / "data" / "ml-latest-small"
 if not data_dir.exists():
     print("❌ MovieLens dataset not found!")
     print("💡 Please download the dataset first:")
-    print("   python download_sample_data.py")
+    print("   python download_data.py")
     exit(1)
 ```
 
@@ -489,18 +489,18 @@ ARCADEDB_JVM_MAX_HEAP="8g" python 04_csv_import_documents.py --size large
 - NULL value detection for all 4 files
 - Performance statistics (before/after indexes)
 - Data analysis queries with results
-- Total time: ~2-3 minutes (ml-large) or ~5 seconds (ml-small)
+- Total time: ~2-3 minutes (movielens-large) or ~5 seconds (movielens-small)
 
 **Database location:**
-- Small dataset: `./my_test_databases/ml_small_db/`
-- Large dataset: `./my_test_databases/ml_large_db/`
+- Small dataset: `./my_test_databases/movielens_small_db/`
+- Large dataset: `./my_test_databases/movielens_large_db/`
 
 The database is preserved for inspection after the example completes.
 
 **Database size:**
 
-- **ml-large**: ~2.0 GB database from ~971 MB CSV files (~2.1x expansion)
-- **ml-small**: ~27 MB database from ~3.2 MB CSV files (~8.4x expansion)
+- **movielens-large**: ~2.0 GB database from ~971 MB CSV files (~2.1x expansion)
+- **movielens-small**: ~27 MB database from ~3.2 MB CSV files (~8.4x expansion)
 
 ⚠️ **Note**: Database files are larger than source CSVs due to:
 
@@ -520,15 +520,15 @@ The database is preserved for inspection after the example completes.
 
 Step 0: Checking for MovieLens dataset...
 ✅ Large dataset found!
-   Location: .../data/ml-large
+   Location: .../data/movielens-large
 
 # Or if dataset doesn't exist, you'll see:
-# ❌ Large dataset not found at: .../data/ml-large
+# ❌ Large dataset not found at: .../data/movielens-large
 # 📥 Downloading large dataset...
 # ✅ Dataset downloaded successfully!
 
 Step 1: Creating database...
-   ✅ Database created at: ./my_test_databases/ml_large_db
+   ✅ Database created at: ./my_test_databases/movielens_large_db
    ⏱️  Time: 0.597s
 
 Step 2: Inspecting CSV files and inferring types...
@@ -601,7 +601,7 @@ Step 12: Querying and analyzing imported data...
 
 The example creates a `FULL_TEXT` index on the `Movie.genres` field, but testing reveals that **FULL_TEXT indexes do NOT improve performance for `LIKE '%term%'` pattern matching queries**, and may actually cause performance regression.
 
-### Performance Results (ml-large dataset with 86,537 movies)
+### Performance Results (movielens-large dataset with 86,537 movies)
 
 **Query: `SELECT count(*) FROM Movie WHERE genres LIKE '%Action%'`**
 
@@ -667,10 +667,10 @@ After running the example, the database directory contains several types of file
 
 ### Directory Structure
 
-Example for large dataset (`ml_large_db`):
+Example for large dataset (`movielens_large_db`):
 
 ```bash
-my_test_databases/ml_large_db/
+my_test_databases/movielens_large_db/
 ├── configuration.json          # Database configuration
 ├── schema.json                 # Current schema (authoritative)
 ├── schema.prev.json           # Previous schema version (for rollback)
@@ -808,8 +808,8 @@ Some index files may appear duplicated with different timestamps due to LSMTree 
 
 ```python
 # Open existing database (no creation needed)
-# Use ml_small_db or ml_large_db depending on which dataset you imported
-db = arcadedb.create_arcadedb("./my_test_databases/ml_large_db")
+# Use movielens_small_db or movielens_large_db depending on which dataset you imported
+db = arcadedb.create_arcadedb("./my_test_databases/movielens_large_db")
 
 # Schema is automatically loaded (4 types: Movie, Rating, Link, Tag)
 types = db.get_schema().get_types()
@@ -841,7 +841,7 @@ result = db.query("sql", "SELECT FROM Movie WHERE movieId = 500")  # Fast indexe
 db.close()  # Ensures all data is flushed to disk
 
 # 2. Reopen existing database (don't recreate!)
-db_path = "./my_test_databases/ml_large_db"  # or ml_small_db
+db_path = "./my_test_databases/movielens_large_db"  # or movielens_small_db
 if os.path.exists(db_path):
     db = arcadedb.create_arcadedb(db_path)
     # All data, schema, indexes automatically available
@@ -856,8 +856,8 @@ else:
 
 **Database files on disk**:
 
-Small dataset: `./my_test_databases/ml_small_db/` (~27 MB, 155 files)
-Large dataset: `./my_test_databases/ml_large_db/` (~2.0 GB, more files due to data volume)
+Small dataset: `./my_test_databases/movielens_small_db/` (~27 MB, 155 files)
+Large dataset: `./my_test_databases/movielens_large_db/` (~2.0 GB, more files due to data volume)
 
 Contents:
 
