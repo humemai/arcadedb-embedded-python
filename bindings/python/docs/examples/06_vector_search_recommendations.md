@@ -39,36 +39,36 @@ This example requires a graph database from Example 05:
 python 05_csv_import_graph.py --size small --method java --no-async
 
 # Option B: Import from JSONL export
-python 05_csv_import_graph.py --size small --import-jsonl ./exports/ml_graph_small_db.jsonl.tgz
+python 05_csv_import_graph.py --size small --import-jsonl ./exports/movielens_graph_small_db.jsonl.tgz
 ```
 
 **Two dataset sizes available:**
-- **ml-small**: 9,742 movies, ~100K ratings - Quick testing (9 min total)
-- **ml-large**: 86,537 movies, ~33M ratings - Production testing (51 min total)
+- **movielens-small**: 9,742 movies, ~100K ratings - Quick testing (9 min total)
+- **movielens-large**: 86,537 movies, ~33M ratings - Production testing (51 min total)
 
 ## Usage
 
 ```bash
 # Recommended: Import from JSONL export (fastest setup)
 python 06_vector_search_recommendations.py \
-    --source-db my_test_databases/ml_graph_small_db \
-    --db-path my_test_databases/ml_graph_small_db_vectors
+    --source-db my_test_databases/movielens_graph_small_db \
+    --db-path my_test_databases/movielens_graph_small_db_vectors
 
 # Use existing graph database
 python 06_vector_search_recommendations.py \
-    --source-db my_test_databases/ml_graph_small_db \
-    --db-path my_test_databases/ml_graph_small_db_vectors
+    --source-db my_test_databases/movielens_graph_small_db \
+    --db-path my_test_databases/movielens_graph_small_db_vectors
 
 # Import from JSONL
 python 06_vector_search_recommendations.py \
-    --import-jsonl ./exports/ml_graph_small_db.jsonl.tgz \
-    --source-db my_test_databases/ml_graph_small_db \
-    --db-path my_test_databases/ml_graph_small_db_vectors
+    --import-jsonl ./exports/movielens_graph_small_db.jsonl.tgz \
+    --source-db my_test_databases/movielens_graph_small_db \
+    --db-path my_test_databases/movielens_graph_small_db_vectors
 
 # Force re-generation of embeddings
 python 06_vector_search_recommendations.py \
-    --source-db my_test_databases/ml_graph_small_db \
-    --db-path my_test_databases/ml_graph_small_db_vectors \
+    --source-db my_test_databases/movielens_graph_small_db \
+    --db-path my_test_databases/movielens_graph_small_db_vectors \
     --force-embed
 
 # See all options
