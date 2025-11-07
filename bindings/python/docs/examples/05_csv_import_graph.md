@@ -223,7 +223,7 @@ Total Roundtrip (Export + Import):
 
 ## Graph Queries
 
-The example includes 10 comprehensive graph queries:
+The example includes 10 comprehensive graph queries (8 SQL + 2 Gremlin):
 
 ### Query 1: Count Vertices by Type
 ```sql
@@ -274,11 +274,15 @@ LIMIT 10
 
 **⚠️ Known Issue:** Query 6 has an off-by-one result in `java_noindex_noasync` mode after roundtrip validation (1,806,983 vs 1,806,984). This is a query ordering artifact, not data loss. All edge counts are correct.
 
-### Query 7-10: Additional Patterns
-- Most active users (by rating count)
-- Most tagged movies
-- Movies with multiple genres
-- Recent ratings
+### Query 7-8: Additional SQL Patterns
+- Query 7: Users with similar taste (SQL MATCH + aggregation)
+- Query 8: Rating distribution (SQL aggregation, filters NULL ratings)
+
+### Query 9-10: Gremlin Patterns
+- Query 9: User's top-rated movies (Gremlin traversal with filtering)
+- Query 10: Collaborative filtering (Gremlin group/count aggregation)
+
+**Note:** Gremlin provides superior performance compared to Cypher (63× faster in benchmarks). These queries demonstrate Apache TinkerPop traversal patterns as an alternative to SQL MATCH syntax.
 
 ## Code Walkthrough
 

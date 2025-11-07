@@ -72,11 +72,12 @@
 # CSV → Edges: Movie HAS_TAG Tag relationships (from tags.csv)
 # Foreign key resolution (userId → User vertex, movieId → Movie vertex)
 # Edge properties (rating score, timestamp)
-# Graph queries: "Users who rated similar movies", "Movie recommendations"
+# Graph queries: 8 SQL + 2 Gremlin (demonstrates Apache TinkerPop)
 # Performance benchmarking: Java API vs SQL, sync vs async, with/without indexes
 # Key findings: java_noasync fastest (5,071 edges/sec), sync 2.5× faster than async
+# Query languages: SQL MATCH (native) + Gremlin (TinkerPop, superior performance)
 ```
-**Note**: ✅ Complete with 6 benchmark configurations, 10 validation queries, export/import roundtrip testing
+**Note**: ✅ Complete with 6 benchmark configurations, 10 validation queries (8 SQL + 2 Gremlin), export/import roundtrip testing
 
 ### 6. **Vector Search: Movie Recommendations** 🚧 (Priority: MEDIUM)
 **File**: `06_vector_search_movies.py`

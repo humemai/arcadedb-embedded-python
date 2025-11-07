@@ -1053,11 +1053,11 @@ EXPECTED_RESULTS = {
                 "count": 10,
             },
             {
-                "name": "Query 9: User #1's top-rated movies (Cypher - Basic Pattern)",
+                "name": "Query 9: User #1's top-rated movies (Gremlin - Basic Pattern)",
                 "count": 187,
             },
             {
-                "name": "Query 10: Users who rated same movies as User #1 (Cypher - Pattern)",
+                "name": "Query 10: Users who rated same movies as User #1 (Gremlin - Pattern)",
                 "count": 188,
                 "sample": {"top_user_id": 414, "top_shared": 188},
             },
@@ -1119,11 +1119,11 @@ EXPECTED_RESULTS = {
                 "count": 10,
             },
             {
-                "name": "Query 9: User #1's top-rated movies (Cypher - Basic Pattern)",
+                "name": "Query 9: User #1's top-rated movies (Gremlin - Basic Pattern)",
                 "count": 39,
             },
             {
-                "name": "Query 10: Users who rated same movies as User #1 (Cypher - Pattern)",
+                "name": "Query 10: Users who rated same movies as User #1 (Gremlin - Pattern)",
                 "count": 252903,
                 "sample": {"top_user_id": 236260, "top_shared": 60},
             },
@@ -1542,7 +1542,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     """Run all graph queries and validate against baseline.
 
     This unified function:
-    - Runs all 10 graph queries (SQL + Cypher)
+    - Runs all 10 graph queries (8 SQL + 2 Gremlin)
     - Collects results in a structured format
     - Validates against EXPECTED_RESULTS if check_baseline=True
     - Outputs JSON for easy copy-paste into EXPECTED_RESULTS
@@ -1957,6 +1957,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
         """
         SELECT rating, count(*) as frequency
         FROM RATED
+        WHERE rating IS NOT NULL
         GROUP BY rating
         ORDER BY rating
         """,
@@ -2000,32 +2001,34 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
             print(f"  ✓ Count matches baseline: {len(distribution)}")
     print()
 
-    # Query 9: Basic Cypher Pattern
-    print("9. User #1's top-rated movies (Cypher - Basic Pattern)")
+    # Query 9: Basic Gremlin Pattern
+    print("9. User #1's top-rated movies (Gremlin - Basic Pattern)")
     print("-" * 70)
     start = time.time()
     result = db.query(
-        "cypher",
+        "gremlin",
         """
-        MATCH (u:User {userId: 1})-[r:RATED]->(m:Movie)
-        WHERE r.rating >= 4.0
-        RETURN m.title as title, r.rating as rating
-        ORDER BY r.rating DESC
+        g.V().hasLabel('User').has('userId', 1)
+         .outE('RATED').has('rating', gte(4.0))
+         .order().by('rating', desc)
+         .project('title', 'rating')
+           .by(inV().values('title'))
+           .by('rating')
         """,
     )
-    cypher_results = list(result)
+    gremlin_results = list(result)
     elapsed = time.time() - start
 
     query9_result = {
-        "name": "Query 9: User #1's top-rated movies (Cypher - Basic Pattern)",
-        "count": len(cypher_results),
+        "name": "Query 9: User #1's top-rated movies (Gremlin - Basic Pattern)",
+        "count": len(gremlin_results),
     }
     results.append(query9_result)
 
-    print(f"  Found {len(cypher_results)} movies in {elapsed:.3f}s")
+    print(f"  Found {len(gremlin_results)} movies in {elapsed:.3f}s")
     print(f"  {'#':<4} {'Title':<50} {'Rating':<8}")
     print(f"  {'-'*4} {'-'*50} {'-'*8}")
-    for i, record in enumerate(cypher_results):
+    for i, record in enumerate(gremlin_results):
         if i >= 10:  # Only display first 10
             break
         title = record.get_property("title")
@@ -2034,47 +2037,55 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
 
     if check_baseline and len(expected_queries) > 8:
         expected_count = expected_queries[8].get("count")
-        if expected_count is not None and len(cypher_results) != expected_count:
+        if expected_count is not None and len(gremlin_results) != expected_count:
             print(
                 f"  ❌ Count mismatch: expected {expected_count}, "
-                f"got {len(cypher_results)}"
+                f"got {len(gremlin_results)}"
             )
             all_passed = False
         elif expected_count is not None:
-            print(f"  ✓ Count matches baseline: {len(cypher_results)}")
+            print(f"  ✓ Count matches baseline: {len(gremlin_results)}")
     print()
 
-    # Query 10: Collaborative Filtering (Cypher)
-    print("10. Users who rated same movies as User #1 (Cypher - Pattern)")
+    # Query 10: Collaborative Filtering (Gremlin)
+    print("10. Users who rated same movies as User #1 (Gremlin - Pattern)")
     print("-" * 70)
     start = time.time()
     result = db.query(
-        "cypher",
+        "gremlin",
         """
-        MATCH (u1:User {userId: 1})-[:RATED]->(m:Movie)<-[:RATED]-(u2:User)
-        WHERE u2.userId <> 1
-        RETURN u2.userId as other_user, count(m) as shared_movies
-        ORDER BY shared_movies DESC
+        g.V().hasLabel('User').has('userId', 1)
+         .out('RATED')
+         .in('RATED')
+         .where(values('userId').is(neq(1)))
+         .group()
+           .by('userId')
+           .by(count())
+         .unfold()
+         .project('other_user', 'shared_movies')
+           .by(select(keys))
+           .by(select(values))
+         .order().by(select('shared_movies'), desc)
         """,
     )
-    collab_cypher = list(result)
+    collab_gremlin = list(result)
     elapsed = time.time() - start
 
     query10_result = {
-        "name": "Query 10: Users who rated same movies as User #1 (Cypher - Pattern)",
-        "count": len(collab_cypher),
+        "name": "Query 10: Users who rated same movies as User #1 (Gremlin - Pattern)",
+        "count": len(collab_gremlin),
         "sample": {},
     }
-    if collab_cypher:
-        top_user = collab_cypher[0]
+    if collab_gremlin:
+        top_user = collab_gremlin[0]
         query10_result["sample"]["top_user_id"] = top_user.get_property("other_user")
         query10_result["sample"]["top_shared"] = top_user.get_property("shared_movies")
     results.append(query10_result)
 
-    print(f"  Found {len(collab_cypher)} users in {elapsed:.3f}s")
+    print(f"  Found {len(collab_gremlin)} users in {elapsed:.3f}s")
     print(f"  {'User':<8} {'Shared Movies':<15}")
     print(f"  {'-'*8} {'-'*15}")
-    for i, record in enumerate(collab_cypher):
+    for i, record in enumerate(collab_gremlin):
         if i >= 10:  # Only display first 10
             break
         user = record.get_property("other_user")
@@ -2086,8 +2097,8 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
         exp_top_id = expected_sample.get("top_user_id")
         exp_top_shared = expected_sample.get("top_shared")
 
-        if exp_top_id is not None and collab_cypher:
-            actual_top_id = collab_cypher[0].get_property("other_user")
+        if exp_top_id is not None and collab_gremlin:
+            actual_top_id = collab_gremlin[0].get_property("other_user")
             if actual_top_id != exp_top_id:
                 print(
                     f"  ❌ Top user mismatch: expected {exp_top_id}, "
@@ -2097,8 +2108,8 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
             else:
                 print(f"  ✓ Top user matches baseline: {actual_top_id}")
 
-        if exp_top_shared is not None and collab_cypher:
-            actual_shared = collab_cypher[0].get_property("shared_movies")
+        if exp_top_shared is not None and collab_gremlin:
+            actual_shared = collab_gremlin[0].get_property("shared_movies")
             if actual_shared != exp_top_shared:
                 print(
                     f"  ❌ Shared count mismatch: expected {exp_top_shared}, "
