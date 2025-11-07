@@ -1531,7 +1531,7 @@ def validate_and_query(
     if validation_passed:
         print(f"✅ All validation & queries passed! ({elapsed:.2f}s)")
     else:
-        print(f"⚠️  Some validations failed ({elapsed:.2f}s)")
+        print(f"❌ VALIDATION FAILED - Some checks did not pass ({elapsed:.2f}s)")
     print("=" * 70)
     print()
 
@@ -2592,6 +2592,21 @@ def main():
             f"(includes schema, loading, validation)"
         )
     print("=" * 70)
+    print()
+
+    # Check if validation failed and exit with error code
+    if not validation_passed:
+        print("=" * 70)
+        print("❌ VALIDATION FAILED")
+        print("=" * 70)
+        print()
+        print("Some validation checks or queries did not pass.")
+        print("This may indicate:")
+        print("  • Data integrity issues")
+        print("  • Baseline mismatch")
+        print("  • Query behavior changes")
+        print()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
