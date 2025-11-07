@@ -33,21 +33,22 @@ Perfect introduction to ArcadeDB basics:
 ---
 
 ### 🔗 [02_social_network_graph.py](./02_social_network_graph.py) ✅ **COMPLETE**
-**Vertex Types | Edge Types | Graph Traversal | SQL MATCH vs Cypher | NULL Handling**
+**Vertex Types | Edge Types | Graph Traversal | SQL MATCH vs Cypher vs Gremlin | NULL Handling**
 
 Complete social network modeling with graph database:
 - Creating vertex types (Person) and edge types (FRIEND_OF) with rich properties
 - NULL value handling for optional fields (email, phone, reputation)
 - Bidirectional relationships with metadata (since, closeness)
 - Graph traversal patterns (friends, friends-of-friends, mutual connections)
-- Comparing SQL MATCH vs Cypher query languages
+- Comparing SQL MATCH vs Cypher vs Gremlin query languages
+- **Performance comparison: Gremlin 63× faster than Cypher** (0.017s vs 1.075s total)
 - Variable-length path queries (`*1..3`) and graph aggregations
 - NULL filtering (IS NULL queries for missing contact info)
 - Relationship property queries (closeness filtering)
 
-**Learn:** Graph schema design, relationship modeling, multi-language querying, NULL handling in graphs
+**Learn:** Graph schema design, relationship modeling, multi-language querying, performance optimization, NULL handling in graphs
 
-**Status:** ✅ Fully functional - 8 people, 24 bidirectional edges, comprehensive queries
+**Status:** ✅ Fully functional - 8 people, 24 bidirectional edges, comprehensive queries with performance analysis
 
 ---
 

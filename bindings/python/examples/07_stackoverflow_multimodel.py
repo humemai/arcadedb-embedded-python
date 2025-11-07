@@ -1350,13 +1350,18 @@ def main():
         epilog="""
 Examples:
   # Import and process Stack Overflow data (runs all available phases)
+  # Small dataset: 645 MB XML → ~1.4M records
+  ARCADEDB_JVM_MAX_HEAP="2g" ARCADEDB_JVM_ARGS="-Xms2g"
   python 07_stackoverflow_multimodel.py --dataset stackoverflow-small
 
-  # Use medium dataset
+  # Medium dataset: 3 GB XML → ~5M records
+  ARCADEDB_JVM_MAX_HEAP="8g" ARCADEDB_JVM_ARGS="-Xms8g"
   python 07_stackoverflow_multimodel.py --dataset stackoverflow-medium
 
-  # Use large dataset (requires significant disk space and memory)
-  python 07_stackoverflow_multimodel.py --dataset stackoverflow-large
+  # Large dataset: 325 GB XML → ~350M records (REQUIRES 32GB+ RAM)
+  # Note: PostHistory (170GB) is massive - consider smaller batch sizes
+  ARCADEDB_JVM_MAX_HEAP="32g" ARCADEDB_JVM_ARGS="-Xms32g"
+  python 07_stackoverflow_multimodel.py --dataset stackoverflow-large --batch-size 5000
         """,
     )
 
