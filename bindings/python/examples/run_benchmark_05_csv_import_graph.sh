@@ -30,8 +30,8 @@
 #   ./run_benchmark_05_csv_import_graph.sh small 5000 4 all_6 --export
 #   ./run_benchmark_05_csv_import_graph.sh large 10000 8 java
 #   ./run_benchmark_05_csv_import_graph.sh small 5000 4 all_java
-#   ./run_benchmark_05_csv_import_graph.sh small 5000 4 java --import-jsonl ./exports/ml_small_db.jsonl.tgz
-#   ./run_benchmark_05_csv_import_graph.sh small 5000 4 java --import-jsonl ./exports/ml_small_db.jsonl.tgz --export
+#   ./run_benchmark_05_csv_import_graph.sh small 5000 4 java --import-jsonl ./exports/movielens_small_db.jsonl.tgz
+#   ./run_benchmark_05_csv_import_graph.sh small 5000 4 java --import-jsonl ./exports/movielens_small_db.jsonl.tgz --export
 #
 
 # Start timing
@@ -153,7 +153,7 @@ fi
 echo ""
 
 # Check if source database exists (skip if using import mode)
-SOURCE_DB="./my_test_databases/ml_${SIZE}_db"
+SOURCE_DB="./my_test_databases/movielens_${SIZE}_db"
 if [ -z "$IMPORT_JSONL" ]; then
     if [ ! -d "$SOURCE_DB" ]; then
         echo "❌ Source database not found: $SOURCE_DB"
@@ -203,7 +203,7 @@ monitor_memory() {
 # Clean up any existing copies from previous runs
 echo "Cleaning up any existing database copies..."
 for i in {1..6}; do
-    rm -rf "./my_test_databases/ml_${SIZE}_db_copy${i}"
+    rm -rf "./my_test_databases/movielens_${SIZE}_db_copy${i}"
 done
 
 # Create temporary copies for parallel runs (skip if using import mode - each run will import independently)
@@ -218,7 +218,7 @@ if [ $NUM_METHODS -gt 1 ] && [ -z "$IMPORT_JSONL" ]; then
     for method in "${!RUN_METHODS[@]}"; do
         COPY_NUM=$((COPY_NUM + 1))
         COPY_MAP[$method]=$COPY_NUM
-        cp -r "$SOURCE_DB" "./my_test_databases/ml_${SIZE}_db_copy${COPY_NUM}" &
+        cp -r "$SOURCE_DB" "./my_test_databases/movielens_${SIZE}_db_copy${COPY_NUM}" &
         eval "CP_PID${COPY_NUM}=$!"
     done
 
@@ -243,7 +243,7 @@ get_source_db() {
     if [ ! -z "$IMPORT_JSONL" ]; then
         echo "" # No source DB when using import
     elif [ $NUM_METHODS -gt 1 ]; then
-        echo "$(pwd)/my_test_databases/ml_${SIZE}_db_copy${COPY_MAP[$METHOD]}"
+        echo "$(pwd)/my_test_databases/movielens_${SIZE}_db_copy${COPY_MAP[$METHOD]}"
     else
         echo "$(pwd)/$SOURCE_DB"
     fi
@@ -643,9 +643,9 @@ echo "Cleaning up temporary databases..."
 # Remove temporary database copies (used for parallel runs)
 if [ $NUM_METHODS -gt 1 ] && [ -z "$IMPORT_JSONL" ]; then
     for i in {1..6}; do
-        if [ -d "./my_test_databases/ml_${SIZE}_db_copy${i}" ]; then
-            rm -rf "./my_test_databases/ml_${SIZE}_db_copy${i}"
-            echo "  ✓ Removed ml_${SIZE}_db_copy${i}"
+        if [ -d "./my_test_databases/movielens_${SIZE}_db_copy${i}" ]; then
+            rm -rf "./my_test_databases/movielens_${SIZE}_db_copy${i}"
+            echo "  ✓ Removed movielens_${SIZE}_db_copy${i}"
         fi
     done
 fi

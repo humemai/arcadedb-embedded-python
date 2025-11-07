@@ -6,14 +6,14 @@
 #   ./run_with_memory_monitor.sh <log_prefix> <python_command>
 #
 # Example:
-#   ./run_with_memory_monitor.sh vector_large "ARCADEDB_JVM_MAX_HEAP='8g' ARCADEDB_JVM_ARGS='-Xms8g' python 06_vector_search_recommendations.py --source-db my_test_databases/ml_graph_large_db --db-path my_test_databases/ml_graph_large_db_vectors"
+#   ./run_with_memory_monitor.sh vector_large "ARCADEDB_JVM_MAX_HEAP='8g' ARCADEDB_JVM_ARGS='-Xms8g' python 06_vector_search_recommendations.py --source-db my_test_databases/movielens_graph_large_db --db-path my_test_databases/movielens_graph_large_db_vectors"
 #
 
 if [ $# -lt 2 ]; then
     echo "Usage: $0 <log_prefix> <python_command>"
     echo ""
     echo "Example:"
-    echo "  $0 vector_large \"python 06_vector_search_recommendations.py --source-db my_test_databases/ml_graph_large_db --db-path my_test_databases/ml_graph_large_db_vectors\""
+    echo "  $0 vector_large \"python 06_vector_search_recommendations.py --source-db my_test_databases/movielens_graph_large_db --db-path my_test_databases/movielens_graph_large_db_vectors\""
     exit 1
 fi
 
