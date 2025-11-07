@@ -30,7 +30,7 @@ from .exceptions import ArcadeDBError
 from .exporter import export_database, export_to_csv
 
 # Import importer classes
-from .importer import Importer, import_csv, import_json, import_neo4j
+from .importer import Importer, import_csv, import_xml
 
 # Import result classes
 from .results import Result, ResultSet
@@ -88,7 +88,6 @@ __all__ = [
     "export_to_csv",
     # Data import
     "Importer",
-    "import_json",
     "import_csv",
-    "import_neo4j",
+    "import_xml",
 ]

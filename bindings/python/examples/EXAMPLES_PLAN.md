@@ -99,23 +99,255 @@
 **Target**: Backend developers, full-stack engineers, data scientists
 **Concepts**: Documents + Graph + Vectors in one system, complex queries, multi-model integration
 **Why**: Comprehensive showcase of ArcadeDB's multi-model capabilities with rich dataset
-**Status**: 🚧 Planned
-**Dataset**: Stack Exchange data dump (Python/JavaScript tags, converted from XML to CSV)
-**Scope**: 300-400 lines (comprehensive multi-model example)
+**Status**: 🚧 In Progress
+**Dataset**: Stack Exchange XML data dump (8 XML files: Posts, Users, Tags, Comments, Votes, Badges, PostLinks, PostHistory)
+**Dataset Sizes**:
+- Small (cs.stackexchange.com): ~1.4M records, ~650MB, 668 tags
+- Medium (stats.stackexchange.com): ~5M records, ~2.5GB, 1,612 tags
+- Large (stackoverflow.com): ~350M records, ~325GB, 65K tags
+**Scope**: Single comprehensive Python file (~800-1000 lines) with class-based architecture
+
+## Architecture: Three Phases in ONE File
+
+### **Phase 1: Document Import (SchemaBuilder + DocumentImporter classes)**
+Import 8 XML files → 8 Document types with schema-first approach
 ```python
-# Documents: Questions/Answers with full text, searchable content
-# Graph: User → ASKED/ANSWERED → Question, Question → TAGGED_WITH → Tag
-# Vectors: Question embeddings for duplicate detection
-# Multi-model queries:
-#   - "Find Python experts" (graph traversal + aggregation)
-#   - "Similar unanswered questions" (vector + document filtering)
-#   - "Trending topics by tag relationships" (graph analytics)
-# XML → CSV conversion (provide script or use existing tools)
+class SchemaBuilder:
+    """Creates ArcadeDB schema from analyzed JSON schema"""
+    def load_schema(json_path)          # Load stackoverflow_schema.json
+    def create_document_types()         # CREATE DOCUMENT TYPE Post, User, etc.
+    def create_properties()             # CREATE PROPERTY with explicit types
+    def handle_type_conflicts()         # Use STRING for INTEGER+DATETIME conflicts
+
+class DocumentImporter:
+    """Imports XML → Documents with streaming parser"""
+    def import_entity(xml_path, entity)  # Stream XML, batch insert
+    def convert_types()                  # STRING → INTEGER/DATETIME conversion
+    def handle_nulls()                   # Missing attributes = NULL
+    def batch_commit()                   # Commit every 5,000-10,000 records
+    def create_indexes_after_import()    # Primary keys + foreign keys
 ```
-**Dataset Options**:
-- Stack Exchange data dump (8-10 CSV files after conversion)
-- Alternative: E-commerce dataset (products, reviews, customers)
-- Decision: To be determined based on conversion ease and dataset availability
+
+**Documents Created**:
+- Post (22 attrs): Id, PostTypeId, Title, Body, Tags, OwnerUserId, CreationDate, Score, etc.
+- User (12 attrs): Id, DisplayName, Reputation, AboutMe, Location, CreationDate, etc.
+- Tag (5 attrs): Id, TagName, Count, ExcerptPostId, WikiPostId
+- Comment (7 attrs): Id, PostId, UserId, Text, Score, CreationDate, UserDisplayName
+- Vote (6 attrs): Id, PostId, UserId, VoteTypeId, BountyAmount, CreationDate
+- Badge (6 attrs): Id, UserId, Name, Date, Class, TagBased
+- PostLink (5 attrs): Id, PostId, RelatedPostId, LinkTypeId, CreationDate
+- PostHistory (10 attrs): Id, PostId, UserId, PostHistoryTypeId, Text, Comment, CreationDate, etc.
+
+**Indexes Created** (after import):
+```sql
+-- Primary Keys (UNIQUE)
+CREATE INDEX ON Post (Id) UNIQUE
+CREATE INDEX ON User (Id) UNIQUE
+CREATE INDEX ON Tag (TagName) UNIQUE
+
+-- Foreign Keys (NOTUNIQUE) - for graph traversal
+CREATE INDEX ON Post (OwnerUserId, ParentId, AcceptedAnswerId, PostTypeId) NOTUNIQUE
+CREATE INDEX ON Comment (PostId, UserId) NOTUNIQUE
+CREATE INDEX ON Vote (PostId, UserId, VoteTypeId) NOTUNIQUE
+CREATE INDEX ON Badge (UserId, Name) NOTUNIQUE
+CREATE INDEX ON PostLink (PostId, RelatedPostId, LinkTypeId) NOTUNIQUE
+CREATE INDEX ON PostHistory (PostId, UserId) NOTUNIQUE
+
+-- Temporal/Scoring (NOTUNIQUE)
+CREATE INDEX ON Post (CreationDate, Score) NOTUNIQUE
+CREATE INDEX ON User (Reputation) NOTUNIQUE
+```
+
+**Type Conflict Handling**:
+```python
+# Fields with DATETIME conflicts in large dataset → use STRING
+CONFLICT_FIELDS = {
+    'Posts': ['AcceptedAnswerId'],      # 38 DATETIME in 1M samples
+    'Users': ['AccountId'],
+    'Comments': ['Id'],                 # 7,255 DATETIME!
+    'Votes': ['Id'],                    # 13,188 DATETIME!
+    'Badges': ['Id', 'UserId'],
+    'PostLinks': ['Id', 'PostId', 'RelatedPostId'],
+    'Tags': ['ExcerptPostId', 'WikiPostId'],
+}
+# Strategy: Store as STRING, convert to INTEGER at query time (safe)
+```
+
+### **Phase 2: Graph Creation (GraphBuilder class)**
+Convert Documents → Vertices + Edges
+```python
+class GraphBuilder:
+    """Creates graph from documents"""
+    def convert_to_vertices()           # Post/User/Tag documents → vertices
+    def create_user_vertices()          # User documents → User vertices
+    def create_post_vertices()          # Post documents → Post vertices (Q/A)
+    def create_tag_vertices()           # Tag documents → Tag vertices
+    def create_edges()                  # Create all relationship edges
+
+    # Edge creation methods (use indexes for fast lookups)
+    def create_asked_answered_edges()   # Post.OwnerUserId → User
+    def create_answer_to_edges()        # Post.ParentId → Post (answers)
+    def create_has_tag_edges()          # Post.Tags → Tag (parse pipe-delimited)
+    def create_commented_edges()        # Comment.UserId → User, PostId → Post
+    def create_voted_edges()            # Vote.UserId → User (if not NULL)
+    def create_earned_badge_edges()     # Badge.UserId → User
+    def create_linked_edges()           # PostLink relationships
+```
+
+**Vertices Created**:
+- User vertex (from User document)
+- Post vertex (from Post document, discriminate Question vs Answer via PostTypeId)
+- Tag vertex (from Tag document)
+
+**Edges Created**:
+```python
+# User → Post relationships
+User -[ASKED]-> Post        # Post.PostTypeId = 1 (question)
+User -[ANSWERED]-> Post     # Post.PostTypeId = 2 (answer)
+User -[COMMENTED]-> Post    # From Comment.UserId → PostId
+User -[VOTED]-> Post        # From Vote.UserId → PostId (if not NULL)
+
+# Post → Post relationships
+Post -[ANSWER_TO]-> Post    # Post.ParentId (answer to question)
+Post -[LINKED_TO]-> Post    # From PostLink.PostId → RelatedPostId
+
+# Post → Tag relationships
+Post -[HAS_TAG]-> Tag       # Parse Post.Tags (pipe-delimited: "|python|sql|")
+
+# User → Badge relationships
+User -[EARNED_BADGE]-> Badge  # From Badge.UserId
+```
+
+**Graph Queries** (after Phase 2):
+```sql
+-- Find user's questions and answers
+MATCH {User, as: u} -[ASKED|ANSWERED]-> {Post, as: p}
+WHERE u.Id = 5
+RETURN u.DisplayName, p.Title, p.Score
+
+-- Find answers to a question
+MATCH {Post, as: q} <-[ANSWER_TO]- {Post, as: a}
+WHERE q.Id = 1000
+RETURN a.Score, a.Body
+ORDER BY a.Score DESC
+
+-- Find posts by tag
+MATCH {Post, as: p} -[HAS_TAG]-> {Tag, as: t}
+WHERE t.TagName = 'python'
+RETURN p.Title, p.Score
+
+-- Find top contributors (users with most answers)
+MATCH {User, as: u} -[ANSWERED]-> {Post, as: p}
+RETURN u.DisplayName, count(p) as answer_count, u.Reputation
+ORDER BY answer_count DESC
+LIMIT 10
+```
+
+### **Phase 3: Vector Search (VectorBuilder class)**
+Add embeddings for semantic search
+```python
+class VectorBuilder:
+    """Generates embeddings and creates vector indexes"""
+    def generate_post_embeddings()      # Post.Title + Body → embedding
+    def generate_tag_embeddings()       # Tag.TagName + Excerpt → embedding
+    def generate_user_embeddings()      # User.DisplayName + AboutMe → embedding
+    def create_vector_indexes()         # HNSW indexes for each
+    def semantic_search()               # Find similar posts/tags/users
+```
+
+**Embeddings**:
+```python
+# Post embeddings (duplicate question detection)
+Post.embedding = embed(Post.Title + "\n" + Post.Body)  # 384 dims
+CREATE VECTOR INDEX ON Post (embedding) HNSW
+
+# Tag embeddings (related tags)
+Tag.embedding = embed(Tag.TagName + "\n" + Tag.ExcerptPostId.Body)
+CREATE VECTOR INDEX ON Tag (embedding) HNSW
+
+# User embeddings (similar expertise)
+User.embedding = embed(User.DisplayName + "\n" + User.AboutMe)
+CREATE VECTOR INDEX ON User (embedding) HNSW
+```
+
+**Vector Queries** (after Phase 3):
+```python
+# Find duplicate/similar questions
+query_post = db.query("SELECT FROM Post WHERE Id = 1000")
+similar_posts = index.find_nearest(query_post.embedding, k=10)
+
+# Find related tags
+query_tag = db.query("SELECT FROM Tag WHERE TagName = 'python'")
+related_tags = index.find_nearest(query_tag.embedding, k=10)
+
+# Find users with similar expertise
+query_user = db.query("SELECT FROM User WHERE Id = 5")
+similar_users = index.find_nearest(query_user.embedding, k=10)
+```
+
+**Multi-Model Queries** (combine all three):
+```sql
+-- Find Python experts (graph + aggregation)
+MATCH {User, as: u} -[ANSWERED]-> {Post, as: p} -[HAS_TAG]-> {Tag, as: t}
+WHERE t.TagName = 'python' AND p.Score >= 5
+RETURN u.DisplayName, count(p) as answers, sum(p.Score) as total_score
+ORDER BY total_score DESC LIMIT 10
+
+-- Similar unanswered questions (vector + document filtering)
+-- 1. Find similar questions via vector search
+-- 2. Filter by AcceptedAnswerId IS NULL
+-- 3. Rank by Score
+
+-- Trending topics (graph analytics on tag co-occurrence)
+MATCH {Post, as: p} -[HAS_TAG]-> {Tag, as: t1},
+      {Post, as: p} -[HAS_TAG]-> {Tag, as: t2}
+WHERE t1 != t2
+RETURN t1.TagName, t2.TagName, count(p) as co_occurrence
+ORDER BY co_occurrence DESC LIMIT 20
+```
+
+## Class Architecture
+
+```python
+class StackOverflowDatabase:
+    """Main orchestrator - manages all three phases"""
+    def __init__(db_path, dataset_size)
+    def run_full_pipeline()              # Execute all phases
+    def run_phase_1_documents()          # Import documents only
+    def run_phase_2_graph()              # Add graph layer
+    def run_phase_3_vectors()            # Add vector search
+    def validate_each_phase()            # Check counts, run sample queries
+    def export_database()                # Export to JSONL for reproducibility
+
+class SchemaBuilder:
+    """Phase 1: Schema creation"""
+
+class DocumentImporter:
+    """Phase 1: XML import"""
+
+class GraphBuilder:
+    """Phase 2: Graph layer"""
+
+class VectorBuilder:
+    """Phase 3: Vector search"""
+```
+
+## Dataset Options & Performance
+
+**Small Dataset (cs.stackexchange.com)** - RECOMMENDED FOR DEVELOPMENT:
+- 105K posts, 138K users, 668 tags, 195K comments
+- ~650MB XML, imports in ~2-5 minutes
+- Perfect for development and testing
+
+**Medium Dataset (stats.stackexchange.com)**:
+- 425K posts, 345K users, 1.6K tags, 819K comments
+- ~2.5GB XML, imports in ~10-20 minutes
+
+**Large Dataset (stackoverflow.com)** - PRODUCTION SCALE:
+- 59M posts, 20M users, 65K tags, ~100M comments
+- ~325GB XML, imports in hours (97GB Posts.xml alone!)
+- Requires 8GB+ JVM heap, production server setup
+
 **Note**: Largest example, demonstrates all three models working together
 
 ### 8. **Server Mode: HTTP API + Studio** (Priority: HIGH)

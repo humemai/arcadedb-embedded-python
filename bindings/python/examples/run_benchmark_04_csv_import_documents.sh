@@ -74,9 +74,9 @@ echo ""
 # Check if dataset exists
 DATA_BASE="./data"
 if [ "$SIZE" = "small" ]; then
-    DATA_DIR="$DATA_BASE/ml-small"
+    DATA_DIR="$DATA_BASE/movielens-small"
 else
-    DATA_DIR="$DATA_BASE/ml-large"
+    DATA_DIR="$DATA_BASE/movielens-large"
 fi
 
 if [ ! -d "$DATA_DIR" ]; then
