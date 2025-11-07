@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 160/160 Passing (100%) | **Platforms**: 6 Supported
+**Status**: ✅ Production Ready | **Tests**: 164/164 Passing (100%) | **Platforms**: 6 Supported
 
 ---
 
@@ -40,7 +40,7 @@ pip install --pre arcadedb-embedded \
 ```
 
 !!! note "PyPI Size Limit"
-    We're temporarily hosting wheels on GitHub Pages while awaiting PyPI size limit approval (our wheels are ~160MB, default limit is 100MB). The `--index-url` tells pip to use our GitHub Pages index for arcadedb-embedded, while `--extra-index-url` ensures dependencies like JPype1 are installed from PyPI.
+    We're temporarily hosting wheels on GitHub Pages while awaiting PyPI size limit approval (our wheels are ~164MB, default limit is 100MB). The `--index-url` tells pip to use our GitHub Pages index for arcadedb-embedded, while `--extra-index-url` ensures dependencies like JPype1 are installed from PyPI.
 
 **Requirements:**
 
@@ -108,12 +108,12 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 
 | Platform | Wheel Size | JRE Size | Installed Size | Tests |
 |----------|-----------|----------|----------------|-------|
-| Windows ARM64 | 155.1M | 47.3M | ~215M | 160/160 ✅ |
-| macOS ARM64 | 156.7M | 53.9M | ~221M | 160/160 ✅ |
-| macOS Intel | 157.8M | 55.3M | ~223M | 160/160 ✅ |
-| Windows x64 | 157.4M | 51.5M | ~219M | 160/160 ✅ |
-| Linux ARM64 | 159.9M | 61.8M | ~229M | 160/160 ✅ |
-| Linux x64 | 160.9M | 62.7M | ~230M | 160/160 ✅ |
+| Windows ARM64 | 155.1M | 47.3M | ~215M | 164/164 ✅ |
+| macOS ARM64 | 156.7M | 53.9M | ~221M | 164/164 ✅ |
+| macOS Intel | 157.8M | 55.3M | ~223M | 164/164 ✅ |
+| Windows x64 | 157.4M | 51.5M | ~219M | 164/164 ✅ |
+| Linux ARM64 | 159.9M | 61.8M | ~229M | 164/164 ✅ |
+| Linux x64 | 160.9M | 62.7M | ~230M | 164/164 ✅ |
 
 **Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See `jar_exclusions.txt` for details.
 
@@ -123,7 +123,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 160/160 tests passing (100%)
+**Status**: 164/164 tests passing (100%)
 
 ```bash
 # Run all tests
