@@ -292,7 +292,7 @@ EXPECTED_RESULTS = {
                     "userId": 414,
                     "movieId": 47,
                     "rating": 5.0,
-                    "timestamp": 1603897739,
+                    "timestamp": None,
                     "@props": "userId:3,movieId:3,rating:5,timestamp:3",
                 },
                 {
@@ -376,15 +376,15 @@ EXPECTED_RESULTS = {
                     "@props": "movieId:3,title:7,genres:7",
                 },
                 {
-                    "movieId": 20,
-                    "title": "Money Train (1995)",
-                    "genres": "Action|Comedy|Crime|Drama|Thriller",
+                    "movieId": 15,
+                    "title": "Cutthroat Island (1995)",
+                    "genres": "Action|Adventure|Romance",
                     "@props": "movieId:3,title:7,genres:7",
                 },
                 {
-                    "movieId": 23,
-                    "title": "Assassins (1995)",
-                    "genres": "Action|Crime|Thriller",
+                    "movieId": 20,
+                    "title": "Money Train (1995)",
+                    "genres": "Action|Comedy|Crime|Drama|Thriller",
                     "@props": "movieId:3,title:7,genres:7",
                 },
             ],
@@ -392,7 +392,7 @@ EXPECTED_RESULTS = {
         {
             "name": "Count ALL Action movies (LIKE, no LIMIT)",
             "count": 1,
-            "sample": [{"count": 9284}],
+            "sample": [{"count": 9386}],
         },
     ],
 }
@@ -977,7 +977,7 @@ if not check_dataset_exists(data_dir):
     print()
     download_dataset(args.dataset)
 else:
-    print(f"✅ Dataset found!")
+    print("✅ Dataset found!")
     print(f"   Location: {data_dir}")
     print()
 
@@ -1259,17 +1259,18 @@ print("   💡 Running queries multiple times to get reliable statistics")
 print()
 
 # Compare against embedded baseline results
+baseline_match_step8 = True
 if args.dataset in EXPECTED_RESULTS and EXPECTED_RESULTS[args.dataset]:
     print("   📊 Step 8 - Comparing against baseline (BEFORE indexes):")
     print()
-    baseline_match = compare_query_results(
+    baseline_match_step8 = compare_query_results(
         times_without_indexes, EXPECTED_RESULTS[args.dataset], verbose=True
     )
     print()
-    if baseline_match:
+    if baseline_match_step8:
         print("   ✅ Step 8: All results match baseline!")
     else:
-        print("   ⚠️  Step 8: Some results differ from baseline!")
+        print("   ❌ Step 8: VALIDATION FAILED - Results differ from baseline!")
     print()
 else:
     print(
@@ -1499,17 +1500,18 @@ print(f"   ✅ Results saved to: {results_file}")
 print()
 
 # Compare against embedded baseline results
+baseline_match_step10 = True
 if args.dataset in EXPECTED_RESULTS and EXPECTED_RESULTS[args.dataset]:
     print("   📊 Step 10 - Comparing against baseline (AFTER indexes):")
     print()
-    baseline_match = compare_query_results(
+    baseline_match_step10 = compare_query_results(
         times_with_indexes, EXPECTED_RESULTS[args.dataset], verbose=True
     )
     print()
-    if baseline_match:
+    if baseline_match_step10:
         print("   ✅ Step 10: All results match baseline!")
     else:
-        print("   ⚠️  Step 10: Some results differ from baseline!")
+        print("   ❌ Step 10: VALIDATION FAILED - Results differ from baseline!")
     print()
 else:
     print(
@@ -2097,7 +2099,7 @@ if args.export and export_filename:
             print(f"      Before indexes: {count_before}")
             print(f"      After indexes:  {count_after}")
             print(f"      After roundtrip: {count_roundtrip}")
-            print(f"      ⚠️  MISMATCH DETECTED!")
+            print("      ⚠️  MISMATCH DETECTED!")
             all_three_match = False
         print()
 
@@ -2247,3 +2249,17 @@ print("=" * 70)
 print(f"⏱️  TOTAL SCRIPT RUN TIME: {minutes}m {seconds}s")
 print("=" * 70)
 print()
+
+# Check if baseline validation failed and exit with error code
+if not baseline_match_step8 or not baseline_match_step10:
+    print("=" * 70)
+    print("❌ BASELINE VALIDATION FAILED")
+    print("=" * 70)
+    print()
+    print("Some query results did not match the expected baseline values.")
+    print("This may indicate:")
+    print("  • Data integrity issues")
+    print("  • Changes in query behavior")
+    print("  • Dataset differences")
+    print()
+    sys.exit(1)

@@ -472,7 +472,9 @@ def import_from_jsonl(jsonl_path: Path, target_db_path: Path) -> float:
     # Import using SQL command (IMPORT DATABASE auto-commits, no transaction needed)
     start_time = time.time()
     with arcadedb.open_database(str(target_db_path)) as db:
-        import_cmd = f"IMPORT DATABASE file://{jsonl_path.absolute()}"
+        # Convert Windows backslashes to forward slashes for SQL compatibility
+        import_path = str(jsonl_path.absolute()).replace("\\", "/")
+        import_cmd = f"IMPORT DATABASE file://{import_path}"
         db.command("sql", import_cmd)
 
     elapsed = time.time() - start_time

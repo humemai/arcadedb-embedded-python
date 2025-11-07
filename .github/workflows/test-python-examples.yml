@@ -178,7 +178,12 @@ jobs:
         shell: bash
         run: |
           # Install dependencies needed by examples
-          pip install numpy requests sentence-transformers
+          # Note: macOS Intel needs NumPy 1.x for PyTorch compatibility
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            pip install "numpy<2.0" requests sentence-transformers
+          else
+            pip install numpy requests sentence-transformers
+          fi
 
       - name: Install timeout command (macOS only)
         if: matrix.platform == 'darwin/amd64' || matrix.platform == 'darwin/arm64'
