@@ -72,13 +72,19 @@ eval "$CMD" > "$LOG_FILE" 2>&1 &
 SHELL_PID=$!
 
 # Wait a moment for Python to start, then find the actual Python process
-sleep 0.5
+sleep 1
 
 # Find the Python child process (not the shell wrapper)
-PYTHON_PID=$(pgrep -P $SHELL_PID python 2> /dev/null || echo $SHELL_PID)
+# Match any python* process (python, python3, python3.11, etc.)
+PYTHON_PID=$(pgrep -P $SHELL_PID -f python 2> /dev/null | head -1)
 
-# If we found a Python child, use that; otherwise use the shell PID
-if [ "$PYTHON_PID" != "$SHELL_PID" ]; then
+# If we didn't find a Python child, try looking for any child process
+if [ -z "$PYTHON_PID" ]; then
+    PYTHON_PID=$(pgrep -P $SHELL_PID 2> /dev/null | head -1)
+fi
+
+# Use the Python PID if found, otherwise fall back to the shell PID
+if [ -n "$PYTHON_PID" ] && [ "$PYTHON_PID" != "$SHELL_PID" ]; then
     PID=$PYTHON_PID
 else
     PID=$SHELL_PID

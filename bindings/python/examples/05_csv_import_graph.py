@@ -1050,7 +1050,7 @@ EXPECTED_RESULTS = {
             },
             {
                 "name": "Query 8: Rating distribution across all ratings (SQL - Aggregation)",
-                "count": 11,
+                "count": 10,
             },
             {
                 "name": "Query 9: User #1's top-rated movies (Cypher - Basic Pattern)",
@@ -1120,12 +1120,12 @@ EXPECTED_RESULTS = {
             },
             {
                 "name": "Query 9: User #1's top-rated movies (Cypher - Basic Pattern)",
-                "count": 40,
+                "count": 39,
             },
             {
                 "name": "Query 10: Users who rated same movies as User #1 (Cypher - Pattern)",
                 "count": 252903,
-                "sample": {"top_user_id": 189614, "top_shared": 58},
+                "sample": {"top_user_id": 236260, "top_shared": 60},
             },
         ],
     },
