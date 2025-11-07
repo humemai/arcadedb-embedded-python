@@ -178,7 +178,7 @@ jobs:
         shell: bash
         run: |
           # Install dependencies needed by examples
-          pip install numpy requests
+          pip install numpy requests sentence-transformers
 
       - name: Install timeout command (macOS only)
         if: matrix.platform == 'darwin/amd64' || matrix.platform == 'darwin/arm64'
