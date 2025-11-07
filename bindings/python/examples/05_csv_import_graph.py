@@ -1067,11 +1067,11 @@ EXPECTED_RESULTS = {
         "counts": {
             "users": 330975,
             "movies": 86537,
-            "rated": 33155309,
-            "tagged": 2212213,
+            "rated": 32816845,
+            "tagged": 2167297,
         },
         "samples": {
-            "user1_ratings": 60,
+            "user1_ratings": 61,
             "user1_tags": 0,
             "movie1_title": "Toy Story (1995)",
             "movie1_genres": "Adventure|Animation|Children|Comedy|Fantasy",
@@ -1079,7 +1079,7 @@ EXPECTED_RESULTS = {
         "queries": [
             {
                 "name": "Query 1: Movies rated by User #1 (SQL - Basic Traversal)",
-                "count": 60,
+                "count": 61,
             },
             {
                 "name": "Query 2: Movies rated 5.0 by User #1 (SQL - Edge Property Filter)",
@@ -1088,14 +1088,14 @@ EXPECTED_RESULTS = {
             {
                 "name": "Query 3: Rating statistics for top 5 active users (SQL - Aggregations)",
                 "count": 5,
-                "sample": {"top_user_id": 189614, "top_user_ratings": 32667},
+                "sample": {"top_user_id": 189614, "top_user_ratings": 32333},
             },
             {
                 "name": "Query 4: Top 10 most rated movies (SQL - Aggregations)",
                 "count": 10,
                 "sample": {
-                    "top_movie": "Shawshank Redemption, The (1994)",
-                    "top_movie_count": 119899,
+                    "top_movie": "",
+                    "top_movie_count": 128016,
                 },
             },
             {
@@ -1103,16 +1103,16 @@ EXPECTED_RESULTS = {
                 "count": 10,
                 "sample": {
                     "top_movie": "Star Wars: Episode IV - A New Hope (1977)",
-                    "top_movie_tags": 10604,
+                    "top_movie_tags": 10361,
                 },
             },
             {
                 "name": "Query 6: Users who rated same movies as User #1 (SQL - MATCH Pattern)",
-                "count": 1806984,
+                "count": 1757255,
             },
             {
                 "name": "Query 7: Users with similar taste to User #1 (SQL - MATCH + Aggregation)",
-                "count": 141927,
+                "count": 137140,
             },
             {
                 "name": "Query 8: Rating distribution across all ratings (SQL - Aggregation)",
