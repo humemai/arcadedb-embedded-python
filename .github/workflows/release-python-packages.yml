@@ -145,7 +145,7 @@ jobs:
     name: Publish to PyPI (Test)
     needs: [validate-version, build-dummy-wheels]
     runs-on: ubuntu-latest
-    environment: pypi-base
+    environment: pypi
     permissions:
       id-token: write
     steps:
