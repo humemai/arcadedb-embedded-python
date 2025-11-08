@@ -569,25 +569,28 @@ class Schema:
                 f"Failed to get/create index on '{type_name}[{','.join(property_names)}]': {e}"
             ) from e
 
-    def drop_index(self, index_name: str):
+    def drop_index(self, index_name: str, force: bool = False):
         """Drop an index.
 
         Args:
             index_name: Name of the index to drop
+            force: If True, skip existence check (useful for corrupted/partial indexes)
 
         Raises:
-            ArcadeDBError: If index doesn't exist
+            ArcadeDBError: If index doesn't exist (when force=False) or drop fails
 
         Example:
             >>> schema = db.schema
             >>> schema.drop_index("User[email]")
+            >>> # Force drop corrupted index
+            >>> schema.drop_index("User[email]", force=True)
         """
         from .exceptions import ArcadeDBError
 
         self._db._check_not_closed()
 
-        # Check if index exists first
-        if not self.exists_index(index_name):
+        # Check if index exists first (unless force=True)
+        if not force and not self.exists_index(index_name):
             raise ArcadeDBError(f"Index '{index_name}' does not exist")
 
         try:
