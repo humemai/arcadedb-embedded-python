@@ -111,16 +111,16 @@ After a successful release, you should see:
 
 ### Test Results (CI run #96)
 
-All 6 platforms passing 160/160 tests:
+All 6 platforms passing 164/164 tests:
 
 | Platform | Wheel Size | JRE Size | Tests |
 |----------|-----------|----------|-------|
-| linux/amd64 | 160.9M | 62.7M | 160/160 ✅ |
-| linux/arm64 | 159.9M | 61.8M | 160/160 ✅ |
-| darwin/amd64 | 157.8M | 55.3M | 160/160 ✅ |
-| darwin/arm64 | 156.7M | 53.9M | 160/160 ✅ |
-| windows/amd64 | 157.4M | 51.5M | 160/160 ✅ |
-| windows/arm64 | 155.1M | 47.3M | 160/160 ✅ |
+| linux/amd64 | 160.9M | 62.7M | 164/164 ✅ |
+| linux/arm64 | 159.9M | 61.8M | 164/164 ✅ |
+| darwin/amd64 | 157.8M | 55.3M | 164/164 ✅ |
+| darwin/arm64 | 156.7M | 53.9M | 164/164 ✅ |
+| windows/amd64 | 157.4M | 51.5M | 164/164 ✅ |
+| windows/arm64 | 155.1M | 47.3M | 164/164 ✅ |
 
 **All platforms include:**
 

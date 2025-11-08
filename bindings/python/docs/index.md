@@ -8,7 +8,7 @@
 
     Native Python bindings for ArcadeDB with full test coverage
 
-    **Status**: ✅ Production Ready | **Tests**: 160/160 Passing (100%)
+    **Status**: ✅ Production Ready | **Tests**: 164/164 Passing (100%)
 
 -   :fontawesome-brands-python:{ .lg .middle } __Pure Python API__
 

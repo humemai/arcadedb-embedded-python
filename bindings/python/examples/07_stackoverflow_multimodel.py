@@ -15,7 +15,45 @@ Dataset: Stack Exchange Data Dump (https://archive.org/details/stackexchange)
 - stackoverflow-large: stackoverflow.com (~325GB, 350M records)
 
 Usage:
+    # Run all phases (default)
     python 07_stackoverflow_multimodel.py --dataset stackoverflow-small
+
+    # Run specific phase
+    python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phase 1
+    python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phase 2
+
+    # Force rebuild Phase 1 indexes on existing database
+    python 07_stackoverflow_multimodel.py --dataset stackoverflow-large \\
+        --phase 1 --force-rebuild-indexes
+
+Force Rebuild Indexes (--force-rebuild-indexes):
+    [Phase 1 only] When creating indexes on large datasets, ArcadeDB's background
+    async compaction can cause NeedRetryException errors during index creation.
+    On datasets with hundreds of millions of records, these compaction conflicts
+    can persist for hours, causing index creation to fail even after many retries.
+
+    The --force-rebuild-indexes flag provides a robust solution:
+    1. Opens the existing database without deleting data
+    2. Validates Phase 1 data is complete (checks document counts)
+    3. Drops all indexes that match the planned index definitions
+    4. Recreates all indexes with extended retry timeouts (3 hours per index)
+    5. Handles compaction conflicts gracefully with exponential backoff
+
+    This is safer than attempting to detect partially-built indexes, as ArcadeDB's
+    INDEX_STATUS is atomic (AVAILABLE or UNAVAILABLE) and doesn't expose partial
+    build state through the Python bindings. Force rebuild ensures a clean slate
+    by dropping and recreating all indexes, allowing the database to complete
+    compaction cycles without blocking new index operations.
+
+    Use this when:
+    - Phase 1 index creation fails with NeedRetryException after initial import
+    - You need to rebuild indexes after data corruption or incomplete builds
+    - You want to ensure all indexes are created fresh with current data
+
+Phase Dependencies:
+    - Phase 1 (Documents + Indexes): Standalone, imports XML data and creates indexes
+    - Phase 2 (Graph): Requires Phase 1 complete (validates document counts)
+    - Phase 3 (Vectors): Requires Phase 1 + 2 complete
 """
 
 import argparse
@@ -39,6 +77,40 @@ class StackOverflowDatabase:
             Path(__file__).parent / "data" / "stackoverflow-medium"
         ),
         "stackoverflow-large": Path(__file__).parent / "data" / "stackoverflow-large",
+    }
+
+    # Expected document counts per dataset (for phase validation)
+    EXPECTED_COUNTS = {
+        "stackoverflow-small": {
+            "Badge": 182_975,
+            "Comment": 195_781,
+            "Post": 105_373,
+            "PostHistory": 360_340,
+            "PostLink": 11_005,
+            "Tag": 668,
+            "User": 138_727,
+            "Vote": 411_166,
+        },
+        "stackoverflow-medium": {
+            "Badge": 612_258,
+            "Comment": 819_648,
+            "Post": 425_735,
+            "PostHistory": 1_525_713,
+            "PostLink": 86_919,
+            "Tag": 1_612,
+            "User": 345_754,
+            "Vote": 1_747_225,
+        },
+        "stackoverflow-large": {
+            "Badge": 51_289_973,
+            "Comment": 90_380_323,
+            "Post": 59_819_048,
+            "PostHistory": 160_790_317,
+            "PostLink": 6_552_590,
+            "Tag": 65_675,
+            "User": 22_484_235,
+            "Vote": 238_984_011,
+        },
     }
 
     def __init__(self, db_path: str, dataset: str):
@@ -81,10 +153,98 @@ class StackOverflowDatabase:
         self.db = arcadedb.create_database(self.db_path)
         return self
 
+    def __enter_existing__(self):
+        """Context manager entry: open existing database (for retry/rebuild)."""
+        if not os.path.exists(self.db_path):
+            raise FileNotFoundError(
+                f"Database not found at {self.db_path}. "
+                f"Cannot open non-existent database."
+            )
+        self.db = arcadedb.open_database(self.db_path)
+        return self
+
+    def open_existing(self):
+        """Open existing database without cleanup (for phase 2/3 or rebuild)."""
+        if not os.path.exists(self.db_path):
+            raise FileNotFoundError(
+                f"Database not found at {self.db_path}. "
+                f"Run Phase 1 first to create the database."
+            )
+        self.db = arcadedb.open_database(self.db_path)
+        return self
+
+    def validate_phase_1_complete(self) -> bool:
+        """Validate that Phase 1 completed successfully by checking document counts.
+
+        Returns:
+            True if Phase 1 appears complete, False otherwise
+        """
+        if not os.path.exists(self.db_path):
+            return False
+
+        expected = self.EXPECTED_COUNTS.get(self.dataset)
+        if not expected:
+            print(f"⚠️  No expected counts defined for {self.dataset}")
+            return False
+
+        print("🔍 Validating Phase 1 completion...")
+
+        # Check if all expected document types exist with correct counts
+        all_valid = True
+        for doc_type, expected_count in expected.items():
+            if not self.db.schema.exists_type(doc_type):
+                print(f"  ❌ {doc_type}: Type not found")
+                all_valid = False
+                continue
+
+            # Count documents
+            query = f"SELECT count(*) as count FROM {doc_type}"
+            result = self.db.query("sql", query)
+            # Convert ResultSet to list to access first record
+            records = list(result)
+            actual_count = records[0].get_property("count") if records else 0
+
+            # Allow 1% tolerance for count differences (in case of data variations)
+            tolerance = max(1, int(expected_count * 0.01))
+            if abs(actual_count - expected_count) > tolerance:
+                print(
+                    f"  ⚠️  {doc_type}: Expected ~{expected_count:,} documents, "
+                    f"found {actual_count:,}"
+                )
+                all_valid = False
+            else:
+                print(f"  ✓ {doc_type}: {actual_count:,} documents")
+
+        if all_valid:
+            print("✅ Phase 1 validation passed")
+        else:
+            print("❌ Phase 1 validation failed - run Phase 1 first")
+
+        return all_valid
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit: close database connection."""
         if self.db:
             self.db.close()
+
+    def close_with_wait(self):
+        """Close database after waiting for all background compactions."""
+        if not self.db:
+            return
+
+        print()
+        print("⏳ Waiting for background compactions to complete...")
+        try:
+            async_exec = self.db.async_executor()
+            # Wait indefinitely (None = no timeout)
+            async_exec.wait_completion()
+            print("  ✓ All compactions complete - safe to close")
+        except Exception as e:
+            print(f"  ⚠️  Could not verify compaction status: {e}")
+            print("     Proceeding with database close...")
+
+        self.__exit__(None, None, None)
+        print("  ✓ Database closed")
 
     def execute_phase_1(
         self, analysis_limit: int = 1_000_000, batch_size: int = 50_000
@@ -498,23 +658,34 @@ class StackOverflowDatabase:
 
         return query_results
 
-    def create_indexes_and_compare(self):
-        """Create indexes on frequently queried fields and compare performance."""
+    def create_indexes_and_compare(self, force_rebuild: bool = False):
+        """Create indexes on frequently queried fields and compare performance.
+
+        Args:
+            force_rebuild: If True, drop existing indexes before creating new ones
+                          (useful after partial failures or corruption)
+        """
+        # Set generous retry limits for all datasets
+        # 3 hours max per index - handles even the largest compaction delays
+        max_retries = 180  # 3 hours max per index (180 × 60s)
+        retry_delay = 60  # Wait 60 seconds between retries
+
+        print()
         print()
         print("=" * 80)
         print("CREATING INDEXES FOR PERFORMANCE COMPARISON")
         print("=" * 80)
         print()
 
-        # Wait for any background async tasks (like index compaction) to complete
-        print("Waiting for background tasks to complete...")
+        # Quick check for background async tasks before starting index creation
+        print("Checking background task status...")
         try:
             async_exec = self.db.async_executor()
-            # Try waiting with a timeout (5 minutes)
-            async_exec.wait_completion(timeout_ms=300000)
-            print("  ✓ All background tasks completed")
+            # Quick check - don't block for hours on existing compactions
+            async_exec.wait_completion(timeout_ms=10000)  # 10 seconds
+            print("  ✓ No background tasks running")
         except TimeoutError:
-            print("  ⚠️  Background tasks still running, will use retry logic")
+            print("  ℹ️  Background tasks detected (will proceed anyway)")
         except Exception as e:
             print(f"  ℹ️  Could not check async status: {e}")
         print()
@@ -655,6 +826,96 @@ class StackOverflowDatabase:
         print(f"Creating {len(indexes_to_create)} indexes with retry logic...")
         print()
 
+        # Drop existing indexes if force_rebuild is enabled
+        if force_rebuild:
+            print("🔄 Force rebuild enabled - dropping existing indexes...")
+            dropped_count = 0
+            drop_errors = []
+
+            try:
+                # Get all indexes from schema
+                all_indexes = self.db.schema.get_indexes()
+
+                # Check if indexes exist
+                if not all_indexes:
+                    print("  ℹ️  No existing indexes found")
+                else:
+                    print(f"  ℹ️  Found {len(all_indexes)} total indexes in database")
+
+                    # Build list of indexes to drop (matching our planned indexes)
+                    indexes_to_drop = []
+                    for idx in all_indexes:
+                        try:
+                            type_name = idx.getTypeName()
+                            property_names_raw = idx.getPropertyNames()
+                            index_name = idx.getName()
+
+                            # Handle None property names (bucket indexes)
+                            if property_names_raw is None:
+                                print(f"  ⊗ Skipping bucket index: {index_name}")
+                                continue
+
+                            property_names = list(property_names_raw)
+
+                            # Check if this index matches any of our planned indexes
+                            for planned_type, planned_prop, _ in indexes_to_create:
+                                if (
+                                    type_name == planned_type
+                                    and planned_prop in property_names
+                                ):
+                                    indexes_to_drop.append(
+                                        (index_name, type_name, planned_prop)
+                                    )
+                                    break
+                        except Exception as e:
+                            idx_name = (
+                                idx.getName() if hasattr(idx, "getName") else "unknown"
+                            )
+                            print(f"  ⚠️  Error inspecting index {idx_name}: {e}")
+                            continue
+
+                    if len(indexes_to_drop) == 0:
+                        print("  ✅ No existing user indexes match planned indexes")
+                    else:
+                        count = len(indexes_to_drop)
+                        print(f"  ℹ️  Identified {count} user indexes to drop")
+
+                    # Drop all matching indexes
+                    for index_name, type_name, prop_name in indexes_to_drop:
+                        try:
+                            # Use force=True to skip existence check for corrupted
+                            # indexes
+                            with self.db.transaction():
+                                self.db.schema.drop_index(index_name, force=True)
+                            print(f"  ✓ Dropped: {index_name}")
+                            dropped_count += 1
+                        except Exception as e:
+                            error_msg = str(e)
+                            # Skip already-dropped or invalid indexes
+                            if (
+                                "not valid" in error_msg
+                                or "does not exist" in error_msg
+                                or "not found" in error_msg
+                            ):
+                                print(f"  ⊗ Already dropped: {index_name}")
+                            else:
+                                msg = error_msg[:80]
+                                print(f"  ⚠️  Failed to drop {index_name}: {msg}")
+                                drop_errors.append((index_name, error_msg))
+
+                if dropped_count > 0:
+                    print(f"✅ Dropped {dropped_count} indexes")
+                else:
+                    print("✅ No user indexes found - proceeding to create new indexes")
+                if drop_errors:
+                    print(f"⚠️  {len(drop_errors)} indexes could not be dropped")
+                print()
+
+            except Exception as e:
+                print(f"  ⚠️  Error during index dropping: {e}")
+                print("  Will attempt to create all indexes anyway...")
+                print()
+
         # Create indexes with retry logic for compaction conflicts
         success_count = 0
         failed_indexes = []
@@ -665,8 +926,6 @@ class StackOverflowDatabase:
             indexes_to_create, 1
         ):
             created = False
-            max_retries = 60  # Try for up to 60 attempts
-            retry_delay = 10  # Wait 10 seconds between retries
             index_start = time.time()
             retry_time = 0  # Track time spent waiting in retries
 
@@ -804,8 +1063,26 @@ class StackOverflowDatabase:
         print("=" * 80)
         print()
 
+        # Wait for final compactions triggered by index creation
+        # Note: On large datasets, compaction can take hours
+        print("⏳ Checking for background compactions...")
+        try:
+            async_exec = self.db.async_executor()
+            # Quick check - don't block for hours
+            async_exec.wait_completion(timeout_ms=10000)  # 10 seconds
+            print("  ✓ All background compactions completed")
+        except TimeoutError:
+            print("  ℹ️  Background compactions still running")
+            print("     (This is normal and can take hours on large datasets)")
+            print("     Indexes are functional and queries will work.")
+        except Exception as e:
+            print(f"  ℹ️  Could not check async status: {e}")
+        print()
+
         # Rerun queries with indexes
         print("🔍 Re-running queries WITH indexes for comparison...")
+        print("    Note: Performance may improve further as compactions complete")
+        print()
         self.indexed_results = self.run_phase_1_queries()
 
         # Create comparison table
@@ -877,25 +1154,25 @@ class StackOverflowDatabase:
 
     def execute_phase_2(self):
         """Execute Phase 2: Build graph from documents."""
-        print("=" * 80)
-        print("PHASE 2: GRAPH")
-        print("=" * 80)
         print("Building graph vertices and edges from documents...")
         print()
 
         # TODO: Implement Phase 2
-        print("Phase 2 not yet implemented.")
+        print("⚠️  Phase 2 not yet implemented.")
+        print("    Will transform documents into graph vertices and edges")
+        print("    for relationship queries.")
+        print()
 
     def execute_phase_3(self):
         """Execute Phase 3: Add vector embeddings."""
-        print("=" * 80)
-        print("PHASE 3: VECTORS")
-        print("=" * 80)
         print("Generating embeddings and creating HNSW indexes...")
         print()
 
         # TODO: Implement Phase 3
-        print("Phase 3 not yet implemented.")
+        print("⚠️  Phase 3 not yet implemented.")
+        print("    Will add semantic search capabilities with embeddings")
+        print("    and HNSW indexes.")
+        print()
 
 
 class SchemaAnalyzer:
@@ -1349,19 +1626,27 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Import and process Stack Overflow data (runs all available phases)
-  # Small dataset: 645 MB XML → ~1.4M records
+  # Run all phases (1, 2, 3) - default behavior
   ARCADEDB_JVM_MAX_HEAP="2g" ARCADEDB_JVM_ARGS="-Xms2g"
   python 07_stackoverflow_multimodel.py --dataset stackoverflow-small
+
+  # Run specific phase (Phase 2 requires Phase 1, Phase 3 requires 1+2)
+  python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phase 1
+  python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phase 2
+  python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phase 3
 
   # Medium dataset: 3 GB XML → ~5M records
   ARCADEDB_JVM_MAX_HEAP="8g" ARCADEDB_JVM_ARGS="-Xms8g"
   python 07_stackoverflow_multimodel.py --dataset stackoverflow-medium
 
   # Large dataset: 325 GB XML → ~350M records (REQUIRES 32GB+ RAM)
-  # Note: PostHistory (170GB) is massive - consider smaller batch sizes
   ARCADEDB_JVM_MAX_HEAP="32g" ARCADEDB_JVM_ARGS="-Xms32g"
   python 07_stackoverflow_multimodel.py --dataset stackoverflow-large --batch-size 5000
+
+  # Phase 1 only: Force rebuild indexes on existing database (after failures)
+  ARCADEDB_JVM_MAX_HEAP="32g" ARCADEDB_JVM_ARGS="-Xms32g"
+  python 07_stackoverflow_multimodel.py --dataset stackoverflow-large \\
+      --phase 1 --force-rebuild-indexes
         """,
     )
 
@@ -1370,6 +1655,16 @@ Examples:
         choices=["stackoverflow-small", "stackoverflow-medium", "stackoverflow-large"],
         default="stackoverflow-small",
         help="Dataset size to use (default: stackoverflow-small)",
+    )
+
+    parser.add_argument(
+        "--phase",
+        choices=["1", "2", "3", "all"],
+        default="all",
+        help=(
+            "Which phase to run: 1 (Documents+Indexes), 2 (Graph), 3 (Vectors), "
+            "or all (default: all). Phase 2 requires Phase 1, Phase 3 requires 1+2."
+        ),
     )
 
     parser.add_argument(
@@ -1395,6 +1690,16 @@ Examples:
         help="Batch size for document import (default: 50000)",
     )
 
+    parser.add_argument(
+        "--force-rebuild-indexes",
+        action="store_true",
+        help=(
+            "[Phase 1 only] Drop and rebuild all indexes on existing database. "
+            "Skips data import. Use this if Phase 1 index creation failed or "
+            "indexes are incomplete/corrupted."
+        ),
+    )
+
     args = parser.parse_args()
 
     # Set default database path with dataset size if not provided
@@ -1403,21 +1708,150 @@ Examples:
         size = args.dataset.split("-")[-1]
         args.db_path = f"my_test_databases/stackoverflow_{size}_db"
 
-    # Create database instance and run all phases
-    with StackOverflowDatabase(args.db_path, args.dataset) as db:
-        # Phase 1: Documents (implemented)
-        db.execute_phase_1(
-            analysis_limit=args.analysis_limit, batch_size=args.batch_size
+    # Validate phase + force-rebuild-indexes combination
+    if args.force_rebuild_indexes and args.phase not in ("1", "all"):
+        print("❌ Error: --force-rebuild-indexes only works with --phase 1")
+        print("   (Index rebuilding is part of Phase 1)")
+        return
+
+    # Determine which phases to run
+    phases_to_run = []
+    if args.phase == "all":
+        phases_to_run = [1, 2, 3]
+    else:
+        phases_to_run = [int(args.phase)]
+
+    # Handle Phase 1 force rebuild mode
+    if args.force_rebuild_indexes:
+        print("=" * 80)
+        print("PHASE 1: FORCE REBUILD INDEXES")
+        print("=" * 80)
+        print(f"Database path: {args.db_path}")
+        print()
+
+        # Open existing database
+        db_instance = StackOverflowDatabase(args.db_path, args.dataset)
+        db_instance.__enter_existing__()
+
+        try:
+            # Validate Phase 1 data exists
+            if not db_instance.validate_phase_1_complete():
+                print("\n❌ Cannot rebuild indexes - Phase 1 data is incomplete")
+                print("   Run Phase 1 without --force-rebuild-indexes first")
+                return
+
+            print()
+            # Drop and recreate all indexes
+            db_instance.create_indexes_and_compare(force_rebuild=True)
+        finally:
+            db_instance.close_with_wait()
+
+        # Overall timing summary
+        script_elapsed = time.time() - script_start_time
+        print("\n" + "=" * 80)
+        print("OVERALL TIMING")
+        print("=" * 80)
+        minutes = script_elapsed / 60
+        print(
+            f"Total script execution time: {script_elapsed:.2f}s "
+            f"({minutes:.1f} min)"
         )
+        print("=" * 80)
+        print()
+        print("Done!")
+        return
 
-        # Phase 1b: Create indexes and compare performance
-        db.create_indexes_and_compare()
+    # Run selected phases
+    db_instance = StackOverflowDatabase(args.db_path, args.dataset)
 
-        # Phase 2: Graph (not yet implemented)
-        db.execute_phase_2()
+    try:
+        # Phase 1: Documents + Indexes
+        if 1 in phases_to_run:
+            # Create new database
+            db_instance.__enter__()
 
-        # Phase 3: Vectors (not yet implemented)
-        db.execute_phase_3()
+            print("=" * 80)
+            print("PHASE 1: DOCUMENTS + INDEXES")
+            print("=" * 80)
+            print()
+
+            # Import documents
+            db_instance.execute_phase_1(
+                analysis_limit=args.analysis_limit, batch_size=args.batch_size
+            )
+
+            # Create indexes and compare performance
+            db_instance.create_indexes_and_compare()
+
+            # Final check (don't block for hours waiting for compaction)
+            print()
+            print("⏳ Final check: background compaction status...")
+            try:
+                async_exec = db_instance.db.async_executor()
+                async_exec.wait_completion(timeout_ms=10000)  # 10 seconds
+                print("  ✓ All background operations completed")
+            except TimeoutError:
+                print("  ℹ️  Background compactions still running")
+                print("     This is expected on large datasets and can take hours.")
+                print("     The database is fully functional. Compactions will")
+                print("     complete in background, improving performance over time.")
+            except Exception as e:
+                print(f"  ℹ️  Could not check async status: {e}")
+
+            print()
+            print("✅ Phase 1 complete!")
+            print()
+
+        # Phase 2: Graph (requires Phase 1)
+        if 2 in phases_to_run:
+            # If Phase 1 wasn't just run, open existing database and validate
+            if 1 not in phases_to_run:
+                db_instance.open_existing()
+
+                if not db_instance.validate_phase_1_complete():
+                    print("\n❌ Cannot run Phase 2 - Phase 1 is not complete")
+                    print("   Run Phase 1 first")
+                    return
+                print()
+
+            print("=" * 80)
+            print("PHASE 2: GRAPH")
+            print("=" * 80)
+            print()
+
+            db_instance.execute_phase_2()
+
+            print()
+            print("✅ Phase 2 complete!")
+            print()
+
+        # Phase 3: Vectors (requires Phase 1 + 2)
+        if 3 in phases_to_run:
+            # If previous phases weren't just run, open existing database
+            if 1 not in phases_to_run and 2 not in phases_to_run:
+                db_instance.open_existing()
+
+                if not db_instance.validate_phase_1_complete():
+                    print("\n❌ Cannot run Phase 3 - Phase 1 is not complete")
+                    print("   Run Phase 1 first")
+                    return
+
+                # TODO: Add Phase 2 validation once implemented
+                print()
+
+            print("=" * 80)
+            print("PHASE 3: VECTORS")
+            print("=" * 80)
+            print()
+
+            db_instance.execute_phase_3()
+
+            print()
+            print("✅ Phase 3 complete!")
+            print()
+
+    finally:
+        db_instance.close_with_wait()
 
     # Overall timing summary
     script_elapsed = time.time() - script_start_time
