@@ -45,10 +45,40 @@ Force Rebuild Indexes (--force-rebuild-indexes):
     by dropping and recreating all indexes, allowing the database to complete
     compaction cycles without blocking new index operations.
 
+    For Cleanest Results - Manual Index Cleanup (Optional):
+    --------------------------------------------------------
+    Before running --force-rebuild-indexes, you can optionally delete index files
+    manually to avoid ArcadeDB auto-recovery warnings on startup:
+
+        # While database is CLOSED, delete index files (keeps data safe):
+        cd bindings/python/examples
+        rm -v my_test_databases/stackoverflow_*_db/*.nuctidx
+        rm -v my_test_databases/stackoverflow_*_db/*.numtidx
+        rm -v my_test_databases/stackoverflow_*_db/*.temp_nuctidx
+
+    What gets deleted:
+    - *.nuctidx  = Non-unique composite index files (safe to delete)
+    - *.numtidx  = Numeric/unique index files (safe to delete)
+    - *.temp_nuctidx = Temporary index files from interrupted ops (safe)
+
+    What is NEVER deleted:
+    - *.bucket   = Your actual data files (CRITICAL - never touch these!)
+
+    Why this helps:
+    1. Avoids ArcadeDB auto-recovery warnings on startup (cleaner logs)
+    2. Frees disk space from orphaned/partial indexes immediately
+       (Can save GBs on large datasets - e.g., 46 files removed from large DB)
+    3. Gives you a truly clean slate for index rebuilding
+
+    Without manual cleanup, ArcadeDB will auto-recover orphaned indexes on
+    startup (showing WARNI/SEVER messages), then --force-rebuild-indexes drops
+    them anyway. Manual cleanup is faster and cleaner.
+
     Use this when:
     - Phase 1 index creation fails with NeedRetryException after initial import
     - You need to rebuild indexes after data corruption or incomplete builds
     - You want to ensure all indexes are created fresh with current data
+    - You cancelled index creation mid-operation (Ctrl+C during compaction)
 
 Phase Dependencies:
     - Phase 1 (Documents + Indexes): Standalone, imports XML data and creates indexes
@@ -666,9 +696,9 @@ class StackOverflowDatabase:
                           (useful after partial failures or corruption)
         """
         # Set generous retry limits for all datasets
-        # 3 hours max per index - handles even the largest compaction delays
-        max_retries = 180  # 3 hours max per index (180 × 60s)
-        retry_delay = 60  # Wait 60 seconds between retries
+        # 9 hours max per index - handles even the largest compaction delays
+        max_retries = 180  # 9 hours max per index (180 × 180s)
+        retry_delay = 180  # Wait 180 seconds (3 mins) between retries
 
         print()
         print()
@@ -677,15 +707,30 @@ class StackOverflowDatabase:
         print("=" * 80)
         print()
 
-        # Quick check for background async tasks before starting index creation
+        # Check for background async tasks before starting index creation
+        # If force_rebuild is enabled, wait longer to clear any orphaned compactions
+        wait_timeout_ms = 300000 if force_rebuild else 10000  # 5 min vs 10 sec
         print("Checking background task status...")
         try:
             async_exec = self.db.async_executor()
-            # Quick check - don't block for hours on existing compactions
-            async_exec.wait_completion(timeout_ms=10000)  # 10 seconds
+            async_exec.wait_completion(timeout_ms=wait_timeout_ms)
             print("  ✓ No background tasks running")
         except TimeoutError:
-            print("  ℹ️  Background tasks detected (will proceed anyway)")
+            if force_rebuild:
+                print("  ⚠️  Background tasks still running after 5 minutes!")
+                print(
+                    "     This may indicate orphaned compaction from "
+                    "cancelled operations."
+                )
+                print("     Recommendations:")
+                print("       1. Wait and try again in 10-15 minutes")
+                print(
+                    "       2. Or manually delete database and reimport "
+                    "if issue persists"
+                )
+                print("     Proceeding anyway, but index creation may fail...")
+            else:
+                print("  ℹ️  Background tasks detected (will proceed anyway)")
         except Exception as e:
             print(f"  ℹ️  Could not check async status: {e}")
         print()
