@@ -563,8 +563,8 @@ def create_indexes(db, indexes, verbose=True):
 
     for idx, (table, column, uniqueness) in enumerate(indexes, 1):
         created = False
-        max_retries = 60  # Try for up to 60 attempts
-        retry_delay = 10  # Wait 10 seconds (= 10 minutes max per index)
+        retry_delay = 300  # Wait 300 seconds (5 minutes) between retries
+        max_retries = 200  # Try for up to 200 attempts (= 1000 minutes max per index)
 
         for attempt in range(1, max_retries + 1):
             try:

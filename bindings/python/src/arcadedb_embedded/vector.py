@@ -101,23 +101,31 @@ class VectorIndex:
 
         Returns:
             List of tuples: [(vertex, distance), ...]
-            where vertex is the matched vertex object and distance is the
-            similarity score
+            where vertex is the Java vertex object (use .get() and .has() methods)
+            and distance is the similarity score
         """
-        # Convert query vector to Java float array
-        java_vector = to_java_float_array(query_vector)
+        try:
+            # Convert query vector to Java float array
+            java_vector = to_java_float_array(query_vector)
 
-        # Perform search (None = no filtering callback)
-        results = self._java_index.findNearest(java_vector, k, None)
+            # Perform search (None = no filtering callback)
+            results = self._java_index.findNearest(java_vector, k, None)
 
-        # Convert results to Python format
-        neighbors = []
-        for result in results:
-            vertex = result.item()
-            distance = result.distance()
-            neighbors.append((vertex, float(distance)))
+            # Convert results to Python format - vertices are Java objects
+            neighbors = []
+            for result in results:
+                java_vertex = result.item()
+                distance = result.distance()
+                # Return Java vertex directly (don't wrap)
+                neighbors.append((java_vertex, float(distance)))
 
-        return neighbors
+            return neighbors
+        except Exception as e:
+            print(f"Debug VectorIndex: ERROR in find_nearest: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return []
 
     def add_vertex(self, vertex):
         """

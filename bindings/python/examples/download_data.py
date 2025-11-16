@@ -18,9 +18,10 @@ Available datasets:
    - movielens-large: ~265 MB, ~33M ratings, 86K movies, 280K users
 
 2. Stack Exchange (Q&A posts, users, tags, links):
-   - stackoverflow-small: ~80 MB, ~80K posts (cs.stackexchange.com, 2024-06-30)
-   - stackoverflow-medium: ~500 MB, ~300K posts (stats.stackexchange.com, 2024-06-30)
-   - stackoverflow-large: ~5 GB, full stackoverflow.com Posts (2024-06-30)
+   - stackoverflow-small: ~642 MB, 1.41M records (cs.stackexchange.com, 2024-06-30)
+   - stackoverflow-medium: ~2.9 GB, 5.56M records (stats.stackexchange.com, 2024-06-30)
+   - stackoverflow-large: ~323 GB, records (full stackoverflow.com, 2024-06-30)
+
 
 Stack Exchange Data Note:
 - Pinned to 2024-06-30 quarterly dump for reproducibility
