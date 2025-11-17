@@ -478,6 +478,198 @@ class TestPropertyTypes:
         assert complex_type is not None
 
 
+class TestVectorIndexSchemaOps:
+    """Test vector index schema operations (retrieval and listing via Schema API)."""
+
+    def test_get_index_by_name_existing(self, test_db):
+        """Test get_index_by_name for an existing index."""
+        schema = test_db.schema
+        schema.create_vertex_type("User")
+        schema.create_property("User", "email", PropertyType.STRING)
+        schema.create_index("User", ["email"], unique=True)
+
+        # Get the index name (format: Type[property])
+        indexes = schema.get_indexes()
+        index_name = None
+        for idx in indexes:
+            if "User" in idx.getTypeName() and "email" in idx.getName():
+                index_name = idx.getName()
+                break
+
+        assert index_name is not None
+        retrieved_index = schema.get_index_by_name(index_name)
+        assert retrieved_index is not None
+        assert retrieved_index.getName() == index_name
+
+    def test_get_index_by_name_non_existent(self, test_db):
+        """Test get_index_by_name returns None for non-existent index."""
+        schema = test_db.schema
+        result = schema.get_index_by_name("NonExistentIndex")
+        assert result is None
+
+    def test_list_vector_indexes_empty(self, test_db):
+        """Test list_vector_indexes returns empty list when no HNSW indexes exist."""
+        schema = test_db.schema
+
+        # Create some regular indexes
+        schema.create_vertex_type("User")
+        schema.create_property("User", "name", PropertyType.STRING)
+        schema.create_index("User", ["name"])
+
+        vector_indexes = schema.list_vector_indexes()
+        assert isinstance(vector_indexes, list)
+        assert len(vector_indexes) == 0
+
+    def test_list_vector_indexes_with_hnsw(self, test_db):
+        """Test list_vector_indexes returns HNSW index names."""
+        # Try to use NumPy if available (for vector embeddings)
+        try:
+            import numpy as np  # noqa: F401
+        except ImportError:
+            pytest.skip("NumPy not available for vector index test")
+
+        schema = test_db.schema
+
+        # Create vertex type with vector property
+        schema.create_vertex_type("Document")
+        schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
+
+        # Create HNSW vector index
+        with test_db.transaction():
+            test_db.create_vector_index(
+                vertex_type="Document",
+                vector_property="embedding",
+                dimensions=4,
+                max_items=100,
+                id_property="vector_id",
+                distance_function="cosine",
+            )
+
+        # List vector indexes
+        vector_indexes = schema.list_vector_indexes()
+        assert isinstance(vector_indexes, list)
+        assert len(vector_indexes) == 1
+
+        # Index name should contain Document_embedding
+        index_name = vector_indexes[0]
+        assert "Document" in index_name
+        assert "embedding" in index_name
+
+    def test_get_vector_index_existing(self, test_db):
+        """Test get_vector_index retrieves an existing HNSW index."""
+        # Try to use NumPy if available
+        try:
+            import numpy as np  # noqa: F401
+        except ImportError:
+            pytest.skip("NumPy not available for vector index test")
+
+        schema = test_db.schema
+
+        # Create vertex type and vector index
+        schema.create_vertex_type("Article")
+        schema.create_property("Article", "embedding", "ARRAY_OF_FLOATS")
+
+        with test_db.transaction():
+            test_db.create_vector_index(
+                vertex_type="Article",
+                vector_property="embedding",
+                dimensions=8,
+                max_items=50,
+                id_property="vector_id",
+                distance_function="euclidean",
+            )
+
+        # Retrieve the index using schema method
+        retrieved_index = schema.get_vector_index(
+            vertex_type="Article", vector_property="embedding", id_property="vector_id"
+        )
+
+        assert retrieved_index is not None
+        # VectorIndex wrapper should have the underlying Java index
+        assert hasattr(retrieved_index, "_java_index")
+
+    def test_get_vector_index_non_existent(self, test_db):
+        """Test get_vector_index returns None for non-existent index."""
+        schema = test_db.schema
+
+        # Create vertex type but no index
+        schema.create_vertex_type("NoIndex")
+        schema.create_property("NoIndex", "embedding", "ARRAY_OF_FLOATS")
+
+        # Try to get non-existent index
+        result = schema.get_vector_index(
+            vertex_type="NoIndex", vector_property="embedding", id_property="vector_id"
+        )
+
+        assert result is None
+
+    def test_get_vector_index_wrong_type(self, test_db):
+        """Test get_vector_index returns None for non-HNSW index."""
+        schema = test_db.schema
+
+        # Create regular index (not HNSW)
+        schema.create_vertex_type("RegularIndex")
+        schema.create_property("RegularIndex", "name", PropertyType.STRING)
+        schema.create_index("RegularIndex", ["name"])
+
+        # Try to get it as vector index (should return None)
+        result = schema.get_vector_index(
+            vertex_type="RegularIndex", vector_property="name", id_property="id"
+        )
+
+        assert result is None
+
+    def test_get_vector_index_persistence(self, test_db):
+        """Test that get_vector_index can load persisted HNSW indexes."""
+        # Try to use NumPy if available
+        try:
+            import numpy as np
+        except ImportError:
+            pytest.skip("NumPy not available for vector index test")
+
+        schema = test_db.schema
+
+        # Create and populate vector index
+        schema.create_vertex_type("Embedding")
+        schema.create_property("Embedding", "vector", "ARRAY_OF_FLOATS")
+        schema.create_property("Embedding", "vector_id", PropertyType.STRING)
+
+        with test_db.transaction():
+            index = test_db.create_vector_index(
+                vertex_type="Embedding",
+                vector_property="vector",
+                dimensions=4,
+                max_items=100,
+                id_property="vector_id",
+                distance_function="cosine",
+            )
+
+            # Add a vertex to the index
+            vertex = test_db._java_db.newVertex("Embedding")
+            vector = np.array([0.1, 0.2, 0.3, 0.4])
+            import arcadedb_embedded as arcadedb
+
+            vertex.set("vector", arcadedb.to_java_float_array(vector))
+            vertex.set("vector_id", "test_vector_1")  # Set the ID property
+            vertex.save()
+            index.add_vertex(vertex)
+
+            # Workaround: force save to persist entryPoint
+            index._java_index.save()
+
+        # Retrieve the persisted index
+        loaded_index = schema.get_vector_index(
+            vertex_type="Embedding", vector_property="vector", id_property="vector_id"
+        )
+
+        assert loaded_index is not None
+
+        # Verify we can search the loaded index
+        query_vector = np.array([0.1, 0.2, 0.3, 0.4])
+        results = loaded_index.find_nearest(query_vector, k=1)
+        assert len(results) == 1
+
+
 class TestIntegration:
     """Integration tests combining multiple schema operations."""
 

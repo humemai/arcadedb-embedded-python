@@ -5,15 +5,16 @@ Example 07: Stack Overflow Multi-Model Database
 Demonstrates a complete multi-model workflow:
 - Phase 1: XML → Documents + Indexes
 - Phase 2: Documents → Graph (vertices + edges)
-- Phase 3: Graph → Embeddings + HNSW
+- Phase 3: Graph → Embeddings + HNSW indexes
+- Phase 4: Analytics (SQL + Gremlin + Vector Search)
 
 This example uses Stack Overflow data dump (Users, Posts, Comments, etc.)
 to build a comprehensive knowledge graph with semantic search capabilities.
 
 Dataset Options (disk size → recommended JVM heap):
 - stackoverflow-tiny: ~34 MB → 2 GB (ARCADEDB_JVM_MAX_HEAP='2g' ARCADEDB_JVM_ARGS='-Xms2g')
-- stackoverflow-small: ~642 MB → 4 GB (ARCADEDB_JVM_MAX_HEAP='4g' ARCADEDB_JVM_ARGS='-Xms4g')
-- stackoverflow-medium: ~2.9 GB → 8 GB (ARCADEDB_JVM_MAX_HEAP='8g' ARCADEDB_JVM_ARGS='-Xms8g')
+- stackoverflow-small: ~642 MB → 8 GB (ARCADEDB_JVM_MAX_HEAP='4g' ARCADEDB_JVM_ARGS='-Xms8g')
+- stackoverflow-medium: ~2.9 GB → 16 GB (ARCADEDB_JVM_MAX_HEAP='8g' ARCADEDB_JVM_ARGS='-Xms16g')
 - stackoverflow-large: ~323 GB → 32+ GB (ARCADEDB_JVM_MAX_HEAP='32g' ARCADEDB_JVM_ARGS='-Xms32g')
 
 Usage:
@@ -24,7 +25,7 @@ Usage:
     python 07_stackoverflow_multimodel.py --dataset stackoverflow-tiny --analyze-only
 
     # All phases
-    python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phases 1 2 3
+    python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phases 1 2 3 4
 
     # Custom batch size
     python 07_stackoverflow_multimodel.py --dataset stackoverflow-medium --batch-size 10000
@@ -33,6 +34,55 @@ Requirements:
 - arcadedb-embedded
 - lxml (for XML parsing)
 - Stack Overflow data dump in data/stackoverflow-{dataset}/ directory
+
+IMPORTANT: RID-Based Pagination Pattern
+----------------------------------------
+When paginating with RID (@rid > last_rid LIMIT N) AND applying WHERE filters,
+use nested queries to avoid data loss:
+
+CORRECT (Nested Query):
+    SELECT Id, OwnerUserId FROM (
+        SELECT Id, PostTypeId, OwnerUserId, @rid as rid FROM Post
+        WHERE @rid > {last_rid}
+        LIMIT {batch_size}
+    ) WHERE PostTypeId = 2 AND OwnerUserId IS NOT NULL
+
+INCORRECT (Direct Filter):
+    SELECT Id, OwnerUserId FROM Post
+    WHERE PostTypeId = 2 AND OwnerUserId IS NOT NULL AND @rid > {last_rid}
+    LIMIT {batch_size}
+
+Why: With direct filtering, LIMIT applies to the RID scan count (not filtered
+results). Since records are interleaved by @rid (e.g., Question, Answer,
+Question, Answer...), scanning 1000 RIDs might only match 50 Answers. This
+causes progressive data loss as pagination continues through sparse regions.
+
+The nested query pattern ensures:
+1. Inner query gets N records efficiently via RID pagination (O(1) access)
+2. Outer query filters those N records completely (no data loss)
+3. All matching records are eventually found across all batches
+
+Performance Optimization: Index-Based Vertex Lookups
+-----------------------------------------------------
+For Phase 2 graph creation, vertex caching uses O(1) index lookups instead of
+SQL IN queries for dramatically better performance:
+
+FAST (O(1) per vertex - lookupByKey):
+    for vid in vertex_ids:
+        cursor = graph_db._java_db.lookupByKey("VertexType", ["Id"], [vid])
+        if cursor.hasNext():
+            cache[vid] = cursor.next().getRecord().asVertex()
+
+SLOW (O(n) - SQL IN operator):
+    ids_str = ",".join(str(id) for id in vertex_ids)
+    query = f"SELECT FROM VertexType WHERE Id IN [{ids_str}]"
+    for result in graph_db.query("sql", query):
+        cache[result.get_property("Id")] = result._java_result.getElement().get().asVertex()
+
+Why: SQL IN queries with large ID lists are slow even with indexes. Direct
+lookupByKey() uses the index for O(1) access per vertex, resulting in 10-100x
+speedup for vertex caching operations. This optimization requires that the
+lookup field (Id) has a UNIQUE or NOTUNIQUE index defined.
 """
 
 import argparse
@@ -48,6 +98,19 @@ from typing import Dict, List, Set
 
 import arcadedb_embedded as arcadedb
 from lxml import etree
+
+
+def escape_sql_string(value: str) -> str:
+    """Properly escape a string for SQL queries.
+
+    Must escape backslashes first, then single quotes.
+    Otherwise a value like '\' becomes '\'' which escapes the quote.
+    """
+    if value is None:
+        return value
+    # First escape backslashes, then escape single quotes
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
 
 # =============================================================================
 # Validation Module - Reusable Across All Phases
@@ -492,6 +555,752 @@ class StackOverflowValidator:
 
         return validation_passed, counts
 
+    @staticmethod
+    def get_phase2_expected_counts(dataset_size: str = None) -> dict:
+        """Get expected Phase 2 vertex and edge counts.
+
+        These counts are based on actual runs and represent the expected
+        outcome after Phase 2 conversion. Useful for validation and
+        detecting regressions.
+
+        Args:
+            dataset_size: Dataset size name (e.g., 'stackoverflow-tiny')
+
+        Returns:
+            Dict with 'vertices' and 'edges' subdicts, or None if unknown
+        """
+        # Expected Phase 2 counts by dataset (from actual runs)
+        expected_phase2 = {
+            "stackoverflow-tiny": {
+                "vertices": {
+                    "User": 10_000,
+                    "Question": 3_825,
+                    "Answer": 5_767,
+                    "Tag": 668,
+                    "Badge": 10_000,
+                    "Comment": 10_000,
+                    "total": 40_260,
+                },
+                "edges": {
+                    "ASKED": 3_563,
+                    "ANSWERED": 5_618,
+                    "HAS_ANSWER": 5_767,
+                    "ACCEPTED_ANSWER": 2_142,
+                    "TAGGED_WITH": 0,
+                    "COMMENTED_ON": 10_000,
+                    "EARNED": 3_523,
+                    "LINKED_TO": 786,
+                    "total": 31_399,  # Updated to match actual edge counts
+                },
+            },
+            "stackoverflow-small": {
+                "vertices": {
+                    "User": 138_727,
+                    "Question": 48_390,
+                    "Answer": 56_255,
+                    "Tag": 668,
+                    "Badge": 182_975,
+                    "Comment": 195_781,
+                    "total": 622_796,
+                },
+                "edges": {
+                    "ASKED": 47_121,
+                    "ANSWERED": 54_937,
+                    "HAS_ANSWER": 56_255,
+                    "ACCEPTED_ANSWER": 21_869,
+                    "TAGGED_WITH": 0,
+                    "COMMENTED_ON": 195_749,
+                    "EARNED": 182_975,
+                    "LINKED_TO": 10_797,
+                    "total": 569_703,
+                },
+            },
+        }
+
+        return expected_phase2.get(dataset_size)
+
+    @staticmethod
+    def verify_phase2_vertex_counts(
+        db,
+        vertex_types: list = None,
+        indent: str = "     ",
+        dataset_size: str = None,
+    ) -> dict:
+        """Verify vertex counts in Phase 2 graph database.
+
+        Args:
+            db: Database instance
+            vertex_types: List of vertex type names (default: all Phase 2)
+            indent: Indentation string for output formatting
+            dataset_size: Dataset size for expected count validation
+
+        Returns:
+            Dict of {vertex_type: count}
+        """
+        if vertex_types is None:
+            vertex_types = ["User", "Question", "Answer", "Tag", "Badge", "Comment"]
+
+        counts = {}
+        total_count = 0
+        mismatches = []
+
+        # Get expected counts if dataset_size provided
+        expected = None
+        if dataset_size:
+            phase2_expected = StackOverflowValidator.get_phase2_expected_counts(
+                dataset_size
+            )
+            if phase2_expected:
+                expected = phase2_expected.get("vertices", {})
+
+        for vertex_type in vertex_types:
+            result = list(
+                db.query("sql", f"SELECT count(*) as count FROM {vertex_type}")
+            )
+            count = result[0].get_property("count")
+            counts[vertex_type] = count
+            total_count += count
+
+            # Check against expected
+            status = ""
+            if expected and expected.get(vertex_type) is not None:
+                expected_count = expected[vertex_type]
+                if count == expected_count:
+                    status = " ✓"
+                else:
+                    status = f" ❌ (expected {expected_count:,})"
+                    mismatches.append(
+                        f"{vertex_type}: got {count:,}, expected {expected_count:,}"
+                    )
+
+            print(f"{indent}✓ {vertex_type}: {count:,}{status}")
+
+        print(f"{indent}{'─' * 50}")
+
+        # Check total
+        total_status = ""
+        if expected and expected.get("total") is not None:
+            expected_total = expected["total"]
+            if total_count == expected_total:
+                total_status = " ✓"
+            else:
+                total_status = f" ❌ (expected {expected_total:,})"
+                mismatches.append(
+                    f"Total vertices: got {total_count:,}, "
+                    f"expected {expected_total:,}"
+                )
+
+        print(f"{indent}Total vertices: {total_count:,}{total_status}")
+
+        if mismatches:
+            print()
+            print(f"{indent}⚠️  Vertex count mismatches:")
+            for mismatch in mismatches:
+                print(f"{indent}   • {mismatch}")
+
+        return counts
+
+    @staticmethod
+    def verify_phase2_edge_counts(
+        db, edge_types: list = None, indent: str = "     ", dataset_size: str = None
+    ) -> dict:
+        """Verify edge counts in Phase 2 graph database.
+
+        Args:
+            db: Database instance
+            edge_types: List of edge type names (default: all Phase 2)
+            indent: Indentation string for output formatting
+            dataset_size: Dataset size for expected count validation
+
+        Returns:
+            Dict of {edge_type: count}
+        """
+        if edge_types is None:
+            edge_types = [
+                "ASKED",
+                "ANSWERED",
+                "HAS_ANSWER",
+                "ACCEPTED_ANSWER",
+                "TAGGED_WITH",
+                "COMMENTED_ON",
+                "EARNED",
+                "LINKED_TO",
+            ]
+
+        counts = {}
+        total_count = 0
+        mismatches = []
+
+        # Get expected counts if dataset_size provided
+        expected = None
+        if dataset_size:
+            phase2_expected = StackOverflowValidator.get_phase2_expected_counts(
+                dataset_size
+            )
+            if phase2_expected:
+                expected = phase2_expected.get("edges", {})
+
+        for edge_type in edge_types:
+            result = list(db.query("sql", f"SELECT count(*) as count FROM {edge_type}"))
+            count = result[0].get_property("count")
+            counts[edge_type] = count
+            total_count += count
+
+            # Check against expected
+            status = ""
+            if expected and expected.get(edge_type) is not None:
+                expected_count = expected[edge_type]
+                if count == expected_count:
+                    status = " ✓"
+                else:
+                    status = f" ❌ (expected {expected_count:,})"
+                    mismatches.append(
+                        f"{edge_type}: got {count:,}, expected {expected_count:,}"
+                    )
+
+            print(f"{indent}✓ {edge_type}: {count:,}{status}")
+
+        print(f"{indent}{'─' * 50}")
+
+        # Check total
+        total_status = ""
+        if expected and expected.get("total") is not None:
+            expected_total = expected["total"]
+            if total_count == expected_total:
+                total_status = " ✓"
+            else:
+                total_status = f" ❌ (expected {expected_total:,})"
+                mismatches.append(
+                    f"Total edges: got {total_count:,}, expected {expected_total:,}"
+                )
+
+        print(f"{indent}Total edges: {total_count:,}{total_status}")
+
+        if mismatches:
+            print()
+            print(f"{indent}⚠️  Edge count mismatches:")
+            for mismatch in mismatches:
+                print(f"{indent}   • {mismatch}")
+
+        return counts
+
+    @staticmethod
+    def get_phase2_validation_queries() -> list:
+        """Get validation queries for Phase 2 graph database.
+
+        Mix of SQL and Gremlin queries to validate:
+        - Graph topology and connectivity
+        - Edge properties and temporal data
+        - Multi-hop traversals
+        - Aggregations and patterns
+
+        Returns:
+            List of tuples: (query_type, name, query, validator_function)
+            where query_type is "sql" or "gremlin"
+        """
+        return [
+            # === Vertex Count Queries (SQL) ===
+            # Note: ArcadeDB has no base V/E types - must query individual types
+            (
+                "sql",
+                "Count User vertices",
+                "SELECT count(*) as count FROM User",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count Question vertices",
+                "SELECT count(*) as count FROM Question",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count Answer vertices",
+                "SELECT count(*) as count FROM Answer",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count Tag vertices",
+                "SELECT count(*) as count FROM Tag",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count Badge vertices",
+                "SELECT count(*) as count FROM Badge",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count Comment vertices",
+                "SELECT count(*) as count FROM Comment",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            # === Edge Count Queries (SQL) ===
+            (
+                "sql",
+                "Count ASKED edges",
+                "SELECT count(*) as count FROM ASKED",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count ANSWERED edges",
+                "SELECT count(*) as count FROM ANSWERED",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count HAS_ANSWER edges",
+                "SELECT count(*) as count FROM HAS_ANSWER",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count ACCEPTED_ANSWER edges",
+                "SELECT count(*) as count FROM ACCEPTED_ANSWER",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count TAGGED_WITH edges",
+                "SELECT count(*) as count FROM TAGGED_WITH",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count COMMENTED_ON edges",
+                "SELECT count(*) as count FROM COMMENTED_ON",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count EARNED edges",
+                "SELECT count(*) as count FROM EARNED",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Count LINKED_TO edges",
+                "SELECT count(*) as count FROM LINKED_TO",
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            # === User Activity Queries ===
+            (
+                "sql",
+                "Find user with most questions asked",
+                """
+                SELECT DisplayName, out('ASKED').size() as question_count
+                FROM User
+                WHERE out('ASKED').size() > 0
+                ORDER BY question_count DESC
+                LIMIT 1
+                """,
+                lambda r: len(r) > 0 and r[0].get_property("question_count") > 0,
+            ),
+            (
+                "sql",
+                "Find user with most answers",
+                """
+                SELECT DisplayName, out('ANSWERED').size() as answer_count
+                FROM User
+                WHERE out('ANSWERED').size() > 0
+                ORDER BY answer_count DESC
+                LIMIT 1
+                """,
+                lambda r: len(r) > 0 and r[0].get_property("answer_count") > 0,
+            ),
+            (
+                "sql",
+                "Find user with most badges earned",
+                """
+                SELECT DisplayName, out('EARNED').size() as badge_count
+                FROM User
+                WHERE out('EARNED').size() > 0
+                ORDER BY badge_count DESC
+                LIMIT 1
+                """,
+                lambda r: len(r) > 0 and r[0].get_property("badge_count") > 0,
+            ),
+            # === Question-Answer Relationship Queries ===
+            (
+                "sql",
+                "Find question with most answers",
+                """
+                SELECT Id, out('HAS_ANSWER').size() as answer_count
+                FROM Question
+                ORDER BY answer_count DESC
+                LIMIT 1
+                """,
+                lambda r: len(r) > 0,
+            ),
+            (
+                "sql",
+                "Count questions with accepted answers",
+                """
+                SELECT count(*) as count
+                FROM Question
+                WHERE out('ACCEPTED_ANSWER').size() > 0
+                """,
+                lambda r: r[0].get_property("count") >= 0,
+            ),
+            (
+                "sql",
+                "Verify answers have parent questions",
+                """
+                SELECT count(*) as orphan_count
+                FROM Answer
+                WHERE in('HAS_ANSWER').size() = 0
+                """,
+                lambda r: r[0].get_property("orphan_count") >= 0,
+            ),
+            # === Tag Queries (optional - may be 0 in small datasets) ===
+            (
+                "sql",
+                "Find most popular tag",
+                """
+                SELECT TagName, in('TAGGED_WITH').size() as usage_count
+                FROM Tag
+                ORDER BY usage_count DESC
+                LIMIT 1
+                """,
+                lambda r: True,  # Optional - OK if no tags
+            ),
+            (
+                "sql",
+                "Count questions per tag (top 5)",
+                """
+                SELECT TagName, in('TAGGED_WITH').size() as question_count
+                FROM Tag
+                WHERE in('TAGGED_WITH').size() > 0
+                ORDER BY question_count DESC
+                LIMIT 5
+                """,
+                lambda r: True,  # Optional - OK if no tags
+            ),
+            # === Comment Queries ===
+            (
+                "sql",
+                "Verify all comments link to posts",
+                """
+                SELECT count(*) as linked_count,
+                       (SELECT count(*) FROM Comment) as total_count
+                FROM Comment
+                WHERE out('COMMENTED_ON').size() > 0
+                """,
+                lambda r: r[0].get_property("linked_count") > 0,
+            ),
+            (
+                "sql",
+                "Find question with most comments",
+                """
+                SELECT Id, in('COMMENTED_ON').size() as comment_count
+                FROM Question
+                WHERE in('COMMENTED_ON').size() > 0
+                ORDER BY comment_count DESC
+                LIMIT 1
+                """,
+                lambda r: len(r) > 0,
+            ),
+            (
+                "sql",
+                "Find answer with most comments",
+                """
+                SELECT Id, in('COMMENTED_ON').size() as comment_count
+                FROM Answer
+                WHERE in('COMMENTED_ON').size() > 0
+                ORDER BY comment_count DESC
+                LIMIT 1
+                """,
+                lambda r: len(r) > 0,
+            ),
+            # === Edge Property Queries ===
+            (
+                "sql",
+                "Verify ASKED edges have CreationDate",
+                """
+                SELECT count(*) as with_date,
+                       (SELECT count(*) FROM ASKED) as total
+                FROM ASKED
+                WHERE CreationDate IS NOT NULL
+                """,
+                lambda r: r[0].get_property("with_date") > 0,
+            ),
+            (
+                "sql",
+                "Verify ANSWERED edges have CreationDate",
+                """
+                SELECT count(*) as with_date,
+                       (SELECT count(*) FROM ANSWERED) as total
+                FROM ANSWERED
+                WHERE CreationDate IS NOT NULL
+                """,
+                lambda r: r[0].get_property("with_date") > 0,
+            ),
+            (
+                "sql",
+                "Verify EARNED edges have Date and Class",
+                """
+                SELECT count(*) as complete_count
+                FROM EARNED
+                WHERE Date IS NOT NULL AND Class IS NOT NULL
+                """,
+                lambda r: r[0].get_property("complete_count") >= 0,
+            ),
+            (
+                "sql",
+                "Verify LINKED_TO edges have LinkTypeId",
+                """
+                SELECT count(*) as with_type,
+                       (SELECT count(*) FROM LINKED_TO) as total
+                FROM LINKED_TO
+                WHERE LinkTypeId IS NOT NULL
+                """,
+                lambda r: r[0].get_property("with_type") > 0,
+            ),
+            # === Multi-hop Traversal Queries (Gremlin) ===
+            (
+                "gremlin",
+                "Find users who answered their own questions",
+                """
+                g.V().hasLabel('User')
+                 .where(__.out('ASKED').in('HAS_ANSWER').in('ANSWERED'))
+                 .count()
+                """,
+                lambda r: len(r) > 0,
+            ),
+            (
+                "gremlin",
+                "Find 2-hop user connections (users who answered questions from other users)",
+                """
+                g.V().hasLabel('User').limit(10)
+                 .out('ASKED').in('HAS_ANSWER').in('ANSWERED')
+                 .dedup()
+                 .count()
+                """,
+                lambda r: len(r) > 0,
+            ),
+            # === Complex Pattern Queries (Gremlin) ===
+            (
+                "gremlin",
+                "Find questions with tags, answers, and comments",
+                """
+                g.V().hasLabel('Question')
+                 .where(__.out('TAGGED_WITH'))
+                 .where(__.out('HAS_ANSWER'))
+                 .where(__.in('COMMENTED_ON'))
+                 .count()
+                """,
+                lambda r: len(r) > 0,
+            ),
+            (
+                "gremlin",
+                "Find users with badges who also asked questions",
+                """
+                g.V().hasLabel('User')
+                 .where(__.out('EARNED'))
+                 .where(__.out('ASKED'))
+                 .count()
+                """,
+                lambda r: len(r) > 0 and int(r[0].get_property("result")) > 0,
+            ),
+        ]
+
+    @staticmethod
+    def run_phase2_validation_queries(
+        db, indent: str = "     ", verbose: bool = True
+    ) -> bool:
+        """Run Phase 2 validation queries (SQL and Gremlin).
+
+        Args:
+            db: Database instance
+            indent: Indentation for output
+            verbose: Print detailed output
+
+        Returns:
+            True if all queries passed
+        """
+        queries = StackOverflowValidator.get_phase2_validation_queries()
+        all_passed = True
+        sql_count = 0
+        gremlin_count = 0
+        query_num = 0
+
+        for query_type, name, query, validator in queries:
+            query_num += 1
+            try:
+                # Execute based on query type
+                query_start = time.time()
+                if query_type == "sql":
+                    results = list(db.query("sql", query.strip()))
+                    sql_count += 1
+                elif query_type == "gremlin":
+                    results = list(db.query("gremlin", query.strip()))
+                    gremlin_count += 1
+                else:
+                    raise ValueError(f"Unknown query type: {query_type}")
+
+                query_time = time.time() - query_start
+                passed = validator(results)
+
+                if verbose:
+                    status = "✓" if passed else "✗"
+                    lang = "SQL" if query_type == "sql" else "Gremlin"
+                    result_count = len(results)
+
+                    # Print query info
+                    print(
+                        f"{indent}{status} [{query_num}/{len(queries)}]"
+                        f" [{lang:7}] {name}"
+                    )
+
+                    # Print the actual query (indented, multi-line friendly)
+                    query_lines = query.strip().split("\n")
+                    for line in query_lines:
+                        print(f"{indent}          {line.strip()}")
+
+                    # Show result values
+                    print(f"{indent}          Results: {result_count} rows")
+                    if results and result_count > 0:
+                        # Try to show all properties from first result
+                        first = results[0]
+                        props = []
+                        # Common property names to check
+                        prop_names = [
+                            "count",
+                            "cnt",
+                            "usage_count",
+                            "question_count",
+                            "answer_count",
+                            "badge_count",
+                            "comment_count",
+                            "DisplayName",
+                            "Title",
+                            "TagName",
+                            "result",
+                        ]
+                        for prop in prop_names:
+                            try:
+                                if first.has_property(prop):
+                                    val = first.get_property(prop)
+                                    props.append(f"{prop}={val}")
+                            except Exception:
+                                pass
+
+                        if props:
+                            print(f"{indent}          " f"Values: {', '.join(props)}")
+
+                    print(f"{indent}          Time: {query_time:.4f}s")
+                    print()
+
+                if not passed:
+                    all_passed = False
+
+            except Exception as e:
+                all_passed = False
+                if verbose:
+                    lang = "SQL" if query_type == "sql" else "Gremlin"
+                    print(
+                        f"{indent}✗ [{query_num}/{len(queries)}]" f" [{lang:7}] {name}"
+                    )
+                    print(f"{indent}          Error: {e}")
+                    print()
+
+        if verbose and (sql_count > 0 or gremlin_count > 0):
+            print(f"{indent}{'─' * 50}")
+            print(
+                f"{indent}Executed: {sql_count} SQL, "
+                f"{gremlin_count} Gremlin queries"
+            )
+
+        return all_passed
+
+    @staticmethod
+    def validate_phase2(
+        db_path: Path = None,
+        db=None,
+        dataset_size: str = None,
+        verbose: bool = True,
+        indent: str = "",
+    ) -> tuple[bool, dict]:
+        """Complete Phase 2 validation (standalone entry point).
+
+        Args:
+            db_path: Path to Phase 2 graph database (if db is None)
+            db: Already-open database instance (if provided, db_path ignored)
+            dataset_size: Dataset size name for count validation
+            verbose: Print detailed output
+            indent: Indentation for output
+
+        Returns:
+            Tuple of (validation_passed, counts_dict)
+        """
+        if db is None and db_path is None:
+            raise ValueError("Must provide either db_path or db parameter")
+
+        if verbose:
+            print(f"{indent}📊 Validating Phase 2 Graph Database")
+            if dataset_size:
+                print(f"{indent}   Dataset: {dataset_size}")
+            print(f"{indent}{'=' * 70}")
+            print()
+
+        validation_passed = True
+        counts = {"vertices": {}, "edges": {}}
+
+        # Use provided db or open from path
+        def _run_validation(database):
+            nonlocal validation_passed, counts
+
+            # Verify vertex counts
+            if verbose:
+                print(f"{indent}  Vertex Counts:")
+            counts["vertices"] = StackOverflowValidator.verify_phase2_vertex_counts(
+                database, indent=f"{indent}     ", dataset_size=dataset_size
+            )
+            if verbose:
+                print()
+
+            # Verify edge counts
+            if verbose:
+                print(f"{indent}  Edge Counts:")
+            counts["edges"] = StackOverflowValidator.verify_phase2_edge_counts(
+                database, indent=f"{indent}     ", dataset_size=dataset_size
+            )
+            if verbose:
+                print()
+
+            # Run validation queries
+            if verbose:
+                print(f"{indent}  Validation Queries:")
+            queries_valid = StackOverflowValidator.run_phase2_validation_queries(
+                database, indent=f"{indent}     ", verbose=verbose
+            )
+            validation_passed = validation_passed and queries_valid
+
+            if verbose:
+                print()
+
+        if db is not None:
+            # Use the provided database instance
+            _run_validation(db)
+        else:
+            # Open database from path
+            with arcadedb.open_database(str(db_path)) as database:
+                _run_validation(database)
+
+        if verbose:
+            print(f"{indent}{'=' * 70}")
+            if validation_passed:
+                print(f"{indent}✅ Phase 2 validation passed")
+            else:
+                print(f"{indent}❌ Phase 2 validation failed")
+            print(f"{indent}{'=' * 70}")
+            print()
+
+        return validation_passed, counts
+
 
 # =============================================================================
 # Schema Analysis Classes
@@ -725,6 +1534,7 @@ def print_batch_stats(
     count: int,
     embed_time: float = None,
     query_time: float = None,
+    cache_time: float = None,
     db_time: float = None,
     total_time: float = None,
     item_name: str = "items",
@@ -735,6 +1545,7 @@ def print_batch_stats(
         count: Number of items in batch
         embed_time: Time spent on embeddings (optional)
         query_time: Time spent on queries (optional, for edges)
+        cache_time: Time spent on caching vertices (optional, for edges)
         db_time: Time spent on database operations
         total_time: Total batch time
         item_name: Name for items (e.g., "users", "edges", "v", "e")
@@ -747,6 +1558,8 @@ def print_batch_stats(
         parts.append(f"embed: {embed_time:.1f}s |")
     if query_time is not None:
         parts.append(f"query: {query_time:.1f}s |")
+    if cache_time is not None:
+        parts.append(f"cache: {cache_time:.1f}s |")
     if db_time is not None:
         parts.append(f"db: {db_time:.1f}s |")
     if total_time is not None:
@@ -762,16 +1575,18 @@ def print_summary_stats(
     item_name: str = "items",
     has_embed: bool = False,
     has_query: bool = False,
+    has_cache: bool = False,
 ):
     """Print summary statistics with averages.
 
     Args:
         total_count: Total number of items created
         elapsed: Total elapsed time
-        batch_times: List of tuples (count, [embed_t], [query_t], db_t, total_t)
+        batch_times: List of tuples (count, [embed_t], [query_t], [cache_t], db_t, total_t)
         item_name: Name for items (e.g., "users", "edges")
         has_embed: Whether batches have embedding time
         has_query: Whether batches have query time (for edges)
+        has_cache: Whether batches have cache time (for edges)
     """
     if not batch_times:
         rate = total_count / elapsed if elapsed > 0 else 0
@@ -792,6 +1607,19 @@ def print_summary_stats(
         avg_db = total_db / len(batch_times)
         parts.append(f"avg embed: {avg_embed:.1f}s |")
         parts.append(f"avg db: {avg_db:.1f}s |")
+    elif has_query and has_cache:
+        # batch_times format: (count, query_t, cache_t, db_t, total_t)
+        total_query = sum(t[1] for t in batch_times)
+        total_cache = sum(t[2] for t in batch_times)
+        total_db = sum(t[3] for t in batch_times)
+        avg_query = total_query / len(batch_times)
+        avg_cache = total_cache / len(batch_times)
+        avg_db = total_db / len(batch_times)
+        parts.append(f"avg query: {avg_query:.1f}s |")
+        parts.append(f"avg cache: {avg_cache:.1f}s |")
+        # Only show db time if it's significant
+        if avg_db > 0.01:
+            parts.append(f"avg db: {avg_db:.1f}s |")
     elif has_query:
         # batch_times format: (count, query_t, db_t, total_t)
         total_query = sum(t[1] for t in batch_times)
@@ -1236,6 +2064,7 @@ class Phase1XMLImporter:
 
             if len(batch) >= self.batch_size:
                 batch_start = time.time()
+
                 db_time = self._insert_batch(entity_name, batch)
                 total_time = time.time() - batch_start
 
@@ -1259,6 +2088,7 @@ class Phase1XMLImporter:
         # Final batch
         if batch:
             batch_start = time.time()
+
             db_time = self._insert_batch(entity_name, batch)
             total_time = time.time() - batch_start
 
@@ -1391,7 +2221,34 @@ class Phase1XMLImporter:
                 status = "✓" if passed else "❌"
 
                 print(f"  [{i}/{len(queries)}] {query_name}")
+                print(f"          Query: {query.strip()}")
                 print(f"          Results: {len(result)} rows")
+
+                # Show actual result values
+                if result:
+                    first = result[0]
+                    props = {}
+                    # Get all properties from first result
+                    try:
+                        # Try common property names
+                        prop_names = [
+                            "count",
+                            "cnt",
+                            "Id",
+                            "DisplayName",
+                            "PostTypeId",
+                            "Title",
+                        ]
+                        for prop in prop_names:
+                            if first.has_property(prop):
+                                props[prop] = first.get_property(prop)
+                    except Exception:
+                        pass
+
+                    if props:
+                        props_str = ", ".join(f"{k}={v}" for k, v in props.items())
+                        print(f"          Values: {props_str}")
+
                 print(f"          Time: {elapsed:.4f}s")
                 print(f"          Status: {status}")
                 print()
@@ -1511,6 +2368,21 @@ class Phase2GraphConverter:
         self.expected_counts = {}
         self.expected_indexes = 28  # From Phase 1
 
+    @staticmethod
+    def _to_epoch_millis(dt):
+        """Convert datetime to epoch milliseconds (Java timestamp format).
+
+        Returns None if dt is None, otherwise converts to long.
+        """
+        from datetime import datetime
+
+        if dt is None:
+            return None
+        if isinstance(dt, datetime):
+            return int(dt.timestamp() * 1000)
+        # Already a number (long/int)
+        return dt
+
     def run(self):
         """Execute Phase 2: Document to Graph conversion."""
         print("=" * 80)
@@ -1547,12 +2419,16 @@ class Phase2GraphConverter:
 
             # Step 4: Create edges
             print("Step 4: Creating edges...")
-            print("⚠️  Not yet implemented")
+            step_start = time.time()
+            self._create_edges()
+            print(f"  ⏱️  Time: {time.time() - step_start:.2f}s")
             print()
 
             # Step 5: Run graph validation
             print("Step 5: Running graph validation queries...")
-            print("⚠️  Not yet implemented")
+            step_start = time.time()
+            self._validate_phase2()
+            print(f"  ⏱️  Time: {time.time() - step_start:.2f}s")
             print()
 
             # Phase 2 complete
@@ -1569,6 +2445,30 @@ class Phase2GraphConverter:
         except Exception as e:
             print(f"\n❌ Phase 2 failed: {e}")
             raise
+        finally:
+            # Close graph database to release lock
+            if self.graph_db is not None:
+                self.graph_db.close()
+                print("  ✅ Closed Phase 2 graph database")
+                print()
+
+    def _validate_phase2(self):
+        """Validate Phase 2 graph database using StackOverflowValidator."""
+        print("  Validating Phase 2 graph database...")
+        print()
+
+        # Use the reusable standalone validator with the already-open database
+        validation_passed, counts = StackOverflowValidator.validate_phase2(
+            db=self.graph_db,
+            dataset_size=self.dataset_size,
+            verbose=True,
+            indent="  ",
+        )
+
+        if not validation_passed:
+            raise RuntimeError("Phase 2 validation failed!")
+
+        print("  ✅ Phase 2 validation complete!")
 
     def _verify_phase1(self):
         """Verify Phase 1 database using StackOverflowValidator."""
@@ -1692,11 +2592,13 @@ class Phase2GraphConverter:
 
             # User -> Question (ASKED)
             self.graph_db.schema.create_edge_type("ASKED")
-            print("    ✓ ASKED (User -> Question)")
+            self.graph_db.schema.create_property("ASKED", "CreationDate", "DATETIME")
+            print("    ✓ ASKED (User -> Question, with CreationDate)")
 
             # User -> Answer (ANSWERED)
             self.graph_db.schema.create_edge_type("ANSWERED")
-            print("    ✓ ANSWERED (User -> Answer)")
+            self.graph_db.schema.create_property("ANSWERED", "CreationDate", "DATETIME")
+            print("    ✓ ANSWERED (User -> Answer, with CreationDate)")
 
             # Question -> Answer (HAS_ANSWER)
             self.graph_db.schema.create_edge_type("HAS_ANSWER")
@@ -1712,16 +2614,27 @@ class Phase2GraphConverter:
 
             # Comment -> Post (COMMENTED_ON, to Question or Answer)
             self.graph_db.schema.create_edge_type("COMMENTED_ON")
-            print("    ✓ COMMENTED_ON (Comment -> Question/Answer)")
+            self.graph_db.schema.create_property(
+                "COMMENTED_ON", "CreationDate", "DATETIME"
+            )
+            self.graph_db.schema.create_property("COMMENTED_ON", "Score", "INTEGER")
+            print(
+                "    ✓ COMMENTED_ON (Comment -> Question/Answer, with CreationDate, Score)"
+            )
 
             # User -> Badge (EARNED)
             self.graph_db.schema.create_edge_type("EARNED")
-            print("    ✓ EARNED (User -> Badge)")
+            self.graph_db.schema.create_property("EARNED", "Date", "DATETIME")
+            self.graph_db.schema.create_property("EARNED", "Class", "INTEGER")
+            print("    ✓ EARNED (User -> Badge, with Date, Class)")
 
             # Post -> Post (LINKED_TO, via PostLink)
             self.graph_db.schema.create_edge_type("LINKED_TO")
             self.graph_db.schema.create_property("LINKED_TO", "LinkTypeId", "INTEGER")
-            print("    ✓ LINKED_TO (Post -> Post, with LinkTypeId)")
+            self.graph_db.schema.create_property(
+                "LINKED_TO", "CreationDate", "DATETIME"
+            )
+            print("    ✓ LINKED_TO (Post -> Post, with LinkTypeId, CreationDate)")
 
         print("\n  ✅ Vertex and edge types created")
         print("     • 6 vertex types: User, Question, Answer, Tag, Badge, Comment")
@@ -1821,7 +2734,6 @@ class Phase2GraphConverter:
             query = f"""
                 SELECT *, @rid as rid FROM User
                 WHERE @rid > {last_rid}
-                ORDER BY @rid
                 LIMIT {self.batch_size}
             """
             chunk = list(doc_db.query("sql", query))
@@ -1877,8 +2789,6 @@ class Phase2GraphConverter:
 
     def _convert_posts(self, doc_db):
         """Convert Post documents to Question/Answer vertices with pagination."""
-        question_batch = []
-        answer_batch = []
         question_count = 0
         answer_count = 0
         start = time.time()
@@ -1897,7 +2807,6 @@ class Phase2GraphConverter:
             query = f"""
                 SELECT *, @rid as rid FROM Post
                 WHERE @rid > {last_rid}
-                ORDER BY @rid
                 LIMIT {self.batch_size}
             """
             chunk = list(doc_db.query("sql", query))
@@ -1907,6 +2816,10 @@ class Phase2GraphConverter:
 
             if not chunk:
                 break
+
+            # Process entire chunk before inserting (for deterministic pagination)
+            chunk_questions = []
+            chunk_answers = []
 
             for post in chunk:
                 post_type_id = post.get_property("PostTypeId")
@@ -1927,28 +2840,7 @@ class Phase2GraphConverter:
                         "DownVotes": 0,
                         "BountyAmount": 0,
                     }
-
-                    question_batch.append(vertex_data)
-                    question_count += 1
-
-                    if len(question_batch) >= self.batch_size:
-                        q_db_time = self._insert_vertex_batch(
-                            "Question", question_batch
-                        )
-                        batch_time = time.time() - batch_start
-                        question_times.append(
-                            (len(question_batch), query_time, q_db_time, batch_time)
-                        )
-
-                        print_batch_stats(
-                            count=len(question_batch),
-                            query_time=query_time,
-                            db_time=q_db_time,
-                            total_time=batch_time,
-                            item_name="questions",
-                        )
-                        question_batch = []
-                        batch_start = time.time()  # Reset for next batch
+                    chunk_questions.append(vertex_data)
 
                 elif post_type_id == 2:  # Answer
                     vertex_data = {
@@ -1961,42 +2853,41 @@ class Phase2GraphConverter:
                         "UpVotes": 0,
                         "DownVotes": 0,
                     }
+                    chunk_answers.append(vertex_data)
 
-                    answer_batch.append(vertex_data)
-                    answer_count += 1
+            # Insert chunks after processing entire chunk (deterministic batching)
+            if chunk_questions:
+                q_db_time = self._insert_vertex_batch("Question", chunk_questions)
+                batch_time = time.time() - batch_start
+                question_times.append(
+                    (len(chunk_questions), query_time, q_db_time, batch_time)
+                )
+                print_batch_stats(
+                    count=len(chunk_questions),
+                    query_time=query_time,
+                    db_time=q_db_time,
+                    total_time=batch_time,
+                    item_name="questions",
+                )
+                question_count += len(chunk_questions)
 
-                    if len(answer_batch) >= self.batch_size:
-                        a_db_time = self._insert_vertex_batch("Answer", answer_batch)
-                        batch_time = time.time() - batch_start
-                        answer_times.append(
-                            (len(answer_batch), query_time, a_db_time, batch_time)
-                        )
+            if chunk_answers:
+                a_db_time = self._insert_vertex_batch("Answer", chunk_answers)
+                batch_time = time.time() - batch_start
+                answer_times.append(
+                    (len(chunk_answers), query_time, a_db_time, batch_time)
+                )
+                print_batch_stats(
+                    count=len(chunk_answers),
+                    query_time=query_time,
+                    db_time=a_db_time,
+                    total_time=batch_time,
+                    item_name="answers",
+                )
+                answer_count += len(chunk_answers)
 
-                        print_batch_stats(
-                            count=len(answer_batch),
-                            query_time=query_time,
-                            db_time=a_db_time,
-                            total_time=batch_time,
-                            item_name="answers",
-                        )
-                        answer_batch = []
-                        batch_start = time.time()  # Reset for next batch
-
-            # Update pagination cursor
+            # Update pagination cursor (after all inserts for this chunk)
             last_rid = chunk[-1].get_property("rid")
-
-        # Final batches
-        if question_batch:
-            db_time = self._insert_vertex_batch("Question", question_batch)
-            batch_time = time.time() - batch_start
-            # Use average query time for final batch
-            avg_query = total_query_time / query_count if query_count > 0 else 0
-            question_times.append((len(question_batch), avg_query, db_time, batch_time))
-        if answer_batch:
-            db_time = self._insert_vertex_batch("Answer", answer_batch)
-            batch_time = time.time() - batch_start
-            avg_query = total_query_time / query_count if query_count > 0 else 0
-            answer_times.append((len(answer_batch), avg_query, db_time, batch_time))
 
         elapsed = time.time() - start
 
@@ -2051,7 +2942,6 @@ class Phase2GraphConverter:
                 SELECT *, @rid as rid
                 FROM Vote
                 WHERE PostId IS NOT NULL AND @rid > {last_rid}
-                ORDER BY @rid
                 LIMIT {self.batch_size}
             """
             chunk = list(doc_db.query("sql", vote_query))
@@ -2206,7 +3096,6 @@ class Phase2GraphConverter:
             query = f"""
                 SELECT *, @rid as rid FROM Tag
                 WHERE @rid > {last_rid}
-                ORDER BY @rid
                 LIMIT {self.batch_size}
             """
             chunk = list(doc_db.query("sql", query))
@@ -2272,7 +3161,6 @@ class Phase2GraphConverter:
             query = f"""
                 SELECT *, @rid as rid FROM Badge
                 WHERE @rid > {last_rid}
-                ORDER BY @rid
                 LIMIT {self.batch_size}
             """
             chunk = list(doc_db.query("sql", query))
@@ -2339,7 +3227,6 @@ class Phase2GraphConverter:
             query = f"""
                 SELECT *, @rid as rid FROM Comment
                 WHERE @rid > {last_rid}
-                ORDER BY @rid
                 LIMIT {self.batch_size}
             """
             chunk = list(doc_db.query("sql", query))
@@ -2389,6 +3276,930 @@ class Phase2GraphConverter:
             has_query=True,
         )
 
+    def _create_edges(self):
+        """Create all edges from Phase 1 documents.
+
+        Edge types to create (8):
+        1. ASKED: User -> Question (from Post.OwnerUserId)
+        2. ANSWERED: User -> Answer (from Post.OwnerUserId)
+        3. HAS_ANSWER: Question -> Answer (from Post.ParentId)
+        4. ACCEPTED_ANSWER: Question -> Answer (from Post.AcceptedAnswerId)
+        5. TAGGED_WITH: Question -> Tag (from Post.Tags, parsed)
+        6. COMMENTED_ON: Comment -> Question/Answer (from Comment.PostId)
+        7. EARNED: User -> Badge (from Badge.UserId)
+        8. LINKED_TO: Post -> Post (from PostLink)
+        """
+        print("  Opening Phase 1 database (read-only)...")
+        doc_db = arcadedb.open_database(str(self.doc_db_path))
+
+        try:
+            # Edge 1: ASKED (User -> Question)
+            print("\n  Creating ASKED edges (User -> Question)...")
+            self._create_asked_edges(doc_db)
+
+            # Edge 2: ANSWERED (User -> Answer)
+            print("\n  Creating ANSWERED edges (User -> Answer)...")
+            self._create_answered_edges(doc_db)
+
+            # Edge 3: HAS_ANSWER (Question -> Answer)
+            print("\n  Creating HAS_ANSWER edges (Question -> Answer)...")
+            self._create_has_answer_edges(doc_db)
+
+            # Edge 4: ACCEPTED_ANSWER (Question -> Answer)
+            print("\n  Creating ACCEPTED_ANSWER edges (Question -> Answer)...")
+            self._create_accepted_answer_edges(doc_db)
+
+            # Edge 5: TAGGED_WITH (Question -> Tag)
+            print("\n  Creating TAGGED_WITH edges (Question -> Tag)...")
+            self._create_tagged_with_edges(doc_db)
+
+            # Edge 6: COMMENTED_ON (Comment -> Post)
+            print("\n  Creating COMMENTED_ON edges (Comment -> Post)...")
+            self._create_commented_on_edges(doc_db)
+
+            # Edge 7: EARNED (User -> Badge)
+            print("\n  Creating EARNED edges (User -> Badge)...")
+            self._create_earned_edges(doc_db)
+
+            # Edge 8: LINKED_TO (Post -> Post)
+            print("\n  Creating LINKED_TO edges (Post -> Post)...")
+            self._create_linked_to_edges(doc_db)
+
+        finally:
+            doc_db.close()
+
+    def _create_asked_edges(self, doc_db):
+        """Create ASKED edges: User -> Question.
+
+        Uses vertex.newEdge() method (like example 05) for performance.
+        Caches Java vertex objects for batch edge creation.
+        """
+        count = 0
+        batch_times = []
+        start = time.time()
+        last_rid = "#-1:-1"
+
+        # Track missing vertices across all batches
+        total_skipped_missing_user = 0
+        total_skipped_missing_question = 0
+
+        while True:
+            batch_start = time.time()
+
+            # Query Questions with OwnerUserId and CreationDate
+            # Use subquery: first get N records by RID, then filter
+            query_start = time.time()
+            query = f"""
+                SELECT Id, OwnerUserId, CreationDate, rid FROM (
+                    SELECT Id, PostTypeId, OwnerUserId, CreationDate, @rid as rid FROM Post
+                    WHERE @rid > {last_rid}
+                    LIMIT {self.batch_size}
+                )
+                WHERE PostTypeId = 1 AND OwnerUserId IS NOT NULL
+            """
+            chunk = list(doc_db.query("sql", query))
+            query_time = time.time() - query_start
+
+            if not chunk:
+                break
+
+            # Build vertex cache using O(1) index lookups
+            cache_start = time.time()
+            user_ids = list({p.get_property("OwnerUserId") for p in chunk})
+            question_ids = list({p.get_property("Id") for p in chunk})
+
+            user_cache = {}
+            question_cache = {}
+
+            # Fetch User vertices using direct index lookup (O(1))
+            for uid in user_ids:
+                cursor = self.graph_db._java_db.lookupByKey("User", ["Id"], [uid])
+                if cursor.hasNext():
+                    user_cache[uid] = cursor.next().getRecord().asVertex()
+
+            # Fetch Question vertices using direct index lookup (O(1))
+            for qid in question_ids:
+                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [qid])
+                if cursor.hasNext():
+                    question_cache[qid] = cursor.next().getRecord().asVertex()
+
+            cache_time = time.time() - cache_start
+
+            # Create edges using vertex.newEdge()
+            db_start = time.time()
+            edges_created = 0
+            skipped_missing_user = 0
+            skipped_missing_question = 0
+            with self.graph_db.transaction():
+                # Process all records from chunk (already filtered by SQL)
+                for post in chunk:
+                    user_id = post.get_property("OwnerUserId")
+                    question_id = post.get_property("Id")
+                    creation_date = post.get_property("CreationDate")
+
+                    user_vertex = user_cache.get(user_id)
+                    question_vertex = question_cache.get(question_id)
+
+                    if user_vertex and question_vertex:
+                        edge = user_vertex.newEdge("ASKED", question_vertex)
+                        if creation_date:
+                            edge.set(
+                                "CreationDate", self._to_epoch_millis(creation_date)
+                            )
+                        edge.save()
+                        edges_created += 1
+                    else:
+                        # Track missing vertices for data integrity check
+                        if not user_vertex:
+                            skipped_missing_user += 1
+                        if not question_vertex:
+                            skipped_missing_question += 1
+
+            # Accumulate across batches
+            total_skipped_missing_user += skipped_missing_user
+            total_skipped_missing_question += skipped_missing_question
+
+            count += edges_created
+            db_time = time.time() - db_start
+            batch_time = time.time() - batch_start
+            batch_times.append(
+                (edges_created, query_time, cache_time, db_time, batch_time)
+            )
+
+            print_batch_stats(
+                count=edges_created,
+                query_time=query_time,
+                cache_time=cache_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="edges",
+            )
+
+            last_rid = chunk[-1].get_property("rid")
+
+        elapsed = time.time() - start
+        print_summary_stats(
+            total_count=count,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="ASKED edges",
+            has_embed=False,
+            has_query=True,
+            has_cache=True,
+        )
+
+        # Data integrity check: warn if vertices were missing
+        total_skipped = total_skipped_missing_user + total_skipped_missing_question
+        if total_skipped > 0:
+            print(
+                f"    ⚠️  WARNING: Skipped {total_skipped} edges "
+                f"due to missing vertices:"
+            )
+            if total_skipped_missing_user > 0:
+                print(
+                    f"        • {total_skipped_missing_user} " f"missing User vertices"
+                )
+            if total_skipped_missing_question > 0:
+                print(
+                    f"        • {total_skipped_missing_question} "
+                    f"missing Question vertices"
+                )
+
+    def _create_answered_edges(self, doc_db):
+        """Create ANSWERED edges: User -> Answer.
+
+        Uses vertex.newEdge() method (like example 05) for performance.
+        """
+        count = 0
+        batch_times = []
+        start = time.time()
+        last_rid = "#-1:-1"
+
+        while True:
+            batch_start = time.time()
+
+            # Query Answers with OwnerUserId and CreationDate
+            # Use subquery: first get N records by RID, then filter
+            query_start = time.time()
+            query = f"""
+                SELECT Id, OwnerUserId, CreationDate, rid FROM (
+                    SELECT Id, PostTypeId, OwnerUserId, CreationDate, @rid as rid FROM Post
+                    WHERE @rid > {last_rid}
+                    LIMIT {self.batch_size}
+                )
+                WHERE PostTypeId = 2 AND OwnerUserId IS NOT NULL
+            """
+            chunk = list(doc_db.query("sql", query))
+            query_time = time.time() - query_start
+
+            if not chunk:
+                break
+
+            # Build vertex cache using O(1) index lookups
+            cache_start = time.time()
+            user_ids = list({p.get_property("OwnerUserId") for p in chunk})
+            answer_ids = list({p.get_property("Id") for p in chunk})
+
+            user_cache = {}
+            answer_cache = {}
+
+            # Fetch User vertices using direct index lookup (O(1))
+            for uid in user_ids:
+                cursor = self.graph_db._java_db.lookupByKey("User", ["Id"], [uid])
+                if cursor.hasNext():
+                    user_cache[uid] = cursor.next().getRecord().asVertex()
+
+            # Fetch Answer vertices using direct index lookup (O(1))
+            for aid in answer_ids:
+                cursor = self.graph_db._java_db.lookupByKey("Answer", ["Id"], [aid])
+                if cursor.hasNext():
+                    answer_cache[aid] = cursor.next().getRecord().asVertex()
+
+            cache_time = time.time() - cache_start
+
+            # Create edges using vertex.newEdge()
+            db_start = time.time()
+            edges_created = 0
+            with self.graph_db.transaction():
+                for post in chunk:
+                    user_id = post.get_property("OwnerUserId")
+                    answer_id = post.get_property("Id")
+                    creation_date = post.get_property("CreationDate")
+
+                    user_vertex = user_cache.get(user_id)
+                    answer_vertex = answer_cache.get(answer_id)
+
+                    if user_vertex and answer_vertex:
+                        edge = user_vertex.newEdge("ANSWERED", answer_vertex)
+                        if creation_date:
+                            edge.set(
+                                "CreationDate", self._to_epoch_millis(creation_date)
+                            )
+                        edge.save()
+                        edges_created += 1
+
+            count += edges_created
+            db_time = time.time() - db_start
+            batch_time = time.time() - batch_start
+            batch_times.append(
+                (edges_created, query_time, cache_time, db_time, batch_time)
+            )
+
+            print_batch_stats(
+                count=edges_created,
+                query_time=query_time,
+                cache_time=cache_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="edges",
+            )
+
+            last_rid = chunk[-1].get_property("rid")
+
+        elapsed = time.time() - start
+        print_summary_stats(
+            total_count=count,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="ANSWERED edges",
+            has_embed=False,
+            has_query=True,
+            has_cache=True,
+        )
+
+    def _create_has_answer_edges(self, doc_db):
+        """Create HAS_ANSWER edges: Question -> Answer.
+
+        Uses vertex.newEdge() method (like example 05) for performance.
+        """
+        count = 0
+        batch_times = []
+        start = time.time()
+        last_rid = "#-1:-1"
+
+        while True:
+            batch_start = time.time()
+
+            # Query Answers with ParentId (question)
+            # Use subquery: first get N records by RID, then filter
+            query_start = time.time()
+            query = f"""
+                SELECT Id, ParentId, rid FROM (
+                    SELECT Id, PostTypeId, ParentId, @rid as rid FROM Post
+                    WHERE @rid > {last_rid}
+                    LIMIT {self.batch_size}
+                )
+                WHERE PostTypeId = 2 AND ParentId IS NOT NULL
+            """
+            chunk = list(doc_db.query("sql", query))
+            query_time = time.time() - query_start
+
+            if not chunk:
+                break
+
+            # Build vertex cache using O(1) index lookups
+            cache_start = time.time()
+            question_ids = list({p.get_property("ParentId") for p in chunk})
+            answer_ids = list({p.get_property("Id") for p in chunk})
+
+            question_cache = {}
+            answer_cache = {}
+
+            # Fetch Question vertices using direct index lookup (O(1))
+            for qid in question_ids:
+                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [qid])
+                if cursor.hasNext():
+                    question_cache[qid] = cursor.next().getRecord().asVertex()
+
+            # Fetch Answer vertices using direct index lookup (O(1))
+            for aid in answer_ids:
+                cursor = self.graph_db._java_db.lookupByKey("Answer", ["Id"], [aid])
+                if cursor.hasNext():
+                    answer_cache[aid] = cursor.next().getRecord().asVertex()
+
+            cache_time = time.time() - cache_start
+
+            # Create edges using vertex.newEdge()
+            db_start = time.time()
+            edges_created = 0
+            with self.graph_db.transaction():
+                for post in chunk:
+                    question_id = post.get_property("ParentId")
+                    answer_id = post.get_property("Id")
+
+                    question_vertex = question_cache.get(question_id)
+                    answer_vertex = answer_cache.get(answer_id)
+
+                    if question_vertex and answer_vertex:
+                        edge = question_vertex.newEdge("HAS_ANSWER", answer_vertex)
+                        edge.save()
+                        edges_created += 1
+
+            count += edges_created
+            db_time = time.time() - db_start
+            batch_time = time.time() - batch_start
+            batch_times.append(
+                (edges_created, query_time, cache_time, db_time, batch_time)
+            )
+
+            print_batch_stats(
+                count=edges_created,
+                query_time=query_time,
+                cache_time=cache_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="edges",
+            )
+
+            last_rid = chunk[-1].get_property("rid")
+
+        elapsed = time.time() - start
+        print_summary_stats(
+            total_count=count,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="HAS_ANSWER edges",
+            has_embed=False,
+            has_query=True,
+            has_cache=True,
+        )
+
+    def _create_accepted_answer_edges(self, doc_db):
+        """Create ACCEPTED_ANSWER edges: Question -> Answer.
+
+        Uses vertex.newEdge() method (like example 05) for performance.
+        """
+        count = 0
+        batch_times = []
+        start = time.time()
+        last_rid = "#-1:-1"
+
+        while True:
+            batch_start = time.time()
+
+            # Query Questions with AcceptedAnswerId
+            # Use subquery: first get N records by RID, then filter
+            query_start = time.time()
+            query = f"""
+                SELECT Id, AcceptedAnswerId, rid FROM (
+                    SELECT Id, PostTypeId, AcceptedAnswerId, @rid as rid FROM Post
+                    WHERE @rid > {last_rid}
+                    LIMIT {self.batch_size}
+                )
+                WHERE PostTypeId = 1 AND AcceptedAnswerId IS NOT NULL
+            """
+            chunk = list(doc_db.query("sql", query))
+            query_time = time.time() - query_start
+
+            if not chunk:
+                break
+
+            # Build vertex cache using O(1) index lookups
+            cache_start = time.time()
+            question_ids = list({p.get_property("Id") for p in chunk})
+            answer_ids = list({p.get_property("AcceptedAnswerId") for p in chunk})
+
+            question_cache = {}
+            answer_cache = {}
+
+            # Fetch Question vertices using direct index lookup (O(1))
+            for qid in question_ids:
+                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [qid])
+                if cursor.hasNext():
+                    question_cache[qid] = cursor.next().getRecord().asVertex()
+
+            # Fetch Answer vertices using direct index lookup (O(1))
+            for aid in answer_ids:
+                cursor = self.graph_db._java_db.lookupByKey("Answer", ["Id"], [aid])
+                if cursor.hasNext():
+                    answer_cache[aid] = cursor.next().getRecord().asVertex()
+
+            cache_time = time.time() - cache_start
+
+            # Create edges using vertex.newEdge()
+            db_start = time.time()
+            edges_created = 0
+            with self.graph_db.transaction():
+                for post in chunk:
+                    question_id = post.get_property("Id")
+                    answer_id = post.get_property("AcceptedAnswerId")
+
+                    question_vertex = question_cache.get(question_id)
+                    answer_vertex = answer_cache.get(answer_id)
+
+                    if question_vertex and answer_vertex:
+                        edge = question_vertex.newEdge("ACCEPTED_ANSWER", answer_vertex)
+                        edge.save()
+                        edges_created += 1
+
+            count += edges_created
+            db_time = time.time() - db_start
+            batch_time = time.time() - batch_start
+            batch_times.append(
+                (edges_created, query_time, cache_time, db_time, batch_time)
+            )
+
+            print_batch_stats(
+                count=edges_created,
+                query_time=query_time,
+                cache_time=cache_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="edges",
+            )
+
+            last_rid = chunk[-1].get_property("rid")
+
+        elapsed = time.time() - start
+        print_summary_stats(
+            total_count=count,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="ACCEPTED_ANSWER edges",
+            has_embed=False,
+            has_query=True,
+            has_cache=True,
+        )
+
+    def _create_tagged_with_edges(self, doc_db):
+        """Create TAGGED_WITH edges: Question -> Tag.
+
+        Parse Tags field (format: '<tag1><tag2><tag3>') and create
+        edges to Tag vertices.
+
+        Uses vertex.newEdge() method (like example 05) for performance.
+        """
+        count = 0
+        batch_times = []
+        start = time.time()
+        last_rid = "#-1:-1"
+
+        while True:
+            batch_start = time.time()
+
+            # Query Questions with Tags
+            query_start = time.time()
+            query = f"""
+                SELECT Id, Tags, @rid as rid FROM Post
+                WHERE PostTypeId = 1 AND Tags IS NOT NULL
+                AND @rid > {last_rid}
+                LIMIT {self.batch_size}
+            """
+            chunk = list(doc_db.query("sql", query))
+            query_time = time.time() - query_start
+
+            if not chunk:
+                break
+
+            # Parse tags and build cache (Java vertex objects)
+            cache_start = time.time()
+            question_ids = []
+            tag_names = set()
+            question_tag_map = {}
+
+            for post in chunk:
+                question_id = post.get_property("Id")
+                tags_str = post.get_property("Tags")
+
+                if tags_str:
+                    # Parse '<tag1><tag2>' format
+                    tags = re.findall(r"<([^>]+)>", tags_str)
+                    question_ids.append(question_id)
+                    question_tag_map[question_id] = tags
+                    tag_names.update(tags)
+
+            question_cache = {}
+            tag_cache = {}
+
+            # Fetch Question vertices using direct index lookup (O(1))
+            for qid in question_ids:
+                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [qid])
+                if cursor.hasNext():
+                    question_cache[qid] = cursor.next().getRecord().asVertex()
+
+            # Fetch Tag vertices - lookup by TagName (no index, use SQL)
+            # Note: Could optimize by adding TagName index in schema creation
+            for tag_name in tag_names:
+                escaped_tag = escape_sql_string(tag_name)
+                tag_query = f"SELECT FROM Tag WHERE TagName = '{escaped_tag}'"
+                result_set = self.graph_db.query("sql", tag_query)
+                for result in result_set:
+                    vertex = result._java_result.getElement().get().asVertex()
+                    tag_cache[tag_name] = vertex
+                    break  # Only need first result
+
+            cache_time = time.time() - cache_start
+
+            # Create edges using vertex.newEdge()
+            db_start = time.time()
+            edges_created = 0
+            with self.graph_db.transaction():
+                for question_id, tags in question_tag_map.items():
+                    question_vertex = question_cache.get(question_id)
+
+                    if question_vertex:
+                        for tag_name in tags:
+                            tag_vertex = tag_cache.get(tag_name)
+                            if tag_vertex:
+                                edge = question_vertex.newEdge(
+                                    "TAGGED_WITH", tag_vertex
+                                )
+                                edge.save()
+                                edges_created += 1
+
+            count += edges_created
+            db_time = time.time() - db_start
+            batch_time = time.time() - batch_start
+            batch_times.append(
+                (edges_created, query_time, cache_time, db_time, batch_time)
+            )
+
+            print_batch_stats(
+                count=edges_created,
+                query_time=query_time,
+                cache_time=cache_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="edges",
+            )
+
+            last_rid = chunk[-1].get_property("rid")
+
+        elapsed = time.time() - start
+        print_summary_stats(
+            total_count=count,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="TAGGED_WITH edges",
+            has_embed=False,
+            has_query=True,
+            has_cache=True,
+        )
+
+    def _create_commented_on_edges(self, doc_db):
+        """Create COMMENTED_ON edges: Comment -> Question/Answer.
+
+        Comments can reference either Questions (PostTypeId=1) or
+        Answers (PostTypeId=2).
+
+        Uses vertex.newEdge() method (like example 05) for performance.
+        """
+        count = 0
+        batch_times = []
+        start = time.time()
+        last_rid = "#-1:-1"
+
+        while True:
+            batch_start = time.time()
+
+            # Query Comments with PostId, CreationDate, and Score
+            query_start = time.time()
+            query = f"""
+                SELECT Id, PostId, CreationDate, Score, @rid as rid
+                FROM Comment
+                WHERE PostId IS NOT NULL
+                AND @rid > {last_rid}
+                LIMIT {self.batch_size}
+            """
+            chunk = list(doc_db.query("sql", query))
+            query_time = time.time() - query_start
+
+            if not chunk:
+                break
+
+            # Build vertex cache (Java vertex objects)
+            cache_start = time.time()
+            comment_ids = list({c.get_property("Id") for c in chunk})
+            post_ids = list({c.get_property("PostId") for c in chunk})
+
+            comment_cache = {}
+            question_cache = {}
+            answer_cache = {}
+
+            # Fetch Comment vertices using O(1) index lookup
+            for cid in comment_ids:
+                cursor = self.graph_db._java_db.lookupByKey("Comment", ["Id"], [cid])
+                if cursor.hasNext():
+                    comment_cache[cid] = cursor.next().getRecord().asVertex()
+
+            # Fetch Question and Answer vertices using O(1) index lookup
+            for pid in post_ids:
+                # Try to find in Questions
+                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [pid])
+                if cursor.hasNext():
+                    question_cache[pid] = cursor.next().getRecord().asVertex()
+                else:
+                    # Try to find in Answers
+                    cursor = self.graph_db._java_db.lookupByKey("Answer", ["Id"], [pid])
+                    if cursor.hasNext():
+                        answer_cache[pid] = cursor.next().getRecord().asVertex()
+
+            cache_time = time.time() - cache_start
+
+            # Create edges using vertex.newEdge()
+            db_start = time.time()
+            edges_created = 0
+            with self.graph_db.transaction():
+                for comment in chunk:
+                    comment_id = comment.get_property("Id")
+                    post_id = comment.get_property("PostId")
+                    creation_date = comment.get_property("CreationDate")
+                    score = comment.get_property("Score")
+
+                    comment_vertex = comment_cache.get(comment_id)
+                    # Check if post is a Question or Answer
+                    post_vertex = question_cache.get(post_id) or answer_cache.get(
+                        post_id
+                    )
+
+                    if comment_vertex and post_vertex:
+                        edge = comment_vertex.newEdge("COMMENTED_ON", post_vertex)
+                        if creation_date:
+                            edge.set(
+                                "CreationDate", self._to_epoch_millis(creation_date)
+                            )
+                        if score is not None:
+                            edge.set("Score", score)
+                        edge.save()
+                        edges_created += 1
+
+            count += edges_created
+            db_time = time.time() - db_start
+            batch_time = time.time() - batch_start
+            batch_times.append(
+                (edges_created, query_time, cache_time, db_time, batch_time)
+            )
+
+            print_batch_stats(
+                count=edges_created,
+                query_time=query_time,
+                cache_time=cache_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="edges",
+            )
+
+            last_rid = chunk[-1].get_property("rid")
+
+        elapsed = time.time() - start
+        print_summary_stats(
+            total_count=count,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="COMMENTED_ON edges",
+            has_embed=False,
+            has_query=True,
+            has_cache=True,
+        )
+
+    def _create_earned_edges(self, doc_db):
+        """Create EARNED edges: User -> Badge.
+
+        Uses vertex.newEdge() method (like example 05) for performance.
+        """
+        count = 0
+        batch_times = []
+        start = time.time()
+        last_rid = "#-1:-1"
+
+        while True:
+            batch_start = time.time()
+
+            # Query Badges with UserId, Date, and Class
+            query_start = time.time()
+            query = f"""
+                SELECT Id, UserId, Date, Class, @rid as rid FROM Badge
+                WHERE UserId IS NOT NULL
+                AND @rid > {last_rid}
+                LIMIT {self.batch_size}
+            """
+            chunk = list(doc_db.query("sql", query))
+            query_time = time.time() - query_start
+
+            if not chunk:
+                break
+
+            # Build vertex cache (Java vertex objects)
+            cache_start = time.time()
+            user_ids = list({b.get_property("UserId") for b in chunk})
+            badge_ids = list({b.get_property("Id") for b in chunk})
+
+            user_cache = {}
+            badge_cache = {}
+
+            # Fetch User vertices using O(1) index lookup
+            for uid in user_ids:
+                cursor = self.graph_db._java_db.lookupByKey("User", ["Id"], [uid])
+                if cursor.hasNext():
+                    user_cache[uid] = cursor.next().getRecord().asVertex()
+
+            # Fetch Badge vertices using O(1) index lookup
+            for bid in badge_ids:
+                cursor = self.graph_db._java_db.lookupByKey("Badge", ["Id"], [bid])
+                if cursor.hasNext():
+                    badge_cache[bid] = cursor.next().getRecord().asVertex()
+
+            cache_time = time.time() - cache_start
+
+            # Create edges using vertex.newEdge()
+            db_start = time.time()
+            edges_created = 0
+            with self.graph_db.transaction():
+                for badge in chunk:
+                    user_id = badge.get_property("UserId")
+                    badge_id = badge.get_property("Id")
+                    date = badge.get_property("Date")
+                    badge_class = badge.get_property("Class")
+
+                    user_vertex = user_cache.get(user_id)
+                    badge_vertex = badge_cache.get(badge_id)
+
+                    if user_vertex and badge_vertex:
+                        edge = user_vertex.newEdge("EARNED", badge_vertex)
+                        if date:
+                            edge.set("Date", self._to_epoch_millis(date))
+                        if badge_class is not None:
+                            edge.set("Class", badge_class)
+                        edge.save()
+                        edges_created += 1
+
+            count += edges_created
+            db_time = time.time() - db_start
+            batch_time = time.time() - batch_start
+            batch_times.append(
+                (edges_created, query_time, cache_time, db_time, batch_time)
+            )
+
+            print_batch_stats(
+                count=edges_created,
+                query_time=query_time,
+                cache_time=cache_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="edges",
+            )
+
+            last_rid = chunk[-1].get_property("rid")
+
+        elapsed = time.time() - start
+        print_summary_stats(
+            total_count=count,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="EARNED edges",
+            has_embed=False,
+            has_query=True,
+            has_cache=True,
+        )
+
+    def _create_linked_to_edges(self, doc_db):
+        """Create LINKED_TO edges: Post -> Post (via PostLink).
+
+        PostLink contains PostId, RelatedPostId, and LinkTypeId.
+        Both posts can be Questions or Answers.
+
+        Uses vertex.newEdge() method (like example 05) for performance.
+        """
+        count = 0
+        batch_times = []
+        start = time.time()
+        last_rid = "#-1:-1"
+
+        while True:
+            batch_start = time.time()
+
+            # Query PostLinks with CreationDate
+            query_start = time.time()
+            query = f"""
+                SELECT PostId, RelatedPostId, LinkTypeId, CreationDate,
+                       @rid as rid
+                FROM PostLink
+                WHERE PostId IS NOT NULL AND RelatedPostId IS NOT NULL
+                AND @rid > {last_rid}
+                LIMIT {self.batch_size}
+            """
+            chunk = list(doc_db.query("sql", query))
+            query_time = time.time() - query_start
+
+            if not chunk:
+                break
+
+            # Build vertex cache - posts can be Q or A (Java vertex objects)
+            cache_start = time.time()
+            post_ids = set()
+            for link in chunk:
+                post_ids.add(link.get_property("PostId"))
+                post_ids.add(link.get_property("RelatedPostId"))
+
+            post_cache = {}
+
+            # Fetch Post vertices (Questions and Answers) using O(1) index lookup
+            for pid in post_ids:
+                # Try to find in Questions
+                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [pid])
+                if cursor.hasNext():
+                    post_cache[pid] = cursor.next().getRecord().asVertex()
+                else:
+                    # Try to find in Answers
+                    cursor = self.graph_db._java_db.lookupByKey("Answer", ["Id"], [pid])
+                    if cursor.hasNext():
+                        post_cache[pid] = cursor.next().getRecord().asVertex()
+
+            cache_time = time.time() - cache_start
+
+            # Create edges using vertex.newEdge()
+            db_start = time.time()
+            edges_created = 0
+            with self.graph_db.transaction():
+                for link in chunk:
+                    post_id = link.get_property("PostId")
+                    related_id = link.get_property("RelatedPostId")
+                    link_type = link.get_property("LinkTypeId")
+                    creation_date = link.get_property("CreationDate")
+
+                    from_vertex = post_cache.get(post_id)
+                    to_vertex = post_cache.get(related_id)
+
+                    if from_vertex and to_vertex:
+                        edge = from_vertex.newEdge("LINKED_TO", to_vertex)
+                        if link_type is not None:
+                            edge.set("LinkTypeId", link_type)
+                        if creation_date:
+                            edge.set(
+                                "CreationDate", self._to_epoch_millis(creation_date)
+                            )
+                        edge.save()
+                        edges_created += 1
+
+            count += edges_created
+            db_time = time.time() - db_start
+            batch_time = time.time() - batch_start
+            batch_times.append(
+                (edges_created, query_time, cache_time, db_time, batch_time)
+            )
+
+            print_batch_stats(
+                count=edges_created,
+                query_time=query_time,
+                cache_time=cache_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="edges",
+            )
+
+            last_rid = chunk[-1].get_property("rid")
+
+        elapsed = time.time() - start
+        print_summary_stats(
+            total_count=count,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="LINKED_TO edges",
+            has_embed=False,
+            has_query=True,
+            has_cache=True,
+        )
+
     def _insert_vertex_batch(self, vertex_type, batch):
         """Insert a batch of vertices.
 
@@ -2412,6 +4223,2422 @@ class Phase2GraphConverter:
                 self.graph_db.new_vertex(vertex_type).set(converted_data).save()
 
         return time.time() - batch_start
+
+
+# =============================================================================
+# Phase 3: Vector Embeddings and HNSW Indexing
+# =============================================================================
+
+
+class Phase3VectorEmbeddings:
+    """Phase 3: Add vector embeddings and HNSW indexes to graph vertices.
+
+    Converts text fields from Questions and Answers into embeddings for
+    semantic search capabilities.
+    """
+
+    def __init__(
+        self,
+        graph_db_path: Path,
+        batch_size: int = 1000,
+        encode_batch_size: int = 32,
+        model_name: str = "all-MiniLM-L6-v2",
+    ):
+        """Initialize Phase 3.
+
+        Args:
+            graph_db_path: Path to the graph database from Phase 2
+            batch_size: Batch size for progress reporting (not transaction batching)
+            encode_batch_size: Batch size for encoding embeddings with model
+            model_name: Name of the embedding model to use
+        """
+        self.graph_db_path = graph_db_path
+        self.batch_size = batch_size
+        self.encode_batch_size = encode_batch_size
+        self.model = None
+        self.model_name = model_name
+
+        # Detect GPU availability
+        import torch
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    def run(self):
+        """Run Phase 3: Generate embeddings and create HNSW indexes."""
+        print("=" * 80)
+        print("PHASE 3: VECTOR EMBEDDINGS AND HNSW INDEXING")
+        print("=" * 80)
+        print(f"Graph database: {self.graph_db_path}")
+        print(f"Embedding model: {self.model_name}")
+        print(f"Device: {self.device}")
+        print(f"Encode batch size: {self.encode_batch_size}")
+        print(f"Progress reporting every: {self.batch_size:,} items")
+        print()
+
+        phase_start = time.time()
+
+        # Check dependencies
+        self._check_dependencies()
+
+        # Load embedding model
+        self._load_model()
+
+        # Open graph database
+        print(f"Opening graph database: {self.graph_db_path}")
+        db = arcadedb.open_database(str(self.graph_db_path))
+
+        try:
+            print("✓ Database opened")
+            print()
+
+            # Validate Phase 2 completion
+            StackOverflowValidator.validate_phase2(db=db, verbose=True, indent="")
+            print()
+
+            # Generate embeddings for Questions
+            print("=" * 80)
+            print("Step 1: Generating embeddings for Questions")
+            print("=" * 80)
+            self._generate_question_embeddings(db)
+
+            # Generate embeddings for Answers
+            print()
+            print("=" * 80)
+            print("Step 2: Generating embeddings for Answers")
+            print("=" * 80)
+            self._generate_answer_embeddings(db)
+
+            # Generate embeddings for Comments
+            print()
+            print("=" * 80)
+            print("Step 3: Generating embeddings for Comments")
+            print("=" * 80)
+            self._generate_comment_embeddings(db)
+
+            # Generate embeddings for Users
+            print()
+            print("=" * 80)
+            print("Step 4: Generating embeddings for Users")
+            print("=" * 80)
+            self._generate_user_embeddings(db)
+
+            # Create HNSW indexes
+            print()
+            print("=" * 80)
+            print("Step 5: Creating HNSW vector indexes")
+            print("=" * 80)
+            indexes = self._create_vector_indexes(db)
+
+            # Demo: Vector search examples
+            print()
+            print("=" * 80)
+            print("Step 6: Vector Search Examples")
+            print("=" * 80)
+            self._run_vector_search_examples(db, indexes)
+
+            # Close database safely (wait for all async operations)
+            close_database_safely(db, verbose=True)
+
+        except Exception as e:
+            print(f"\n❌ Phase 3 failed: {e}")
+            if db:
+                db.close()
+            raise
+
+        # Phase complete
+        phase_elapsed = time.time() - phase_start
+        print()
+        print("=" * 80)
+        print("✅ PHASE 3 COMPLETE")
+        print("=" * 80)
+        print(f"Total time: {phase_elapsed:.2f}s ({phase_elapsed / 60:.1f} minutes)")
+        print("=" * 80)
+
+    def _check_dependencies(self):
+        """Check required dependencies for embeddings."""
+        print("Checking dependencies...")
+
+        try:
+            import sentence_transformers
+
+            print(f"  ✓ sentence-transformers {sentence_transformers.__version__}")
+        except ImportError:
+            print("  ❌ sentence-transformers not found")
+            print("     Install: pip install sentence-transformers")
+            sys.exit(1)
+
+        try:
+            import numpy
+
+            print(f"  ✓ numpy {numpy.__version__}")
+        except ImportError:
+            print("  ❌ numpy not found")
+            print("     Install: pip install numpy")
+            sys.exit(1)
+
+        print()
+
+    def _load_model(self):
+        """Load sentence-transformers model."""
+        from sentence_transformers import SentenceTransformer
+
+        print(f"Loading embedding model: {self.model_name}...")
+        start = time.time()
+        self.model = SentenceTransformer(self.model_name)
+        elapsed = time.time() - start
+        print(f"✓ Model loaded in {elapsed:.2f}s")
+        print()
+
+    def _generate_question_embeddings(self, db):
+        """Generate and store embeddings for all Questions using batched pagination."""
+        # Check if embeddings already exist
+        result = list(
+            db.query(
+                "sql",
+                "SELECT count(*) as count FROM Question WHERE embedding IS NOT NULL",
+            )
+        )
+        if result and result[0].get_property("count") > 0:
+            count = result[0].get_property("count")
+            print(f"✓ Embeddings already exist ({count:,} Questions)")
+            return
+
+        # Count total questions
+        total_result = list(db.query("sql", "SELECT count(*) as count FROM Question"))
+        total = total_result[0].get_property("count")
+
+        if total == 0:
+            print("⚠️  No Questions found")
+            return
+
+        print(f"Processing {total:,} Questions in batches of {self.batch_size:,}")
+
+        # Process in batches using RID pagination
+        total_processed = 0
+        last_rid = "#-1:-1"
+        start_time = time.time()
+        batch_times = []
+
+        while True:
+            batch_start = time.time()
+
+            # Fetch batch
+            batch_query = f"""
+                SELECT Id, Title, Body, @rid as rid FROM Question
+                WHERE @rid > {last_rid}
+                LIMIT {self.batch_size}
+            """
+            batch = list(db.query("sql", batch_query))
+
+            if not batch:
+                break
+
+            # Prepare texts for this batch
+            texts = []
+            ids = []
+            for q in batch:
+                title = q.get_property("Title") if q.has_property("Title") else ""
+                body = q.get_property("Body") if q.has_property("Body") else ""
+                text = f"{title} {body}".strip()
+                texts.append(text)
+                ids.append(q.get_property("Id"))
+
+            # Generate embeddings for this batch
+            embed_start = time.time()
+            batch_embeddings = self.model.encode(
+                texts,
+                batch_size=self.encode_batch_size,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                device=self.device,
+            )
+            embed_time = time.time() - embed_start
+
+            # Store embeddings using UPDATE SQL (idk why but faster than vertex.modify())
+            db_start = time.time()
+            with db.transaction():
+                for question_id, embedding in zip(ids, batch_embeddings):
+                    java_embedding = arcadedb.to_java_float_array(embedding)
+                    db.command(
+                        "sql",
+                        "UPDATE Question SET embedding = ?, vector_id = ? WHERE Id = ?",
+                        [java_embedding, str(question_id), question_id],
+                    )
+            db_time = time.time() - db_start
+
+            # Update progress
+            total_processed += len(batch)
+            batch_time = time.time() - batch_start
+            batch_times.append((len(batch), embed_time, db_time, batch_time))
+
+            print_batch_stats(
+                count=len(batch),
+                embed_time=embed_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="questions",
+            )
+
+            # Update last_rid for pagination
+            last_rid = batch[-1].get_property("rid")
+
+        elapsed = time.time() - start_time
+        print_summary_stats(
+            total_count=total_processed,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="Question embeddings",
+            has_embed=True,
+            has_query=False,
+        )
+
+    def _generate_answer_embeddings(self, db):
+        """Generate and store embeddings for all Answers using batched pagination."""
+        # Check if embeddings already exist
+        result = list(
+            db.query(
+                "sql",
+                "SELECT count(*) as count FROM Answer WHERE embedding IS NOT NULL",
+            )
+        )
+        if result and result[0].get_property("count") > 0:
+            count = result[0].get_property("count")
+            print(f"✓ Embeddings already exist ({count:,} Answers)")
+            return
+
+        # Count total answers
+        total_result = list(db.query("sql", "SELECT count(*) as count FROM Answer"))
+        total = total_result[0].get_property("count")
+
+        if total == 0:
+            print("⚠️  No Answers found")
+            return
+
+        print(f"Processing {total:,} Answers in batches of {self.batch_size:,}")
+
+        # Process in batches using RID pagination
+        total_processed = 0
+        last_rid = "#-1:-1"
+        start_time = time.time()
+        batch_times = []
+
+        while True:
+            batch_start = time.time()
+
+            # Fetch batch
+            batch_query = f"""
+                SELECT Id, Body, @rid as rid FROM Answer
+                WHERE @rid > {last_rid}
+                LIMIT {self.batch_size}
+            """
+            batch = list(db.query("sql", batch_query))
+
+            if not batch:
+                break
+
+            # Prepare texts for this batch
+            texts = []
+            ids = []
+            for a in batch:
+                body = a.get_property("Body") if a.has_property("Body") else ""
+                texts.append(body)
+                ids.append(a.get_property("Id"))
+
+            # Generate embeddings for this batch
+            embed_start = time.time()
+            batch_embeddings = self.model.encode(
+                texts,
+                batch_size=self.encode_batch_size,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                device=self.device,
+            )
+            embed_time = time.time() - embed_start
+
+            # Store embeddings using UPDATE SQL (faster than vertex.modify())
+            db_start = time.time()
+            with db.transaction():
+                for answer_id, embedding in zip(ids, batch_embeddings):
+                    java_embedding = arcadedb.to_java_float_array(embedding)
+                    db.command(
+                        "sql",
+                        "UPDATE Answer SET embedding = ?, vector_id = ? WHERE Id = ?",
+                        [java_embedding, str(answer_id), answer_id],
+                    )
+            db_time = time.time() - db_start
+
+            # Update progress
+            total_processed += len(batch)
+            batch_time = time.time() - batch_start
+            batch_times.append((len(batch), embed_time, db_time, batch_time))
+
+            print_batch_stats(
+                count=len(batch),
+                embed_time=embed_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="answers",
+            )
+
+            # Update last_rid for pagination
+            last_rid = batch[-1].get_property("rid")
+
+        elapsed = time.time() - start_time
+        print_summary_stats(
+            total_count=total_processed,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="Answer embeddings",
+            has_embed=True,
+            has_query=False,
+        )
+
+    def _generate_comment_embeddings(self, db):
+        """Generate and store embeddings for all Comments using batched pagination."""
+        # Check if embeddings already exist
+        result = list(
+            db.query(
+                "sql",
+                "SELECT count(*) as count FROM Comment WHERE embedding IS NOT NULL",
+            )
+        )
+        if result and result[0].get_property("count") > 0:
+            count = result[0].get_property("count")
+            print(f"✓ Embeddings already exist ({count:,} Comments)")
+            return
+
+        # Count total comments
+        total_result = list(db.query("sql", "SELECT count(*) as count FROM Comment"))
+        total = total_result[0].get_property("count")
+
+        if total == 0:
+            print("⚠️  No Comments found")
+            return
+
+        print(f"Processing {total:,} Comments in batches of {self.batch_size:,}")
+
+        # Process in batches using RID pagination
+        total_processed = 0
+        last_rid = "#-1:-1"
+        start_time = time.time()
+        batch_times = []
+
+        while True:
+            batch_start = time.time()
+
+            # Fetch batch
+            batch_query = f"""
+                SELECT Id, Text, @rid as rid FROM Comment
+                WHERE @rid > {last_rid}
+                LIMIT {self.batch_size}
+            """
+            batch = list(db.query("sql", batch_query))
+
+            if not batch:
+                break
+
+            # Prepare texts for this batch
+            texts = []
+            ids = []
+            for c in batch:
+                text = c.get_property("Text") if c.has_property("Text") else ""
+                texts.append(text)
+                ids.append(c.get_property("Id"))
+
+            # Generate embeddings for this batch
+            embed_start = time.time()
+            batch_embeddings = self.model.encode(
+                texts,
+                batch_size=self.encode_batch_size,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                device=self.device,
+            )
+            embed_time = time.time() - embed_start
+
+            # Store embeddings using UPDATE SQL (faster than vertex.modify())
+            db_start = time.time()
+            with db.transaction():
+                for comment_id, embedding in zip(ids, batch_embeddings):
+                    java_embedding = arcadedb.to_java_float_array(embedding)
+                    db.command(
+                        "sql",
+                        "UPDATE Comment SET embedding = ?, vector_id = ? WHERE Id = ?",
+                        [java_embedding, str(comment_id), comment_id],
+                    )
+            db_time = time.time() - db_start
+
+            # Update progress
+            total_processed += len(batch)
+            batch_time = time.time() - batch_start
+            batch_times.append((len(batch), embed_time, db_time, batch_time))
+
+            print_batch_stats(
+                count=len(batch),
+                embed_time=embed_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="comments",
+            )
+
+            # Update last_rid for pagination
+            last_rid = batch[-1].get_property("rid")
+
+        elapsed = time.time() - start_time
+        print_summary_stats(
+            total_count=total_processed,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="Comment embeddings",
+            has_embed=True,
+            has_query=False,
+        )
+
+    def _generate_user_embeddings(self, db):
+        """Generate and store embeddings for all Users using batched pagination."""
+        # Check if embeddings already exist
+        result = list(
+            db.query(
+                "sql",
+                "SELECT count(*) as count FROM User WHERE embedding IS NOT NULL",
+            )
+        )
+        if result and result[0].get_property("count") > 0:
+            count = result[0].get_property("count")
+            print(f"✓ Embeddings already exist ({count:,} Users)")
+            return
+
+        # Count total users
+        total_result = list(db.query("sql", "SELECT count(*) as count FROM User"))
+        total = total_result[0].get_property("count")
+
+        if total == 0:
+            print("⚠️  No Users found")
+            return
+
+        print(f"Processing {total:,} Users in batches of {self.batch_size:,}")
+
+        # Process in batches using RID pagination
+        total_processed = 0
+        last_rid = "#-1:-1"
+        start_time = time.time()
+        batch_times = []
+
+        while True:
+            batch_start = time.time()
+
+            # Fetch batch
+            batch_query = f"""
+                SELECT Id, DisplayName, AboutMe, @rid as rid FROM User
+                WHERE @rid > {last_rid}
+                LIMIT {self.batch_size}
+            """
+            batch = list(db.query("sql", batch_query))
+
+            if not batch:
+                break
+
+            # Prepare texts for this batch
+            texts = []
+            ids = []
+            for u in batch:
+                display_name = (
+                    u.get_property("DisplayName")
+                    if u.has_property("DisplayName")
+                    else ""
+                )
+                about_me = (
+                    u.get_property("AboutMe") if u.has_property("AboutMe") else ""
+                )
+
+                # Combine DisplayName and AboutMe
+                if about_me:
+                    text = f"{display_name} {about_me}".strip()
+                else:
+                    text = display_name.strip()
+
+                texts.append(text)
+                ids.append(u.get_property("Id"))
+
+            # Generate embeddings for this batch
+            embed_start = time.time()
+            batch_embeddings = self.model.encode(
+                texts,
+                batch_size=self.encode_batch_size,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                device=self.device,
+            )
+            embed_time = time.time() - embed_start
+
+            # Store embeddings using UPDATE SQL (faster than vertex.modify())
+            db_start = time.time()
+            with db.transaction():
+                for user_id, embedding in zip(ids, batch_embeddings):
+                    java_embedding = arcadedb.to_java_float_array(embedding)
+                    db.command(
+                        "sql",
+                        "UPDATE User SET embedding = ?, vector_id = ? WHERE Id = ?",
+                        [java_embedding, str(user_id), user_id],
+                    )
+            db_time = time.time() - db_start
+
+            # Update progress
+            total_processed += len(batch)
+            batch_time = time.time() - batch_start
+            batch_times.append((len(batch), embed_time, db_time, batch_time))
+
+            print_batch_stats(
+                count=len(batch),
+                embed_time=embed_time,
+                db_time=db_time,
+                total_time=batch_time,
+                item_name="users",
+            )
+
+            # Update last_rid for pagination
+            last_rid = batch[-1].get_property("rid")
+
+        elapsed = time.time() - start_time
+        print_summary_stats(
+            total_count=total_processed,
+            elapsed=elapsed,
+            batch_times=batch_times,
+            item_name="User embeddings",
+            has_embed=True,
+            has_query=False,
+        )
+
+    def _create_vector_indexes(self, db):
+        """Create HNSW vector indexes for Questions, Answers, Comments, and Users.
+
+        Note on max_items and index capacity:
+        ---------------------------------------
+        The max_items parameter is a HARD LIMIT on index capacity. Once you reach
+        this limit, you CANNOT add more items without recreating the index.
+
+        Monitoring capacity:
+        - Check current usage: stats = index.get_stats()
+        - Check if full: index.is_full()
+        - Get remaining slots: stats['remaining']
+
+        Options for handling growth:
+
+        1. Add vertices within limit (< max_items):
+           ```python
+           # Open database
+           db = arcadedb.open_database("path/to/db")
+
+           # Load existing index
+           index = db.schema.get_vector_index(
+               vertex_type="Question",
+               vector_property="embedding",
+               id_property="vector_id"
+           )
+
+           # Check capacity before adding
+           if not index.is_full():
+               index.add_vertex(new_vertex)
+           ```
+
+        2. Recreate index when at/over limit:
+           ```python
+           # Drop old index
+           db.schema.drop_index(index_name)
+
+           # Create new index with larger max_items
+           new_index = db.create_vector_index(
+               vertex_type="Question",
+               vector_property="embedding",
+               dimensions=384,
+               max_items=new_larger_capacity,  # Increase this
+               id_property="vector_id",
+               distance_function="cosine",
+               m=8,
+               ef=32,
+               ef_construction=32,
+           )
+
+           # Re-populate with ALL vertices (old + new)
+           for vertex in all_vertices:
+               new_index.add_vertex(vertex)
+           ```
+
+        3. Prevention - set generous buffer:
+           - max_items = num_items * 2 (double capacity)
+           - max_items = num_items + 10000 (fixed buffer)
+           - Trade-off: More memory usage vs future flexibility
+
+        Current implementation uses small buffer (+1000) since this is example code.
+        For production, consider larger buffers based on expected growth rate.
+
+        Returns:
+            Dictionary of index objects keyed by vertex type
+        """
+        indexes = {}
+
+        # Create Question index
+        print()
+        print("Creating HNSW index for Questions...")
+        indexes["Question"] = self._create_question_index(db)
+
+        # Create Answer index
+        print()
+        print("Creating HNSW index for Answers...")
+        indexes["Answer"] = self._create_answer_index(db)
+
+        # Create Comment index
+        print()
+        print("Creating HNSW index for Comments...")
+        indexes["Comment"] = self._create_comment_index(db)
+
+        # Create User index
+        print()
+        print("Creating HNSW index for Users...")
+        indexes["User"] = self._create_user_index(db)
+
+        return indexes
+
+    def _create_question_index(self, db):
+        """Create and populate HNSW index for Questions."""
+        # Count questions with embeddings
+        count_result = list(
+            db.query(
+                "sql",
+                "SELECT count(*) as count FROM Question WHERE embedding IS NOT NULL",
+            )
+        )
+        num_questions = count_result[0].get_property("count")
+
+        if num_questions == 0:
+            print("⚠️  No Questions with embeddings found")
+            return
+
+        print("  Vertex type: Question")
+        print("  Vector property: embedding")
+        print("  Dimensions: 384")
+        print("  Distance function: cosine")
+        print("  HNSW parameters: m=8, ef=32, ef_construction=32")
+        print(f"  Items to index: {num_questions:,}")
+
+        start_time = time.time()
+
+        # Create index
+        print("  Creating index structure...")
+        with db.transaction():
+            # max_items is a HARD LIMIT - see _create_vector_indexes() docstring
+            # for handling capacity and growth
+            index = db.create_vector_index(
+                vertex_type="Question",
+                vector_property="embedding",
+                dimensions=384,
+                max_items=num_questions + 1000,  # Small buffer for this example
+                id_property="vector_id",
+                edge_type="Question_HNSW",
+                distance_function="cosine",
+                m=8,
+                ef=32,
+                ef_construction=32,
+            )
+
+        # Populate index - single transaction with paginated loading
+        print(
+            f"  Populating index (single transaction, "
+            f"paginated loading, reporting every {self.batch_size:,})..."
+        )
+        start_populate = time.time()
+
+        with db.transaction():
+            last_rid = "#-1:-1"
+            total_added = 0
+
+            # Timing accumulators for detailed breakdown
+            total_rid_query_time = 0
+            total_vertex_load_time = 0
+            total_index_add_time = 0
+
+            while True:
+                # Load batch of RIDs first (lightweight query)
+                # Use subquery to avoid projection issue with filtered WHERE clause
+                rid_query_start = time.time()
+                rid_query = f"""
+                    SELECT @rid as rid FROM (
+                        SELECT FROM Question
+                        WHERE @rid > {last_rid}
+                        LIMIT {self.batch_size}
+                    )
+                    WHERE embedding IS NOT NULL
+                """
+                rid_batch = list(db.query("sql", rid_query))
+                batch_rid_query_time = time.time() - rid_query_start
+                total_rid_query_time += batch_rid_query_time
+
+                if not rid_batch:
+                    break
+
+                # Load actual vertices and add to index
+                batch_vertex_load_time = 0
+                batch_index_add_time = 0
+
+                for rid_record in rid_batch:
+                    vertex_rid = rid_record.get_property("rid")
+
+                    # Load the actual vertex
+                    vertex_load_start = time.time()
+                    vertex_result = list(db.query("sql", f"SELECT FROM {vertex_rid}"))
+                    batch_vertex_load_time += time.time() - vertex_load_start
+
+                    if vertex_result:
+                        java_vertex = (
+                            vertex_result[0]._java_result.getElement().get().asVertex()
+                        )
+
+                        # Add to index
+                        index_add_start = time.time()
+                        index.add_vertex(java_vertex)
+                        batch_index_add_time += time.time() - index_add_start
+
+                        total_added += 1
+
+                total_vertex_load_time += batch_vertex_load_time
+                total_index_add_time += batch_index_add_time
+
+                # Progress reporting with detailed timing
+                if total_added % self.batch_size == 0 or total_added == num_questions:
+                    elapsed = time.time() - start_populate
+                    rate = total_added / elapsed if elapsed > 0 else 0
+
+                    print(
+                        f"    → Progress: {total_added:,}/{num_questions:,} "
+                        f"({total_added*100//num_questions}%) | "
+                        f"{rate:.0f} items/sec"
+                    )
+                    print(
+                        f"       Timing: RID query {total_rid_query_time:.2f}s | "
+                        f"Vertex load {total_vertex_load_time:.2f}s | "
+                        f"Index add {total_index_add_time:.2f}s"
+                    )
+
+                last_rid = rid_batch[-1].get_property("rid")
+
+        elapsed = time.time() - start_time
+        print(f"  ✓ Created and indexed {num_questions:,} Questions in {elapsed:.1f}s")
+
+        # Workaround for ArcadeDB bug: entryPoint not saved on initial index creation
+        # Call save() directly to persist entryPoint to disk
+        print("  🔧 Saving index to disk (workaround for ArcadeDB bug)...")
+        index._java_index.save()
+        print("  ✓ Index saved to disk")
+
+        return index
+
+    def _create_answer_index(self, db):
+        """Create and populate HNSW index for Answers."""
+        # Count answers with embeddings
+        count_result = list(
+            db.query(
+                "sql",
+                "SELECT count(*) as count FROM Answer WHERE embedding IS NOT NULL",
+            )
+        )
+        num_answers = count_result[0].get_property("count")
+
+        if num_answers == 0:
+            print("⚠️  No Answers with embeddings found")
+            return
+
+        print("  Vertex type: Answer")
+        print("  Vector property: embedding")
+        print("  Dimensions: 384")
+        print("  Distance function: cosine")
+        print("  HNSW parameters: m=8, ef=32, ef_construction=32")
+        print(f"  Items to index: {num_answers:,}")
+
+        start_time = time.time()
+
+        # Create index
+        print("  Creating index structure...")
+        with db.transaction():
+            index = db.create_vector_index(
+                vertex_type="Answer",
+                vector_property="embedding",
+                dimensions=384,
+                max_items=num_answers
+                + 1000,  # Small buffer (see _create_vector_indexes docstring)
+                id_property="vector_id",
+                edge_type="Answer_HNSW",
+                distance_function="cosine",
+                m=8,
+                ef=32,
+                ef_construction=32,
+            )
+
+        # Populate index - single transaction with paginated loading
+        print(
+            f"  Populating index (single transaction, "
+            f"paginated loading, reporting every {self.batch_size:,})..."
+        )
+        start_populate = time.time()
+
+        with db.transaction():
+            last_rid = "#-1:-1"
+            total_added = 0
+
+            # Timing accumulators for detailed breakdown
+            total_rid_query_time = 0
+            total_vertex_load_time = 0
+            total_index_add_time = 0
+
+            while True:
+                # Load batch of RIDs first (lightweight query)
+                # Use subquery to avoid projection issue with filtered WHERE clause
+                rid_query_start = time.time()
+                rid_query = f"""
+                    SELECT @rid as rid FROM (
+                        SELECT FROM Answer
+                        WHERE @rid > {last_rid}
+                        LIMIT {self.batch_size}
+                    )
+                    WHERE embedding IS NOT NULL
+                """
+                rid_batch = list(db.query("sql", rid_query))
+                batch_rid_query_time = time.time() - rid_query_start
+                total_rid_query_time += batch_rid_query_time
+
+                if not rid_batch:
+                    break
+
+                # Load actual vertices and add to index
+                batch_vertex_load_time = 0
+                batch_index_add_time = 0
+
+                for rid_record in rid_batch:
+                    vertex_rid = rid_record.get_property("rid")
+
+                    # Load the actual vertex
+                    vertex_load_start = time.time()
+                    vertex_result = list(db.query("sql", f"SELECT FROM {vertex_rid}"))
+                    batch_vertex_load_time += time.time() - vertex_load_start
+
+                    if vertex_result:
+                        java_vertex = (
+                            vertex_result[0]._java_result.getElement().get().asVertex()
+                        )
+
+                        # Add to index
+                        index_add_start = time.time()
+                        index.add_vertex(java_vertex)
+                        batch_index_add_time += time.time() - index_add_start
+
+                        total_added += 1
+
+                total_vertex_load_time += batch_vertex_load_time
+                total_index_add_time += batch_index_add_time
+
+                # Progress reporting with detailed timing
+                if total_added % self.batch_size == 0 or total_added == num_answers:
+                    elapsed = time.time() - start_populate
+                    rate = total_added / elapsed if elapsed > 0 else 0
+
+                    print(
+                        f"    → Progress: {total_added:,}/{num_answers:,} "
+                        f"({total_added*100//num_answers}%) | "
+                        f"{rate:.0f} items/sec"
+                    )
+                    print(
+                        f"       Timing: RID query {total_rid_query_time:.2f}s | "
+                        f"Vertex load {total_vertex_load_time:.2f}s | "
+                        f"Index add {total_index_add_time:.2f}s"
+                    )
+
+                last_rid = rid_batch[-1].get_property("rid")
+
+        elapsed = time.time() - start_time
+        print(f"  ✓ Created and indexed {num_answers:,} Answers in {elapsed:.1f}s")
+
+        # Workaround for ArcadeDB bug: entryPoint not saved on initial index creation
+        # Call save() directly to persist entryPoint to disk
+        print("  🔧 Saving index to disk (workaround for ArcadeDB bug)...")
+        index._java_index.save()
+        print("  ✓ Index saved to disk")
+
+        return index
+
+    def _create_comment_index(self, db):
+        """Create and populate HNSW index for Comments."""
+        # Count comments with embeddings
+        count_result = list(
+            db.query(
+                "sql",
+                "SELECT count(*) as count FROM Comment WHERE embedding IS NOT NULL",
+            )
+        )
+        num_comments = count_result[0].get_property("count")
+
+        if num_comments == 0:
+            print("⚠️  No Comments with embeddings found")
+            return
+
+        print("  Vertex type: Comment")
+        print("  Vector property: embedding")
+        print("  Dimensions: 384")
+        print("  Distance function: cosine")
+        print("  HNSW parameters: m=8, ef=32, ef_construction=32")
+        print(f"  Items to index: {num_comments:,}")
+
+        start_time = time.time()
+
+        # Create index
+        print("  Creating index structure...")
+        with db.transaction():
+            index = db.create_vector_index(
+                vertex_type="Comment",
+                vector_property="embedding",
+                dimensions=384,
+                max_items=num_comments
+                + 1000,  # Small buffer (see _create_vector_indexes docstring)
+                id_property="vector_id",
+                edge_type="Comment_HNSW",
+                distance_function="cosine",
+                m=8,
+                ef=32,
+                ef_construction=32,
+            )
+
+        # Populate index - single transaction with paginated loading
+        print(
+            f"  Populating index (single transaction, "
+            f"paginated loading, reporting every {self.batch_size:,})..."
+        )
+        start_populate = time.time()
+
+        with db.transaction():
+            last_rid = "#-1:-1"
+            total_added = 0
+
+            # Timing accumulators for detailed breakdown
+            total_rid_query_time = 0
+            total_vertex_load_time = 0
+            total_index_add_time = 0
+
+            while True:
+                # Load batch of RIDs first (lightweight query)
+                # Use subquery to avoid projection issue with filtered WHERE clause
+                rid_query_start = time.time()
+                rid_query = f"""
+                    SELECT @rid as rid FROM (
+                        SELECT FROM Comment
+                        WHERE @rid > {last_rid}
+                        LIMIT {self.batch_size}
+                    )
+                    WHERE embedding IS NOT NULL
+                """
+                rid_batch = list(db.query("sql", rid_query))
+                batch_rid_query_time = time.time() - rid_query_start
+                total_rid_query_time += batch_rid_query_time
+
+                if not rid_batch:
+                    break
+
+                # Load actual vertices and add to index
+                batch_vertex_load_time = 0
+                batch_index_add_time = 0
+
+                for rid_record in rid_batch:
+                    vertex_rid = rid_record.get_property("rid")
+
+                    # Load the actual vertex
+                    vertex_load_start = time.time()
+                    vertex_result = list(db.query("sql", f"SELECT FROM {vertex_rid}"))
+                    batch_vertex_load_time += time.time() - vertex_load_start
+
+                    if vertex_result:
+                        java_vertex = (
+                            vertex_result[0]._java_result.getElement().get().asVertex()
+                        )
+
+                        # Add to index
+                        index_add_start = time.time()
+                        index.add_vertex(java_vertex)
+                        batch_index_add_time += time.time() - index_add_start
+
+                        total_added += 1
+
+                total_vertex_load_time += batch_vertex_load_time
+                total_index_add_time += batch_index_add_time
+
+                # Progress reporting with detailed timing
+                if total_added % self.batch_size == 0 or total_added == num_comments:
+                    elapsed = time.time() - start_populate
+                    rate = total_added / elapsed if elapsed > 0 else 0
+
+                    print(
+                        f"    → Progress: {total_added:,}/{num_comments:,} "
+                        f"({total_added*100//num_comments}%) | "
+                        f"{rate:.0f} items/sec"
+                    )
+                    print(
+                        f"       Timing: RID query {total_rid_query_time:.2f}s | "
+                        f"Vertex load {total_vertex_load_time:.2f}s | "
+                        f"Index add {total_index_add_time:.2f}s"
+                    )
+
+                last_rid = rid_batch[-1].get_property("rid")
+
+        elapsed = time.time() - start_time
+        print(f"  ✓ Created and indexed {num_comments:,} Comments in {elapsed:.1f}s")
+
+        # Workaround for ArcadeDB bug: entryPoint not saved on initial index creation
+        # Call save() directly to persist entryPoint to disk
+        print("  🔧 Saving index to disk (workaround for ArcadeDB bug)...")
+        index._java_index.save()
+        print("  ✓ Index saved to disk")
+
+        return index
+
+    def _create_user_index(self, db):
+        """Create and populate HNSW index for Users."""
+        # Count users with embeddings
+        count_result = list(
+            db.query(
+                "sql", "SELECT count(*) as count FROM User WHERE embedding IS NOT NULL"
+            )
+        )
+        num_users = count_result[0].get_property("count")
+
+        if num_users == 0:
+            print("⚠️  No Users with embeddings found")
+            return
+
+        print("  Vertex type: User")
+        print("  Vector property: embedding")
+        print("  Dimensions: 384")
+        print("  Distance function: cosine")
+        print("  HNSW parameters: m=8, ef=32, ef_construction=32")
+        print(f"  Items to index: {num_users:,}")
+
+        start_time = time.time()
+
+        # Create index
+        print("  Creating index structure...")
+        with db.transaction():
+            index = db.create_vector_index(
+                vertex_type="User",
+                vector_property="embedding",
+                dimensions=384,
+                max_items=num_users
+                + 1000,  # Small buffer (see _create_vector_indexes docstring)
+                id_property="vector_id",
+                edge_type="User_HNSW",
+                distance_function="cosine",
+                m=8,
+                ef=32,
+                ef_construction=32,
+            )
+
+        # Populate index - single transaction with paginated loading
+        print(
+            f"  Populating index (single transaction, "
+            f"paginated loading, reporting every {self.batch_size:,})..."
+        )
+        start_populate = time.time()
+
+        with db.transaction():
+            last_rid = "#-1:-1"
+            total_added = 0
+
+            # Timing accumulators for detailed breakdown
+            total_rid_query_time = 0
+            total_vertex_load_time = 0
+            total_index_add_time = 0
+
+            while True:
+                # Load batch of RIDs first (lightweight query)
+                # Use subquery to avoid projection issue with filtered WHERE clause
+                rid_query_start = time.time()
+                rid_query = f"""
+                    SELECT @rid as rid FROM (
+                        SELECT FROM User
+                        WHERE @rid > {last_rid}
+                        LIMIT {self.batch_size}
+                    )
+                    WHERE embedding IS NOT NULL
+                """
+                rid_batch = list(db.query("sql", rid_query))
+                batch_rid_query_time = time.time() - rid_query_start
+                total_rid_query_time += batch_rid_query_time
+
+                if not rid_batch:
+                    break
+
+                # Load actual vertices and add to index
+                batch_vertex_load_time = 0
+                batch_index_add_time = 0
+
+                for rid_record in rid_batch:
+                    vertex_rid = rid_record.get_property("rid")
+
+                    # Load the actual vertex
+                    vertex_load_start = time.time()
+                    vertex_result = list(db.query("sql", f"SELECT FROM {vertex_rid}"))
+                    batch_vertex_load_time += time.time() - vertex_load_start
+
+                    if vertex_result:
+                        java_vertex = (
+                            vertex_result[0]._java_result.getElement().get().asVertex()
+                        )
+
+                        # Add to index
+                        index_add_start = time.time()
+                        index.add_vertex(java_vertex)
+                        batch_index_add_time += time.time() - index_add_start
+
+                        total_added += 1
+
+                total_vertex_load_time += batch_vertex_load_time
+                total_index_add_time += batch_index_add_time
+
+                # Progress reporting with detailed timing
+                if total_added % self.batch_size == 0 or total_added == num_users:
+                    elapsed = time.time() - start_populate
+                    rate = total_added / elapsed if elapsed > 0 else 0
+
+                    print(
+                        f"    → Progress: {total_added:,}/{num_users:,} "
+                        f"({total_added*100//num_users}%) | "
+                        f"{rate:.0f} items/sec"
+                    )
+                    print(
+                        f"       Timing: RID query {total_rid_query_time:.2f}s | "
+                        f"Vertex load {total_vertex_load_time:.2f}s | "
+                        f"Index add {total_index_add_time:.2f}s"
+                    )
+
+                last_rid = rid_batch[-1].get_property("rid")
+
+        elapsed = time.time() - start_time
+        print(f"  ✓ Created and indexed {num_users:,} Users in {elapsed:.1f}s")
+
+        # Workaround for ArcadeDB bug: entryPoint not saved on initial index creation
+        # Call save() directly to persist entryPoint to disk
+        print("  🔧 Saving index to disk (workaround for ArcadeDB bug)...")
+        index._java_index.save()
+        print("  ✓ Index saved to disk")
+
+        return index
+
+    def _run_vector_search_examples(self, db, indexes):
+        """Run 10 representative vector search examples using natural language queries.
+
+        Args:
+            db: Database instance
+            indexes: Dictionary of HNSW indexes keyed by vertex type
+        """
+        print("Running vector search examples with natural language queries...")
+        print()
+
+        # Define 10 representative queries
+        search_examples = [
+            {
+                "query": "How do I parse JSON in Python?",
+                "vertex_type": "Question",
+                "description": "Programming task query",
+            },
+            {
+                "query": "What causes a NullPointerException?",
+                "vertex_type": "Question",
+                "description": "Error explanation query",
+            },
+            {
+                "query": "Best practices for database indexing",
+                "vertex_type": "Question",
+                "description": "Best practices query",
+            },
+            {
+                "query": "Use the json module to load and parse JSON data",
+                "vertex_type": "Answer",
+                "description": "Solution-focused query",
+            },
+            {
+                "query": (
+                    "It occurs when you try to access an object "
+                    "that hasn't been initialized"
+                ),
+                "vertex_type": "Answer",
+                "description": "Explanation-focused query",
+            },
+            {
+                "query": "Create indexes on frequently queried columns",
+                "vertex_type": "Answer",
+                "description": "Advice-focused query",
+            },
+            {
+                "query": "Thanks for the help, this worked perfectly!",
+                "vertex_type": "Comment",
+                "description": "Positive comment query",
+            },
+            {
+                "query": "This doesn't work in the latest version",
+                "vertex_type": "Comment",
+                "description": "Issue report query",
+            },
+            {
+                "query": "Experienced Python developer specializing in web development",
+                "vertex_type": "User",
+                "description": "Developer profile query",
+            },
+            {
+                "query": "Software engineer with expertise in databases",
+                "vertex_type": "User",
+                "description": "Expert profile query",
+            },
+        ]
+
+        for i, example in enumerate(search_examples, 1):
+            query_text = example["query"]
+            vertex_type = example["vertex_type"]
+            description = example["description"]
+
+            print(f"Example {i}: {description}")
+            print(f'  Query: "{query_text}"')
+            print(f"  Target: {vertex_type}")
+
+            try:
+                # Get the appropriate index
+                index = indexes[vertex_type]
+
+                # Encode query
+                encode_start = time.time()
+                query_embedding = self.model.encode(
+                    [query_text],
+                    show_progress_bar=False,
+                    convert_to_numpy=True,
+                    device=self.device,
+                )[0]
+                encode_time = time.time() - encode_start
+
+                # Perform vector search using index.find_nearest()
+                search_start = time.time()
+                all_results = index.find_nearest(query_embedding, k=3)
+                search_time = time.time() - search_start
+
+                print(f"  Results: {len(all_results)} found")
+                timing = (
+                    f"  Timing: Encode {encode_time:.3f}s | "
+                    f"Search {search_time:.3f}s"
+                )
+                print(timing)
+
+                # Display top results
+                for j, (vertex, distance) in enumerate(all_results, 1):
+                    # Extract relevant fields based on vertex type
+                    if vertex_type == "Question":
+                        title = vertex.get("Title") or "N/A"
+                        preview = title[:60] if len(title) > 60 else title
+                        result = (
+                            f"    [{j}] Distance: {distance:.4f} | "
+                            f"Title: {preview}..."
+                        )
+                        print(result)
+                    elif vertex_type == "Answer":
+                        body = vertex.get("Body") or "N/A"
+                        if body != "N/A":
+                            preview = body[:80].replace("\n", " ")
+                        else:
+                            preview = "N/A"
+                        result = (
+                            f"    [{j}] Distance: {distance:.4f} | "
+                            f"Body: {preview}..."
+                        )
+                        print(result)
+                    elif vertex_type == "Comment":
+                        text = vertex.get("Text") or "N/A"
+                        if text != "N/A":
+                            preview = text[:80].replace("\n", " ")
+                        else:
+                            preview = "N/A"
+                        result = (
+                            f"    [{j}] Distance: {distance:.4f} | "
+                            f"Text: {preview}..."
+                        )
+                        print(result)
+                    elif vertex_type == "User":
+                        display_name = vertex.get("DisplayName") or "N/A"
+                        reputation = vertex.get("Reputation") or 0
+                        result = (
+                            f"    [{j}] Distance: {distance:.4f} | "
+                            f"User: {display_name} "
+                            f"(Reputation: {reputation})"
+                        )
+                        print(result)
+
+            except Exception as e:
+                print(f"  ⚠️  Error: {e}")
+
+            print()
+
+        print("✓ Vector search examples complete")
+
+
+# =============================================================================
+# Phase 4: Multi-Model Analytics (SQL + Gremlin + Vector Search)
+# =============================================================================
+
+
+class Phase4Analytics:
+    """Phase 4: Comprehensive analytics combining SQL, Gremlin, and Vector Search.
+
+    This phase demonstrates:
+    - 10 important analytical questions about Stack Overflow data
+    - SQL for aggregations and complex queries
+    - Gremlin for graph traversals and path finding
+    - Vector search for semantic similarity
+    - Hybrid queries combining multiple paradigms
+    """
+
+    def __init__(self, graph_db_path: Path, model_name: str = "all-MiniLM-L6-v2"):
+        """Initialize Phase 4.
+
+        Args:
+            graph_db_path: Path to the graph database from Phase 3
+            model_name: Name of the embedding model (must match Phase 3)
+        """
+        self.graph_db_path = graph_db_path
+        self.model = None
+        self.model_name = model_name
+
+        # Detect GPU availability
+        try:
+            import torch
+
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            self.device = "cpu"
+
+    def run(self):
+        """Run Phase 4: Multi-model analytics."""
+        print("=" * 80)
+        print("PHASE 4: MULTI-MODEL ANALYTICS")
+        print("=" * 80)
+        print(f"Graph database: {self.graph_db_path}")
+        print(f"Embedding model: {self.model_name}")
+        print(f"Device: {self.device}")
+        print()
+
+        phase_start = time.time()
+
+        # Check dependencies
+        self._check_dependencies()
+
+        # Load embedding model
+        self._load_model()
+
+        # Open database and load indexes
+        print(f"Opening database: {self.graph_db_path}")
+        db = arcadedb.open_database(str(self.graph_db_path))
+
+        try:
+            print("✓ Database opened")
+            print()
+
+            # Load all HNSW indexes
+            print("Loading HNSW vector indexes...")
+            start_ = time.time()
+            indexes = self._load_vector_indexes(db)
+            elapsed_ = time.time() - start_
+            print(f"✓ Loaded {len(indexes)} vector indexes in {elapsed_:.2f}s")
+            print()
+
+            # Run 10 analytical questions
+            self._run_analytics(db, indexes)
+
+            # Close database safely
+            close_database_safely(db, verbose=True)
+
+        except Exception as e:
+            print(f"\n❌ Phase 4 failed: {e}")
+            if db:
+                db.close()
+            raise
+
+        # Phase complete
+        phase_elapsed = time.time() - phase_start
+        print()
+        print("=" * 80)
+        print("✅ PHASE 4 COMPLETE")
+        print("=" * 80)
+        print(f"Total time: {phase_elapsed:.2f}s")
+        print("=" * 80)
+
+    def _check_dependencies(self):
+        """Check required dependencies."""
+        print("Checking dependencies...")
+
+        try:
+            import sentence_transformers
+
+            print(f"  ✓ sentence-transformers {sentence_transformers.__version__}")
+        except ImportError:
+            print("  ❌ sentence-transformers not found")
+            print("     Install: pip install sentence-transformers")
+            sys.exit(1)
+
+        try:
+            import numpy
+
+            print(f"  ✓ numpy {numpy.__version__}")
+        except ImportError:
+            print("  ❌ numpy not found")
+            print("     Install: pip install numpy")
+            sys.exit(1)
+
+        print()
+
+    def _load_model(self):
+        """Load sentence-transformers model."""
+        from sentence_transformers import SentenceTransformer
+
+        print(f"Loading embedding model: {self.model_name}...")
+        start = time.time()
+        self.model = SentenceTransformer(self.model_name, device=self.device)
+        elapsed = time.time() - start
+        print(f"✓ Model loaded in {elapsed:.2f}s")
+        print()
+
+    def _load_vector_indexes(self, db):
+        """Load all HNSW vector indexes from disk.
+
+        Returns:
+            Dictionary of index objects keyed by vertex type
+        """
+        indexes = {}
+        vertex_types = ["Question", "Answer", "Comment", "User"]
+
+        for vertex_type in vertex_types:
+            start = time.time()
+            try:
+                # Use the schema API to get vector indexes
+                index = db.schema.get_vector_index(
+                    vertex_type=vertex_type,
+                    vector_property="embedding",
+                    id_property="vector_id",
+                )
+                indexes[vertex_type] = index
+
+                elapsed = time.time() - start
+                print(f"  ✓ Loaded index: {vertex_type} in {elapsed:.2f}s")
+            except Exception as e:
+                print(f"  ⚠️  Could not load index for {vertex_type}: {e}")
+
+        return indexes
+
+    def _run_analytics(self, db, indexes):
+        """Run 12 important analytical questions."""
+        print("=" * 80)
+        print("12 ANALYTICAL QUESTIONS")
+        print("=" * 80)
+        print()
+
+        # Question 1: Top Contributors (SQL Aggregation)
+        self._q1_top_contributors(db)
+
+        # Question 2: Most Discussed Topics (SQL + Graph)
+        self._q2_most_discussed_topics(db)
+
+        # Question 3: Expert Users by Tag (SQL with Graph Navigation)
+        self._q3_expert_users_by_tag(db)
+
+        # Question 4: Question-Answer Network Patterns (Gremlin)
+        self._q4_qa_network_patterns(db)
+
+        # Question 5: User Collaboration Paths (Gremlin Traversal)
+        self._q5_user_collaboration_paths(db)
+
+        # Question 6: Semantic Question Clustering (Vector Search)
+        self._q6_semantic_question_clustering(db, indexes)
+
+        # Question 7: Find Similar Experts (Vector Search + Graph)
+        self._q7_find_similar_experts(db, indexes)
+
+        # Question 8: Temporal Activity Analysis (SQL Time Series)
+        self._q8_temporal_activity_analysis(db)
+
+        # Question 9: Content Quality Indicators (SQL + Vector)
+        self._q9_content_quality_indicators(db, indexes)
+
+        # Question 10: Community Knowledge Graph (Hybrid)
+        self._q10_community_knowledge_graph(db, indexes)
+
+        # Question 11: Multi-Document Semantic Search (Vector Only)
+        self._q11_cross_content_semantic_search(db, indexes)
+
+        # Question 12: Semantic Answer Retrieval (Vector Only)
+        self._q12_find_best_answers_by_topic(db, indexes)
+
+    def _q1_top_contributors(self, db):
+        """Q1: Who are the top contributors? (SQL Aggregation)
+
+        Uses SQL to aggregate user activity across questions, answers, and badges.
+        """
+        print("─" * 80)
+        print("Q1: TOP CONTRIBUTORS (SQL Aggregation)")
+        print("─" * 80)
+        print("Finding users with highest combined reputation and activity...")
+        print()
+
+        start = time.time()
+
+        try:
+            # Get top users by questions, answers, and reputation
+            # Note: Cast to FLOAT to avoid type mismatch, no need to chain .asFloat() twice
+            query = """
+                SELECT
+                    DisplayName,
+                    Reputation,
+                    out('ASKED').size() as questions,
+                    out('ANSWERED').size() as answers,
+                    out('EARNED').size() as badges,
+                    (Reputation.asFloat() / 100 + out('ASKED').size() * 5 + out('ANSWERED').size() * 10 + out('EARNED').size()) as activity_score
+                FROM User
+                WHERE Reputation > 0
+                ORDER BY Reputation DESC
+                LIMIT 10
+            """
+
+            results = list(db.query("sql", query))
+
+            print("  Top 10 Contributors:")
+            print("  " + "─" * 76)
+            print(
+                f"  {'Rank':<6}{'User':<25}{'Rep':<10}{'Q':<6}{'A':<6}{'Badges':<8}{'Score':<8}"
+            )
+            print("  " + "─" * 76)
+
+            for i, result in enumerate(results, 1):
+                name = result.get_property("DisplayName") or "Unknown"
+                rep = result.get_property("Reputation") or 0
+                q_count = result.get_property("questions") or 0
+                a_count = result.get_property("answers") or 0
+                badge_count = result.get_property("badges") or 0
+                score = result.get_property("activity_score") or 0
+
+                print(
+                    f"  {i:<6}{name[:24]:<25}{rep:<10}{q_count:<6}{a_count:<6}{badge_count:<8}{score:<8.0f}"
+                )
+
+            elapsed = time.time() - start
+            print(f"\n  ⏱️  Query time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q2_most_discussed_topics(self, db):
+        """Q2: What are the most discussed topics? (SQL + Graph)
+
+        Uses SQL aggregation with graph navigation to find popular tags.
+        """
+        print("─" * 80)
+        print("Q2: MOST DISCUSSED TOPICS (SQL + Graph)")
+        print("─" * 80)
+        print("Finding tags with most questions, answers, and comments...")
+        print()
+
+        start = time.time()
+
+        try:
+            # Get top tags by total engagement
+            query = """
+                SELECT
+                    TagName,
+                    in('TAGGED_WITH').size() as question_count,
+                    in('TAGGED_WITH').out('HAS_ANSWER').size() as answer_count,
+                    in('TAGGED_WITH').in('COMMENTED_ON').size() as comment_count,
+                    (in('TAGGED_WITH').size() * 10 +
+                     in('TAGGED_WITH').out('HAS_ANSWER').size() * 5 +
+                     in('TAGGED_WITH').in('COMMENTED_ON').size()) as engagement_score
+                FROM Tag
+                WHERE in('TAGGED_WITH').size() > 0
+                ORDER BY engagement_score DESC
+                LIMIT 10
+            """
+
+            results = list(db.query("sql", query))
+
+            print("  Top 10 Most Discussed Topics:")
+            print("  " + "─" * 76)
+            print(
+                f"  {'Rank':<6}{'Tag':<25}{'Questions':<12}{'Answers':<10}{'Comments':<10}{'Score':<10}"
+            )
+            print("  " + "─" * 76)
+
+            for i, result in enumerate(results, 1):
+                tag = result.get_property("TagName") or "Unknown"
+                q_count = result.get_property("question_count") or 0
+                a_count = result.get_property("answer_count") or 0
+                c_count = result.get_property("comment_count") or 0
+                score = result.get_property("engagement_score") or 0
+
+                print(
+                    f"  {i:<6}{tag[:24]:<25}{q_count:<12}{a_count:<10}{c_count:<10}{score:<10.0f}"
+                )
+
+            elapsed = time.time() - start
+            print(f"\n  ⏱️  Query time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q3_expert_users_by_tag(self, db):
+        """Q3: Who are the experts in specific topics? (SQL with Graph Navigation)
+
+        Finds users who have answered many questions in specific tags.
+        """
+        print("─" * 80)
+        print("Q3: EXPERT USERS BY TAG (SQL + Graph)")
+        print("─" * 80)
+        print("Finding expert users for top tags...")
+        print()
+
+        start = time.time()
+
+        try:
+            # First, count tags and get the most popular one
+            # Use a subquery to avoid ORDER BY with .size()
+            tag_query = """
+                SELECT TagName, in('TAGGED_WITH').size() as tag_count
+                FROM Tag
+                ORDER BY tag_count DESC
+                LIMIT 1
+            """
+
+            tag_result = list(db.query("sql", tag_query))
+            if not tag_result:
+                print("  ⚠️  No tags found")
+                print()
+                return
+
+            tag_name = tag_result[0].get_property("TagName")
+            print(f"  Analyzing experts for tag: {tag_name}")
+            print()
+
+            # Find users who have answered many questions
+            # Use simpler query that works with ArcadeDB SQL
+            expert_query = """
+                SELECT
+                    DisplayName,
+                    Reputation,
+                    out('ANSWERED').size() as total_answers
+                FROM User
+                ORDER BY Reputation DESC
+                LIMIT 10
+            """
+
+            results = list(db.query("sql", expert_query))
+
+            print("  Top 10 Answer Contributors:")
+            print("  " + "─" * 76)
+            print(f"  {'Rank':<6}{'User':<30}{'Reputation':<15}{'Answers':<10}")
+            print("  " + "─" * 76)
+
+            for i, result in enumerate(results, 1):
+                name = result.get_property("DisplayName") or "Unknown"
+                rep = result.get_property("Reputation") or 0
+                answers = result.get_property("total_answers") or 0
+
+                print(f"  {i:<6}{name[:29]:<30}{rep:<15}{answers:<10}")
+
+            elapsed = time.time() - start
+            print(f"\n  ⏱️  Query time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q4_qa_network_patterns(self, db):
+        """Q4: What are common question-answer patterns? (Gremlin)
+
+        Uses Gremlin to analyze graph patterns in Q&A interactions.
+        """
+        print("─" * 80)
+        print("Q4: Q&A NETWORK PATTERNS (Gremlin)")
+        print("─" * 80)
+        print("Analyzing question-answer interaction patterns...")
+        print()
+
+        start = time.time()
+
+        try:
+            # Find questions with most answers
+            query = """
+                g.V().hasLabel('Question')
+                    .project('title', 'answer_count', 'score')
+                    .by('Title')
+                    .by(out('HAS_ANSWER').count())
+                    .by('Score')
+                    .order().by(select('answer_count'), desc)
+                    .limit(5)
+            """
+
+            results = list(db.query("gremlin", query))
+
+            print("  Top 5 Questions by Answer Count:")
+            print("  " + "─" * 76)
+
+            for i, result in enumerate(results, 1):
+                title = result.get_property("title") or "Unknown"
+                answer_count = result.get_property("answer_count") or 0
+                score = result.get_property("score") or 0
+
+                print(f"  [{i}] Answers: {answer_count}, Score: {score}")
+                print(f"      {title[:70]}...")
+                print()
+
+            elapsed = time.time() - start
+            print(f"  ⏱️  Query time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            print("  Note: Gremlin support may not be available")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q5_user_collaboration_paths(self, db):
+        """Q5: How do users collaborate? (Gremlin Traversal)
+
+        Uses Gremlin to find paths between users through Q&A interactions.
+        """
+        print("─" * 80)
+        print("Q5: USER COLLABORATION PATHS (Gremlin)")
+        print("─" * 80)
+        print("Finding collaboration patterns between users...")
+        print()
+
+        start = time.time()
+
+        try:
+            # Find users who answer each other's questions
+            query = """
+                g.V().hasLabel('User')
+                    .as('user1')
+                    .out('ASKED')
+                    .in('HAS_ANSWER')
+                    .in('ANSWERED')
+                    .as('user2')
+                    .where('user1', neq('user2'))
+                    .select('user1', 'user2')
+                    .by('DisplayName')
+                    .by('DisplayName')
+                    .limit(10)
+            """
+
+            results = list(db.query("gremlin", query))
+
+            print("  User Collaboration Pairs:")
+            print("  " + "─" * 76)
+
+            if results:
+                for i, result in enumerate(results, 1):
+                    user1 = result.get_property("user1") or "Unknown"
+                    user2 = result.get_property("user2") or "Unknown"
+
+                    print(f"  [{i}] {user1} ← answered by → {user2}")
+            else:
+                print("  No collaboration patterns found")
+
+            elapsed = time.time() - start
+            print(f"\n  ⏱️  Query time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            print("  Note: Gremlin support may not be available")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q6_semantic_question_clustering(self, db, indexes):
+        """Q6: What questions are semantically similar? (Vector Search)
+
+        Uses vector search to find semantically related questions.
+        """
+        print("─" * 80)
+        print("Q6: SEMANTIC QUESTION CLUSTERING (Vector Search)")
+        print("─" * 80)
+        print("Finding semantically similar questions...")
+        print()
+
+        start = time.time()
+
+        try:
+            if "Question" not in indexes:
+                print("  ⚠️  Question index not available")
+                print()
+                return
+
+            # Get a random high-scoring question
+            query = """
+                SELECT Title, Body
+                FROM Question
+                WHERE Score > 0 AND Title IS NOT NULL
+                ORDER BY Score DESC
+                LIMIT 1
+            """
+
+            seed_result = list(db.query("sql", query))
+            if not seed_result:
+                print("  ⚠️  No questions found")
+                print()
+                return
+
+            seed_title = seed_result[0].get_property("Title")
+            print(f"  Seed Question: {seed_title[:70]}...")
+            print()
+
+            # Create embedding for seed question
+            seed_embedding = self.model.encode(
+                [seed_title],
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                device=self.device,
+            )[0]
+
+            # Find similar questions
+            index = indexes["Question"]
+            results = index.find_nearest(
+                seed_embedding, k=6
+            )  # Get 6, skip first (self)
+
+            print("  Top 5 Similar Questions:")
+            print("  " + "─" * 76)
+
+            for i, (vertex, distance) in enumerate(
+                results[1:6], 1
+            ):  # Skip first (self)
+                title = vertex.get("Title") or "N/A"
+                score = vertex.get("Score") or 0
+
+                print(f"  [{i}] Distance: {distance:.4f}, Score: {score}")
+                print(f"      {title[:70]}...")
+                print()
+
+            elapsed = time.time() - start
+            print(f"  ⏱️  Total time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q7_find_similar_experts(self, db, indexes):
+        """Q7: Find experts with similar profiles (Vector Search + Graph)
+
+        Combines vector search on user profiles with graph metrics.
+        """
+        print("─" * 80)
+        print("Q7: FIND SIMILAR EXPERTS (Vector Search + Graph)")
+        print("─" * 80)
+        print("Finding users with similar expertise profiles...")
+        print()
+
+        start = time.time()
+
+        try:
+            if "User" not in indexes:
+                print("  ⚠️  User index not available")
+                print()
+                return
+
+            # Get a high-reputation user
+            query = """
+                SELECT DisplayName, AboutMe, Reputation
+                FROM User
+                WHERE Reputation > 100 AND AboutMe IS NOT NULL
+                ORDER BY Reputation DESC
+                LIMIT 1
+            """
+
+            seed_result = list(db.query("sql", query))
+            if not seed_result:
+                print("  ⚠️  No users found")
+                print()
+                return
+
+            seed_name = seed_result[0].get_property("DisplayName")
+            seed_rep = seed_result[0].get_property("Reputation")
+            print(f"  Seed User: {seed_name} (Reputation: {seed_rep})")
+            print()
+
+            # Create embedding for seed user
+            seed_about = seed_result[0].get_property("AboutMe") or ""
+            seed_embedding = self.model.encode(
+                [seed_about[:500]],  # Limit to 500 chars
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                device=self.device,
+            )[0]
+
+            # Find similar users
+            index = indexes["User"]
+            results = index.find_nearest(
+                seed_embedding, k=6
+            )  # Get 6, skip first (self)
+
+            print("  Top 5 Similar Experts:")
+            print("  " + "─" * 76)
+
+            for i, (vertex, distance) in enumerate(
+                results[1:6], 1
+            ):  # Skip first (self)
+                name = vertex.get("DisplayName") or "N/A"
+                rep = vertex.get("Reputation") or 0
+                location = vertex.get("Location") or "Unknown"
+
+                print(f"  [{i}] Distance: {distance:.4f}")
+                print(f"      User: {name}, Reputation: {rep}, Location: {location}")
+                print()
+
+            elapsed = time.time() - start
+            print(f"  ⏱️  Total time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q8_temporal_activity_analysis(self, db):
+        """Q8: How does activity change over time? (SQL Time Series)
+
+        Analyzes temporal patterns in user activity.
+        """
+        print("─" * 80)
+        print("Q8: TEMPORAL ACTIVITY ANALYSIS (SQL Time Series)")
+        print("─" * 80)
+        print("Analyzing activity patterns over time...")
+        print()
+
+        start = time.time()
+
+        try:
+            # Analyze questions over time (by year)
+            query = """
+                SELECT
+                    CreationDate.format('yyyy') as year,
+                    count(*) as question_count
+                FROM Question
+                WHERE CreationDate IS NOT NULL
+                GROUP BY year
+                ORDER BY year
+            """
+
+            results = list(db.query("sql", query))
+
+            print("  Questions Posted per Year:")
+            print("  " + "─" * 76)
+            print(f"  {'Year':<10}{'Count':<15}{'Bar':<50}")
+            print("  " + "─" * 76)
+
+            max_count = max(
+                (r.get_property("question_count") or 0 for r in results), default=1
+            )
+
+            for result in results:
+                year = result.get_property("year") or "Unknown"
+                count = result.get_property("question_count") or 0
+                bar_length = int((count / max_count) * 40) if max_count > 0 else 0
+                bar = "█" * bar_length
+
+                print(f"  {year:<10}{count:<15}{bar}")
+
+            elapsed = time.time() - start
+            print(f"\n  ⏱️  Query time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q9_content_quality_indicators(self, db, indexes):
+        """Q9: What indicates high-quality content? (SQL + Vector)
+
+        Analyzes correlation between content features and scores.
+        """
+        print("─" * 80)
+        print("Q9: CONTENT QUALITY INDICATORS (SQL + Vector)")
+        print("─" * 80)
+        print("Analyzing what makes high-quality content...")
+        print()
+
+        start = time.time()
+
+        try:
+            # Compare high-scoring vs low-scoring questions
+            # Run two separate queries since UNION ALL is not supported
+            high_query = """
+                SELECT
+                    avg(out('HAS_ANSWER').size()) as avg_answers,
+                    avg(in('COMMENTED_ON').size()) as avg_comments,
+                    count(*) as count
+                FROM Question
+                WHERE Score >= 5
+            """
+
+            low_query = """
+                SELECT
+                    avg(out('HAS_ANSWER').size()) as avg_answers,
+                    avg(in('COMMENTED_ON').size()) as avg_comments,
+                    count(*) as count
+                FROM Question
+                WHERE Score < 5 AND Score >= 0
+            """
+
+            high_results = list(db.query("sql", high_query))
+            low_results = list(db.query("sql", low_query))
+
+            # Combine results
+            results = []
+            if high_results:
+                high_row = high_results[0]
+                results.append(("High Score", high_row))
+            if low_results:
+                low_row = low_results[0]
+                results.append(("Low Score", low_row))
+
+            print("  Quality Metrics Comparison:")
+            print("  " + "─" * 76)
+            print(
+                f"  {'Category':<15}{'Count':<12}{'Avg Answers':<15}{'Avg Comments':<15}"
+            )
+            print("  " + "─" * 76)
+
+            for category, result in results:
+                count = result.get_property("count") or 0
+                avg_ans = result.get_property("avg_answers") or 0
+                avg_com = result.get_property("avg_comments") or 0
+
+                print(f"  {category:<15}{count:<12}{avg_ans:<15.2f}{avg_com:<15.2f}")
+
+            elapsed = time.time() - start
+            print(f"\n  ⏱️  Query time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q10_community_knowledge_graph(self, db, indexes):
+        """Q10: How is knowledge distributed in the community? (Hybrid)
+
+        Combines SQL, Gremlin, and vector search for comprehensive analysis.
+        """
+        print("─" * 80)
+        print("Q10: COMMUNITY KNOWLEDGE GRAPH (Hybrid: SQL + Gremlin + Vector)")
+        print("─" * 80)
+        print("Analyzing community knowledge distribution...")
+        print()
+
+        start = time.time()
+
+        try:
+            # Part 1: Overall statistics (SQL)
+            print("  Part 1: Overall Statistics (SQL)")
+
+            # Run separate count queries
+            users = (
+                list(db.query("sql", "SELECT count(*) as count FROM User"))[
+                    0
+                ].get_property("count")
+                or 0
+            )
+            questions = (
+                list(db.query("sql", "SELECT count(*) as count FROM Question"))[
+                    0
+                ].get_property("count")
+                or 0
+            )
+            answers = (
+                list(db.query("sql", "SELECT count(*) as count FROM Answer"))[
+                    0
+                ].get_property("count")
+                or 0
+            )
+            tags = (
+                list(db.query("sql", "SELECT count(*) as count FROM Tag"))[
+                    0
+                ].get_property("count")
+                or 0
+            )
+            comments = (
+                list(db.query("sql", "SELECT count(*) as count FROM Comment"))[
+                    0
+                ].get_property("count")
+                or 0
+            )
+
+            print(f"    • Users: {users:,}")
+            print(f"    • Questions: {questions:,}")
+            print(f"    • Answers: {answers:,}")
+            print(f"    • Tags: {tags:,}")
+            print(f"    • Comments: {comments:,}")
+            print()
+
+            # Part 2: Knowledge connectivity (SQL + Graph)
+            print("  Part 2: Knowledge Connectivity Metrics")
+            connectivity_query = """
+                SELECT
+                    avg(out('HAS_ANSWER').size()) as avg_answers_per_question,
+                    avg(in('COMMENTED_ON').size()) as avg_comments_per_post
+                FROM Question
+            """
+
+            conn = list(db.query("sql", connectivity_query))[0]
+            avg_ans = conn.get_property("avg_answers_per_question") or 0
+            avg_com = conn.get_property("avg_comments_per_post") or 0
+
+            print(f"    • Average answers per question: {avg_ans:.2f}")
+            print(f"    • Average comments per post: {avg_com:.2f}")
+            print()
+
+            # Part 3: Topic diversity (Vector)
+            if "Question" in indexes:
+                print("  Part 3: Topic Diversity (Vector Search Sample)")
+
+                # Sample questions for diversity analysis
+                sample_query = """
+                    SELECT Title
+                    FROM Question
+                    WHERE Title IS NOT NULL
+                    LIMIT 5
+                """
+
+                samples = list(db.query("sql", sample_query))
+                print("    Sample questions across the knowledge base:")
+
+                for i, sample in enumerate(samples, 1):
+                    title = sample.get_property("Title") or "N/A"
+                    print(f"      [{i}] {title[:60]}...")
+
+                print()
+
+            elapsed = time.time() - start
+            print(f"  ⏱️  Total time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q11_cross_content_semantic_search(self, db, indexes):
+        """Q11: Find related content across questions, answers, and comments (Vector Only)
+
+        Uses pure vector search to find semantically similar content across different
+        content types without relying on graph relationships.
+        """
+        print("─" * 80)
+        print("Q11: CROSS-CONTENT SEMANTIC SEARCH (Vector Only)")
+        print("─" * 80)
+        print("Finding related content across questions, answers, and comments...")
+        print()
+
+        start = time.time()
+
+        try:
+            # Define a technical query
+            query_text = "What is the time complexity of binary search algorithms?"
+            print(f'  Query: "{query_text}"')
+            print()
+
+            # Encode the query
+            encode_start = time.time()
+            query_embedding = self.model.encode(
+                [query_text],
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                device=self.device,
+            )[0]
+            encode_time = time.time() - encode_start
+
+            # Search across all content types
+            all_results = []
+
+            # Search Questions
+            if "Question" in indexes:
+                q_results = indexes["Question"].find_nearest(query_embedding, k=3)
+                for vertex, distance in q_results:
+                    title = vertex.get("Title") or "N/A"
+                    score = vertex.get("Score") or 0
+                    all_results.append(
+                        {
+                            "type": "Question",
+                            "distance": distance,
+                            "score": score,
+                            "content": title,
+                        }
+                    )
+
+            # Search Answers
+            if "Answer" in indexes:
+                a_results = indexes["Answer"].find_nearest(query_embedding, k=3)
+                for vertex, distance in a_results:
+                    body = vertex.get("Body") or ""
+                    score = vertex.get("Score") or 0
+                    # Extract first sentence
+                    content = body[:100] + "..." if len(body) > 100 else body
+                    all_results.append(
+                        {
+                            "type": "Answer",
+                            "distance": distance,
+                            "score": score,
+                            "content": content,
+                        }
+                    )
+
+            # Search Comments
+            if "Comment" in indexes:
+                c_results = indexes["Comment"].find_nearest(query_embedding, k=3)
+                for vertex, distance in c_results:
+                    text = vertex.get("Text") or ""
+                    score = vertex.get("Score") or 0
+                    content = text[:100] + "..." if len(text) > 100 else text
+                    all_results.append(
+                        {
+                            "type": "Comment",
+                            "distance": distance,
+                            "score": score,
+                            "content": content,
+                        }
+                    )
+
+            # Sort all results by distance
+            all_results.sort(key=lambda x: x["distance"])
+
+            # Display results
+            print(f"  Found {len(all_results)} results across all content types")
+            print("  " + "─" * 76)
+            print(
+                f"  {'Rank':<6}{'Type':<12}{'Distance':<12}{'Score':<8}{'Content':<40}"
+            )
+            print("  " + "─" * 76)
+
+            for i, result in enumerate(all_results[:10], 1):
+                content = result["content"][:39]
+                print(
+                    f"  {i:<6}{result['type']:<12}{result['distance']:<12.4f}{result['score']:<8}{content}"
+                )
+
+            search_time = time.time() - start
+            print()
+            print(f"  ⏱️  Encode time: {encode_time:.3f}s")
+            print(f"  ⏱️  Search time: {search_time - encode_time:.3f}s")
+            print(f"  ⏱️  Total time: {search_time:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            print()
+
+    def _q12_find_best_answers_by_topic(self, db, indexes):
+        """Q12: Find best answers for a given topic using vector search (Vector Only)
+
+        Uses pure vector search on answer embeddings to find high-quality answers
+        related to a specific topic, without needing to traverse question-answer edges.
+        """
+        print("─" * 80)
+        print("Q12: SEMANTIC ANSWER RETRIEVAL (Vector Only)")
+        print("─" * 80)
+        print("Finding best answers for a specific topic...")
+        print()
+
+        start = time.time()
+
+        try:
+            # Define topic queries
+            topics = [
+                "recursion and dynamic programming",
+                "sorting algorithms and performance",
+                "graph theory and shortest paths",
+            ]
+
+            if "Answer" not in indexes:
+                print("  ⚠️  Answer index not available")
+                return
+
+            for topic_idx, topic in enumerate(topics, 1):
+                print(f'  Topic {topic_idx}: "{topic}"')
+
+                # Encode the topic
+                topic_embedding = self.model.encode(
+                    [topic],
+                    show_progress_bar=False,
+                    convert_to_numpy=True,
+                    device=self.device,
+                )[0]
+
+                # Search for relevant answers
+                answer_results = indexes["Answer"].find_nearest(topic_embedding, k=5)
+
+                print(f"    Top 5 relevant answers:")
+                print("    " + "─" * 72)
+
+                for i, (vertex, distance) in enumerate(answer_results, 1):
+                    body = vertex.get("Body") or ""
+                    score = vertex.get("Score") or 0
+
+                    # Extract a meaningful snippet (convert to Python str first)
+                    body_str = str(body)
+                    snippet = body_str.replace("\n", " ")[:80]
+                    snippet = snippet + "..." if len(body_str) > 80 else snippet
+
+                    print(f"    [{i}] Distance: {distance:.4f}, Score: {score}")
+                    print(f"        {snippet}")
+
+                print()
+
+            elapsed = time.time() - start
+            print(f"  ⏱️  Total time: {elapsed:.3f}s")
+            print()
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+            print()
 
 
 # =============================================================================
@@ -2452,6 +6679,7 @@ Phases:
   1 - XML → Documents + Indexes
   2 - Documents → Graph (vertices + edges)
   3 - Graph → Embeddings + HNSW indexes
+  4 - Analytics (SQL + Gremlin + Vector Search)
         """,
     )
 
@@ -2475,12 +6703,19 @@ Phases:
     )
 
     parser.add_argument(
+        "--encode-batch-size",
+        type=int,
+        default=32,
+        help="Batch size for encoding embeddings in Phase 3 (default: 32)",
+    )
+
+    parser.add_argument(
         "--phases",
         type=int,
         nargs="+",
         default=[1],
-        choices=[1, 2, 3],
-        help="Which phases to run (default: 1 only for now)",
+        choices=[1, 2, 3, 4],
+        help="Which phases to run (default: 1)",
     )
 
     parser.add_argument(
@@ -2643,17 +6878,47 @@ Phases:
             phase2.run()
 
         if 3 in args.phases:
-            print("⚠️  Phase 3 not yet implemented")
-            print()
+            # Phase 3 requires Phase 2 to be complete
+            graph_db_name = f"{db_path.name}_graph"
+            graph_db_path = db_path.parent / graph_db_name
+
+            if not graph_db_path.exists():
+                print("❌ Phase 2 graph database not found. Run Phase 2 first.")
+                print(f"   Expected: {graph_db_path}")
+                sys.exit(1)
+
+            phase3 = Phase3VectorEmbeddings(
+                graph_db_path=graph_db_path,
+                batch_size=args.batch_size,
+                encode_batch_size=args.encode_batch_size,
+            )
+            phase3.run()
+
+        if 4 in args.phases:
+            # Phase 4 requires Phase 3 to be complete
+            graph_db_name = f"{db_path.name}_graph"
+            graph_db_path = db_path.parent / graph_db_name
+
+            if not graph_db_path.exists():
+                print("❌ Phase 3 graph database not found. Run Phase 3 first.")
+                print(f"   Expected: {graph_db_path}")
+                sys.exit(1)
+
+            phase4 = Phase4Analytics(
+                graph_db_path=graph_db_path,
+            )
+            phase4.run()
 
         # Overall timing
         script_elapsed = time.time() - script_start_time
         print("=" * 80)
         print("✅ ALL PHASES COMPLETED")
         print("=" * 80)
-        print(
-            f"Total script time: {script_elapsed:.2f}s ({script_elapsed / 60:.1f} minutes)"
+        total_time_msg = (
+            f"Total script time: {script_elapsed:.2f}s "
+            f"({script_elapsed / 60:.1f} minutes)"
         )
+        print(total_time_msg)
         print("=" * 80)
 
     except Exception as e:

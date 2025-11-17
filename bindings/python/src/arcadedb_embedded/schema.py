@@ -630,3 +630,97 @@ class Schema:
         """
         self._db._check_not_closed()
         return self._java_schema.existsIndex(index_name)
+
+    def get_index_by_name(self, index_name: str) -> Optional[Any]:
+        """Get an index by name.
+
+        Args:
+            index_name: Name of the index
+
+        Returns:
+            Java Index object or None if not found
+
+        Example:
+            >>> schema = db.schema
+            >>> idx = schema.get_index_by_name("User[email]")
+            >>> if idx:
+            ...     print(f"Index type: {idx.getType()}")
+        """
+        self._db._check_not_closed()
+
+        try:
+            return self._java_schema.getIndexByName(index_name)
+        except Exception:
+            return None
+
+    def get_vector_index(
+        self, vertex_type: str, vector_property: str, id_property: str = "vector_id"
+    ) -> Optional[Any]:
+        """Get an existing HNSW vector index.
+
+        Args:
+            vertex_type: Name of the vertex type
+            vector_property: Name of the vector property
+            id_property: Property used as unique ID (default: "vector_id")
+
+        Returns:
+            VectorIndex object for performing similarity searches, or None if not found
+
+        Example:
+            >>> schema = db.schema
+            >>> # Load existing index from disk
+            >>> index = schema.get_vector_index("Question", "embedding")
+            >>> if index:
+            ...     results = index.find_nearest(query_vector, k=5)
+        """
+        from .vector import VectorIndex
+
+        self._db._check_not_closed()
+
+        # Index name follows pattern: "{VertexType}[{id_property},{vector_property}]"
+        index_name = f"{vertex_type}[{id_property},{vector_property}]"
+
+        try:
+            from com.arcadedb.index.vector import HnswVectorIndex
+
+            java_index = self._java_schema.getIndexByName(index_name)
+
+            if java_index is None:
+                return None
+
+            # Verify it's an HNSW index - return None if wrong type
+            if not isinstance(java_index, HnswVectorIndex):
+                return None
+
+            return VectorIndex(java_index, self._db)
+
+        except Exception:
+            # Return None if index doesn't exist or any other error
+            return None
+
+    def list_vector_indexes(self) -> List[str]:
+        """List all HNSW vector index names in the database.
+
+        Returns:
+            List of vector index names
+
+        Example:
+            >>> schema = db.schema
+            >>> vector_indexes = schema.list_vector_indexes()
+            >>> for idx_name in vector_indexes:
+            ...     print(idx_name)
+            Question[vector_id,embedding]
+            Answer[vector_id,embedding]
+        """
+        self._db._check_not_closed()
+
+        try:
+            from com.arcadedb.index.vector import HnswVectorIndex
+
+            indexes = []
+            for java_index in self._java_schema.getIndexes():
+                if isinstance(java_index, HnswVectorIndex):
+                    indexes.append(java_index.getName())
+            return indexes
+        except Exception:
+            return []

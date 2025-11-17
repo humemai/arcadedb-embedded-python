@@ -697,7 +697,7 @@ def batch_context(
 
 **Test Results:**
 - ✅ All 44/44 tests passing (100% success rate)
-- ✅ Full test suite: 164/164 tests passing (116 original + 44 new)
+- ✅ Full test suite: 182/182 tests passing (116 original + 44 new)
 - ✅ Test execution time: ~3.6 seconds
 - ✅ Verified: Type creation, properties, indexes, get_or_create patterns, complex types
 
@@ -707,7 +707,7 @@ def batch_context(
 - ✅ Converted all `CREATE INDEX` → `schema.create_index()` (example 04 with UNIQUE/FULL_TEXT/NOTUNIQUE logic)
 - ✅ Converted all `CREATE PROPERTY` → `schema.create_property()` (simple types, LIST OF, ARRAY_OF_FLOATS)
 - ✅ Fixed `ARRAY_OF_FLOATS` property type (requires Java Type enum, not string-based creation)
-- ✅ All 164/164 tests passing, all examples (01-06) converted and working
+- ✅ All 182/182 tests passing, all examples (01-06) converted and working
 - ✅ Batch conversion script created for automated migration (`/tmp/convert_properties.py`)
 - ✅ **Scope Clarified**: Only DDL (schema definition) converted; DML (INSERT, CREATE EDGE) intentionally left as SQL or Java API
 
@@ -958,7 +958,7 @@ def schema(self) -> 'Schema':
 6. ✅ **Example 06** (vector_search_recommendations.py): Uses Schema API
 
 **Tests Validated:**
-- ✅ 164/164 tests passing (44 schema tests + 116 other tests)
+- ✅ 182/182 tests passing (44 schema tests + 116 other tests)
 - ✅ All property types: STRING, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, DECIMAL, LIST OF, ARRAY_OF_FLOATS
 - ✅ All index types: UNIQUE, NOTUNIQUE, FULL_TEXT
 - ✅ Idempotent operations: get_or_create_*_type(), get_or_create_property(), get_or_create_index()

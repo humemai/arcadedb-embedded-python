@@ -191,7 +191,6 @@ class DataLoader:
                 query = f"""
                     SELECT *, @rid as rid FROM Link
                     WHERE @rid > {last_rid}
-                    ORDER BY @rid
                     LIMIT {self.batch_size}
                 """
                 chunk = list(source_db.query("sql", query))
@@ -434,7 +433,6 @@ class VertexCreator:
                         query = f"""
                             SELECT *, @rid as rid FROM Movie
                             WHERE @rid > {last_rid}
-                            ORDER BY @rid
                             LIMIT {self.batch_size}
                         """
                         chunk = list(source_db.query("sql", query))
@@ -493,7 +491,6 @@ class VertexCreator:
                     query = f"""
                         SELECT *, @rid as rid FROM Movie
                         WHERE @rid > {last_rid}
-                        ORDER BY @rid
                         LIMIT {self.batch_size}
                     """
                     chunk = list(source_db.query("sql", query))
@@ -557,7 +554,6 @@ class VertexCreator:
                     query = f"""
                         SELECT *, @rid as rid FROM Movie
                         WHERE @rid > {last_rid}
-                        ORDER BY @rid
                         LIMIT {self.batch_size}
                     """
                     chunk = list(source_db.query("sql", query))
@@ -702,7 +698,6 @@ class EdgeCreator:
                 query = f"""
                     SELECT *, @rid as rid FROM Rating
                     WHERE timestamp IS NOT NULL AND @rid > {last_rid}
-                    ORDER BY @rid
                     LIMIT {self.batch_size}
                 """
                 chunk = list(source_db.query("sql", query))
@@ -796,7 +791,6 @@ class EdgeCreator:
                     WHERE timestamp IS NOT NULL
                         AND tag IS NOT NULL
                         AND @rid > {last_rid}
-                    ORDER BY @rid
                     LIMIT {self.batch_size}
                 """
                 chunk = list(source_db.query("sql", query))

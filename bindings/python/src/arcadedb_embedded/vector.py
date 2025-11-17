@@ -150,3 +150,93 @@ class VectorIndex:
             self._java_index.remove(vertex_id)
         except Exception as e:
             raise ArcadeDBError(f"Failed to remove vertex from index: {e}") from e
+
+    def get_max_capacity(self):
+        """
+        Get the maximum number of items this index can hold.
+
+        Returns:
+            int: Maximum capacity (max_items parameter from creation)
+
+        Note:
+            This is a HARD LIMIT. Once reached, you must recreate the index
+            with a larger capacity. Use get_stats() to monitor usage.
+        """
+        try:
+            return self._java_index.getMaxItemCount()
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to get max capacity: {e}") from e
+
+    def get_size(self):
+        """
+        Get the current number of items in the index.
+
+        Returns:
+            int: Number of items currently indexed
+
+        Note:
+            This counts vertices in the underlying vertex type that have
+            the vector property. For large indexes, this may be slow.
+            Consider caching if needed.
+        """
+        try:
+            # HNSW persistent index doesn't have a size() method
+            # We need to count via the underlying TypeIndex
+            underlying_index = self._java_index.getUnderlyingIndex()
+
+            # Count entries in the underlying index
+            # The underlying index stores the ID property for each vertex
+            count = 0
+            cursor = underlying_index.iterator(True)
+            while cursor.hasNext():
+                cursor.next()
+                count += 1
+
+            return count
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to get index size: {e}") from e
+
+    def get_stats(self):
+        """
+        Get index statistics including size and capacity.
+
+        Returns:
+            dict: Statistics with keys:
+                - size: Current number of items
+                - max_capacity: Maximum capacity
+                - usage_percent: Percentage of capacity used
+                - remaining: Number of slots remaining
+
+        Example:
+            >>> stats = index.get_stats()
+            >>> print(f"Index is {stats['usage_percent']:.1f}% full")
+            >>> if stats['usage_percent'] > 90:
+            ...     print("⚠️  Index nearly full - "
+            ...           "consider recreating with larger capacity")
+        """
+        try:
+            size = self.get_size()
+            max_capacity = self.get_max_capacity()
+            usage_percent = (size / max_capacity * 100) if max_capacity > 0 else 0
+            remaining = max_capacity - size
+
+            return {
+                "size": size,
+                "max_capacity": max_capacity,
+                "usage_percent": usage_percent,
+                "remaining": remaining,
+            }
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to get index stats: {e}") from e
+
+    def is_full(self):
+        """
+        Check if the index is at capacity.
+
+        Returns:
+            bool: True if index is full, False otherwise
+        """
+        try:
+            return self.get_size() >= self.get_max_capacity()
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to check if index is full: {e}") from e

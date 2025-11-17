@@ -36,7 +36,7 @@ pip install --force-reinstall dist/arcadedb_embedded_minimal-*.whl
 pytest  # 40 passed, 3 skipped
 
 pip install --force-reinstall dist/arcadedb_embedded_full-*.whl
-pytest  # 164 passed, 0 skipped
+pytest  # 182 passed, 0 skipped
 ```
 
 **Note**: Version is automatically extracted from `pom.xml` by `extract_version.py` during build. The `-SNAPSHOT` suffix is converted to `.dev0` for PEP 440 compliance.
@@ -73,9 +73,9 @@ Instead of pushing tags manually, create a GitHub Release which automatically cr
 
    ## Test Results
 
-   - Headless: 36/164 passed (7 skipped)
-   - Minimal: 40/164 passed (3 skipped)
-   - Full: 164/164 passed
+   - Headless: 36/182 passed (7 skipped)
+   - Minimal: 40/182 passed (3 skipped)
+   - Full: 182/182 passed
    ```
 
 6. Click **Publish release** (or **Save as draft** to test first)
@@ -114,9 +114,9 @@ https://humemai.github.io/arcadedb-embedded-python/
 
 ## Test Results
 
-- Headless: 36/164 passed
-- Minimal: 40/164 passed
-- Full: 164/164 passed
+- Headless: 36/182 passed
+- Minimal: 40/182 passed
+- Full: 182/182 passed
 
 **What happens automatically:**
 
