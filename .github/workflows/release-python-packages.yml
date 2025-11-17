@@ -117,7 +117,7 @@ jobs:
           retention-days: 5
 
   publish:
-    name: Publish arcadedb-embedded to PyPI
+    name: Publish arcadedb-embedded to PyPI (3 platforms)
     needs: [validate-version, prepare-wheels]
     runs-on: ubuntu-latest
     continue-on-error: true  # Don't block GitHub Release if PyPI upload fails (size limit)
@@ -125,34 +125,60 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - name: Download all wheels (separately to avoid overwrites)
+      - name: Download wheels for main platforms only
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: wheel-*
           path: wheels-temp/
           merge-multiple: false  # Keep in separate directories
 
-      - name: Collect wheels into single directory
+      - name: Collect wheels for PyPI (3 main platforms)
         shell: bash
         run: |
           mkdir -p dist
-          # Copy all wheels from subdirectories to dist/
-          find wheels-temp -name "*.whl" -exec cp {} dist/ \;
-          echo "📦 Collected wheels:"
+
+          # Only copy wheels for the 3 most common platforms (~90% of developers)
+          # Skipped platforms (available via GitHub Releases):
+          #   - darwin-amd64 (~3-5%): Intel Macs can use darwin-arm64 via Rosetta 2
+          #   - linux-arm64 (~5-8%): Raspberry Pi, AWS Graviton
+          #   - windows-arm64 (~1-2%): Surface Pro X
+
+          echo "📦 Collecting wheels for PyPI (main platforms only)..."
+
+          # Copy main platform wheels
+          for platform in linux-amd64 darwin-arm64 windows-amd64; do
+            if [ -d "wheels-temp/wheel-$platform" ]; then
+              cp wheels-temp/wheel-$platform/*.whl dist/ 2>/dev/null || true
+              echo "  ✅ $platform"
+            else
+              echo "  ⚠️  $platform not found"
+            fi
+          done
+
+          echo ""
+          echo "📦 Wheels for PyPI:"
           ls -lh dist/
 
       - name: Verify wheels
         run: |
           ls -lh dist/
-          echo "📦 Wheels:"
+          echo "📦 Wheels for PyPI (3 main platforms):"
           ls dist/*.whl
 
-          # Count wheels (should be 6: one for each platform)
+          # Count wheels (should be 3: linux-amd64, darwin-arm64, windows-amd64)
           WHEEL_COUNT=$(ls dist/*.whl | wc -l)
-          echo "📊 Wheel count: $WHEEL_COUNT (expected: 6)"
+          echo "📊 Wheel count: $WHEEL_COUNT (expected: 3)"
 
-          if [ "$WHEEL_COUNT" -ne 6 ]; then
-            echo "❌ Expected 6 wheels (6 platforms), got $WHEEL_COUNT"
+          echo ""
+          echo "ℹ️  Platforms not on PyPI (available via GitHub Releases):"
+          echo "   - darwin-amd64 (~3-5%): Intel Macs can use darwin-arm64 via Rosetta 2"
+          echo "   - linux-arm64 (~5-8%): Raspberry Pi, AWS Graviton"
+          echo "   - windows-arm64 (~1-2%): Surface Pro X"
+          echo ""
+          echo "   Coverage: ~90% of developers with these 3 platforms"
+
+          if [ "$WHEEL_COUNT" -ne 3 ]; then
+            echo "❌ Expected 3 wheels (3 main platforms), got $WHEEL_COUNT"
             exit 1
           fi
 
@@ -240,13 +266,13 @@ jobs:
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
 
   github-release:
-    name: Create GitHub Release
+    name: Create GitHub Release (All 6 platforms)
     needs: [validate-version, prepare-wheels]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download all wheels
+      - name: Download all wheels (all 6 platforms)
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           pattern: wheel-*
@@ -264,14 +290,29 @@ jobs:
             ## 🎮 ArcadeDB Embedded Python Bindings v${{ needs.validate-version.outputs.python-version }}
 
             ### 📦 Installation
+
+            **Recommended (PyPI - 3 main platforms):**
             ```bash
             pip install arcadedb-embedded==${{ needs.validate-version.outputs.python-version }}
             ```
 
-            ### 🌍 Supported Platforms (6)
-            - ✅ **Linux** (x86_64, ARM64)
-            - ✅ **macOS** (Intel, Apple Silicon)
-            - ✅ **Windows** (x64, ARM64)
+            **Alternative (GitHub - all 6 platforms):**
+            ```bash
+            # For platforms not on PyPI (see below)
+            pip install https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/arcadedb_embedded-${{ needs.validate-version.outputs.python-version }}-py3-none-<platform>.whl
+            ```
+
+            ### 🌍 Supported Platforms
+
+            **Available on PyPI** (~90% of developers):
+            - ✅ **Linux x86_64** (servers, CI/CD, Docker, cloud)
+            - ✅ **macOS Apple Silicon** (M1/M2/M3/M4, also works on Intel Macs via Rosetta 2)
+            - ✅ **Windows x64** (most Windows users)
+
+            **Available via GitHub Releases only** (~10% of developers):
+            - ⬇️ **macOS Intel** (2019-2020 Macs) - *Can use Apple Silicon wheel via Rosetta 2*
+            - ⬇️ **Linux ARM64** (Raspberry Pi, AWS Graviton)
+            - ⬇️ **Windows ARM64** (Surface Pro X)
 
             ### 📚 Links
             - [PyPI Package](https://pypi.org/project/arcadedb-embedded/${{ needs.validate-version.outputs.python-version }}/)
@@ -279,13 +320,17 @@ jobs:
             - [Examples](https://github.com/${{ github.repository }}/tree/main/bindings/python/examples)
 
             ### 🔽 Direct Downloads
-            Platform-specific wheels are attached below. Most users should install via pip (auto-selects correct wheel).
+            All 6 platform-specific wheels are attached below. Most users should install via pip (auto-selects correct wheel).
 
             ---
+            **Note**: PyPI distribution limited to 3 main platforms to reduce storage (~50% savings). All platforms available here.
+
+            **Intel Mac users**: Use the Apple Silicon wheel (works via Rosetta 2) or download the native Intel wheel below for maximum performance.
+
             **Based on ArcadeDB v${{ needs.validate-version.outputs.base-version }}**
 
   update-pypi-index:
-    name: Update PyPI simple index on GitHub Pages
+    name: Update PyPI simple index on GitHub Pages (All 6 platforms)
     needs: [validate-version, github-release]
     runs-on: ubuntu-latest
     permissions:
@@ -317,9 +362,13 @@ jobs:
             </head>
             <body>
               <h1>Links for arcadedb-embedded</h1>
+              <p><strong>Alternative PyPI index with all 6 platforms</strong> (official PyPI only has 3 main platforms)</p>
+              <p>Usage: <code>pip install --extra-index-url https://humemai.github.io/arcadedb-embedded-python/simple arcadedb-embedded</code></p>
+              <p><em>Note: Intel Mac users can use the Apple Silicon wheel via Rosetta 2, or download the native Intel wheel for best performance.</em></p>
+              <hr/>
           EOF
 
-          # Get all releases and add wheel links
+          # Get all releases and add wheel links (all 6 platforms from GitHub)
           echo "📋 Fetching all releases..."
           gh release list --limit 100 --json tagName | jq -r '.[].tagName' | while read -r tag; do
             echo "  Processing release: $tag"
