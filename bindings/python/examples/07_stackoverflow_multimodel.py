@@ -14,7 +14,7 @@ to build a comprehensive knowledge graph with semantic search capabilities.
 Dataset Options (disk size → recommended JVM heap):
 - stackoverflow-tiny: ~34 MB → 2 GB (ARCADEDB_JVM_MAX_HEAP='2g' ARCADEDB_JVM_ARGS='-Xms2g')
 - stackoverflow-small: ~642 MB → 8 GB (ARCADEDB_JVM_MAX_HEAP='4g' ARCADEDB_JVM_ARGS='-Xms8g')
-- stackoverflow-medium: ~2.9 GB → 16 GB (ARCADEDB_JVM_MAX_HEAP='8g' ARCADEDB_JVM_ARGS='-Xms16g')
+- stackoverflow-medium: ~2.9 GB → 32 GB (ARCADEDB_JVM_MAX_HEAP='32g' ARCADEDB_JVM_ARGS='-Xms32g')
 - stackoverflow-large: ~323 GB → 32+ GB (ARCADEDB_JVM_MAX_HEAP='32g' ARCADEDB_JVM_ARGS='-Xms32g')
 
 Usage:
@@ -4241,7 +4241,7 @@ class Phase3VectorEmbeddings:
         self,
         graph_db_path: Path,
         batch_size: int = 1000,
-        encode_batch_size: int = 32,
+        encode_batch_size: int = 256,
         model_name: str = "all-MiniLM-L6-v2",
     ):
         """Initialize Phase 3.
@@ -6705,8 +6705,8 @@ Phases:
     parser.add_argument(
         "--encode-batch-size",
         type=int,
-        default=32,
-        help="Batch size for encoding embeddings in Phase 3 (default: 32)",
+        default=256,
+        help="Batch size for encoding embeddings in Phase 3 (default: 256)",
     )
 
     parser.add_argument(

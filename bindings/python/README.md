@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 182/182 Passing (100%) | **Platforms**: 6 Supported
+**Status**: ✅ Production Ready | **Tests**: 189/189 Passing (100%) | **Platforms**: 6 Supported
 
 ---
 
@@ -108,12 +108,12 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 
 | Platform | Wheel Size | JRE Size | Installed Size | Tests |
 |----------|-----------|----------|----------------|-------|
-| Windows ARM64 | 155.1M | 47.3M | ~215M | 182/182 ✅ |
-| macOS ARM64 | 156.7M | 53.9M | ~221M | 182/182 ✅ |
-| macOS Intel | 157.8M | 55.3M | ~223M | 182/182 ✅ |
-| Windows x64 | 157.4M | 51.5M | ~219M | 182/182 ✅ |
-| Linux ARM64 | 159.9M | 61.8M | ~229M | 182/182 ✅ |
-| Linux x64 | 160.9M | 62.7M | ~230M | 182/182 ✅ |
+| Windows ARM64 | 155.1M | 47.3M | ~215M | 189/189 ✅ |
+| macOS ARM64 | 156.7M | 53.9M | ~221M | 189/189 ✅ |
+| macOS Intel | 157.8M | 55.3M | ~223M | 189/189 ✅ |
+| Windows x64 | 157.4M | 51.5M | ~219M | 189/189 ✅ |
+| Linux ARM64 | 159.9M | 61.8M | ~229M | 189/189 ✅ |
+| Linux x64 | 160.9M | 62.7M | ~230M | 189/189 ✅ |
 
 **Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See `jar_exclusions.txt` for details.
 
@@ -123,7 +123,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 182/182 tests passing (100%)
+**Status**: 189/189 tests passing (100%)
 
 ```bash
 # Run all tests

@@ -14,7 +14,7 @@
 - ✅ **Architecture-Specific macOS Wheels**: Separate x86_64 and arm64 (not universal2)
 - ✅ **setup.py for Platform Tags**: BinaryDistribution class forces platform-specific wheels
 - ✅ **Build System**: Native runners for all platforms, Docker for Linux (manylinux compliance)
-- ✅ **Testing**: 182/182 tests passing on all 6 platforms
+- ✅ **Testing**: 189/189 tests passing on all 6 platforms
 - ✅ **Tag-Driven Releases**: Manual git tags trigger full release workflow
 - ✅ **GitHub Releases**: All 6 wheels attached automatically (independent of PyPI)
 - ✅ **GitHub Pages PyPI Index**: pip-compatible index at https://humemai.github.io/arcadedb-embedded-python/simple/

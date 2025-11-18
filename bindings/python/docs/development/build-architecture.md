@@ -21,7 +21,7 @@ This document describes the build architecture for creating platform-specific Py
 
 **All platforms:**
 
-- ✅ 182/182 tests passing
+- ✅ 189/189 tests passing
 - ✅ 167.4M JARs (83 files, identical across platforms)
 - ✅ All native runners (no QEMU emulation)
 - ✅ ~40MB savings vs initial builds (195.9M → 155-161M)

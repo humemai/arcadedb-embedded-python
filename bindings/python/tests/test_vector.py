@@ -312,6 +312,516 @@ class TestVectorIndexCapacity:
         assert stats["remaining"] == 100
 
 
+def test_cosine_distance_orthogonal_vectors(temp_db_path):
+    """Test that orthogonal vectors have cosine distance = 1.0.
+
+    Orthogonal vectors have cos(θ) = 0, so distance = 1 - 0 = 1.0.
+    Uses standard basis vectors [1,0] and [0,1] in 2D.
+    """
+    try:
+        import numpy as np
+
+        use_numpy = True
+    except ImportError:
+        use_numpy = False
+
+    with arcadedb.create_database(temp_db_path) as db:
+        with db.transaction():
+            db.schema.create_vertex_type("VectorTest")
+            db.schema.create_property("VectorTest", "name", "STRING")
+            db.schema.create_property("VectorTest", "vector", "ARRAY_OF_FLOATS")
+
+        # Create orthogonal vectors: [1,0] and [0,1]
+        if use_numpy:
+            vectors = [
+                ("x_axis", np.array([1.0, 0.0])),
+                ("y_axis", np.array([0.0, 1.0])),
+            ]
+        else:
+            vectors = [
+                ("x_axis", [1.0, 0.0]),
+                ("y_axis", [0.0, 1.0]),
+            ]
+
+        with db.transaction():
+            for name, vector in vectors:
+                vertex = db._java_db.newVertex("VectorTest")
+                vertex.set("name", name)
+                vertex.set("vector", arcadedb.to_java_float_array(vector))
+                vertex.save()
+
+        with db.transaction():
+            index = db.create_vector_index(
+                vertex_type="VectorTest",
+                vector_property="vector",
+                dimensions=2,
+                id_property="name",
+                distance_function="cosine",
+                max_items=100,
+            )
+
+            # Index vertices
+            result = db.query("sql", "SELECT FROM VectorTest")
+            for record in result:
+                vertex = record._java_result.getElement().get().asVertex()
+                index.add_vertex(vertex)
+
+        # Query with [1,0] - should find [0,1] with distance ~1.0
+        query = [1.0, 0.0] if not use_numpy else np.array([1.0, 0.0])
+        neighbors = index.find_nearest(query, k=2)
+
+        # Find the orthogonal vector
+        orthogonal = [n for n in neighbors if str(n[0].get("name")) == "y_axis"]
+        assert len(orthogonal) == 1, "Should find orthogonal vector"
+        distance = orthogonal[0][1]
+
+        print(f"\n  Orthogonal vectors distance: {distance:.6f} (expected: 1.0)")
+        assert (
+            abs(distance - 1.0) < 0.01
+        ), f"Orthogonal distance should be ~1.0, got {distance}"
+
+
+def test_cosine_distance_parallel_vectors(temp_db_path):
+    """Test that parallel vectors (same direction) have cosine distance = 0.0.
+
+    Parallel vectors have cos(θ) = 1, so distance = 1 - 1 = 0.0.
+    Tests with same angle but different magnitudes.
+    """
+    try:
+        import numpy as np
+
+        use_numpy = True
+    except ImportError:
+        use_numpy = False
+
+    with arcadedb.create_database(temp_db_path) as db:
+        with db.transaction():
+            db.schema.create_vertex_type("VectorTest")
+            db.schema.create_property("VectorTest", "name", "STRING")
+            db.schema.create_property("VectorTest", "vector", "ARRAY_OF_FLOATS")
+
+        # Create parallel vectors with different magnitudes
+        if use_numpy:
+            vectors = [
+                ("v1", np.array([1.0, 1.0])),
+                ("v2", np.array([2.0, 2.0])),  # Same direction, 2x magnitude
+                ("v3", np.array([0.5, 0.5])),  # Same direction, 0.5x magnitude
+            ]
+        else:
+            vectors = [
+                ("v1", [1.0, 1.0]),
+                ("v2", [2.0, 2.0]),
+                ("v3", [0.5, 0.5]),
+            ]
+
+        with db.transaction():
+            for name, vector in vectors:
+                vertex = db._java_db.newVertex("VectorTest")
+                vertex.set("name", name)
+                vertex.set("vector", arcadedb.to_java_float_array(vector))
+                vertex.save()
+
+        with db.transaction():
+            index = db.create_vector_index(
+                vertex_type="VectorTest",
+                vector_property="vector",
+                dimensions=2,
+                id_property="name",
+                distance_function="cosine",
+                max_items=100,
+            )
+
+            result = db.query("sql", "SELECT FROM VectorTest")
+            for record in result:
+                vertex = record._java_result.getElement().get().asVertex()
+                index.add_vertex(vertex)
+
+        # Query with [1,1] - should find all parallel vectors with distance ~0.0
+        query = [1.0, 1.0] if not use_numpy else np.array([1.0, 1.0])
+        neighbors = index.find_nearest(query, k=3)
+
+        print("\n  Parallel vectors distances:")
+        for vertex, distance in neighbors:
+            name = str(vertex.get("name"))
+            print(f"    {name}: {distance:.6f} (expected: ~0.0)")
+            assert (
+                distance < 0.01
+            ), f"Parallel vector {name} distance should be ~0.0, got {distance}"
+
+
+def test_cosine_distance_opposite_vectors(temp_db_path):
+    """Test that opposite vectors (180° apart) have cosine distance = 2.0.
+
+    Opposite vectors have cos(θ) = -1, so distance = 1 - (-1) = 2.0.
+    """
+    try:
+        import numpy as np
+
+        use_numpy = True
+    except ImportError:
+        use_numpy = False
+
+    with arcadedb.create_database(temp_db_path) as db:
+        with db.transaction():
+            db.schema.create_vertex_type("VectorTest")
+            db.schema.create_property("VectorTest", "name", "STRING")
+            db.schema.create_property("VectorTest", "vector", "ARRAY_OF_FLOATS")
+
+        # Create opposite vectors
+        if use_numpy:
+            vectors = [
+                ("positive", np.array([1.0, 0.0])),
+                ("negative", np.array([-1.0, 0.0])),  # 180° opposite
+            ]
+        else:
+            vectors = [
+                ("positive", [1.0, 0.0]),
+                ("negative", [-1.0, 0.0]),
+            ]
+
+        with db.transaction():
+            for name, vector in vectors:
+                vertex = db._java_db.newVertex("VectorTest")
+                vertex.set("name", name)
+                vertex.set("vector", arcadedb.to_java_float_array(vector))
+                vertex.save()
+
+        with db.transaction():
+            index = db.create_vector_index(
+                vertex_type="VectorTest",
+                vector_property="vector",
+                dimensions=2,
+                id_property="name",
+                distance_function="cosine",
+                max_items=100,
+            )
+
+            result = db.query("sql", "SELECT FROM VectorTest")
+            for record in result:
+                vertex = record._java_result.getElement().get().asVertex()
+                index.add_vertex(vertex)
+
+        # Query with [1,0] - should find [-1,0] with distance ~2.0
+        query = [1.0, 0.0] if not use_numpy else np.array([1.0, 0.0])
+        neighbors = index.find_nearest(query, k=2)
+
+        opposite = [n for n in neighbors if str(n[0].get("name")) == "negative"]
+        assert len(opposite) == 1, "Should find opposite vector"
+        distance = opposite[0][1]
+
+        print(f"\n  Opposite vectors distance: {distance:.6f} (expected: 2.0)")
+        assert (
+            abs(distance - 2.0) < 0.01
+        ), f"Opposite distance should be ~2.0, got {distance}"
+
+
+def test_cosine_distance_45_degree_vectors(temp_db_path):
+    """Test vectors at 45° angle have expected cosine distance.
+
+    45° angle: cos(45°) = √2/2 ≈ 0.707, so distance = 1 - 0.707 ≈ 0.293.
+    """
+    try:
+        import numpy as np
+
+        use_numpy = True
+    except ImportError:
+        use_numpy = False
+
+    with arcadedb.create_database(temp_db_path) as db:
+        with db.transaction():
+            db.schema.create_vertex_type("VectorTest")
+            db.schema.create_property("VectorTest", "name", "STRING")
+            db.schema.create_property("VectorTest", "vector", "ARRAY_OF_FLOATS")
+
+        # Create vectors at 45° angle: [1,0] and [1,1]/√2 normalized
+        if use_numpy:
+            vectors = [
+                ("x_axis", np.array([1.0, 0.0])),
+                ("diagonal", np.array([1.0, 1.0])),  # 45° from x-axis
+            ]
+        else:
+            vectors = [
+                ("x_axis", [1.0, 0.0]),
+                ("diagonal", [1.0, 1.0]),
+            ]
+
+        with db.transaction():
+            for name, vector in vectors:
+                vertex = db._java_db.newVertex("VectorTest")
+                vertex.set("name", name)
+                vertex.set("vector", arcadedb.to_java_float_array(vector))
+                vertex.save()
+
+        with db.transaction():
+            index = db.create_vector_index(
+                vertex_type="VectorTest",
+                vector_property="vector",
+                dimensions=2,
+                id_property="name",
+                distance_function="cosine",
+                max_items=100,
+            )
+
+            result = db.query("sql", "SELECT FROM VectorTest")
+            for record in result:
+                vertex = record._java_result.getElement().get().asVertex()
+                index.add_vertex(vertex)
+
+        # Query with [1,0] - should find [1,1] with distance ~0.293
+        query = [1.0, 0.0] if not use_numpy else np.array([1.0, 0.0])
+        neighbors = index.find_nearest(query, k=2)
+
+        diagonal = [n for n in neighbors if str(n[0].get("name")) == "diagonal"]
+        assert len(diagonal) == 1, "Should find diagonal vector"
+        distance = diagonal[0][1]
+
+        expected = 1.0 - (1.0 / (2.0**0.5))  # 1 - cos(45°) ≈ 0.293
+        print(f"\n  45° vectors distance: {distance:.6f} (expected: {expected:.6f})")
+        assert (
+            abs(distance - expected) < 0.01
+        ), f"45° distance should be ~{expected}, got {distance}"
+
+
+def test_cosine_distance_3d_orthogonal_vectors(temp_db_path):
+    """Test 3D orthogonal vectors have cosine distance = 1.0.
+
+    Tests standard basis vectors in 3D: [1,0,0], [0,1,0], [0,0,1].
+    All pairs should be orthogonal with distance = 1.0.
+    """
+    try:
+        import numpy as np
+
+        use_numpy = True
+    except ImportError:
+        use_numpy = False
+
+    with arcadedb.create_database(temp_db_path) as db:
+        with db.transaction():
+            db.schema.create_vertex_type("VectorTest3D")
+            db.schema.create_property("VectorTest3D", "name", "STRING")
+            db.schema.create_property("VectorTest3D", "vector", "ARRAY_OF_FLOATS")
+
+        # Create 3D orthogonal basis vectors
+        if use_numpy:
+            vectors = [
+                ("x_axis", np.array([1.0, 0.0, 0.0])),
+                ("y_axis", np.array([0.0, 1.0, 0.0])),
+                ("z_axis", np.array([0.0, 0.0, 1.0])),
+            ]
+        else:
+            vectors = [
+                ("x_axis", [1.0, 0.0, 0.0]),
+                ("y_axis", [0.0, 1.0, 0.0]),
+                ("z_axis", [0.0, 0.0, 1.0]),
+            ]
+
+        with db.transaction():
+            for name, vector in vectors:
+                vertex = db._java_db.newVertex("VectorTest3D")
+                vertex.set("name", name)
+                vertex.set("vector", arcadedb.to_java_float_array(vector))
+                vertex.save()
+
+        with db.transaction():
+            index = db.create_vector_index(
+                vertex_type="VectorTest3D",
+                vector_property="vector",
+                dimensions=3,
+                id_property="name",
+                distance_function="cosine",
+                max_items=100,
+            )
+
+            result = db.query("sql", "SELECT FROM VectorTest3D")
+            for record in result:
+                vertex = record._java_result.getElement().get().asVertex()
+                index.add_vertex(vertex)
+
+        # Query with [1,0,0] - should find [0,1,0] and [0,0,1] with distance ~1.0
+        query = [1.0, 0.0, 0.0] if not use_numpy else np.array([1.0, 0.0, 0.0])
+        neighbors = index.find_nearest(query, k=3)
+
+        print("\n  3D orthogonal vectors distances:")
+        for vertex, distance in neighbors:
+            name = str(vertex.get("name"))
+            print(f"    {name}: {distance:.6f}")
+            if name != "x_axis":  # Skip self
+                assert (
+                    abs(distance - 1.0) < 0.01
+                ), f"3D orthogonal distance should be ~1.0, got {distance}"
+
+
+def test_cosine_distance_3d_parallel_and_opposite(temp_db_path):
+    """Test 3D parallel (distance=0) and opposite (distance=2) vectors.
+
+    Parallel: [1,1,1] vs [2,2,2] → distance = 0
+    Opposite: [1,1,1] vs [-1,-1,-1] → distance = 2
+    """
+    try:
+        import numpy as np
+
+        use_numpy = True
+    except ImportError:
+        use_numpy = False
+
+    with arcadedb.create_database(temp_db_path) as db:
+        with db.transaction():
+            db.schema.create_vertex_type("VectorTest3D")
+            db.schema.create_property("VectorTest3D", "name", "STRING")
+            db.schema.create_property("VectorTest3D", "vector", "ARRAY_OF_FLOATS")
+
+        if use_numpy:
+            vectors = [
+                ("v1", np.array([1.0, 1.0, 1.0])),
+                ("v2_parallel", np.array([2.0, 2.0, 2.0])),  # Parallel
+                ("v3_opposite", np.array([-1.0, -1.0, -1.0])),  # Opposite
+            ]
+        else:
+            vectors = [
+                ("v1", [1.0, 1.0, 1.0]),
+                ("v2_parallel", [2.0, 2.0, 2.0]),
+                ("v3_opposite", [-1.0, -1.0, -1.0]),
+            ]
+
+        with db.transaction():
+            for name, vector in vectors:
+                vertex = db._java_db.newVertex("VectorTest3D")
+                vertex.set("name", name)
+                vertex.set("vector", arcadedb.to_java_float_array(vector))
+                vertex.save()
+
+        with db.transaction():
+            index = db.create_vector_index(
+                vertex_type="VectorTest3D",
+                vector_property="vector",
+                dimensions=3,
+                id_property="name",
+                distance_function="cosine",
+                max_items=100,
+            )
+
+            result = db.query("sql", "SELECT FROM VectorTest3D")
+            for record in result:
+                vertex = record._java_result.getElement().get().asVertex()
+                index.add_vertex(vertex)
+
+        # Query with [1,1,1]
+        query = [1.0, 1.0, 1.0] if not use_numpy else np.array([1.0, 1.0, 1.0])
+        neighbors = index.find_nearest(query, k=3)
+
+        print("\n  3D parallel and opposite vectors:")
+        for vertex, distance in neighbors:
+            name = str(vertex.get("name"))
+            print(f"    {name}: {distance:.6f}")
+
+            if "parallel" in name:
+                assert (
+                    distance < 0.01
+                ), f"Parallel should have distance ~0, got {distance}"
+            elif "opposite" in name:
+                assert (
+                    abs(distance - 2.0) < 0.01
+                ), f"Opposite should have distance ~2, got {distance}"
+
+
+def test_cosine_distance_high_dimensional(temp_db_path):
+    """Test cosine distance in high dimensions (128D, typical for embeddings).
+
+    Tests:
+    - Orthogonal random vectors → distance ≈ 1.0
+    - Parallel vectors (scaled) → distance ≈ 0.0
+    - Opposite vectors → distance ≈ 2.0
+    """
+    try:
+        import numpy as np
+
+        use_numpy = True
+    except ImportError:
+        pytest.skip("NumPy required for high-dimensional test")
+
+    with arcadedb.create_database(temp_db_path) as db:
+        with db.transaction():
+            db.schema.create_vertex_type("VectorTestHD")
+            db.schema.create_property("VectorTestHD", "name", "STRING")
+            db.schema.create_property("VectorTestHD", "vector", "ARRAY_OF_FLOATS")
+
+        # Create high-dimensional test vectors (128D)
+        dim = 128
+        np.random.seed(42)  # Reproducible
+
+        # Base vector
+        base = np.random.randn(dim)
+        base = base / np.linalg.norm(base)  # Normalize
+
+        # Parallel vector (same direction, different magnitude)
+        parallel = base * 2.5
+
+        # Opposite vector (180° opposite)
+        opposite = -base
+
+        # Orthogonal vector (constructed to be perpendicular)
+        orthogonal = np.random.randn(dim)
+        # Make orthogonal using Gram-Schmidt
+        orthogonal = orthogonal - np.dot(orthogonal, base) * base
+        orthogonal = orthogonal / np.linalg.norm(orthogonal)
+
+        # Verify orthogonality
+        dot_product = np.dot(base, orthogonal)
+        assert (
+            abs(dot_product) < 0.01
+        ), f"Vectors should be orthogonal, dot={dot_product}"
+
+        vectors = [
+            ("base", base),
+            ("parallel", parallel),
+            ("opposite", opposite),
+            ("orthogonal", orthogonal),
+        ]
+
+        with db.transaction():
+            for name, vector in vectors:
+                vertex = db._java_db.newVertex("VectorTestHD")
+                vertex.set("name", name)
+                vertex.set("vector", arcadedb.to_java_float_array(vector))
+                vertex.save()
+
+        with db.transaction():
+            index = db.create_vector_index(
+                vertex_type="VectorTestHD",
+                vector_property="vector",
+                dimensions=dim,
+                id_property="name",
+                distance_function="cosine",
+                max_items=100,
+            )
+
+            result = db.query("sql", "SELECT FROM VectorTestHD")
+            for record in result:
+                vertex = record._java_result.getElement().get().asVertex()
+                index.add_vertex(vertex)
+
+        # Query with base vector
+        neighbors = index.find_nearest(base, k=4)
+
+        print(f"\n  High-dimensional ({dim}D) cosine distances:")
+        for vertex, distance in neighbors:
+            name = str(vertex.get("name"))
+            print(f"    {name}: {distance:.6f}")
+
+            if name == "parallel":
+                assert (
+                    distance < 0.01
+                ), f"Parallel should have distance ~0, got {distance}"
+            elif name == "opposite":
+                assert (
+                    abs(distance - 2.0) < 0.01
+                ), f"Opposite should have distance ~2, got {distance}"
+            elif name == "orthogonal":
+                assert (
+                    abs(distance - 1.0) < 0.1
+                ), f"Orthogonal should have distance ~1, got {distance}"
+
+
 def test_vector_search(temp_db_path):
     """Test vector embeddings with HNSW similarity search.
 
