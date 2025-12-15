@@ -9,7 +9,7 @@ def test_resultset_to_list(temp_db_path):
     """Test ResultSet.to_list() method."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE User")
+            db.schema.create_document_type("User")
             db.command("sql", "INSERT INTO User SET name = 'Alice', age = 30")
             db.command("sql", "INSERT INTO User SET name = 'Bob', age = 25")
             db.command("sql", "INSERT INTO User SET name = 'Charlie', age = 35")
@@ -43,7 +43,7 @@ def test_resultset_to_dataframe(temp_db_path):
 
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Product")
+            db.schema.create_document_type("Product")
             db.command(
                 "sql",
                 "INSERT INTO Product SET name = 'Widget', price = 9.99, stock = 100",
@@ -82,7 +82,7 @@ def test_resultset_iter_chunks(temp_db_path):
     """Test ResultSet.iter_chunks() for memory-efficient iteration."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Item")
+            db.schema.create_document_type("Item")
             # Insert 250 items
             for i in range(250):
                 db.command(
@@ -116,7 +116,7 @@ def test_resultset_count(temp_db_path):
     """Test ResultSet.count() method."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Counter")
+            db.schema.create_document_type("Counter")
             for i in range(50):
                 db.command("sql", f"INSERT INTO Counter SET num = {i}")
 
@@ -131,7 +131,7 @@ def test_resultset_first(temp_db_path):
     """Test ResultSet.first() method."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE FirstTest")
+            db.schema.create_document_type("FirstTest")
             db.command("sql", "INSERT INTO FirstTest SET value = 'first'")
             db.command("sql", "INSERT INTO FirstTest SET value = 'second'")
             db.command("sql", "INSERT INTO FirstTest SET value = 'third'")
@@ -155,7 +155,7 @@ def test_resultset_one(temp_db_path):
     """Test ResultSet.one() method."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE OneTest")
+            db.schema.create_document_type("OneTest")
             db.command("sql", "INSERT INTO OneTest SET id = 1, value = 'unique'")
             db.command("sql", "INSERT INTO OneTest SET id = 2, value = 'multiple'")
             db.command("sql", "INSERT INTO OneTest SET id = 3, value = 'multiple'")
@@ -191,7 +191,7 @@ def test_resultset_iteration_patterns(temp_db_path):
     """Test various iteration patterns with ResultSet."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE IterTest")
+            db.schema.create_document_type("IterTest")
             for i in range(10):
                 db.command("sql", f"INSERT INTO IterTest SET num = {i}")
 
@@ -217,7 +217,7 @@ def test_result_representation(temp_db_path):
     """Test Result.__repr__() for better debugging."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE ReprTest")
+            db.schema.create_document_type("ReprTest")
             db.command(
                 "sql",
                 "INSERT INTO ReprTest SET name = 'test', value = 42, active = true",
@@ -238,9 +238,9 @@ def test_resultset_with_complex_queries(temp_db_path):
     """Test ResultSet methods with complex queries."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Sales")
-            db.command("sql", "CREATE PROPERTY Sales.amount DECIMAL")
-            db.command("sql", "CREATE PROPERTY Sales.region STRING")
+            db.schema.create_document_type("Sales")
+            db.schema.create_property("Sales", "amount", "DECIMAL")
+            db.schema.create_property("Sales", "region", "STRING")
 
             # Insert sample data
             regions = ["North", "South", "East", "West"]
@@ -284,7 +284,7 @@ def test_resultset_empty_handling(temp_db_path):
     """Test ResultSet methods with empty results."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE EmptyTest")
+            db.schema.create_document_type("EmptyTest")
 
         # Query empty table
         result = db.query("sql", "SELECT FROM EmptyTest")
@@ -313,7 +313,7 @@ def test_resultset_reusability(temp_db_path):
     """Test that ResultSet can only be iterated once (Java ResultSet behavior)."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE ReuseTest")
+            db.schema.create_document_type("ReuseTest")
             db.command("sql", "INSERT INTO ReuseTest SET value = 1")
             db.command("sql", "INSERT INTO ReuseTest SET value = 2")
 

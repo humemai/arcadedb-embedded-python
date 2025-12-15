@@ -71,17 +71,37 @@ def to_python_array(java_vector, use_numpy=True):
     return py_list
 
 
-class VectorIndex:
+class LegacyVectorIndex:
     """
-    Wrapper for ArcadeDB HNSW vector index.
+    Wrapper for ArcadeDB HNSW vector index (legacy implementation using hnswlib).
+
+    Note: This is the legacy implementation. For new code, use VectorIndex (JVector-based)
+    which is faster, has no max_items limit, and uses normalized cosine distance.
 
     Provides a Pythonic interface for creating and searching vector indexes,
     with native support for NumPy arrays.
+
+    Distance Calculation:
+        The metric used depends on the `distance_function` parameter during index creation:
+
+        1. **EUCLIDEAN**:
+           - Returns **Squared Euclidean Distance** (Lower is better).
+           - Formula: $d^2 = \sum (A_i - B_i)^2$
+           - Range: [0.0, +inf)
+           - 0.0: Identical vectors
+
+        2. **COSINE**:
+           - Returns **Cosine Distance** (Lower is better).
+           - Formula: $1 - \cos(\theta) = 1 - \frac{A \cdot B}{||A|| ||B||}$
+           - Range: [0.0, 2.0]
+           - 0.0: Identical vectors
+           - 1.0: Orthogonal vectors
+           - 2.0: Opposite vectors
     """
 
     def __init__(self, java_index, database):
         """
-        Initialize VectorIndex wrapper.
+        Initialize LegacyVectorIndex wrapper.
 
         Args:
             java_index: Java HnswVectorIndex object
@@ -101,23 +121,31 @@ class VectorIndex:
 
         Returns:
             List of tuples: [(vertex, distance), ...]
-            where vertex is the matched vertex object and distance is the
-            similarity score
+            where vertex is the Java vertex object (use .get() and .has() methods)
+            and distance is the similarity score
         """
-        # Convert query vector to Java float array
-        java_vector = to_java_float_array(query_vector)
+        try:
+            # Convert query vector to Java float array
+            java_vector = to_java_float_array(query_vector)
 
-        # Perform search (None = no filtering callback)
-        results = self._java_index.findNearest(java_vector, k, None)
+            # Perform search (None = no filtering callback)
+            results = self._java_index.findNearest(java_vector, k, None)
 
-        # Convert results to Python format
-        neighbors = []
-        for result in results:
-            vertex = result.item()
-            distance = result.distance()
-            neighbors.append((vertex, float(distance)))
+            # Convert results to Python format - vertices are Java objects
+            neighbors = []
+            for result in results:
+                java_vertex = result.item()
+                distance = result.distance()
+                # Return Java vertex directly (don't wrap)
+                neighbors.append((java_vertex, float(distance)))
 
-        return neighbors
+            return neighbors
+        except Exception as e:
+            print(f"Debug VectorIndex: ERROR in find_nearest: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return []
 
     def add_vertex(self, vertex):
         """
@@ -142,3 +170,237 @@ class VectorIndex:
             self._java_index.remove(vertex_id)
         except Exception as e:
             raise ArcadeDBError(f"Failed to remove vertex from index: {e}") from e
+
+    def get_max_capacity(self):
+        """
+        Get the maximum number of items this index can hold.
+
+        Returns:
+            int: Maximum capacity (max_items parameter from creation)
+
+        Note:
+            This is a HARD LIMIT. Once reached, you must recreate the index
+            with a larger capacity. Use get_stats() to monitor usage.
+        """
+        try:
+            return self._java_index.getMaxItemCount()
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to get max capacity: {e}") from e
+
+    def get_size(self):
+        """
+        Get the current number of items in the index.
+
+        Returns:
+            int: Number of items currently indexed
+
+        Note:
+            This counts vertices in the underlying vertex type that have
+            the vector property. For large indexes, this may be slow.
+            Consider caching if needed.
+        """
+        try:
+            # HNSW persistent index doesn't have a size() method
+            # We need to count via the underlying TypeIndex
+            underlying_index = self._java_index.getUnderlyingIndex()
+
+            # Count entries in the underlying index
+            # The underlying index stores the ID property for each vertex
+            count = 0
+            cursor = underlying_index.iterator(True)
+            while cursor.hasNext():
+                cursor.next()
+                count += 1
+
+            return count
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to get index size: {e}") from e
+
+    def get_stats(self):
+        """
+        Get index statistics including size and capacity.
+
+        Returns:
+            dict: Statistics with keys:
+                - size: Current number of items
+                - max_capacity: Maximum capacity
+                - usage_percent: Percentage of capacity used
+                - remaining: Number of slots remaining
+
+        Example:
+            >>> stats = index.get_stats()
+            >>> print(f"Index is {stats['usage_percent']:.1f}% full")
+            >>> if stats['usage_percent'] > 90:
+            ...     print("⚠️  Index nearly full - "
+            ...           "consider recreating with larger capacity")
+        """
+        try:
+            size = self.get_size()
+            max_capacity = self.get_max_capacity()
+            usage_percent = (size / max_capacity * 100) if max_capacity > 0 else 0
+            remaining = max_capacity - size
+
+            return {
+                "size": size,
+                "max_capacity": max_capacity,
+                "usage_percent": usage_percent,
+                "remaining": remaining,
+            }
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to get index stats: {e}") from e
+
+    def is_full(self):
+        """
+        Check if the index is at capacity.
+
+        Returns:
+            bool: True if index is full, False otherwise
+        """
+        try:
+            return self.get_size() >= self.get_max_capacity()
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to check if index is full: {e}") from e
+
+
+class VectorIndex:
+    """
+    Wrapper for ArcadeDB vector index (JVector-based implementation).
+
+    This is the default and recommended implementation for vector search.
+    It uses JVector (a graph index combining HNSW hierarchy with Vamana/DiskANN
+    algorithms) which provides:
+    - No max_items limit (grows dynamically)
+    - Faster index construction (typically 1000x faster than legacy HNSW)
+    - Automatic indexing of existing records
+    - Concurrent construction support
+
+    Provides a Pythonic interface for creating and searching vector indexes,
+    with native support for NumPy arrays.
+
+    Distance Calculation:
+        The metric used depends on the `distance_function` parameter during index creation:
+
+        1. **EUCLIDEAN** (Default):
+           - Returns **Similarity Score** (Higher is better).
+           - Formula: $1 / (1 + d^2)$ where $d$ is Euclidean distance.
+           - Range: (0.0, 1.0]
+           - 1.0: Identical vectors
+           - ~0.0: Very distant vectors
+
+        2. **COSINE**:
+           - Returns **Normalized Distance** (Lower is better).
+           - Formula: $(1 - \cos(\theta)) / 2$
+           - Range: [0.0, 1.0]
+           - 0.0: Identical vectors (angle 0)
+           - 0.5: Orthogonal vectors (angle 90)
+           - 1.0: Opposite vectors (angle 180)
+
+        3. **DOT_PRODUCT**:
+           - Returns **Negative Dot Product** (Lower is better).
+           - Formula: $- (A \cdot B)$
+           - Range: (-inf, +inf)
+           - Lower values indicate higher similarity (larger positive dot product).
+    """
+
+    def __init__(self, java_index, database):
+        """
+        Initialize VectorIndex wrapper.
+
+        Args:
+            java_index: Java LSMVectorIndex object
+            database: Parent Database object
+        """
+        self._java_index = java_index
+        self._database = database
+
+    def find_nearest(self, query_vector, k=10, use_numpy=True):
+        """
+        Find k nearest neighbors to the query vector.
+
+        Args:
+            query_vector: Query vector as Python list, NumPy array, or array-like
+            k: Number of nearest neighbors to return (default: 10)
+            use_numpy: Return vectors as NumPy arrays if available (default: True)
+
+        Returns:
+            List of tuples: [(vertex, score), ...]
+            where vertex is the Java vertex object (use .get() and .has() methods)
+            and score is the distance or similarity score depending on the metric.
+
+            Note:
+            - **EUCLIDEAN**: Returns similarity (Higher is better).
+            - **COSINE**: Returns distance (Lower is better).
+            - **DOT_PRODUCT**: Returns negative dot product (Lower is better).
+        """
+        try:
+            # Convert query vector to Java float array
+            java_vector = to_java_float_array(query_vector)
+
+            all_results = []
+
+            def process_index(idx):
+                # Check if it's LSMVectorIndex (by class name to avoid imports)
+                if "LSMVectorIndex" in idx.getClass().getName():
+                    # Call findNeighborsFromVector(float[], int)
+                    pairs = idx.findNeighborsFromVector(java_vector, k)
+                    for pair in pairs:
+                        rid = pair.getFirst()
+                        score = pair.getSecond()
+                        # Load record
+                        record = self._database._java_db.lookupByRID(rid, True)
+                        all_results.append((record, float(score)))
+
+            # Handle TypeIndex (wrapper around buckets)
+            if "TypeIndex" in self._java_index.getClass().getName():
+                sub_indexes = self._java_index.getSubIndexes()
+                for sub in sub_indexes:
+                    process_index(sub)
+            else:
+                process_index(self._java_index)
+
+            # Determine sort order based on similarity function
+            # EUCLIDEAN returns similarity (higher is better) -> Descending
+            # COSINE returns distance (lower is better) -> Ascending
+            # DOT_PRODUCT returns negative distance (lower is better) -> Ascending
+            reverse_sort = False
+            try:
+                idx_to_check = None
+                if "LSMVectorIndex" in self._java_index.getClass().getName():
+                    idx_to_check = self._java_index
+                elif "TypeIndex" in self._java_index.getClass().getName():
+                    sub_indexes = self._java_index.getSubIndexes()
+                    if not sub_indexes.isEmpty():
+                        idx_to_check = sub_indexes[0]
+
+                if idx_to_check:
+                    sim_func = str(idx_to_check.getSimilarityFunction())
+                    if sim_func == "EUCLIDEAN":
+                        reverse_sort = True
+            except Exception:
+                # Fallback to default (Ascending) if check fails
+                pass
+
+            # Sort results
+            all_results.sort(key=lambda x: x[1], reverse=reverse_sort)
+
+            return all_results[:k]
+
+        except Exception as e:
+            print(f"Debug VectorIndex: ERROR in find_nearest: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return []
+
+    def get_size(self):
+        """
+        Get the current number of items in the index.
+
+        Returns:
+            int: Number of items currently indexed
+        """
+        try:
+            # Both TypeIndex and LSMVectorIndex support countEntries()
+            return self._java_index.countEntries()
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to get index size: {e}") from e

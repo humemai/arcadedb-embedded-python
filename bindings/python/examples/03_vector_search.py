@@ -47,6 +47,7 @@ HNSW (Hierarchical Navigable Small World) enables logarithmic search time withou
 loading all vectors into memory.
 """
 
+import argparse
 import os
 import shutil
 import time
@@ -54,8 +55,18 @@ import time
 import arcadedb_embedded as arcadedb
 import numpy as np
 
+# Parse command line arguments
+parser = argparse.ArgumentParser(description="Vector Search Example")
+parser.add_argument(
+    "--impl",
+    choices=["default", "legacy"],
+    default="default",
+    help="Vector index implementation: 'default' (JVector) or 'legacy' (HNSW)",
+)
+args = parser.parse_args()
+
 print("=" * 70)
-print("🔍 ArcadeDB Python - Example 03: Vector Search")
+print(f"🔍 ArcadeDB Python - Example 03: Vector Search ({args.impl.upper()})")
 print("=" * 70)
 print()
 print("⚠️  EXPERIMENTAL: Vector search is under active development")
@@ -95,20 +106,20 @@ step_start = time.time()
 with db.transaction():
     # Create vertex type for documents
     # We use VERTEX (not DOCUMENT) so we can potentially create relationships
-    db.command("sql", "CREATE VERTEX TYPE Article")
+    db.schema.create_vertex_type("Article")
 
     # Properties
-    db.command("sql", "CREATE PROPERTY Article.id STRING")
-    db.command("sql", "CREATE PROPERTY Article.title STRING")
-    db.command("sql", "CREATE PROPERTY Article.content STRING")
-    db.command("sql", "CREATE PROPERTY Article.category STRING")
+    db.schema.create_property("Article", "id", "STRING")
+    db.schema.create_property("Article", "title", "STRING")
+    db.schema.create_property("Article", "content", "STRING")
+    db.schema.create_property("Article", "category", "STRING")
 
     # Vector property - MUST be ARRAY_OF_FLOATS for HNSW index
     # In production, this would be 384, 768, or 1536 dimensions
-    db.command("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
+    db.schema.create_property("Article", "embedding", "ARRAY_OF_FLOATS")
 
-    # Index for fast lookups
-    db.command("sql", "CREATE INDEX ON Article (id) UNIQUE")
+    # Index for fast lookups using Schema API
+    db.schema.create_index("Article", ["id"], unique=True)
 
 print("   ✅ Created Article vertex type with embedding property")
 print("   💡 Vector property type: ARRAY_OF_FLOATS (required for HNSW)")
@@ -279,81 +290,106 @@ print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
 print()
 
 # -----------------------------------------------------------------------------
-# Step 4: Create HNSW Vector Index
+# Step 4: Create Vector Index
 # -----------------------------------------------------------------------------
-print("Step 4: Creating HNSW vector index...")
+print(f"Step 4: Creating {args.impl.upper()} vector index...")
 step_start = time.time()
 
-print("   💡 HNSW Parameters:")
+# Determine max_items from document count
+num_articles = db.count_type("Article")
+print(f"   📊 Found {num_articles} articles to index")
+print()
+
+print(f"   💡 {args.impl.upper()} Parameters:")
 print(f"      • dimensions: {EMBEDDING_DIM} (matches embedding size)")
 print("      • distance_function: cosine (best for normalized vectors)")
-print("      • m: 16 (connections per node, higher = more accurate but slower)")
-print("      • ef: 128 (search quality, higher = more accurate)")
-print("      • max_items: 10000 (can index up to 10K documents)")
+print(
+    "      • max_connections: 16 (connections per node, higher = more accurate but slower)"
+)
+print("      • beam_width: 128 (search quality, higher = more accurate)")
+if args.impl == "hnsw":
+    print(f"      • max_items: {num_articles} (set to actual document count)")
 print()
 
 with db.transaction():
-    index = db.create_vector_index(
-        vertex_type="Article",
-        vector_property="embedding",
-        dimensions=EMBEDDING_DIM,
-        id_property="id",
-        distance_function="cosine",  # Options: cosine, euclidean, inner_product
-        m=16,
-        ef=128,
-        ef_construction=128,
-        max_items=10000,
-    )
+    if args.impl == "default":
+        # Create vector index (JVector implementation - recommended)
+        index = db.create_vector_index(
+            vertex_type="Article",
+            vector_property="embedding",
+            dimensions=EMBEDDING_DIM,
+            distance_function="cosine",
+            max_connections=16,
+            beam_width=128,
+        )
+    else:  # legacy
+        # Create legacy HNSW vector index
+        index = db.create_legacy_vector_index(
+            vertex_type="Article",
+            vector_property="embedding",
+            dimensions=EMBEDDING_DIM,
+            max_items=num_articles,
+            id_property="id",
+            distance_function="cosine",  # Options: cosine, euclidean, inner_product
+            m=16,
+            ef=128,
+            ef_construction=128,
+        )
 
-print("   ✅ Created HNSW vector index")
+print(f"   ✅ Created {args.impl.upper()} vector index")
 print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
 print()
 
 # -----------------------------------------------------------------------------
 # Step 5: Populate Vector Index (Batch Indexing)
 # -----------------------------------------------------------------------------
-print("Step 5: Populating vector index with existing documents...")
-print()
-print("   ⚠️  BATCH INDEXING: One-time operation for existing data")
-print()
-print("   💡 Production Best Practices:")
-print("      • INDEX AS YOU INSERT: Call index.add_vertex() during creation")
-print("      • AVOID RE-INDEXING: Batch approach is for initial load only")
-print("      • FILTERING: Build ONE index, use oversampling for filters")
-print("      • PERFORMANCE: ~13ms per document (HNSW graph + disk writes)")
-print()
-print("   📊 What happens during indexing:")
-print("      • HNSW graph built in RAM (algorithm execution)")
-print("      • Edges persisted to disk (~9KB per document)")
-print("      • Vertices updated with graph metadata")
-print("      • All within transaction for consistency")
-print()
+if args.impl == "legacy":
+    print("Step 5: Populating vector index with existing documents...")
+    print()
+    print("   ⚠️  BATCH INDEXING: One-time operation for existing data")
+    print()
+    print("   💡 Production Best Practices:")
+    print("      • INDEX AS YOU INSERT: Call index.add_vertex() during creation")
+    print("      • AVOID RE-INDEXING: Batch approach is for initial load only")
+    print("      • FILTERING: Build ONE index, use oversampling for filters")
+    print("      • PERFORMANCE: ~13ms per document (HNSW graph + disk writes)")
+    print()
+    print("   📊 What happens during indexing:")
+    print("      • HNSW graph built in RAM (algorithm execution)")
+    print("      • Edges persisted to disk (~9KB per document)")
+    print("      • Vertices updated with graph metadata")
+    print("      • All within transaction for consistency")
+    print()
 
-step_start = time.time()
+    step_start = time.time()
 
-# Fetch all documents and add them to the index
-result = db.query("sql", "SELECT FROM Article ORDER BY id")
+    # Fetch all documents and add them to the index
+    result = db.query("sql", "SELECT FROM Article ORDER BY id")
 
-with db.transaction():
-    for record in result:
-        # Get the underlying Java vertex object
-        java_vertex = record._java_result.getElement().get().asVertex()
+    with db.transaction():
+        for record in result:
+            # Get the underlying Java vertex object
+            java_vertex = record._java_result.getElement().get().asVertex()
 
-        # Add to vector index
-        index.add_vertex(java_vertex)
+            # Add to vector index
+            index.add_vertex(java_vertex)
 
-# Count how many we indexed (could also use count() method on result)
-indexed_count = db.count_type("Article")
+    # Count how many we indexed (could also use count() method on result)
+    indexed_count = db.count_type("Article")
 
-print(f"   ✅ Indexed {indexed_count:,} documents in HNSW index")
-print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
-per_doc_time = (time.time() - step_start) / indexed_count * 1000
-print(f"   ⏱️  Per-document indexing time: {per_doc_time:.2f}ms")
-print()
-print("   ⚠️  Note: This step is slow because we're batch-indexing existing data.")
-print("      In production, you'd typically index vectors as you insert them,")
-print("      not re-index the entire dataset.")
-print()
+    print(f"   ✅ Indexed {indexed_count:,} documents in HNSW index")
+    print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
+    per_doc_time = (time.time() - step_start) / indexed_count * 1000
+    print(f"   ⏱️  Per-document indexing time: {per_doc_time:.2f}ms")
+    print()
+    print("   ⚠️  Note: This step is slow because we're batch-indexing existing data.")
+    print("      In production, you'd typically index vectors as you insert them,")
+    print("      not re-index the entire dataset.")
+    print()
+else:
+    print("Step 5: Populating vector index...")
+    print("   💡 LSM index automatically indexes existing records upon creation.")
+    print("   ✅ Indexing handled by ArcadeDB engine.")
 
 # -----------------------------------------------------------------------------
 # Step 6: Perform Semantic Search
@@ -391,7 +427,9 @@ for query_num, cat_num in enumerate(sampled_categories, 1):
 
     # Get all documents to find least similar
     # (HNSW doesn't have a "find_farthest" method, so we get more results)
-    all_results = index.find_nearest(query_embedding, k=NUM_DOCUMENTS)
+    # Note: For LSM, getting ALL documents might be slow or limited by k
+    k_limit = NUM_DOCUMENTS if args.impl == "legacy" else min(NUM_DOCUMENTS, 1000)
+    all_results = index.find_nearest(query_embedding, k=k_limit)
     least_similar = list(all_results)[-5:]  # Last 5 = farthest
 
     print("      Top 5 LEAST similar documents (largest distance):")
@@ -417,358 +455,3 @@ db.close()
 
 print(f"💡 Database preserved at: {db_path}")
 print()
-
-
-"""Below is the output of running this script. We'll revisit it when we have a better
-vector search implementation in ArcadeDB.
-
-python 03_vector_search.py
-======================================================================
-🔍 ArcadeDB Python - Example 03: Vector Search
-======================================================================
-
-⚠️  EXPERIMENTAL: Vector search is under active development
-   This example demonstrates the API but may have known issues.
-   Not recommended for production use yet.
-
-Step 1: Creating database...
-[To redirect Truffle log output to a file use one of the following options:
-* '--log.file=<path>' if the option is passed using a guest language launcher.
-* '-Dpolyglot.log.file=<path>' if the option is passed using the host Java launcher.
-* Configure logging using the polyglot embedding API.]
-[engine] WARNING: The polyglot engine uses a fallback runtime that does not support runtime compilation to native code.
-Execution without runtime compilation will negatively impact the guest application performance.
-The following cause was found: JVMCI is not enabled for this JVM. Enable JVMCI using -XX:+EnableJVMCI.
-For more information see: https://www.graalvm.org/latest/reference-manual/embed-languages/#runtime-optimization-support.
-To disable this warning use the '--engine.WarnInterpreterOnly=false' option or the '-Dpolyglot.engine.WarnInterpreterOnly=false' system property.
-
-2025-10-23 13:01:09.494 WARNI [PaginatedComponentFile] Unable to disable channel close on interrupt: Unable to make field private sun.nio.ch.Interruptible java.nio.channels.spi.AbstractInterruptibleChannel.interruptor accessible: module java.base does not "opens java.nio.channels.spi" to unnamed module @5b8bc155   ✅ Database created at: ./my_test_databases/vector_search_db
-   💡 Using embedded mode - no server needed!
-   ⏱️  Time: 0.657s
-
-Step 2: Creating schema for document embeddings...
-   ✅ Created Article vertex type with embedding property
-   💡 Vector property type: ARRAY_OF_FLOATS (required for HNSW)
-   ⏱️  Time: 0.061s
-
-Step 3: Creating sample documents with mock embeddings...
-
-   💡 Using 384D embeddings (like sentence-transformers)
-   💡 In production, use real models: OpenAI, sentence-transformers, etc.
-
-   💡 Generating 10,000 documents across 100 categories...
-
-   ✅ Generated 100 uniformly distributed category base vectors
-      (Categories maximally separated on unit sphere)
-
-   Inserting documents with embeddings...
-   ✅ Inserted 10,000 documents with 384D embeddings
-   ⏱️  Time: 1.406s
-
-Step 4: Creating HNSW vector index...
-   💡 HNSW Parameters:
-      • dimensions: 384 (matches embedding size)
-      • distance_function: cosine (best for normalized vectors)
-      • m: 16 (connections per node, higher = more accurate but slower)
-      • ef: 128 (search quality, higher = more accurate)
-      • max_items: 10000 (can index up to 10K documents)
-
-   ✅ Created HNSW vector index
-   ⏱️  Time: 0.138s
-
-Step 5: Populating vector index with existing documents...
-
-   ⚠️  BATCH INDEXING: One-time operation for existing data
-
-   💡 Production Best Practices:
-      • INDEX AS YOU INSERT: Call index.add_vertex() during creation
-      • AVOID RE-INDEXING: Batch approach is for initial load only
-      • FILTERING: Build ONE index, use oversampling for filters
-      • PERFORMANCE: ~13ms per document (HNSW graph + disk writes)
-
-   📊 What happens during indexing:
-      • HNSW graph built in RAM (algorithm execution)
-      • Edges persisted to disk (~9KB per document)
-      • Vertices updated with graph metadata
-      • All within transaction for consistency
-
-   ✅ Indexed 10,000 documents in HNSW index
-   ⏱️  Time: 122.899s
-   ⏱️  Per-document indexing time: 12.29ms
-
-   ⚠️  Note: This step is slow because we're batch-indexing existing data.
-      In production, you'd typically index vectors as you insert them,
-      not re-index the entire dataset.
-
-Step 6: Performing semantic similarity searches...
-   Running 10 queries on randomly sampled categories...
-
-   🔍 Query 1: Find documents similar to Category 98
-
-      Top 5 MOST similar documents (smallest distance):
-      1. Category 98: Document 67
-         Category: category_98, Distance: 0.7334
-      2. Category 98: Document 14
-         Category: category_98, Distance: 0.7718
-      3. Category 98: Document 7
-         Category: category_98, Distance: 0.7789
-      4. Category 98: Document 74
-         Category: category_98, Distance: 0.7841
-      5. Category 98: Document 43
-         Category: category_98, Distance: 0.7850
-
-      Top 5 LEAST similar documents (largest distance):
-      1. Category 20: Document 53
-         Category: category_20, Distance: 1.1704
-      2. Category 43: Document 20
-         Category: category_43, Distance: 1.1712
-      3. Category 6: Document 3
-         Category: category_6, Distance: 1.1764
-      4. Category 56: Document 15
-         Category: category_56, Distance: 1.1880
-      5. Category 51: Document 96
-         Category: category_51, Distance: 1.1912
-
-   🔍 Query 2: Find documents similar to Category 43
-
-      Top 5 MOST similar documents (smallest distance):
-      1. Category 43: Document 69
-         Category: category_43, Distance: 0.7506
-      2. Category 43: Document 60
-         Category: category_43, Distance: 0.7778
-      3. Category 43: Document 22
-         Category: category_43, Distance: 0.7924
-      4. Category 43: Document 70
-         Category: category_43, Distance: 0.7929
-      5. Category 43: Document 42
-         Category: category_43, Distance: 0.7986
-
-      Top 5 LEAST similar documents (largest distance):
-      1. Category 36: Document 9
-         Category: category_36, Distance: 1.1680
-      2. Category 97: Document 20
-         Category: category_97, Distance: 1.1736
-      3. Category 27: Document 12
-         Category: category_27, Distance: 1.1739
-      4. Category 32: Document 17
-         Category: category_32, Distance: 1.1760
-      5. Category 16: Document 13
-         Category: category_16, Distance: 1.1773
-
-   🔍 Query 3: Find documents similar to Category 45
-
-      Top 5 MOST similar documents (smallest distance):
-      1. Category 45: Document 89
-         Category: category_45, Distance: 0.7727
-      2. Category 18: Document 10
-         Category: category_18, Distance: 0.8148
-      3. Category 32: Document 76
-         Category: category_32, Distance: 0.8181
-      4. Category 45: Document 1
-         Category: category_45, Distance: 0.8195
-      5. Category 45: Document 55
-         Category: category_45, Distance: 0.8205
-
-      Top 5 LEAST similar documents (largest distance):
-      1. Category 86: Document 20
-         Category: category_86, Distance: 1.1736
-      2. Category 77: Document 50
-         Category: category_77, Distance: 1.1773
-      3. Category 8: Document 70
-         Category: category_8, Distance: 1.1784
-      4. Category 84: Document 89
-         Category: category_84, Distance: 1.1826
-      5. Category 89: Document 34
-         Category: category_89, Distance: 1.1866
-
-   🔍 Query 4: Find documents similar to Category 38
-
-      Top 5 MOST similar documents (smallest distance):
-      1. Category 38: Document 31
-         Category: category_38, Distance: 0.7694
-      2. Category 38: Document 74
-         Category: category_38, Distance: 0.7716
-      3. Category 38: Document 75
-         Category: category_38, Distance: 0.7773
-      4. Category 38: Document 48
-         Category: category_38, Distance: 0.7931
-      5. Category 38: Document 17
-         Category: category_38, Distance: 0.8035
-
-      Top 5 LEAST similar documents (largest distance):
-      1. Category 95: Document 18
-         Category: category_95, Distance: 1.1653
-      2. Category 6: Document 26
-         Category: category_6, Distance: 1.1673
-      3. Category 82: Document 45
-         Category: category_82, Distance: 1.1690
-      4. Category 51: Document 86
-         Category: category_51, Distance: 1.1742
-      5. Category 9: Document 35
-         Category: category_9, Distance: 1.1759
-
-   🔍 Query 5: Find documents similar to Category 16
-
-      Top 5 MOST similar documents (smallest distance):
-      1. Category 16: Document 85
-         Category: category_16, Distance: 0.7961
-      2. Category 77: Document 59
-         Category: category_77, Distance: 0.8135
-      3. Category 16: Document 51
-         Category: category_16, Distance: 0.8144
-      4. Category 16: Document 71
-         Category: category_16, Distance: 0.8203
-      5. Category 16: Document 18
-         Category: category_16, Distance: 0.8225
-
-      Top 5 LEAST similar documents (largest distance):
-      1. Category 15: Document 5
-         Category: category_15, Distance: 1.1636
-      2. Category 15: Document 53
-         Category: category_15, Distance: 1.1658
-      3. Category 56: Document 48
-         Category: category_56, Distance: 1.1718
-      4. Category 31: Document 41
-         Category: category_31, Distance: 1.1840
-      5. Category 59: Document 34
-         Category: category_59, Distance: 1.1967
-
-   🔍 Query 6: Find documents similar to Category 22
-
-      Top 5 MOST similar documents (smallest distance):
-      1. Category 22: Document 35
-         Category: category_22, Distance: 0.7863
-      2. Category 22: Document 27
-         Category: category_22, Distance: 0.7937
-      3. Category 22: Document 18
-         Category: category_22, Distance: 0.8105
-      4. Category 91: Document 18
-         Category: category_91, Distance: 0.8267
-      5. Category 20: Document 8
-         Category: category_20, Distance: 0.8329
-
-      Top 5 LEAST similar documents (largest distance):
-      1. Category 57: Document 65
-         Category: category_57, Distance: 1.1658
-      2. Category 73: Document 78
-         Category: category_73, Distance: 1.1763
-      3. Category 64: Document 2
-         Category: category_64, Distance: 1.1833
-      4. Category 86: Document 28
-         Category: category_86, Distance: 1.1837
-      5. Category 83: Document 44
-         Category: category_83, Distance: 1.1961
-
-   🔍 Query 7: Find documents similar to Category 82
-
-      Top 5 MOST similar documents (smallest distance):
-      1. Category 82: Document 95
-         Category: category_82, Distance: 0.7767
-      2. Category 82: Document 69
-         Category: category_82, Distance: 0.7817
-      3. Category 14: Document 7
-         Category: category_14, Distance: 0.7931
-      4. Category 82: Document 81
-         Category: category_82, Distance: 0.7991
-      5. Category 82: Document 3
-         Category: category_82, Distance: 0.8004
-
-      Top 5 LEAST similar documents (largest distance):
-      1. Category 98: Document 3
-         Category: category_98, Distance: 1.1652
-      2. Category 78: Document 4
-         Category: category_78, Distance: 1.1660
-      3. Category 26: Document 2
-         Category: category_26, Distance: 1.1753
-      4. Category 73: Document 51
-         Category: category_73, Distance: 1.1898
-      5. Category 60: Document 65
-         Category: category_60, Distance: 1.1935
-
-   🔍 Query 8: Find documents similar to Category 76
-
-      Top 5 MOST similar documents (smallest distance):
-      1. Category 76: Document 94
-         Category: category_76, Distance: 0.7519
-      2. Category 76: Document 98
-         Category: category_76, Distance: 0.7728
-      3. Category 76: Document 11
-         Category: category_76, Distance: 0.7806
-      4. Category 76: Document 72
-         Category: category_76, Distance: 0.7810
-      5. Category 76: Document 68
-         Category: category_76, Distance: 0.7858
-
-      Top 5 LEAST similar documents (largest distance):
-      1. Category 58: Document 88
-         Category: category_58, Distance: 1.1704
-      2. Category 37: Document 65
-         Category: category_37, Distance: 1.1719
-      3. Category 45: Document 72
-         Category: category_45, Distance: 1.1737
-      4. Category 70: Document 22
-         Category: category_70, Distance: 1.1946
-      5. Category 28: Document 29
-         Category: category_28, Distance: 1.1956
-
-   🔍 Query 9: Find documents similar to Category 36
-
-      Top 5 MOST similar documents (smallest distance):
-      1. Category 36: Document 14
-         Category: category_36, Distance: 0.7304
-      2. Category 36: Document 88
-         Category: category_36, Distance: 0.7478
-      3. Category 36: Document 78
-         Category: category_36, Distance: 0.7900
-      4. Category 19: Document 25
-         Category: category_19, Distance: 0.7953
-      5. Category 36: Document 65
-         Category: category_36, Distance: 0.8019
-
-      Top 5 LEAST similar documents (largest distance):
-      1. Category 47: Document 15
-         Category: category_47, Distance: 1.1613
-      2. Category 82: Document 83
-         Category: category_82, Distance: 1.1620
-      3. Category 70: Document 6
-         Category: category_70, Distance: 1.1688
-      4. Category 37: Document 37
-         Category: category_37, Distance: 1.1770
-      5. Category 70: Document 55
-         Category: category_70, Distance: 1.1793
-
-   🔍 Query 10: Find documents similar to Category 28
-
-      Top 5 MOST similar documents (smallest distance):
-      1. Category 66: Document 51
-         Category: category_66, Distance: 0.8075
-      2. Category 28: Document 41
-         Category: category_28, Distance: 0.8170
-      3. Category 28: Document 16
-         Category: category_28, Distance: 0.8208
-      4. Category 99: Document 38
-         Category: category_99, Distance: 0.8228
-      5. Category 99: Document 66
-         Category: category_99, Distance: 0.8255
-
-      Top 5 LEAST similar documents (largest distance):
-      1. Category 49: Document 41
-         Category: category_49, Distance: 1.1738
-      2. Category 87: Document 11
-         Category: category_87, Distance: 1.1747
-      3. Category 51: Document 59
-         Category: category_51, Distance: 1.1756
-      4. Category 87: Document 13
-         Category: category_87, Distance: 1.1990
-      5. Category 51: Document 48
-         Category: category_51, Distance: 1.1995
-
-   ⏱️  All queries time: 4.225s
-
-======================================================================
-✅ Vector search example completed successfully!
-======================================================================
-
-💡 Database preserved at: ./my_test_databases/vector_search_db
-
-"""
