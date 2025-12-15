@@ -1,0 +1,120 @@
+name: Deploy MkDocs to GitHub Pages
+
+on:
+  # Deploy docs when a version tag is pushed (e.g., 25.10.1, 25.10.1.post0)
+  # Skip .devN versions (e.g., 25.10.1.dev0)
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+*'
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (e.g., 25.10.1, 25.10.1.post0)'
+        required: true
+      set_latest:
+        description: 'Set as latest version?'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write  # Need write to push to gh-pages branch
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: https://humemai.github.io/arcadedb-embedded-python/
+
+    steps:
+      - name: Check if this is a dev version (skip deployment)
+        if: github.event_name != 'workflow_dispatch'
+        id: check-dev-version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          echo "📦 Tag version: $VERSION"
+
+          # Check if version contains .dev (e.g., 25.10.1.dev0)
+          if [[ "$VERSION" == *.dev* ]]; then
+            echo "⏭️ This is a dev version ($VERSION), skipping docs deployment"
+            echo "is-dev=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ This is a stable/post version ($VERSION), deploying docs"
+            echo "is-dev=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip workflow for dev versions
+        if: github.event_name != 'workflow_dispatch' && steps.check-dev-version.outputs.is-dev == 'true'
+        run: |
+          echo "This is a dev version, exiting gracefully"
+          exit 0
+
+      - name: Checkout repository
+        if: github.event_name == 'workflow_dispatch' || steps.check-dev-version.outputs.is-dev != 'true'
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0  # Full history for mike versioning
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        if: github.event_name == 'workflow_dispatch' || steps.check-dev-version.outputs.is-dev != 'true'
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        if: github.event_name == 'workflow_dispatch' || steps.check-dev-version.outputs.is-dev != 'true'
+        working-directory: bindings/python
+        run: |
+          pip install --upgrade pip
+          pip install mkdocs-material mkdocs-git-revision-date-localized-plugin mike
+
+      - name: Configure Git
+        if: github.event_name == 'workflow_dispatch' || steps.check-dev-version.outputs.is-dev != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Extract version from tag or input
+        if: github.event_name == 'workflow_dispatch' || steps.check-dev-version.outputs.is-dev != 'true'
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            SET_LATEST="${{ github.event.inputs.set_latest }}"
+          else
+            # Extract version from tag (e.g., 25.10.1, 25.10.1.post0)
+            VERSION="${{ github.ref_name }}"
+            SET_LATEST="true"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "set_latest=$SET_LATEST" >> $GITHUB_OUTPUT
+          echo "📦 Deploying documentation version: $VERSION"
+
+      - name: Deploy with mike (set as latest)
+        if: (github.event_name == 'workflow_dispatch' || steps.check-dev-version.outputs.is-dev != 'true') && steps.version.outputs.set_latest == 'true'
+        working-directory: bindings/python
+        run: |
+          mike deploy --push --update-aliases \
+            ${{ steps.version.outputs.version }} latest \
+            --title "${{ steps.version.outputs.version }} (latest)"
+          mike set-default --push latest
+
+      - name: Deploy with mike (not latest)
+        if: (github.event_name == 'workflow_dispatch' || steps.check-dev-version.outputs.is-dev != 'true') && steps.version.outputs.set_latest != 'true'
+        working-directory: bindings/python
+        run: |
+          mike deploy --push \
+            ${{ steps.version.outputs.version }} \
+            --title "${{ steps.version.outputs.version }}"
