@@ -1,0 +1,397 @@
+name: Build and Release Python Packages to PyPI
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+*'  # Matches: 25.10.1, 25.10.1.dev0, 25.10.1.post1, etc.
+
+jobs:
+  # Validate version compatibility between tag and pom.xml
+  validate-version:
+    name: Validate Version Compatibility
+    runs-on: ubuntu-24.04
+    outputs:
+      python-version: ${{ steps.validate.outputs.python-version }}
+      base-version: ${{ steps.validate.outputs.base-version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.11'
+
+      - name: Validate version compatibility
+        id: validate
+        run: |
+          cd bindings/python
+
+          # Get version from git tag
+          TAG_VERSION="${{ github.ref_name }}"
+          echo "📌 Git tag version: $TAG_VERSION"
+
+          # Extract base version from tag (remove .dev0, .post1, etc.)
+          TAG_BASE=$(echo "$TAG_VERSION" | sed -E 's/\.(dev|post|rc|a|b)[0-9]+$//')
+          echo "📌 Tag base version: $TAG_BASE"
+
+          # Get version from pom.xml
+          POM_VERSION=$(python3 extract_version.py --format=docker)
+          echo "📌 pom.xml version: $POM_VERSION"
+
+          # Extract base version from pom.xml (remove -SNAPSHOT, etc.)
+          POM_BASE=$(echo "$POM_VERSION" | sed 's/-SNAPSHOT$//' | sed 's/-RC.*//')
+          echo "📌 pom.xml base version: $POM_BASE"
+
+          # Compare base versions
+          if [ "$TAG_BASE" != "$POM_BASE" ]; then
+            echo "❌ Version mismatch!"
+            echo "   Tag base version: $TAG_BASE"
+            echo "   pom.xml base version: $POM_BASE"
+            echo ""
+            echo "This prevents accidentally releasing the wrong version."
+            echo "For example, tagging 25.9.1.dev0 when pom.xml says 25.10.1-SNAPSHOT"
+            exit 1
+          fi
+
+          echo "✅ Version compatibility check passed!"
+          echo "   Base version: $TAG_BASE"
+          echo "   Full tag version: $TAG_VERSION"
+
+          # Output for later jobs
+          echo "python-version=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "base-version=$TAG_BASE" >> $GITHUB_OUTPUT
+
+  # Run example tests before building (workflow_call)
+  test-examples:
+    name: Run Example Tests
+    needs: validate-version
+    uses: ./.github/workflows/test-python-examples.yml
+    secrets: inherit
+
+  # Run unit tests before building
+  test:
+    name: Run Unit Tests
+    needs: validate-version
+    uses: ./.github/workflows/test-python-bindings.yml
+    secrets: inherit
+
+  # Reuse wheels from test job (no need to rebuild!)
+  prepare-wheels:
+    needs: [validate-version, test, test-examples]
+    name: Prepare Wheels for Release (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform:
+          - linux-amd64
+          - linux-arm64
+          - darwin-amd64
+          - darwin-arm64
+          - windows-amd64
+          - windows-arm64
+
+    steps:
+      - name: Download wheel from test job
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: wheel-${{ matrix.platform }}-test
+          path: dist/
+
+      - name: Verify wheel was downloaded
+        shell: bash
+        run: |
+          echo "📦 Checking for wheel-${{ matrix.platform }}-test..."
+          ls -lh dist/
+          if [ ! -f dist/*.whl ]; then
+            echo "❌ No wheel found for ${{ matrix.platform }}!"
+            exit 1
+          fi
+          echo "✅ Wheel found for ${{ matrix.platform }}"
+
+      - name: Re-upload wheel for release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wheel-${{ matrix.platform }}
+          path: dist/*.whl
+          retention-days: 5
+
+  publish:
+    name: Publish arcadedb-embedded to PyPI (3 platforms)
+    needs: [validate-version, prepare-wheels]
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Don't block GitHub Release if PyPI upload fails (size limit)
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download wheels for main platforms only
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: wheel-*
+          path: wheels-temp/
+          merge-multiple: false  # Keep in separate directories
+
+      - name: Collect wheels for PyPI (3 main platforms)
+        shell: bash
+        run: |
+          mkdir -p dist
+
+          # Only copy wheels for the 3 most common platforms (~90% of developers)
+          # Skipped platforms (available via GitHub Releases):
+          #   - darwin-amd64 (~3-5%): Intel Macs can use darwin-arm64 via Rosetta 2
+          #   - linux-arm64 (~5-8%): Raspberry Pi, AWS Graviton
+          #   - windows-arm64 (~1-2%): Surface Pro X
+
+          echo "📦 Collecting wheels for PyPI (main platforms only)..."
+
+          # Copy main platform wheels
+          for platform in linux-amd64 darwin-arm64 windows-amd64; do
+            if [ -d "wheels-temp/wheel-$platform" ]; then
+              cp wheels-temp/wheel-$platform/*.whl dist/ 2>/dev/null || true
+              echo "  ✅ $platform"
+            else
+              echo "  ⚠️  $platform not found"
+            fi
+          done
+
+          echo ""
+          echo "📦 Wheels for PyPI:"
+          ls -lh dist/
+
+      - name: Verify wheels
+        run: |
+          ls -lh dist/
+          echo "📦 Wheels for PyPI (3 main platforms):"
+          ls dist/*.whl
+
+          # Count wheels (should be 3: linux-amd64, darwin-arm64, windows-amd64)
+          WHEEL_COUNT=$(ls dist/*.whl | wc -l)
+          echo "📊 Wheel count: $WHEEL_COUNT (expected: 3)"
+
+          echo ""
+          echo "ℹ️  Platforms not on PyPI (available via GitHub Releases):"
+          echo "   - darwin-amd64 (~3-5%): Intel Macs can use darwin-arm64 via Rosetta 2"
+          echo "   - linux-arm64 (~5-8%): Raspberry Pi, AWS Graviton"
+          echo "   - windows-arm64 (~1-2%): Surface Pro X"
+          echo ""
+          echo "   Coverage: ~90% of developers with these 3 platforms"
+
+          if [ "$WHEEL_COUNT" -ne 3 ]; then
+            echo "❌ Expected 3 wheels (3 main platforms), got $WHEEL_COUNT"
+            exit 1
+          fi
+
+          # Show checksums to verify wheels are different
+          echo ""
+          echo "🔐 Wheel checksums (SHA256):"
+          sha256sum dist/*.whl
+
+          # Report wheel sizes with actual component breakdown
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Built Wheels" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Wheel Size | JRE Size | JARs Size | Installed Size | SHA256 (first 8 chars) |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------------|----------|-----------|----------------|------------------------|" >> $GITHUB_STEP_SUMMARY
+
+          for WHEEL_FILE in dist/*.whl; do
+            WHEEL_NAME=$(basename "$WHEEL_FILE")
+            WHEEL_SIZE_BYTES=$(stat -c%s "$WHEEL_FILE")
+            WHEEL_SIZE_MB=$(echo "scale=1; $WHEEL_SIZE_BYTES / 1024 / 1024" | bc)
+
+            # Extract platform from filename
+            if [[ "$WHEEL_NAME" == *"manylinux"*"x86_64"* ]]; then
+              PLATFORM="linux/amd64"
+            elif [[ "$WHEEL_NAME" == *"macosx"*"x86_64"* ]]; then
+              PLATFORM="darwin/amd64"
+            elif [[ "$WHEEL_NAME" == *"macosx"*"arm64"* ]]; then
+              PLATFORM="darwin/arm64"
+            elif [[ "$WHEEL_NAME" == *"win_amd64"* ]]; then
+              PLATFORM="windows/amd64"
+            else
+              PLATFORM="unknown"
+            fi
+
+            # Analyze wheel contents
+            TEMP_DIR=$(mktemp -d)
+            unzip -q "$WHEEL_FILE" -d "$TEMP_DIR"
+
+            # Calculate component sizes (find jre directory anywhere)
+            JRE_DIR=$(find "$TEMP_DIR" -type d -name "jre" | head -n1)
+            if [ -n "$JRE_DIR" ] && [ -d "$JRE_DIR" ]; then
+              JRE_SIZE_BYTES=$(du -sb "$JRE_DIR" | cut -f1)
+              JRE_SIZE_MB=$(echo "scale=1; $JRE_SIZE_BYTES / 1024 / 1024" | bc)
+            else
+              JRE_SIZE_MB="N/A"
+            fi
+
+            JAR_SIZE_BYTES=$(find "$TEMP_DIR" -name "*.jar" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
+            if [ -n "$JAR_SIZE_BYTES" ] && [ "$JAR_SIZE_BYTES" != "0" ]; then
+              JAR_SIZE_MB=$(echo "scale=1; $JAR_SIZE_BYTES / 1024 / 1024" | bc)
+            else
+              JAR_SIZE_MB="N/A"
+            fi
+
+            INSTALLED_SIZE_BYTES=$(du -sb "$TEMP_DIR" | cut -f1)
+            INSTALLED_SIZE_MB=$(echo "scale=0; $INSTALLED_SIZE_BYTES / 1024 / 1024" | bc)
+
+            # Calculate SHA256 checksum
+            CHECKSUM=$(sha256sum "$WHEEL_FILE" | cut -d' ' -f1 | cut -c1-8)
+
+            rm -rf "$TEMP_DIR"
+
+            echo "| $PLATFORM | ${WHEEL_SIZE_MB}M | ${JRE_SIZE_MB}M | ${JAR_SIZE_MB}M | ~${INSTALLED_SIZE_MB}M | \`$CHECKSUM\` |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note**: Sizes are uncompressed except for Wheel Size (compressed)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Verify wheel versions
+        run: |
+          for WHEEL_FILE in dist/*.whl; do
+            echo "📦 Checking: $WHEEL_FILE"
+            # Extract version from wheel filename
+            WHEEL_VERSION=$(echo "$WHEEL_FILE" | grep -oP '\d+\.\d+\.\d+(\.(dev|post|rc|a|b)\d+)?')
+            echo "   Version: $WHEEL_VERSION"
+
+            if [ "$WHEEL_VERSION" != "${{ needs.validate-version.outputs.python-version }}" ]; then
+              echo "❌ Wheel version mismatch in $WHEEL_FILE!"
+              exit 1
+            fi
+          done
+          echo "✅ All wheel versions match tag version"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
+
+  github-release:
+    name: Create GitHub Release (All 6 platforms)
+    needs: [validate-version, prepare-wheels]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all wheels (all 6 platforms)
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: wheel-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191 # v2.0.8
+        with:
+          files: dist/*.whl
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'dev') || contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+          body: |
+            ## 🎮 ArcadeDB Embedded Python Bindings v${{ needs.validate-version.outputs.python-version }}
+
+            ### 📦 Installation
+
+            **Recommended (PyPI - 3 main platforms):**
+            ```bash
+            pip install arcadedb-embedded==${{ needs.validate-version.outputs.python-version }}
+            ```
+
+            **Alternative (GitHub - all 6 platforms):**
+            ```bash
+            # For platforms not on PyPI (see below)
+            pip install https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/arcadedb_embedded-${{ needs.validate-version.outputs.python-version }}-py3-none-<platform>.whl
+            ```
+
+            ### 🌍 Supported Platforms
+
+            **Available on PyPI** (~90% of developers):
+            - ✅ **Linux x86_64** (servers, CI/CD, Docker, cloud)
+            - ✅ **macOS Apple Silicon** (M1/M2/M3/M4, also works on Intel Macs via Rosetta 2)
+            - ✅ **Windows x64** (most Windows users)
+
+            **Available via GitHub Releases only** (~10% of developers):
+            - ⬇️ **macOS Intel** (2019-2020 Macs) - *Can use Apple Silicon wheel via Rosetta 2*
+            - ⬇️ **Linux ARM64** (Raspberry Pi, AWS Graviton)
+            - ⬇️ **Windows ARM64** (Surface Pro X)
+
+            ### 📚 Links
+            - [PyPI Package](https://pypi.org/project/arcadedb-embedded/${{ needs.validate-version.outputs.python-version }}/)
+            - [Documentation](https://github.com/${{ github.repository }})
+            - [Examples](https://github.com/${{ github.repository }}/tree/main/bindings/python/examples)
+
+            ### 🔽 Direct Downloads
+            All 6 platform-specific wheels are attached below. Most users should install via pip (auto-selects correct wheel).
+
+            ---
+            **Note**: PyPI distribution limited to 3 main platforms to reduce storage (~50% savings). All platforms available here.
+
+            **Intel Mac users**: Use the Apple Silicon wheel (works via Rosetta 2) or download the native Intel wheel below for maximum performance.
+
+            **Based on ArcadeDB v${{ needs.validate-version.outputs.base-version }}**
+
+  update-pypi-index:
+    name: Update PyPI simple index on GitHub Pages (All 6 platforms)
+    needs: [validate-version, github-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Generate PyPI simple index
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate-version.outputs.python-version }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Create simple index directory structure
+          mkdir -p simple/arcadedb-embedded
+
+          # Generate index.html header
+          cat > simple/arcadedb-embedded/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>Links for arcadedb-embedded</title>
+              <meta name="pypi:repository-version" content="1.0">
+            </head>
+            <body>
+              <h1>Links for arcadedb-embedded</h1>
+              <p><strong>Alternative PyPI index with all 6 platforms</strong> (official PyPI only has 3 main platforms)</p>
+              <p>Usage: <code>pip install --extra-index-url https://humemai.github.io/arcadedb-embedded-python/simple arcadedb-embedded</code></p>
+              <p><em>Note: Intel Mac users can use the Apple Silicon wheel via Rosetta 2, or download the native Intel wheel for best performance.</em></p>
+              <hr/>
+          EOF
+
+          # Get all releases and add wheel links (all 6 platforms from GitHub)
+          echo "📋 Fetching all releases..."
+          gh release list --limit 100 --json tagName | jq -r '.[].tagName' | while read -r tag; do
+            echo "  Processing release: $tag"
+            # Get wheel assets for this release
+            gh release view "$tag" --json assets --jq '.assets[] | select(.name | endswith(".whl")) | .name' | while read -r wheel; do
+              echo "<a href=\"https://github.com/${{ github.repository }}/releases/download/$tag/$wheel\">$wheel</a><br/>" >> simple/arcadedb-embedded/index.html
+            done
+          done
+
+          # Close HTML
+          cat >> simple/arcadedb-embedded/index.html <<'EOF'
+            </body>
+          </html>
+          EOF
+
+          echo "✅ Generated PyPI simple index:"
+          cat simple/arcadedb-embedded/index.html
+
+      - name: Commit and push index
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add simple/
+          git commit -m "Update PyPI simple index for v${{ needs.validate-version.outputs.python-version }}" || echo "No changes to commit"
+          git push

@@ -20,7 +20,7 @@ def test_database_operations(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create a document type
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE TestDoc")
+            db.schema.create_document_type("TestDoc")
 
         # Insert data
         with db.transaction():
@@ -49,18 +49,18 @@ def test_rich_data_types(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create document type with rich data types
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Task")
+            db.schema.create_document_type("Task")
 
             # Define properties with various ArcadeDB data types
-            db.command("sql", "CREATE PROPERTY Task.title STRING")
-            db.command("sql", "CREATE PROPERTY Task.priority STRING")
-            db.command("sql", "CREATE PROPERTY Task.completed BOOLEAN")
-            db.command("sql", "CREATE PROPERTY Task.created_date DATE")
-            db.command("sql", "CREATE PROPERTY Task.due_datetime DATETIME")
-            db.command("sql", "CREATE PROPERTY Task.estimated_hours FLOAT")
-            db.command("sql", "CREATE PROPERTY Task.priority_score INTEGER")
-            db.command("sql", "CREATE PROPERTY Task.cost DECIMAL")
-            db.command("sql", "CREATE PROPERTY Task.task_id STRING")  # UUID as string
+            db.schema.create_property("Task", "title", "STRING")
+            db.schema.create_property("Task", "priority", "STRING")
+            db.schema.create_property("Task", "completed", "BOOLEAN")
+            db.schema.create_property("Task", "created_date", "DATE")
+            db.schema.create_property("Task", "due_datetime", "DATETIME")
+            db.schema.create_property("Task", "estimated_hours", "FLOAT")
+            db.schema.create_property("Task", "priority_score", "INTEGER")
+            db.schema.create_property("Task", "cost", "DECIMAL")
+            db.schema.create_property("Task", "task_id", "STRING")  # UUID as string
 
         # Insert sample data showcasing various data types
         with db.transaction():
@@ -162,7 +162,7 @@ def test_arcadedb_sql_features(temp_db_path):
     """
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE TestEntity")
+            db.schema.create_document_type("TestEntity")
 
         # Test built-in SQL functions
         with db.transaction():
@@ -219,7 +219,7 @@ def test_arcadedb_sql_features(temp_db_path):
 def test_transactions(temp_db_path):
     """Test transaction support."""
     with arcadedb.create_database(temp_db_path) as db:
-        db.command("sql", "CREATE DOCUMENT TYPE TransactionTest")
+        db.schema.create_document_type("TransactionTest")
 
         # Test successful transaction
         with db.transaction():
@@ -250,8 +250,8 @@ def test_graph_operations(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph schema
         with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE Person")
-            db.command("sql", "CREATE EDGE TYPE Knows")
+            db.schema.create_vertex_type("Person")
+            db.schema.create_edge_type("Knows")
 
         # Create vertices using Java API
         with db.transaction():
@@ -305,7 +305,7 @@ def test_result_methods(temp_db_path):
     """Test Result object methods."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE ResultTest")
+            db.schema.create_document_type("ResultTest")
             db.command(
                 "sql",
                 """
@@ -347,8 +347,8 @@ def test_cypher_queries(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph schema
         with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE Person")
-            db.command("sql", "CREATE EDGE TYPE FRIEND_OF")
+            db.schema.create_vertex_type("Person")
+            db.schema.create_edge_type("FRIEND_OF")
 
         # Insert data using Cypher (if available)
         try:
@@ -371,161 +371,11 @@ def test_cypher_queries(temp_db_path):
             raise
 
 
-def test_vector_search(temp_db_path):
-    """Test vector embeddings with HNSW similarity search.
-
-    This test creates an HNSW vector index using the simplified Python API
-    to enable nearest-neighbor similarity search on vector embeddings.
-    Works with NumPy arrays (preferred) or plain Python lists.
-    """
-    # Try to use NumPy if available
-    try:
-        import numpy as np
-
-        use_numpy = True
-    except ImportError:
-        use_numpy = False
-
-    with arcadedb.create_database(temp_db_path) as db:
-        # Create vertex type for vector embeddings
-        with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE EmbeddingNode")
-            db.command("sql", "CREATE PROPERTY EmbeddingNode.name STRING")
-            # Use ARRAY_OF_FLOATS for vector property (required for HNSW)
-            db.command("sql", "CREATE PROPERTY EmbeddingNode.vector ARRAY_OF_FLOATS")
-            # Create unique index on name for lookups
-            db.command("sql", "CREATE INDEX ON EmbeddingNode (name) UNIQUE")
-
-        # Insert sample word embeddings (4-dimensional for simplicity)
-        # In reality, embeddings would be 300-1536 dimensions
-        if use_numpy:
-            embeddings = [
-                ("king", np.array([0.5, 0.3, 0.1, 0.2])),
-                ("queen", np.array([0.52, 0.32, 0.08, 0.18])),  # Similar to king
-                ("man", np.array([0.48, 0.25, 0.15, 0.22])),
-                ("woman", np.array([0.50, 0.28, 0.12, 0.20])),
-                ("cat", np.array([0.1, 0.8, 0.6, 0.3])),  # Different cluster
-                ("dog", np.array([0.12, 0.82, 0.58, 0.32])),  # Similar to cat
-            ]
-        else:
-            embeddings = [
-                ("king", [0.5, 0.3, 0.1, 0.2]),
-                ("queen", [0.52, 0.32, 0.08, 0.18]),  # Similar to king
-                ("man", [0.48, 0.25, 0.15, 0.22]),
-                ("woman", [0.50, 0.28, 0.12, 0.20]),
-                ("cat", [0.1, 0.8, 0.6, 0.3]),  # Different cluster
-                ("dog", [0.12, 0.82, 0.58, 0.32]),  # Similar to cat
-            ]
-
-        with db.transaction():
-            for name, vector in embeddings:
-                # Use the helper function to convert to Java array
-                java_vector = arcadedb.to_java_float_array(vector)
-
-                # Create vertex with Java array as vector property
-                java_db = db._java_db
-                vertex = java_db.newVertex("EmbeddingNode")
-                vertex.set("name", name)
-                vertex.set("vector", java_vector)
-                vertex.save()
-
-        # Test 1: Verify we can query and retrieve stored vectors
-        result = db.query("sql", "SELECT FROM EmbeddingNode WHERE name = 'king'")
-        records = list(result)
-        assert len(records) == 1
-
-        king_node = records[0]
-        assert king_node.has_property("vector")
-        assert king_node.has_property("name")
-        assert king_node.get_property("name") == "king"
-
-        vector = king_node.get_property("vector")
-        # Convert to Python/NumPy array
-        vector = arcadedb.to_python_array(vector, use_numpy=use_numpy)
-
-        if use_numpy:
-            assert isinstance(vector, np.ndarray)
-            assert vector.shape == (4,)
-        else:
-            assert isinstance(vector, list)
-            assert len(vector) == 4
-
-        assert abs(vector[0] - 0.5) < 0.01  # Verify first component
-
-        # Test 2: Create HNSW vector index using simplified API
-        print("\nCreating HNSW vector index...")
-
-        # Create index with simplified API
-        with db.transaction():
-            index = db.create_vector_index(
-                vertex_type="EmbeddingNode",
-                vector_property="vector",
-                dimensions=4,
-                id_property="name",  # Use name as ID
-                distance_function="cosine",
-                m=16,
-                ef=128,
-                max_items=1000,
-            )
-
-        print("  ✓ Created vector index")
-
-        # Index existing vertices
-        print("  Indexing existing vertices...")
-        result = db.query("sql", "SELECT FROM EmbeddingNode")
-        indexed_count = 0
-
-        with db.transaction():
-            for record in result:
-                vertex = record._java_result.getElement().get().asVertex()
-                index.add_vertex(vertex)
-                indexed_count += 1
-
-        print(f"  ✓ Indexed {indexed_count} vertices")
-
-        # Test 3: Perform similarity search with NumPy/list arrays
-        print("\nTesting nearest-neighbor similarity search...")
-
-        # Search for neighbors of "king" - should find "queen", "man", "woman"
-        if use_numpy:
-            king_vector = np.array([0.5, 0.3, 0.1, 0.2])
-        else:
-            king_vector = [0.5, 0.3, 0.1, 0.2]
-
-        neighbors = index.find_nearest(king_vector, k=3)
-
-        # Extract names from results
-        neighbor_names = [str(vertex.get("name")) for vertex, distance in neighbors]
-
-        print(f"  3 nearest neighbors to 'king': {neighbor_names}")
-        assert "queen" in neighbor_names, "Expected 'queen' to be near 'king'"
-        assert "man" in neighbor_names or "woman" in neighbor_names
-        assert "cat" not in neighbor_names, "'cat' should be in different cluster"
-        assert "dog" not in neighbor_names, "'dog' should be in different cluster"
-        print("  ✓ Similarity search returns correct neighbors!")
-
-        # Search for neighbors of "cat" - should find "dog"
-        if use_numpy:
-            cat_vector = np.array([0.1, 0.8, 0.6, 0.3])
-        else:
-            cat_vector = [0.1, 0.8, 0.6, 0.3]
-
-        neighbors = index.find_nearest(cat_vector, k=2)
-        neighbor_names = [str(vertex.get("name")) for vertex, distance in neighbors]
-
-        print(f"  2 nearest neighbors to 'cat': {neighbor_names}")
-        assert "dog" in neighbor_names, "Expected 'dog' to be near 'cat'"
-        assert "king" not in neighbor_names, "'king' should be in different cluster"
-        print("  ✓ Different cluster correctly separated!")
-
-        print("\n✓ HNSW vector index fully functional with NumPy support!")
-
-
 def test_unicode_support(temp_db_path):
     """Test Unicode and international character support."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE User")
+            db.schema.create_document_type("User")
             # Test various Unicode: Spanish, Chinese, Japanese, Arabic, Emoji
             db.command(
                 "sql",
@@ -584,16 +434,16 @@ def test_schema_queries(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create schema with various property types
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Person")
-            db.command("sql", "CREATE PROPERTY Person.name STRING")
-            db.command("sql", "CREATE PROPERTY Person.age INTEGER")
-            db.command("sql", "CREATE PROPERTY Person.email STRING")
-            db.command("sql", "CREATE INDEX ON Person (email) UNIQUE")
+            db.schema.create_document_type("Person")
+            db.schema.create_property("Person", "name", "STRING")
+            db.schema.create_property("Person", "age", "INTEGER")
+            db.schema.create_property("Person", "email", "STRING")
+            db.schema.create_index("Person", ["email"], unique=True)
 
-            db.command("sql", "CREATE VERTEX TYPE Company")
-            db.command("sql", "CREATE PROPERTY Company.name STRING")
+            db.schema.create_vertex_type("Company")
+            db.schema.create_property("Company", "name", "STRING")
 
-            db.command("sql", "CREATE EDGE TYPE WorksFor")
+            db.schema.create_edge_type("WorksFor")
 
         # Query schema:types to get type information
         result = db.query("sql", "SELECT FROM schema:types WHERE name = 'Person'")
@@ -629,7 +479,7 @@ def test_large_result_set_handling(temp_db_path):
     """Test handling large result sets efficiently."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE LargeData")
+            db.schema.create_document_type("LargeData")
             # Insert 1000 records
             for i in range(1000):
                 db.command(
@@ -671,7 +521,7 @@ def test_property_type_conversions(temp_db_path):
     """Test that property types are correctly converted between Python/Java."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE TypeTest")
+            db.schema.create_document_type("TypeTest")
             db.command(
                 "sql",
                 """
@@ -727,9 +577,9 @@ def test_complex_graph_traversal(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create social network graph
         with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE Person")
-            db.command("sql", "CREATE EDGE TYPE Follows")
-            db.command("sql", "CREATE EDGE TYPE Likes")
+            db.schema.create_vertex_type("Person")
+            db.schema.create_edge_type("Follows")
+            db.schema.create_edge_type("Likes")
 
         # Create vertices using Java API
         with db.transaction():

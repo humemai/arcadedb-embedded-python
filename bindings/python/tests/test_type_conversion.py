@@ -12,7 +12,7 @@ def test_basic_type_conversion(temp_db_path):
     """Test basic type conversion for common data types."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE TypeTest")
+            db.schema.create_document_type("TypeTest")
             db.command(
                 "sql",
                 """
@@ -64,8 +64,8 @@ def test_decimal_conversion(temp_db_path):
     """Test BigDecimal to Python Decimal conversion."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE DecimalTest")
-            db.command("sql", "CREATE PROPERTY DecimalTest.price DECIMAL")
+            db.schema.create_document_type("DecimalTest")
+            db.schema.create_property("DecimalTest", "price", "DECIMAL")
             db.command("sql", "INSERT INTO DecimalTest SET price = 99.95")
 
         result = db.query("sql", "SELECT FROM DecimalTest")
@@ -81,9 +81,9 @@ def test_date_conversion(temp_db_path):
     """Test Java Date/LocalDate to Python datetime/date conversion."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE DateTest")
-            db.command("sql", "CREATE PROPERTY DateTest.created_date DATE")
-            db.command("sql", "CREATE PROPERTY DateTest.created_datetime DATETIME")
+            db.schema.create_document_type("DateTest")
+            db.schema.create_property("DateTest", "created_date", "DATE")
+            db.schema.create_property("DateTest", "created_datetime", "DATETIME")
             db.command(
                 "sql",
                 """
@@ -112,7 +112,7 @@ def test_collection_conversion(temp_db_path):
     """Test Java collections (List, Set, Map) to Python conversion."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE CollectionTest")
+            db.schema.create_document_type("CollectionTest")
             db.command(
                 "sql",
                 """
@@ -149,7 +149,7 @@ def test_nested_collection_conversion(temp_db_path):
     """Test conversion of nested collections."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE NestedTest")
+            db.schema.create_document_type("NestedTest")
             db.command(
                 "sql",
                 """
@@ -192,7 +192,7 @@ def test_property_names(temp_db_path):
     """Test the property_names property."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE PropsTest")
+            db.schema.create_document_type("PropsTest")
             db.command(
                 "sql",
                 """
@@ -220,7 +220,7 @@ def test_to_dict_conversion(temp_db_path):
     """Test Result.to_dict() method."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE DictTest")
+            db.schema.create_document_type("DictTest")
             db.command(
                 "sql",
                 """
@@ -255,7 +255,7 @@ def test_to_json_conversion(temp_db_path):
     """Test Result.to_json() method."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE JsonTest")
+            db.schema.create_document_type("JsonTest")
             db.command(
                 "sql",
                 """
@@ -281,7 +281,7 @@ def test_python_to_java_conversion(temp_db_path):
     """Test converting Python types to Java when setting properties."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE PyToJavaTest")
+            db.schema.create_document_type("PyToJavaTest")
 
         with db.transaction():
             doc = db.new_document("PyToJavaTest")
@@ -324,9 +324,9 @@ def test_array_conversion(temp_db_path):
     """Test Java list to Python list conversion."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE ArrayTest")
-            db.command("sql", "CREATE PROPERTY ArrayTest.numbers LIST")
-            db.command("sql", "CREATE PROPERTY ArrayTest.names LIST")
+            db.schema.create_document_type("ArrayTest")
+            db.schema.create_property("ArrayTest", "numbers", "LIST")
+            db.schema.create_property("ArrayTest", "names", "LIST")
 
         with db.transaction():
             doc = db.new_document("ArrayTest")

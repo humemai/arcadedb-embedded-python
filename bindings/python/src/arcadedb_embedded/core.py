@@ -4,7 +4,7 @@ ArcadeDB Python Bindings - Core Database Classes
 Database and DatabaseFactory classes for embedded database access.
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .exceptions import ArcadeDBError
 from .jvm import start_jvm
@@ -138,22 +138,26 @@ class Database:
         except Exception as e:
             raise ArcadeDBError(f"Failed to get database path: {e}") from e
 
-    def create_vector_index(
+    def create_legacy_vector_index(
         self,
         vertex_type: str,
         vector_property: str,
         dimensions: int,
+        max_items: int,
         id_property: str = "id",
         edge_type: str = "VectorProximity",
         deleted_property: str = "deleted",
         distance_function: str = "cosine",
         m: int = 16,
         ef: int = 128,
-        ef_construction: int = 128,
-        max_items: int = 10000,
-    ) -> VectorIndex:
+        ef_construction: int = 200,
+    ) -> "LegacyVectorIndex":
         """
-        Create an HNSW vector index for similarity search.
+        Create an HNSW vector index for similarity search (legacy implementation).
+
+        Note: This is the legacy implementation using hnswlib. For new code,
+        use create_vector_index() which uses JVector and is typically 1000x faster
+        with no max_items limit.
 
         This is a high-level convenience method that handles the complex
         Java API for creating HNSW indexes.
@@ -162,6 +166,11 @@ class Database:
             vertex_type: Name of the vertex type containing vectors
             vector_property: Name of the property storing vector arrays
             dimensions: Dimensionality of the vectors
+            max_items: Maximum number of items the index can hold (required).
+                       The index pre-allocates memory based on this value.
+                       If you try to add more items, a SizeLimitExceededException
+                       is raised. Set this to your expected dataset size (e.g.,
+                       use db.count_type(vertex_type) or len(your_data)).
             id_property: Property to use as unique ID (default: "id")
             edge_type: Edge type for proximity graph (default: "VectorProximity")
             deleted_property: Property marking deleted items (default: "deleted")
@@ -172,21 +181,33 @@ class Database:
             ef: HNSW ef parameter - size of dynamic candidate list for search
                 (default: 128)
             ef_construction: Size of dynamic candidate list during construction
-                             (default: 128)
-            max_items: Maximum number of items in the index (default: 10000)
+                             (default: 200)
 
         Returns:
-            VectorIndex object for performing similarity searches
+            LegacyVectorIndex object for performing similarity searches
+
+        Note:
+            For new projects, use create_vector_index() instead which uses
+            JVector and doesn't require max_items.
 
         Example:
             >>> import numpy as np
+            >>> # Create schema
             >>> with db.transaction():
             ...     db.command("sql", "CREATE VERTEX TYPE Doc")
             ...     db.command("sql",
             ...                "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
             ...     db.command("sql", "CREATE PROPERTY Doc.id STRING")
             ...
-            >>> index = db.create_vector_index("Doc", "embedding", dimensions=384)
+            >>> # Determine max_items from your dataset
+            >>> num_docs = len(embeddings)  # or db.count_type("Doc")
+            >>>
+            >>> # Create legacy index with correct max_items
+            >>> index = db.create_legacy_vector_index(
+            ...     "Doc", "embedding",
+            ...     dimensions=384,
+            ...     max_items=num_docs
+            ... )
             >>>
             >>> # Add vectors (as NumPy arrays or Python lists)
             >>> with db.transaction():
@@ -224,6 +245,9 @@ class Database:
         distance_func = distance_funcs[distance_function]
 
         try:
+            # Ensure max_items is a proper Python int (JPype will convert to Java int)
+            max_items = int(max_items)
+
             # Build HNSW RAM index
             builder = HnswVectorIndexRAM.newBuilder(
                 dimensions, distance_func, max_items
@@ -249,8 +273,78 @@ class Database:
             # Create the index
             java_index = persistent_builder.create()
 
-            return VectorIndex(java_index, self)
+            from .vector import LegacyVectorIndex
 
+            return LegacyVectorIndex(java_index, self)
+
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to create vector index: {e}") from e
+
+    def create_vector_index(
+        self,
+        vertex_type: str,
+        vector_property: str,
+        dimensions: int,
+        distance_function: str = "cosine",
+        max_connections: int = 16,
+        beam_width: int = 128,
+    ) -> "VectorIndex":
+        """
+        Create a vector index for similarity search (default JVector implementation).
+
+        This uses JVector (graph index combining HNSW hierarchy with Vamana/DiskANN)
+        which is more efficient than the legacy HNSW implementation:
+        - No max_items limit (grows dynamically)
+        - Typically 1000x faster index construction
+        - Automatic indexing of existing records
+        - Concurrent construction support
+
+        For the legacy HNSW implementation, use create_legacy_vector_index().
+
+        Args:
+            vertex_type: Name of the vertex type
+            vector_property: Name of the property containing vectors
+            dimensions: Vector dimensionality (e.g., 768 for BERT)
+            distance_function: "cosine", "euclidean", or "inner_product"
+            max_connections: Max connections per node (default: 16).
+                             Maps to `maxConnections` in JVector.
+            beam_width: Beam width for search/construction (default: 128).
+                        Maps to `beamWidth` in JVector.
+
+        Returns:
+            VectorIndex object
+        """
+        self._check_not_closed()
+        from .schema import IndexType
+
+        # Create the index using the Java Builder API directly to pass configuration
+        try:
+            import jpype
+
+            java_schema = self.schema._java_schema
+
+            # Convert property names to Java array
+            java_props = jpype.JArray(jpype.JString)([vector_property])
+
+            # Build the index
+            builder = java_schema.buildTypeIndex(vertex_type, java_props)
+
+            # Set type to LSM_VECTOR (this returns TypeLSMVectorIndexBuilder)
+            INDEX_TYPE = jpype.JPackage("com").arcadedb.schema.Schema.INDEX_TYPE
+            builder = builder.withType(INDEX_TYPE.LSM_VECTOR)
+
+            # Configure
+            builder.withDimensions(dimensions)
+            builder.withSimilarity(distance_function)
+            builder.withMaxConnections(max_connections)
+            builder.withBeamWidth(beam_width)
+
+            # Create
+            java_index = builder.create()
+
+            from .vector import VectorIndex
+
+            return VectorIndex(java_index, self)
         except Exception as e:
             raise ArcadeDBError(f"Failed to create vector index: {e}") from e
 
@@ -312,6 +406,90 @@ class Database:
         except Exception as e:
             raise ArcadeDBError(f"Failed to check transaction status: {e}") from e
 
+    def set_wal_flush(self, mode: str):
+        """
+        Configure Write-Ahead Log (WAL) flush strategy.
+
+        Controls how aggressively changes are flushed to disk. This affects the
+        durability/performance trade-off for transactions.
+
+        Args:
+            mode: WAL flush mode, one of:
+                - 'no': No flush, maximum performance (default)
+                - 'yes_nometadata': Flush data but not metadata
+                - 'yes_full': Flush everything, maximum durability
+
+        Raises:
+            ValueError: If mode is not valid
+
+        Example:
+            >>> db.set_wal_flush('yes_full')  # Maximum durability
+            >>> db.set_wal_flush('no')  # Maximum performance
+        """
+        self._check_not_closed()
+        import jpype
+
+        valid_modes = {
+            "no": "NO",
+            "yes_nometadata": "YES_NOMETADATA",
+            "yes_full": "YES_FULL",
+        }
+        if mode not in valid_modes:
+            raise ValueError(
+                f"Invalid WAL flush mode: {mode}. "
+                f"Must be one of: {list(valid_modes.keys())}"
+            )
+
+        try:
+            WALFile = jpype.JPackage("com").arcadedb.engine.WALFile
+            flush_type = getattr(WALFile.FlushType, valid_modes[mode])
+            self._java_db.setWALFlush(flush_type)
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to set WAL flush mode: {e}") from e
+
+    def set_read_your_writes(self, enabled: bool):
+        """
+        Enable or disable read-your-writes consistency.
+
+        When enabled, uncommitted changes in the current transaction are visible
+        in subsequent reads. Disabling can improve concurrency but may show stale data.
+
+        Args:
+            enabled: True to enable read-your-writes, False to disable
+
+        Example:
+            >>> db.set_read_your_writes(True)  # Default behavior
+            >>> db.set_read_your_writes(False)  # Better concurrency
+        """
+        self._check_not_closed()
+        try:
+            self._java_db.setReadYourWrites(enabled)
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to set read-your-writes: {e}") from e
+
+    def set_auto_transaction(self, enabled: bool):
+        """
+        Enable or disable automatic transaction management.
+
+        When enabled, ArcadeDB automatically begins a transaction for operations
+        that require one. When disabled, you must manually call begin_transaction().
+
+        Args:
+            enabled: True to enable auto-transaction, False to disable
+
+        Example:
+            >>> db.set_auto_transaction(False)  # Manual transaction control
+            >>> db.begin_transaction()
+            >>> # ... do work ...
+            >>> db.commit()
+            >>> db.set_auto_transaction(True)  # Restore default
+        """
+        self._check_not_closed()
+        try:
+            self._java_db.setAutoTransaction(enabled)
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to set auto-transaction: {e}") from e
+
     def async_executor(self):
         """
         Get async executor for parallel operations.
@@ -350,6 +528,42 @@ class Database:
 
         # JPype converts 'async' to 'async_' to avoid Python keyword collision
         return AsyncExecutor(self._java_db.async_())
+
+    @property
+    def schema(self):
+        """
+        Get the schema manipulation API for this database.
+
+        The schema API provides type-safe access to schema operations:
+        - Type management (document, vertex, edge types)
+        - Property management (create, drop properties)
+        - Index management (create, drop indexes)
+
+        Returns:
+            Schema instance for this database
+
+        Example:
+            >>> # Create a vertex type with properties
+            >>> schema = db.schema
+            >>> schema.create_vertex_type("User")
+            >>> schema.create_property("User", "name", PropertyType.STRING)
+            >>> schema.create_property("User", "age", PropertyType.INTEGER)
+            >>>
+            >>> # Create an index
+            >>> schema.create_index("User", ["name"], unique=True)
+            >>>
+            >>> # Create edge type
+            >>> schema.create_edge_type("Follows")
+
+        Note:
+            Schema changes are immediately persisted and visible to all
+            database connections. Schema modifications should be done
+            carefully in production environments.
+        """
+        self._check_not_closed()
+        from .schema import Schema
+
+        return Schema(self._java_db.getSchema(), self)
 
     def batch_context(
         self,
