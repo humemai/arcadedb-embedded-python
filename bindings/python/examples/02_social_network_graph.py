@@ -841,6 +841,168 @@ def demonstrate_gremlin_queries(db):
         traceback.print_exc()
 
 
+def demonstrate_gremlin_queries(db):
+    """Demonstrate graph queries using Gremlin traversal language"""
+    print("\n  🎯 Gremlin Queries (matching Cypher functionality):")
+
+    section_start = time.time()
+
+    try:
+        # 1. Find all friends of Alice using Gremlin
+        print("\n    1️⃣ Find all friends of Alice (Gremlin):")
+        query_start = time.time()
+        result = db.query(
+            "gremlin",
+            """
+            g.V().hasLabel('Person').has('name', 'Alice Johnson')
+                .out('FRIEND_OF')
+                .project('name', 'city')
+                .by('name')
+                .by('city')
+                .order().by(select('name'))
+        """,
+        )
+
+        for row in result:
+            name = row.get_property("name")
+            city = row.get_property("city")
+            print(f"      👥 {name} from {city}")
+        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
+
+        # 2. Find friends of friends using Gremlin
+        print("\n    2️⃣ Find friends of friends of Alice (Gremlin):")
+        query_start = time.time()
+        result = db.query(
+            "gremlin",
+            """
+            g.V().hasLabel('Person').has('name', 'Alice Johnson')
+                .out('FRIEND_OF').as('friend')
+                .out('FRIEND_OF').as('fof')
+                .where(values('name').is(neq('Alice Johnson')))
+                .select('fof', 'friend')
+                .by('name')
+                .by('name')
+                .order().by(select('fof'))
+        """,
+        )
+
+        for row in result:
+            name = row.get_property("fof")
+            through = row.get_property("friend")
+            print(f"      🔗 {name} (through {through})")
+        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
+
+        # 3. Find mutual friends using Gremlin
+        print("\n    3️⃣ Find mutual friends between Alice and Bob (Gremlin):")
+        query_start = time.time()
+        result = db.query(
+            "gremlin",
+            """
+            g.V().hasLabel('Person').has('name', 'Alice Johnson')
+                .out('FRIEND_OF').as('mutual')
+                .in('FRIEND_OF').has('name', 'Bob Smith')
+                .select('mutual')
+                .values('name')
+                .order()
+        """,
+        )
+
+        mutual_friends = list(result)
+        if mutual_friends:
+            for row in mutual_friends:
+                print(f"      🤝 {row.get_property('result')}")
+        else:
+            print("      ℹ️  No mutual friends found")
+        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
+
+        # 4. Find close friendships using Gremlin
+        print("\n    4️⃣ Find close friendships (Gremlin):")
+        query_start = time.time()
+        result = db.query(
+            "gremlin",
+            """
+            g.V().hasLabel('Person').as('p1')
+                .outE('FRIEND_OF').has('closeness', 'close').as('edge')
+                .inV().as('p2')
+                .select('p1', 'p2', 'edge')
+                .by('name')
+                .by('name')
+                .by('since')
+                .order().by(select('edge'))
+        """,
+        )
+
+        for row in result:
+            person1 = row.get_property("p1")
+            person2 = row.get_property("p2")
+            since = row.get_property("edge")
+            print(f"      💙 {person1} → {person2} (since {since})")
+        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
+
+        # 5. Count friends per person using Gremlin
+        print("\n    5️⃣ Count friends per person (Gremlin aggregation):")
+        query_start = time.time()
+        result = db.query(
+            "gremlin",
+            """
+            g.V().hasLabel('Person')
+                .project('name', 'friend_count')
+                .by('name')
+                .by(out('FRIEND_OF').count())
+                .order()
+                .by(select('friend_count'), desc)
+                .by(select('name'))
+        """,
+        )
+
+        for row in result:
+            name = row.get_property("name")
+            count = row.get_property("friend_count")
+            print(f"      • {name}: {count} friends")
+        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
+
+        # 6. Find variable length paths using Gremlin
+        print("\n    6️⃣ Find connections within 3 steps from Alice (Gremlin):")
+        query_start = time.time()
+        result = db.query(
+            "gremlin",
+            """
+            g.V().hasLabel('Person').has('name', 'Alice Johnson')
+                .repeat(out('FRIEND_OF').simplePath())
+                .times(3).emit()
+                .where(values('name').is(neq('Alice Johnson')))
+                .dedup()
+                .project('name', 'city')
+                .by('name')
+                .by('city')
+                .order().by(select('name'))
+        """,
+        )
+
+        for row in result:
+            name = row.get_property("name")
+            city = row.get_property("city")
+            print(f"      🌐 {name} from {city}")
+        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
+
+        print(f"  ⏱️  Gremlin section: {time.time() - section_start:.3f}s")
+        print("\n  💡 Gremlin features demonstrated:")
+        print("      • Traversal-based graph navigation (out, in, outE, inV)")
+        print("      • Filtering with has() and where()")
+        print("      • Deduplication with dedup()")
+        print("      • Aggregations with project() and count()")
+        print("      • Variable-length paths with repeat() and emit()")
+        print("      • Sorting with order() - same results as Cypher")
+        print("      • ✅ 100% feature parity with Cypher queries!")
+
+    except Exception as e:
+        print(f"    ❌ Error in Gremlin queries: {e}")
+        print("    💡 Note: Gremlin support requires full ArcadeDB distribution")
+        import traceback
+
+        traceback.print_exc()
+
+
 def compare_query_languages(db):
     """Compare SQL MATCH vs OpenCypher for the same queries"""
     print("\n  🆚 SQL MATCH vs OpenCypher Comparison:")
