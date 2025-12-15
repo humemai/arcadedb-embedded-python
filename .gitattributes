@@ -1,2 +1,8 @@
 package/src/main/scripts/console.bat eol=crlf
 package/src/main/scripts/server.bat eol=crlf
+
+# Fork-specific paths - automatically prefer our version during upstream sync
+# See ./sync-upstream.sh for sync workflow
+/README.md merge=ours
+.github/workflows/** merge=ours
+bindings/python/** merge=ours

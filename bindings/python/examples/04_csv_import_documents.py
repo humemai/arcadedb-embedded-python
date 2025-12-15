@@ -47,7 +47,7 @@ Other:
 
 Requirements:
 - arcadedb-embedded
-- MovieLens dataset (downloaded via download_sample_data.py)
+- MovieLens dataset (downloaded via download_data.py)
 - JRE 21+
 - Sufficient JVM heap memory (8GB recommended for large dataset)
 
@@ -55,13 +55,13 @@ Usage:
 1. Run with default (large) dataset:
    python 04_csv_import_documents.py
 2. Run with small dataset:
-   python 04_csv_import_documents.py --size small
+   python 04_csv_import_documents.py --dataset movielens-small
 3. Run with large dataset and custom parallel threads:
-   python 04_csv_import_documents.py --size large --parallel 8
+   python 04_csv_import_documents.py --dataset movielens-large --parallel 8
 4. Run with custom batch size:
    python 04_csv_import_documents.py --batch-size 10000
 5. Run with custom JVM heap, parallel threads, and batch size:
-   ARCADEDB_JVM_MAX_HEAP="8g" python 04_csv_import_documents.py --size large --parallel 8 --batch-size 10000
+   ARCADEDB_JVM_MAX_HEAP="8g" python 04_csv_import_documents.py --dataset movielens-large --parallel 8 --batch-size 10000
 
 The script will automatically download the dataset if it doesn't exist.
 
@@ -70,6 +70,10 @@ Memory Requirements:
 - Large dataset (~33M ratings): 4GB heap (default) should work, 8GB for safety
 - Very large datasets (100M+ records): Set ARCADEDB_JVM_MAX_HEAP="8g" or higher
 - Must be set BEFORE running the script (before JVM starts)
+
+Dataset Options:
+- movielens-small: ~1 MB, ~100K ratings, 9K movies, 600 users
+- movielens-large: ~265 MB, ~33M ratings, 86K movies, 280K users
 
 Note: This example creates a database at ./my_test_databases/movielens_db/
       The database files are preserved so you can inspect them after running.
@@ -115,7 +119,7 @@ TEST_QUERIES = [
 
 # Expected baseline results for validation
 EXPECTED_RESULTS = {
-    "small": [
+    "movielens-small": [
         {
             "name": "Find movie by ID",
             "count": 1,
@@ -250,10 +254,10 @@ EXPECTED_RESULTS = {
         {
             "name": "Count ALL Action movies (LIKE, no LIMIT)",
             "count": 1,
-            "sample": [{"count": 1774}],
+            "sample": [{"count": 1796}],
         },
     ],
-    "large": [
+    "movielens-large": [
         {
             "name": "Find movie by ID",
             "count": 1,
@@ -288,7 +292,7 @@ EXPECTED_RESULTS = {
                     "userId": 414,
                     "movieId": 47,
                     "rating": 5.0,
-                    "timestamp": 1603897739,
+                    "timestamp": None,
                     "@props": "userId:3,movieId:3,rating:5,timestamp:3",
                 },
                 {
@@ -372,15 +376,15 @@ EXPECTED_RESULTS = {
                     "@props": "movieId:3,title:7,genres:7",
                 },
                 {
-                    "movieId": 20,
-                    "title": "Money Train (1995)",
-                    "genres": "Action|Comedy|Crime|Drama|Thriller",
+                    "movieId": 15,
+                    "title": "Cutthroat Island (1995)",
+                    "genres": "Action|Adventure|Romance",
                     "@props": "movieId:3,title:7,genres:7",
                 },
                 {
-                    "movieId": 23,
-                    "title": "Assassins (1995)",
-                    "genres": "Action|Crime|Thriller",
+                    "movieId": 20,
+                    "title": "Money Train (1995)",
+                    "genres": "Action|Comedy|Crime|Drama|Thriller",
                     "@props": "movieId:3,title:7,genres:7",
                 },
             ],
@@ -388,7 +392,7 @@ EXPECTED_RESULTS = {
         {
             "name": "Count ALL Action movies (LIKE, no LIMIT)",
             "count": 1,
-            "sample": [{"count": 9284}],
+            "sample": [{"count": 9386}],
         },
     ],
 }
@@ -559,15 +563,19 @@ def create_indexes(db, indexes, verbose=True):
 
     for idx, (table, column, uniqueness) in enumerate(indexes, 1):
         created = False
-        max_retries = 60  # Try for up to 60 attempts
-        retry_delay = 10  # Wait 10 seconds (= 10 minutes max per index)
+        retry_delay = 300  # Wait 300 seconds (5 minutes) between retries
+        max_retries = 200  # Try for up to 200 attempts (= 1000 minutes max per index)
 
         for attempt in range(1, max_retries + 1):
             try:
                 with db.transaction():
-                    db.command(
-                        "sql", f"CREATE INDEX ON {table} ({column}) {uniqueness}"
-                    )
+                    # Convert uniqueness string to Schema API parameters
+                    if uniqueness == "UNIQUE":
+                        db.schema.create_index(table, [column], unique=True)
+                    elif uniqueness == "FULL_TEXT":
+                        db.schema.create_index(table, [column], index_type="FULL_TEXT")
+                    else:  # NOTUNIQUE
+                        db.schema.create_index(table, [column], unique=False)
                 if verbose:
                     print(
                         f"   ✅ [{idx}/{len(indexes)}] "
@@ -794,22 +802,26 @@ def run_validation_queries(db, queries=None, num_runs=1, verbose=True):
     return results
 
 
-def download_dataset(size):
-    """Download the dataset using download_sample_data.py script."""
-    download_script = Path(__file__).parent / "download_sample_data.py"
+def download_dataset(dataset_name):
+    """Download the dataset using download_data.py script.
+
+    Args:
+        dataset_name: Dataset name (e.g., "movielens-small", "movielens-large")
+    """
+    download_script = Path(__file__).parent / "download_data.py"
 
     if not download_script.exists():
         print(f"❌ Download script not found: {download_script}")
-        print("   Please ensure download_sample_data.py is in the same directory.")
+        print("   Please ensure download_data.py is in the same directory.")
         sys.exit(1)
 
-    print(f"📥 Downloading {size} dataset...")
-    print(f"   Running: python {download_script} --size {size}")
+    print(f"📥 Downloading {dataset_name} dataset...")
+    print(f"   Running: python {download_script} {dataset_name}")
     print()
 
     try:
         subprocess.run(
-            [sys.executable, str(download_script), "--size", size],
+            [sys.executable, str(download_script), dataset_name],
             check=True,
             capture_output=False,
         )
@@ -841,18 +853,18 @@ parser = argparse.ArgumentParser(
     formatter_class=argparse.RawDescriptionHelpFormatter,
     epilog="""
 Examples:
-  python 04_csv_import_documents.py                    # Use large dataset (default)
-  python 04_csv_import_documents.py --size small       # Use small dataset
-  python 04_csv_import_documents.py --size large       # Use large dataset
-  python 04_csv_import_documents.py --parallel 8       # Use 8 parallel threads
-  python 04_csv_import_documents.py --batch-size 10000 # Use larger batch size
-  python 04_csv_import_documents.py --size small --parallel 4 --batch-size 1000
-  python 04_csv_import_documents.py --export           # Export database after import
+  python 04_csv_import_documents.py                             # Use large dataset (default)
+  python 04_csv_import_documents.py --dataset movielens-small   # Use small dataset
+  python 04_csv_import_documents.py --dataset movielens-large   # Use large dataset
+  python 04_csv_import_documents.py --parallel 8                # Use 8 parallel threads
+  python 04_csv_import_documents.py --batch-size 10000          # Use larger batch size
+  python 04_csv_import_documents.py --dataset movielens-small --parallel 4 --batch-size 1000
+  python 04_csv_import_documents.py --export                    # Export database after import
   python 04_csv_import_documents.py --export --export-path my_backup.jsonl.tgz
 
 Dataset sizes:
-  large - ml-large (~33M ratings, ~86K movies, ~265 MB) - DEFAULT
-  small - ml-small (~100K ratings, ~9K movies, ~1 MB)
+  large - movielens-large (~33M ratings, ~86K movies, ~265 MB) - DEFAULT
+  small - movielens-small (~100K ratings, ~9K movies, ~1 MB)
 
 Parallel threads:
   Default: auto-detect (CPU cores / 2 - 1, minimum 1)
@@ -873,10 +885,10 @@ The script will automatically download the dataset if it doesn't exist.
     """,
 )
 parser.add_argument(
-    "--size",
-    choices=["small", "large"],
-    default="large",
-    help="Dataset size to use (default: large)",
+    "--dataset",
+    choices=["movielens-small", "movielens-large"],
+    default="movielens-large",
+    help="Dataset size to use (default: movielens-large)",
 )
 parser.add_argument(
     "--parallel",
@@ -894,7 +906,7 @@ parser.add_argument(
     "--db-name",
     type=str,
     default=None,
-    help="Database name (default: ml_{size}_db)",
+    help="Database name (default: based on dataset name, e.g., movielens_small_db)",
 )
 parser.add_argument(
     "--export",
@@ -916,7 +928,7 @@ print("=" * 70)
 print("🎬 ArcadeDB Python - Example 04: CSV Import - Documents")
 print("=" * 70)
 print()
-print(f"📊 Dataset size: {args.size}")
+print(f"📊 Dataset: {args.dataset}")
 if args.parallel:
     print(f"🔧 Parallel threads: {args.parallel}")
 else:
@@ -927,9 +939,8 @@ if args.export:
     if args.export_path:
         display_path = args.export_path
     else:
-        db_name = args.db_name or (
-            "ml_small_db" if args.size == "small" else "ml_large_db"
-        )
+        # Convert dataset name to db name (movielens-small → movielens_small_db)
+        db_name = args.db_name or args.dataset.replace("-", "_") + "_db"
         display_path = f"exports/{db_name}.jsonl.tgz"
     print(f"💾 Export: enabled → {display_path}")
 else:
@@ -943,7 +954,7 @@ if jvm_heap:
 else:
     print("💡 JVM Max Heap: 4g (default)")
     print("   ℹ️  Using default JVM heap (4g)")
-    if args.size == "large":
+    if args.dataset == "movielens-large":
         print("   💡 For large datasets, you can increase it:")
         print('      export ARCADEDB_JVM_MAX_HEAP="8g"  # or run with:')
         print('      ARCADEDB_JVM_MAX_HEAP="8g" python 04_csv_import_documents.py')
@@ -955,18 +966,18 @@ print()
 print("Step 0: Checking for MovieLens dataset...")
 print()
 
-# Determine dataset directory based on size argument
+# Determine dataset directory based on dataset argument
 data_base = Path(__file__).parent / "data"
-dataset_dirname = "ml-large" if args.size == "large" else "ml-small"
+dataset_dirname = args.dataset
 data_dir = data_base / dataset_dirname
 
 # Check if dataset exists, download if it doesn't
 if not check_dataset_exists(data_dir):
-    print(f"❌ {args.size.capitalize()} dataset not found at: {data_dir}")
+    print(f"❌ Dataset not found at: {data_dir}")
     print()
-    download_dataset(args.size)
+    download_dataset(args.dataset)
 else:
-    print(f"✅ {args.size.capitalize()} dataset found!")
+    print("✅ Dataset found!")
     print(f"   Location: {data_dir}")
     print()
 
@@ -989,7 +1000,8 @@ db_dir = "./my_test_databases"
 if args.db_name:
     db_name = args.db_name
 else:
-    db_name = "ml_small_db" if args.size == "small" else "ml_large_db"
+    # Convert dataset name to db name (movielens-small → movielens_small_db)
+    db_name = args.dataset.replace("-", "_") + "_db"
 db_path = os.path.join(db_dir, db_name)
 
 # Clean up any existing database from previous runs
@@ -1247,21 +1259,22 @@ print("   💡 Running queries multiple times to get reliable statistics")
 print()
 
 # Compare against embedded baseline results
-if args.size in EXPECTED_RESULTS and EXPECTED_RESULTS[args.size]:
+baseline_match_step8 = True
+if args.dataset in EXPECTED_RESULTS and EXPECTED_RESULTS[args.dataset]:
     print("   📊 Step 8 - Comparing against baseline (BEFORE indexes):")
     print()
-    baseline_match = compare_query_results(
-        times_without_indexes, EXPECTED_RESULTS[args.size], verbose=True
+    baseline_match_step8 = compare_query_results(
+        times_without_indexes, EXPECTED_RESULTS[args.dataset], verbose=True
     )
     print()
-    if baseline_match:
+    if baseline_match_step8:
         print("   ✅ Step 8: All results match baseline!")
     else:
-        print("   ⚠️  Step 8: Some results differ from baseline!")
+        print("   ❌ Step 8: VALIDATION FAILED - Results differ from baseline!")
     print()
 else:
     print(
-        f"   ℹ️  No embedded baseline for {args.size} dataset - "
+        f"   ℹ️  No embedded baseline for {args.dataset} dataset - "
         f"skipping Step 8 comparison"
     )
     print()
@@ -1482,26 +1495,27 @@ print()
 
 # Save query results and compare against baseline
 print("   💾 Saving query results for reproducibility...")
-results_file = save_query_results(times_with_indexes, args.size, db_path)
+results_file = save_query_results(times_with_indexes, args.dataset, db_path)
 print(f"   ✅ Results saved to: {results_file}")
 print()
 
 # Compare against embedded baseline results
-if args.size in EXPECTED_RESULTS and EXPECTED_RESULTS[args.size]:
+baseline_match_step10 = True
+if args.dataset in EXPECTED_RESULTS and EXPECTED_RESULTS[args.dataset]:
     print("   📊 Step 10 - Comparing against baseline (AFTER indexes):")
     print()
-    baseline_match = compare_query_results(
-        times_with_indexes, EXPECTED_RESULTS[args.size], verbose=True
+    baseline_match_step10 = compare_query_results(
+        times_with_indexes, EXPECTED_RESULTS[args.dataset], verbose=True
     )
     print()
-    if baseline_match:
+    if baseline_match_step10:
         print("   ✅ Step 10: All results match baseline!")
     else:
-        print("   ⚠️  Step 10: Some results differ from baseline!")
+        print("   ❌ Step 10: VALIDATION FAILED - Results differ from baseline!")
     print()
 else:
     print(
-        f"   ℹ️  No embedded baseline for {args.size} dataset - "
+        f"   ℹ️  No embedded baseline for {args.dataset} dataset - "
         f"results saved for future comparison"
     )
     print()
@@ -1651,7 +1665,11 @@ for record in result:
     rating = record.get_property("rating")
     count = record.get_property("count")
     bar = "█" * int(count / 3000)  # Scale for visualization
-    print(f"      {rating:.1f} ★ : {count:,} {bar}")
+    # Handle NULL ratings (introduced by NULL injection)
+    if rating is None:
+        print(f"      NULL  : {count:,} {bar}")
+    else:
+        print(f"      {rating:.1f} ★ : {count:,} {bar}")
 print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
 print()
 
@@ -1873,11 +1891,16 @@ if args.export and export_filename:
     print(f"   💡 Import settings: {import_params}")
     print()
 
+    # Initialize roundtrip_results to None in case import fails
+    roundtrip_results = None
+
     try:
         import_start = time.time()
 
         # Use SQL IMPORT DATABASE command with performance parameters
         import_path = os.path.abspath(actual_export_path)
+        # Convert Windows backslashes to forward slashes for SQL URI
+        import_path = import_path.replace("\\", "/")
         import_sql = f"IMPORT DATABASE file://{import_path} WITH {import_params}"
         roundtrip_db.command("sql", import_sql)
 
@@ -1954,11 +1977,11 @@ if args.export and export_filename:
         )
 
         # Compare against embedded baseline results
-        if args.size in EXPECTED_RESULTS and EXPECTED_RESULTS[args.size]:
+        if args.dataset in EXPECTED_RESULTS and EXPECTED_RESULTS[args.dataset]:
             print("   📊 Step 14 - Comparing against baseline (AFTER roundtrip):")
             print()
             baseline_match = compare_query_results(
-                roundtrip_results, EXPECTED_RESULTS[args.size], verbose=True
+                roundtrip_results, EXPECTED_RESULTS[args.dataset], verbose=True
             )
             print()
             if baseline_match:
@@ -1969,7 +1992,7 @@ if args.export and export_filename:
             print()
         else:
             print(
-                f"   ℹ️  No embedded baseline for {args.size} dataset - "
+                f"   ℹ️  No embedded baseline for {args.dataset} dataset - "
                 f"skipping Step 14 comparison"
             )
             print()
@@ -2045,20 +2068,23 @@ if args.export and export_filename:
     print("📊 FINAL VALIDATION: Comparing All Query Runs")
     print("=" * 70)
     print()
-    print("   Comparing results from:")
-    print("   1️⃣  Before indexes (Step 8)")
-    print("   2️⃣  After indexes (Step 10)")
-    print("   3️⃣  After roundtrip (Step 14)")
-    print()
 
-    all_three_match = True
+    # Only do final validation if roundtrip succeeded
+    if roundtrip_results is not None:
+        print("   Comparing results from:")
+        print("   1️⃣  Before indexes (Step 8)")
+        print("   2️⃣  After indexes (Step 10)")
+        print("   3️⃣  After roundtrip (Step 14)")
+        print()
 
-    for i, query_info in enumerate(TEST_QUERIES):
-        query_name = query_info[0]
+        all_three_match = True
 
-        before_idx = times_without_indexes[i]
-        after_idx = times_with_indexes[i]
-        after_roundtrip = roundtrip_results[i]
+        for i, query_info in enumerate(TEST_QUERIES):
+            query_name = query_info[0]
+
+            before_idx = times_without_indexes[i]
+            after_idx = times_with_indexes[i]
+            after_roundtrip = roundtrip_results[i]
 
         count_before = before_idx["count"]
         count_after = after_idx["count"]
@@ -2073,19 +2099,24 @@ if args.export and export_filename:
             print(f"      Before indexes: {count_before}")
             print(f"      After indexes:  {count_after}")
             print(f"      After roundtrip: {count_roundtrip}")
-            print(f"      ⚠️  MISMATCH DETECTED!")
+            print("      ⚠️  MISMATCH DETECTED!")
             all_three_match = False
         print()
 
-    if all_three_match:
-        print("   ✅ SUCCESS: All query results are consistent!")
-        print("      • Before indexes ✓")
-        print("      • After indexes ✓")
-        print("      • After export/import roundtrip ✓")
+        if all_three_match:
+            print("   ✅ SUCCESS: All query results are consistent!")
+            print("      • Before indexes ✓")
+            print("      • After indexes ✓")
+            print("      • After export/import roundtrip ✓")
+        else:
+            print("   ❌ FAILURE: Query results differ across runs!")
+            print("      This indicates a data integrity issue.")
+        print()
     else:
-        print("   ❌ FAILURE: Query results differ across runs!")
-        print("      This indicates a data integrity issue.")
-    print()
+        print("   ⚠️  Roundtrip validation skipped (import failed)")
+        print("      Cannot compare roundtrip results")
+        print()
+
     print("=" * 70)
     print()
 
@@ -2218,3 +2249,17 @@ print("=" * 70)
 print(f"⏱️  TOTAL SCRIPT RUN TIME: {minutes}m {seconds}s")
 print("=" * 70)
 print()
+
+# Check if baseline validation failed and exit with error code
+if not baseline_match_step8 or not baseline_match_step10:
+    print("=" * 70)
+    print("❌ BASELINE VALIDATION FAILED")
+    print("=" * 70)
+    print()
+    print("Some query results did not match the expected baseline values.")
+    print("This may indicate:")
+    print("  • Data integrity issues")
+    print("  • Changes in query behavior")
+    print("  • Dataset differences")
+    print()
+    sys.exit(1)

@@ -74,7 +74,7 @@ def test_thread_safety(cleanup_db):
 
     print("\n1. Creating database with test data...")
     db = arcadedb.create_database(db_path)
-    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.schema.create_document_type("Person")
 
     with db.transaction():
         for i in range(20):

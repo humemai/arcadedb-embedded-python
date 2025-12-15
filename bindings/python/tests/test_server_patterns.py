@@ -89,7 +89,7 @@ def test_server_pattern_recommended(cleanup_test_dirs):
     db = server.create_database("mydb")
 
     with db.transaction():
-        db.command("sql", "CREATE DOCUMENT TYPE Product")
+        db.schema.create_document_type("Product")
         db.command("sql", "INSERT INTO Product SET name = 'Laptop', price = 999")
         db.command("sql", "INSERT INTO Product SET name = 'Mouse', price = 29")
 
@@ -138,7 +138,7 @@ def test_server_thread_safety(cleanup_test_dirs):
     db = server.create_database("testdb")
 
     with db.transaction():
-        db.command("sql", "CREATE DOCUMENT TYPE Item")
+        db.schema.create_document_type("Item")
         for i in range(20):
             db.command("sql", f"INSERT INTO Item SET id = {i}, value = {i * 10}")
 
@@ -208,7 +208,7 @@ def test_server_context_manager(cleanup_test_dirs):
         db = server.create_database("contextdb")
 
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE Note")
+            db.schema.create_document_type("Note")
             db.command("sql", "INSERT INTO Note SET text = 'Test'")
 
         result = db.query("sql", "SELECT count(*) as count FROM Note")
@@ -247,7 +247,7 @@ def test_pattern1_embedded_first_requires_close(cleanup_test_dirs):
     db = arcadedb.create_database(db_path)
 
     with db.transaction():
-        db.command("sql", "CREATE DOCUMENT TYPE Person")
+        db.schema.create_document_type("Person")
         db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
         db.command("sql", "INSERT INTO Person SET name = 'Bob', age = 25")
 
@@ -671,7 +671,7 @@ def test_http_api_access_pattern(cleanup_test_dirs):
 
     # Create same test type (already exists, but included for fair comparison)
     try:
-        db.command("sql", "CREATE DOCUMENT TYPE BenchItem")
+        db.schema.create_document_type("BenchItem")
     except Exception:
         pass  # Already exists
 

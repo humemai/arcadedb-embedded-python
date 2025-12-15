@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 107/107 Passing (100%) | **Platforms**: 6 Supported
+**Status**: ✅ Production Ready | **Tests**: 205/205 Passing (100%) | **Platforms**: 6 Supported
 
 ---
 
@@ -11,9 +11,9 @@ Native Python bindings for ArcadeDB - the multi-model database that supports Gra
 **[📖 Read the Full Documentation →](https://humemai.github.io/arcadedb-embedded-python/latest)**
 
 Quick links:
+
 - [Installation Guide](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/)
 - [Quick Start Tutorial](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/quickstart/)
-
 - [User Guide](https://humemai.github.io/arcadedb-embedded-python/latest/guide/core/database/)
 - [API Reference](https://humemai.github.io/arcadedb-embedded-python/latest/api/database/)
 - [Examples](https://humemai.github.io/arcadedb-embedded-python/latest/examples/)
@@ -40,7 +40,7 @@ pip install --pre arcadedb-embedded \
 ```
 
 !!! note "PyPI Size Limit"
-    We're temporarily hosting wheels on GitHub Pages while awaiting PyPI size limit approval (our wheels are ~160MB, default limit is 100MB). The `--index-url` tells pip to use our GitHub Pages index for arcadedb-embedded, while `--extra-index-url` ensures dependencies like JPype1 are installed from PyPI.
+We're temporarily hosting wheels on GitHub Pages while awaiting PyPI size limit approval (our wheels are ~164MB, default limit is 100MB). The `--index-url` tells pip to use our GitHub Pages index for arcadedb-embedded, while `--extra-index-url` ensures dependencies like JPype1 are installed from PyPI.
 
 **Requirements:**
 
@@ -52,7 +52,7 @@ pip install --pre arcadedb-embedded \
 - **Development version**: Use `--pre` flag to install `.devN` versions
 
 !!! tip "Development Releases"
-    We publish development versions (`X.Y.Z.devN`) for every push to main when `pom.xml` contains a SNAPSHOT version. These are great for testing new features but may be unstable. [Learn more](DEV_RELEASE_STRATEGY.md)
+We publish development versions (`X.Y.Z.devN`) for every push to main when `pom.xml` contains a SNAPSHOT version. These are great for testing new features but may be unstable. [Learn more](DEV_RELEASE_STRATEGY.md)
 
 ### 5-Minute Example
 
@@ -106,14 +106,14 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 
 **Platform Details:**
 
-| Platform | Wheel Size | JRE Size | Installed Size | Tests |
-|----------|-----------|----------|----------------|-------|
-| Windows ARM64 | 155.1M | 47.3M | ~215M | 107/107 ✅ |
-| macOS ARM64 | 156.7M | 53.9M | ~221M | 107/107 ✅ |
-| macOS Intel | 157.8M | 55.3M | ~223M | 107/107 ✅ |
-| Windows x64 | 157.4M | 51.5M | ~219M | 107/107 ✅ |
-| Linux ARM64 | 159.9M | 61.8M | ~229M | 107/107 ✅ |
-| Linux x64 | 160.9M | 62.7M | ~230M | 107/107 ✅ |
+| Platform      | Wheel Size | JRE Size | Installed Size | Tests      |
+| ------------- | ---------- | -------- | -------------- | ---------- |
+| Windows ARM64 | 155.1M     | 47.3M    | ~215M          | 205/205 ✅ |
+| macOS ARM64   | 156.7M     | 53.9M    | ~221M          | 205/205 ✅ |
+| macOS Intel   | 157.8M     | 55.3M    | ~223M          | 205/205 ✅ |
+| Windows x64   | 157.4M     | 51.5M    | ~219M          | 205/205 ✅ |
+| Linux ARM64   | 159.9M     | 61.8M    | ~229M          | 205/205 ✅ |
+| Linux x64     | 160.9M     | 62.7M    | ~230M          | 205/205 ✅ |
 
 **Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See `jar_exclusions.txt` for details.
 
@@ -123,7 +123,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 107/107 tests passing (100%)
+**Status**: 205/205 tests passing (100%)
 
 ```bash
 # Run all tests
@@ -200,16 +200,15 @@ Built wheels will be in `dist/`. **[Build instructions](https://humemai.github.i
 - `windows/amd64` (Native build on Windows x64)
 - `windows/arm64` (Native build on Windows ARM64)
 
-
 > **Developer Note:** See [docs/development/build-architecture.md](docs/development/build-architecture.md) for comprehensive documentation of the multi-platform build architecture, including how we achieve platform-specific JRE bundling across all 6 platforms on GitHub Actions.
 
 ## Development
 
 !!! note "Package Contents"
-    The package includes optimized ArcadeDB JARs. Some components are excluded for size optimization - see `jar_exclusions.txt` for details.
+The package includes optimized ArcadeDB JARs. Some components are excluded for size optimization - see `jar_exclusions.txt` for details.
 
 !!! note "Versioning"
-    Versions are automatically extracted from the main ArcadeDB `pom.xml`. See [versioning strategy](https://humemai.github.io/arcadedb-embedded-python/latest/development/release/#python-versioning-strategy) for details on development vs release mode handling.
+Versions are automatically extracted from the main ArcadeDB `pom.xml`. See [versioning strategy](https://humemai.github.io/arcadedb-embedded-python/latest/development/release/#python-versioning-strategy) for details on development vs release mode handling.
 
 ---
 

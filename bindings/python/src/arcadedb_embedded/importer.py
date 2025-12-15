@@ -2,7 +2,53 @@
 ArcadeDB Python Bindings - Data Importer
 
 Thin wrapper over ArcadeDB's Java data import functionality.
-Supports importing from JSON, CSV, and Neo4j export formats.
+Supports importing from CSV and XML formats.
+
+IMPORTANT LIMITATIONS AND QUIRKS:
+
+XML Import:
+-----------
+1. **Property Carryover Bug**: Due to a bug in ArcadeDB's XMLImporterFormat,
+   properties from previous records carry over to subsequent records. To avoid
+   this, ALL XML records MUST have the SAME complete set of attributes.
+
+   CORRECT:
+   <users>
+     <user id="1" name="Alice" age="30"/>
+     <user id="2" name="Bob" age=""/>      <!-- Empty string, not missing -->
+   </users>
+
+   WRONG (will cause user 2 to inherit age="30" from user 1):
+   <users>
+     <user id="1" name="Alice" age="30"/>
+     <user id="2" name="Bob"/>              <!-- Missing age attribute -->
+   </users>
+
+2. **Always Creates Vertices**: XMLImporterFormat always creates vertices
+   regardless of the import_type parameter (documents vs vertices).
+   This is a known bug in the Java code.
+
+3. **Attributes vs Elements**: XMLImporterFormat reliably extracts XML
+   attributes, but nested element text extraction is unreliable.
+   Always use attributes for data, not nested elements.
+
+CSV Import:
+-----------
+1. **NULL Handling**: Empty CSV fields become empty strings (""), not None/NULL.
+   Use schema definitions if you need proper NULL handling.
+
+2. **Type Inference**: CSV values are imported as strings by default.
+   ArcadeDB may perform automatic type inference, but it's not guaranteed.
+
+3. **Missing Columns**: All CSV rows should have the same number of columns.
+   Missing columns in some rows may cause import errors or unexpected results.
+
+General Notes:
+--------------
+- For database exports/imports (full database migration), use ArcadeDB's
+  native JSONL export format via SQL commands, not these importers.
+- For large datasets, adjust commitEvery and parallel settings for performance.
+- Always validate imported data after import completes.
 """
 
 import os
@@ -19,9 +65,8 @@ class Importer:
 
     This class provides a Pythonic interface to ArcadeDB's production-tested
     Java importer, which supports:
-    - JSON files (single or multiple objects)
     - CSV/TSV files (documents, vertices, edges with FK resolution)
-    - Neo4j JSONL exports
+    - XML files (documents or vertices)
 
     The Java importer handles:
     - Streaming parsing for memory efficiency
@@ -62,11 +107,13 @@ class Importer:
 
         Args:
             file_path: Path to the file to import
-            format_type: Format type: 'json', 'csv', 'neo4j'
+            format_type: Format type: 'csv' or 'xml'
                         (auto-detected from extension if None)
-            import_type: Type of import: 'documents', 'vertices', or 'edges' (default: 'documents')
+            import_type: Type of import: 'documents', 'vertices', or 'edges'
+                        (default: 'documents')
             type_name: Target document/vertex/edge type name
-            **options: Additional format-specific options passed to Java ImporterSettings:
+            **options: Additional format-specific options passed to
+                       Java ImporterSettings:
 
                 Common options:
                 - commitEvery: Commit every N records (default: 5000)
@@ -128,9 +175,9 @@ class Importer:
         if format_type is None:
             ext = Path(file_path).suffix.lower()
             format_map = {
-                ".json": "json",
                 ".csv": "csv",
                 ".tsv": "csv",
+                ".xml": "xml",
             }
             format_type = format_map.get(ext)
             if format_type is None:
@@ -147,7 +194,8 @@ class Importer:
             )
 
         # Validate required parameters for vertices and edges
-        if import_type in ("vertices", "edges"):
+        # Note: XML format doesn't require typeIdProperty (creates vertices directly)
+        if import_type in ("vertices", "edges") and format_type not in ("xml",):
             if "typeIdProperty" not in options:
                 raise ArcadeDBError(
                     f"Missing required parameter 'typeIdProperty' "
@@ -178,16 +226,15 @@ class Importer:
 
         # Route to appropriate importer
         format_type = format_type.lower()
-        if format_type in ("json", "csv"):
+        if format_type == "csv":
             return self._import_using_java(
                 file_path, format_type, import_type, type_name, **options
             )
-        elif format_type == "neo4j":
-            return self._import_neo4j(file_path, **options)
+        elif format_type == "xml":
+            return self._import_xml(file_path, import_type, type_name, **options)
         else:
             raise ArcadeDBError(
-                f"Unsupported format: {format_type}. "
-                "Supported formats: json, csv, neo4j"
+                f"Unsupported format: {format_type}. " "Supported formats: csv, xml"
             )
 
     def _import_using_java(
@@ -218,6 +265,8 @@ class Importer:
             # Configure based on import type
             if import_type == "documents":
                 settings.documents = abs_path
+                # Tell Java what format to expect
+                settings.documentsFileType = format_type
                 if type_name:
                     settings.documentTypeName = type_name
                 if "delimiter" in options:
@@ -231,6 +280,8 @@ class Importer:
 
             elif import_type == "vertices":
                 settings.vertices = abs_path
+                # Tell Java what format to expect
+                settings.verticesFileType = format_type
                 if type_name:
                     settings.vertexTypeName = type_name
                 if "delimiter" in options:
@@ -251,6 +302,8 @@ class Importer:
 
             elif import_type == "edges":
                 settings.edges = abs_path
+                # Tell Java what format to expect
+                settings.edgesFileType = format_type
                 if type_name:
                     settings.edgeTypeName = type_name
                 if "delimiter" in options:
@@ -334,6 +387,8 @@ class Importer:
             # We only want to set ONE of these to avoid double imports!
             if import_type == "documents":
                 settings_map["documents"] = settings.documents
+                if settings.documentsFileType:
+                    settings_map["documentsFileType"] = settings.documentsFileType
                 if settings.documentTypeName:
                     settings_map["documentType"] = settings.documentTypeName
                 if settings.documentsDelimiter:
@@ -345,6 +400,8 @@ class Importer:
 
             elif import_type == "vertices":
                 settings_map["vertices"] = settings.vertices
+                if settings.verticesFileType:
+                    settings_map["verticesFileType"] = settings.verticesFileType
                 if settings.vertexTypeName:
                     settings_map["vertexType"] = settings.vertexTypeName
                 if settings.verticesDelimiter:
@@ -360,6 +417,8 @@ class Importer:
 
             elif import_type == "edges":
                 settings_map["edges"] = settings.edges
+                if settings.edgesFileType:
+                    settings_map["edgesFileType"] = settings.edgesFileType
                 if settings.edgeTypeName:
                     settings_map["edgeType"] = settings.edgeTypeName
                 if settings.edgesDelimiter:
@@ -470,83 +529,217 @@ class Importer:
                 f"Import failed ({format_type} -> {import_type}): {e}"
             ) from e
 
-    def _import_neo4j(self, file_path: str, **options) -> Dict[str, Any]:
-        """Import Neo4j JSONL export using Java Neo4jImporter."""
-        from com.arcadedb.integration.importer import Neo4jImporter
+    def _import_xml(
+        self,
+        file_path: str,
+        import_type: str,
+        type_name: Optional[str],
+        **options,
+    ) -> Dict[str, Any]:
+        """
+        Import XML file using Java XMLImporterFormat.
+
+        IMPORTANT: XMLImporterFormat currently has a bug where it ignores the
+        EntityType parameter and always creates vertices. This wrapper works
+        around the limitation by documenting the actual behavior.
+
+        See: integration/src/main/java/com/arcadedb/integration/importer/format/XMLImporterFormat.java
+        Line 101: Always calls database.newVertex(entityName)
+
+        Args:
+            file_path: Path to XML file
+            import_type: Type of import: 'documents' or 'vertices'
+                        Note: Currently 'documents' is mapped to vertices
+                        due to Java bug
+            type_name: Target type name (optional, defaults to XML element)
+            **options: Additional options:
+                - objectNestLevel: Nesting level for object extraction
+                - parsingLimitEntries: Limit number of entries to parse
+                - commitEvery: Batch size
+                - parallel: Number of parallel threads
+                - trimText: Trim whitespace from text values
+
+        Returns:
+            Dict with import statistics
+        """
+        from com.arcadedb.engine import WALFile
+        from com.arcadedb.integration.importer import (
+            AnalyzedEntity,
+            ImporterContext,
+            ImporterSettings,
+            Parser,
+            SourceDiscovery,
+        )
+        from com.arcadedb.integration.importer.format import XMLImporterFormat
 
         try:
             abs_path = os.path.abspath(file_path)
 
-            # Create Neo4j importer with existing database
-            java_importer = Neo4jImporter(self._java_db, abs_path)
+            # WORKAROUND: XMLImporterFormat always creates vertices
+            # (ignores EntityType parameter, see line 101 in Java source)
+            if import_type == "documents":
+                # Log warning about the limitation
+                import warnings
 
-            # Create settings map
-            settings_map = {}
+                warnings.warn(
+                    "XMLImporterFormat currently creates VERTICES even when "
+                    "import_type='documents' due to a bug in ArcadeDB Java "
+                    "(line 101 in XMLImporterFormat.java). "
+                    "The records will be created as vertices.",
+                    UserWarning,
+                )
+                # Map to vertices since that's what will actually happen
+                actual_import_type = "vertices"
+            else:
+                actual_import_type = import_type
 
-            # Apply options
+            # Create importer settings
+            settings = ImporterSettings()
+            settings.database = self._java_db.getDatabasePath()
+            settings.wal = False
+
+            # Common settings (only if user provides them)
             if "commitEvery" in options:
-                settings_map["commitEvery"] = str(options["commitEvery"])
-            if "verboseLevel" in options:
-                settings_map["verboseLevel"] = str(options["verboseLevel"])
+                settings.commitEvery = int(options["commitEvery"])
+            if "parallel" in options:
+                settings.parallel = int(options["parallel"])
+            if "trimText" in options:
+                settings.trimText = bool(options["trimText"])
 
-            # Apply settings
-            java_importer.setSettings(settings_map)
+            # XML-specific settings
+            if "objectNestLevel" in options:
+                settings.options.put("objectNestLevel", options["objectNestLevel"])
+            if "parsingLimitEntries" in options:
+                settings.parsingLimitEntries = options["parsingLimitEntries"]
 
-            # Run import (3-pass: schema -> vertices -> edges)
+            # Create source and parser
+            source_discovery = SourceDiscovery(abs_path)
+            source = source_discovery.getSource()
+            parser = Parser(source, 0)
+
+            # Create importer context
+            context = ImporterContext()
+
+            # Create XML importer
+            xml_importer = XMLImporterFormat()
+
+            # IMPORTANT: XMLImporterFormat creates vertex types dynamically as
+            # "v_<element>" (e.g., <item> -> v_item, <row> -> v_row).
+            # We need to create the schema beforehand since newVertex() requires
+            # the type to exist.
+            #
+            # To avoid having to parse the XML twice to determine all element types,
+            # we'll let the first import attempt fail with SchemaException, catch it,
+            # create the required type, and retry the import.
+            #
+            # This is a pragmatic workaround for the XMLImporterFormat design.
+
+            # Map import_type to EntityType
+            # Note: XMLImporterFormat ignores this and always creates vertices
+            if actual_import_type == "vertices":
+                entity_type = AnalyzedEntity.EntityType.VERTEX
+            elif actual_import_type == "documents":
+                entity_type = AnalyzedEntity.EntityType.DOCUMENT
+            else:
+                raise ArcadeDBError(
+                    f"XML import only supports 'documents' and 'vertices', "
+                    f"got: {import_type}"
+                )
+
+            # Configure async for batch inserts
+            async_api = self._java_db.async_()
+            self._java_db.setReadYourWrites(False)
+            async_api.setParallelLevel(settings.parallel)
+            async_api.setCommitEvery(settings.commitEvery)
+            async_api.setTransactionUseWAL(False)
+            async_api.setTransactionSync(WALFile.FlushType.NO)
+
+            # Import (XMLImporterFormat will always create vertices regardless)
             import time
 
             start_time = time.time()
-            result_map = java_importer.load()
+
+            try:
+                xml_importer.load(
+                    None,  # sourceSchema (can be null, will auto-detect)
+                    entity_type,  # Ignored by XMLImporterFormat (bug)
+                    parser,
+                    self._java_db,
+                    context,
+                    settings,
+                )
+            except Exception as e:
+                # Check if it's a schema exception about missing vertex type
+                # The error might be wrapped in ImportException, so check both
+                # the message and any cause
+                error_msg = str(e)
+
+                # Try to get Java cause if available
+                if hasattr(e, "getCause") and callable(e.getCause):
+                    cause = e.getCause()
+                    if cause:
+                        error_msg = f"{error_msg}\n{str(cause)}"
+
+                if "Type with name 'v_" in error_msg and "was not found" in error_msg:
+                    # Extract the type name from error message
+                    # Error format: "Type with name 'v_item' was not found"
+                    import re
+
+                    match = re.search(
+                        r"Type with name '([^']+)' was not found", error_msg
+                    )
+                    if match:
+                        missing_type = match.group(1)
+
+                        # Create the missing vertex type
+                        if not self._java_db.getSchema().existsType(missing_type):
+                            self._java_db.getSchema().createVertexType(missing_type)
+
+                        # Reset parser and context for retry
+                        source_discovery = SourceDiscovery(abs_path)
+                        source = source_discovery.getSource()
+                        parser = Parser(source, 0)
+                        context = ImporterContext()
+
+                        # Retry import
+                        xml_importer.load(
+                            None,
+                            entity_type,
+                            parser,
+                            self._java_db,
+                            context,
+                            settings,
+                        )
+                    else:
+                        # Can't parse error, re-raise
+                        raise
+                else:
+                    # Not a schema error, re-raise
+                    raise
+
+            # Wait for async operations to complete
+            async_api.waitCompletion()
+
             elapsed_ms = int((time.time() - start_time) * 1000)
 
-            # Convert result to Python dict - capture ALL Java stats
-            stats = {}
-            for key in result_map.keySet():
-                value = result_map.get(key)
-                stats[str(key)] = int(value) if value is not None else 0
+            # Get stats from context
+            parsed = context.parsed.get()
+            created = context.createdVertices.get()  # Always vertices
+            errors = context.errors.get()
 
-            # Add Python-tracked elapsed time
-            stats["duration_ms"] = elapsed_ms
-
-            # Map Java keys to Python API keys for backward compatibility
-            # Note: Neo4j importer may use different keys than CSV importer
             return {
-                "documents": stats.get("documentCount", 0),
-                "vertices": stats.get("vertexCount", 0),
-                "edges": stats.get("edgeCount", 0),
-                "errors": stats.get("errors", 0),
+                "documents": 0,  # XMLImporterFormat never creates documents
+                "vertices": created,  # Always creates vertices
+                "edges": 0,
+                "errors": errors,
                 "duration_ms": elapsed_ms,
             }
 
         except Exception as e:
-            raise ArcadeDBError(f"Neo4j import failed: {e}") from e
+            raise ArcadeDBError(f"XML import failed: {e}") from e
 
 
 # Convenience functions
-
-
-def import_json(database, file_path: str, **options) -> Dict[str, Any]:
-    """
-    Import JSON file into database using Java importer.
-
-    Args:
-        database: Database instance
-        file_path: Path to JSON file
-        **options: Additional options (commitEvery, verboseLevel, etc.)
-
-    Returns:
-        Dict with import statistics
-
-    Example:
-        >>> import arcadedb_embedded as arcadedb
-        >>> db = arcadedb.open_database("./mydb")
-        >>> stats = arcadedb.import_json(db, "data.json")
-        >>> print(f"Imported {stats['documents']} documents")
-    """
-    importer = Importer(database)
-    return importer.import_file(
-        file_path, format_type="json", import_type="documents", **options
-    )
 
 
 def import_csv(database, file_path: str, type_name: str, **options) -> Dict[str, Any]:
@@ -600,20 +793,6 @@ def import_csv(database, file_path: str, type_name: str, **options) -> Dict[str,
     """
     import_type = options.pop("import_type", "documents")
 
-    # Handle legacy options
-    if "vertex_type" in options:
-        import_type = "vertices"
-        options.pop("vertex_type")
-    if "edge_type" in options:
-        import_type = "edges"
-        options.pop("edge_type")
-
-    # Legacy property name mappings
-    if "from_property" in options:
-        options["edgeFromField"] = options.pop("from_property")
-    if "to_property" in options:
-        options["edgeToField"] = options.pop("to_property")
-
     importer = Importer(database)
     return importer.import_file(
         file_path,
@@ -641,3 +820,54 @@ def import_neo4j(database, file_path: str, **options) -> Dict[str, Any]:
     """
     importer = Importer(database)
     return importer.import_file(file_path, format_type="neo4j", **options)
+
+
+def import_xml(
+    database, file_path: str, import_type: str = "documents", **options
+) -> Dict[str, Any]:
+    """
+    Import XML file into database using Java XMLImporterFormat.
+
+    IMPORTANT LIMITATION: Due to a bug in ArcadeDB's Java XMLImporterFormat,
+    records are ALWAYS created as vertices regardless of import_type parameter.
+    This is a known issue in the Java code (line 101 in XMLImporterFormat.java).
+
+    Args:
+        database: Database instance
+        file_path: Path to XML file
+        import_type: Type of import: 'documents' or 'vertices'
+                    (default: 'documents')
+                    Note: Currently both create vertices due to Java bug
+        **options: Additional options:
+            - objectNestLevel: Nesting level for object extraction
+              Example: For <posts><row .../></posts>, use objectNestLevel=1
+            - parsingLimitEntries: Limit number of entries to parse
+            - commitEvery: Batch size
+            - parallel: Number of parallel threads
+            - trimText: Trim whitespace from text values
+
+    Returns:
+        Dict with import statistics
+
+    Examples:
+        >>> # Import Stack Exchange Posts.xml
+        >>> stats = arcadedb.import_xml(
+        ...     db,
+        ...     "Posts.xml",
+        ...     import_type="vertices",
+        ...     objectNestLevel=1,  # <posts><row .../></posts>
+        ...     commitEvery=10000
+        ... )
+        >>>
+        >>> # Import config.xml with limit
+        >>> stats = arcadedb.import_xml(
+        ...     db,
+        ...     "config.xml",
+        ...     import_type="documents",
+        ...     parsingLimitEntries=1000
+        ... )
+    """
+    importer = Importer(database)
+    return importer.import_file(
+        file_path, format_type="xml", import_type=import_type, type_name=None, **options
+    )

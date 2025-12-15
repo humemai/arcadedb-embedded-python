@@ -15,8 +15,8 @@ def test_gremlin_queries(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph schema
         with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE Person")
-            db.command("sql", "CREATE EDGE TYPE knows")
+            db.schema.create_vertex_type("Person")
+            db.schema.create_edge_type("knows")
 
         # Insert data using Java API
         with db.transaction():
@@ -61,8 +61,8 @@ def test_gremlin_traversal(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph
         with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE City")
-            db.command("sql", "CREATE EDGE TYPE road")
+            db.schema.create_vertex_type("City")
+            db.schema.create_edge_type("road")
 
         # Add cities using Java API
         with db.transaction():

@@ -49,6 +49,9 @@ dev = [
 vector = [
     "numpy>=1.20.0",
 ]
+examples = [
+    "py7zr>=0.20.0",  # Required for Stack Exchange data downloads (Example 07)
+]
 
 [project.urls]
 Homepage = "https://github.com/humemai/arcadedb-embedded-python"

@@ -9,8 +9,8 @@ def test_count_type(temp_db_path):
     """Test Database.count_type() method."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE DOCUMENT TYPE User")
-            db.command("sql", "CREATE DOCUMENT TYPE Product")
+            db.schema.create_document_type("User")
+            db.schema.create_document_type("Product")
 
             # Insert users
             for i in range(10):
@@ -53,7 +53,7 @@ def test_drop_database(temp_db_path):
 
     # Create some data
     with db.transaction():
-        db.command("sql", "CREATE DOCUMENT TYPE Test")
+        db.schema.create_document_type("Test")
         db.command("sql", "INSERT INTO Test SET value = 1")
 
     # Verify data exists
@@ -73,8 +73,8 @@ def test_database_methods_integration(temp_db_path):
     """Test using multiple database methods together."""
     with arcadedb.create_database(temp_db_path) as db:
         with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE Person")
-            db.command("sql", "CREATE EDGE TYPE Knows")
+            db.schema.create_vertex_type("Person")
+            db.schema.create_edge_type("Knows")
 
         # Insert data
         with db.transaction():

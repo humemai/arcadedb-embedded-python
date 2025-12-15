@@ -10,7 +10,7 @@ def test_batch_context_basic(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE User")
+    db.schema.create_vertex_type("User")
 
     # Use batch context to create vertices
     with db.batch_context(batch_size=100, parallel=2) as batch:
@@ -28,7 +28,7 @@ def test_batch_context_with_documents(temp_db):
     db = temp_db
 
     # Create document type
-    db.command("sql", "CREATE DOCUMENT TYPE LogEntry")
+    db.schema.create_document_type("LogEntry")
 
     # Use batch context to create documents
     with db.batch_context(batch_size=50, parallel=4) as batch:
@@ -48,8 +48,8 @@ def test_batch_context_with_edges(temp_db):
     db = temp_db
 
     # Create schema
-    db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE KNOWS")
+    db.schema.create_vertex_type("Person")
+    db.schema.create_edge_type("KNOWS")
 
     # Create some vertices first
     with db.transaction():
@@ -92,7 +92,7 @@ def test_batch_context_with_callbacks(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Item")
+    db.schema.create_vertex_type("Item")
 
     created_ids = []
 
@@ -119,7 +119,7 @@ def test_batch_context_success_count(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Product")
+    db.schema.create_vertex_type("Product")
 
     # Use batch context and track success count
     with db.batch_context(batch_size=100) as batch:
@@ -138,7 +138,7 @@ def test_batch_context_create_record(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Node")
+    db.schema.create_vertex_type("Node")
 
     # Create records directly
     with db.batch_context(batch_size=50) as batch:
@@ -159,7 +159,7 @@ def test_batch_context_is_pending(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Task")
+    db.schema.create_vertex_type("Task")
 
     with db.batch_context(batch_size=1000, parallel=2) as batch:
         # Queue many operations
@@ -178,7 +178,7 @@ def test_batch_context_wait_completion(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Event")
+    db.schema.create_vertex_type("Event")
 
     with db.batch_context(batch_size=500, parallel=4) as batch:
         for i in range(2000):
@@ -201,7 +201,7 @@ def test_batch_context_performance(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Benchmark")
+    db.schema.create_vertex_type("Benchmark")
 
     # Measure batch context performance
     start_batch = time.time()
@@ -238,7 +238,7 @@ def test_batch_context_different_batch_sizes(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Record")
+    db.schema.create_vertex_type("Record")
 
     # Test with small batch size
     with db.batch_context(batch_size=10) as batch:
@@ -261,7 +261,7 @@ def test_batch_context_update_record(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Counter")
+    db.schema.create_vertex_type("Counter")
 
     # Create some initial records
     with db.transaction():
@@ -294,7 +294,7 @@ def test_batch_context_delete_record(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Temporary")
+    db.schema.create_vertex_type("Temporary")
 
     # Create records
     with db.transaction():
@@ -323,7 +323,7 @@ def test_batch_context_mixed_operations(temp_db):
     db = temp_db
 
     # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Mixed")
+    db.schema.create_vertex_type("Mixed")
 
     # Create some initial records
     with db.transaction():
