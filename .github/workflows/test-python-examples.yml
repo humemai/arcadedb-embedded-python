@@ -1,17 +1,9 @@
 name: Test Python Examples
 
 on:
-  # Run on push to bindings/python/ directory
-  push:
-    paths:
-      - 'bindings/python/**'
-      - '.github/workflows/test-python-examples.yml'
-
-  # Run on pull request affecting bindings/python/
+  # Run on pull requests to main
   pull_request:
-    paths:
-      - 'bindings/python/**'
-      - '.github/workflows/test-python-examples.yml'
+    branches: [main]
 
   # Run after release workflow completes
   workflow_run:
