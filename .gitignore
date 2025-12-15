@@ -556,3 +556,6 @@ dist
 # Test database files
 *.lsmvecidx
 *.metadata.json
+
+# Test databases
+my_test_databases/
