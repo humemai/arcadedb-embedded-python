@@ -207,6 +207,7 @@ else
     echo -e "${CYAN}📦 Building Docker image...${NC}"
 
     docker build \
+        --pull \
         --platform "$DOCKER_PLATFORM" \
         --build-arg PACKAGE_NAME="$PACKAGE_NAME" \
         --build-arg PACKAGE_DESCRIPTION="$DESCRIPTION" \
