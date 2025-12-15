@@ -5,7 +5,6 @@ Vector index and array conversion utilities for similarity search.
 """
 
 import jpype.types as jtypes
-
 from .exceptions import ArcadeDBError
 
 
