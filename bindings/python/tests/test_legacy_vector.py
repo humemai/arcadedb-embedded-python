@@ -108,15 +108,14 @@ class TestVectorIndexCapacity:
         schema.create_property("CapacityTest", "embedding", "ARRAY_OF_FLOATS")
 
         max_capacity = 500
-        with test_db.transaction():
-            index = test_db.create_legacy_vector_index(
-                vertex_type="CapacityTest",
-                vector_property="embedding",
-                dimensions=4,
-                max_items=max_capacity,
-                id_property="vector_id",
-                distance_function="cosine",
-            )
+        index = test_db.create_legacy_vector_index(
+            vertex_type="CapacityTest",
+            vector_property="embedding",
+            dimensions=4,
+            max_items=max_capacity,
+            id_property="vector_id",
+            distance_function="cosine",
+        )
 
         # Test get_max_capacity
         assert index.get_max_capacity() == max_capacity
@@ -133,15 +132,14 @@ class TestVectorIndexCapacity:
         schema.create_vertex_type("SizeTest")
         schema.create_property("SizeTest", "embedding", "ARRAY_OF_FLOATS")
 
-        with test_db.transaction():
-            index = test_db.create_legacy_vector_index(
-                vertex_type="SizeTest",
-                vector_property="embedding",
-                dimensions=4,
-                max_items=100,
-                id_property="vector_id",
-                distance_function="cosine",
-            )
+        index = test_db.create_legacy_vector_index(
+            vertex_type="SizeTest",
+            vector_property="embedding",
+            dimensions=4,
+            max_items=100,
+            id_property="vector_id",
+            distance_function="cosine",
+        )
 
         # Empty index should have size 0
         assert index.get_size() == 0
@@ -159,16 +157,16 @@ class TestVectorIndexCapacity:
         schema.create_property("SizeTest2", "embedding", "ARRAY_OF_FLOATS")
         schema.create_property("SizeTest2", "vector_id", PropertyType.STRING)
 
-        with test_db.transaction():
-            index = test_db.create_legacy_vector_index(
-                vertex_type="SizeTest2",
-                vector_property="embedding",
-                dimensions=4,
-                max_items=100,
-                id_property="vector_id",
-                distance_function="cosine",
-            )
+        index = test_db.create_legacy_vector_index(
+            vertex_type="SizeTest2",
+            vector_property="embedding",
+            dimensions=4,
+            max_items=100,
+            id_property="vector_id",
+            distance_function="cosine",
+        )
 
+        with test_db.transaction():
             # Add 3 vertices
             for i in range(3):
                 vertex = test_db._java_db.newVertex("SizeTest2")
@@ -195,16 +193,16 @@ class TestVectorIndexCapacity:
         schema.create_property("StatsTest", "vector_id", PropertyType.STRING)
 
         max_capacity = 10
-        with test_db.transaction():
-            index = test_db.create_legacy_vector_index(
-                vertex_type="StatsTest",
-                vector_property="embedding",
-                dimensions=4,
-                max_items=max_capacity,
-                id_property="vector_id",
-                distance_function="cosine",
-            )
+        index = test_db.create_legacy_vector_index(
+            vertex_type="StatsTest",
+            vector_property="embedding",
+            dimensions=4,
+            max_items=max_capacity,
+            id_property="vector_id",
+            distance_function="cosine",
+        )
 
+        with test_db.transaction():
             # Add 3 items (30% capacity)
             for i in range(3):
                 vertex = test_db._java_db.newVertex("StatsTest")
@@ -244,16 +242,16 @@ class TestVectorIndexCapacity:
 
         # Create very small index
         max_capacity = 2
-        with test_db.transaction():
-            index = test_db.create_legacy_vector_index(
-                vertex_type="FullTest",
-                vector_property="embedding",
-                dimensions=4,
-                max_items=max_capacity,
-                id_property="vector_id",
-                distance_function="cosine",
-            )
+        index = test_db.create_legacy_vector_index(
+            vertex_type="FullTest",
+            vector_property="embedding",
+            dimensions=4,
+            max_items=max_capacity,
+            id_property="vector_id",
+            distance_function="cosine",
+        )
 
+        with test_db.transaction():
             # Should not be full initially
             assert not index.is_full()
 
@@ -294,15 +292,14 @@ class TestVectorIndexCapacity:
         schema.create_vertex_type("EmptyStats")
         schema.create_property("EmptyStats", "embedding", "ARRAY_OF_FLOATS")
 
-        with test_db.transaction():
-            index = test_db.create_legacy_vector_index(
-                vertex_type="EmptyStats",
-                vector_property="embedding",
-                dimensions=4,
-                max_items=100,
-                id_property="vector_id",
-                distance_function="cosine",
-            )
+        index = test_db.create_legacy_vector_index(
+            vertex_type="EmptyStats",
+            vector_property="embedding",
+            dimensions=4,
+            max_items=100,
+            id_property="vector_id",
+            distance_function="cosine",
+        )
 
         stats = index.get_stats()
 
@@ -350,16 +347,16 @@ def test_cosine_distance_orthogonal_vectors(temp_db_path):
                 vertex.set("vector", arcadedb.to_java_float_array(vector))
                 vertex.save()
 
-        with db.transaction():
-            index = db.create_legacy_vector_index(
-                vertex_type="VectorTest",
-                vector_property="vector",
-                dimensions=2,
-                id_property="name",
-                distance_function="cosine",
-                max_items=100,
-            )
+        index = db.create_legacy_vector_index(
+            vertex_type="VectorTest",
+            vector_property="vector",
+            dimensions=2,
+            id_property="name",
+            distance_function="cosine",
+            max_items=100,
+        )
 
+        with db.transaction():
             # Index vertices
             result = db.query("sql", "SELECT FROM VectorTest")
             for record in result:
@@ -785,16 +782,16 @@ def test_cosine_distance_high_dimensional(temp_db_path):
                 vertex.set("vector", arcadedb.to_java_float_array(vector))
                 vertex.save()
 
-        with db.transaction():
-            index = db.create_legacy_vector_index(
-                vertex_type="VectorTestHD",
-                vector_property="vector",
-                dimensions=dim,
-                id_property="name",
-                distance_function="cosine",
-                max_items=100,
-            )
+        index = db.create_legacy_vector_index(
+            vertex_type="VectorTestHD",
+            vector_property="vector",
+            dimensions=dim,
+            id_property="name",
+            distance_function="cosine",
+            max_items=100,
+        )
 
+        with db.transaction():
             result = db.query("sql", "SELECT FROM VectorTestHD")
             for record in result:
                 vertex = record._java_result.getElement().get().asVertex()
@@ -909,17 +906,16 @@ def test_vector_search(temp_db_path):
         print("\nCreating HNSW vector index...")
 
         # Create index with simplified API
-        with db.transaction():
-            index = db.create_legacy_vector_index(
-                vertex_type="EmbeddingNode",
-                vector_property="vector",
-                dimensions=4,
-                id_property="name",  # Use name as ID
-                distance_function="cosine",
-                m=16,
-                ef=128,
-                max_items=1000,
-            )
+        index = db.create_legacy_vector_index(
+            vertex_type="EmbeddingNode",
+            vector_property="vector",
+            dimensions=4,
+            id_property="name",  # Use name as ID
+            distance_function="cosine",
+            m=16,
+            ef=128,
+            max_items=1000,
+        )
 
         print("  ✓ Created vector index")
 
