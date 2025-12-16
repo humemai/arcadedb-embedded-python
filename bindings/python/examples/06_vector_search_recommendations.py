@@ -311,30 +311,28 @@ def create_vector_index(db, impl="default", property_suffix=""):
     start_time = time.time()
 
     if impl == "default":
-        with db.transaction():
-            index = db.create_vector_index(
-                vertex_type="Movie",
-                vector_property=embedding_prop,
-                dimensions=384,
-                distance_function="cosine",
-                max_connections=16,
-                beam_width=128,
-            )
+        index = db.create_vector_index(
+            vertex_type="Movie",
+            vector_property=embedding_prop,
+            dimensions=384,
+            distance_function="cosine",
+            max_connections=16,
+            beam_width=128,
+        )
     else:  # legacy
         # Create index with correct max_items
-        with db.transaction():
-            index = db.create_legacy_vector_index(
-                vertex_type="Movie",
-                vector_property=embedding_prop,
-                dimensions=384,
-                max_items=10000,
-                id_property=vector_id_prop,
-                edge_type=edge_type,
-                distance_function="cosine",
-                m=16,
-                ef=128,
-                ef_construction=128,
-            )
+        index = db.create_legacy_vector_index(
+            vertex_type="Movie",
+            vector_property=embedding_prop,
+            dimensions=384,
+            max_items=10000,
+            id_property=vector_id_prop,
+            edge_type=edge_type,
+            distance_function="cosine",
+            m=16,
+            ef=128,
+            ef_construction=128,
+        )
 
         # Populate index with existing movies
         with db.transaction():

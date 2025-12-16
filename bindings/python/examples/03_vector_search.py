@@ -311,30 +311,29 @@ if args.impl == "hnsw":
     print(f"      • max_items: {num_articles} (set to actual document count)")
 print()
 
-with db.transaction():
-    if args.impl == "default":
-        # Create vector index (JVector implementation - recommended)
-        index = db.create_vector_index(
-            vertex_type="Article",
-            vector_property="embedding",
-            dimensions=EMBEDDING_DIM,
-            distance_function="cosine",
-            max_connections=16,
-            beam_width=128,
-        )
-    else:  # legacy
-        # Create legacy HNSW vector index
-        index = db.create_legacy_vector_index(
-            vertex_type="Article",
-            vector_property="embedding",
-            dimensions=EMBEDDING_DIM,
-            max_items=num_articles,
-            id_property="id",
-            distance_function="cosine",  # Options: cosine, euclidean, inner_product
-            m=16,
-            ef=128,
-            ef_construction=128,
-        )
+if args.impl == "default":
+    # Create vector index (JVector implementation - recommended)
+    index = db.create_vector_index(
+        vertex_type="Article",
+        vector_property="embedding",
+        dimensions=EMBEDDING_DIM,
+        distance_function="cosine",
+        max_connections=16,
+        beam_width=128,
+    )
+else:  # legacy
+    # Create legacy HNSW vector index
+    index = db.create_legacy_vector_index(
+        vertex_type="Article",
+        vector_property="embedding",
+        dimensions=EMBEDDING_DIM,
+        max_items=num_articles,
+        id_property="id",
+        distance_function="cosine",  # Options: cosine, euclidean, inner_product
+        m=16,
+        ef=128,
+        ef_construction=128,
+    )
 
 print(f"   ✅ Created {args.impl.upper()} vector index")
 print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
