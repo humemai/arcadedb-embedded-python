@@ -242,34 +242,48 @@ def test_index(
 
     # Create Index
     start_build = time.time()
-    with db.transaction():
-        if index_type == "JVECTOR":
-            index = db.create_vector_index(
-                vertex_type="VectorData",
-                vector_property="vector",
-                dimensions=dim,
-                distance_function=metric,
-                max_connections=m,
-                beam_width=ef,
-            )
-        else:  # HNSWLIB
-            index = db.create_legacy_vector_index(
-                vertex_type="VectorData",
-                vector_property="vector",
-                dimensions=dim,
-                max_items=count,
-                id_property="id",
-                distance_function=metric,
-                m=m,
-                ef=ef,
-                ef_construction=200,
-            )
 
-            # Legacy index needs manual population
+    if index_type == "JVECTOR":
+        index = db.create_vector_index(
+            vertex_type="VectorData",
+            vector_property="vector",
+            dimensions=dim,
+            distance_function=metric,
+            max_connections=m,
+            beam_width=ef,
+        )
+    else:  # HNSWLIB
+        index = db.create_legacy_vector_index(
+            vertex_type="VectorData",
+            vector_property="vector",
+            dimensions=dim,
+            max_items=count,
+            id_property="id",
+            distance_function=metric,
+            m=m,
+            ef=ef,
+            ef_construction=200,
+        )
+
+        # Legacy index needs manual population
+        print("    - Populating legacy index (paginated)...")
+        last_rid = "#-1:-1"
+        batch_size = 10000
+
+        while True:
+            query = f"SELECT FROM VectorData WHERE @rid > {last_rid} ORDER BY @rid LIMIT {batch_size}"
+            chunk = list(db.query("sql", query))
+
+            if not chunk:
+                break
+
             with db.transaction():
-                result = list(db.query("sql", "SELECT FROM VectorData"))
-                for record in result:
+                for record in chunk:
                     index.add_vertex(record._java_result.getElement().get().asVertex())
+
+            last_rid = (
+                chunk[-1]._java_result.getElement().get().getIdentity().toString()
+            )
 
     # Force index build (JVector is lazy)
     print("    - Warming up index (forcing build)...")
@@ -517,10 +531,20 @@ def save_results_to_markdown(
             f.write(f"- **Data Load Time**: {first_r['Load(s)']:.4f}s\n")
             f.write(f"- **Ground Truth Time**: {first_r['GT_Calc(s)']:.4f}s\n")
             f.write(f"- **DB Setup Time**: {first_r['DB_Setup(s)']:.4f}s\n")
-            duration = first_r.get("Scenario_Duration", 0)
-            f.write(
-                f"- **Total Scenario Time**: {duration/60:.2f} min ({duration:.2f}s)\n\n"
-            )
+
+            j_time = first_r.get("J_Total_Time", 0)
+            h_time = first_r.get("H_Total_Time", 0)
+
+            if j_time > 0:
+                f.write(
+                    f"- **JVector Total Time**: {j_time/60:.2f} min ({j_time:.2f}s)\n"
+                )
+            if h_time > 0:
+                f.write(
+                    f"- **HNSWLib Total Time**: {h_time/60:.2f} min ({h_time:.2f}s)\n"
+                )
+
+            f.write("\n")
 
             # Get unique k values
             k_values = sorted(list(set(r["k"] for r in scen_results)))
@@ -648,17 +672,19 @@ def run_benchmark():
         db, setup_time = setup_database(db_path, data)
         db.close()
 
+        j_results_map = {}
+        h_results_map = {}
+        j_total_time = 0
+        h_total_time = 0
+
         try:
-            for m in m_values:
-                for ef in ef_values:
-                    print(f"  Testing Params: m={m}, ef={ef}...", end="", flush=True)
-
-                    # Defaults
-                    j_results = None
-                    h_results = None
-
-                    if args.impl in ["JVECTOR", "ALL"]:
-                        # Test JVector
+            # 1. Run JVector Tests
+            if args.impl in ["JVECTOR", "ALL"]:
+                print("  Running JVector Tests...")
+                start_j = time.time()
+                for m in m_values:
+                    for ef in ef_values:
+                        print(f"    - Params: m={m}, ef={ef}...", end="", flush=True)
                         temp_db_path = db_path + f"_temp_j_{m}_{ef}"
                         if os.path.exists(temp_db_path):
                             shutil.rmtree(temp_db_path)
@@ -666,7 +692,7 @@ def run_benchmark():
 
                         try:
                             with arcadedb.open_database(temp_db_path) as db:
-                                j_results = test_index(
+                                j_results_map[(m, ef)] = test_index(
                                     db,
                                     "JVECTOR",
                                     queries,
@@ -681,9 +707,16 @@ def run_benchmark():
                         finally:
                             if os.path.exists(temp_db_path):
                                 shutil.rmtree(temp_db_path)
+                        print(" Done.")
+                j_total_time = time.time() - start_j
 
-                    if args.impl in ["HNSWLIB", "ALL"]:
-                        # Test HNSWLib
+            # 2. Run HNSWLib Tests
+            if args.impl in ["HNSWLIB", "ALL"]:
+                print("  Running HNSWLib Tests...")
+                start_h = time.time()
+                for m in m_values:
+                    for ef in ef_values:
+                        print(f"    - Params: m={m}, ef={ef}...", end="", flush=True)
                         temp_db_path = db_path + f"_temp_h_{m}_{ef}"
                         if os.path.exists(temp_db_path):
                             shutil.rmtree(temp_db_path)
@@ -691,7 +724,7 @@ def run_benchmark():
 
                         try:
                             with arcadedb.open_database(temp_db_path) as db:
-                                h_results = test_index(
+                                h_results_map[(m, ef)] = test_index(
                                     db,
                                     "HNSWLIB",
                                     queries,
@@ -706,8 +739,14 @@ def run_benchmark():
                         finally:
                             if os.path.exists(temp_db_path):
                                 shutil.rmtree(temp_db_path)
+                        print(" Done.")
+                h_total_time = time.time() - start_h
 
-                    print(" Done.")
+            # 3. Combine Results
+            for m in m_values:
+                for ef in ef_values:
+                    j_results = j_results_map.get((m, ef))
+                    h_results = h_results_map.get((m, ef))
 
                     for k in k_values:
                         # Extract JVector results for this k
@@ -808,8 +847,11 @@ def run_benchmark():
                                 "H_Lat_Std": h_lat_std,
                                 "H_Back(ms)": h_back,
                                 "H_Back_Std": h_back_std,
+                                "J_Total_Time": j_total_time,
+                                "H_Total_Time": h_total_time,
                             }
                         )
+
         finally:
             if os.path.exists(db_path):
                 shutil.rmtree(db_path)
