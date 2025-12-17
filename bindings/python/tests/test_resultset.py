@@ -331,3 +331,28 @@ def test_resultset_reusability(temp_db_path):
         result2 = db.query("sql", "SELECT FROM ReuseTest")
         fresh_list = list(result2)
         assert len(fresh_list) == 2
+
+
+def test_result_get_rid_and_vertex(temp_db_path):
+    """Test get_rid() and get_vertex() methods on Result."""
+    with arcadedb.create_database(temp_db_path) as db:
+        with db.transaction():
+            db.schema.create_vertex_type("Person")
+            db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+
+        result = db.query("sql", "SELECT FROM Person").first()
+
+        # Test get_rid()
+        rid = result.get_rid()
+        assert rid is not None
+        assert isinstance(rid, str)
+        assert rid.startswith("#")
+
+        # Test get_vertex()
+        vertex = result.get_vertex()
+        assert vertex is not None
+        # It should be a Java object
+        assert "Vertex" in str(vertex) or "Vertex" in vertex.getClass().getName()
+
+        # Verify we can use the vertex object
+        assert vertex.getString("name") == "Alice"
