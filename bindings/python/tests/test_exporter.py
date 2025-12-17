@@ -512,7 +512,9 @@ class TestRoundTripExport:
 
         # Import the exported data
         try:
-            import_db.command("sql", f"IMPORT DATABASE file://{export_file.absolute()}")
+            # Convert path to string and replace backslashes with forward slashes for Windows compatibility
+            import_path_str = str(export_file.absolute()).replace("\\", "/")
+            import_db.command("sql", f"IMPORT DATABASE file://{import_path_str}")
 
             # Verify counts match the complex sample_db
             user_count = import_db.count_type("User")
@@ -750,9 +752,9 @@ class TestAllDataTypes:
                 assert export_file.exists()
 
                 # Import the data
-                import_db.command(
-                    "sql", f"IMPORT DATABASE file://{export_file.absolute()}"
-                )
+                # Convert path to string and replace backslashes with forward slashes for Windows compatibility
+                import_path_str = str(export_file.absolute()).replace("\\", "/")
+                import_db.command("sql", f"IMPORT DATABASE file://{import_path_str}")
 
                 # Verify record count
                 count = import_db.count_type("DataTypeTest")
