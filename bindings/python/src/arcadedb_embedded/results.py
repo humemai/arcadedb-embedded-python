@@ -206,6 +206,35 @@ class Result:
         value = self._java_result.getProperty(name)
         return convert_java_to_python(value)
 
+    def get_rid(self) -> Optional[str]:
+        """
+        Get the Record ID (RID) if available.
+
+        Returns:
+            RID string (e.g., "#10:5") or None
+
+        Example:
+            >>> result = db.query("sql", "SELECT FROM User LIMIT 1").first()
+            >>> print(result.get_rid())
+            #10:5
+        """
+        identity = self._java_result.getIdentity()
+        if identity.isPresent():
+            return str(identity.get().toString())
+        return None
+
+    def get_vertex(self) -> Any:
+        """
+        Get the underlying Vertex object if available.
+
+        Returns:
+            Java Vertex object or None
+        """
+        vertex = self._java_result.getVertex()
+        if vertex.isPresent():
+            return vertex.get()
+        return None
+
     def get_property_names(self) -> List[str]:
         """
         Get all property names (alternative to property_names property).
