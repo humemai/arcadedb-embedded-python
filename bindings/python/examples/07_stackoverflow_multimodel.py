@@ -4956,13 +4956,12 @@ class Phase3VectorEmbeddings:
 
         # Create index - automatically indexes all records
         print("  Creating vector index (auto-indexing all records)...")
-        with db.transaction():
-            index = db.create_vector_index(
-                vertex_type="Question",
-                vector_property="embedding",
-                dimensions=384,
-                distance_function="cosine",
-            )
+        index = db.create_vector_index(
+            vertex_type="Question",
+            vector_property="embedding",
+            dimensions=384,
+            distance_function="cosine",
+        )
 
         elapsed = time.time() - start_time
         print(f"  ✓ Created and indexed {num_questions:,} Questions in {elapsed:.1f}s")
@@ -4997,13 +4996,12 @@ class Phase3VectorEmbeddings:
 
         # Create index - automatically indexes all records
         print("  Creating vector index (auto-indexing all records)...")
-        with db.transaction():
-            index = db.create_vector_index(
-                vertex_type="Answer",
-                vector_property="embedding",
-                dimensions=384,
-                distance_function="cosine",
-            )
+        index = db.create_vector_index(
+            vertex_type="Answer",
+            vector_property="embedding",
+            dimensions=384,
+            distance_function="cosine",
+        )
 
         elapsed = time.time() - start_time
         print(f"  ✓ Created and indexed {num_answers:,} Answers in {elapsed:.1f}s")
@@ -5038,13 +5036,12 @@ class Phase3VectorEmbeddings:
 
         # Create vector index - automatically indexes all records
         print("  Creating vector index (auto-indexing all records)...")
-        with db.transaction():
-            index = db.create_vector_index(
-                vertex_type="Comment",
-                vector_property="embedding",
-                dimensions=384,
-                distance_function="cosine",
-            )
+        index = db.create_vector_index(
+            vertex_type="Comment",
+            vector_property="embedding",
+            dimensions=384,
+            distance_function="cosine",
+        )
 
         elapsed = time.time() - start_time
         print(f"  ✓ Created and indexed {num_comments:,} Comments in {elapsed:.1f}s")
@@ -5078,13 +5075,12 @@ class Phase3VectorEmbeddings:
 
         # Create vector index - automatically indexes all records
         print("  Creating vector index (auto-indexing all records)...")
-        with db.transaction():
-            index = db.create_vector_index(
-                vertex_type="User",
-                vector_property="embedding",
-                dimensions=384,
-                distance_function="cosine",
-            )
+        index = db.create_vector_index(
+            vertex_type="User",
+            vector_property="embedding",
+            dimensions=384,
+            distance_function="cosine",
+        )
 
         elapsed = time.time() - start_time
         print(f"  ✓ Created and indexed {num_users:,} Users in {elapsed:.1f}s")

@@ -31,7 +31,17 @@ class Database:
         self._check_not_closed()
         try:
             if args:
-                java_result = self._java_db.query(language, command, *args)
+                # Convert NumPy arrays to Java float arrays
+                converted_args = []
+                for arg in args:
+                    if (
+                        hasattr(arg, "__class__")
+                        and arg.__class__.__name__ == "ndarray"
+                    ):
+                        converted_args.append(to_java_float_array(arg))
+                    else:
+                        converted_args.append(arg)
+                java_result = self._java_db.query(language, command, *converted_args)
             else:
                 java_result = self._java_db.query(language, command)
             return ResultSet(java_result)
@@ -43,7 +53,17 @@ class Database:
         self._check_not_closed()
         try:
             if args:
-                java_result = self._java_db.command(language, command, *args)
+                # Convert NumPy arrays to Java float arrays
+                converted_args = []
+                for arg in args:
+                    if (
+                        hasattr(arg, "__class__")
+                        and arg.__class__.__name__ == "ndarray"
+                    ):
+                        converted_args.append(to_java_float_array(arg))
+                    else:
+                        converted_args.append(arg)
+                java_result = self._java_db.command(language, command, *converted_args)
             else:
                 java_result = self._java_db.command(language, command)
 

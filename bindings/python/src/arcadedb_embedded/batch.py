@@ -221,6 +221,18 @@ class BatchContext:
 
         vertex = self.db.new_vertex(type_name)
         for key, value in properties.items():
+            # Auto-convert numpy arrays to Java float arrays
+            if hasattr(value, "dtype") and hasattr(value, "tolist"):
+                try:
+                    import numpy as np
+
+                    if np.issubdtype(value.dtype, np.floating):
+                        from .vector import to_java_float_array
+
+                        value = to_java_float_array(value)
+                except ImportError:
+                    pass
+
             vertex.set(key, value)
 
         cb = self._make_callback(callback)
@@ -245,6 +257,18 @@ class BatchContext:
 
         document = self.db.new_document(type_name)
         for key, value in properties.items():
+            # Auto-convert numpy arrays to Java float arrays
+            if hasattr(value, "dtype") and hasattr(value, "tolist"):
+                try:
+                    import numpy as np
+
+                    if np.issubdtype(value.dtype, np.floating):
+                        from .vector import to_java_float_array
+
+                        value = to_java_float_array(value)
+                except ImportError:
+                    pass
+
             document.set(key, value)
 
         cb = self._make_callback(callback)
