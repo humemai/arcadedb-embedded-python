@@ -536,13 +536,33 @@ class TestRoundTripExport:
 
         finally:
             import_db.close()
-            export_file.unlink()
+            # Force garbage collection to release file handles (Windows fix)
+            import gc
+
+            gc.collect()
+
+            if export_file.exists():
+                try:
+                    export_file.unlink()
+                except PermissionError:
+                    # On Windows, file might still be locked by Java process
+                    # Wait a bit and try again, or ignore if it persists (temp file)
+                    import time
+
+                    time.sleep(0.5)
+                    try:
+                        export_file.unlink()
+                    except PermissionError:
+                        pass
 
             # Cleanup import database
             import shutil
 
             if os.path.exists(import_db_path):
-                shutil.rmtree(import_db_path)
+                try:
+                    shutil.rmtree(import_db_path)
+                except PermissionError:
+                    pass
 
 
 class TestExportWithBatchContext:
@@ -829,11 +849,25 @@ class TestAllDataTypes:
 
             finally:
                 import_db.close()
+                # Force garbage collection to release file handles (Windows fix)
+                import gc
+
+                gc.collect()
 
             # Clean up
             export_file = Path("exports") / export_path
             if export_file.exists():
-                export_file.unlink()
+                try:
+                    export_file.unlink()
+                except PermissionError:
+                    # On Windows, file might still be locked by Java process
+                    import time
+
+                    time.sleep(0.5)
+                    try:
+                        export_file.unlink()
+                    except PermissionError:
+                        pass
 
         finally:
             # Properly close database if still open

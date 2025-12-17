@@ -17,7 +17,24 @@ def temp_db_path():
     yield db_path
     # Cleanup
     if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
+        # Force garbage collection to release file handles (Windows fix)
+        import gc
+
+        gc.collect()
+
+        try:
+            shutil.rmtree(temp_dir)
+        except PermissionError:
+            # On Windows, files might still be locked by Java process
+            # Wait a bit and try again
+            import time
+
+            time.sleep(0.5)
+            try:
+                shutil.rmtree(temp_dir)
+            except PermissionError:
+                # If still locked, ignore (OS will clean up temp eventually)
+                pass
 
 
 @pytest.fixture
@@ -37,8 +54,24 @@ def temp_db():
             db.close()
     except Exception:
         pass
+
+    # Force garbage collection to release file handles (Windows fix)
+    import gc
+
+    gc.collect()
+
     if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(temp_dir)
+        except PermissionError:
+            # On Windows, files might still be locked by Java process
+            import time
+
+            time.sleep(0.5)
+            try:
+                shutil.rmtree(temp_dir)
+            except PermissionError:
+                pass
 
 
 @pytest.fixture
