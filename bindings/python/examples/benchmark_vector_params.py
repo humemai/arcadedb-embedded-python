@@ -45,12 +45,8 @@ import time
 
 import arcadedb_embedded as arcadedb
 import h5py
-import jpype
 import numpy as np
 import requests
-from arcadedb_embedded.exceptions import ArcadeDBError
-from arcadedb_embedded.jvm import start_jvm
-from arcadedb_embedded.vector import to_java_float_array
 
 DATASETS = {
     "sift-128-euclidean": "http://ann-benchmarks.com/sift-128-euclidean.hdf5",
@@ -215,10 +211,9 @@ def setup_database(db_path, data):
         db.schema.create_property("VectorData", "id", "INTEGER")
         db.schema.create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
 
-    with db.batch_context(batch_size=1000) as batch:
+    with db.batch_context(batch_size=10000) as batch:
         for i, vec in enumerate(data):
-            java_vec = to_java_float_array(vec)
-            batch.create_vertex("VectorData", id=i, vector=java_vec)
+            batch.create_vertex("VectorData", id=i, vector=vec)
 
     setup_time = time.time() - start_setup
     print(f"  Database setup completed in {setup_time:.4f}s")
@@ -238,7 +233,7 @@ def test_index(
     ef,
     metric="cosine",
 ):
-    # print(f"    Testing {index_type} (m={m}, ef={ef})...")
+    print(f"    Testing {index_type} (m={m}, ef={ef})...")
 
     # Create Index
     start_build = time.time()
@@ -279,11 +274,9 @@ def test_index(
 
             with db.transaction():
                 for record in chunk:
-                    index.add_vertex(record._java_result.getElement().get().asVertex())
+                    index.add_vertex(record.get_vertex())
 
-            last_rid = (
-                chunk[-1]._java_result.getElement().get().getIdentity().toString()
-            )
+            last_rid = chunk[-1].get_rid()
 
     # Force index build (JVector is lazy)
     print("    - Warming up index (forcing build)...")
@@ -300,85 +293,34 @@ def test_index(
     # This is efficient but assumes the index returns ordered results (which it does)
 
     latencies = []
-    backend_latencies = []
 
     # Pre-allocate lists for each k
     recalls_map = {k: [] for k in k_values}
     hits_map = {k: [] for k in k_values}
 
-    System = jpype.JClass("java.lang.System")
-
     for i, query_vec in enumerate(queries):
-        # Pre-convert to avoid measuring conversion in backend time
-        java_vector = to_java_float_array(query_vec)
-
         t0 = time.time()
 
-        # Backend Search
-        start_nano = System.nanoTime()
-        raw_results = []  # List of (rid, score) or (vertex, distance)
-
-        if index_type == "JVECTOR":
-            idx = index._java_index
-            # Handle TypeIndex vs LSMVectorIndex
-            indexes_to_search = []
-            if "TypeIndex" in idx.getClass().getName():
-                indexes_to_search.extend(idx.getSubIndexes())
-            else:
-                indexes_to_search.append(idx)
-
-            for sub in indexes_to_search:
-                if "LSMVectorIndex" in sub.getClass().getName():
-                    pairs = sub.findNeighborsFromVector(java_vector, max_k)
-                    # pairs is List<Pair<RID, Float>>
-                    for pair in pairs:
-                        raw_results.append((pair.getFirst(), pair.getSecond()))
-
-        else:  # HNSWLIB
-            # findNearest returns Stream<ResultSet> or similar?
-            # In vector.py: results = self._java_index.findNearest(java_vector, k, None)
-            # results is a collection of Result objects
-            java_results = index._java_index.findNearest(java_vector, max_k, None)
-            for res in java_results:
-                raw_results.append((res.item(), res.distance()))
-
-        end_nano = System.nanoTime()
-        backend_latencies.append((end_nano - start_nano) / 1_000_000.0)
-
-        # Post-processing (Resolution) - included in Total Latency but not Backend
-
-        result_ids_ordered = []
-
-        if index_type == "JVECTOR":
-            # Sort
-            # Check metric for direction
-            reverse = False
-            if metric == "euclidean":
-                reverse = True  # Similarity
-            # Cosine: Distance (Lower better) -> False
-
-            raw_results.sort(key=lambda x: x[1], reverse=reverse)
-            raw_results = raw_results[:max_k]
-
-            # Resolve RIDs
-            for rid, score in raw_results:
-                try:
-                    # lookupByRID
-                    rec = db._java_db.lookupByRID(rid, True)
-                    vid = rec.asVertex().getInteger("id")
-                    result_ids_ordered.append(vid)
-                except Exception:
-                    pass
-        else:
-            # HNSWLIB returns Vertices directly (item() is Vertex)
-            for vertex, dist in raw_results:
-                try:
-                    vid = vertex.getInteger("id")
-                    result_ids_ordered.append(vid)
-                except Exception:
-                    pass
+        # Use Python API
+        results = index.find_nearest(query_vec, k=max_k)
 
         latencies.append((time.time() - t0) * 1000)
+
+        result_ids_ordered = []
+        for item, score in results:
+            try:
+                # Handle both Record (JVector) and Vertex (Legacy)
+                vertex = item
+                # If item is a Result wrapper (from results.py), get the underlying vertex
+                if hasattr(item, "get_vertex"):
+                    vertex = item.get_vertex()
+                elif hasattr(item, "asVertex"):
+                    vertex = item.asVertex()
+
+                vid = vertex.getInteger("id")
+                result_ids_ordered.append(vid)
+            except Exception:
+                pass
 
         # Calculate metrics for each k
         for k in k_values:
@@ -397,19 +339,14 @@ def test_index(
     avg_latency = np.mean(latencies)
     std_latency = np.std(latencies)
 
-    avg_backend_latency = np.mean(backend_latencies)
-    std_backend_latency = np.std(backend_latencies)
-
     for k in k_values:
         results_by_k[k] = {
             "recall": np.mean(recalls_map[k]),
             "recall_std": np.std(recalls_map[k]),
             "hit": np.mean(hits_map[k]),
             "hit_std": np.std(hits_map[k]),
-            "latency": avg_latency,  # Latency is same for all k if we query max_k
+            "latency": avg_latency,
             "latency_std": std_latency,
-            "backend_latency": avg_backend_latency,
-            "backend_latency_std": std_backend_latency,
             "build_time": build_time,
         }
 
@@ -422,27 +359,6 @@ def format_val(val, fmt=".4f"):
 
 def format_std(val, std, fmt=".4f"):
     return f"{val:{fmt}}±{std:{fmt}}" if val is not None else "N/A"
-
-
-def silence_logs():
-    """
-    Silence ArcadeDB INFO logs to avoid polluting benchmark output
-    and affecting timing measurements.
-    """
-    try:
-        # ArcadeDB uses java.util.logging
-        Logger = jpype.JClass("java.util.logging.Logger")
-        Level = jpype.JClass("java.util.logging.Level")
-
-        # Silence Root Logger
-        root_logger = Logger.getLogger("")
-        root_logger.setLevel(Level.WARNING)
-
-        # Explicitly silence ArcadeDB logger
-        Logger.getLogger("com.arcadedb").setLevel(Level.WARNING)
-
-    except Exception as e:
-        print(f"  [Warning] Failed to silence Java logs: {e}")
 
 
 def save_results_to_markdown(
@@ -552,9 +468,9 @@ def save_results_to_markdown(
             for k in k_values:
                 f.write(f"### k = {k}\n\n")
                 f.write(
-                    "| m | ef | J_Recall (Avg±Std) | H_Recall (Avg±Std) | J_Hit (Avg) | H_Hit (Avg) | J_Build(s) | H_Build(s) | J_Lat(ms) | H_Lat(ms) | J_Back(ms) | H_Back(ms) |\n"
+                    "| m | ef | J_Recall (Avg±Std) | H_Recall (Avg±Std) | J_Hit (Avg) | H_Hit (Avg) | J_Build(s) | H_Build(s) | J_Lat(ms) | H_Lat(ms) |\n"
                 )
-                f.write("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+                f.write("|---|---|---|---|---|---|---|---|---|---|\n")
 
                 k_results = [r for r in scen_results if r["k"] == k]
                 for r in k_results:
@@ -564,17 +480,11 @@ def save_results_to_markdown(
                     h_hit_str = format_val(r["H_Hit"])
                     j_lat_str = format_std(r["J_Lat(ms)"], r["J_Lat_Std"], ".2f")
                     h_lat_str = format_std(r["H_Lat(ms)"], r["H_Lat_Std"], ".2f")
-                    j_back_str = format_std(
-                        r.get("J_Back(ms)"), r.get("J_Back_Std"), ".2f"
-                    )
-                    h_back_str = format_std(
-                        r.get("H_Back(ms)"), r.get("H_Back_Std"), ".2f"
-                    )
                     j_bld_str = format_val(r["J_Build(s)"])
                     h_bld_str = format_val(r["H_Build(s)"])
 
                     f.write(
-                        f"| {r['m']} | {r['ef']} | {j_rec_str} | {h_rec_str} | {j_hit_str} | {h_hit_str} | {j_bld_str} | {h_bld_str} | {j_lat_str} | {h_lat_str} | {j_back_str} | {h_back_str} |\n"
+                        f"| {r['m']} | {r['ef']} | {j_rec_str} | {h_rec_str} | {j_hit_str} | {h_hit_str} | {j_bld_str} | {h_bld_str} | {j_lat_str} | {h_lat_str} |\n"
                     )
                 f.write("\n")
     print(f"  [Saved results to {filename}]")
@@ -605,8 +515,6 @@ def run_benchmark():
         raise ValueError("Dataset must be specified. Use --dataset.")
 
     # Ensure JVM is started and logs are silenced
-    start_jvm()
-    silence_logs()
 
     db_path = f"./my_test_databases/benchmark_db_{args.dataset}"
     k_values = [10, 50, 100]
@@ -757,12 +665,8 @@ def run_benchmark():
                             j_hit_std,
                             j_lat,
                             j_lat_std,
-                            j_back,
-                            j_back_std,
                             j_bld,
                         ) = (
-                            None,
-                            None,
                             None,
                             None,
                             None,
@@ -779,8 +683,6 @@ def run_benchmark():
                             j_hit_std = res["hit_std"]
                             j_lat = res["latency"]
                             j_lat_std = res["latency_std"]
-                            j_back = res["backend_latency"]
-                            j_back_std = res["backend_latency_std"]
                             j_bld = res["build_time"]
 
                         # Extract HNSWLib results for this k
@@ -791,12 +693,8 @@ def run_benchmark():
                             h_hit_std,
                             h_lat,
                             h_lat_std,
-                            h_back,
-                            h_back_std,
                             h_bld,
                         ) = (
-                            None,
-                            None,
                             None,
                             None,
                             None,
@@ -813,8 +711,6 @@ def run_benchmark():
                             h_hit_std = res["hit_std"]
                             h_lat = res["latency"]
                             h_lat_std = res["latency_std"]
-                            h_back = res["backend_latency"]
-                            h_back_std = res["backend_latency_std"]
                             h_bld = res["build_time"]
 
                         results.append(
@@ -836,8 +732,6 @@ def run_benchmark():
                                 "J_Build(s)": j_bld,
                                 "J_Lat(ms)": j_lat,
                                 "J_Lat_Std": j_lat_std,
-                                "J_Back(ms)": j_back,
-                                "J_Back_Std": j_back_std,
                                 "H_Recall": h_rec,
                                 "H_Std": h_std,
                                 "H_Hit": h_hit,
@@ -845,8 +739,6 @@ def run_benchmark():
                                 "H_Build(s)": h_bld,
                                 "H_Lat(ms)": h_lat,
                                 "H_Lat_Std": h_lat_std,
-                                "H_Back(ms)": h_back,
-                                "H_Back_Std": h_back_std,
                                 "J_Total_Time": j_total_time,
                                 "H_Total_Time": h_total_time,
                             }
@@ -868,11 +760,11 @@ def run_benchmark():
         )
 
     # Print Results Table
-    print("\n" + "=" * 200)
+    print("\n" + "=" * 170)
     print(
-        f"{'Scenario':<10} | {'m':<3} | {'ef':<4} | {'k':<3} | {'J_Recall (Avg±Std)':<20} | {'H_Recall (Avg±Std)':<20} | {'J_Hit (Avg)':<15} | {'H_Hit (Avg)':<15} | {'J_Build(s)':<10} | {'H_Build(s)':<10} | {'J_Lat(ms)':<15} | {'H_Lat(ms)':<15} | {'J_Back(ms)':<15} | {'H_Back(ms)':<15}"
+        f"{'Scenario':<10} | {'m':<3} | {'ef':<4} | {'k':<3} | {'J_Recall (Avg±Std)':<20} | {'H_Recall (Avg±Std)':<20} | {'J_Hit (Avg)':<15} | {'H_Hit (Avg)':<15} | {'J_Build(s)':<10} | {'H_Build(s)':<10} | {'J_Lat(ms)':<15} | {'H_Lat(ms)':<15}"
     )
-    print("-" * 200)
+    print("-" * 170)
 
     for r in results:
         j_rec_str = format_std(r["J_Recall"], r["J_Std"])
@@ -881,13 +773,11 @@ def run_benchmark():
         h_hit_str = format_val(r["H_Hit"])
         j_lat_str = format_std(r["J_Lat(ms)"], r["J_Lat_Std"], ".2f")
         h_lat_str = format_std(r["H_Lat(ms)"], r["H_Lat_Std"], ".2f")
-        j_back_str = format_std(r.get("J_Back(ms)"), r.get("J_Back_Std"), ".2f")
-        h_back_str = format_std(r.get("H_Back(ms)"), r.get("H_Back_Std"), ".2f")
         j_bld_str = format_val(r["J_Build(s)"])
         h_bld_str = format_val(r["H_Build(s)"])
 
         print(
-            f"{r['Scenario']:<10} | {r['m']:<3} | {r['ef']:<4} | {r['k']:<3} | {j_rec_str:<20} | {h_rec_str:<20} | {j_hit_str:<15} | {h_hit_str:<15} | {j_bld_str:<10} | {h_bld_str:<10} | {j_lat_str:<15} | {h_lat_str:<15} | {j_back_str:<15} | {h_back_str:<15}"
+            f"{r['Scenario']:<10} | {r['m']:<3} | {r['ef']:<4} | {r['k']:<3} | {j_rec_str:<20} | {h_rec_str:<20} | {j_hit_str:<15} | {h_hit_str:<15} | {j_bld_str:<10} | {h_bld_str:<10} | {j_lat_str:<15} | {h_lat_str:<15}"
         )
     print("=" * 200)
 
