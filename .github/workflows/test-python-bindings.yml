@@ -217,20 +217,31 @@ jobs:
           # Parse JUnit XML for test counts (cross-platform XML parsing)
           if [ -f "test-results.xml" ]; then
             # Extract counts from testsuite element
-            PASSED=$(grep -oE 'tests="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
+            TOTAL=$(grep -oE 'tests="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
             FAILED=$(grep -oE 'failures="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
             SKIPPED=$(grep -oE 'skipped="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
+            ERRORS=$(grep -oE 'errors="[0-9]+"' test-results.xml | grep -oE '[0-9]+' | head -1)
 
             # Default to 0 if not found
-            PASSED=${PASSED:-0}
+            TOTAL=${TOTAL:-0}
             FAILED=${FAILED:-0}
             SKIPPED=${SKIPPED:-0}
+            ERRORS=${ERRORS:-0}
+
+            # Calculate passed tests
+            PASSED=$((TOTAL - FAILED - SKIPPED - ERRORS))
 
             echo "passed=$PASSED" >> $GITHUB_OUTPUT
             echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
             echo "failed=$FAILED" >> $GITHUB_OUTPUT
 
             echo "✅ Test results: $PASSED passed, $SKIPPED skipped, $FAILED failed"
+
+            # Force failure if there are failures or errors
+            if [ "$FAILED" -gt 0 ] || [ "$ERRORS" -gt 0 ]; then
+              echo "❌ Tests failed (failures=$FAILED, errors=$ERRORS)"
+              exit 1
+            fi
           else
             echo "⚠️ test-results.xml not found"
             exit 1

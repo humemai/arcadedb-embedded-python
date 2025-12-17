@@ -522,12 +522,6 @@ class TestVectorIndexSchemaOps:
 
     def test_list_vector_indexes_with_hnsw(self, test_db):
         """Test list_vector_indexes returns HNSW index names."""
-        # Try to use NumPy if available (for vector embeddings)
-        try:
-            import numpy as np  # noqa: F401
-        except ImportError:
-            pytest.skip("NumPy not available for vector index test")
-
         schema = test_db.schema
 
         # Create vertex type with vector property
@@ -621,12 +615,6 @@ class TestVectorIndexSchemaOps:
 
     def test_get_vector_index_persistence(self, test_db):
         """Test that get_vector_index can load persisted HNSW indexes."""
-        # Try to use NumPy if available
-        try:
-            import numpy as np
-        except ImportError:
-            pytest.skip("NumPy not available for vector index test")
-
         schema = test_db.schema
 
         # Create and populate vector index
@@ -647,7 +635,7 @@ class TestVectorIndexSchemaOps:
         with test_db.transaction():
             # Add a vertex to the index
             vertex = test_db._java_db.newVertex("Embedding")
-            vector = np.array([0.1, 0.2, 0.3, 0.4])
+            vector = [0.1, 0.2, 0.3, 0.4]
             import arcadedb_embedded as arcadedb
 
             vertex.set("vector", arcadedb.to_java_float_array(vector))
@@ -659,7 +647,7 @@ class TestVectorIndexSchemaOps:
             index._java_index.save()
 
         # Verify we can search the index
-        query_vector = np.array([0.1, 0.2, 0.3, 0.4])
+        query_vector = [0.1, 0.2, 0.3, 0.4]
         results = index.find_nearest(query_vector, k=1)
         assert len(results) == 1
 
@@ -736,11 +724,6 @@ class TestLSMVectorIndexSchemaOps:
 
     def test_list_lsm_vector_indexes(self, test_db):
         """Test list_vector_indexes includes LSM vector indexes."""
-        try:
-            import numpy as np  # noqa: F401
-        except ImportError:
-            pytest.skip("NumPy not available")
-
         schema = test_db.schema
         schema.create_vertex_type("Doc")
         schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
@@ -756,11 +739,6 @@ class TestLSMVectorIndexSchemaOps:
 
     def test_get_lsm_vector_index_existing(self, test_db):
         """Test get_vector_index retrieves an existing LSM index."""
-        try:
-            import numpy as np  # noqa: F401
-        except ImportError:
-            pytest.skip("NumPy not available")
-
         schema = test_db.schema
         schema.create_vertex_type("Doc")
         schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
@@ -781,11 +759,6 @@ class TestLSMVectorIndexSchemaOps:
 
     def test_get_lsm_vector_index_persistence(self, test_db):
         """Test that get_vector_index can load persisted LSM indexes."""
-        try:
-            import numpy as np  # noqa: F401
-        except ImportError:
-            pytest.skip("NumPy not available")
-
         import arcadedb_embedded as arcadedb
 
         schema = test_db.schema

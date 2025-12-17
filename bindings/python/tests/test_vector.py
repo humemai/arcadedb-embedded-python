@@ -113,11 +113,6 @@ class TestLSMVectorIndex:
 
     def test_lsm_index_size(self, test_db):
         """Test getting the size of an LSM vector index."""
-        try:
-            import numpy as np
-        except ImportError:
-            pytest.skip("NumPy not available")
-
         test_db.schema.create_vertex_type("Doc")
         test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
 
