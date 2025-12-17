@@ -96,11 +96,6 @@ class TestVectorIndexCapacity:
 
     def test_vector_index_get_max_capacity(self, test_db):
         """Test get_max_capacity returns the max_items parameter."""
-        try:
-            import numpy as np  # noqa: F401
-        except ImportError:
-            pytest.skip("NumPy not available for vector index test")
-
         schema = test_db.schema
 
         # Create vector index with known capacity
@@ -122,11 +117,6 @@ class TestVectorIndexCapacity:
 
     def test_vector_index_get_size_empty(self, test_db):
         """Test get_size returns 0 for empty index."""
-        try:
-            import numpy as np  # noqa: F401
-        except ImportError:
-            pytest.skip("NumPy not available for vector index test")
-
         schema = test_db.schema
 
         schema.create_vertex_type("SizeTest")
@@ -181,11 +171,6 @@ class TestVectorIndexCapacity:
 
     def test_vector_index_get_stats(self, test_db):
         """Test get_stats returns correct statistics."""
-        try:
-            import numpy as np
-        except ImportError:
-            pytest.skip("NumPy not available for vector index test")
-
         schema = test_db.schema
 
         schema.create_vertex_type("StatsTest")
@@ -206,7 +191,7 @@ class TestVectorIndexCapacity:
             # Add 3 items (30% capacity)
             for i in range(3):
                 vertex = test_db._java_db.newVertex("StatsTest")
-                vector = np.array([0.1 * i, 0.2 * i, 0.3 * i, 0.4 * i])
+                vector = [0.1 * i, 0.2 * i, 0.3 * i, 0.4 * i]
                 vertex.set("embedding", arcadedb.to_java_float_array(vector))
                 vertex.set("vector_id", f"stats_vec_{i}")
                 vertex.save()
@@ -229,11 +214,6 @@ class TestVectorIndexCapacity:
 
     def test_vector_index_is_full(self, test_db):
         """Test is_full correctly identifies when index is at capacity."""
-        try:
-            import numpy as np
-        except ImportError:
-            pytest.skip("NumPy not available for vector index test")
-
         schema = test_db.schema
 
         schema.create_vertex_type("FullTest")
@@ -259,7 +239,7 @@ class TestVectorIndexCapacity:
             vertex1 = test_db._java_db.newVertex("FullTest")
             vertex1.set(
                 "embedding",
-                arcadedb.to_java_float_array(np.array([0.1, 0.2, 0.3, 0.4])),
+                arcadedb.to_java_float_array([0.1, 0.2, 0.3, 0.4]),
             )
             vertex1.set("vector_id", "full_vec_1")
             vertex1.save()
@@ -271,7 +251,7 @@ class TestVectorIndexCapacity:
             vertex2 = test_db._java_db.newVertex("FullTest")
             vertex2.set(
                 "embedding",
-                arcadedb.to_java_float_array(np.array([0.5, 0.6, 0.7, 0.8])),
+                arcadedb.to_java_float_array([0.5, 0.6, 0.7, 0.8]),
             )
             vertex2.set("vector_id", "full_vec_2")
             vertex2.save()
@@ -282,11 +262,6 @@ class TestVectorIndexCapacity:
 
     def test_vector_index_stats_empty_index(self, test_db):
         """Test get_stats handles empty index correctly."""
-        try:
-            import numpy as np  # noqa: F401
-        except ImportError:
-            pytest.skip("NumPy not available for vector index test")
-
         schema = test_db.schema
 
         schema.create_vertex_type("EmptyStats")
