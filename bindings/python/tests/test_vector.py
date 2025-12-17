@@ -55,11 +55,6 @@ class TestLSMVectorIndex:
 
     def test_lsm_vector_search(self, test_db):
         """Test searching in vector index (JVector implementation)."""
-        try:
-            import numpy as np
-        except ImportError:
-            pytest.skip("NumPy not available")
-
         # Create schema and index
         test_db.schema.create_vertex_type("Doc")
         test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")

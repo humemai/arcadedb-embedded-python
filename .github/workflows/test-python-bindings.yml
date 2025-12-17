@@ -199,7 +199,7 @@ jobs:
         shell: bash
         run: |
           cd bindings/python
-          pip install test-install/*.whl pytest pytest-cov requests
+          pip install test-install/*.whl pytest pytest-cov requests numpy
 
       - name: Run pytest on host
         id: pytest
