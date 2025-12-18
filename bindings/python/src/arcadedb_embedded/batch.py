@@ -40,7 +40,7 @@ class BatchContext:
         batch_size: int = 5000,
         parallel: int = 4,
         use_wal: bool = True,
-        back_pressure: int = 0,
+        back_pressure: int = 50,
         progress: bool = False,
         progress_desc: str = "Processing",
     ):
@@ -52,7 +52,7 @@ class BatchContext:
             batch_size: Auto-commit every N operations (default: 5000)
             parallel: Number of parallel worker threads 1-16 (default: 4)
             use_wal: Enable Write-Ahead Log (default: True)
-            back_pressure: Queue back-pressure threshold 0-100 (default: 0)
+            back_pressure: Queue back-pressure threshold 0-100 (default: 50)
             progress: Enable progress tracking (default: False)
             progress_desc: Description for progress bar (default: "Processing")
         """
