@@ -1,5 +1,11 @@
 # Vector Search Benchmark: ArcadeDB (JVector) vs FAISS
 
+## TL;DR
+*   **Speed:** ArcadeDB (JVector) is surprisingly fast, often matching or beating in-memory FAISS.
+*   **Recall:** ArcadeDB has much lower recall than FAISS (likely due to lazy loading issues).
+*   **Persistence:** Works correctly, but has a significant "warmup" latency on the first query.
+*   **Verdict:** Promising performance, but recall issues need addressing for high-precision production use.
+
 This project benchmarks the performance and accuracy of **ArcadeDB's embedded Python bindings (JVector)** against **FAISS (HNSW)**, a standard in-memory vector search library.
 
 The goal is to evaluate ArcadeDB's suitability for vector search tasks, specifically focusing on **Recall@k**, **Latency**, and **Persistence**.
