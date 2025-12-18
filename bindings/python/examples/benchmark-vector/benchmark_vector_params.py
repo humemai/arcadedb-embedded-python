@@ -3,17 +3,18 @@
 Benchmark Vector Parameters
 ===========================
 
-Runs a comprehensive benchmark of ArcadeDB's vector index implementations
-(JVector vs HNSWLib) across multiple dataset sizes and index parameters.
+Runs a comprehensive benchmark of ArcadeDB's JVector index implementation
+across multiple dataset sizes and index parameters.
 
 Scenarios:
-1. Small:  Dim=64,  Count=1000,  Queries=20
-2. Medium: Dim=128, Count=5000,  Queries=50
-3. Large:  Dim=384, Count=10000, Queries=100
+1. Small:  Count=1,000,     Queries=10
+2. Medium: Count=10,000,    Queries=100
+3. Large:  Count=100,000,   Queries=1,000
+4. Full:   Count=1,000,000, Queries=10,000
 
 Index Parameters Swept:
-- m: [16, 32, 64]
-- ef: [128, 256, 512]
+- max_connections: [16, 32, 64]
+- beam_width: [128, 256, 512]
 
 
 **1. SIFT-128-Euclidean (`sift-128-euclidean.hdf5`)**
@@ -27,14 +28,6 @@ Index Parameters Swept:
 *   **Total Vectors:** 1,183,514 (~1.2 Million)
 *   **Dimensions:** 100
 *   **Test Queries:** 10,000
-
-**Important Note:**
-Your current benchmark scenarios are capped at **10,000** vectors ("Large" scenario).
-This means you are loading the 500MB file but only using the first 1% of the data.
-
-If you want to benchmark the *real* performance of the index, we should probably add a
-scenario that uses the full 1M vectors, though that will take significantly longer to
-build and test.
 
 """
 
@@ -221,82 +214,15 @@ def setup_database(db_path, data):
     return db, setup_time
 
 
-def test_index(
-    db,
-    index_type,
-    queries,
-    ground_truth_dict,
-    k_values,
-    dim,
-    count,
-    m,
-    ef,
-    metric="cosine",
-):
-    print(f"    Testing {index_type} (m={m}, ef={ef})...")
-
-    # Create Index
-    start_build = time.time()
-
-    if index_type == "JVECTOR":
-        index = db.create_vector_index(
-            vertex_type="VectorData",
-            vector_property="vector",
-            dimensions=dim,
-            distance_function=metric,
-            max_connections=m,
-            beam_width=ef,
-        )
-    else:  # HNSWLIB
-        index = db.create_legacy_vector_index(
-            vertex_type="VectorData",
-            vector_property="vector",
-            dimensions=dim,
-            max_items=count,
-            id_property="id",
-            distance_function=metric,
-            m=m,
-            ef=ef,
-            ef_construction=200,
-        )
-
-        # Legacy index needs manual population
-        print("    - Populating legacy index (paginated)...")
-        last_rid = "#-1:-1"
-        batch_size = 10000
-
-        while True:
-            query = f"SELECT FROM VectorData WHERE @rid > {last_rid} ORDER BY @rid LIMIT {batch_size}"
-            chunk = list(db.query("sql", query))
-
-            if not chunk:
-                break
-
-            with db.transaction():
-                for record in chunk:
-                    index.add_vertex(record.get_vertex())
-
-            last_rid = chunk[-1].get_rid()
-
-    # Force index build (JVector is lazy)
-    print("    - Warming up index (forcing build)...")
-    # Run a dummy query to trigger graph construction
-    index.find_nearest(queries[0], k=k_values[0])
-
-    build_time = time.time() - start_build
-
-    results_by_k = {}
+def evaluate_index(index, queries, ground_truth_dict, k_values):
+    """
+    Runs queries against the index and calculates Recall and Latency.
+    """
     max_k = max(k_values)
-
-    # Query
-    # We query with max_k once, then slice results for smaller k's
-    # This is efficient but assumes the index returns ordered results (which it does)
-
     latencies = []
 
     # Pre-allocate lists for each k
     recalls_map = {k: [] for k in k_values}
-    hits_map = {k: [] for k in k_values}
 
     for i, query_vec in enumerate(queries):
         t0 = time.time()
@@ -334,23 +260,129 @@ def test_index(
             recall = intersection / k
             recalls_map[k].append(recall)
 
-            hits_map[k].append(1 if intersection > 0 else 0)
-
     avg_latency = np.mean(latencies)
     std_latency = np.std(latencies)
 
+    results = {}
     for k in k_values:
-        results_by_k[k] = {
+        results[k] = {
             "recall": np.mean(recalls_map[k]),
             "recall_std": np.std(recalls_map[k]),
-            "hit": np.mean(hits_map[k]),
-            "hit_std": np.std(hits_map[k]),
             "latency": avg_latency,
             "latency_std": std_latency,
+        }
+    return results
+
+
+def test_index(
+    db_path,
+    queries,
+    ground_truth_dict,
+    k_values,
+    dim,
+    count,
+    max_connections,
+    beam_width,
+    metric="cosine",
+):
+    print(
+        f"    Testing JVector (max_connections={max_connections}, beam_width={beam_width})..."
+    )
+
+    # 1. Open DB to create index
+    start_build = time.time()
+    count_before = 0
+    actual_index_name = None
+    results_before = None
+
+    with arcadedb.open_database(db_path) as db:
+        print("    - DB Opened. Creating index...")
+        index = db.create_vector_index(
+            vertex_type="VectorData",
+            vector_property="vector",
+            dimensions=dim,
+            distance_function=metric,
+            max_connections=max_connections,
+            beam_width=beam_width,
+        )
+        print("    - Index created.")
+
+        # Force index build (JVector is lazy)
+        print("    - Warming up index (forcing build)...")
+        start_warmup = time.time()
+        # Run a dummy query to trigger graph construction
+        try:
+            index.find_nearest(queries[0], k=k_values[0])
+            print("    - Warmup query successful.")
+        except Exception as e:
+            print(f"    - Warmup query FAILED: {e}")
+            raise
+        warmup_time = time.time() - start_warmup
+
+        actual_index_name = index._java_index.getName()
+
+        count_before = db.count_type("VectorData")
+        print(f"    - Vectors before close: {count_before}")
+
+        print("    - Running queries BEFORE restart...")
+        results_before = evaluate_index(index, queries, ground_truth_dict, k_values)
+
+    build_time = time.time() - start_build
+
+    # 2. Reopen DB to verify persistence and query
+    print("    - Restarting Database...")
+    count_after = 0
+    results_after = None
+
+    start_open = time.time()
+    with arcadedb.open_database(db_path) as db:
+        open_time = time.time() - start_open
+        print(f"    - Database opened in {open_time:.4f}s")
+
+        count_after = db.count_type("VectorData")
+        print(f"    - Vectors after open: {count_after}")
+
+        # Re-acquire index object
+        try:
+            raw_index = db.schema.get_index_by_name(actual_index_name)
+
+            # Import wrappers
+            from arcadedb_embedded.vector import VectorIndex
+
+            index = VectorIndex(raw_index, db)
+
+        except Exception as e:
+            print(
+                f"    - Warning: Could not retrieve index '{actual_index_name}' by name: {e}"
+            )
+            pass
+
+        print("    - Running queries AFTER restart...")
+        results_after = evaluate_index(index, queries, ground_truth_dict, k_values)
+
+    # Merge results
+    final_results = {}
+    for k in k_values:
+        rb = results_before[k]
+        ra = results_after[k]
+
+        final_results[k] = {
+            "recall": ra["recall"],  # Default to After for main metric
+            "recall_std": ra["recall_std"],
+            "latency": ra["latency"],
+            "latency_std": ra["latency_std"],
+            "recall_before": rb["recall"],
+            "recall_after": ra["recall"],
+            "latency_before": rb["latency"],
+            "latency_after": ra["latency"],
             "build_time": build_time,
+            "warmup_time": warmup_time,
+            "open_time": open_time,
+            "count_before": count_before,
+            "count_after": count_after,
         }
 
-    return results_by_k
+    return final_results
 
 
 def format_val(val, fmt=".4f"):
@@ -367,7 +399,7 @@ def save_results_to_markdown(
     with open(filename, "w") as f:
         f.write("# Benchmark Results\n\n")
         f.write(
-            "This benchmark compares ArcadeDB's vector index implementations (JVector vs HNSWLib) across multiple dataset sizes and index parameters.\n\n"
+            "This benchmark evaluates ArcadeDB's JVector index implementation across multiple dataset sizes and index parameters.\n\n"
         )
 
         if dataset_info:
@@ -382,42 +414,18 @@ def save_results_to_markdown(
             f.write("\n")
 
         f.write("## Targets & Use Cases\n\n")
-        f.write(
-            "| k      | Recall target | Hit target | Use case                   |\n"
-        )
-        f.write(
-            "| ------ | ------------- | ---------- | -------------------------- |\n"
-        )
-        f.write(
-            "| 10     | 0.85–0.95     | 0.90–0.95  | Small corpora only         |\n"
-        )
-        f.write(
-            "| **50** | **≥ 0.95**    | **≥ 0.99** | **Default RAG**            |\n"
-        )
-        f.write(
-            "| 100    | 0.90–0.93     | ≈ 1.0      | Very large / noisy corpora |\n\n"
-        )
-        f.write("As k increases, Recall@k can go down — but Hit@k must go up.\n\n")
+        f.write("| k      | Recall target | Use case                   |\n")
+        f.write("| ------ | ------------- | -------------------------- |\n")
+        f.write("| 10     | 0.85–0.95     | Small corpora only         |\n")
+        f.write("| **50** | **≥ 0.95**    | **Default RAG**            |\n")
+        f.write("| 100    | 0.90–0.93     | Very large / noisy corpora |\n\n")
+        f.write("As k increases, Recall@k can go down.\n\n")
 
         f.write("**Note:**\n")
-        f.write(
-            "- **Parameter Semantics**: `m` and `ef` are not exactly equivalent between implementations:\n"
-        )
-        f.write("  - **JVector**: `m` -> `max_connections`, `ef` -> `beam_width`.\n")
-        f.write("  - **HNSWLib**: `m` -> `m`, `ef` -> `ef`.\n")
-        f.write(
-            "- **HNSWLib**: `ef_construction` is fixed at 200. `ef` controls search recall/speed dynamically.\n"
-        )
         f.write("- **Metric Equations**:\n")
+        f.write("  - **Euclidean**: Similarity = $1 / (1 + d^2)$ (Higher is better)\n")
         f.write(
-            "  - **Euclidean (JVector)**: Similarity = $1 / (1 + d^2)$ (Higher is better)\n"
-        )
-        f.write("  - **Euclidean (HNSWLib)**: Distance = $d^2$ (Lower is better)\n")
-        f.write(
-            "  - **Cosine (JVector)**: Distance = $(1 - \\cos(\\theta)) / 2$ (Lower is better)\n"
-        )
-        f.write(
-            "  - **Cosine (HNSWLib)**: Distance = $1 - \\cos(\\theta)$ (Lower is better)\n"
+            "  - **Cosine**: Distance = $(1 - \\cos(\\theta)) / 2$ (Lower is better)\n"
         )
 
         if not dataset_info:
@@ -449,15 +457,10 @@ def save_results_to_markdown(
             f.write(f"- **DB Setup Time**: {first_r['DB_Setup(s)']:.4f}s\n")
 
             j_time = first_r.get("J_Total_Time", 0)
-            h_time = first_r.get("H_Total_Time", 0)
 
             if j_time > 0:
                 f.write(
                     f"- **JVector Total Time**: {j_time/60:.2f} min ({j_time:.2f}s)\n"
-                )
-            if h_time > 0:
-                f.write(
-                    f"- **HNSWLib Total Time**: {h_time/60:.2f} min ({h_time:.2f}s)\n"
                 )
 
             f.write("\n")
@@ -468,23 +471,29 @@ def save_results_to_markdown(
             for k in k_values:
                 f.write(f"### k = {k}\n\n")
                 f.write(
-                    "| m | ef | J_Recall (Avg±Std) | H_Recall (Avg±Std) | J_Hit (Avg) | H_Hit (Avg) | J_Build(s) | H_Build(s) | J_Lat(ms) | H_Lat(ms) |\n"
+                    "| max_connections | beam_width | Recall (Before) | Recall (After) | Latency (ms) (Before) | Latency (ms) (After) | Build (s) | Warmup (s) | Open (s) | Count (Before) | Count (After) |\n"
                 )
-                f.write("|---|---|---|---|---|---|---|---|---|---|\n")
+                f.write("|---|---|---|---|---|---|---|---|---|---|---|\n")
 
                 k_results = [r for r in scen_results if r["k"] == k]
                 for r in k_results:
-                    j_rec_str = format_std(r["J_Recall"], r["J_Std"])
-                    h_rec_str = format_std(r["H_Recall"], r["H_Std"])
-                    j_hit_str = format_val(r["J_Hit"])
-                    h_hit_str = format_val(r["H_Hit"])
-                    j_lat_str = format_std(r["J_Lat(ms)"], r["J_Lat_Std"], ".2f")
-                    h_lat_str = format_std(r["H_Lat(ms)"], r["H_Lat_Std"], ".2f")
+                    # Format Recall Before/After
+                    j_rb = format_val(r.get("J_Recall_Before"))
+                    j_ra = format_val(r.get("J_Recall_After"))
+
+                    # Format Latency Before/After
+                    j_lb = format_val(r.get("J_Lat_Before"), ".2f")
+                    j_la = format_val(r.get("J_Lat_After"), ".2f")
+
                     j_bld_str = format_val(r["J_Build(s)"])
-                    h_bld_str = format_val(r["H_Build(s)"])
+                    j_warmup_str = format_val(r.get("J_Warmup(s)"))
+                    j_open_str = format_val(r.get("J_Open(s)"))
+
+                    j_cb = r.get("J_Count_Before", "N/A")
+                    j_ca = r.get("J_Count_After", "N/A")
 
                     f.write(
-                        f"| {r['m']} | {r['ef']} | {j_rec_str} | {h_rec_str} | {j_hit_str} | {h_hit_str} | {j_bld_str} | {h_bld_str} | {j_lat_str} | {h_lat_str} |\n"
+                        f"| {r['max_connections']} | {r['beam_width']} | {j_rb} | {j_ra} | {j_lb} | {j_la} | {j_bld_str} | {j_warmup_str} | {j_open_str} | {j_cb} | {j_ca} |\n"
                     )
                 f.write("\n")
     print(f"  [Saved results to {filename}]")
@@ -496,12 +505,6 @@ def save_results_to_markdown(
 def run_benchmark():
     parser = argparse.ArgumentParser(
         description="Benchmark ArcadeDB Vector Index Implementations"
-    )
-    parser.add_argument(
-        "--impl",
-        choices=["JVECTOR", "HNSWLIB", "ALL"],
-        default="ALL",
-        help="Implementation to test (JVECTOR, HNSWLIB, or ALL)",
     )
     parser.add_argument(
         "--dataset",
@@ -535,8 +538,8 @@ def run_benchmark():
         "K Values": str(k_values),
     }
 
-    m_values = [8, 16, 32]
-    ef_values = [32, 64, 128]
+    max_connections_values = [8, 16, 32, 64]
+    beam_width_values = [32, 64, 128, 256]
 
     results = []
 
@@ -581,137 +584,52 @@ def run_benchmark():
         db.close()
 
         j_results_map = {}
-        h_results_map = {}
         j_total_time = 0
-        h_total_time = 0
 
         try:
             # 1. Run JVector Tests
-            if args.impl in ["JVECTOR", "ALL"]:
-                print("  Running JVector Tests...")
-                start_j = time.time()
-                for m in m_values:
-                    for ef in ef_values:
-                        print(f"    - Params: m={m}, ef={ef}...", end="", flush=True)
-                        temp_db_path = db_path + f"_temp_j_{m}_{ef}"
+            print("  Running JVector Tests...")
+            start_j = time.time()
+            for max_connections in max_connections_values:
+                for beam_width in beam_width_values:
+                    print(
+                        f"    - Params: max_connections={max_connections}, beam_width={beam_width}...",
+                        end="",
+                        flush=True,
+                    )
+                    temp_db_path = db_path + f"_temp_j_{max_connections}_{beam_width}"
+                    if os.path.exists(temp_db_path):
+                        shutil.rmtree(temp_db_path)
+                    shutil.copytree(db_path, temp_db_path)
+
+                    try:
+                        j_results_map[(max_connections, beam_width)] = test_index(
+                            temp_db_path,
+                            queries,
+                            ground_truth,
+                            k_values,
+                            scenario["dim"],
+                            scenario["count"],
+                            max_connections,
+                            beam_width,
+                            metric=metric,
+                        )
+                    finally:
                         if os.path.exists(temp_db_path):
                             shutil.rmtree(temp_db_path)
-                        shutil.copytree(db_path, temp_db_path)
-
-                        try:
-                            with arcadedb.open_database(temp_db_path) as db:
-                                j_results_map[(m, ef)] = test_index(
-                                    db,
-                                    "JVECTOR",
-                                    queries,
-                                    ground_truth,
-                                    k_values,
-                                    scenario["dim"],
-                                    scenario["count"],
-                                    m,
-                                    ef,
-                                    metric=metric,
-                                )
-                        finally:
-                            if os.path.exists(temp_db_path):
-                                shutil.rmtree(temp_db_path)
-                        print(" Done.")
-                j_total_time = time.time() - start_j
-
-            # 2. Run HNSWLib Tests
-            if args.impl in ["HNSWLIB", "ALL"]:
-                print("  Running HNSWLib Tests...")
-                start_h = time.time()
-                for m in m_values:
-                    for ef in ef_values:
-                        print(f"    - Params: m={m}, ef={ef}...", end="", flush=True)
-                        temp_db_path = db_path + f"_temp_h_{m}_{ef}"
-                        if os.path.exists(temp_db_path):
-                            shutil.rmtree(temp_db_path)
-                        shutil.copytree(db_path, temp_db_path)
-
-                        try:
-                            with arcadedb.open_database(temp_db_path) as db:
-                                h_results_map[(m, ef)] = test_index(
-                                    db,
-                                    "HNSWLIB",
-                                    queries,
-                                    ground_truth,
-                                    k_values,
-                                    scenario["dim"],
-                                    scenario["count"],
-                                    m,
-                                    ef,
-                                    metric=metric,
-                                )
-                        finally:
-                            if os.path.exists(temp_db_path):
-                                shutil.rmtree(temp_db_path)
-                        print(" Done.")
-                h_total_time = time.time() - start_h
+                    print(" Done.")
+            j_total_time = time.time() - start_j
 
             # 3. Combine Results
-            for m in m_values:
-                for ef in ef_values:
-                    j_results = j_results_map.get((m, ef))
-                    h_results = h_results_map.get((m, ef))
+            for max_connections in max_connections_values:
+                for beam_width in beam_width_values:
+                    j_results = j_results_map.get((max_connections, beam_width))
 
                     for k in k_values:
                         # Extract JVector results for this k
-                        (
-                            j_rec,
-                            j_std,
-                            j_hit,
-                            j_hit_std,
-                            j_lat,
-                            j_lat_std,
-                            j_bld,
-                        ) = (
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                        )
+                        j_res = {}
                         if j_results:
-                            res = j_results[k]
-                            j_rec = res["recall"]
-                            j_std = res["recall_std"]
-                            j_hit = res["hit"]
-                            j_hit_std = res["hit_std"]
-                            j_lat = res["latency"]
-                            j_lat_std = res["latency_std"]
-                            j_bld = res["build_time"]
-
-                        # Extract HNSWLib results for this k
-                        (
-                            h_rec,
-                            h_std,
-                            h_hit,
-                            h_hit_std,
-                            h_lat,
-                            h_lat_std,
-                            h_bld,
-                        ) = (
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                        )
-                        if h_results:
-                            res = h_results[k]
-                            h_rec = res["recall"]
-                            h_std = res["recall_std"]
-                            h_hit = res["hit"]
-                            h_hit_std = res["hit_std"]
-                            h_lat = res["latency"]
-                            h_lat_std = res["latency_std"]
-                            h_bld = res["build_time"]
+                            j_res = j_results[k]
 
                         results.append(
                             {
@@ -719,28 +637,27 @@ def run_benchmark():
                                 "dim": scenario["dim"],
                                 "count": scenario["count"],
                                 "queries": scenario["queries"],
-                                "m": m,
-                                "ef": ef,
+                                "max_connections": max_connections,
+                                "beam_width": beam_width,
                                 "k": k,
                                 "Load(s)": load_time,
                                 "GT_Calc(s)": gt_time,
                                 "DB_Setup(s)": setup_time,
-                                "J_Recall": j_rec,
-                                "J_Std": j_std,
-                                "J_Hit": j_hit,
-                                "J_Hit_Std": j_hit_std,
-                                "J_Build(s)": j_bld,
-                                "J_Lat(ms)": j_lat,
-                                "J_Lat_Std": j_lat_std,
-                                "H_Recall": h_rec,
-                                "H_Std": h_std,
-                                "H_Hit": h_hit,
-                                "H_Hit_Std": h_hit_std,
-                                "H_Build(s)": h_bld,
-                                "H_Lat(ms)": h_lat,
-                                "H_Lat_Std": h_lat_std,
+                                # JVector
+                                "J_Recall": j_res.get("recall"),
+                                "J_Std": j_res.get("recall_std"),
+                                "J_Build(s)": j_res.get("build_time"),
+                                "J_Warmup(s)": j_res.get("warmup_time"),
+                                "J_Open(s)": j_res.get("open_time"),
+                                "J_Lat(ms)": j_res.get("latency"),
+                                "J_Lat_Std": j_res.get("latency_std"),
+                                "J_Count_Before": j_res.get("count_before"),
+                                "J_Count_After": j_res.get("count_after"),
+                                "J_Recall_Before": j_res.get("recall_before"),
+                                "J_Recall_After": j_res.get("recall_after"),
+                                "J_Lat_Before": j_res.get("latency_before"),
+                                "J_Lat_After": j_res.get("latency_after"),
                                 "J_Total_Time": j_total_time,
-                                "H_Total_Time": h_total_time,
                             }
                         )
 
@@ -760,26 +677,32 @@ def run_benchmark():
         )
 
     # Print Results Table
-    print("\n" + "=" * 170)
+    print("\n" + "=" * 160)
     print(
-        f"{'Scenario':<10} | {'m':<3} | {'ef':<4} | {'k':<3} | {'J_Recall (Avg±Std)':<20} | {'H_Recall (Avg±Std)':<20} | {'J_Hit (Avg)':<15} | {'H_Hit (Avg)':<15} | {'J_Build(s)':<10} | {'H_Build(s)':<10} | {'J_Lat(ms)':<15} | {'H_Lat(ms)':<15}"
+        f"{'Scenario':<10} | {'max_connections':<15} | {'beam_width':<10} | {'k':<3} | {'Recall (Before)':<15} | {'Recall (After)':<15} | {'Lat (ms) (Before)':<18} | {'Lat (ms) (After)':<18} | {'Build (s)':<10} | {'Warmup (s)':<10} | {'Open (s)':<10} | {'Count (B)':<10} | {'Count (A)':<10}"
     )
-    print("-" * 170)
+    print("-" * 160)
 
     for r in results:
-        j_rec_str = format_std(r["J_Recall"], r["J_Std"])
-        h_rec_str = format_std(r["H_Recall"], r["H_Std"])
-        j_hit_str = format_val(r["J_Hit"])
-        h_hit_str = format_val(r["H_Hit"])
-        j_lat_str = format_std(r["J_Lat(ms)"], r["J_Lat_Std"], ".2f")
-        h_lat_str = format_std(r["H_Lat(ms)"], r["H_Lat_Std"], ".2f")
+        # Format Recall Before/After
+        j_rb = format_val(r.get("J_Recall_Before"))
+        j_ra = format_val(r.get("J_Recall_After"))
+
+        # Format Latency Before/After
+        j_lb = format_val(r.get("J_Lat_Before"), ".2f")
+        j_la = format_val(r.get("J_Lat_After"), ".2f")
+
         j_bld_str = format_val(r["J_Build(s)"])
-        h_bld_str = format_val(r["H_Build(s)"])
+        j_warmup_str = format_val(r.get("J_Warmup(s)"))
+        j_open_str = format_val(r.get("J_Open(s)"))
+
+        j_cb = str(r.get("J_Count_Before", "N/A"))
+        j_ca = str(r.get("J_Count_After", "N/A"))
 
         print(
-            f"{r['Scenario']:<10} | {r['m']:<3} | {r['ef']:<4} | {r['k']:<3} | {j_rec_str:<20} | {h_rec_str:<20} | {j_hit_str:<15} | {h_hit_str:<15} | {j_bld_str:<10} | {h_bld_str:<10} | {j_lat_str:<15} | {h_lat_str:<15}"
+            f"{r['Scenario']:<10} | {r['max_connections']:<15} | {r['beam_width']:<10} | {r['k']:<3} | {j_rb:<15} | {j_ra:<15} | {j_lb:<18} | {j_la:<18} | {j_bld_str:<10} | {j_warmup_str:<10} | {j_open_str:<10} | {j_cb:<10} | {j_ca:<10}"
         )
-    print("=" * 200)
+    print("=" * 160)
 
 
 if __name__ == "__main__":
