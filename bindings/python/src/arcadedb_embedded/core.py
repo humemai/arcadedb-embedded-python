@@ -166,6 +166,7 @@ class Database:
         distance_function: str = "cosine",
         max_connections: int = 16,
         beam_width: int = 128,
+        quantization: str = None,
     ) -> "VectorIndex":
         """
         Create a vector index for similarity search (default JVector implementation).
@@ -188,6 +189,10 @@ class Database:
                              Maps to `maxConnections` in JVector.
             beam_width: Beam width for search/construction (default: 128).
                         Maps to `beamWidth` in JVector.
+            quantization: Vector quantization type (default: None).
+                          Options: "INT8", "BINARY".
+                          Reduces memory usage and speeds up search at the cost of
+                          some precision.
 
         Returns:
             VectorIndex object
@@ -216,6 +221,9 @@ class Database:
             builder.withSimilarity(distance_function)
             builder.withMaxConnections(max_connections)
             builder.withBeamWidth(beam_width)
+
+            if quantization:
+                builder.withQuantization(quantization)
 
             # Create
             java_index = builder.create()

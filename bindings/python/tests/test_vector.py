@@ -674,3 +674,152 @@ class TestLSMVectorIndex:
         print(f"  2 nearest neighbors to 'cat': {neighbor_names}")
         assert "dog" in neighbor_names, "Expected 'dog' to be near 'cat'"
         assert "king" not in neighbor_names, "'king' should be in different cluster"
+
+    def test_int8_quantization_boundary_condition(self, test_db):
+        """
+        Demonstrates that INT8 quantization runs without crashing for small N (e.g. 10) at Dim=16,
+        unlike N=50 which crashes. This explains why simple unit tests might pass (False Positives).
+        """
+        test_db.schema.create_vertex_type("SmallScaleInt8")
+        test_db.schema.create_property("SmallScaleInt8", "embedding", "ARRAY_OF_FLOATS")
+
+        # Dim=16 is the threshold where negative index bugs stop, but storage bugs haven't started yet (for small N)
+        dims = 16
+        index = test_db.create_vector_index(
+            "SmallScaleInt8", "embedding", dimensions=dims, quantization="INT8"
+        )
+
+        # N=10 is safe from storage overflow (which triggers around N=50)
+        vectors = []
+        for i in range(10):
+            vec = [0.0] * dims
+            vec[i % dims] = 1.0
+            vectors.append(vec)
+
+        with test_db.transaction():
+            for vec in vectors:
+                v = test_db.new_vertex("SmallScaleInt8")
+                v.set("embedding", arcadedb.to_java_float_array(vec))
+                v.save()
+
+        # Search should succeed
+        query = [0.9, 0.1] + [0.0] * (dims - 2)
+        results = index.find_nearest(query, k=1)
+
+        assert len(results) == 1
+        # Note: We don't assert strict accuracy here, as INT8 is known to be imprecise.
+        # We just verify that it runs without the IllegalArgumentException seen in the N=50 test.
+
+    @pytest.mark.xfail(
+        reason="INT8 quantization fails with storage overflow on N>=50", strict=True
+    )
+    def test_create_vector_index_with_quantization(self, test_db):
+        """Test creating a vector index with quantization (INT8)."""
+        # Create schema
+        test_db.schema.create_vertex_type("QuantizedDocInt8")
+        test_db.schema.create_property(
+            "QuantizedDocInt8", "embedding", "ARRAY_OF_FLOATS"
+        )
+
+        # Create vector index with quantization
+        # Note: This is known to fail with IllegalArgumentException on N>=50
+        dims = 16
+        index = test_db.create_vector_index(
+            "QuantizedDocInt8",
+            "embedding",
+            dimensions=dims,
+            quantization="INT8",
+        )
+
+        assert index is not None
+        assert index.get_quantization() == "INT8"
+
+        # Add enough data to trigger the storage overflow bug (N=50)
+        num_vectors = 50
+        vectors = []
+        for i in range(num_vectors):
+            vec = [0.0] * dims
+            vec[i % dims] = 1.0
+            vectors.append(vec)
+
+        with test_db.transaction():
+            for i, vec in enumerate(vectors):
+                v = test_db.new_vertex("QuantizedDocInt8")
+                v.set("embedding", arcadedb.to_java_float_array(vec))
+                v.save()
+
+        # Search should work if the bug wasn't present
+        query = [0.9, 0.1] + [0.0] * (dims - 2)
+        results = index.find_nearest(query, k=1)
+
+        assert len(results) == 1
+        # Verify we found the vector that looks like [1.0, 0.0, ...]
+        vertex, distance = results[0]
+        vec_data = arcadedb.to_python_array(vertex.get("embedding"))
+
+        # Check content: The first dimension should be dominant
+        assert vec_data[0] > 0.9
+
+        # Check distance:
+        # Query: [0.9, 0.1, ...], Target: [1.0, 0.0, ...]
+        # Cosine Similarity ~= 0.9 (assuming normalized)
+        # Cosine Distance ~= 0.1
+        # We allow some slack for quantization error, but it shouldn't be 0 (which implies data loss)
+        # and it shouldn't be huge.
+        assert (
+            0.05 < distance < 0.2
+        ), f"Distance {distance} is suspicious (expected ~0.1)"
+
+    @pytest.mark.xfail(
+        reason="BINARY quantization drops data and fails search", strict=True
+    )
+    def test_create_vector_index_with_binary_quantization(self, test_db):
+        """Test creating a vector index with BINARY quantization."""
+        # Create schema
+        test_db.schema.create_vertex_type("QuantizedDocBinary")
+        test_db.schema.create_property(
+            "QuantizedDocBinary", "embedding", "ARRAY_OF_FLOATS"
+        )
+
+        # Create vector index with quantization
+        dims = 16
+        index = test_db.create_vector_index(
+            "QuantizedDocBinary",
+            "embedding",
+            dimensions=dims,
+            quantization="BINARY",
+        )
+
+        assert index is not None
+        assert index.get_quantization() == "BINARY"
+
+        # Add enough data to verify robustness
+        num_vectors = 50
+        vectors = []
+        for i in range(num_vectors):
+            vec = [0.0] * dims
+            vec[i % dims] = 1.0
+            vectors.append(vec)
+
+        with test_db.transaction():
+            for i, vec in enumerate(vectors):
+                v = test_db.new_vertex("QuantizedDocBinary")
+                v.set("embedding", arcadedb.to_java_float_array(vec))
+                v.save()
+
+        # Search
+        query = [0.9, 0.1] + [0.0] * (dims - 2)
+        results = index.find_nearest(query, k=1)
+
+        # BINARY quantization currently drops data or returns 0 results
+        assert len(results) == 1
+        vertex, distance = results[0]
+        vec_data = arcadedb.to_python_array(vertex.get("embedding"))
+
+        # Check content
+        assert vec_data[0] > 0.9
+
+        # Check distance (BINARY might be Hamming or similar, but JVector often normalizes)
+        # If it's Hamming, distance is int. If Cosine, float.
+        # We just check it's not None
+        assert distance is not None

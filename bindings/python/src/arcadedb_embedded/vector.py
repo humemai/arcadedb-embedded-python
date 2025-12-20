@@ -108,6 +108,12 @@ class VectorIndex:
            - Formula: $- (A \cdot B)$
            - Range: (-inf, +inf)
            - Lower values indicate higher similarity (larger positive dot product).
+
+    Quantization:
+        The index supports vector quantization to reduce memory usage and speed up search:
+        - **NONE** (Default): Full precision (float32).
+        - **INT8**: 8-bit integer quantization.
+        - **BINARY**: 1-bit quantization (for high-dimensional binary vectors).
     """
 
     def __init__(self, java_index, database):
@@ -211,3 +217,25 @@ class VectorIndex:
             return self._java_index.countEntries()
         except Exception as e:
             raise ArcadeDBError(f"Failed to get index size: {e}") from e
+
+    def get_quantization(self):
+        """
+        Get the quantization type of the index.
+
+        Returns:
+            str: "NONE", "INT8", or "BINARY"
+        """
+        try:
+            idx_to_check = None
+            if "LSMVectorIndex" in self._java_index.getClass().getName():
+                idx_to_check = self._java_index
+            elif "TypeIndex" in self._java_index.getClass().getName():
+                sub_indexes = self._java_index.getSubIndexes()
+                if not sub_indexes.isEmpty():
+                    idx_to_check = sub_indexes.get(0)
+
+            if idx_to_check:
+                return str(idx_to_check.getMetadata().quantizationType)
+            return "NONE"
+        except Exception:
+            return "NONE"
