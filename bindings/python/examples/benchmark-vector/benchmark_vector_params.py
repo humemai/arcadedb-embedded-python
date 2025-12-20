@@ -343,16 +343,35 @@ def test_index(
     results_before = None
 
     with arcadedb.open_database(db_path) as db:
-        print("    - DB Opened. Creating index...")
-        index = db.create_vector_index(
-            vertex_type="VectorData",
-            vector_property="vector",
-            dimensions=dim,
-            distance_function=metric,
-            max_connections=max_connections,
-            beam_width=beam_width,
-            quantization=quantization if quantization != "NONE" else None,
-        )
+        if query_method == "SQL":
+            print("    - DB Opened. Creating index (via SQL)...")
+            import json
+
+            metadata = {
+                "dimensions": dim,
+                "similarity": metric.upper(),
+                "maxConnections": max_connections,
+                "beamWidth": beam_width,
+            }
+            if quantization != "NONE":
+                metadata["quantization"] = quantization
+
+            sql = f"CREATE INDEX IF NOT EXISTS ON VectorData (vector) LSM_VECTOR METADATA {json.dumps(metadata)}"
+            db.command("sql", sql)
+
+            # Get the index object for evaluate_index (which needs it to get the name)
+            index = db.schema.get_vector_index("VectorData", "vector")
+        else:
+            print("    - DB Opened. Creating index...")
+            index = db.create_vector_index(
+                vertex_type="VectorData",
+                vector_property="vector",
+                dimensions=dim,
+                distance_function=metric,
+                max_connections=max_connections,
+                beam_width=beam_width,
+                quantization=quantization if quantization != "NONE" else None,
+            )
         print("    - Index created.")
 
         # Force index build (JVector is lazy)
