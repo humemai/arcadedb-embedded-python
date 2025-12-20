@@ -214,7 +214,9 @@ def setup_database(db_path, data):
     return db, setup_time
 
 
-def evaluate_index(index, queries, ground_truth_dict, k_values):
+def evaluate_index(
+    index, queries, ground_truth_dict, k_values, query_method="EMBEDDED"
+):
     """
     Runs queries against the index and calculates Recall and Latency.
     """
@@ -224,17 +226,60 @@ def evaluate_index(index, queries, ground_truth_dict, k_values):
     # Pre-allocate lists for each k
     recalls_map = {k: [] for k in k_values}
 
+    # For SQL, we need the index name and database
+    index_name = None
+    db = None
+    if query_method == "SQL":
+        if hasattr(index, "_java_index"):
+            index_name = index._java_index.getName()
+        if hasattr(index, "_database"):
+            db = index._database
+
+        if not index_name or not db:
+            raise ValueError(
+                "Cannot run SQL queries: index name or database not found on index object"
+            )
+
     for i, query_vec in enumerate(queries):
         t0 = time.time()
 
-        # Use Python API
-        results = index.find_nearest(query_vec, k=max_k)
+        if query_method == "SQL":
+            # Use vectorNeighbors function
+            q_vec_list = (
+                query_vec.tolist() if hasattr(query_vec, "tolist") else list(query_vec)
+            )
+            # Note: Passing vector as string literal for simplicity
+            rs = db.query(
+                "sql",
+                f"SELECT vectorNeighbors('{index_name}', {q_vec_list}, {max_k}) as neighbors",
+            )
+            try:
+                row = next(rs)
+                # vectorNeighbors returns a list of vertices/records or dicts
+                results = row.get_property("neighbors")
+
+                # Handle list of dicts (new behavior)
+                if results and isinstance(results[0], dict) and "vertex" in results[0]:
+                    results = [
+                        (item["vertex"], item.get("distance", 0.0)) for item in results
+                    ]
+                else:
+                    # Fallback/Standard behavior
+                    results = [(item, 0.0) for item in results]
+            except StopIteration:
+                results = []
+        else:
+            # Use Python API
+            results = index.find_nearest(query_vec, k=max_k)
 
         latencies.append((time.time() - t0) * 1000)
 
         result_ids_ordered = []
-        for item, score in results:
+        for item_tuple in results:
             try:
+                # Handle tuple (item, score) from find_nearest or constructed above
+                item = item_tuple[0]
+
                 # Handle both Record (JVector) and Vertex (Legacy)
                 vertex = item
                 # If item is a Result wrapper (from results.py), get the underlying vertex
@@ -284,9 +329,11 @@ def test_index(
     max_connections,
     beam_width,
     metric="cosine",
+    quantization="NONE",
+    query_method="EMBEDDED",
 ):
     print(
-        f"    Testing JVector (max_connections={max_connections}, beam_width={beam_width})..."
+        f"    Testing JVector (max_connections={max_connections}, beam_width={beam_width}, quantization={quantization}, method={query_method})..."
     )
 
     # 1. Open DB to create index
@@ -304,6 +351,7 @@ def test_index(
             distance_function=metric,
             max_connections=max_connections,
             beam_width=beam_width,
+            quantization=quantization if quantization != "NONE" else None,
         )
         print("    - Index created.")
 
@@ -325,7 +373,9 @@ def test_index(
         print(f"    - Vectors before close: {count_before}")
 
         print("    - Running queries BEFORE restart...")
-        results_before = evaluate_index(index, queries, ground_truth_dict, k_values)
+        results_before = evaluate_index(
+            index, queries, ground_truth_dict, k_values, query_method=query_method
+        )
 
     build_time = time.time() - start_build
 
@@ -358,7 +408,9 @@ def test_index(
             pass
 
         print("    - Running queries AFTER restart...")
-        results_after = evaluate_index(index, queries, ground_truth_dict, k_values)
+        results_after = evaluate_index(
+            index, queries, ground_truth_dict, k_values, query_method=query_method
+        )
 
     # Merge results
     final_results = {}
@@ -471,9 +523,9 @@ def save_results_to_markdown(
             for k in k_values:
                 f.write(f"### k = {k}\n\n")
                 f.write(
-                    "| max_connections | beam_width | Recall (Before) | Recall (After) | Latency (ms) (Before) | Latency (ms) (After) | Build (s) | Warmup (s) | Open (s) | Count (Before) | Count (After) |\n"
+                    "| max_connections | beam_width | quantization | method | Recall (Before) | Recall (After) | Latency (ms) (Before) | Latency (ms) (After) | Build (s) | Warmup (s) | Open (s) | Count (Before) | Count (After) |\n"
                 )
-                f.write("|---|---|---|---|---|---|---|---|---|---|---|\n")
+                f.write("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 
                 k_results = [r for r in scen_results if r["k"] == k]
                 for r in k_results:
@@ -493,7 +545,7 @@ def save_results_to_markdown(
                     j_ca = r.get("J_Count_After", "N/A")
 
                     f.write(
-                        f"| {r['max_connections']} | {r['beam_width']} | {j_rb} | {j_ra} | {j_lb} | {j_la} | {j_bld_str} | {j_warmup_str} | {j_open_str} | {j_cb} | {j_ca} |\n"
+                        f"| {r['max_connections']} | {r['beam_width']} | {r['quantization']} | {r['method']} | {j_rb} | {j_ra} | {j_lb} | {j_la} | {j_bld_str} | {j_warmup_str} | {j_open_str} | {j_cb} | {j_ca} |\n"
                     )
                 f.write("\n")
     print(f"  [Saved results to {filename}]")
@@ -540,6 +592,9 @@ def run_benchmark():
 
     max_connections_values = [8, 16, 32, 64]
     beam_width_values = [32, 64, 128, 256]
+    # quantization_values = ["NONE", "INT8", "BINARY"]
+    quantization_values = ["NONE"]
+    query_methods = ["EMBEDDED", "SQL"]
 
     results = []
 
@@ -592,74 +647,101 @@ def run_benchmark():
             start_j = time.time()
             for max_connections in max_connections_values:
                 for beam_width in beam_width_values:
-                    print(
-                        f"    - Params: max_connections={max_connections}, beam_width={beam_width}...",
-                        end="",
-                        flush=True,
-                    )
-                    temp_db_path = db_path + f"_temp_j_{max_connections}_{beam_width}"
-                    if os.path.exists(temp_db_path):
-                        shutil.rmtree(temp_db_path)
-                    shutil.copytree(db_path, temp_db_path)
+                    for quantization in quantization_values:
+                        for query_method in query_methods:
+                            print(
+                                f"    - Params: max_connections={max_connections}, beam_width={beam_width}, quantization={quantization}, method={query_method}...",
+                                end="",
+                                flush=True,
+                            )
+                            temp_db_path = (
+                                db_path
+                                + f"_temp_j_{max_connections}_{beam_width}_{quantization}_{query_method}"
+                            )
+                            if os.path.exists(temp_db_path):
+                                shutil.rmtree(temp_db_path)
+                            shutil.copytree(db_path, temp_db_path)
 
-                    try:
-                        j_results_map[(max_connections, beam_width)] = test_index(
-                            temp_db_path,
-                            queries,
-                            ground_truth,
-                            k_values,
-                            scenario["dim"],
-                            scenario["count"],
-                            max_connections,
-                            beam_width,
-                            metric=metric,
-                        )
-                    finally:
-                        if os.path.exists(temp_db_path):
-                            shutil.rmtree(temp_db_path)
-                    print(" Done.")
+                            try:
+                                j_results_map[
+                                    (
+                                        max_connections,
+                                        beam_width,
+                                        quantization,
+                                        query_method,
+                                    )
+                                ] = test_index(
+                                    temp_db_path,
+                                    queries,
+                                    ground_truth,
+                                    k_values,
+                                    scenario["dim"],
+                                    scenario["count"],
+                                    max_connections,
+                                    beam_width,
+                                    metric=metric,
+                                    quantization=quantization,
+                                    query_method=query_method,
+                                )
+                            except Exception as e:
+                                print(f"\n    !!! Error testing params: {e}")
+                            finally:
+                                if os.path.exists(temp_db_path):
+                                    shutil.rmtree(temp_db_path)
+                            print(" Done.")
             j_total_time = time.time() - start_j
 
             # 3. Combine Results
             for max_connections in max_connections_values:
                 for beam_width in beam_width_values:
-                    j_results = j_results_map.get((max_connections, beam_width))
+                    for quantization in quantization_values:
+                        for query_method in query_methods:
+                            j_results = j_results_map.get(
+                                (
+                                    max_connections,
+                                    beam_width,
+                                    quantization,
+                                    query_method,
+                                )
+                            )
 
-                    for k in k_values:
-                        # Extract JVector results for this k
-                        j_res = {}
-                        if j_results:
-                            j_res = j_results[k]
+                            for k in k_values:
+                                # Extract JVector results for this k
+                                j_res = {}
+                                if j_results:
+                                    j_res = j_results[k]
 
-                        results.append(
-                            {
-                                "Scenario": scenario["name"],
-                                "dim": scenario["dim"],
-                                "count": scenario["count"],
-                                "queries": scenario["queries"],
-                                "max_connections": max_connections,
-                                "beam_width": beam_width,
-                                "k": k,
-                                "Load(s)": load_time,
-                                "GT_Calc(s)": gt_time,
-                                "DB_Setup(s)": setup_time,
-                                # JVector
-                                "J_Recall": j_res.get("recall"),
-                                "J_Std": j_res.get("recall_std"),
-                                "J_Build(s)": j_res.get("build_time"),
-                                "J_Warmup(s)": j_res.get("warmup_time"),
-                                "J_Open(s)": j_res.get("open_time"),
-                                "J_Lat(ms)": j_res.get("latency"),
-                                "J_Lat_Std": j_res.get("latency_std"),
-                                "J_Count_Before": j_res.get("count_before"),
-                                "J_Count_After": j_res.get("count_after"),
-                                "J_Recall_Before": j_res.get("recall_before"),
-                                "J_Recall_After": j_res.get("recall_after"),
-                                "J_Lat_Before": j_res.get("latency_before"),
-                                "J_Lat_After": j_res.get("latency_after"),
-                                "J_Total_Time": j_total_time,
-                            }
-                        )
+                                results.append(
+                                    {
+                                        "Scenario": scenario["name"],
+                                        "dim": scenario["dim"],
+                                        "count": scenario["count"],
+                                        "queries": scenario["queries"],
+                                        "max_connections": max_connections,
+                                        "beam_width": beam_width,
+                                        "quantization": quantization,
+                                        "method": query_method,
+                                        "k": k,
+                                        "Load(s)": load_time,
+                                        "GT_Calc(s)": gt_time,
+                                        "DB_Setup(s)": setup_time,
+                                        # JVector
+                                        "J_Recall": j_res.get("recall"),
+                                        "J_Std": j_res.get("recall_std"),
+                                        "J_Build(s)": j_res.get("build_time"),
+                                        "J_Warmup(s)": j_res.get("warmup_time"),
+                                        "J_Open(s)": j_res.get("open_time"),
+                                        "J_Lat(ms)": j_res.get("latency"),
+                                        "J_Lat_Std": j_res.get("latency_std"),
+                                        "J_Count_Before": j_res.get("count_before"),
+                                        "J_Count_After": j_res.get("count_after"),
+                                        "J_Recall_Before": j_res.get("recall_before"),
+                                        "J_Recall_After": j_res.get("recall_after"),
+                                        "J_Lat_Before": j_res.get("latency_before"),
+                                        "J_Lat_After": j_res.get("latency_after"),
+                                        "J_Total_Time": j_total_time,
+                                    }
+                                )
 
         finally:
             if os.path.exists(db_path):
@@ -677,11 +759,11 @@ def run_benchmark():
         )
 
     # Print Results Table
-    print("\n" + "=" * 160)
+    print("\n" + "=" * 180)
     print(
-        f"{'Scenario':<10} | {'max_connections':<15} | {'beam_width':<10} | {'k':<3} | {'Recall (Before)':<15} | {'Recall (After)':<15} | {'Lat (ms) (Before)':<18} | {'Lat (ms) (After)':<18} | {'Build (s)':<10} | {'Warmup (s)':<10} | {'Open (s)':<10} | {'Count (B)':<10} | {'Count (A)':<10}"
+        f"{'Scenario':<10} | {'max_conn':<8} | {'beam':<6} | {'quant':<8} | {'method':<8} | {'k':<3} | {'Recall (B)':<10} | {'Recall (A)':<10} | {'Lat (B)':<10} | {'Lat (A)':<10} | {'Build':<8} | {'Warmup':<8} | {'Open':<8} | {'Count':<8}"
     )
-    print("-" * 160)
+    print("-" * 180)
 
     for r in results:
         # Format Recall Before/After
@@ -700,9 +782,9 @@ def run_benchmark():
         j_ca = str(r.get("J_Count_After", "N/A"))
 
         print(
-            f"{r['Scenario']:<10} | {r['max_connections']:<15} | {r['beam_width']:<10} | {r['k']:<3} | {j_rb:<15} | {j_ra:<15} | {j_lb:<18} | {j_la:<18} | {j_bld_str:<10} | {j_warmup_str:<10} | {j_open_str:<10} | {j_cb:<10} | {j_ca:<10}"
+            f"{r['Scenario']:<10} | {r['max_connections']:<8} | {r['beam_width']:<6} | {r['quantization']:<8} | {r['method']:<8} | {r['k']:<3} | {j_rb:<10} | {j_ra:<10} | {j_lb:<10} | {j_la:<10} | {j_bld_str:<8} | {j_warmup_str:<8} | {j_open_str:<8} | {j_cb:<8}"
         )
-    print("=" * 160)
+    print("=" * 180)
 
 
 if __name__ == "__main__":
