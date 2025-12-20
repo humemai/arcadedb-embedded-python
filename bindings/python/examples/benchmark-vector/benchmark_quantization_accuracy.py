@@ -8,7 +8,7 @@ import arcadedb_embedded as arcadedb
 from arcadedb_embedded import create_database
 
 # Configuration
-DB_PATH = "bench_accuracy_db"
+DB_PATH = "./my_test_databases/bench_quantization_accuracy_db"
 DIMENSIONS_LIST = [4, 8, 16, 32]
 NUM_VECTORS = 1000
 NUM_QUERIES = 20
@@ -68,12 +68,15 @@ def run_benchmark_for_dim(dim):
 
         # Create Index
         print("Creating index...")
-        kwargs = {"dimensions": dim}
+        import json
+
+        metadata = {"dimensions": dim}
         if q_type != "NONE":
-            kwargs["quantization"] = q_type
+            metadata["quantization"] = q_type
 
         try:
-            db.create_vector_index(type_name, "vector", **kwargs)
+            sql = f"CREATE INDEX ON {type_name} (vector) LSM_VECTOR METADATA {json.dumps(metadata)}"
+            db.command("sql", sql)
         except Exception as e:
             print(f"ERROR creating index for {q_type}: {e}")
             # Fill with empty results so we can continue

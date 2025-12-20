@@ -270,7 +270,12 @@ class TestVectorSQL:
         # Create schema and index
         test_db.schema.create_vertex_type("Item")
         test_db.schema.create_property("Item", "vec", "ARRAY_OF_FLOATS")
-        test_db.create_vector_index("Item", "vec", dimensions=2)
+
+        # Create index via SQL
+        test_db.command(
+            "sql",
+            'CREATE INDEX ON Item (vec) LSM_VECTOR METADATA {"dimensions": 2}',
+        )
 
         # Add data
         with test_db.transaction():
