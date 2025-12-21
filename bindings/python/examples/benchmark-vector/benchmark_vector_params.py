@@ -426,6 +426,15 @@ def test_index(
             )
             pass
 
+        print("    - Warming up index AFTER restart...")
+        start_warmup_after = time.time()
+        # Run some queries to warm up caches
+        warmup_count = min(len(queries), 100)  # Warm up with up to 100 queries
+        for i in range(warmup_count):
+            index.find_nearest(queries[i], k=k_values[0])
+        warmup_time_after = time.time() - start_warmup_after
+        print(f"    - Warmup AFTER restart completed in {warmup_time_after:.4f}s")
+
         print("    - Running queries AFTER restart...")
         results_after = evaluate_index(
             index, queries, ground_truth_dict, k_values, query_method=query_method
@@ -448,6 +457,7 @@ def test_index(
             "latency_after": ra["latency"],
             "build_time": build_time,
             "warmup_time": warmup_time,
+            "warmup_time_after": warmup_time_after,
             "open_time": open_time,
             "count_before": count_before,
             "count_after": count_after,
@@ -507,6 +517,10 @@ def save_results_to_markdown(
                 "- **Data Distribution**: Clustered data (simulating topics) on unit hypersphere. Queries are perturbed data points.\n"
             )
 
+        f.write(
+            "- **Warmup**: A warmup phase (up to 100 queries) is performed after reopening the database to prime caches before measuring latency.\n"
+        )
+
         # Group results by Scenario
         scenarios = []
         seen_scenarios = set()
@@ -542,9 +556,9 @@ def save_results_to_markdown(
             for k in k_values:
                 f.write(f"### k = {k}\n\n")
                 f.write(
-                    "| max_connections | beam_width | quantization | method | Recall (Before) | Recall (After) | Latency (ms) (Before) | Latency (ms) (After) | Build (s) | Warmup (s) | Open (s) | Count (Before) | Count (After) |\n"
+                    "| max_connections | beam_width | quantization | method | Recall (Before) | Recall (After) | Latency (ms) (Before) | Latency (ms) (After) | Build (s) | Warmup (s) | Warmup After (s) | Open (s) | Count (Before) | Count (After) |\n"
                 )
-                f.write("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+                f.write("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 
                 k_results = [r for r in scen_results if r["k"] == k]
                 for r in k_results:
@@ -558,13 +572,14 @@ def save_results_to_markdown(
 
                     j_bld_str = format_val(r["J_Build(s)"])
                     j_warmup_str = format_val(r.get("J_Warmup(s)"))
+                    j_warmup_after_str = format_val(r.get("J_Warmup_After(s)"))
                     j_open_str = format_val(r.get("J_Open(s)"))
 
                     j_cb = r.get("J_Count_Before", "N/A")
                     j_ca = r.get("J_Count_After", "N/A")
 
                     f.write(
-                        f"| {r['max_connections']} | {r['beam_width']} | {r['quantization']} | {r['method']} | {j_rb} | {j_ra} | {j_lb} | {j_la} | {j_bld_str} | {j_warmup_str} | {j_open_str} | {j_cb} | {j_ca} |\n"
+                        f"| {r['max_connections']} | {r['beam_width']} | {r['quantization']} | {r['method']} | {j_rb} | {j_ra} | {j_lb} | {j_la} | {j_bld_str} | {j_warmup_str} | {j_warmup_after_str} | {j_open_str} | {j_cb} | {j_ca} |\n"
                     )
                 f.write("\n")
     print(f"  [Saved results to {filename}]")
@@ -749,6 +764,9 @@ def run_benchmark():
                                         "J_Std": j_res.get("recall_std"),
                                         "J_Build(s)": j_res.get("build_time"),
                                         "J_Warmup(s)": j_res.get("warmup_time"),
+                                        "J_Warmup_After(s)": j_res.get(
+                                            "warmup_time_after"
+                                        ),
                                         "J_Open(s)": j_res.get("open_time"),
                                         "J_Lat(ms)": j_res.get("latency"),
                                         "J_Lat_Std": j_res.get("latency_std"),
@@ -778,11 +796,11 @@ def run_benchmark():
         )
 
     # Print Results Table
-    print("\n" + "=" * 180)
+    print("\n" + "=" * 200)
     print(
-        f"{'Scenario':<10} | {'max_conn':<8} | {'beam':<6} | {'quant':<8} | {'method':<8} | {'k':<3} | {'Recall (B)':<10} | {'Recall (A)':<10} | {'Lat (B)':<10} | {'Lat (A)':<10} | {'Build':<8} | {'Warmup':<8} | {'Open':<8} | {'Count':<8}"
+        f"{'Scenario':<10} | {'max_conn':<8} | {'beam':<6} | {'quant':<8} | {'method':<8} | {'k':<3} | {'Recall (B)':<10} | {'Recall (A)':<10} | {'Lat (B)':<10} | {'Lat (A)':<10} | {'Build':<8} | {'Warmup':<8} | {'Warmup(A)':<10} | {'Open':<8} | {'Count':<8}"
     )
-    print("-" * 180)
+    print("-" * 200)
 
     for r in results:
         # Format Recall Before/After
@@ -795,15 +813,16 @@ def run_benchmark():
 
         j_bld_str = format_val(r["J_Build(s)"])
         j_warmup_str = format_val(r.get("J_Warmup(s)"))
+        j_warmup_after_str = format_val(r.get("J_Warmup_After(s)"))
         j_open_str = format_val(r.get("J_Open(s)"))
 
         j_cb = str(r.get("J_Count_Before", "N/A"))
         j_ca = str(r.get("J_Count_After", "N/A"))
 
         print(
-            f"{r['Scenario']:<10} | {r['max_connections']:<8} | {r['beam_width']:<6} | {r['quantization']:<8} | {r['method']:<8} | {r['k']:<3} | {j_rb:<10} | {j_ra:<10} | {j_lb:<10} | {j_la:<10} | {j_bld_str:<8} | {j_warmup_str:<8} | {j_open_str:<8} | {j_cb:<8}"
+            f"{r['Scenario']:<10} | {r['max_connections']:<8} | {r['beam_width']:<6} | {r['quantization']:<8} | {r['method']:<8} | {r['k']:<3} | {j_rb:<10} | {j_ra:<10} | {j_lb:<10} | {j_la:<10} | {j_bld_str:<8} | {j_warmup_str:<8} | {j_warmup_after_str:<10} | {j_open_str:<8} | {j_cb:<8}"
         )
-    print("=" * 180)
+    print("=" * 200)
 
 
 if __name__ == "__main__":
