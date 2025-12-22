@@ -606,7 +606,7 @@ def run_benchmark():
     # Ensure JVM is started and logs are silenced
 
     db_path = f"./my_test_databases/benchmark_db_{args.dataset}"
-    k_values = [10, 50, 100]
+    k_values = [10, 50, 100, 256]
 
     scenarios = [
         {"name": "Tiny", "count": 1000, "queries": 10},
@@ -625,7 +625,7 @@ def run_benchmark():
     }
 
     max_connections_values = [8, 16, 32, 64]
-    beam_width_values = [32, 64, 128, 256]
+    beam_width_values = [200]
     # quantization_values = ["NONE", "INT8", "BINARY"]
     quantization_values = ["NONE"]
     query_methods = ["EMBEDDED", "SQL"]
