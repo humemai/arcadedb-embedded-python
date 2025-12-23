@@ -302,3 +302,74 @@ class TestVectorSQL:
         except Exception:
             # Maybe it expects type name?
             pass
+
+    def test_vector_delete_and_search_others_sql(self, test_db):
+        """Test deleting vertices in a larger dataset using SQL."""
+        import random
+
+        # Create schema
+        test_db.command("sql", "CREATE VERTEX TYPE DocSql")
+        test_db.command("sql", "CREATE PROPERTY DocSql.embedding ARRAY_OF_FLOATS")
+        test_db.command("sql", "CREATE PROPERTY DocSql.id INTEGER")
+
+        dims = 10
+        # Create index
+        test_db.command(
+            "sql",
+            f'CREATE INDEX ON DocSql (embedding) LSM_VECTOR METADATA {{"dimensions": {dims}}}',
+        )
+
+        # Get index name
+        indexes = test_db.schema.list_vector_indexes()
+        # Filter for our index if multiple exist
+        index_name = next(idx for idx in indexes if "DocSql" in idx)
+
+        # Generate 100 random vectors
+        num_vectors = 100
+        vectors = []
+
+        random.seed(42)
+
+        with test_db.transaction():
+            for i in range(num_vectors):
+                vec = [random.random() for _ in range(dims)]
+                vectors.append(vec)
+                # Insert via SQL using string formatting
+                test_db.command(
+                    "sql", f"INSERT INTO DocSql SET id = {i}, embedding = {vec}"
+                )
+
+        # Delete every 10th vector
+        deleted_indices = set(range(0, num_vectors, 10))
+
+        with test_db.transaction():
+            for i in deleted_indices:
+                test_db.command("sql", f"DELETE FROM DocSql WHERE id = {i}")
+
+        # Verify
+        for i in range(num_vectors):
+            vec = vectors[i]
+
+            # Search using projection and ORDER BY alias
+            rs = test_db.query(
+                "sql",
+                f"SELECT id, vectorL2Distance(embedding, {vec}) as dist FROM DocSql ORDER BY dist ASC LIMIT 1",
+            )
+
+            row = next(rs, None)
+
+            if i in deleted_indices:
+                # Should NOT find the deleted vector
+                if not row:
+                    continue
+
+                found_id = row.get_property("id")
+                assert found_id != i, f"Found deleted vector at index {i}"
+
+            else:
+                # Should find it
+                assert row is not None, f"Did not find vector at index {i}"
+                found_id = row.get_property("id")
+                assert (
+                    found_id == i
+                ), f"Found wrong vector for index {i}: found {found_id}"
