@@ -659,3 +659,28 @@ def test_complex_graph_traversal(temp_db_path):
         )
         names = [r.get_property("value") for r in result]
         assert "Charlie" in names
+
+
+def test_lookup_by_rid(temp_db_path):
+    """Test looking up records by RID."""
+    with arcadedb.create_database(temp_db_path) as db:
+        # Create schema
+        db.schema.create_vertex_type("User")
+
+        # Create a vertex
+        with db.transaction():
+            user = db.new_vertex("User")
+            user.set("name", "John Doe")
+            user.save()
+            # Get RID as string
+            rid = user.getIdentity().toString()
+
+        # Lookup by RID
+        found_user = db.lookup_by_rid(rid)
+        assert found_user is not None
+        assert found_user.get("name") == "John Doe"
+        assert found_user.getIdentity().toString() == rid
+
+        # Test lookup with invalid RID format
+        with pytest.raises(arcadedb.ArcadeDBError):
+            db.lookup_by_rid("invalid_rid")

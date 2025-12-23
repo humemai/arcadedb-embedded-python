@@ -158,6 +158,30 @@ class Database:
         except Exception as e:
             raise ArcadeDBError(f"Failed to get database path: {e}") from e
 
+    def lookup_by_rid(self, rid: str) -> Any:
+        """
+        Lookup a record by its RID.
+
+        Args:
+            rid: Record ID string (e.g. "#10:5")
+
+        Returns:
+            Record object (Vertex, Document, or Edge) or None if not found
+
+        Example:
+            >>> record = db.lookup_by_rid("#10:5")
+            >>> if record:
+            ...     print(record.get("name"))
+        """
+        self._check_not_closed()
+        try:
+            from com.arcadedb.database import RID
+
+            java_rid = RID(self._java_db, rid)
+            return self._java_db.lookupByRID(java_rid, True)
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to lookup RID '{rid}': {e}") from e
+
     def create_vector_index(
         self,
         vertex_type: str,

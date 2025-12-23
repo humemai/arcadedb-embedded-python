@@ -90,6 +90,113 @@ class TestLSMVectorIndex:
         res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
         assert abs(res_embedding[0] - 1.0) < 0.001
 
+    def test_lsm_vector_delete_and_search_others(self, test_db):
+        """Test deleting vertices in a larger dataset and ensuring others are still found."""
+        import random
+
+        # Create schema and index
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+        test_db.schema.create_property("Doc", "id", "INTEGER")
+
+        # Use higher dimensions to reduce chance of random collision
+        dims = 10
+        index = test_db.create_vector_index("Doc", "embedding", dimensions=dims)
+
+        # Generate 100 random vectors
+        num_vectors = 100
+        vectors = []
+        rids = []
+
+        # Use fixed seed for reproducibility
+        random.seed(42)
+
+        with test_db.transaction():
+            for i in range(num_vectors):
+                # Create random vector
+                vec = [random.random() for _ in range(dims)]
+                vectors.append(vec)
+
+                v = test_db.new_vertex("Doc")
+                v.set("embedding", arcadedb.to_java_float_array(vec))
+                v.set("id", i)
+                v.save()
+                rids.append(v.getIdentity().toString())
+
+        # Delete every 10th vector (indices 0, 10, 20, ...)
+        deleted_indices = set(range(0, num_vectors, 10))
+
+        with test_db.transaction():
+            for idx in deleted_indices:
+                rid = rids[idx]
+                v_ref = test_db.lookup_by_rid(rid)
+                assert v_ref is not None
+                v_ref.delete()
+
+        # Verify deletions and existence
+        for i in range(num_vectors):
+            vec = vectors[i]
+            rid = rids[i]
+
+            # Search for the vector
+            results = index.find_nearest(vec, k=1)
+
+            if i in deleted_indices:
+                # If deleted, we should NOT find this specific RID
+                if len(results) > 0:
+                    found_vertex, _ = results[0]
+                    found_rid = found_vertex.getIdentity().toString()
+                    assert (
+                        found_rid != rid
+                    ), f"Deleted vector at index {i} (RID {rid}) was found!"
+            else:
+                # If not deleted, we SHOULD find this specific RID as top match (exact match)
+                assert len(results) >= 1, f"Existing vector at index {i} not found"
+                found_vertex, _ = results[0]
+                found_rid = found_vertex.getIdentity().toString()
+                assert (
+                    found_rid == rid
+                ), f"Vector at index {i} mismatch. Expected {rid}, got {found_rid}"
+
+    def test_lsm_vector_search_overquery(self, test_db):
+        """Test searching in vector index with overquery_factor."""
+        # Create schema and index
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index("Doc", "embedding", dimensions=3)
+
+        # Add some data
+        vectors = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.5, 0.5, 0.0],
+            [0.0, 0.5, 0.5],
+        ]
+
+        with test_db.transaction():
+            for v in vectors:
+                vertex = test_db.new_vertex("Doc")
+                vertex.set("embedding", arcadedb.to_java_float_array(v))
+                vertex.save()
+
+        # Search with overquery_factor
+        query = [0.9, 0.1, 0.0]
+        k = 2
+        overquery_factor = 2
+
+        # This should internally query for k * overquery_factor = 4 items
+        # but return only k = 2 items
+        results = index.find_nearest(query, k=k, overquery_factor=overquery_factor)
+
+        assert len(results) == k
+
+        # Verify the top result is still the closest one
+        vertex, distance = results[0]
+        res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
+        assert abs(res_embedding[0] - 1.0) < 0.001
+
     def test_get_vector_index_lsm(self, test_db):
         """Test retrieving an existing vector index (JVector implementation)."""
         # Create schema and index

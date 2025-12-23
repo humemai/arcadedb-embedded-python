@@ -127,76 +127,64 @@ class VectorIndex:
         self._java_index = java_index
         self._database = database
 
-    def find_nearest(self, query_vector, k=10, use_numpy=True):
+    def find_nearest(self, query_vector, k=10, overquery_factor=1, use_numpy=True):
         """
         Find k nearest neighbors to the query vector.
 
         Args:
             query_vector: Query vector as Python list, NumPy array, or array-like
-            k: Number of nearest neighbors to return (default: 10)
-            use_numpy: Return vectors as NumPy arrays if available (default: True)
+            k: Number of nearest neighbors to return (final k)
+            overquery_factor: Multiplier for search-time over-querying (implicit efSearch)
+            use_numpy: Return vectors as NumPy arrays if available
 
         Returns:
             List of tuples: [(vertex, score), ...]
-            where vertex is the Java vertex object (use .get() and .has() methods)
-            and score is the distance or similarity score depending on the metric.
-
-            Note:
-            - **EUCLIDEAN**: Returns similarity (Higher is better).
-            - **COSINE**: Returns distance (Lower is better).
-            - **DOT_PRODUCT**: Returns negative dot product (Lower is better).
         """
         try:
             # Convert query vector to Java float array
             java_vector = to_java_float_array(query_vector)
 
+            # Search-time over-querying
+            search_k = k * max(1, int(overquery_factor))
+
             all_results = []
 
             def process_index(idx):
-                # Check if it's LSMVectorIndex (by class name to avoid imports)
                 if "LSMVectorIndex" in idx.getClass().getName():
-                    # Call findNeighborsFromVector(float[], int)
-                    pairs = idx.findNeighborsFromVector(java_vector, k)
+                    pairs = idx.findNeighborsFromVector(java_vector, search_k)
                     for pair in pairs:
                         rid = pair.getFirst()
                         score = pair.getSecond()
-                        # Load record
                         record = self._database._java_db.lookupByRID(rid, True)
                         all_results.append((record, float(score)))
 
-            # Handle TypeIndex (wrapper around buckets)
+            # Handle TypeIndex (multiple buckets)
             if "TypeIndex" in self._java_index.getClass().getName():
-                sub_indexes = self._java_index.getSubIndexes()
-                for sub in sub_indexes:
+                for sub in self._java_index.getSubIndexes():
                     process_index(sub)
             else:
                 process_index(self._java_index)
 
-            # Determine sort order based on similarity function
-            # EUCLIDEAN returns similarity (higher is better) -> Descending
-            # COSINE returns distance (lower is better) -> Ascending
-            # DOT_PRODUCT returns negative distance (lower is better) -> Ascending
+            # Determine sort order
             reverse_sort = False
             try:
                 idx_to_check = None
                 if "LSMVectorIndex" in self._java_index.getClass().getName():
                     idx_to_check = self._java_index
                 elif "TypeIndex" in self._java_index.getClass().getName():
-                    sub_indexes = self._java_index.getSubIndexes()
-                    if not sub_indexes.isEmpty():
-                        idx_to_check = sub_indexes[0]
+                    subs = self._java_index.getSubIndexes()
+                    if not subs.isEmpty():
+                        idx_to_check = subs[0]
 
                 if idx_to_check:
-                    sim_func = str(idx_to_check.getSimilarityFunction())
-                    if sim_func == "EUCLIDEAN":
+                    if str(idx_to_check.getSimilarityFunction()) == "EUCLIDEAN":
                         reverse_sort = True
             except Exception:
-                # Fallback to default (Ascending) if check fails
                 pass
 
-            # Sort results
             all_results.sort(key=lambda x: x[1], reverse=reverse_sort)
 
+            # Final k truncation
             return all_results[:k]
 
         except Exception as e:
