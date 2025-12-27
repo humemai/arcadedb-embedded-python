@@ -303,23 +303,29 @@ print()
 print(f"   💡 {args.impl.upper()} Parameters:")
 print(f"      • dimensions: {EMBEDDING_DIM} (matches embedding size)")
 print("      • distance_function: cosine (best for normalized vectors)")
-print(
-    "      • max_connections: 16 (connections per node, higher = more accurate but slower)"
-)
-print("      • beam_width: 128 (search quality, higher = more accurate)")
+if args.impl == "default":
+    print(
+        "      • max_connections: 32 (connections per node, higher = more accurate but slower)"
+    )
+    print("      • beam_width: 256 (search quality, higher = more accurate)")
+else:
+    print(
+        "      • max_connections: 16 (connections per node, higher = more accurate but slower)"
+    )
+    print("      • beam_width: 128 (search quality, higher = more accurate)")
+
 if args.impl == "hnsw":
     print(f"      • max_items: {num_articles} (set to actual document count)")
 print()
 
 if args.impl == "default":
     # Create vector index (JVector implementation - recommended)
+    # Using new defaults: max_connections=32, beam_width=256
     index = db.create_vector_index(
         vertex_type="Article",
         vector_property="embedding",
         dimensions=EMBEDDING_DIM,
         distance_function="cosine",
-        max_connections=16,
-        beam_width=128,
     )
 else:  # legacy
     # Create legacy HNSW vector index

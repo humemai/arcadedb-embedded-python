@@ -188,8 +188,8 @@ class Database:
         vector_property: str,
         dimensions: int,
         distance_function: str = "cosine",
-        max_connections: int = 16,
-        beam_width: int = 128,
+        max_connections: int = 32,
+        beam_width: int = 256,
         quantization: str = None,
     ) -> "VectorIndex":
         """
@@ -202,6 +202,10 @@ class Database:
         - Automatic indexing of existing records
         - Concurrent construction support
 
+        Default parameters (max_connections=32, beam_width=256) were chosen based on
+        benchmarks on the GloVe-100-Angular dataset to achieve at least 0.85 recall
+        with decent build and search time.
+
         For the legacy HNSW implementation, use create_legacy_vector_index().
 
         Args:
@@ -209,9 +213,9 @@ class Database:
             vector_property: Name of the property containing vectors
             dimensions: Vector dimensionality (e.g., 768 for BERT)
             distance_function: "cosine", "euclidean", or "inner_product"
-            max_connections: Max connections per node (default: 16).
+            max_connections: Max connections per node (default: 32).
                              Maps to `maxConnections` in JVector.
-            beam_width: Beam width for search/construction (default: 128).
+            beam_width: Beam width for search/construction (default: 256).
                         Maps to `beamWidth` in JVector.
             quantization: Vector quantization type (default: None).
                           Options: "INT8", "BINARY".

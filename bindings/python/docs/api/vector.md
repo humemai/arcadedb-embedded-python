@@ -112,8 +112,8 @@ db.create_vector_index(
     vector_property: str,
     dimensions: int,
     distance_function: str = "cosine",
-    max_connections: int = 16,
-    beam_width: int = 200
+    max_connections: int = 32,
+    beam_width: int = 256
 ) -> VectorIndex
 ```
 
@@ -126,11 +126,11 @@ db.create_vector_index(
   - `"cosine"`: Cosine distance (1 - cosine similarity)
   - `"euclidean"`: Euclidean distance (L2 norm)
   - `"inner_product"`: Negative inner product
-- `max_connections` (int): Max connections per node (default: 16)
+- `max_connections` (int): Max connections per node (default: 32)
   - Maps to `maxConnections` in JVector
   - Higher = better recall, more memory
-  - Typical range: 12-48
-- `beam_width` (int): Beam width for search/construction (default: 200)
+  - Typical range: 128-256
+- `beam_width` (int): Beam width for search/construction (default: 256)
   - Maps to `beamWidth` in JVector
   - Higher = better recall, slower search
   - Typical range: 100-400
@@ -162,8 +162,8 @@ index = db.create_vector_index(
     vector_property="embedding",
     dimensions=384,  # Match your embedding model
     distance_function="cosine",
-    m=16,
-    ef=128
+    max_connections=32,
+    beam_width=256
 )
 
 print(f"Created vector index: {index}")
@@ -171,7 +171,7 @@ print(f"Created vector index: {index}")
 
 ---
 
-### `VectorIndex.find_nearest(query_vector, k=10, use_numpy=True)`
+### `VectorIndex.find_nearest(query_vector, k=10, overquery_factor=16, use_numpy=True, allowed_rids=None)`
 
 Find k-nearest neighbors to the query vector.
 
@@ -182,7 +182,11 @@ Find k-nearest neighbors to the query vector.
   - NumPy array: `np.array([0.1, 0.2, ...])`
   - Any array-like iterable
 - `k` (int): Number of neighbors to return (default: 10)
+- `overquery_factor` (int): Multiplier for search-time over-querying (implicit efSearch)
+  (default: 16)
 - `use_numpy` (bool): Return vectors as NumPy if available (default: `True`)
+- `allowed_rids` (List[str]): Optional list of RID strings (e.g. `["#1:0", "#2:5"]`) to
+  restrict search (default: `None`)
 
 **Returns:**
 
@@ -201,6 +205,10 @@ query_vector = generate_embedding(query_text)  # Your embedding function
 
 # Search for 5 most similar documents
 neighbors = index.find_nearest(query_vector, k=5)
+
+# Search with RID filtering
+allowed_rids = ["#10:5", "#10:8", "#10:12"]
+filtered_neighbors = index.find_nearest(query_vector, k=5, allowed_rids=allowed_rids)
 
 for vertex, distance in neighbors:
     doc_id = vertex.get("id")
