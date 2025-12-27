@@ -306,18 +306,17 @@ def create_vector_index(db, impl="default", property_suffix=""):
         print(f"  edge_type={edge_type}, metric=cosine, m=16, ef=128")
         print(f"  max_items={num_movies:,} (based on movies with embeddings)")
     else:
-        print("  metric=cosine, max_connections=16, beam_width=128")
+        print("  metric=cosine, max_connections=32, beam_width=256")
 
     start_time = time.time()
 
     if impl == "default":
+        # Using new defaults: max_connections=32, beam_width=256
         index = db.create_vector_index(
             vertex_type="Movie",
             vector_property=embedding_prop,
             dimensions=384,
             distance_function="cosine",
-            max_connections=16,
-            beam_width=128,
         )
     else:  # legacy
         # Create index with correct max_items

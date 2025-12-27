@@ -1,10 +1,13 @@
 # Vector Search Guide
 
-Vector search enables semantic similarity search using embeddings from machine learning models. This guide covers strategies, best practices, and patterns for implementing vector search with ArcadeDB.
+Vector search enables semantic similarity search using embeddings from machine learning
+models. This guide covers strategies, best practices, and patterns for implementing
+vector search with ArcadeDB.
 
 ## Overview
 
-Vector search transforms your data into high-dimensional vectors (embeddings) and finds similar items using distance metrics. Perfect for:
+Vector search transforms your data into high-dimensional vectors (embeddings) and finds
+similar items using distance metrics. Perfect for:
 
 - **Semantic Search**: Find documents by meaning, not just keywords
 - **Recommendation Systems**: Find similar products, users, or content
@@ -272,16 +275,17 @@ index = db.create_vector_index(
 
 ## Index Parameters
 
-### Max Connections (m)
+### Max Connections
 
-Controls connections per node in the graph. Maps to `maxConnections` in JVector.
+Controls connections per node in the graph. Maps to `maxConnections` in JVector and `M`
+in HNSW.
 
 ```python
 index = db.create_vector_index(
     vertex_type="Doc",
     vector_property="embedding",
     dimensions=384,
-    max_connections=16  # Number of connections
+    max_connections=32  # Number of connections (default: 32)
 )
 ```
 
@@ -289,27 +293,28 @@ index = db.create_vector_index(
 
 | Max Connections | Recall | Memory | Build Speed | Search Speed |
 |-----------------|--------|--------|-------------|--------------|
-| 8-12            | Lower  | Low    | Fast        | Fast         |
-| 16-24           | Good   | Medium | Medium      | Medium       |
-| 32-48           | High   | High   | Slow        | Slow         |
+| 16              | Good   | Low    | Fast        | Fast         |
+| 32 (Default)    | Decent | Medium | Medium      | Medium       |
+| 64              | High   | High   | Slow        | Slow         |
 
 **Recommendations:**
 - **Small datasets (<100K)**: max_connections=16
-- **Medium datasets (100K-1M)**: max_connections=24
-- **Large datasets (>1M)**: max_connections=32-48
+- **Medium datasets (100K-1M)**: max_connections=32 (default)
+- **Large datasets (>1M)**: max_connections=64
 
 ---
 
 ### Beam Width (ef)
 
-Controls search quality vs speed. Maps to `beamWidth` in JVector.
+Controls search quality vs speed. Maps to `beamWidth` in JVector and `ef_construction`
+in HNSW.
 
 ```python
 index = db.create_vector_index(
     vertex_type="Doc",
     vector_property="embedding",
     dimensions=384,
-    beam_width=128  # Search candidate list size
+    beam_width=256  # Search candidate list size (default: 256)
 )
 ```
 
@@ -317,21 +322,44 @@ index = db.create_vector_index(
 
 | Beam Width | Recall | Search Speed |
 |------------|--------|--------------|
-| 50-100     | Lower  | Fast         |
-| 128-200    | Good   | Medium       |
-| 200-400    | High   | Slow         |
+| <256       | Good   | Fast         |
+| 256 (Def)  | Medium | Medium       |
+| >256       | High   | Slow         |
 
 **Recommendations:**
-- **Fast search**: beam_width=50-100
-- **Balanced**: beam_width=128-200
-- **High accuracy**: beam_width=200-400
+- **Fast search**: beam_width=128
+- **Balanced**: beam_width=256 (default)
+- **High accuracy**: beam_width=512
+
+---
+
+### Overquery Factor
+
+Controls search-time accuracy by exploring more candidates than requested. This is
+similar to `efSearch` from HNSW.
+
+```python
+# Actual search will explore k * overquery_factor candidates
+results = index.find_nearest(
+    query_embedding,
+    k=10,
+    overquery_factor=16  # Default: 16
+)
+```
+
+**Trade-offs:**
+
+| Factor | Recall | Search Speed |
+|--------|--------|--------------|
+| <16    | Low    | Fast         |
+| 16     | Decent | Medium       |
+| >16    | High   | Slow         |
+
 
 **Recommendations:**
-- **Fast iteration**: ef_construction=100
-- **Production**: ef_construction=200
-- **Maximum quality**: ef_construction=400
-
-**Note:** Higher ef_construction improves recall but only affects index building, not search.
+- **Fast search**: overquery_factor=8
+- **Balanced**: overquery_factor=16 (default)
+- **High accuracy**: overquery_factor=32
 
 ## Schema Design
 
@@ -426,10 +454,33 @@ for vertex, distance in results:
 
 ### Hybrid Search (Vector + Filters)
 
-Combine vector similarity with metadata filters:
+Combine vector similarity with metadata filters.
+
+**Option 1: Pre-filtering (Recommended)**
+
+Filter candidates *before* vector search using `allowed_rids`. This is more efficient as
+it ensures you get `k` results that match your criteria.
 
 ```python
-# Get candidates from vector search
+# 1. Query for matching RIDs using SQL or index lookup
+rs = db.query("sql", "SELECT @rid FROM Article WHERE category = 'Programming'")
+allowed_rids = [doc.getIdentity().toString() for doc in rs]
+
+# 2. Perform vector search restricted to those RIDs
+query_embedding = model.encode("python tutorial")
+results = index.find_nearest(query_embedding, k=10, allowed_rids=allowed_rids)
+
+for vertex, distance in results:
+    print(f"{vertex.get('title')} (distance: {distance:.4f})")
+```
+
+**Option 2: Post-filtering**
+
+Filter candidates *after* vector search. This is simpler but may return fewer than `k`
+results if many top candidates are filtered out.
+
+```python
+# Get candidates from vector search (oversample with larger k)
 query_embedding = model.encode("python tutorial")
 candidates = index.find_nearest(query_embedding, k=100)
 
