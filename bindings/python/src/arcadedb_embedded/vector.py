@@ -127,15 +127,24 @@ class VectorIndex:
         self._java_index = java_index
         self._database = database
 
-    def find_nearest(self, query_vector, k=10, overquery_factor=1, use_numpy=True):
+    def find_nearest(
+        self,
+        query_vector,
+        k=10,
+        overquery_factor=16,
+        use_numpy=True,
+        allowed_rids=None,
+    ):
         """
         Find k nearest neighbors to the query vector.
 
         Args:
             query_vector: Query vector as Python list, NumPy array, or array-like
             k: Number of nearest neighbors to return (final k)
-            overquery_factor: Multiplier for search-time over-querying (implicit efSearch)
+            overquery_factor: Multiplier for search-time over-querying (implicit efSearch).
+                              Default is 16, chosen based on benchmarks to ensure decent recall.
             use_numpy: Return vectors as NumPy arrays if available
+            allowed_rids: Optional list of RID strings (e.g. ["#1:0", "#2:5"]) to restrict search
 
         Returns:
             List of tuples: [(vertex, score), ...]
@@ -144,6 +153,16 @@ class VectorIndex:
             # Convert query vector to Java float array
             java_vector = to_java_float_array(query_vector)
 
+            # Prepare RID filter if provided
+            allowed_rids_set = None
+            if allowed_rids:
+                from com.arcadedb.database import RID
+                from java.util import HashSet
+
+                allowed_rids_set = HashSet()
+                for rid_str in allowed_rids:
+                    allowed_rids_set.add(RID(self._database._java_db, rid_str))
+
             # Search-time over-querying
             search_k = k * max(1, int(overquery_factor))
 
@@ -151,7 +170,13 @@ class VectorIndex:
 
             def process_index(idx):
                 if "LSMVectorIndex" in idx.getClass().getName():
-                    pairs = idx.findNeighborsFromVector(java_vector, search_k)
+                    if allowed_rids_set:
+                        pairs = idx.findNeighborsFromVector(
+                            java_vector, search_k, allowed_rids_set
+                        )
+                    else:
+                        pairs = idx.findNeighborsFromVector(java_vector, search_k)
+
                     for pair in pairs:
                         rid = pair.getFirst()
                         score = pair.getSecond()

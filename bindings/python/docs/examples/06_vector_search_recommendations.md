@@ -287,13 +287,9 @@ index = db.create_vector_index(
     vertex_type="Movie",
     vector_property="embedding_v1",  # or "embedding_v2"
     dimensions=384,
-    max_items=10000,  # Adjusted to actual movie count
-    id_property="vector_id_v1",  # or "vector_id_v2"
-    edge_type="Movie_v1",  # Unique edge type per index
     distance_function="cosine",
-    m=16,  # Number of connections per layer
-    ef=128,  # Size of dynamic candidate list
-    ef_construction=128  # Size during index construction
+    max_connections=32,  # Number of connections per layer (default: 32)
+    beam_width=256       # Size of dynamic candidate list (default: 256)
 )
 ```
 
@@ -365,7 +361,7 @@ index = db.create_vector_index(
 
 **Vector search:**
 - Cache embeddings (stored in database properties)
-- Use appropriate HNSW parameters (m=16, ef=128)
+- Use appropriate JVector parameters (max_connections=32, beam_width=256)
 - Choose faster encoding model (paraphrase-MiniLM-L6-v2)
 
 **Memory management:**

@@ -90,6 +90,67 @@ class TestLSMVectorIndex:
         res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
         assert abs(res_embedding[0] - 1.0) < 0.001
 
+    def test_lsm_vector_search_with_filter(self, test_db):
+        """Test searching in vector index with RID filtering."""
+        # Create schema and index
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index("Doc", "embedding", dimensions=3)
+
+        # Add some data
+        # V0 is exact match for query
+        # V1 is close
+        # V2 is somewhat close
+        # V3 is far
+        # V4 is far
+        vectors = [
+            [1.0, 0.0, 0.0],  # V0
+            [0.9, 0.1, 0.0],  # V1
+            [0.8, 0.2, 0.0],  # V2
+            [0.0, 1.0, 0.0],  # V3
+            [0.0, 0.0, 1.0],  # V4
+        ]
+
+        rids = []
+        with test_db.transaction():
+            for i, vec in enumerate(vectors):
+                v = test_db.new_vertex("Doc")
+                v.set("embedding", arcadedb.to_java_float_array(vec))
+                v.save()
+                rids.append(v.getIdentity().toString())
+
+        query = [1.0, 0.0, 0.0]
+
+        # Scenario 1: Filter allows V2 and V3. k=1.
+        # V2 is closer than V3. V0 and V1 are filtered out.
+        allowed_rids = [rids[2], rids[3]]
+        results = index.find_nearest(query, k=1, allowed_rids=allowed_rids)
+        assert len(results) == 1
+        assert results[0][0].getIdentity().toString() == rids[2]
+
+        # Scenario 2: Filter allows V2 and V3. k=2.
+        # Should return both V2 and V3. V2 first.
+        results = index.find_nearest(query, k=2, allowed_rids=allowed_rids)
+        assert len(results) == 2
+        assert results[0][0].getIdentity().toString() == rids[2]
+        assert results[1][0].getIdentity().toString() == rids[3]
+
+        # Scenario 3: Filter allows V0, V1, V2. k=2.
+        # Should return V0 and V1.
+        allowed_rids = [rids[0], rids[1], rids[2]]
+        results = index.find_nearest(query, k=2, allowed_rids=allowed_rids)
+        assert len(results) == 2
+        assert results[0][0].getIdentity().toString() == rids[0]
+        assert results[1][0].getIdentity().toString() == rids[1]
+
+        # Scenario 4: Filter allows V3. k=5.
+        # Should return only V3.
+        allowed_rids = [rids[3]]
+        results = index.find_nearest(query, k=5, allowed_rids=allowed_rids)
+        assert len(results) == 1
+        assert results[0][0].getIdentity().toString() == rids[3]
+
     def test_lsm_vector_delete_and_search_others(self, test_db):
         """Test deleting vertices in a larger dataset and ensuring others are still found."""
         import random
