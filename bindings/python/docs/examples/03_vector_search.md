@@ -72,12 +72,9 @@ index = db.create_vector_index(
     vertex_type="Article",
     vector_property="embedding",
     dimensions=384,
-    id_property="id",
     distance_function="cosine",  # or "euclidean", "inner_product"
-    m=16,                         # connections per node
-    ef=128,                       # search quality
-    ef_construction=128,          # build quality
-    max_items=10000              # capacity
+    max_connections=32,          # connections per node (default: 32)
+    beam_width=256               # search quality (default: 256)
 )
 ```
 
@@ -88,14 +85,11 @@ index = db.create_vector_index(
   - `cosine`: Best for normalized vectors (text embeddings)
   - `euclidean`: Straight-line distance (image features)
   - `inner_product`: Dot product (when magnitude matters)
-- **M**: Connections per node (16 typical, 12-48 range)
+- **max_connections**: Connections per node (32 default, 16-64 range)
   - Higher = better accuracy, more memory
-  - 16 is good balance for most use cases
-- **ef**: Search beam width (100-200 typical)
+  - 32 is good balance for most use cases
+- **beam_width**: Search beam width (256 default, 100-400 range)
   - Higher = better recall, slower search
-- **ef_construction**: Build quality (100-200 typical)
-  - Higher = better index, slower build
-- **max_items**: Pre-allocated capacity
 
 ### Distance vs Similarity
 
@@ -120,15 +114,15 @@ index = db.create_vector_index(
 
 When you create and populate a vector index, ArcadeDB stores:
 
-**Files created** (for 10K documents, 384D, M=16):
+**Files created** (for 10K documents, 384D, M=32):
 ```
 Article_414002873519545.5.v0.hnswidx         4 KB   (metadata only)
 Article_0.1.65536.v0.bucket                 24 MB   (vertices + embeddings)
 Article_0_in_edges.3.65536.v0.bucket        22 MB   (incoming edges)
 Article_0_out_edges.2.65536.v0.bucket       22 MB   (outgoing edges)
-VectorProximity0_0.7.65536.v0.bucket        47 MB   (HNSW proximity edges)
+VectorProximity0_0.7.65536.v0.bucket        90 MB   (HNSW proximity edges)
 ─────────────────────────────────────────────────
-Total:                                     115 MB
+Total:                                     160 MB
 ```
 
 **Key insight**: The `.hnswidx` file is tiny (4KB) - it only stores metadata. The actual HNSW graph is stored as edges in the database!
@@ -319,10 +313,10 @@ RAM ≈ 4 bytes × dimensions × num_vectors × (1 + M/2)
 ```
 
 **Examples:**
-- 10K vectors, 384D, M=16: ~37 MB
-- 100K vectors, 384D, M=16: ~370 MB
-- 1M vectors, 384D, M=16: ~3.7 GB
-- 1M vectors, 1536D, M=16: ~14.7 GB
+- 10K vectors, 384D, M=32: ~50 MB
+- 100K vectors, 384D, M=32: ~500 MB
+- 1M vectors, 384D, M=32: ~5 GB
+- 1M vectors, 1536D, M=32: ~16 GB
 
 **Note:** This is working set, not total database size. ArcadeDB uses page caching, so hot data stays in RAM while cold data is read from disk on-demand.
 
@@ -330,7 +324,7 @@ RAM ≈ 4 bytes × dimensions × num_vectors × (1 + M/2)
 
 **Start with defaults:**
 ```python
-M=16, ef=128, ef_construction=128
+max_connections=32, beam_width=256
 ```
 
 **Then tune based on needs:**
