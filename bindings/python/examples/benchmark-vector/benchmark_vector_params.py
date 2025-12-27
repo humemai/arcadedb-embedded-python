@@ -6,7 +6,13 @@ Benchmark Vector Parameters
 Runs a comprehensive benchmark of ArcadeDB's JVector index implementation
 across multiple dataset sizes and index parameters.
 
-Scenarios:
+Design:
+- Build-Once, Sweep-Search
+- Incremental Markdown Reporting
+- Persistence Testing per Build Config
+- Embedded API Only
+
+dataset_sizes:
 1. Small:  Count=1,000,     Queries=10
 2. Medium: Count=10,000,    Queries=100
 3. Large:  Count=100,000,   Queries=1,000
@@ -41,6 +47,10 @@ import h5py
 import numpy as np
 import requests
 
+# -----------------------------
+# Configuration
+# -----------------------------
+
 DATASETS = {
     "sift-128-euclidean": "http://ann-benchmarks.com/sift-128-euclidean.hdf5",
     "glove-100-angular": "http://ann-benchmarks.com/glove-100-angular.hdf5",
@@ -68,10 +78,26 @@ DATASET_METRICS = {
     "glove-100-angular": "cosine",
 }
 
+# Build parameters define the index structure and trigger a rebuild
+BUILD_PARAMS = {
+    "max_connections": [16, 32, 64],
+    "ef_construction_factors": [8, 16, 32],
+    "quantization": ["NONE"],
+}
+
+# Search parameters affect traversal only and are swept per build
+SEARCH_PARAMS = {
+    "overquery_factors": [1, 4, 8, 16, 32, 64, 128],
+}
+
+
+# -----------------------------
+# Utilities
+# -----------------------------
+
 
 def download_dataset(url, dest_path):
     if os.path.exists(dest_path):
-        print(f"  Dataset already exists at {dest_path}")
         return
 
     print(f"  Downloading dataset from {url}...")
@@ -121,7 +147,6 @@ def load_ann_benchmark_data(dataset_name, count, num_queries, k_values):
         ground_truth = None
         if count == total_train:
             print("    - Using pre-computed ground truth from dataset")
-            # neighbors contains indices of nearest neighbors
             ground_truth = {}
             for k in k_values:
                 gt_indices = np.array(neighbors_ds[:num_queries, :k])
@@ -129,7 +154,7 @@ def load_ann_benchmark_data(dataset_name, count, num_queries, k_values):
         else:
             print("    - Subset of data selected; Ground Truth must be re-computed")
 
-        # Normalize if needed (Angular datasets like GloVe need normalization for Cosine)
+        # Normalize if needed
         metric = DATASET_METRICS[dataset_name]
         if metric == "cosine":
             print("  Normalizing data for Cosine similarity...")
@@ -138,13 +163,8 @@ def load_ann_benchmark_data(dataset_name, count, num_queries, k_values):
 
             queries = queries.astype(np.float32)
             queries /= np.linalg.norm(queries, axis=1, keepdims=True)
-        else:
-            print(f"  Using {metric} metric (no normalization).")
 
     return data, queries, ground_truth, dim
-
-
-# --- Core Logic from internal_test_vector_accuracy.py ---
 
 
 def compute_ground_truth(
@@ -154,7 +174,7 @@ def compute_ground_truth(
         return precomputed_ground_truth
 
     print(f"  Computing Ground Truth ({metric})...")
-    start = time.time()
+    start = time.perf_counter()
 
     max_k = max(k_values)
     ground_truth = {k: [] for k in k_values}
@@ -164,34 +184,33 @@ def compute_ground_truth(
         for i in range(len(queries)):
             top_k_indices = np.argpartition(scores[i], -max_k)[-max_k:]
             top_k_indices = top_k_indices[np.argsort(scores[i][top_k_indices])[::-1]]
-
             for k in k_values:
                 ground_truth[k].append(set(top_k_indices[:k]))
 
     elif metric == "euclidean":
-        # Squared Euclidean distance: x^2 + y^2 - 2xy
-        # We only need ranking, so squared is fine.
-
         data_sq = np.sum(data**2, axis=1)
         term1 = -2 * np.dot(queries, data.T)
         scores = term1 + data_sq
 
         for i in range(len(queries)):
-            # Smallest scores are best
             top_k_indices = np.argpartition(scores[i], max_k)[:max_k]
             top_k_indices = top_k_indices[np.argsort(scores[i][top_k_indices])]
-
             for k in k_values:
                 ground_truth[k].append(set(top_k_indices[:k]))
     else:
         raise ValueError(f"Unsupported metric: {metric}")
 
-    print(f"  Ground Truth computed in {time.time() - start:.4f}s")
+    print(f"  Ground Truth computed in {time.perf_counter() - start:.4f}s")
     return ground_truth
 
 
+# -----------------------------
+# Database & Index Operations
+# -----------------------------
+
+
 def setup_database(db_path, data):
-    start_setup = time.time()
+    start_setup = time.perf_counter()
 
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
@@ -208,81 +227,62 @@ def setup_database(db_path, data):
         for i, vec in enumerate(data):
             batch.create_vertex("VectorData", id=i, vector=vec)
 
-    setup_time = time.time() - start_setup
+    setup_time = time.perf_counter() - start_setup
     print(f"  Database setup completed in {setup_time:.4f}s")
 
     return db, setup_time
 
 
+def build_index(db, dim, metric, max_connections, beam_width, quantization="NONE"):
+    print(
+        f"    Creating Index (M={max_connections}, beam={beam_width}, quant={quantization})..."
+    )
+    start_build = time.perf_counter()
+
+    index = db.create_vector_index(
+        vertex_type="VectorData",
+        vector_property="vector",
+        dimensions=dim,
+        distance_function=metric,
+        max_connections=max_connections,
+        beam_width=beam_width,
+        quantization=quantization if quantization != "NONE" else None,
+    )
+
+    build_time = time.perf_counter() - start_build
+    print(f"    Index created in {build_time:.4f}s")
+    return index, build_time
+
+
 def evaluate_index(
-    index, queries, ground_truth_dict, k_values, query_method="EMBEDDED"
+    index,
+    queries,
+    ground_truth_dict,
+    k_values,
+    overquery_factor=1,
 ):
     """
     Runs queries against the index and calculates Recall and Latency.
     """
     max_k = max(k_values)
     latencies = []
-
-    # Pre-allocate lists for each k
     recalls_map = {k: [] for k in k_values}
 
-    # For SQL, we need the index name and database
-    index_name = None
-    db = None
-    if query_method == "SQL":
-        if hasattr(index, "_java_index"):
-            index_name = index._java_index.getName()
-        if hasattr(index, "_database"):
-            db = index._database
-
-        if not index_name or not db:
-            raise ValueError(
-                "Cannot run SQL queries: index name or database not found on index object"
-            )
-
     for i, query_vec in enumerate(queries):
-        t0 = time.time()
+        t0 = time.perf_counter()
 
-        if query_method == "SQL":
-            # Use vectorNeighbors function
-            q_vec_list = (
-                query_vec.tolist() if hasattr(query_vec, "tolist") else list(query_vec)
-            )
-            # Note: Passing vector as string literal for simplicity
-            rs = db.query(
-                "sql",
-                f"SELECT vectorNeighbors('{index_name}', {q_vec_list}, {max_k}) as neighbors",
-            )
-            try:
-                row = next(rs)
-                # vectorNeighbors returns a list of vertices/records or dicts
-                results = row.get_property("neighbors")
+        # Embedded API
+        results = index.find_nearest(
+            query_vec, k=max_k, overquery_factor=overquery_factor
+        )
 
-                # Handle list of dicts (new behavior)
-                if results and isinstance(results[0], dict) and "vertex" in results[0]:
-                    results = [
-                        (item["vertex"], item.get("distance", 0.0)) for item in results
-                    ]
-                else:
-                    # Fallback/Standard behavior
-                    results = [(item, 0.0) for item in results]
-            except StopIteration:
-                results = []
-        else:
-            # Use Python API
-            results = index.find_nearest(query_vec, k=max_k)
-
-        latencies.append((time.time() - t0) * 1000)
+        latencies.append((time.perf_counter() - t0) * 1000)
 
         result_ids_ordered = []
         for item_tuple in results:
             try:
-                # Handle tuple (item, score) from find_nearest or constructed above
                 item = item_tuple[0]
-
-                # Handle both Record (JVector) and Vertex (Legacy)
                 vertex = item
-                # If item is a Result wrapper (from results.py), get the underlying vertex
                 if hasattr(item, "get_vertex"):
                     vertex = item.get_vertex()
                 elif hasattr(item, "asVertex"):
@@ -293,14 +293,9 @@ def evaluate_index(
             except Exception:
                 pass
 
-        # Calculate metrics for each k
         for k in k_values:
-            # Take top k from the results
             top_k_ids = set(result_ids_ordered[:k])
-
-            # Ground truth for this k
             gt_set = ground_truth_dict[k][i]
-
             intersection = len(top_k_ids.intersection(gt_set))
             recall = intersection / k
             recalls_map[k].append(recall)
@@ -319,273 +314,92 @@ def evaluate_index(
     return results
 
 
-def test_index(
-    db_path,
-    queries,
-    ground_truth_dict,
-    k_values,
-    dim,
-    count,
-    max_connections,
-    beam_width,
-    metric="cosine",
-    quantization="NONE",
-    query_method="EMBEDDED",
+# -----------------------------
+# Markdown Reporting
+# -----------------------------
+
+
+def ensure_table_header(f, algo="jvector"):
+    headers = [
+        "max_connections",
+        "beam_width",
+        "overquery",
+        "Recall (Before)",
+        "Recall (After)",
+        "Latency (ms) (Before)",
+        "Latency (ms) (After)",
+        "Build (s)",
+        "Warmup (s) (Before)",
+        "Warmup (s) (After)",
+        "Open (s)",
+    ]
+    f.write("| " + " | ".join(headers) + " |\n")
+    f.write("| " + " | ".join(["---"] * len(headers)) + " |\n")
+
+
+def append_markdown_row(
+    filename,
+    dataset_info,
+    dataset_size,
+    k,
+    algo,
+    row,
 ):
-    print(
-        f"    Testing JVector (max_connections={max_connections}, beam_width={beam_width}, quantization={quantization}, method={query_method})..."
-    )
+    file_exists = os.path.exists(filename)
 
-    # 1. Open DB to create index
-    start_build = time.time()
-    count_before = 0
-    actual_index_name = None
-    results_before = None
-
-    with arcadedb.open_database(db_path) as db:
-        if query_method == "SQL":
-            print("    - DB Opened. Creating index (via SQL)...")
-            import json
-
-            metadata = {
-                "dimensions": dim,
-                "similarity": metric.upper(),
-                "maxConnections": max_connections,
-                "beamWidth": beam_width,
-            }
-            if quantization != "NONE":
-                metadata["quantization"] = quantization
-
-            sql = f"CREATE INDEX IF NOT EXISTS ON VectorData (vector) LSM_VECTOR METADATA {json.dumps(metadata)}"
-            db.command("sql", sql)
-
-            # Get the index object for evaluate_index (which needs it to get the name)
-            index = db.schema.get_vector_index("VectorData", "vector")
-        else:
-            print("    - DB Opened. Creating index...")
-            index = db.create_vector_index(
-                vertex_type="VectorData",
-                vector_property="vector",
-                dimensions=dim,
-                distance_function=metric,
-                max_connections=max_connections,
-                beam_width=beam_width,
-                quantization=quantization if quantization != "NONE" else None,
-            )
-        print("    - Index created.")
-
-        # Force index build (JVector is lazy)
-        print("    - Warming up index (forcing build)...")
-        start_warmup = time.time()
-        # Run a dummy query to trigger graph construction
-        try:
-            index.find_nearest(queries[0], k=k_values[0])
-            print("    - Warmup query successful.")
-        except Exception as e:
-            print(f"    - Warmup query FAILED: {e}")
-            raise
-        warmup_time = time.time() - start_warmup
-
-        actual_index_name = index._java_index.getName()
-
-        count_before = db.count_type("VectorData")
-        print(f"    - Vectors before close: {count_before}")
-
-        print("    - Running queries BEFORE restart...")
-        results_before = evaluate_index(
-            index, queries, ground_truth_dict, k_values, query_method=query_method
-        )
-
-    build_time = time.time() - start_build
-
-    # 2. Reopen DB to verify persistence and query
-    print("    - Restarting Database...")
-    count_after = 0
-    results_after = None
-
-    start_open = time.time()
-    with arcadedb.open_database(db_path) as db:
-        open_time = time.time() - start_open
-        print(f"    - Database opened in {open_time:.4f}s")
-
-        count_after = db.count_type("VectorData")
-        print(f"    - Vectors after open: {count_after}")
-
-        # Re-acquire index object
-        try:
-            raw_index = db.schema.get_index_by_name(actual_index_name)
-
-            # Import wrappers
-            from arcadedb_embedded.vector import VectorIndex
-
-            index = VectorIndex(raw_index, db)
-
-        except Exception as e:
-            print(
-                f"    - Warning: Could not retrieve index '{actual_index_name}' by name: {e}"
-            )
-            pass
-
-        print("    - Warming up index AFTER restart...")
-        start_warmup_after = time.time()
-        # Run some queries to warm up caches
-        warmup_count = min(len(queries), 100)  # Warm up with up to 100 queries
-        for i in range(warmup_count):
-            index.find_nearest(queries[i], k=k_values[0])
-        warmup_time_after = time.time() - start_warmup_after
-        print(f"    - Warmup AFTER restart completed in {warmup_time_after:.4f}s")
-
-        print("    - Running queries AFTER restart...")
-        results_after = evaluate_index(
-            index, queries, ground_truth_dict, k_values, query_method=query_method
-        )
-
-    # Merge results
-    final_results = {}
-    for k in k_values:
-        rb = results_before[k]
-        ra = results_after[k]
-
-        final_results[k] = {
-            "recall": ra["recall"],  # Default to After for main metric
-            "recall_std": ra["recall_std"],
-            "latency": ra["latency"],
-            "latency_std": ra["latency_std"],
-            "recall_before": rb["recall"],
-            "recall_after": ra["recall"],
-            "latency_before": rb["latency"],
-            "latency_after": ra["latency"],
-            "build_time": build_time,
-            "warmup_time": warmup_time,
-            "warmup_time_after": warmup_time_after,
-            "open_time": open_time,
-            "count_before": count_before,
-            "count_after": count_after,
-        }
-
-    return final_results
-
-
-def format_val(val, fmt=".4f"):
-    return f"{val:{fmt}}" if val is not None else "N/A"
-
-
-def format_std(val, std, fmt=".4f"):
-    return f"{val:{fmt}}±{std:{fmt}}" if val is not None else "N/A"
-
-
-def save_results_to_markdown(
-    results, filename="benchmark_results.md", dataset_info=None
-):
-    with open(filename, "w") as f:
-        f.write("# Benchmark Results\n\n")
-        f.write(
-            "This benchmark evaluates ArcadeDB's JVector index implementation across multiple dataset sizes and index parameters.\n\n"
-        )
-
-        if dataset_info:
+    with open(filename, "a") as f:
+        if not file_exists:
+            # File header
+            f.write(f"# ArcadeDB JVector Benchmark\n\n")
             f.write("## Dataset Information\n\n")
-
-            desc = DATASET_DESCRIPTIONS.get(dataset_info.get("Name"))
-            if desc:
-                f.write(desc.strip() + "\n\n")
-
-            for key, value in dataset_info.items():
-                f.write(f"- **{key}**: {value}\n")
+            for k0, v0 in dataset_info.items():
+                f.write(f"- **{k0}**: {v0}\n")
             f.write("\n")
 
-        f.write("## Targets & Use Cases\n\n")
-        f.write("| k      | Recall target | Use case                   |\n")
-        f.write("| ------ | ------------- | -------------------------- |\n")
-        f.write("| 10     | 0.85–0.95     | Small corpora only         |\n")
-        f.write("| **50** | **≥ 0.95**    | **Default RAG**            |\n")
-        f.write("| 100    | 0.90–0.93     | Very large / noisy corpora |\n\n")
-        f.write("As k increases, Recall@k can go down.\n\n")
+        # dataset_size section
+        dataset_size_header = f"## dataset_size: {dataset_size['name']}"
+        k_header = f"### k = {k}"
 
-        f.write("**Note:**\n")
-        f.write("- **Metric Equations**:\n")
-        f.write("  - **Euclidean**: Similarity = $1 / (1 + d^2)$ (Higher is better)\n")
+        content = ""
+        if file_exists:
+            with open(filename, "r") as rf:
+                content = rf.read()
+
+        if dataset_size_header not in content:
+            f.write(f"\n{dataset_size_header}\n\n")
+            f.write(f"- **Dimensions**: {dataset_size['dim']}\n")
+            f.write(f"- **Vectors**: {dataset_size['count']}\n")
+            f.write(f"- **Queries**: {dataset_size['queries']}\n\n")
+
+            # If we write a new dataset_size, we definitely need the K header for this first row
+            f.write(f"\n{k_header}\n\n")
+            ensure_table_header(f, algo)
+        else:
+            # dataset_size exists. Check if K header exists *after* the last dataset_size header.
+            last_dataset_size_idx = content.rfind(dataset_size_header)
+            if content.find(k_header, last_dataset_size_idx) == -1:
+                f.write(f"\n{k_header}\n\n")
+                ensure_table_header(f, algo)
+
+        # Row
         f.write(
-            "  - **Cosine**: Distance = $(1 - \\cos(\\theta)) / 2$ (Lower is better)\n"
+            f"| {row['max_connections']} "
+            f"| {row['beam_width']} "
+            f"| {row['overquery_factor']} "
+            f"| {row['recall_before']:.4f} "
+            f"| {row['recall_after']:.4f} "
+            f"| {row['latency_before']:.2f} "
+            f"| {row['latency_after']:.2f} "
+            f"| {row['build_time']:.2f} "
+            f"| {row['warmup_time']:.4f} "
+            f"| {row['warmup_time_after']:.4f} "
+            f"| {row['open_time']:.4f} |\n"
         )
 
-        if not dataset_info:
-            f.write(
-                "- **Ground Truth**: Computed via exact brute-force matrix multiplication (numpy) in Python.\n"
-            )
-            f.write(
-                "- **Data Distribution**: Clustered data (simulating topics) on unit hypersphere. Queries are perturbed data points.\n"
-            )
 
-        f.write(
-            "- **Warmup**: A warmup phase (up to 100 queries) is performed after reopening the database to prime caches before measuring latency.\n"
-        )
-
-        # Group results by Scenario
-        scenarios = []
-        seen_scenarios = set()
-        for r in results:
-            if r["Scenario"] not in seen_scenarios:
-                scenarios.append(r["Scenario"])
-                seen_scenarios.add(r["Scenario"])
-
-        for scen_name in scenarios:
-            scen_results = [r for r in results if r["Scenario"] == scen_name]
-            first_r = scen_results[0]
-
-            f.write(f"\n## Scenario: {scen_name}\n\n")
-            f.write(f"- **Dimensions**: {first_r['dim']}\n")
-            f.write(f"- **Vector Count**: {first_r['count']}\n")
-            f.write(f"- **Queries**: {first_r['queries']}\n")
-            f.write(f"- **Data Load Time**: {first_r['Load(s)']:.4f}s\n")
-            f.write(f"- **Ground Truth Time**: {first_r['GT_Calc(s)']:.4f}s\n")
-            f.write(f"- **DB Setup Time**: {first_r['DB_Setup(s)']:.4f}s\n")
-
-            j_time = first_r.get("J_Total_Time", 0)
-
-            if j_time > 0:
-                f.write(
-                    f"- **JVector Total Time**: {j_time/60:.2f} min ({j_time:.2f}s)\n"
-                )
-
-            f.write("\n")
-
-            # Get unique k values
-            k_values = sorted(list(set(r["k"] for r in scen_results)))
-
-            for k in k_values:
-                f.write(f"### k = {k}\n\n")
-                f.write(
-                    "| max_connections | beam_width | quantization | method | Recall (Before) | Recall (After) | Latency (ms) (Before) | Latency (ms) (After) | Build (s) | Warmup (s) | Warmup After (s) | Open (s) | Count (Before) | Count (After) |\n"
-                )
-                f.write("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
-
-                k_results = [r for r in scen_results if r["k"] == k]
-                for r in k_results:
-                    # Format Recall Before/After
-                    j_rb = format_val(r.get("J_Recall_Before"))
-                    j_ra = format_val(r.get("J_Recall_After"))
-
-                    # Format Latency Before/After
-                    j_lb = format_val(r.get("J_Lat_Before"), ".2f")
-                    j_la = format_val(r.get("J_Lat_After"), ".2f")
-
-                    j_bld_str = format_val(r["J_Build(s)"])
-                    j_warmup_str = format_val(r.get("J_Warmup(s)"))
-                    j_warmup_after_str = format_val(r.get("J_Warmup_After(s)"))
-                    j_open_str = format_val(r.get("J_Open(s)"))
-
-                    j_cb = r.get("J_Count_Before", "N/A")
-                    j_ca = r.get("J_Count_After", "N/A")
-
-                    f.write(
-                        f"| {r['max_connections']} | {r['beam_width']} | {r['quantization']} | {r['method']} | {j_rb} | {j_ra} | {j_lb} | {j_la} | {j_bld_str} | {j_warmup_str} | {j_warmup_after_str} | {j_open_str} | {j_cb} | {j_ca} |\n"
-                    )
-                f.write("\n")
-    print(f"  [Saved results to {filename}]")
-
-
-# --- Benchmark Runner ---
+# -----------------------------
+# Main Benchmark Runner
+# -----------------------------
 
 
 def run_benchmark():
@@ -595,25 +409,33 @@ def run_benchmark():
     parser.add_argument(
         "--dataset",
         choices=list(DATASETS.keys()),
-        default=None,
+        required=True,
         help="Use a standard ANN-Benchmark dataset (e.g., sift-128-euclidean)",
+    )
+    parser.add_argument(
+        "--dataset-size",
+        choices=["tiny", "small", "medium", "full"],
+        default="medium",
+        help="Benchmark dataset size",
     )
     args = parser.parse_args()
 
-    if not args.dataset:
-        raise ValueError("Dataset must be specified. Use --dataset.")
+    db_base_path = f"./jvector_{args.dataset}_size_{args.dataset_size}"
+    k_values = [10]
 
-    # Ensure JVM is started and logs are silenced
+    # Output file
+    md_file = f"benchmark_jvector_{args.dataset}_size_{args.dataset_size}.md"
 
-    db_path = f"./my_test_databases/benchmark_db_{args.dataset}"
-    k_values = [10, 50, 100, 256]
+    all_dataset_sizes = {
+        "tiny": {"name": "tiny", "count": 1000, "queries": 10},
+        "small": {"name": "small", "count": 10000, "queries": 100},
+        "medium": {"name": "medium", "count": 100000, "queries": 1000},
+        "full": {"name": "full", "count": None, "queries": 10000},
+    }
 
-    scenarios = [
-        {"name": "Tiny", "count": 1000, "queries": 10},
-        {"name": "Small", "count": 10000, "queries": 100},
-        {"name": "Medium", "count": 100000, "queries": 1000},
-        {"name": "Full", "count": None, "queries": 10000},  # None = All available
-    ]
+    dataset_sizes = []
+    if args.dataset_size:
+        dataset_sizes.append(all_dataset_sizes[args.dataset_size])
 
     metric = DATASET_METRICS[args.dataset]
 
@@ -624,205 +446,130 @@ def run_benchmark():
         "K Values": str(k_values),
     }
 
-    max_connections_values = [8, 16, 32, 64]
-    beam_width_values = [200]
-    # quantization_values = ["NONE", "INT8", "BINARY"]
-    quantization_values = ["NONE"]
-    query_methods = ["EMBEDDED", "SQL"]
-
-    results = []
-
     print("Starting Benchmark...")
     print("=" * 80)
 
-    for scenario in scenarios:
-        scenario_start_time = time.time()
-        # Generate Data & Setup DB once per scenario
-        load_time = 0
-        gt_time = 0
+    for dataset_size in dataset_sizes:
+        print(f"\n--- dataset_size: {dataset_size['name']} ---")
 
-        if args.dataset:
-            start_load = time.time()
-            data, queries, ground_truth, dim = load_ann_benchmark_data(
-                args.dataset, scenario["count"], scenario["queries"], k_values
-            )
-            load_time = time.time() - start_load
-
-            scenario["dim"] = dim
-            scenario["count"] = len(data)  # Update count if it was None
-
-            start_gt = time.time()
-            ground_truth = compute_ground_truth(
-                data,
-                queries,
-                k_values,
-                metric=metric,
-                precomputed_ground_truth=ground_truth,
-            )
-            gt_time = time.time() - start_gt
-        else:
-            raise ValueError(
-                "Dataset must be specified. Random generation is deprecated."
-            )
-
-        print(
-            f"\nScenario: {scenario['name']} (Dim={scenario['dim']}, Count={scenario['count']})"
+        # Load Data
+        start_load = time.perf_counter()
+        data, queries, ground_truth, dim = load_ann_benchmark_data(
+            args.dataset, dataset_size["count"], dataset_size["queries"], k_values
         )
+        load_time = time.perf_counter() - start_load
 
-        db, setup_time = setup_database(db_path, data)
-        db.close()
+        dataset_size["dim"] = dim
+        dataset_size["count"] = len(data)
 
-        j_results_map = {}
-        j_total_time = 0
+        # Compute GT
+        start_gt = time.perf_counter()
+        ground_truth = compute_ground_truth(
+            data,
+            queries,
+            k_values,
+            metric=metric,
+            precomputed_ground_truth=ground_truth,
+        )
+        gt_time = time.perf_counter() - start_gt
 
-        try:
-            # 1. Run JVector Tests
-            print("  Running JVector Tests...")
-            start_j = time.time()
-            for max_connections in max_connections_values:
-                for beam_width in beam_width_values:
-                    for quantization in quantization_values:
-                        for query_method in query_methods:
+        # Iterate Build Configs
+        for max_connections in BUILD_PARAMS["max_connections"]:
+            for ef_c in BUILD_PARAMS["ef_construction_factors"]:
+                beam_width = ef_c * max_connections
+                quantization = "NONE"  # Fixed for now
+
+                # Unique DB path for this build config
+                db_path = f"{db_base_path}_{max_connections}_{beam_width}"
+
+                print(f"\n  [Build Config] M={max_connections}, beam={beam_width}")
+
+                # 1. Setup & Build
+                db, setup_time = setup_database(db_path, data)
+
+                try:
+                    index, build_time = build_index(
+                        db, dim, metric, max_connections, beam_width, quantization
+                    )
+
+                    # 2. Warmup
+                    print("    Warming up...")
+                    t0 = time.perf_counter()
+                    for i in range(min(5, len(queries))):
+                        index.find_nearest(queries[i], k=k_values[0])
+                    warmup_time = time.perf_counter() - t0
+
+                    # 3. Run "Before" Queries
+                    print("    Running 'Before' queries...")
+                    results_before = {}
+                    for oq in SEARCH_PARAMS["overquery_factors"]:
+                        results_before[oq] = evaluate_index(
+                            index, queries, ground_truth, k_values, overquery_factor=oq
+                        )
+
+                    # 4. Persist (Close)
+                    print("    Persisting (Closing DB)...")
+                    db.close()
+
+                    # 5. Reload (Open)
+                    print("    Reloading (Opening DB)...")
+                    t0 = time.perf_counter()
+                    db = arcadedb.open_database(db_path)
+                    open_time = time.perf_counter() - t0
+
+                    # Re-acquire index
+                    # Note: We assume only one vector index exists on VectorData.vector
+                    index = db.schema.get_vector_index("VectorData", "vector")
+
+                    # 5.5 Warmup AFTER reload
+                    print("    Warming up AFTER reload...")
+                    t0 = time.perf_counter()
+                    for i in range(min(5, len(queries))):
+                        index.find_nearest(queries[i], k=k_values[0])
+                    warmup_time_after = time.perf_counter() - t0
+
+                    # 6. Run "After" Queries & Report
+                    print("    Running 'After' queries & Reporting...")
+                    for oq in SEARCH_PARAMS["overquery_factors"]:
+                        metrics_after = evaluate_index(
+                            index, queries, ground_truth, k_values, overquery_factor=oq
+                        )
+                        metrics_before = results_before[oq]
+
+                        for k in k_values:
+                            row = {
+                                "max_connections": max_connections,
+                                "beam_width": beam_width,
+                                "overquery_factor": oq,
+                                "recall_before": metrics_before[k]["recall"],
+                                "recall_after": metrics_after[k]["recall"],
+                                "latency_before": metrics_before[k]["latency"],
+                                "latency_after": metrics_after[k]["latency"],
+                                "build_time": build_time,
+                                "warmup_time": warmup_time,
+                                "warmup_time_after": warmup_time_after,
+                                "open_time": open_time,
+                            }
+
+                            append_markdown_row(
+                                filename=md_file,
+                                dataset_info=dataset_info,
+                                dataset_size=dataset_size,
+                                k=k,
+                                algo="jvector",
+                                row=row,
+                            )
                             print(
-                                f"    - Params: max_connections={max_connections}, beam_width={beam_width}, quantization={quantization}, method={query_method}...",
-                                end="",
-                                flush=True,
-                            )
-                            temp_db_path = (
-                                db_path
-                                + f"_temp_j_{max_connections}_{beam_width}_{quantization}_{query_method}"
-                            )
-                            if os.path.exists(temp_db_path):
-                                shutil.rmtree(temp_db_path)
-                            shutil.copytree(db_path, temp_db_path)
-
-                            try:
-                                j_results_map[
-                                    (
-                                        max_connections,
-                                        beam_width,
-                                        quantization,
-                                        query_method,
-                                    )
-                                ] = test_index(
-                                    temp_db_path,
-                                    queries,
-                                    ground_truth,
-                                    k_values,
-                                    scenario["dim"],
-                                    scenario["count"],
-                                    max_connections,
-                                    beam_width,
-                                    metric=metric,
-                                    quantization=quantization,
-                                    query_method=query_method,
-                                )
-                            except Exception as e:
-                                print(f"\n    !!! Error testing params: {e}")
-                            finally:
-                                if os.path.exists(temp_db_path):
-                                    shutil.rmtree(temp_db_path)
-                            print(" Done.")
-            j_total_time = time.time() - start_j
-
-            # 3. Combine Results
-            for max_connections in max_connections_values:
-                for beam_width in beam_width_values:
-                    for quantization in quantization_values:
-                        for query_method in query_methods:
-                            j_results = j_results_map.get(
-                                (
-                                    max_connections,
-                                    beam_width,
-                                    quantization,
-                                    query_method,
-                                )
+                                f"      -> k={k}, oq={oq}: Recall={row['recall_after']:.4f}, Latency={row['latency_after']:.2f}ms"
                             )
 
-                            for k in k_values:
-                                # Extract JVector results for this k
-                                j_res = {}
-                                if j_results:
-                                    j_res = j_results[k]
+                finally:
+                    if db and db.is_open():
+                        db.close()
+                    if os.path.exists(db_path):
+                        shutil.rmtree(db_path)
 
-                                results.append(
-                                    {
-                                        "Scenario": scenario["name"],
-                                        "dim": scenario["dim"],
-                                        "count": scenario["count"],
-                                        "queries": scenario["queries"],
-                                        "max_connections": max_connections,
-                                        "beam_width": beam_width,
-                                        "quantization": quantization,
-                                        "method": query_method,
-                                        "k": k,
-                                        "Load(s)": load_time,
-                                        "GT_Calc(s)": gt_time,
-                                        "DB_Setup(s)": setup_time,
-                                        # JVector
-                                        "J_Recall": j_res.get("recall"),
-                                        "J_Std": j_res.get("recall_std"),
-                                        "J_Build(s)": j_res.get("build_time"),
-                                        "J_Warmup(s)": j_res.get("warmup_time"),
-                                        "J_Warmup_After(s)": j_res.get(
-                                            "warmup_time_after"
-                                        ),
-                                        "J_Open(s)": j_res.get("open_time"),
-                                        "J_Lat(ms)": j_res.get("latency"),
-                                        "J_Lat_Std": j_res.get("latency_std"),
-                                        "J_Count_Before": j_res.get("count_before"),
-                                        "J_Count_After": j_res.get("count_after"),
-                                        "J_Recall_Before": j_res.get("recall_before"),
-                                        "J_Recall_After": j_res.get("recall_after"),
-                                        "J_Lat_Before": j_res.get("latency_before"),
-                                        "J_Lat_After": j_res.get("latency_after"),
-                                        "J_Total_Time": j_total_time,
-                                    }
-                                )
-
-        finally:
-            if os.path.exists(db_path):
-                shutil.rmtree(db_path)
-
-        scenario_duration = time.time() - scenario_start_time
-        for r in results:
-            if r["Scenario"] == scenario["name"]:
-                r["Scenario_Duration"] = scenario_duration
-
-        save_results_to_markdown(
-            results,
-            filename=f"benchmark_results_{args.dataset}.md",
-            dataset_info=dataset_info,
-        )
-
-    # Print Results Table
-    print("\n" + "=" * 200)
-    print(
-        f"{'Scenario':<10} | {'max_conn':<8} | {'beam':<6} | {'quant':<8} | {'method':<8} | {'k':<3} | {'Recall (B)':<10} | {'Recall (A)':<10} | {'Lat (B)':<10} | {'Lat (A)':<10} | {'Build':<8} | {'Warmup':<8} | {'Warmup(A)':<10} | {'Open':<8} | {'Count':<8}"
-    )
-    print("-" * 200)
-
-    for r in results:
-        # Format Recall Before/After
-        j_rb = format_val(r.get("J_Recall_Before"))
-        j_ra = format_val(r.get("J_Recall_After"))
-
-        # Format Latency Before/After
-        j_lb = format_val(r.get("J_Lat_Before"), ".2f")
-        j_la = format_val(r.get("J_Lat_After"), ".2f")
-
-        j_bld_str = format_val(r["J_Build(s)"])
-        j_warmup_str = format_val(r.get("J_Warmup(s)"))
-        j_warmup_after_str = format_val(r.get("J_Warmup_After(s)"))
-        j_open_str = format_val(r.get("J_Open(s)"))
-
-        j_cb = str(r.get("J_Count_Before", "N/A"))
-        j_ca = str(r.get("J_Count_After", "N/A"))
-
-        print(
-            f"{r['Scenario']:<10} | {r['max_connections']:<8} | {r['beam_width']:<6} | {r['quantization']:<8} | {r['method']:<8} | {r['k']:<3} | {j_rb:<10} | {j_ra:<10} | {j_lb:<10} | {j_la:<10} | {j_bld_str:<8} | {j_warmup_str:<8} | {j_warmup_after_str:<10} | {j_open_str:<8} | {j_cb:<8}"
-        )
-    print("=" * 200)
+    print(f"\nBenchmark complete. Results saved to {md_file}")
 
 
 if __name__ == "__main__":
