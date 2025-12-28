@@ -5,10 +5,10 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 ## Quick Statistics
 
 !!! success "Test Results"
-    - **Current package**: ✅ 205 passed, 0 skipped
+    - **Current package**: ✅ 204 passed, 0 skipped
     - All features available (SQL, Cypher, Gremlin, Studio UI, Vector search)
 
-    **Total: 205 tests** across 6 test files, 100% passing
+    **Total: 204 tests** across 6 test files, 100% passing
 
 ## What's Tested
 
@@ -107,22 +107,6 @@ pytest -l
 pytest -vv -s
 ```
 
-### Distribution-Specific Testing
-
-Some tests are automatically skipped based on your distribution:
-
-```python
-@pytest.mark.server
-def test_server_feature():
-    # Skipped in headless distribution
-    pass
-
-@pytest.mark.gremlin
-def test_gremlin_query():
-    # Skipped in minimal and headless distributions
-    pass
-```
-
 ## Test Markers
 
 Tests are organized with pytest markers:
@@ -143,10 +127,10 @@ pytest -m "not slow"
 When all tests pass, you should see:
 
 ```
-======================== 205 passed in 9.67s =========================
+======================== 204 passed in 9.67s =========================
 ```
 
-With some distributions, you may see skipped tests
+
 
 ## Next Steps
 
