@@ -18,7 +18,7 @@ similar items using distance metrics. Perfect for:
 **How It Works:**
 
 1. Generate embeddings using ML models (Sentence Transformers, OpenAI, etc.)
-2. Store vectors in ArcadeDB with HNSW indexing
+2. Store vectors in ArcadeDB with JVector indexing
 3. Query with new vectors to find nearest neighbors
 4. Get results ranked by similarity
 
@@ -77,8 +77,7 @@ with db.transaction():
         vertex.set("embedding", to_java_float_array(embedding))
         vertex.save()
 
-        # Add to index
-        index.add_vertex(vertex)
+        # Note: LSM vector index automatically indexes new records
 ```
 
 ### 4. Search
@@ -277,8 +276,7 @@ index = db.create_vector_index(
 
 ### Max Connections
 
-Controls connections per node in the graph. Maps to `maxConnections` in JVector and `M`
-in HNSW.
+Controls connections per node in the graph. Maps to `maxConnections` in JVector.
 
 ```python
 index = db.create_vector_index(
@@ -306,8 +304,7 @@ index = db.create_vector_index(
 
 ### Beam Width (ef)
 
-Controls search quality vs speed. Maps to `beamWidth` in JVector and `ef_construction`
-in HNSW.
+Controls search quality vs speed. Maps to `beamWidth` in JVector.
 
 ```python
 index = db.create_vector_index(
@@ -335,8 +332,7 @@ index = db.create_vector_index(
 
 ### Overquery Factor
 
-Controls search-time accuracy by exploring more candidates than requested. This is
-similar to `efSearch` from HNSW.
+Controls search-time accuracy by exploring more candidates than requested.
 
 ```python
 # Actual search will explore k * overquery_factor candidates
@@ -575,6 +571,29 @@ page2 = paginated_search(query_embedding, page_size=10, page=1)
 
 ## Performance Optimization
 
+### Lazy Index Building
+
+The vector index is built lazily. The actual construction of the index happens when the
+first query is executed, not when the index is created or when data is added.
+
+This means the first search query might take longer than subsequent queries as it
+triggers the index build process ("warm up").
+
+```python
+# Create index (instant)
+index = db.create_vector_index(...)
+
+# Add data (fast)
+# ...
+
+# First query (slower - triggers index build)
+print("Warming up index...")
+index.find_nearest(query_embedding, k=1)
+
+# Subsequent queries (fast)
+results = index.find_nearest(query_embedding, k=10)
+```
+
 ### Batch Indexing
 
 ```python
@@ -590,8 +609,6 @@ with db.transaction():
         vertex.set("text", doc['text'])
         vertex.set("embedding", to_java_float_array(embedding))
         vertex.save()
-
-        index.add_vertex(vertex)
 
         # Commit every batch_size records
         if (i + 1) % batch_size == 0:
@@ -664,9 +681,6 @@ def add_document(db, index, model, doc_data):
         vertex.set("embedding", to_java_float_array(embedding))
         vertex.save()
 
-        # Add to index
-        index.add_vertex(vertex)
-
     return vertex
 
 def update_document(db, index, model, doc_id, new_text):
@@ -679,17 +693,11 @@ def update_document(db, index, model, doc_id, new_text):
 
         vertex = result.next()
 
-        # Remove from index
-        index.remove_vertex(doc_id)
-
         # Update
         new_embedding = model.encode(new_text)
         vertex.set("text", new_text)
         vertex.set("embedding", to_java_float_array(new_embedding))
         vertex.save()
-
-        # Re-add to index
-        index.add_vertex(vertex)
 ```
 
 ---
@@ -717,8 +725,6 @@ def index_large_dataset(db, index, model, data_source, chunk_size=1000):
                 vertex.set("embedding", to_java_float_array(embedding))
                 vertex.save()
 
-                index.add_vertex(vertex)
-
         chunk_count += 1
         print(f"Indexed chunk {chunk_count} ({chunk_size} items)")
 
@@ -739,17 +745,16 @@ class VectorSearchConfig:
     model_name: str = "all-MiniLM-L6-v2"
     dimensions: int = 384
     distance_function: str = "cosine"
-    m: int = 16
-    ef: int = 128
-    ef_construction: int = 128
+    max_connections: int = 32
+    beam_width: int = 256
     max_items: int = 1000000
 
 # Load from environment
 config = VectorSearchConfig(
     model_name=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
     dimensions=int(os.getenv("VECTOR_DIMENSIONS", "384")),
-    m=int(os.getenv("HNSW_M", "16")),
-    ef=int(os.getenv("HNSW_EF", "128"))
+    max_connections=int(os.getenv("JVECTOR_MAX_CONNECTIONS", "32")),
+    beam_width=int(os.getenv("JVECTOR_BEAM_WIDTH", "256"))
 )
 
 # Use config
@@ -852,8 +857,6 @@ def safe_vector_index(db, index, model, document):
             vertex.set("embedding", to_java_float_array(embedding))
             vertex.save()
 
-            index.add_vertex(vertex)
-
             return True
 
     except ArcadeDBError as e:
@@ -885,8 +888,6 @@ for doc in documents:
         vertex.set("embedding", to_java_float_array(embedding))
         vertex.save()
 
-        index.add_vertex(vertex)
-
 # Search
 query = "How do I learn programming?"
 query_embedding = model.encode(query)
@@ -917,8 +918,6 @@ for qa in qa_pairs:
         vertex.set("answer", qa['a'])
         vertex.set("embedding", to_java_float_array(embedding))
         vertex.save()
-
-        index.add_vertex(vertex)
 
 # Find answer for new question
 new_question = "Where can I get Python?"
@@ -954,8 +953,6 @@ for prod in products:
         vertex.set("embedding", to_java_float_array(embedding))
         vertex.save()
 
-        index.add_vertex(vertex)
-
 # Find similar products
 target_product_desc = "portable computer"
 query_embedding = model.encode(target_product_desc)
@@ -971,4 +968,4 @@ for vertex, distance in similar:
 - [Vector API Reference](../api/vector.md) - Complete API documentation
 - [Vector Examples](../examples/vectors.md) - Practical code examples
 - [Database API](../api/database.md) - Database operations
-- [HNSW Paper](https://arxiv.org/abs/1603.09320) - Original HNSW algorithm
+- [JVector GitHub](https://github.com/datastax/jvector) - JVector java library

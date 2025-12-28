@@ -1,13 +1,14 @@
 # Example 06: Vector Search Movie Recommendations
 
-**Production-ready vector embeddings and HNSW indexing for semantic movie search**
+**Production-ready vector embeddings and JVector indexing for semantic movie search**
 
 ## Overview
 
-This example demonstrates creating vector embeddings for movies and using HNSW (Hierarchical Navigable Small World) indexing for fast semantic similarity search. You'll learn:
+This example demonstrates creating vector embeddings for movies and using JVector
+indexing for fast semantic similarity search. You'll learn:
 
 - **Real embeddings** - Using sentence-transformers for 384-dimensional vectors
-- **HNSW vector indexing** - Fast approximate nearest neighbor search (cosine similarity)
+- **JVector vector indexing** - Fast approximate nearest neighbor search (cosine similarity)
 - **Graph vs Vector** - Compare collaborative filtering with semantic similarity
 - **Multi-model comparison** - Two embedding models with different semantic characteristics
 - **Performance optimization** - Graph query sampling for 150-300× speedup
@@ -15,11 +16,11 @@ This example demonstrates creating vector embeddings for movies and using HNSW (
 ## What You'll Learn
 
 - Generate embeddings using sentence-transformers (all-MiniLM-L6-v2, paraphrase-MiniLM-L6-v2)
-- Create and populate HNSW vector indexes with custom edge types
+- Create and populate JVector vector indexes with custom edge types
 - Graph-based collaborative filtering (full vs sampled modes)
 - Vector-based semantic similarity search
 - Performance comparison: 4 recommendation methods
-- Handling HNSW metadata persistence and property versioning
+- Handling vector metadata persistence and property versioning
 - Known limitations: JSONL export/import for vectors, NOTUNIQUE index bugs
 
 ## Prerequisites
@@ -154,7 +155,7 @@ python 06_vector_search_recommendations.py --help
 
 **How it works:**
 - Encodes movie titles and genres into 384-dimensional vectors
-- Uses HNSW index for fast approximate nearest neighbor search
+- Uses JVector index for fast approximate nearest neighbor search
 - Finds movies with similar semantic meaning
 
 **Performance:**
@@ -248,9 +249,9 @@ Vector (paraphrase-MiniLM-L6-v2):
 |-------|------|-------|
 | Setup (copy database) | ~1s | Fresh working copy |
 | Model 1 encoding | 135.6s | 72 movies/sec |
-| Model 1 indexing | 59.6s | HNSW index creation |
+| Model 1 indexing | 59.6s | JVector index creation |
 | Model 2 encoding | ~90s | 5× faster encoding |
-| Model 2 indexing | 58.2s | HNSW index creation |
+| Model 2 indexing | 58.2s | JVector index creation |
 | **Total** | **~548s (9.1 min)** | End-to-end |
 
 **Query Performance:**
@@ -265,9 +266,9 @@ Vector (paraphrase-MiniLM-L6-v2):
 |-------|------|-------|
 | Setup (copy database) | ~5s | 119 MB database |
 | Model 1 encoding | 517.1s | 167 movies/sec |
-| Model 1 indexing | 1,050.8s | HNSW index creation |
+| Model 1 indexing | 1,050.8s | JVector index creation |
 | Model 2 encoding | 91.7s | 943 movies/sec |
-| Model 2 indexing | 1,123.9s | HNSW index creation |
+| Model 2 indexing | 1,123.9s | JVector index creation |
 | **Total** | **~3,075s (51.3 min)** | End-to-end |
 
 **Query Performance:**
@@ -280,7 +281,7 @@ Vector (paraphrase-MiniLM-L6-v2):
 - Small: ~7.2 GB RSS
 - Large: ~11.2 GB RSS
 
-## HNSW Index Configuration
+## JVector Index Configuration
 
 ```python
 index = db.create_vector_index(
@@ -296,8 +297,8 @@ index = db.create_vector_index(
 **Key parameters:**
 - **max_items:** Set to actual vertex count for optimal performance
 - **edge_type:** Use unique names for multiple indexes to avoid metadata conflicts
-- **m:** Higher = better recall, more memory (16 is good default)
-- **ef:** Higher = better accuracy, slower search (128 is balanced)
+- **max_connections:** Higher = better recall, more memory (32 is good default)
+- **beam_width:** Higher = better accuracy, slower search (256 is balanced)
 - **distance_function:** "cosine" for normalized similarity (0-1 range)
 
 ## Known Issues and Workarounds
@@ -316,9 +317,9 @@ index = db.create_vector_index(
 
 **Conclusion:** FULL_TEXT is NOT suitable for exact title matching.
 
-### 3. HNSW Metadata Persistence
+### 3. JVector Metadata Persistence
 
-**Problem:** Once embeddings and indexes are created, they cannot be completely removed and recreated on the same vertices. The HNSW graph metadata (edges, `vectorMaxLevel` property) persists even after dropping the index.
+**Problem:** Once embeddings and indexes are created, they cannot be completely removed and recreated on the same vertices. The JVector graph metadata (edges, `vectorMaxLevel` property) persists even after dropping the index.
 
 **Workaround:** Use SEPARATE properties and edge types for each model:
 - `embedding_v1` / `embedding_v2` (properties)
@@ -329,7 +330,7 @@ index = db.create_vector_index(
 **Problem:** Float arrays are NOT properly preserved during JSONL export/import:
 - Embeddings exported as Java `toString()` strings: `"[F@113ee1ce"`
 - Original vector data (384 floats) is completely lost
-- HNSW index edges are not exported at all
+- JVector index edges are not exported at all
 
 **Impact:** Cannot backup/restore vector databases using JSONL format. After import, embeddings must be regenerated and indexes rebuilt.
 
@@ -387,7 +388,7 @@ The script outputs:
 1. **Dependency check** - Verifies sentence-transformers and numpy
 2. **Database setup** - Copy or import source database
 3. **Embedding generation** - Progress bars for both models
-4. **Index creation** - HNSW index building with timing
+4. **Index creation** - JVector index building with timing
 5. **Recommendation comparison** - 4 methods × 5 query movies
 6. **Summary** - Method characteristics and use cases
 7. **Overall timing** - Total execution time
@@ -401,7 +402,7 @@ The script outputs:
 - [Example 04: CSV Import - Documents](04_csv_import_documents.md) - Source data import
 - [Example 05: CSV Import - Graph](05_csv_import_graph.md) - Graph database creation
 - [sentence-transformers documentation](https://www.sbert.net/) - Embedding models
-- [HNSW algorithm](https://arxiv.org/abs/1603.09320) - Vector index theory
+- [JVector GitHub](https://github.com/datastax/jvector) - Vector index implementation
 
 ## Source Code
 

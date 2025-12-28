@@ -1,6 +1,8 @@
 # Vector API
 
-Vector search capabilities in ArcadeDB use HNSW (Hierarchical Navigable Small World) indexing for fast approximate nearest neighbor search. Perfect for semantic search, recommendation systems, and similarity-based queries.
+Vector search capabilities in ArcadeDB use JVector (a graph-based index combining HNSW
+and DiskANN concepts) for fast approximate nearest neighbor search. Perfect for semantic
+search, recommendation systems, and similarity-based queries.
 
 ## Overview
 
@@ -13,7 +15,7 @@ ArcadeDB's vector support enables:
 
 **Key Features:**
 
-- HNSW indexing for O(log N) search performance
+- Graph-based indexing for O(log N) search performance
 - Multiple distance metrics (cosine, euclidean, inner product)
 - Native NumPy integration (optional)
 - Configurable precision/performance trade-offs
@@ -24,7 +26,8 @@ Utility functions for converting between Python and Java vector representations:
 
 ### `to_java_float_array(vector)`
 
-Convert a Python array-like object to a Java float array compatible with ArcadeDB's vector indexing.
+Convert a Python array-like object to a Java float array compatible with ArcadeDB's
+vector indexing.
 
 **Parameters:**
 
@@ -98,7 +101,7 @@ print(type(py_list))  # <class 'list'>
 
 ## VectorIndex Class
 
-Wrapper for ArcadeDB's HNSW vector index, providing similarity search capabilities.
+Wrapper for ArcadeDB's vector index, providing similarity search capabilities.
 
 ### Creation via Database
 
@@ -171,9 +174,12 @@ print(f"Created vector index: {index}")
 
 ---
 
-### `VectorIndex.find_nearest(query_vector, k=10, overquery_factor=16, use_numpy=True, allowed_rids=None)`
+### `VectorIndex.find_nearest(query_vector, k=10, overquery_factor=16, allowed_rids=None)`
 
 Find k-nearest neighbors to the query vector.
+
+**Note:** The first call to `find_nearest` triggers the index construction if it hasn't
+been built yet. This "warm up" query may take longer than subsequent queries.
 
 **Parameters:**
 
@@ -184,14 +190,13 @@ Find k-nearest neighbors to the query vector.
 - `k` (int): Number of neighbors to return (default: 10)
 - `overquery_factor` (int): Multiplier for search-time over-querying (implicit efSearch)
   (default: 16)
-- `use_numpy` (bool): Return vectors as NumPy if available (default: `True`)
 - `allowed_rids` (List[str]): Optional list of RID strings (e.g. `["#1:0", "#2:5"]`) to
   restrict search (default: `None`)
 
 **Returns:**
 
-- `List[Tuple[vertex, float]]`: List of `(vertex, distance)` tuples
-  - `vertex`: Matched vertex object (MutableVertex)
+- `List[Tuple[record, float]]`: List of `(record, distance)` tuples
+  - `record`: Matched ArcadeDB record object (Vertex, Document, or Edge)
   - `distance`: Similarity score (float)
     - Lower = more similar
     - Range depends on distance function
@@ -210,9 +215,9 @@ neighbors = index.find_nearest(query_vector, k=5)
 allowed_rids = ["#10:5", "#10:8", "#10:12"]
 filtered_neighbors = index.find_nearest(query_vector, k=5, allowed_rids=allowed_rids)
 
-for vertex, distance in neighbors:
-    doc_id = vertex.get("id")
-    text = vertex.get("text")
+for record, distance in neighbors:
+    doc_id = record.get("id")
+    text = record.get("text")
     print(f"Distance: {distance:.4f} | ID: {doc_id}")
     print(f"  Text: {text[:100]}...")
 ```
@@ -225,73 +230,9 @@ for vertex, distance in neighbors:
 | euclidean | [0, ∞) | ✓ (0 = identical) |
 | inner_product | (-∞, ∞) | ✗ (higher = more similar) |
 
----
-
-### `VectorIndex.add_vertex(vertex)`
-
-Add a single vertex to the index.
-
-**Parameters:**
-
-- `vertex`: Vertex object with vector property set
-
-**Raises:**
-
-- `ArcadeDBError`: If vertex cannot be added
-
-**Example:**
-
-```python
-# Add during vertex creation
-with db.transaction():
-    doc = db.new_vertex("Document")
-    doc.set("id", "doc_001")
-    doc.set("text", "Introduction to vector search")
-    doc.set("embedding", to_java_float_array(embedding))
-    doc.save()
-
-    # Add to index
-    index.add_vertex(doc)
-```
-
-**Important:**
-
 - Vertex must have the vector property populated
 - Vector dimensionality must match index dimensions
 - Call within a transaction for consistency
-
----
-
-### `VectorIndex.remove_vertex(vertex_id)`
-
-Remove a vertex from the index.
-
-**Parameters:**
-
-- `vertex_id`: ID of the vertex to remove (typically string or int)
-
-**Raises:**
-
-- `ArcadeDBError`: If removal fails
-
-**Example:**
-
-```python
-# Remove by ID
-vertex_id = "doc_001"
-index.remove_vertex(vertex_id)
-```
-
-**Note:** This removes from the vector index only, not from the database. To fully delete:
-
-```python
-with db.transaction():
-    # Remove from index
-    index.remove_vertex(doc_id)
-
-    # Delete from database
-    db.command("sql", f"DELETE FROM Document WHERE id = '{doc_id}'")
-```
 
 ---
 
@@ -354,9 +295,6 @@ with db.transaction():
         vertex.set("content", doc["content"])
         vertex.set("embedding", to_java_float_array(embedding))
         vertex.save()
-
-        # Add to vector index
-        index.add_vertex(vertex)
 
 print(f"Indexed {len(documents)} documents")
 
@@ -424,7 +362,7 @@ with db.transaction():
         v.set("price", prod["price"])
         v.set("features", to_java_float_array(prod["features"]))
         v.save()
-        index.add_vertex(v)
+        # Note: LSM vector index automatically indexes new records
 
 # Hybrid search: vector similarity + filters
 query_features = np.random.rand(128)
@@ -502,7 +440,7 @@ with db.transaction():
         v.set("embedding", to_java_float_array(embedding))
         v.save()
 
-        index.add_vertex(v)
+        # Note: LSM vector index automatically indexes new records
 
 # Search for similar images
 query_image = "query.jpg"
@@ -521,25 +459,25 @@ db.close()
 
 ## Performance Tuning
 
-### HNSW Parameters
+### Vector Index Parameters
 
-**M (connections per node):**
+**max_connections (connections per node):**
 
-- **Lower (8-12)**: Faster build, less memory, lower recall
-- **Medium (16-24)**: Balanced (recommended)
-- **Higher (32-48)**: Better recall, more memory, slower build
+- **Lower (<32)**: Faster build, less memory, lower recall
+- **Medium (32)**: Balanced (recommended)
+- **Higher (>32)**: Better recall, more memory, slower build
 
-**ef (search size):**
+**overquery_factor (search size):**
 
-- **Lower (50-100)**: Faster search, lower recall
-- **Medium (128-200)**: Balanced (recommended)
-- **Higher (200-400)**: Better recall, slower search
+- **Lower (<16)**: Faster search, lower recall
+- **Medium (16)**: Balanced (recommended)
+- **Higher (>16)**: Better recall, slower search
 
-**ef_construction:**
+**beam_width:**
 
-- **Lower (100-150)**: Faster build, lower quality
-- **Medium (128-256)**: Balanced
-- **Higher (300-500)**: Better quality, slower build
+- **Lower (<256)**: Faster build, lower quality
+- **Medium (256)**: Balanced
+- **Higher (>256)**: Better quality, slower build
 
 ### Distance Functions
 
@@ -592,7 +530,7 @@ try:
     v = db.new_vertex("Doc")
     v.set("emb", to_java_float_array(np.random.rand(512)))  # Wrong size!
     v.save()
-    index.add_vertex(v)  # Will fail
+    # Indexing happens automatically and may fail asynchronously or on next access
 
 except ArcadeDBError as e:
     print(f"Error: {e}")
@@ -604,7 +542,7 @@ try:
     v.set("id", "doc1")
     # Forgot to set embedding!
     v.save()
-    index.add_vertex(v)  # Will fail
+    # Indexing happens automatically
 
 except ArcadeDBError as e:
     print(f"Error: {e}")
