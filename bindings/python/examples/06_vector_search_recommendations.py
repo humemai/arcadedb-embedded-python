@@ -109,12 +109,10 @@ def import_from_jsonl(jsonl_path, db_path):
 
     # Create new database
     with arcadedb.create_database(str(db_path)) as db:
-        # Import using the importer tool
-        # Note: We use the importer module directly
-        from arcadedb_embedded.importer import JsonlImporter
-
-        importer = JsonlImporter(db)
-        importer.import_file(str(jsonl_path))
+        # Import using SQL IMPORT DATABASE command
+        abs_path = Path(jsonl_path).resolve()
+        print(f"Importing from {abs_path}...")
+        db.command("sql", f"IMPORT DATABASE file://{abs_path}")
 
     return time.time() - start_time
 
