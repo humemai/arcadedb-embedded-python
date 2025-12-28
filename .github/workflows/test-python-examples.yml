@@ -1,15 +1,31 @@
 name: Test Python Examples
 
 on:
-  # Run on pull requests to main
+  # Run on push to bindings/python/ directory
+  push:
+    paths:
+      - 'bindings/python/**'
+      - '.github/workflows/test-python-examples.yml'
+
+  # Run on pull request affecting bindings/python/
   pull_request:
-    branches: [main]
+    paths:
+      - 'bindings/python/**'
+      - '.github/workflows/test-python-examples.yml'
+
+  # Run after release workflow completes
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
 
   # Allow being called by other workflows (e.g., release workflow)
   workflow_call:
 
   # Allow manual trigger
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   # First job: Download ArcadeDB JARs (platform-agnostic)
@@ -169,15 +185,11 @@ jobs:
         run: |
           # Install dependencies needed by examples
           # Note: macOS Intel needs NumPy 1.x for PyTorch compatibility
-          # Note: Windows ARM64 doesn't have PyTorch wheels, skip sentence-transformers
-          if [[ "${{ matrix.platform }}" == "windows/arm64" ]]; then
-            echo "⚠️  Skipping sentence-transformers on Windows ARM64 (PyTorch not available)"
-            pip install numpy requests
-          elif [[ "$OSTYPE" == "darwin"* ]]; then
+          if [[ "$OSTYPE" == "darwin"* ]]; then
             # macOS: Default wheels are CPU/MPS (no CUDA)
             pip install "numpy<2.0" requests sentence-transformers
           else
-            # Linux & Windows x64: Install CPU-only PyTorch to save space (avoid CUDA)
+            # Linux & Windows: Install CPU-only PyTorch to save space (avoid CUDA)
             pip install torch --index-url https://download.pytorch.org/whl/cpu
             pip install numpy requests sentence-transformers
           fi
@@ -246,17 +258,6 @@ jobs:
           # Run each example
           for example in $examples; do
             total=$((total + 1))
-
-            # Skip example 06 on Windows ARM64 (PyTorch/sentence-transformers not available)
-            if [[ "$example" == "06_vector_search_recommendations.py" ]] && [[ "${{ matrix.platform }}" == "windows/arm64" ]]; then
-              echo "----------------------------------------"
-              echo "📝 Skipping: $example (PyTorch not available on Windows ARM64)"
-              echo "----------------------------------------"
-              echo "⏭️  SKIPPED: $example (PyTorch not available on Windows ARM64)" | tee -a $results_file
-              skipped=$((skipped + 1))
-              echo ""
-              continue
-            fi
 
             # Set example-specific parameters and timeout
             case "$example" in
@@ -393,6 +394,8 @@ jobs:
           echo "  - Tested with \`--dataset movielens-small --parallel 1 --no-async --export --import-jsonl\`" >> $GITHUB_STEP_SUMMARY
           echo "- **06_vector_search_recommendations.py** - JVector vector indexing for movie recommendations" >> $GITHUB_STEP_SUMMARY
           echo "  - Tested with \`--import-jsonl exports/movielens_graph_small_db.jsonl.tgz\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **07_stackoverflow_multimodel.py** - Multi-model graph/document/vector example with StackOverflow data" >> $GITHUB_STEP_SUMMARY
+          echo "  - Tested with \`--dataset stackoverflow-small\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload example logs
