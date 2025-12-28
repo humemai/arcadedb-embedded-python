@@ -138,7 +138,7 @@ We provide a **single, self-contained package** that works on all major platform
 
 | Platform | Package Name | Size | What's Included |
 |----------|-------------|------|-----------------|
-| **All Platforms** | `arcadedb-embedded` | ~160MB | Full ArcadeDB + Bundled JRE + Studio UI + Gremlin |
+| **All Platforms** | `arcadedb-embedded` | ~215MB | Full ArcadeDB + Bundled JRE + Studio UI + Gremlin |
 
 All distributions use the same import:
 
@@ -179,8 +179,8 @@ import arcadedb_embedded as arcadedb
 
 !!! note "Self-Contained"
     Everything needed to run ArcadeDB is included in the wheel.
-    - **Bundled JRE**: Platform-specific Java 21 runtime (~50-60MB)
-    - **ArcadeDB JARs**: Core database engine (~160MB)
+    - **Bundled JRE**: Platform-specific Java 21 runtime (~63MB)
+    - **ArcadeDB JARs**: Core database engine (~226MB)
     - **JPype**: Bridge between Python and the bundled JVM
 
 ## Community & Support
