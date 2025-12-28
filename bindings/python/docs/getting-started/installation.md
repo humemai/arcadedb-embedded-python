@@ -5,22 +5,8 @@
 The `arcadedb-embedded` package is **self-contained** with a bundled JRE - **no Java installation required!**
 
 ```bash
-# Temporarily install from GitHub Pages (awaiting PyPI size limit approval)
-pip install arcadedb-embedded \
-  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
-  --extra-index-url https://pypi.org/simple/
+pip install arcadedb-embedded
 ```
-
-!!! note "Temporary GitHub Pages Installation"
-    We're temporarily hosting wheels on GitHub Pages while awaiting PyPI size limit approval (our wheels are ~160MB, default limit is 100MB).
-
-    - `--index-url`: Primary index (GitHub Pages for arcadedb-embedded)
-    - `--extra-index-url`: Secondary index (PyPI for dependencies like JPype1)
-
-    Once PyPI approves our size limit request, installation will be simpler:
-    ```bash
-    pip install arcadedb-embedded
-    ```
 
 **Requirements:**
 
@@ -32,9 +18,9 @@ pip install arcadedb-embedded \
 
 ## What's Included
 
-The `arcadedb-embedded` package (~155-161MB wheel, ~215-230MB installed) includes everything you need:
+The `arcadedb-embedded` package (~215MB wheel, ~289MB installed) includes everything you need:
 
-- **ArcadeDB JARs**: 167.4MB (identical across all platforms)
+- **ArcadeDB JARs**: 226.0MB (identical across all platforms)
 - **Bundled JRE**: 47-63MB (platform-specific Java 21 runtime via jlink)
 - **Python Package**: ~5MB
 
@@ -42,12 +28,12 @@ The `arcadedb-embedded` package (~155-161MB wheel, ~215-230MB installed) include
 
 | Platform | Wheel Size | JRE Size | Installed Size |
 |----------|-----------|----------|----------------|
-| Windows ARM64 | 155.1M | 47.3M | ~215M |
-| macOS ARM64 | 156.7M | 53.9M | ~221M |
-| macOS Intel | 157.8M | 55.3M | ~223M |
-| Windows x64 | 157.4M | 51.5M | ~219M |
-| Linux ARM64 | 159.9M | 61.8M | ~229M |
-| Linux x64 | 160.9M | 62.7M | ~230M |
+| Windows ARM64 | ~215M | 47.3M | ~278M |
+| macOS ARM64 | ~215M | 53.9M | ~285M |
+| macOS Intel | ~215M | 55.3M | ~286M |
+| Windows x64 | ~215M | 51.5M | ~282M |
+| Linux ARM64 | ~215M | 61.8M | ~293M |
+| Linux x64 | ~215M | 62.7M | ~294M |
 
 **Features Included:**
 
