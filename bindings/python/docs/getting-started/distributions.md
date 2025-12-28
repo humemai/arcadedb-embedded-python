@@ -61,7 +61,7 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 - ✅ **Query Languages**: SQL, Cypher, Gremlin, MongoDB (all included)
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
-- ✅ **Vector Search**: HNSW indexing for embeddings
+- ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, JSON, Neo4j importers
 
 **Optimized:**

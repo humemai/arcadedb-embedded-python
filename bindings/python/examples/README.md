@@ -52,17 +52,17 @@ Complete social network modeling with graph database:
 ---
 
 ### 🔍 [03_vector_search.py](./03_vector_search.py) ✅ **COMPLETE**
-**Vector Embeddings | HNSW Index | Semantic Search | Performance Analysis**
+**Vector Embeddings | JVector Index | Semantic Search | Performance Analysis**
 
 Semantic similarity search with AI/ML:
 - Vector storage with 384D embeddings (mimicking sentence-transformers)
-- HNSW indexing for nearest-neighbor search
+- JVector indexing for nearest-neighbor search
 - Cosine distance similarity queries
 - Index population strategies (batch vs incremental)
 - Filtering approaches (oversampling, multiple indexes, hybrid)
 - Performance characteristics and best practices
 
-**Learn:** Vector databases, HNSW algorithm, semantic search patterns, index architecture
+**Learn:** Vector databases, JVector algorithm, semantic search patterns, index architecture
 
 **Status:** ✅ Fully functional - Demonstrates vector search capabilities
 
