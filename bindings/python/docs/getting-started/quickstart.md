@@ -260,10 +260,9 @@ ArcadeDB supports multiple query languages:
     result = db.query("mongo", "{ find: 'Person', filter: { age: { $gt: 25 } } }")
     ```
 
-=== "Gremlin (Full only)"
+=== "Gremlin"
 
     ```python
-    # Only in arcadedb-embedded (full distribution)
     result = db.query("gremlin", "g.V().has('Person', 'age', gt(25))")
     ```
 
