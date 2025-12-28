@@ -23,7 +23,7 @@ export JAVA_HOME=/path/to/java
 
 **Solution**:
 ```bash
-# Install the embedded distribution
+# Install the package
 pip install arcadedb-embedded
 ```
 

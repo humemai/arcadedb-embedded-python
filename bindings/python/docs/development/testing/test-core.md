@@ -293,9 +293,6 @@ with arcadedb.create_database("./test_db") as db:
     assert len(people) == 2
 ```
 
-!!! note "Distribution Support"
-    Cypher support requires specific Java modules. This test is skipped in minimal distribution.
-
 **What it tests:**
 - Cypher CREATE statements
 - Cypher MATCH queries
