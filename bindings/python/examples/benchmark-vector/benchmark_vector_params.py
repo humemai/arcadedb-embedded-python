@@ -235,7 +235,7 @@ def setup_database(db_path, data):
 
 def build_index(db, dim, metric, max_connections, beam_width, quantization="NONE"):
     print(
-        f"    Creating Index (M={max_connections}, beam={beam_width}, quant={quantization})..."
+        f"    Creating Index (max_connections={max_connections}, beam={beam_width}, quant={quantization})..."
     )
     start_build = time.perf_counter()
 
@@ -482,7 +482,9 @@ def run_benchmark():
                 # Unique DB path for this build config
                 db_path = f"{db_base_path}_{max_connections}_{beam_width}"
 
-                print(f"\n  [Build Config] M={max_connections}, beam={beam_width}")
+                print(
+                    f"\n  [Build Config] max_connections={max_connections}, beam={beam_width}"
+                )
 
                 # 1. Setup & Build
                 db, setup_time = setup_database(db_path, data)
