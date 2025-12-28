@@ -130,12 +130,12 @@ All schema operations done via SQL DDL:
 
 #### 8. Vector Search - 80%
 
-- ✅ HNSW index creation - `create_vector_index()`
+- ✅ Vector index creation - `create_vector_index()`
 - ✅ NumPy array support - `to_java_float_array()`, `to_python_array()`
 - ✅ Similarity search - `index.find_nearest()`
-- ✅ Add/remove vectors - `index.add_vertex()`, `index.remove_vertex()`
+- ✅ Add/remove vectors - Automatic via vertex save/delete
 - ✅ Distance functions - cosine, euclidean, inner_product
-- ✅ HNSW parameters - m, ef, ef_construction
+- ✅ Vector parameters - max_connections, beam_width, overquery_factor
 
 #### 9. Advanced Features - 5%
 
@@ -212,8 +212,7 @@ This Python binding is actively being developed. Here are the planned improvemen
 **Goal**: Simplify vector operations with SQL-based API
 
 Currently, vector similarity search requires direct interaction with Java APIs (creating
-HNSW indexes, converting arrays, managing vertices manually). This works but isn't as
-user-friendly as it could be.
+vector indexes, converting arrays, managing vertices manually).
 
 **Current approach** (requires understanding Java internals):
 
@@ -251,7 +250,7 @@ bindings to expose this cleaner interface.
 Current testing covers basic functionality (14/14 tests passing), but we need:
 
 - **Load testing**: Insert/query millions of records
-- **Vector performance**: Benchmark HNSW search with large datasets (100K+ vectors)
+- **Vector performance**: Benchmark vector search with large datasets (100K+ vectors)
 - **Concurrency testing**: Multiple transactions, thread safety
 - **Memory profiling**: Long-running processes, leak detection
 - **Platform testing**: Verify behavior across Linux, macOS, Windows

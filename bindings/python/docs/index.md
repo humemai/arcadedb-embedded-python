@@ -43,7 +43,7 @@ ArcadeDB is a next-generation multi-model database that supports:
 - **Graph**: Native property graphs with vertices and edges
 - **Document**: Schema-less JSON documents
 - **Key/Value**: Fast key-value pairs
-- **Vector**: Embeddings with HNSW similarity search
+- **Vector**: Embeddings with JVector similarity search
 - **Time Series**: Temporal data with efficient indexing
 - **Search Engine**: Full-text search with Lucene
 
@@ -87,7 +87,7 @@ Both APIs can be used __simultaneously__ on the same server instance.
 !!! success "Advanced Features"
     - ⚡ **High performance** - Direct JVM integration via JPype
     - 🔒 **ACID transactions** - Full transaction support
-    - 🎯 **Vector storage** - HNSW indexing for embeddings
+    - 🎯 **Vector storage** - JVector indexing for embeddings
     - 📥 **Data import** - CSV, JSON, Neo4j importers
     - 🔎 **Full-text search** - Lucene integration
     - 🗺️ **Geospatial** - JTS for spatial queries
@@ -125,7 +125,7 @@ These bindings provide **~85% coverage** of ArcadeDB's Java API, focusing on fea
 |--------|----------|-------------|
 | Core Operations | ✅ 100% | Database, queries, transactions |
 | Server Mode | ✅ 100% | HTTP server, Studio UI |
-| Vector Search | ✅ 100% | HNSW indexing, similarity search |
+| Vector Search | ✅ 100% | JVector indexing, similarity search |
 | Data Import | ✅ 100% | CSV, JSON, Neo4j |
 | Graph API | ⚠️ 60% | Basic graph operations (Python-relevant subset) |
 | Gremlin | ⚠️ 70% | Query execution (full dist only) |

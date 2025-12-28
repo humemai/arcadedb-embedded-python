@@ -2,7 +2,7 @@
 """
 Example 06: Vector Search Movie Recommendations
 
-Demonstrates vector embeddings and HNSW indexing for semantic movie search.
+Demonstrates vector embeddings and JVector indexing for semantic movie search.
 Compares traditional graph queries with vector similarity search.
 
 PERFORMANCE OPTIMIZATION
@@ -49,26 +49,17 @@ KNOWN ISSUES: ArcadeDB Bugs and Limitations
 
    CONCLUSION: FULL_TEXT is NOT suitable for exact title matching.
 
-3. **HNSW Metadata Persistence**: Once embeddings and indexes are created,
-   they cannot be completely removed and recreated on the same vertices.
-   The HNSW graph metadata (edges, vectorMaxLevel property) persists even
-   after dropping the index.
-
-   WORKAROUND: Use SEPARATE properties and edge types for each model
-   (embedding_v1/embedding_v2 with edge types Movie_v1/Movie_v2).
-
-4. **JSONL Export/Import Broken for Vectors**: Float arrays are NOT properly
+3. **JSONL Export/Import Broken for Vectors**: Float arrays are NOT properly
    preserved during JSONL export/import:
    - Embeddings exported as Java toString() strings: "[F@113ee1ce"
    - Original vector data (384 floats) is completely lost
-   - HNSW index edges are not exported at all
 
    IMPACT: Cannot backup/restore vector databases using JSONL format.
    After import, embeddings must be regenerated and indexes rebuilt.
 
 Features:
 - Real embeddings using sentence-transformers (two models for comparison)
-- HNSW vector indexing for fast similarity search
+- JVector indexing for fast similarity search
 - Compare graph-based vs vector-based recommendations (4 methods)
 - Performance timing and optimization strategies
 
@@ -82,99 +73,70 @@ Usage:
     # Use existing database
     python 06_vector_search_recommendations.py \\
         --source-db my_test_databases/movielens_graph_small_db
-
-The default implementation uses JVector (graph index combining HNSW hierarchy
-with Vamana/DiskANN). The legacy implementation uses hnswlib (pure HNSW).
-JVector is much faster:
-
-small dataset:
-```
-| Component (Vector-Related Only) | **Default (JVector)**   | **Legacy (HNSWlib)**   | **Difference / Notes**                |
-| ------------------------------- | ----------------------- | ---------------------- | ------------------------------------- |
-| **Index Build – Model 1**       | **0.1 s**               | **99.5 s**             | Legacy is **~995× slower**            |
-| **Index Build – Model 2**       | **0.1 s**               | **93.4 s**             | Same pattern                          |
-| **Total Index Build Time**      | **0.2 s**               | **192.9 s**            | Legacy is **~1000× slower overall**   |
-| **First Vector Query**          | 1.2–1.6 s (lazy build)  | 0.01–0.02 s            | Default slow only on first query      |
-| **Subsequent Vector Queries**   | **0.002–0.004 s**       | **0.01–0.02 s**        | Default slightly faster               |
-| **Vector Search Quality**       | ⚠️ Mostly similar       | ⚠️ Mostly similar      | Only distance scaling differs         |
-```
-
-large dataset:
-```
-| Metric                     | **JVector**              | **HNSW (hnswlib)**    |
-| -------------------------- | ------------------------ | --------------------- |
-| **Index build (2 models)** | **~1.4 s**               | **~3,240 s (54 min)** |
-| **First vector query**     | ~13 s (lazy graph build) | ~0.2 s                |
-| **Subsequent queries**     | **~0.002–0.003 s**       | ~0.02–0.05 s          |
-| **Total vector time**      | **~28 s**                | **~3,241 s**          |
-| **Query result match**     | ⚠️ Mostly similar        | ⚠️ Mostly similar     |
-```
-
-The default JVector index delivers massive performance gains over hnswlib (≈1000× faster
-index build and ~5–20× faster queries on 10k–86k vectors), but it consistently returns
-different neighbor sets for the same embeddings and queries. The results remain
-semantically reasonable, suggesting a design tradeoff (e.g., lazy graph construction and
-different traversal heuristics).
-
-As of 13-Dec-2025, we ran into some issues:
-
-- "Vector search is much faster than hnswlib, but returns different neighbors"
-  https://github.com/ArcadeData/arcadedb/issues/2914.
-
 """
 
 import argparse
+import os
 import shutil
 import sys
 import time
 from pathlib import Path
 
 import arcadedb_embedded as arcadedb
+import numpy as np
+
+# Try to import sentence_transformers
+try:
+    from sentence_transformers import SentenceTransformer
+
+    HAS_TRANSFORMERS = True
+except ImportError:
+    HAS_TRANSFORMERS = False
 
 
 def check_dependencies():
-    """Check required dependencies."""
-    try:
-        import sentence_transformers
-
-        print(f"✓ sentence-transformers {sentence_transformers.__version__}")
-    except ImportError:
-        print("ERROR: sentence-transformers not found")
-        print("Install: pip install sentence-transformers")
-        sys.exit(1)
-
-    try:
-        import numpy
-
-        print(f"✓ numpy {numpy.__version__}")
-    except ImportError:
-        print("ERROR: numpy not found")
-        print("Install: pip install numpy")
+    """Check if required dependencies are installed."""
+    if not HAS_TRANSFORMERS:
+        print("ERROR: sentence-transformers not installed.")
+        print("Please install it to run this example:")
+        print("  pip install sentence-transformers")
         sys.exit(1)
 
 
-def load_embedding_model(model_name="all-MiniLM-L6-v2"):
-    """Load sentence-transformers model (384 dimensions).
+def import_from_jsonl(jsonl_path, db_path):
+    """Import database from JSONL export."""
+    start_time = time.time()
 
-    Args:
-        model_name: Model to load. Supported:
-            - 'all-MiniLM-L6-v2' (default, 384 dims)
-            - 'paraphrase-MiniLM-L6-v2' (384 dims)
-    """
-    from sentence_transformers import SentenceTransformer
+    # Create new database
+    with arcadedb.create_database(str(db_path)) as db:
+        # Import using the importer tool
+        # Note: We use the importer module directly
+        from arcadedb_embedded.importer import JsonlImporter
 
-    return SentenceTransformer(model_name)
+        importer = JsonlImporter(db)
+        importer.import_file(str(jsonl_path))
+
+    return time.time() - start_time
+
+
+def load_embedding_model(model_name):
+    """Load sentence-transformer model."""
+    print(f"Loading model: {model_name}...")
+    start_time = time.time()
+    model = SentenceTransformer(model_name)
+    print(f"✓ Model loaded in {time.time() - start_time:.2f}s")
+    return model
 
 
 def generate_embeddings(db, model, model_name, property_suffix="", limit=None):
-    """Generate and store embeddings for all movies.
+    """Generate embeddings for movies and store them.
 
     Args:
         db: Database instance
-        model: Sentence transformer model
-        model_name: Name of the embedding model
+        model: Loaded SentenceTransformer model
+        model_name: Name of the model (for logging)
         property_suffix: Suffix for property names (e.g., "_v1", "_v2")
-        limit: Max number of movies to process (for debugging)
+        limit: Max movies to process (for testing)
 
     Returns:
         Number of movies embedded
@@ -182,71 +144,54 @@ def generate_embeddings(db, model, model_name, property_suffix="", limit=None):
     embedding_prop = f"embedding{property_suffix}"
     vector_id_prop = f"vector_id{property_suffix}"
 
-    # Ensure schema properties exist (required for LSM index)
-    # Note: LSM index requires the property to be defined in the schema
-    if not db.schema.exists_type("Movie"):
-        print("ERROR: Movie type not found in schema")
-        return 0
-
+    # Check if embeddings already exist
     try:
-        db.schema.get_or_create_property("Movie", embedding_prop, "ARRAY_OF_FLOATS")
-        db.schema.get_or_create_property("Movie", vector_id_prop, "STRING")
-    except Exception as e:
-        print(f"Warning: Failed to create schema properties: {e}")
-
-    # Check if embeddings already exist for this property
-    result = list(
-        db.query(
-            "sql",
-            f"SELECT count(*) as count FROM Movie WHERE {embedding_prop} IS NOT NULL",
+        count = db.count_type("Movie")
+        # Check if property exists and has values
+        query = (
+            f"SELECT count(*) as count FROM Movie WHERE {embedding_prop} IS NOT NULL"
         )
-    )
-    if result and result[0].get_property("count") > 0:
-        count = result[0].get_property("count")
-        print(f"✓ Embeddings exist in {embedding_prop} ({count:,} movies)")
-        return count
+        result = list(db.query("sql", query))
+        existing_embeddings = result[0].get_property("count")
 
-    print(f"\nGenerating embeddings for all movies using: {model_name}...")
+        if existing_embeddings > 0 and not args.force_embed:
+            print(f"Found {existing_embeddings} existing embeddings for {model_name}")
+            return existing_embeddings
+    except Exception:
+        pass
 
-    # Get all movies
-    query = "SELECT FROM Movie ORDER BY movieId"
+    print(f"Generating embeddings using {model_name}...")
+
+    # Create properties if they don't exist
+    db.schema.get_or_create_property("Movie", embedding_prop, "ARRAY_OF_FLOATS")
+    db.schema.get_or_create_property("Movie", vector_id_prop, "STRING")
+
+    # Fetch movies
+    query = "SELECT FROM Movie"
     if limit:
         query += f" LIMIT {limit}"
 
     movies = list(db.query("sql", query))
-
-    if not movies:
-        print("ERROR: No movies found")
-        return 0
-
     total = len(movies)
-    print(f"Processing {total:,} movies")
+    print(f"Processing {total} movies...")
 
-    # Prepare texts: "title genre1 genre2 genre3"
+    # Prepare text for embedding
+    # Format: "Title (Year): Genres"
     texts = []
     for movie in movies:
         title = movie.get_property("title")
-        genres = movie.get_property("genres") if movie.has_property("genres") else None
-
-        # Build text for embedding
-        if genres:
-            genre_list = genres.split("|") if isinstance(genres, str) else genres
-            text = f"{title} {' '.join(genre_list)}"
-        else:
-            text = title
-
+        genres = movie.get_property("genres")
+        text = f"{title}: {genres}"
         texts.append(text)
 
-    # Generate embeddings (batch processing)
-    print("Encoding to embeddings...")
+    # Generate embeddings in batches
     start_encode = time.time()
-
     embeddings = model.encode(
         texts,
         batch_size=32,
         show_progress_bar=True,
         convert_to_numpy=True,
-        device="cpu",
+        normalize_embeddings=True,
     )
 
     elapsed_encode = time.time() - start_encode
@@ -269,7 +214,7 @@ def generate_embeddings(db, model, model_name, property_suffix="", limit=None):
             # Set embedding property with custom name
             java_embedding = arcadedb.to_java_float_array(embedding)
             java_vertex.set(embedding_prop, java_embedding)
-            # Create vector_id property for HNSW index
+            # Create vector_id property
             movie_id = str(movie.get_property("movieId"))
             java_vertex.set(vector_id_prop, movie_id)
             java_vertex.save()
@@ -280,64 +225,35 @@ def generate_embeddings(db, model, model_name, property_suffix="", limit=None):
     return total
 
 
-def create_vector_index(db, impl="default", property_suffix=""):
+def create_vector_index(db, property_suffix=""):
     """Create vector index on Movie embeddings and populate it.
 
     Args:
         db: Database instance
-        impl: Implementation "default" (JVector) or "legacy" (HNSW)
         property_suffix: Suffix for property names (e.g., "_v1", "_v2")
 
     Returns:
         VectorIndex object
     """
     embedding_prop = f"embedding{property_suffix}"
-    vector_id_prop = f"vector_id{property_suffix}"
-    # Use unique edge_type for each index to avoid HNSW metadata conflicts
-    edge_type = f"Movie{property_suffix}"
 
     # Count movies with embeddings to determine max_items
     query = f"SELECT FROM Movie WHERE {embedding_prop} IS NOT NULL"
     result_list = list(db.query("sql", query))
     num_movies = len(result_list)
 
-    print(f"\nCreating {impl.upper()} vector index for {embedding_prop}...")
-    if impl == "legacy":
-        print(f"  edge_type={edge_type}, metric=cosine, m=16, ef=128")
-        print(f"  max_items={num_movies:,} (based on movies with embeddings)")
-    else:
-        print("  metric=cosine, max_connections=32, beam_width=256")
+    print(f"\nCreating JVector index for {embedding_prop}...")
+    print("  metric=cosine, max_connections=32, beam_width=256")
 
     start_time = time.time()
 
-    if impl == "default":
-        # Using new defaults: max_connections=32, beam_width=256
-        index = db.create_vector_index(
-            vertex_type="Movie",
-            vector_property=embedding_prop,
-            dimensions=384,
-            distance_function="cosine",
-        )
-    else:  # legacy
-        # Create index with correct max_items
-        index = db.create_legacy_vector_index(
-            vertex_type="Movie",
-            vector_property=embedding_prop,
-            dimensions=384,
-            max_items=10000,
-            id_property=vector_id_prop,
-            edge_type=edge_type,
-            distance_function="cosine",
-            m=16,
-            ef=128,
-            ef_construction=128,
-        )
-
-        # Populate index with existing movies
-        with db.transaction():
-            for record in result_list:
-                java_vertex = record._java_result.getElement().get().asVertex()
-                index.add_vertex(java_vertex)
+    # Using new defaults: max_connections=32, beam_width=256
+    index = db.create_vector_index(
+        vertex_type="Movie",
+        vector_property=embedding_prop,
+        dimensions=384,
+        distance_function="cosine",
+    )
 
     elapsed = time.time() - start_time
     print(f"✓ Created and indexed {num_movies:,} movies in {elapsed:.1f}s")
@@ -402,7 +318,7 @@ def graph_based_recommendations(db, movie_title, limit=5, mode="full"):
         LIMIT :limit
         """
     else:
-        # Full mode: Comprehensive but slow
+        # Full mode: Analyze ALL users (slow but comprehensive)
         query = """
         SELECT FROM (
             SELECT other_movie.title as title,
@@ -423,19 +339,19 @@ def graph_based_recommendations(db, movie_title, limit=5, mode="full"):
         LIMIT :limit
         """
 
-    # Execute query and measure time
-    start = time.time()
-    results = list(db.query("sql", query, {"movieId": query_movie_id, "limit": limit}))
-    query_time = time.time() - start
+    start_time = time.time()
+    results = db.query("sql", query, {"movieId": query_movie_id, "limit": limit})
+    elapsed = time.time() - start_time
 
-    # Display results
-    for i, rec in enumerate(results, 1):
-        title = rec.get_property("title")[:48]
-        avg_rating = rec.get_property("avg_rating")
-        rating_count = rec.get_property("rating_count")
-        print(f"    {i}. {title} ({avg_rating:.1f}★, {rating_count} users)")
+    print(f"   Results ({mode} mode):")
+    for i, row in enumerate(results, 1):
+        print(
+            f"   {i}. {row.get_property('title')} "
+            f"(Rating: {row.get_property('avg_rating'):.1f}, "
+            f"Votes: {row.get_property('rating_count')})"
+        )
 
-    return query_time
+    return elapsed
 
 
 def vector_based_recommendations(
@@ -445,8 +361,8 @@ def vector_based_recommendations(
 
     Args:
         db: Database instance
-        index: Vector index to search
-        model: Sentence transformer model
+        index: VectorIndex object
+        model: SentenceTransformer model
         movie_title: Title of query movie
         property_suffix: Suffix for property names
         limit: Number of results to return
@@ -454,12 +370,12 @@ def vector_based_recommendations(
     Returns:
         Query time in seconds
     """
-    embedding_prop = f"embedding{property_suffix}"
-
-    # Find the movie by title
+    # Find the movie to get its genres
     movies = list(
         db.query(
-            "sql", "SELECT FROM Movie WHERE title = :title", {"title": movie_title}
+            "sql",
+            "SELECT title, genres FROM Movie WHERE title = :title",
+            {"title": movie_title},
         )
     )
 
@@ -467,138 +383,59 @@ def vector_based_recommendations(
         print(f"Movie not found: {movie_title}")
         return 0.0
 
-    query_movie = movies[0]
+    movie = movies[0]
+    title = movie.get_property("title")
+    genres = movie.get_property("genres")
+    text = f"{title}: {genres}"
 
-    # Get or generate embedding
-    embedding = (
-        query_movie.get_property(embedding_prop)
-        if query_movie.has_property(embedding_prop)
-        else None
+    # Generate embedding for query
+    query_embedding = model.encode(
+        text, convert_to_numpy=True, normalize_embeddings=True
     )
 
-    if embedding is None:
-        # Generate embedding for query movie
-        title = query_movie.get_property("title")
-        genres_val = (
-            query_movie.get_property("genres")
-            if query_movie.has_property("genres")
-            else None
-        )
-        if genres_val:
-            genre_list = (
-                genres_val.split("|") if isinstance(genres_val, str) else genres_val
-            )
-            text = f"{title} {' '.join(genre_list)}"
-        else:
-            text = title
-        embedding = model.encode([text], device="cpu")[0]
-    else:
-        # Convert Java array to numpy
-        import numpy as np
-
-        embedding = np.array(embedding, dtype=np.float32)
-
-    # Vector search
-    start = time.time()
-    all_results = index.find_nearest(embedding, k=limit + 1)
-    query_time = time.time() - start
-
-    # Filter out the query movie
-    query_title = query_movie.get_property("title")
-    results = [
-        (vertex, distance)
-        for vertex, distance in all_results
-        if vertex.get("title") != query_title
-    ][:limit]
-
-    # Display results
-    for i, (vertex, distance) in enumerate(results, 1):
-        title = vertex.get("title")[:48]
-        print(f"    {i}. {title} (distance: {distance:.4f})")
-
-    return query_time
-
-
-def import_from_jsonl(jsonl_path: Path, target_db_path: Path) -> float:
-    """Import database from JSONL export.
-
-    Returns: import time in seconds
-    """
-    print(f"Importing from JSONL: {jsonl_path}")
-    print(f"  → Target database: {target_db_path}")
-
-    # Delete target if it exists
-    if target_db_path.exists():
-        shutil.rmtree(target_db_path)
-
-    # Create empty database
-    with arcadedb.create_database(str(target_db_path)) as db:
-        pass  # Just create schema
-
-    # Import using SQL command (IMPORT DATABASE auto-commits, no transaction needed)
     start_time = time.time()
-    with arcadedb.open_database(str(target_db_path)) as db:
-        # Convert Windows backslashes to forward slashes for SQL compatibility
-        import_path = str(jsonl_path.absolute()).replace("\\", "/")
-        import_cmd = f"IMPORT DATABASE file://{import_path}"
-        db.command("sql", import_cmd)
-
+    # Search index
+    results = index.find_nearest(query_embedding, k=limit + 1)  # +1 to exclude self
     elapsed = time.time() - start_time
 
-    # Count imported records
-    with arcadedb.open_database(str(target_db_path)) as db:
-        user_count = list(db.query("sql", "SELECT count(*) as count FROM User"))[
-            0
-        ].get_property("count")
-        movie_count = list(db.query("sql", "SELECT count(*) as count FROM Movie"))[
-            0
-        ].get_property("count")
-        rated_count = list(db.query("sql", "SELECT count(*) as count FROM RATED"))[
-            0
-        ].get_property("count")
-        tagged_count = list(db.query("sql", "SELECT count(*) as count FROM TAGGED"))[
-            0
-        ].get_property("count")
-        total_records = user_count + movie_count + rated_count + tagged_count
+    print("   Results:")
+    count = 0
+    for vertex, score in results:
+        res_title = vertex.get("title")
+        if res_title == movie_title:
+            continue  # Skip self
 
-    print(f"  ✓ Imported {total_records:,} records in {elapsed:.2f}s")
-    print(f"    ({total_records / elapsed:.0f} records/sec)")
-    print(
-        f"    Users: {user_count:,}, Movies: {movie_count:,}, "
-        f"RATED: {rated_count:,}, TAGGED: {tagged_count:,}"
-    )
-    print()
+        count += 1
+        if count > limit:
+            break
+
+        print(f"   {count}. {res_title} (Score: {score:.4f})")
 
     return elapsed
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Example 06: Vector Search Movie Recommendations",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+    parser = argparse.ArgumentParser(description="Vector Search Movie Recommendations")
 
     parser.add_argument(
         "--db-path",
-        required=True,
-        type=str,
-        help="Working database path (e.g., movielens_graph_small_db_vectors)",
-    )
-
-    parser.add_argument(
-        "--source-db",
-        required=True,
-        type=str,
-        help="Source graph database path (e.g., movielens_graph_small_db)",
+        default="./my_test_databases/movielens_vector_db",
+        help="Path to working database",
     )
 
     parser.add_argument(
         "--import-jsonl",
-        type=str,
-        required=False,
         help=(
             "Import graph database from JSONL file "
             "(e.g., ./exports/movielens_graph_small_db.jsonl.tgz)"
+        ),
+    )
+
+    parser.add_argument(
+        "--source-db",
+        help=(
+            "Copy from existing graph database "
+            "(e.g., my_test_databases/movielens_graph_small_db)"
         ),
     )
 
@@ -607,13 +444,6 @@ def main():
         action="store_true",
         required=False,
         help="Force re-generation of embeddings",
-    )
-
-    parser.add_argument(
-        "--impl",
-        choices=["default", "legacy"],
-        default="default",
-        help="Vector index implementation: 'default' (JVector, recommended) or 'legacy' (HNSW)",
     )
 
     parser.add_argument(
@@ -657,7 +487,7 @@ def main():
         import_time = import_from_jsonl(jsonl_path, work_db)
         print(f"  ✓ Working database ready: {work_db}")
         print(f"  ⏱️  Import time: {import_time:.2f}s")
-    else:
+    elif args.source_db:
         # Option 2: Copy from source database
         source_db = Path(args.source_db)
 
@@ -675,6 +505,13 @@ def main():
         print(f"  Copying fresh database from: {source_db}")
         shutil.copytree(source_db, work_db)
         print(f"  ✓ Working database ready: {work_db}")
+    else:
+        # Option 3: Use existing database (if it exists)
+        if not work_db.exists():
+            print(f"ERROR: Database not found at {work_db}")
+            print("Please provide --import-jsonl or --source-db to create it.")
+            sys.exit(1)
+        print(f"  Using existing database: {work_db}")
 
     # Load database
     print(f"\nOpening database: {args.db_path}")
@@ -693,7 +530,7 @@ def main():
             db, model_1, model_1_name, "_v1", limit=args.limit
         )
         print(f"✓ Embedded {num_embedded:,} movies")
-        index_v1 = create_vector_index(db, impl=args.impl, property_suffix="_v1")
+        index_v1 = create_vector_index(db, property_suffix="_v1")
 
         # Model 2: paraphrase-MiniLM-L6-v2
         model_2_name = "paraphrase-MiniLM-L6-v2"
@@ -703,7 +540,7 @@ def main():
             db, model_2, model_2_name, "_v2", limit=args.limit
         )
         print(f"✓ Embedded {num_embedded:,} movies")
-        index_v2 = create_vector_index(db, impl=args.impl, property_suffix="_v2")
+        index_v2 = create_vector_index(db, property_suffix="_v2")
 
         # Run searches for 5 diverse movies
         test_movies = [
@@ -765,7 +602,7 @@ def main():
     print("  - Still produces high-quality recommendations")
     print("  - Best for real-time recommendations")
     print()
-    print("• Vector-based: Semantic similarity (HNSW index)")
+    print("• Vector-based: Semantic similarity (JVector index)")
     print("  - Finds movies with similar plot/genre descriptions")
     print("  - Fast (~0.2s) with no cold start problem")
     print("  - Works for new movies without ratings")

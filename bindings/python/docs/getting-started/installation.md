@@ -56,7 +56,7 @@ The `arcadedb-embedded` package (~155-161MB wheel, ~215-230MB installed) include
 - ✅ **Query Languages**: SQL, Cypher, Gremlin, MongoDB
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
-- ✅ **Vector Search**: HNSW indexing for embeddings
+- ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, JSON, Neo4j importers
 
 !!! tip "Platform Selection"
