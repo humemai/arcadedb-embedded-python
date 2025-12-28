@@ -18,7 +18,7 @@ pip install arcadedb-embedded
 
 ## What's Included
 
-The `arcadedb-embedded` package (~215MB wheel, ~289MB installed) includes everything you need:
+The `arcadedb-embedded` package (~209-215MB wheel, ~274-289MB installed) includes everything you need:
 
 - **ArcadeDB JARs**: 226.0MB (identical across all platforms)
 - **Bundled JRE**: 47-63MB (platform-specific Java 21 runtime via jlink)
@@ -28,12 +28,12 @@ The `arcadedb-embedded` package (~215MB wheel, ~289MB installed) includes everyt
 
 | Platform | Wheel Size | JRE Size | Installed Size |
 |----------|-----------|----------|----------------|
-| Windows ARM64 | ~215M | 47.3M | ~278M |
-| macOS ARM64 | ~215M | 53.9M | ~285M |
-| macOS Intel | ~215M | 55.3M | ~286M |
-| Windows x64 | ~215M | 51.5M | ~282M |
-| Linux ARM64 | ~215M | 61.8M | ~293M |
-| Linux x64 | ~215M | 62.7M | ~294M |
+| Windows ARM64 | 209.4M | 47.6M | ~274M |
+| macOS ARM64 | 210.8M | 53.9M | ~280M |
+| macOS Intel | 211.9M | 55.3M | ~281M |
+| Windows x64 | 211.6M | 51.6M | ~278M |
+| Linux ARM64 | 214.1M | 61.8M | ~288M |
+| Linux x64 | 215.0M | 62.7M | ~289M |
 
 **Features Included:**
 
