@@ -1,9 +1,22 @@
 name: Test Python Examples
 
 on:
-  # Run on pull requests to main
+  # Run on push to bindings/python/ directory
+  push:
+    paths:
+      - 'bindings/python/**'
+      - '.github/workflows/test-python-examples.yml'
+
+  # Run on pull request affecting bindings/python/
   pull_request:
-    branches: [main]
+    paths:
+      - 'bindings/python/**'
+      - '.github/workflows/test-python-examples.yml'
+
+  # Run after release workflow completes
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
 
   # Run after release workflow completes
   workflow_run:
@@ -33,6 +46,9 @@ on:
 
 env:
   EXAMPLES: ${{ inputs.examples || '0[1-7]_*.py' }}
+
+permissions:
+  contents: read
 
 permissions:
   contents: read
