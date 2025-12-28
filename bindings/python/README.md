@@ -109,7 +109,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 204 tests passing
+**Status**: 204 tests + 7 example scripts passing on all 6 platforms
 
 ```bash
 # Run all tests
