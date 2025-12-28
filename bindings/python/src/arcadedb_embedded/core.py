@@ -182,148 +182,6 @@ class Database:
         except Exception as e:
             raise ArcadeDBError(f"Failed to lookup RID '{rid}': {e}") from e
 
-    def create_legacy_vector_index(
-        self,
-        vertex_type: str,
-        vector_property: str,
-        dimensions: int,
-        max_items: int,
-        id_property: str = "id",
-        edge_type: str = "VectorProximity",
-        deleted_property: str = "deleted",
-        distance_function: str = "cosine",
-        m: int = 16,
-        ef: int = 128,
-        ef_construction: int = 200,
-    ) -> "LegacyVectorIndex":
-        """
-        Create an HNSW vector index for similarity search (legacy implementation).
-
-        Note: This is the legacy implementation using hnswlib. For new code,
-        use create_vector_index() which uses JVector and is typically 1000x faster
-        with no max_items limit.
-
-        This is a high-level convenience method that handles the complex
-        Java API for creating HNSW indexes.
-
-        Args:
-            vertex_type: Name of the vertex type containing vectors
-            vector_property: Name of the property storing vector arrays
-            dimensions: Dimensionality of the vectors
-            max_items: Maximum number of items the index can hold (required).
-                       The index pre-allocates memory based on this value.
-                       If you try to add more items, a SizeLimitExceededException
-                       is raised. Set this to your expected dataset size (e.g.,
-                       use db.count_type(vertex_type) or len(your_data)).
-            id_property: Property to use as unique ID (default: "id")
-            edge_type: Edge type for proximity graph (default: "VectorProximity")
-            deleted_property: Property marking deleted items (default: "deleted")
-            distance_function: Distance metric - "cosine", "euclidean", or
-                               "inner_product" (default: "cosine")
-            m: HNSW M parameter - number of bi-directional links per node
-               (default: 16)
-            ef: HNSW ef parameter - size of dynamic candidate list for search
-                (default: 128)
-            ef_construction: Size of dynamic candidate list during construction
-                             (default: 200)
-
-        Returns:
-            LegacyVectorIndex object for performing similarity searches
-
-        Note:
-            For new projects, use create_vector_index() instead which uses
-            JVector and doesn't require max_items.
-
-        Example:
-            >>> import numpy as np
-            >>> # Create schema
-            >>> with db.transaction():
-            ...     db.command("sql", "CREATE VERTEX TYPE Doc")
-            ...     db.command("sql",
-            ...                "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
-            ...     db.command("sql", "CREATE PROPERTY Doc.id STRING")
-            ...
-            >>> # Determine max_items from your dataset
-            >>> num_docs = len(embeddings)  # or db.count_type("Doc")
-            >>>
-            >>> # Create legacy index with correct max_items
-            >>> index = db.create_legacy_vector_index(
-            ...     "Doc", "embedding",
-            ...     dimensions=384,
-            ...     max_items=num_docs
-            ... )
-            >>>
-            >>> # Add vectors (as NumPy arrays or Python lists)
-            >>> with db.transaction():
-            ...     for i, emb in enumerate(embeddings):
-            ...         vertex = db.new_vertex("Doc")
-            ...         vertex.set("id", f"doc_{i}")
-            ...         vertex.set("embedding", to_java_float_array(emb))
-            ...         vertex.save()
-            ...         index.add_vertex(vertex)
-            ...
-            >>> # Search
-            >>> query_vector = np.random.rand(384)
-            >>> neighbors = index.find_nearest(query_vector, k=5)
-        """
-        self._check_not_closed()
-        start_jvm()
-
-        from com.arcadedb.index.vector import HnswVectorIndexRAM
-        from com.arcadedb.schema import Type
-        from com.github.jelmerk.knn import DistanceFunctions
-
-        # Map distance function names to Java constants
-        distance_funcs = {
-            "cosine": DistanceFunctions.FLOAT_COSINE_DISTANCE,
-            "euclidean": DistanceFunctions.FLOAT_EUCLIDEAN_DISTANCE,
-            "inner_product": DistanceFunctions.FLOAT_INNER_PRODUCT,
-        }
-
-        if distance_function not in distance_funcs:
-            raise ArcadeDBError(
-                f"Invalid distance function: {distance_function}. "
-                f"Must be one of: {', '.join(distance_funcs.keys())}"
-            )
-
-        distance_func = distance_funcs[distance_function]
-
-        try:
-            # Ensure max_items is a proper Python int (JPype will convert to Java int)
-            max_items = int(max_items)
-
-            # Build HNSW RAM index
-            builder = HnswVectorIndexRAM.newBuilder(
-                dimensions, distance_func, max_items
-            )
-            builder = builder.withM(m)
-            builder = builder.withEf(ef)
-            builder = builder.withEfConstruction(ef_construction)
-
-            hnsw_ram = builder.build()
-
-            # Create persistent index
-            persistent_builder = hnsw_ram.createPersistentIndex(self._java_db)
-            persistent_builder = persistent_builder.withVertexType(vertex_type)
-            persistent_builder = persistent_builder.withEdgeType(edge_type)
-            persistent_builder = persistent_builder.withVectorProperty(
-                vector_property, Type.ARRAY_OF_FLOATS
-            )
-            persistent_builder = persistent_builder.withIdProperty(id_property)
-            persistent_builder = persistent_builder.withDeletedProperty(
-                deleted_property
-            )
-
-            # Create the index
-            java_index = persistent_builder.create()
-
-            from .vector import LegacyVectorIndex
-
-            return LegacyVectorIndex(java_index, self)
-
-        except Exception as e:
-            raise ArcadeDBError(f"Failed to create vector index: {e}") from e
-
     def create_vector_index(
         self,
         vertex_type: str,
@@ -335,20 +193,18 @@ class Database:
         quantization: str = None,
     ) -> "VectorIndex":
         """
-        Create a vector index for similarity search (default JVector implementation).
+        Create a vector index for similarity search (JVector implementation).
 
         This uses JVector (graph index combining HNSW hierarchy with Vamana/DiskANN)
-        which is more efficient than the legacy HNSW implementation:
+        which provides:
         - No max_items limit (grows dynamically)
-        - Typically 1000x faster index construction
+        - Fast index construction
         - Automatic indexing of existing records
         - Concurrent construction support
 
         Default parameters (max_connections=32, beam_width=256) were chosen based on
         benchmarks on the GloVe-100-Angular dataset to achieve at least 0.85 recall
         with decent build and search time.
-
-        For the legacy HNSW implementation, use create_legacy_vector_index().
 
         Args:
             vertex_type: Name of the vertex type

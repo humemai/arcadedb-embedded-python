@@ -373,3 +373,73 @@ class TestVectorSQL:
                 assert (
                     found_id == i
                 ), f"Found wrong vector for index {i}: found {found_id}"
+
+    def test_document_vector_search_sql(self, test_db):
+        """
+        Test Nearest Neighbor Search on Documents using SQL.
+        Verifies that we can perform KNN search on Document types with vector indexes.
+        """
+        doc_type = "VecDocSearch"
+
+        test_db.command("sql", f"CREATE DOCUMENT TYPE {doc_type}")
+        test_db.command("sql", f"CREATE PROPERTY {doc_type}.name STRING")
+        test_db.command("sql", f"CREATE PROPERTY {doc_type}.vector ARRAY_OF_FLOATS")
+
+        # Create index via SQL
+        sql_index = f"""
+        CREATE INDEX ON {doc_type} (vector)
+        LSM_VECTOR
+        METADATA {{
+            "dimensions": 4,
+            "distanceFunction": "EUCLIDEAN"
+        }}
+        """
+        test_db.command("sql", sql_index)
+
+        # Insert data (Fruits vs Vehicles)
+        # Fruits:
+        # Apple:  [1.0, 0.0, 0.0, 0.0]
+        # Banana: [0.9, 0.1, 0.0, 0.0]
+        # Vehicles:
+        # Car:    [0.0, 0.0, 1.0, 0.0]
+        # Truck:  [0.0, 0.0, 0.9, 0.1]
+
+        with test_db.transaction():
+            test_db.command(
+                "sql",
+                f"INSERT INTO {doc_type} SET name = 'Apple', vector = [1.0, 0.0, 0.0, 0.0]",
+            )
+            test_db.command(
+                "sql",
+                f"INSERT INTO {doc_type} SET name = 'Banana', vector = [0.9, 0.1, 0.0, 0.0]",
+            )
+            test_db.command(
+                "sql",
+                f"INSERT INTO {doc_type} SET name = 'Car', vector = [0.0, 0.0, 1.0, 0.0]",
+            )
+            test_db.command(
+                "sql",
+                f"INSERT INTO {doc_type} SET name = 'Truck', vector = [0.0, 0.0, 0.9, 0.1]",
+            )
+
+        # Search for "Fruit-like" object (close to Apple)
+        # Query: [0.95, 0.05, 0.0, 0.0]
+        query_vector = [0.95, 0.05, 0.0, 0.0]
+
+        # Using vectorL2Distance for distance calculation
+        rs = test_db.query(
+            "sql",
+            f"SELECT name, vectorL2Distance(vector, {query_vector}) as dist FROM {doc_type} ORDER BY dist ASC LIMIT 2",
+        )
+
+        results = list(rs)
+        assert len(results) == 2
+
+        names = [r.get_property("name") for r in results]
+        print(f"Search results: {names}")
+
+        # Should be Apple and Banana
+        assert "Apple" in names
+        assert "Banana" in names
+        assert "Car" not in names
+        assert "Truck" not in names

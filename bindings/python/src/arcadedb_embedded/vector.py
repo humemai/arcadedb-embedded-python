@@ -22,7 +22,7 @@ def to_java_float_array(vector):
         vector: Array-like object containing float values
 
     Returns:
-        Java float array compatible with ArcadeDB HNSW indexes
+        Java float array compatible with ArcadeDB vector indexes
     """
     # Handle NumPy arrays
     try:
@@ -71,197 +71,6 @@ def to_python_array(java_vector, use_numpy=True):
     return py_list
 
 
-class LegacyVectorIndex:
-    """
-    Wrapper for ArcadeDB HNSW vector index (legacy implementation using hnswlib).
-
-    Note: This is the legacy implementation. For new code, use VectorIndex (JVector-based)
-    which is faster, has no max_items limit, and uses normalized cosine distance.
-
-    Provides a Pythonic interface for creating and searching vector indexes,
-    with native support for NumPy arrays.
-
-    Distance Calculation:
-        The metric used depends on the `distance_function` parameter during index creation:
-
-        1. **EUCLIDEAN**:
-           - Returns **Squared Euclidean Distance** (Lower is better).
-           - Formula: $d^2 = \sum (A_i - B_i)^2$
-           - Range: [0.0, +inf)
-           - 0.0: Identical vectors
-
-        2. **COSINE**:
-           - Returns **Cosine Distance** (Lower is better).
-           - Formula: $1 - \cos(\theta) = 1 - \frac{A \cdot B}{||A|| ||B||}$
-           - Range: [0.0, 2.0]
-           - 0.0: Identical vectors
-           - 1.0: Orthogonal vectors
-           - 2.0: Opposite vectors
-    """
-
-    def __init__(self, java_index, database):
-        """
-        Initialize LegacyVectorIndex wrapper.
-
-        Args:
-            java_index: Java HnswVectorIndex object
-            database: Parent Database object
-        """
-        self._java_index = java_index
-        self._database = database
-
-    def find_nearest(self, query_vector, k=10, use_numpy=True):
-        """
-        Find k nearest neighbors to the query vector.
-
-        Args:
-            query_vector: Query vector as Python list, NumPy array, or array-like
-            k: Number of nearest neighbors to return (default: 10)
-            use_numpy: Return vectors as NumPy arrays if available (default: True)
-
-        Returns:
-            List of tuples: [(vertex, distance), ...]
-            where vertex is the Java vertex object (use .get() and .has() methods)
-            and distance is the similarity score
-        """
-        try:
-            # Convert query vector to Java float array
-            java_vector = to_java_float_array(query_vector)
-
-            # Perform search (None = no filtering callback)
-            results = self._java_index.findNearest(java_vector, k, None)
-
-            # Convert results to Python format - vertices are Java objects
-            neighbors = []
-            for result in results:
-                java_vertex = result.item()
-                distance = result.distance()
-                # Return Java vertex directly (don't wrap)
-                neighbors.append((java_vertex, float(distance)))
-
-            return neighbors
-        except Exception as e:
-            print(f"Debug VectorIndex: ERROR in find_nearest: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return []
-
-    def add_vertex(self, vertex):
-        """
-        Add a single vertex to the index.
-
-        Args:
-            vertex: Vertex object to add (must have vector property)
-        """
-        try:
-            self._java_index.add(vertex)
-        except Exception as e:
-            raise ArcadeDBError(f"Failed to add vertex to index: {e}") from e
-
-    def remove_vertex(self, vertex_id):
-        """
-        Remove a vertex from the index.
-
-        Args:
-            vertex_id: ID of the vertex to remove
-        """
-        try:
-            self._java_index.remove(vertex_id)
-        except Exception as e:
-            raise ArcadeDBError(f"Failed to remove vertex from index: {e}") from e
-
-    def get_max_capacity(self):
-        """
-        Get the maximum number of items this index can hold.
-
-        Returns:
-            int: Maximum capacity (max_items parameter from creation)
-
-        Note:
-            This is a HARD LIMIT. Once reached, you must recreate the index
-            with a larger capacity. Use get_stats() to monitor usage.
-        """
-        try:
-            return self._java_index.getMaxItemCount()
-        except Exception as e:
-            raise ArcadeDBError(f"Failed to get max capacity: {e}") from e
-
-    def get_size(self):
-        """
-        Get the current number of items in the index.
-
-        Returns:
-            int: Number of items currently indexed
-
-        Note:
-            This counts vertices in the underlying vertex type that have
-            the vector property. For large indexes, this may be slow.
-            Consider caching if needed.
-        """
-        try:
-            # HNSW persistent index doesn't have a size() method
-            # We need to count via the underlying TypeIndex
-            underlying_index = self._java_index.getUnderlyingIndex()
-
-            # Count entries in the underlying index
-            # The underlying index stores the ID property for each vertex
-            count = 0
-            cursor = underlying_index.iterator(True)
-            while cursor.hasNext():
-                cursor.next()
-                count += 1
-
-            return count
-        except Exception as e:
-            raise ArcadeDBError(f"Failed to get index size: {e}") from e
-
-    def get_stats(self):
-        """
-        Get index statistics including size and capacity.
-
-        Returns:
-            dict: Statistics with keys:
-                - size: Current number of items
-                - max_capacity: Maximum capacity
-                - usage_percent: Percentage of capacity used
-                - remaining: Number of slots remaining
-
-        Example:
-            >>> stats = index.get_stats()
-            >>> print(f"Index is {stats['usage_percent']:.1f}% full")
-            >>> if stats['usage_percent'] > 90:
-            ...     print("⚠️  Index nearly full - "
-            ...           "consider recreating with larger capacity")
-        """
-        try:
-            size = self.get_size()
-            max_capacity = self.get_max_capacity()
-            usage_percent = (size / max_capacity * 100) if max_capacity > 0 else 0
-            remaining = max_capacity - size
-
-            return {
-                "size": size,
-                "max_capacity": max_capacity,
-                "usage_percent": usage_percent,
-                "remaining": remaining,
-            }
-        except Exception as e:
-            raise ArcadeDBError(f"Failed to get index stats: {e}") from e
-
-    def is_full(self):
-        """
-        Check if the index is at capacity.
-
-        Returns:
-            bool: True if index is full, False otherwise
-        """
-        try:
-            return self.get_size() >= self.get_max_capacity()
-        except Exception as e:
-            raise ArcadeDBError(f"Failed to check if index is full: {e}") from e
-
-
 class VectorIndex:
     """
     Wrapper for ArcadeDB vector index (JVector-based implementation).
@@ -270,7 +79,7 @@ class VectorIndex:
     It uses JVector (a graph index combining HNSW hierarchy with Vamana/DiskANN
     algorithms) which provides:
     - No max_items limit (grows dynamically)
-    - Faster index construction (typically 1000x faster than legacy HNSW)
+    - Faster index construction
     - Automatic indexing of existing records
     - Concurrent construction support
 
@@ -324,7 +133,6 @@ class VectorIndex:
         query_vector,
         k=10,
         overquery_factor=16,
-        use_numpy=True,
         allowed_rids=None,
     ):
         """
@@ -335,11 +143,12 @@ class VectorIndex:
             k: Number of nearest neighbors to return (final k)
             overquery_factor: Multiplier for search-time over-querying (implicit efSearch).
                               Default is 16, chosen based on benchmarks to ensure decent recall.
-            use_numpy: Return vectors as NumPy arrays if available
             allowed_rids: Optional list of RID strings (e.g. ["#1:0", "#2:5"]) to restrict search
 
         Returns:
-            List of tuples: [(vertex, score), ...]
+            List of tuples: [(record, score), ...]
+            - record: The matching ArcadeDB record (Vertex, Document, or Edge)
+            - score: The similarity score/distance
         """
         try:
             # Convert query vector to Java float array
