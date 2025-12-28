@@ -121,8 +121,7 @@ pytest tests/test_server.py -v
 pytest tests/test_server.py::test_server_creation -v
 ```
 
-!!! note "Distribution Support"
-    Server tests are skipped in the **headless** distribution (no server module).
+
 
 ## Related Documentation
 

@@ -8,19 +8,19 @@ Supported Query Languages:
 
 - **SQL**: Primary language, full-featured, best for most use cases
 - **Cypher**: OpenCypher for graph pattern matching
-- **Gremlin**: Apache TinkerPop for graph traversals (requires full distribution)
+- **Gremlin**: Apache TinkerPop for graph traversals
 - **MongoDB**: MongoDB-compatible syntax (requires mongodbw plugin)
 - **GraphQL**: GraphQL queries (requires graphql plugin)
 
 ## Quick Reference
 
-| Language | Best For | Distribution | Learning Curve |
-|----------|----------|--------------|----------------|
-| SQL      | General queries, analytics | All | Easy |
-| Cypher   | Graph patterns, relationships | All | Medium |
-| Gremlin  | Complex graph algorithms | Full only | Hard |
-| MongoDB  | Document queries | Full only | Easy |
-| GraphQL  | API queries | Full only | Medium |
+| Language | Best For | Learning Curve |
+|----------|----------|----------------|
+| SQL      | General queries, analytics | Easy |
+| Cypher   | Graph patterns, relationships | Medium |
+| Gremlin  | Complex graph algorithms | Hard |
+| MongoDB  | Document queries | Easy |
+| GraphQL  | API queries | Medium |
 
 ## SQL
 
@@ -427,7 +427,6 @@ result = db.query("cypher", """
 **Traversal-based** graph query language from Apache TinkerPop.
 
 **Requirements:**
-- Full distribution only
 - More complex setup
 
 **Strengths:**
@@ -544,7 +543,6 @@ result = db.query("gremlin", """
 **Document-oriented** query syntax for document databases.
 
 **Requirements:**
-- Full distribution only
 - mongodbw plugin
 
 **Strengths:**

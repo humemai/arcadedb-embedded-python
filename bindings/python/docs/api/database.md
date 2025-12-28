@@ -166,13 +166,13 @@ result = db.query("cypher", """
 
 **Supported Languages:**
 
-| Language | Distribution | Notes |
-|----------|-------------|-------|
-| `sql` | All | ArcadeDB SQL |
-| `cypher` | All | OpenCypher graph query language |
-| `mongo` | Full | MongoDB query syntax |
-| `gremlin` | Full | Apache TinkerPop traversal |
-| `graphql` | Full | GraphQL queries |
+| Language | Notes |
+|----------|-------|
+| `sql` | ArcadeDB SQL |
+| `cypher` | OpenCypher graph query language |
+| `mongo` | MongoDB query syntax |
+| `gremlin` | Apache TinkerPop traversal |
+| `graphql` | GraphQL queries |
 
 ---
 
@@ -608,7 +608,7 @@ db.query("cypher", """
 """)
 ```
 
-### Gremlin (Full Distribution)
+### Gremlin
 
 Apache TinkerPop graph traversals:
 
@@ -620,7 +620,7 @@ db.query("gremlin", """
 """)
 ```
 
-### MongoDB (Full Distribution)
+### MongoDB
 
 MongoDB query syntax:
 
