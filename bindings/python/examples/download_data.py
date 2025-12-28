@@ -89,7 +89,7 @@ def introduce_null_values_movielens(extract_dir):
     # Seed for reproducibility - same NULLs every time
     random.seed(42)
 
-    print("\n🔧 Systematically introducing NULL values in MovieLens CSV files...")
+    print("\n[WORK] Systematically introducing NULL values in MovieLens CSV files...")
     overall_start = time.time()
 
     # Configuration: file -> {nullable_field: percentage}
@@ -155,10 +155,10 @@ def introduce_null_values_movielens(extract_dir):
         null_summary = ", ".join(
             f"{count} NULL {field}" for field, count in null_counts.items()
         )
-        print(f"   ✅ {filename}: {null_summary} ({elapsed:.2f}s)")
+        print(f"   [OK] {filename}: {null_summary} ({elapsed:.2f}s)")
 
     overall_elapsed = time.time() - overall_start
-    print(f"\n⏱️  Total CSV NULL injection time: {overall_elapsed:.2f}s")
+    print(f"\n[TIME]  Total CSV NULL injection time: {overall_elapsed:.2f}s")
 
 
 def download_movielens(size="large", inject_nulls=True):
@@ -200,7 +200,7 @@ def download_movielens(size="large", inject_nulls=True):
 
     # Check if already downloaded
     if extract_dir.exists():
-        print(f"✅ Dataset already exists at: {extract_dir}")
+        print(f"[OK] Dataset already exists at: {extract_dir}")
         print(f"   Size: {config['description']} ({config['size_mb']})")
         print()
         for csv_file in ["movies.csv", "ratings.csv", "tags.csv", "links.csv"]:
@@ -210,10 +210,12 @@ def download_movielens(size="large", inject_nulls=True):
                 print(f"   - {csv_file}: {size_mb:.1f} MB")
 
         # Ask if user wants to re-introduce NULL values
-        print("\n💡 To re-introduce NULL values, delete the data directory and re-run.")
+        print(
+            "\n[INFO] To re-introduce NULL values, delete the data directory and re-run."
+        )
         return extract_dir
 
-    print(f"📥 Downloading MovieLens {size} dataset")
+    print(f"[DOWNLOAD] Downloading MovieLens {size} dataset")
     print(f"   Description: {config['description']} ({config['size_mb']})")
     print(f"   URL: {url}")
     print("   This may take a few minutes...")
@@ -237,11 +239,11 @@ def download_movielens(size="large", inject_nulls=True):
         urllib.request.urlretrieve(url, zip_path, reporthook=report_progress)
         print()  # New line after progress
         download_elapsed = time.time() - download_start
-        print(f"✅ Downloaded to: {zip_path} " f"({download_elapsed:.2f}s)")
+        print(f"[OK] Downloaded to: {zip_path} " f"({download_elapsed:.2f}s)")
 
         # Extract
         extract_start = time.time()
-        print("📦 Extracting...")
+        print("[EXTRACT] Extracting...")
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             # Extract to temp dir (zip contains ml-latest/ml-latest-small)
             temp_extract = data_dir / "temp_extract"
@@ -261,28 +263,28 @@ def download_movielens(size="large", inject_nulls=True):
                 raise Exception(f"Unexpected zip structure in {temp_extract}")
 
         extract_elapsed = time.time() - extract_start
-        print(f"✅ Extracted to: {extract_dir} ({extract_elapsed:.2f}s)")
+        print(f"[OK] Extracted to: {extract_dir} ({extract_elapsed:.2f}s)")
 
         # Introduce NULL values for testing
         if inject_nulls:
             introduce_null_values_movielens(extract_dir)
         else:
-            print("\n⏭️  Skipping NULL value injection (--no-nulls flag)")
+            print("\n[SKIP]  Skipping NULL value injection (--no-nulls flag)")
 
         # Show file sizes
-        print("\n📊 Dataset contents:")
+        print("\n[STATS] Dataset contents:")
         for csv_file in extract_dir.glob("*.csv"):
             size_mb = csv_file.stat().st_size / (1024 * 1024)
             print(f"   - {csv_file.name}: {size_mb:.1f} MB")
 
         # Clean up zip file
         zip_path.unlink()
-        print("\n🧹 Cleaned up zip file")
+        print("\n[CLEAN] Cleaned up zip file")
 
         return extract_dir
 
     except Exception as e:
-        print(f"❌ Error downloading dataset: {e}")
+        print(f"[ERROR] Error downloading dataset: {e}")
         print(f"   You can manually download from: {url}")
         raise
 
@@ -296,7 +298,7 @@ def download_stackoverflow(size="small"):
     try:
         import py7zr
     except ImportError:
-        print("❌ Missing dependency: py7zr")
+        print("[ERROR] Missing dependency: py7zr")
         print("   Install with: pip install py7zr")
         raise
 
@@ -366,7 +368,7 @@ def download_stackoverflow(size="small"):
 
     # Check if already downloaded
     if extract_dir.exists():
-        print(f"✅ Dataset already exists at: {extract_dir}")
+        print(f"[OK] Dataset already exists at: {extract_dir}")
         print(f"   Site: {config['site']}")
         print(f"   Size: {config['description']} ({config['size_mb']})")
         print(f"   Date: {config['date']}")
@@ -380,10 +382,10 @@ def download_stackoverflow(size="small"):
                 size_mb = xml_file.stat().st_size / (1024 * 1024)
                 print(f"   - {xml_file.name}: {size_mb:.1f} MB")
 
-        print("\n💡 To re-download, delete the data directory and re-run.")
+        print("\n[INFO] To re-download, delete the data directory and re-run.")
         return extract_dir
 
-    print(f"📥 Downloading Stack Exchange {size} dataset")
+    print(f"[DOWNLOAD] Downloading Stack Exchange {size} dataset")
     print(f"   Site: {config['site']}")
     print(f"   Description: {config['description']} ({config['size_mb']})")
     print(f"   Date: {config['date']} (pinned for reproducibility)")
@@ -411,44 +413,44 @@ def download_stackoverflow(size="small"):
         for url in config["urls"]:
             filename = url.split("/")[-1]
             archive_path = data_dir / filename
-            print(f"\n📥 Downloading {filename}")
+            print(f"\n[DOWNLOAD] Downloading {filename}")
             file_start = time.time()
             urllib.request.urlretrieve(url, archive_path, reporthook=report_progress)
             print()  # New line after progress
             file_elapsed = time.time() - file_start
-            print(f"✅ Downloaded to: {archive_path} ({file_elapsed:.2f}s)")
+            print(f"[OK] Downloaded to: {archive_path} ({file_elapsed:.2f}s)")
 
             # Extract 7z file
             extract_start = time.time()
-            print(f"📦 Extracting {filename}...")
+            print(f"[EXTRACT] Extracting {filename}...")
             with py7zr.SevenZipFile(archive_path, mode="r") as archive:
                 archive.extractall(path=extract_dir)
 
             extract_elapsed = time.time() - extract_start
-            print(f"✅ Extracted ({extract_elapsed:.2f}s)")
+            print(f"[OK] Extracted ({extract_elapsed:.2f}s)")
 
             # Clean up archive file
             archive_path.unlink()
 
         download_elapsed = time.time() - download_start
-        print(f"\n⏱️  Total download time: {download_elapsed:.2f}s")
+        print(f"\n[TIME]  Total download time: {download_elapsed:.2f}s")
 
-        print(f"\n✅ Extracted to: {extract_dir}")
+        print(f"\n[OK] Extracted to: {extract_dir}")
 
         # Show file sizes
-        print("\n📊 Dataset contents:")
+        print("\n[STATS] Dataset contents:")
         xml_files = list(extract_dir.glob("*.xml"))
         if xml_files:
             for xml_file in sorted(xml_files):
                 size_mb = xml_file.stat().st_size / (1024 * 1024)
                 print(f"   - {xml_file.name}: {size_mb:.1f} MB")
         else:
-            print("   ⚠️  No XML files found")
+            print("   [WARNING]  No XML files found")
 
         return extract_dir
 
     except Exception as e:
-        print(f"❌ Error downloading dataset: {e}")
+        print(f"[ERROR] Error downloading dataset: {e}")
         print(f"   You can manually download from: {config['urls'][0]}")
         raise
 
@@ -531,7 +533,7 @@ def verify_csv_nulls(extract_dir, dataset_type="movielens", sample_size=None):
             results[filename] = file_results
 
     verification_elapsed = time.time() - verification_start
-    print(f"\n⏱️  CSV verification time: {verification_elapsed:.2f}s")
+    print(f"\n[TIME]  CSV verification time: {verification_elapsed:.2f}s")
     return results
 
 
@@ -638,7 +640,7 @@ def verify_xml_nulls(extract_dir, sample_size=None):
         }
 
     verification_elapsed = time.time() - verification_start
-    print(f"\n⏱️  XML verification time: {verification_elapsed:.2f}s")
+    print(f"\n[TIME]  XML verification time: {verification_elapsed:.2f}s")
     return results
 
 
@@ -646,24 +648,24 @@ def print_verification_report(csv_results, xml_results, inject_nulls):
     """Print verification report."""
     print()
     print("=" * 70)
-    print("📊 Dataset Verification Report")
+    print("[STATS] Dataset Verification Report")
     print("=" * 70)
     print()
 
     # CSV verification (MovieLens)
     if csv_results:
         if inject_nulls:
-            print("✅ NULL injection was ENABLED")
+            print("[OK] NULL injection was ENABLED")
             print()
 
         print("CSV Files:")
         for filename, data in csv_results.items():
             sampled_note = " (sampled)" if data.get("sampled") else ""
-            print(f"  📄 {filename}{sampled_note}:")
+            print(f"  [FILE] {filename}{sampled_note}:")
             print(f"     Total rows: {data['total_rows']}")
             for field, count in data["null_counts"].items():
                 pct = (count / data["total_rows"]) * 100
-                status = "✅" if count > 0 else "❌"
+                status = "[OK]" if count > 0 else "[ERROR]"
                 print(f"     {status} NULL {field}: {count} ({pct:.1f}%)")
         print()
 
@@ -671,11 +673,11 @@ def print_verification_report(csv_results, xml_results, inject_nulls):
     if xml_results:
         print("XML Files:")
         print()
-        print("  📊 Stack Exchange data (original, unmodified)")
+        print("  [STATS] Stack Exchange data (original, unmodified)")
         print()
         for filename, data in xml_results.items():
             sampled_note = " (sampled)" if data.get("sampled") else ""
-            print(f"  📄 {filename}{sampled_note}:")
+            print(f"  [FILE] {filename}{sampled_note}:")
             print(f"     Total rows: {data['total_rows']}")
             print(f"     Unique attributes: {data['total_attributes']}")
             if data["null_counts"]:
@@ -690,7 +692,7 @@ def print_verification_report(csv_results, xml_results, inject_nulls):
         print()
 
     print("=" * 70)
-    print("✅ Verification Complete")
+    print("[OK] Verification Complete")
     print("=" * 70)
 
 
@@ -761,7 +763,11 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
     args = parser.parse_args()
 
     print("=" * 70)
-    print("📥 Dataset Download" if not args.verify_only else "📊 Dataset Verification")
+    print(
+        "[DOWNLOAD] Dataset Download"
+        if not args.verify_only
+        else "[STATS] Dataset Verification"
+    )
     print("=" * 70)
     print()
 
@@ -779,12 +785,12 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
     # Verify-only mode
     if args.verify_only:
         if not extract_dir.exists():
-            print(f"❌ Dataset not found: {extract_dir}")
+            print(f"[ERROR] Dataset not found: {extract_dir}")
             print("   Run without --verify-only to download first.")
             return
 
-        print(f"📂 Verifying existing dataset: {extract_dir}")
-        print("⚡ Using smart sampling (100K rows) for fast verification")
+        print(f"[DIR] Verifying existing dataset: {extract_dir}")
+        print("[FAST] Using smart sampling (100K rows) for fast verification")
         print()
 
         sample_size = 100000
@@ -810,15 +816,15 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
 
         print()
         print("=" * 70)
-        print("✅ MovieLens Dataset Ready!")
+        print("[OK] MovieLens Dataset Ready!")
         print("=" * 70)
         print()
-        print("💡 Use this dataset in examples:")
+        print("[INFO] Use this dataset in examples:")
         print(f"   data_dir = Path('{extract_dir}')")
         print("   movies_csv = data_dir / 'movies.csv'")
         print("   ratings_csv = data_dir / 'ratings.csv'")
         print()
-        print("📚 Dataset info:")
+        print("[INFO] Dataset info:")
         if size == "large":
             print("   - ~86,000 movies")
             print("   - ~33,000,000 ratings")
@@ -843,15 +849,15 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
 
         print()
         print("=" * 70)
-        print("✅ Stack Exchange Dataset Ready!")
+        print("[OK] Stack Exchange Dataset Ready!")
         print("=" * 70)
         print()
-        print("💡 Use this dataset in examples:")
+        print("[INFO] Use this dataset in examples:")
         print(f"   data_dir = Path('{extract_dir}')")
         print("   posts_xml = data_dir / 'Posts.xml'")
         print("   users_xml = data_dir / 'Users.xml'")
         print()
-        print("📚 Dataset info:")
+        print("[INFO] Dataset info:")
         if size == "small":
             print("   - Site: cs.stackexchange.com")
             print("   - ~80,000 posts (questions + answers)")
