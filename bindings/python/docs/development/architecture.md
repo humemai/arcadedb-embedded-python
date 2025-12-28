@@ -51,7 +51,7 @@ arcadedb_embedded/
 - Type inference
 
 **`vector.py`**
-- `VectorIndex`: HNSW vector indexing
+- `VectorIndex`: JVector-based Vector indexing
 - NumPy ↔ Java array conversion
 - Nearest neighbor search
 - Distance metrics

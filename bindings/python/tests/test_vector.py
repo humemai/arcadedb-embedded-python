@@ -991,3 +991,59 @@ class TestLSMVectorIndex:
         # If it's Hamming, distance is int. If Cosine, float.
         # We just check it's not None
         assert distance is not None
+
+    def test_document_vector_search(self, test_db):
+        """Test vector search on Document type with metadata and clustering."""
+        # Create schema
+        test_db.schema.create_document_type("MyDoc")
+        test_db.schema.create_property("MyDoc", "name", "STRING")
+        test_db.schema.create_property("MyDoc", "embedding", "ARRAY_OF_FLOATS")
+
+        # Create vector index
+        index = test_db.create_vector_index("MyDoc", "embedding", dimensions=4)
+
+        # Add data: Fruits (dim 0 dominant) vs Vehicles (dim 1 dominant)
+        # [Fruitness, Vehicleness, 0, 0]
+        data = [
+            ("apple", [0.9, 0.1, 0.0, 0.0]),
+            ("banana", [0.8, 0.2, 0.0, 0.0]),
+            ("car", [0.1, 0.9, 0.0, 0.0]),
+            ("truck", [0.2, 0.8, 0.0, 0.0]),
+        ]
+
+        with test_db.transaction():
+            for name, vec in data:
+                doc = test_db.new_document("MyDoc")
+                doc.set("name", name)
+                doc.set("embedding", arcadedb.to_java_float_array(vec))
+                doc.save()
+
+        # Search for something "fruity"
+        query = [0.95, 0.05, 0.0, 0.0]
+        results = index.find_nearest(query, k=2)
+
+        assert len(results) == 2
+
+        # Extract names from results
+        found_names = []
+        for record, distance in results:
+            assert record.getType().getName() == "MyDoc"
+            found_names.append(record.get("name"))
+
+            # Verify embedding is present and correct type
+            emb = arcadedb.to_python_array(record.get("embedding"))
+            assert len(emb) == 4
+
+        # Should find apple and banana
+        assert "apple" in found_names
+        assert "banana" in found_names
+        assert "car" not in found_names
+
+        # Search for something "vehicular"
+        query_vehicle = [0.05, 0.95, 0.0, 0.0]
+        results_v = index.find_nearest(query_vehicle, k=2)
+        found_names_v = [r[0].get("name") for r in results_v]
+
+        assert "car" in found_names_v
+        assert "truck" in found_names_v
+        assert "apple" not in found_names_v

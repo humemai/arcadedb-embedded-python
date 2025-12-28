@@ -83,28 +83,6 @@ Why: SQL IN queries with large ID lists are slow even with indexes. Direct
 lookupByKey() uses the index for O(1) access per vertex, resulting in 10-100x
 speedup for vertex caching operations. This optimization requires that the
 lookup field (Id) has a UNIQUE or NOTUNIQUE index defined.
-
-## Issues
-
-As of 13-Dec-2025, we ran into some issues:
-
-### "Vector Index HNSW Graphs Not Persisting to Disk"
-
-https://github.com/ArcadeData/arcadedb/issues/2915.
-
-This is a rather serious problem, and hopefully it'll get fixed soon. Otherwise jvector
-shouldn't be recommended for use in production until the neighbor consistency is
-improved.
-
-### "Unknown component type" warnings on startup for compacted LSM indexes
-
-https://github.com/ArcadeData/arcadedb/issues/2917
-
-The problem is Low Severity (Cosmetic).
-
-
-###
-
 """
 
 import argparse
@@ -4894,9 +4872,9 @@ class Phase3VectorEmbeddings:
         """Create vector indexes for Questions, Answers, Comments, and Users.
 
         The default vector index implementation (JVector) automatically indexes ALL
-        records of the specified type during creation. This is much simpler and faster
-        than the legacy HNSW implementation which requires manual population.
-        Index creation is typically 1000x faster.
+        records of the specified type during creation. This is efficient and
+        automatically handles population.
+        Index creation is typically very fast.
 
         Note: Only records with non-null embeddings will be indexed.
         Records without embeddings are skipped.
@@ -5381,7 +5359,6 @@ class Phase4Analytics:
                 index = db.schema.get_vector_index(
                     vertex_type=vertex_type,
                     vector_property="embedding",
-                    id_property="vector_id",
                 )
                 indexes[vertex_type] = index
 

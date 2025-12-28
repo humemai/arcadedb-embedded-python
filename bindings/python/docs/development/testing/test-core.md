@@ -308,7 +308,7 @@ with arcadedb.create_database("./test_db") as db:
 
 **Test:** `test_vector_search`
 
-Tests HNSW vector indexing and similarity search.
+Tests vector indexing and similarity search.
 
 ```python
 import arcadedb_embedded as arcadedb
@@ -319,17 +319,14 @@ with arcadedb.create_database("./test_db") as db:
     db.command("sql", "CREATE PROPERTY Document.name STRING")
     db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
 
-    # Create HNSW index
+    # Create vector index
     index = db.create_vector_index(
         vertex_type="Document",
         vector_property="embedding",
         dimensions=3,
-        id_property="name",
         distance_function="cosine",
-        m=16,
-        ef=128,
-        ef_construction=128,
-        max_items=100
+        max_connections=32,
+        beam_width=256
     )
 
     # Insert documents with vectors
@@ -340,7 +337,6 @@ with arcadedb.create_database("./test_db") as db:
             vertex.set("name", f"doc{i+1}")
             vertex.set("embedding", arcadedb.to_java_float_array(vec))
             vertex.save()
-            index.add_vertex(vertex)
 
     # Search for nearest neighbors
     query_vec = [1.0, 0.0, 0.0]
@@ -353,13 +349,10 @@ with arcadedb.create_database("./test_db") as db:
 ```
 
 !!! note "Implementation Status"
-    Vector search is **experimental**. Current implementation uses jelmerk/hnswlib.
-    Future migration to datastax/jvector planned for better performance.
-
-**What it tests:**
+    Vector search uses the JVector library.
 
 - EMBEDDING property type creation
-- HNSW index creation with parameters
+- Vector index creation with parameters
 - Vector insertion (NumPy arrays or Python lists)
 - Cosine similarity search
 - Result ranking by similarity
@@ -367,7 +360,7 @@ with arcadedb.create_database("./test_db") as db:
 **Key findings:**
 
 - ✅ Index creation fast (~0.16s) - creates metadata only
-- ⚠️ Index population expensive (~13ms/doc) - builds HNSW graph + disk writes
+- ⚠️ Index population expensive (~13ms/doc) - builds vector graph + disk writes
 - ✅ Search efficient (logarithmic) - visits ~1,500-2,000 vertices, not all
 - ✅ Works with NumPy arrays and plain Python lists
 - ✅ Distance values correct (cosine distance = 1 - similarity, range [0,2])
@@ -375,41 +368,18 @@ with arcadedb.create_database("./test_db") as db:
 
 **Performance characteristics** (10K documents, 384D):
 
-- Total storage: ~115 MB (24MB vertices + 91MB edges)
-- Index file: 4 KB (metadata only, graph stored as edges)
-- Per-document cost: ~13ms (HNSW algorithm + edge writes)
+- Total storage: ~40 MB (23MB vertices + 16MB graph)
+- Index file: 256 KB (metadata) + 16 MB (graph)
+- Per-document cost: ~13ms (Vector algorithm + graph updates)
 - Search working set: ~4 MB (visited vertices, not entire dataset)
 
 See [Vector Search Example](../../examples/03_vector_search.md) for detailed documentation.
 
 ---
-        CREATE HNSW INDEX Document.embedding
-        ON Document(embedding)
-        WITH m=16, ef=128, efConstruction=128
-    """)
-
-    # Insert vectors
-    with db.transaction():
-        db.command("sql", "INSERT INTO Document SET name = 'doc1', embedding = [1.0, 0.0, 0.0]")
-        db.command("sql", "INSERT INTO Document SET name = 'doc2', embedding = [0.9, 0.1, 0.0]")
-        db.command("sql", "INSERT INTO Document SET name = 'doc3', embedding = [0.0, 1.0, 0.0]")
-
-    # Similarity search
-    result = db.query("sql", """
-        SELECT name, cosine_similarity(embedding, [1.0, 0.0, 0.0]) as similarity
-        FROM Document
-        ORDER BY similarity DESC
-        LIMIT 2
-    """)
-
-    docs = list(result)
-    assert docs[0].get_property("name") == "doc1"  # Closest match
-    assert docs[1].get_property("name") == "doc2"  # Second closest
-```
 
 **What it tests:**
 - EMBEDDING property type creation
-- HNSW index creation with parameters
+- Vector index creation with parameters
 - Vector insertion
 - Cosine similarity search
 - Result ranking by similarity

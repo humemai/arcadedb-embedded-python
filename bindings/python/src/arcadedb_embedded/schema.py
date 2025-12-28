@@ -670,81 +670,56 @@ class Schema:
         self,
         vertex_type: str,
         vector_property: str,
-        id_property: str = "vector_id",
-        index_type: str = "auto",
     ) -> Optional[Any]:
-        """Get an existing vector index (HNSW or LSM).
+        """Get an existing vector index.
 
         Args:
             vertex_type: Name of the vertex type
             vector_property: Name of the vector property
-            id_property: Property used as unique ID (only for HNSW, default: "vector_id")
-            index_type: Type of index to retrieve: "auto", "lsm", or "hnsw" (default: "auto")
 
         Returns:
-            VectorIndex or LegacyVectorIndex object, or None if not found
+            VectorIndex object, or None if not found
         """
-        from .vector import LegacyVectorIndex, VectorIndex
+        from .vector import VectorIndex
 
         self._db._check_not_closed()
 
         try:
-            # 1. Try HNSW Index (legacy/custom implementation)
-            if index_type in ("auto", "hnsw"):
-                # Index name follows pattern: "{VertexType}[{id_property},{vector_property}]"
-                hnsw_index_name = f"{vertex_type}[{id_property},{vector_property}]"
+            # Try LSM Vector Index (native implementation)
+            # Since the name is auto-generated, we need to search for it
+            try:
+                # Get the type
+                doc_type = self._java_schema.getType(vertex_type)
+                # Get all indexes for this type
+                type_indexes = doc_type.getAllIndexes(True)
 
-                try:
-                    from com.arcadedb.index.vector import HnswVectorIndex
+                for java_index in type_indexes:
+                    index_class_name = java_index.getClass().getName()
 
-                    java_index = self._java_schema.getIndexByName(hnsw_index_name)
-                    if java_index and isinstance(java_index, HnswVectorIndex):
-                        return VectorIndex(java_index, self._db)
-                except Exception:
-                    pass
+                    # Check if it's a TypeIndex (wrapper)
+                    if "TypeIndex" in index_class_name:
+                        # Check sub-indexes to see if they are LSMVectorIndex (JVector)
+                        try:
+                            sub_indexes = java_index.getSubIndexes()
+                            if sub_indexes and not sub_indexes.isEmpty():
+                                # Check the first sub-index
+                                first_sub = sub_indexes.get(0)
+                                if "LSMVectorIndex" in first_sub.getClass().getName():
+                                    # Check properties on the wrapper
+                                    props = java_index.getPropertyNames()
+                                    if len(props) == 1 and props[0] == vector_property:
+                                        return VectorIndex(java_index, self._db)
+                        except Exception:
+                            pass
 
-            # 2. Try LSM Vector Index (native implementation)
-            if index_type in ("auto", "lsm"):
-                # Since the name is auto-generated, we need to search for it
-                try:
-                    # Get the type
-                    doc_type = self._java_schema.getType(vertex_type)
-                    # Get all indexes for this type
-                    type_indexes = doc_type.getAllIndexes(True)
-
-                    for java_index in type_indexes:
-                        index_class_name = java_index.getClass().getName()
-
-                        # Check if it's a TypeIndex (wrapper)
-                        if "TypeIndex" in index_class_name:
-                            # Check sub-indexes to see if they are LSMVectorIndex (JVector)
-                            try:
-                                sub_indexes = java_index.getSubIndexes()
-                                if sub_indexes and not sub_indexes.isEmpty():
-                                    # Check the first sub-index
-                                    first_sub = sub_indexes.get(0)
-                                    if (
-                                        "LSMVectorIndex"
-                                        in first_sub.getClass().getName()
-                                    ):
-                                        # Check properties on the wrapper
-                                        props = java_index.getPropertyNames()
-                                        if (
-                                            len(props) == 1
-                                            and props[0] == vector_property
-                                        ):
-                                            return VectorIndex(java_index, self._db)
-                            except Exception:
-                                pass
-
-                        # Check if it's directly an LSM vector index (JVector)
-                        elif "LSMVectorIndex" in index_class_name:
-                            # Check if it covers the requested property
-                            props = java_index.getPropertyNames()
-                            if len(props) == 1 and props[0] == vector_property:
-                                return VectorIndex(java_index, self._db)
-                except Exception:
-                    pass
+                    # Check if it's directly an LSM vector index (JVector)
+                    elif "LSMVectorIndex" in index_class_name:
+                        # Check if it covers the requested property
+                        props = java_index.getPropertyNames()
+                        if len(props) == 1 and props[0] == vector_property:
+                            return VectorIndex(java_index, self._db)
+            except Exception:
+                pass
 
             return None
 
@@ -752,7 +727,7 @@ class Schema:
             return None
 
     def list_vector_indexes(self) -> List[str]:
-        """List all vector index names (HNSW and LSM) in the database.
+        """List all vector index names in the database.
 
         Returns:
             List of vector index names
@@ -760,18 +735,12 @@ class Schema:
         self._db._check_not_closed()
 
         try:
-            from com.arcadedb.index.vector import HnswVectorIndex
-
             indexes = []
             for java_index in self._java_schema.getIndexes():
                 index_class_name = java_index.getClass().getName()
 
-                # Check for HNSW
-                if isinstance(java_index, HnswVectorIndex):
-                    indexes.append(java_index.getName())
-
                 # Check for LSM Vector (direct)
-                elif "LSMVectorIndex" in index_class_name:
+                if "LSMVectorIndex" in index_class_name:
                     indexes.append(java_index.getName())
 
                 # Check for TypeIndex (wrapper)
