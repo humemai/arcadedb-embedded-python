@@ -364,7 +364,7 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "The arcadedb-embedded package has been successfully built and tested." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Package**: arcadedb-embedded (~160MB with bundled JRE)" >> $GITHUB_STEP_SUMMARY
+            echo "**Package**: arcadedb-embedded" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Some platforms failed testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
