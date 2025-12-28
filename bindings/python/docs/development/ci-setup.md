@@ -111,7 +111,7 @@ After a successful release, you should see:
 
 ### Test Results (CI run #96)
 
-All 6 platforms passing 204 tests:
+All 6 platforms passing 204 tests and 7 example scripts:
 
 | Platform | Wheel Size | JRE Size | Tests |
 |----------|-----------|----------|-------|
