@@ -25,7 +25,7 @@ print_header() {
 print_usage() {
     echo "Usage: $0 [PLATFORM]"
     echo ""
-    echo "Builds arcadedb-embedded package with bundled JRE (~160MB)"
+    echo "Builds arcadedb-embedded package with bundled JRE"
     echo "No external Java installation required!"
     echo ""
     echo "PLATFORM:"
@@ -52,7 +52,7 @@ print_usage() {
     echo "  ✅ Bundled platform-specific JRE (no Java required)"
     echo "  ✅ Optimized JAR selection (see jar_exclusions.txt)"
     echo "  ✅ Multi-platform support (6 platforms)"
-    echo "  📦 Size: ~160MB (JRE ~63MB, JARs ~13MB, overhead ~84MB)"
+    echo "  📦 Size: ~215MB (compressed), ~289MB (installed)"
     echo ""
 }
 

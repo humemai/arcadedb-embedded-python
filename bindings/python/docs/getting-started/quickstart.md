@@ -7,10 +7,7 @@ Get up and running with ArcadeDB Python bindings in 5 minutes!
 Install the self-contained package with bundled JRE:
 
 ```bash
-# Temporarily install from GitHub Pages (awaiting PyPI size limit approval)
-pip install arcadedb-embedded \
-  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
-  --extra-index-url https://pypi.org/simple/
+pip install arcadedb-embedded
 ```
 
 !!! note "No Java Installation Required"
