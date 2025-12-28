@@ -31,30 +31,6 @@ Download and install from [java.com](https://java.com)
 ```bash
 java -version
 ```
-
----
-
-### Wrong Package Installed
-
-**Symptom:**
-```python
-import arcadedb_embedded
-# Missing features or import errors
-```
-
-**Solution:**
-
-Uninstall any old packages first (including `headless` or `minimal` variants if present):
-```bash
-pip uninstall -y arcadedb-embedded arcadedb-embedded-headless arcadedb-embedded-minimal
-```
-
-Then install the current package:
-```bash
-# Current package (includes bundled JRE)
-pip install arcadedb-embedded
-```
-
 ---
 
 ### JPype Installation Fails
