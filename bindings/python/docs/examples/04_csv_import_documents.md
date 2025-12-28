@@ -779,7 +779,7 @@ The `schema.json` file is the **authoritative source** for database structure. I
 
 - ✅ **15 buckets per type** - confirms multi-bucket architecture
 - ✅ **1 index per bucket per property** - explains why 6 CREATE INDEX commands create 90 index files
-- ✅ **3 index types**: LSM_TREE (general), FULL_TEXT (text), HNSW (vectors)
+- ✅ **3 index types**: LSM_TREE (general), FULL_TEXT (text), JVECTOR (vectors)
 - ✅ **Properties track type inference** - shows Java-inferred LONG/DOUBLE/STRING types
 
 ### Why So Many Files?
@@ -896,7 +896,7 @@ The database is **production-ready** after import - restart your application, re
 
 - [Example 01 - Simple Document Store](01_simple_document_store.md) - Document basics and CRUD
 - [Example 02 - Social Network Graph](02_social_network_graph.md) - Graph modeling with NULL handling
-- [Example 03 - Vector Search](03_vector_search.md) - Semantic similarity search (experimental)
+- [Example 03 - Vector Search](03_vector_search.md) - Semantic similarity search
 
 ---
 

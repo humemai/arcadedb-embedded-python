@@ -478,7 +478,7 @@ export ARCADEDB_JVM_ARGS="-Xms8g"
 
 Semantic similarity search with MovieLens data:
 - Generate embeddings from movie titles/genres
-- Build HNSW index for nearest-neighbor search
+- Build JVector index for nearest-neighbor search
 - Find similar movies using cosine distance
 - Combine vector similarity with rating data
 - Query: "Movies similar to X that users also liked"
