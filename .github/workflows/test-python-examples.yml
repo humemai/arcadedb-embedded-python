@@ -174,8 +174,11 @@ jobs:
             echo "⚠️  Skipping sentence-transformers on Windows ARM64 (PyTorch not available)"
             pip install numpy requests
           elif [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS: Default wheels are CPU/MPS (no CUDA)
             pip install "numpy<2.0" requests sentence-transformers
           else
+            # Linux & Windows x64: Install CPU-only PyTorch to save space (avoid CUDA)
+            pip install torch --index-url https://download.pytorch.org/whl/cpu
             pip install numpy requests sentence-transformers
           fi
 
