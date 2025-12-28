@@ -78,7 +78,7 @@ We add a semantic layer by generating embeddings for text content.
 - **Tag**: `TagName` → 384-dimensional vector.
 
 **Key Techniques:**
-- **JVector / HNSW**: Uses Hierarchical Navigable Small World graphs for fast approximate nearest neighbor search.
+- **JVector**: Uses state-of-the-art graph-based indexing (DiskANN/Vamana) for fast approximate nearest neighbor search.
 - **Sentence Transformers**: Uses `all-MiniLM-L6-v2` (or similar) to generate high-quality embeddings.
 
 ### Phase 4: Analytics (Multi-Model Queries)
@@ -96,8 +96,3 @@ We demonstrate the power of combining all three models.
 2.  **Filter Carefully**: When combining RID pagination with SQL filters, use **nested queries** to ensure you don't skip records due to sparse matches.
 3.  **Index Lookups**: For graph creation, always use **index lookups** (`lookupByKey`) to find vertices. It is orders of magnitude faster than SQL queries.
 4.  **Batching**: Always use batching (`BatchContext`) for imports and updates to minimize transaction overhead.
-
-## ⚠️ Known Issues
-
-- **Vector Persistence**: As of Dec 2025, there is a known upstream issue where HNSW vector indexes may rebuild on startup ([Issue #2915](https://github.com/ArcadeData/arcadedb/issues/2915)). Data is safe, but startup time may be slower.
-- **LSM Warnings**: You may see "Unknown component type" warnings for LSM indexes ([Issue #2917](https://github.com/ArcadeData/arcadedb/issues/2917)). These are cosmetic and can be ignored.
