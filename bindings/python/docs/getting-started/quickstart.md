@@ -282,7 +282,7 @@ Now that you've created your first database, explore more features:
 
 -   :material-vector-triangle:{ .lg .middle } [__Vector Search__](../guide/vectors.md)
 
-    Store and query embeddings with HNSW indexing
+    Store and query embeddings with vector indexing
 
 -   :material-graph:{ .lg .middle } [__Graph Operations__](../guide/graphs.md)
 
