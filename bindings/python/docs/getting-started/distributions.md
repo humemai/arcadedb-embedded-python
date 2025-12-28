@@ -6,15 +6,12 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 
 | Package | Wheel Size | Installed Size | Java Required | Studio UI | Query Languages |
 |---------|-----------|----------------|---------------|-----------|----------------|
-| **arcadedb-embedded** | 155-161MB | ~215-230MB | ❌ No | ✅ | SQL, Cypher, Gremlin, MongoDB |
+| **arcadedb-embedded** | ~215MB | ~289MB | ❌ No | ✅ | SQL, Cypher, Gremlin, MongoDB |
 
 **Installation:**
 
 ```bash
-# Temporarily install from GitHub Pages (awaiting PyPI size limit approval)
-pip install arcadedb-embedded \
-  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
-  --extra-index-url https://pypi.org/simple/
+pip install arcadedb-embedded
 ```
 
 **Requirements:** Python 3.8+ only - No Java installation needed!
@@ -23,11 +20,11 @@ pip install arcadedb-embedded \
 
 The package includes everything you need:
 
-- **ArcadeDB JARs** (167.4MB): Core database with all features
+- **ArcadeDB JARs** (226.0MB): Core database with all features
 - **Bundled JRE** (47-63MB): Platform-specific Java 21 runtime (via jlink)
 - **Python Package** (~5MB): Python wrapper and utilities
 
-**Total:** 155-161MB compressed wheel (varies by platform), ~215-230MB when installed
+**Total:** ~215MB compressed wheel (varies by platform), ~289MB when installed
 
 ## Platform Support
 
@@ -35,12 +32,12 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 
 | Platform | Wheel Size | JRE Size | Installed Size | Tests |
 |----------|-----------|----------|----------------|-------|
-| Windows ARM64 | 155.1M | 47.3M | ~215M | 205/205 ✅ |
-| macOS ARM64 (Apple Silicon) | 156.7M | 53.9M | ~221M | 205/205 ✅ |
-| macOS Intel (x86_64) | 157.8M | 55.3M | ~223M | 205/205 ✅ |
-| Windows x64 | 157.4M | 51.5M | ~219M | 205/205 ✅ |
-| Linux ARM64 | 159.9M | 61.8M | ~229M | 205/205 ✅ |
-| Linux x64 | 160.9M | 62.7M | ~230M | 205/205 ✅ |
+| Windows ARM64 | 209.4M | 47.6M | ~274M | 205/205 ✅ |
+| macOS ARM64 (Apple Silicon) | 210.8M | 53.9M | ~280M | 205/205 ✅ |
+| macOS Intel (x86_64) | 211.9M | 55.3M | ~281M | 205/205 ✅ |
+| Windows x64 | 211.6M | 51.6M | ~278M | 205/205 ✅ |
+| Linux ARM64 | 214.1M | 61.8M | ~288M | 205/205 ✅ |
+| Linux x64 | 215.0M | 62.7M | ~289M | 205/205 ✅ |
 
 **Key Features:**
 
