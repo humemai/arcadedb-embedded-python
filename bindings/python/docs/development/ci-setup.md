@@ -102,12 +102,12 @@ You need to create one environment in GitHub repository settings:
 After a successful release, you should see:
 
 - **6 wheel files** on PyPI for `arcadedb-embedded` (one per platform):
-  - linux/amd64: ~160.9MB wheel
-  - linux/arm64: ~159.9MB wheel
-  - darwin/amd64: ~157.8MB wheel
-  - darwin/arm64: ~156.7MB wheel
-  - windows/amd64: ~157.4MB wheel
-  - windows/arm64: ~155.1MB wheel
+  - linux/amd64: ~215MB wheel
+  - linux/arm64: ~215MB wheel
+  - darwin/amd64: ~215MB wheel
+  - darwin/arm64: ~215MB wheel
+  - windows/amd64: ~215MB wheel
+  - windows/arm64: ~215MB wheel
 
 ### Test Results (CI run #96)
 
@@ -115,16 +115,16 @@ All 6 platforms passing 205/205 tests:
 
 | Platform | Wheel Size | JRE Size | Tests |
 |----------|-----------|----------|-------|
-| linux/amd64 | 160.9M | 62.7M | 205/205 ✅ |
-| linux/arm64 | 159.9M | 61.8M | 205/205 ✅ |
-| darwin/amd64 | 157.8M | 55.3M | 205/205 ✅ |
-| darwin/arm64 | 156.7M | 53.9M | 205/205 ✅ |
-| windows/amd64 | 157.4M | 51.5M | 205/205 ✅ |
-| windows/arm64 | 155.1M | 47.3M | 205/205 ✅ |
+| linux/amd64 | ~215M | 62.7M | 205/205 ✅ |
+| linux/arm64 | ~215M | 61.8M | 205/205 ✅ |
+| darwin/amd64 | ~215M | 55.3M | 205/205 ✅ |
+| darwin/arm64 | ~215M | 53.9M | 205/205 ✅ |
+| windows/amd64 | ~215M | 51.5M | 205/205 ✅ |
+| windows/arm64 | ~215M | 47.3M | 205/205 ✅ |
 
 **All platforms include:**
 
-- 167.4M JARs (83 files, identical across platforms, gRPC excluded)
+- 226.0M JARs (83 files, identical across platforms, gRPC excluded)
 - Platform-specific JRE (47-63MB depending on platform)
 - Native runners (no QEMU emulation anywhere)
 
