@@ -78,7 +78,7 @@ class VectorIndex:
     It uses JVector (a graph index combining HNSW hierarchy with Vamana/DiskANN
     algorithms) which provides:
     - No max_items limit (grows dynamically)
-    - Faster index construction (typically 1000x faster than legacy HNSW)
+    - Faster index construction
     - Automatic indexing of existing records
     - Concurrent construction support
 
@@ -132,7 +132,6 @@ class VectorIndex:
         query_vector,
         k=10,
         overquery_factor=16,
-        use_numpy=True,
         allowed_rids=None,
     ):
         """
@@ -143,11 +142,12 @@ class VectorIndex:
             k: Number of nearest neighbors to return (final k)
             overquery_factor: Multiplier for search-time over-querying (implicit efSearch).
                               Default is 16, chosen based on benchmarks to ensure decent recall.
-            use_numpy: Return vectors as NumPy arrays if available
             allowed_rids: Optional list of RID strings (e.g. ["#1:0", "#2:5"]) to restrict search
 
         Returns:
-            List of tuples: [(vertex, score), ...]
+            List of tuples: [(record, score), ...]
+            - record: The matching ArcadeDB record (Vertex, Document, or Edge)
+            - score: The similarity score/distance
         """
         try:
             # Convert query vector to Java float array

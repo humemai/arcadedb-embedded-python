@@ -538,7 +538,7 @@ curl http://localhost:2480/api/v1/server
 
 **Symptom:**
 ```python
-index.add_vertex(vertex)
+vertex.save()
 # ArcadeDBError: Vector dimension mismatch
 ```
 
@@ -563,6 +563,28 @@ index = db.create_vector_index(
     vector_property="embedding",
     dimensions=384  # Must match!
 )
+```
+
+---
+
+### Slow First Query
+
+**Symptom:**
+The first vector search query takes significantly longer than subsequent queries.
+
+**Cause:**
+The vector index is built lazily. The first query triggers the actual construction of
+the index ("warm up").
+
+**Solution:**
+This is expected behavior. You can perform a "warm up" query during application startup
+if consistent query latency is required.
+
+```python
+# Warm up index on startup
+print("Warming up vector index...")
+index.find_nearest(np.zeros(384), k=1)
+print("Index ready")
 ```
 
 ---
@@ -593,16 +615,15 @@ index = db.create_vector_index(
 )
 ```
 
-2. **Tune HNSW parameters:**
+2. **Tune vector parameters:**
 ```python
 # Better recall, slower
 index = db.create_vector_index(
     vertex_type="Doc",
     vector_property="embedding",
     dimensions=384,
-    m=32,              # More connections
-    ef=256,            # Larger search candidates
-    ef_construction=256
+    max_connections=32,  # More connections
+    beam_width=256       # Larger search candidates
 )
 ```
 

@@ -179,6 +179,16 @@ jobs:
             pip install numpy requests sentence-transformers
           fi
 
+      - name: Download datasets
+        shell: bash
+        run: |
+          pip install tqdm py7zr lxml
+          cd bindings/python/examples
+          echo "📥 Downloading MovieLens Small dataset..."
+          python3 download_data.py movielens-small
+          echo "📥 Downloading Stack Overflow Small dataset..."
+          python3 download_data.py stackoverflow-small
+
       - name: Install timeout command (macOS only)
         if: matrix.platform == 'darwin/amd64' || matrix.platform == 'darwin/arm64'
         shell: bash
@@ -215,8 +225,8 @@ jobs:
           results_file="example-results.txt"
           > $results_file
 
-          # Find all Python example files (exclude download_data.py as it's a utility)
-          examples=$(ls [0-9]*.py 2>/dev/null | sort)
+          # Find all Python example files (exclude download_data.py and 08_server_mode_rest_api.py)
+          examples=$(ls [0-9]*.py 2>/dev/null | grep -v "08_server_mode_rest_api.py" | sort)
 
           if [ -z "$examples" ]; then
             echo "❌ No example files found!"
@@ -248,19 +258,24 @@ jobs:
             # Set example-specific parameters and timeout
             case "$example" in
               "04_csv_import_documents.py")
-                example_args="--dataset movielens-small --parallel 4 --batch-size 5000 --export"
+                example_args="--dataset movielens-small --export"
                 example_name="$example (movielens-small dataset with export)"
                 timeout_duration=900  # 15 minutes
                 ;;
               "05_csv_import_graph.py")
-                example_args="--dataset movielens-small --parallel 1 --no-async --export --import-jsonl ./exports/movielens_small_db.jsonl.tgz"
-                example_name="$example (movielens-small dataset, sync mode, import from JSONL)"
+                example_args="--dataset movielens-small --method java --import-jsonl ./exports/movielens_small_db.jsonl.tgz --export"
+                example_name="$example (movielens-small dataset, embedded java method, import/export)"
                 timeout_duration=900  # 15 minutes
                 ;;
               "06_vector_search_recommendations.py")
-                example_args="--source-db my_test_databases/movielens_graph_small_db --db-path my_test_databases/movielens_graph_small_db_vectors --import-jsonl exports/movielens_graph_small_db.jsonl.tgz"
+                example_args="--import-jsonl ./exports/movielens_graph_small_db.jsonl.tgz"
                 example_name="$example (vector search, import from JSONL)"
                 timeout_duration=900  # 15 minutes
+                ;;
+              "07_stackoverflow_multimodel.py")
+                example_args="--dataset stackoverflow-small"
+                example_name="$example (stackoverflow-small dataset)"
+                timeout_duration=1800  # 30 minutes
                 ;;
               *)
                 example_args=""
@@ -368,12 +383,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **01_simple_document_store.py** - Document CRUD operations with comprehensive data types" >> $GITHUB_STEP_SUMMARY
           echo "- **02_social_network_graph.py** - Graph modeling with vertices, edges, and traversal" >> $GITHUB_STEP_SUMMARY
-          echo "- **03_vector_search.py** - Vector embeddings and semantic similarity search (experimental)" >> $GITHUB_STEP_SUMMARY
+          echo "- **03_vector_search.py** - Vector embeddings and semantic similarity search" >> $GITHUB_STEP_SUMMARY
           echo "- **04_csv_import_documents.py** - CSV import with automatic dataset download and type inference" >> $GITHUB_STEP_SUMMARY
           echo "  - Tested with \`--dataset movielens-small --parallel 4 --batch-size 5000 --export\`" >> $GITHUB_STEP_SUMMARY
           echo "- **05_csv_import_graph.py** - Graph creation from document store with benchmarking" >> $GITHUB_STEP_SUMMARY
           echo "  - Tested with \`--dataset movielens-small --parallel 1 --no-async --export --import-jsonl\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **06_vector_search_recommendations.py** - HNSW vector indexing for movie recommendations" >> $GITHUB_STEP_SUMMARY
+          echo "- **06_vector_search_recommendations.py** - JVector vector indexing for movie recommendations" >> $GITHUB_STEP_SUMMARY
           echo "  - Tested with \`--import-jsonl exports/movielens_graph_small_db.jsonl.tgz\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 

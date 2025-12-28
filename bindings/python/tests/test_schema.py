@@ -508,7 +508,7 @@ class TestVectorIndexSchemaOps:
         assert result is None
 
     def test_list_vector_indexes_empty(self, test_db):
-        """Test list_vector_indexes returns empty list when no HNSW indexes exist."""
+        """Test list_vector_indexes returns empty list when no vector indexes exist."""
         schema = test_db.schema
 
         # Create some regular indexes
@@ -520,68 +520,6 @@ class TestVectorIndexSchemaOps:
         assert isinstance(vector_indexes, list)
         assert len(vector_indexes) == 0
 
-    def test_list_vector_indexes_with_hnsw(self, test_db):
-        """Test list_vector_indexes returns HNSW index names."""
-        schema = test_db.schema
-
-        # Create vertex type with vector property
-        schema.create_vertex_type("Document")
-        schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
-
-        # Create HNSW vector index
-        with test_db.transaction():
-            test_db.create_legacy_vector_index(
-                vertex_type="Document",
-                vector_property="embedding",
-                dimensions=4,
-                max_items=100,
-                id_property="vector_id",
-                distance_function="cosine",
-            )
-
-        # List vector indexes
-        vector_indexes = schema.list_vector_indexes()
-        assert isinstance(vector_indexes, list)
-        assert len(vector_indexes) == 1
-
-        # Index name should contain Document_embedding
-        index_name = vector_indexes[0]
-        assert "Document" in index_name
-        assert "embedding" in index_name
-
-    def test_get_vector_index_existing(self, test_db):
-        """Test get_vector_index retrieves an existing HNSW index."""
-        # Try to use NumPy if available
-        try:
-            import numpy as np  # noqa: F401
-        except ImportError:
-            pytest.skip("NumPy not available for vector index test")
-
-        schema = test_db.schema
-
-        # Create vertex type and vector index
-        schema.create_vertex_type("Article")
-        schema.create_property("Article", "embedding", "ARRAY_OF_FLOATS")
-
-        with test_db.transaction():
-            test_db.create_legacy_vector_index(
-                vertex_type="Article",
-                vector_property="embedding",
-                dimensions=8,
-                max_items=50,
-                id_property="vector_id",
-                distance_function="euclidean",
-            )
-
-        # Retrieve the index using schema method
-        retrieved_index = schema.get_vector_index(
-            vertex_type="Article", vector_property="embedding", id_property="vector_id"
-        )
-
-        assert retrieved_index is not None
-        # VectorIndex wrapper should have the underlying Java index
-        assert hasattr(retrieved_index, "_java_index")
-
     def test_get_vector_index_non_existent(self, test_db):
         """Test get_vector_index returns None for non-existent index."""
         schema = test_db.schema
@@ -592,64 +530,26 @@ class TestVectorIndexSchemaOps:
 
         # Try to get non-existent index
         result = schema.get_vector_index(
-            vertex_type="NoIndex", vector_property="embedding", id_property="vector_id"
+            vertex_type="NoIndex", vector_property="embedding"
         )
 
         assert result is None
 
     def test_get_vector_index_wrong_type(self, test_db):
-        """Test get_vector_index returns None for non-HNSW index."""
+        """Test get_vector_index returns None for non-vector index."""
         schema = test_db.schema
 
-        # Create regular index (not HNSW)
+        # Create regular index (not vector)
         schema.create_vertex_type("RegularIndex")
         schema.create_property("RegularIndex", "name", PropertyType.STRING)
         schema.create_index("RegularIndex", ["name"])
 
         # Try to get it as vector index (should return None)
         result = schema.get_vector_index(
-            vertex_type="RegularIndex", vector_property="name", id_property="id"
+            vertex_type="RegularIndex", vector_property="name"
         )
 
         assert result is None
-
-    def test_get_vector_index_persistence(self, test_db):
-        """Test that get_vector_index can load persisted HNSW indexes."""
-        schema = test_db.schema
-
-        # Create and populate vector index
-        schema.create_vertex_type("Embedding")
-        schema.create_property("Embedding", "vector", "ARRAY_OF_FLOATS")
-        schema.create_property("Embedding", "vector_id", PropertyType.STRING)
-
-        # Create index outside transaction
-        index = test_db.create_legacy_vector_index(
-            vertex_type="Embedding",
-            vector_property="vector",
-            dimensions=4,
-            max_items=100,
-            id_property="vector_id",
-            distance_function="cosine",
-        )
-
-        with test_db.transaction():
-            # Add a vertex to the index
-            vertex = test_db._java_db.newVertex("Embedding")
-            vector = [0.1, 0.2, 0.3, 0.4]
-            import arcadedb_embedded as arcadedb
-
-            vertex.set("vector", arcadedb.to_java_float_array(vector))
-            vertex.set("vector_id", "test_vector_1")  # Set the ID property
-            vertex.save()
-            # Add to index immediately within the same transaction
-            index.add_vertex(vertex)
-            # Workaround: force save to persist entryPoint
-            index._java_index.save()
-
-        # Verify we can search the index
-        query_vector = [0.1, 0.2, 0.3, 0.4]
-        results = index.find_nearest(query_vector, k=1)
-        assert len(results) == 1
 
 
 class TestIntegration:
@@ -751,11 +651,6 @@ class TestLSMVectorIndexSchemaOps:
         from arcadedb_embedded.vector import VectorIndex
 
         assert isinstance(index, VectorIndex)
-
-        # Retrieve using explicit type
-        index_lsm = schema.get_vector_index("Doc", "embedding", index_type="lsm")
-        assert index_lsm is not None
-        assert isinstance(index_lsm, VectorIndex)
 
     def test_get_lsm_vector_index_persistence(self, test_db):
         """Test that get_vector_index can load persisted LSM indexes."""

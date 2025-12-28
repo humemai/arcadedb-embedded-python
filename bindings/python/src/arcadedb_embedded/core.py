@@ -193,20 +193,18 @@ class Database:
         quantization: str = None,
     ) -> "VectorIndex":
         """
-        Create a vector index for similarity search (default JVector implementation).
+        Create a vector index for similarity search (JVector implementation).
 
         This uses JVector (graph index combining HNSW hierarchy with Vamana/DiskANN)
-        which is more efficient than the legacy HNSW implementation:
+        which provides:
         - No max_items limit (grows dynamically)
-        - Typically 1000x faster index construction
+        - Fast index construction
         - Automatic indexing of existing records
         - Concurrent construction support
 
         Default parameters (max_connections=32, beam_width=256) were chosen based on
         benchmarks on the GloVe-100-Angular dataset to achieve at least 0.85 recall
         with decent build and search time.
-
-        For the legacy HNSW implementation, use create_legacy_vector_index().
 
         Args:
             vertex_type: Name of the vertex type
