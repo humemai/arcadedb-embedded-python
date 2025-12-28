@@ -8,7 +8,7 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
     - **Current package**: ✅ 204 passed, 0 skipped
     - All features available (SQL, Cypher, Gremlin, Studio UI, Vector search)
 
-    **Total: 204 tests** across 6 test files, 100% passing
+    **Total: 204 tests + 7 examples** across all platforms, 100% passing
 
 ## What's Tested
 
