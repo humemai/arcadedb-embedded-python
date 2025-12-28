@@ -8,7 +8,7 @@
 
     Native Python bindings for ArcadeDB with full test coverage
 
-    **Status**: ✅ Production Ready | **Tests**: 205/205 Passing (100%)
+    **Status**: ✅ Production Ready | **Tests**: 204 Passing
 
 -   :fontawesome-brands-python:{ .lg .middle } __Pure Python API__
 
@@ -69,7 +69,7 @@ Both APIs can be used __simultaneously__ on the same server instance.
 
 ## Additional Features
 
-- __Multiple Query Languages__: SQL, Cypher, Gremlin (full distribution), MongoDB syntax
+- __Multiple Query Languages__: SQL, Cypher, Gremlin, MongoDB syntax
 - __ACID Transactions__: Full transactional guarantees
 - __Type Safety__: Pythonic API with proper error handling
 
@@ -80,7 +80,7 @@ Both APIs can be used __simultaneously__ on the same server instance.
 !!! success "Core Features"
     - 🚀 **Embedded Mode** - Direct database access in Python process
     - 🌐 **Server Mode** - Optional HTTP server with Studio UI
-    - 📦 **Self-contained** - All JARs bundled, just needs JRE
+    - 📦 **Self-contained** - All JARs and JRE bundled
     - 🔄 **Multi-model** - Graph, Document, Key/Value, Vector
     - 🔍 **Multiple languages** - SQL, Cypher, Gremlin, MongoDB
 
@@ -128,7 +128,7 @@ These bindings provide **~85% coverage** of ArcadeDB's Java API, focusing on fea
 | Vector Search | ✅ 100% | JVector indexing, similarity search |
 | Data Import | ✅ 100% | CSV, JSON, Neo4j |
 | Graph API | ⚠️ 60% | Basic graph operations (Python-relevant subset) |
-| Gremlin | ⚠️ 70% | Query execution (full dist only) |
+| Gremlin | ⚠️ 70% | Query execution |
 
 See [Java API Coverage](java-api-coverage.md) for detailed comparison.
 
@@ -138,9 +138,9 @@ We provide a **single, self-contained package** that works on all major platform
 
 | Platform | Package Name | Size | What's Included |
 |----------|-------------|------|-----------------|
-| **All Platforms** | `arcadedb-embedded` | ~215MB | Full ArcadeDB + Bundled JRE + Studio UI + Gremlin |
+| **All Platforms** | `arcadedb-embedded` | ~209-215MB | Full ArcadeDB + Bundled JRE + Studio UI + Gremlin |
 
-All distributions use the same import:
+The package uses the standard import:
 
 ```python
 import arcadedb_embedded as arcadedb
@@ -156,7 +156,7 @@ import arcadedb_embedded as arcadedb
 
 -   :material-download:{ .lg .middle } [__Install__](getting-started/installation.md)
 
-    Installation instructions for all three distributions
+    Installation instructions
 
 -   :material-run-fast:{ .lg .middle } [__Quick Start__](getting-started/quickstart.md)
 
