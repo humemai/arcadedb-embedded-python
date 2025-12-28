@@ -19,7 +19,7 @@ The test suite covers:
 - ✅ **Concurrency patterns** - File locking, thread safety, multi-process
 - ✅ **Graph operations** - Vertices, edges, traversals
 - ✅ **Query languages** - SQL, Cypher, Gremlin
-- ✅ **Vector search** - HNSW indexes, similarity search
+- ✅ **Vector search** - JVector-based Vector indexes, similarity search
 - ✅ **Data import** - CSV, JSON, Neo4j exports
 - ✅ **Unicode support** - International characters, emoji
 - ✅ **Schema introspection** - Querying database metadata
