@@ -6,7 +6,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 
 | Package | Wheel Size | Installed Size | Java Required | Studio UI | Query Languages |
 |---------|-----------|----------------|---------------|-----------|----------------|
-| **arcadedb-embedded** | ~215MB | ~289MB | ❌ No | ✅ | SQL, Cypher, Gremlin, MongoDB |
+| **arcadedb-embedded** | ~209-215MB | ~274-289MB | ❌ No | ✅ | SQL, Cypher, Gremlin, MongoDB |
 
 **Installation:**
 
@@ -24,7 +24,7 @@ The package includes everything you need:
 - **Bundled JRE** (47-63MB): Platform-specific Java 21 runtime (via jlink)
 - **Python Package** (~5MB): Python wrapper and utilities
 
-**Total:** ~215MB compressed wheel (varies by platform), ~289MB when installed
+**Total:** ~209-215MB compressed wheel (varies by platform), ~274-289MB when installed
 
 ## Platform Support
 
@@ -32,19 +32,19 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 
 | Platform | Wheel Size | JRE Size | Installed Size | Tests |
 |----------|-----------|----------|----------------|-------|
-| Windows ARM64 | 209.4M | 47.6M | ~274M | 205/205 ✅ |
-| macOS ARM64 (Apple Silicon) | 210.8M | 53.9M | ~280M | 205/205 ✅ |
-| macOS Intel (x86_64) | 211.9M | 55.3M | ~281M | 205/205 ✅ |
-| Windows x64 | 211.6M | 51.6M | ~278M | 205/205 ✅ |
-| Linux ARM64 | 214.1M | 61.8M | ~288M | 205/205 ✅ |
-| Linux x64 | 215.0M | 62.7M | ~289M | 205/205 ✅ |
+| Windows ARM64 | 209.4M | 47.6M | ~274M | 204 passed ✅ |
+| macOS ARM64 (Apple Silicon) | 210.8M | 53.9M | ~280M | 204 passed ✅ |
+| macOS Intel (x86_64) | 211.9M | 55.3M | ~281M | 204 passed ✅ |
+| Windows x64 | 211.6M | 51.6M | ~278M | 204 passed ✅ |
+| Linux ARM64 | 214.1M | 61.8M | ~288M | 204 passed ✅ |
+| Linux x64 | 215.0M | 62.7M | ~289M | 204 passed ✅ |
 
 **Key Features:**
 
 - ✅ All platforms use **platform-specific wheels** (not universal)
 - ✅ pip automatically selects the correct wheel for your system
 - ✅ Each platform has its own bundled JRE optimized for that architecture
-- ✅ All 6 platforms tested and verified (205/205 tests passing)
+- ✅ All 6 platforms tested and verified (204/204 tests passing)
 - ✅ Built on native runners (no emulation) for optimal performance
 
 ## What's Included
@@ -68,7 +68,7 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 
 ## Test Results
 
-**205 out of 205 tests pass** on all platforms (100% success rate):
+**204 out of 204 tests pass** on all platforms (100% success rate):
 
 - ✅ All core database operations
 - ✅ SQL, Cypher, and Gremlin queries
@@ -134,7 +134,7 @@ Total package size varies by platform: **155-161MB wheel, ~215-230MB installed**
 
 - JRE binaries differ by platform (different native code)
 - ARM platforms tend to have slightly smaller JREs
-- All platforms use the same JAR files (167.4MB)
+- All platforms use the same JAR files (226.0MB)
 
 **Optimizations:**
 

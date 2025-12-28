@@ -6,14 +6,9 @@ The `test_gremlin.py` file contains **1 test** validating Gremlin query language
 
 ## Overview
 
-!!! warning "Full Distribution Only"
-    Gremlin support requires the **full** distribution of ArcadeDB Python bindings.
-
-    ```bash
-    pip install arcadedb-embedded  # Full distribution
-    ```
-
-    This test is **skipped** in headless and minimal distributions.
+```bash
+pip install arcadedb-embedded
+```
 
 ## What is Gremlin?
 
@@ -98,7 +93,7 @@ assert 'Bob' not in names  # age 25
 ## Running This Test
 
 ```bash
-# Run Gremlin test (requires full distribution)
+# Run Gremlin test
 pytest tests/test_gremlin.py -v
 
 # Will be skipped if Gremlin not available
@@ -160,16 +155,3 @@ g.V().has('name', 'Alice').out('Knows').values('name')
 - [Graph Operations Guide](../../guide/graphs.md)
 - [ArcadeDB Gremlin Docs](https://docs.arcadedb.com/#Gremlin-API)
 - [Apache TinkerPop Docs](https://tinkerpop.apache.org/docs/current/)
-
-## Distribution Requirements
-
-```bash
-# Headless - ❌ No Gremlin
-pip install arcadedb-embedded-headless
-
-# Minimal - ❌ No Gremlin
-pip install arcadedb-embedded-minimal
-
-# Full - ✅ Includes Gremlin
-pip install arcadedb-embedded
-```
