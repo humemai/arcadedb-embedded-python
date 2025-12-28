@@ -65,7 +65,7 @@ Instead of pushing tags manually, create a GitHub Release which automatically cr
 
    ## Test Results
 
-   - All tests passed: 205/205 passed
+   - All tests passed: 204 passed
    ```
 
 6. Click **Publish release** (or **Save as draft** to test first)
@@ -95,7 +95,7 @@ gh release create vX.Y.Z-python \
 ## Installation
 
 ```bash
-pip install arcadedb-embedded-headless
+pip install arcadedb-embedded
 ```
 
 ## Documentation
@@ -104,14 +104,12 @@ https://humemai.github.io/arcadedb-embedded-python/
 
 ## Test Results
 
-- Headless: 36/205 passed
-- Minimal: 40/205 passed
-- Full: 205/205 passed
+- 204 passed
 
 **What happens automatically:**
 
 - ✅ Git tag `vX.Y.Z-python` is created (annotated tag)
-- ✅ PyPI workflow builds and uploads all 3 distributions
+- ✅ PyPI workflow builds and uploads the distribution
 - ✅ Docs workflow deploys versioned documentation
 
 ### 3. Monitor GitHub Actions
@@ -323,7 +321,7 @@ If you need to roll back a broken release:
 pip install twine
 
 # Yank the release (makes it unavailable for new installs)
-twine yank arcadedb-embedded-headless 25.9.1
+twine yank arcadedb-embedded 25.9.1
 ```
 
 **Documentation** (can delete version):
@@ -354,7 +352,7 @@ mike set-default 25.9.0 --push
 
 **Size limit exceeded:**
 
-- Full distribution might hit PyPI limits (~158 MB)
+- Distribution might hit PyPI limits (~215 MB)
 - Request size increase: <https://pypi.org/help/#file-size-limit>
 - Or distribute via GitHub releases only
 
