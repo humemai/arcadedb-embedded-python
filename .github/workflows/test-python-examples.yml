@@ -237,6 +237,16 @@ jobs:
             python3 download_data.py stackoverflow-small
           fi
 
+      - name: Download datasets
+        shell: bash
+        run: |
+          pip install tqdm py7zr lxml
+          cd bindings/python/examples
+          echo "📥 Downloading MovieLens Small dataset..."
+          python3 download_data.py movielens-small
+          echo "📥 Downloading Stack Overflow Small dataset..."
+          python3 download_data.py stackoverflow-small
+
       - name: Install timeout command (macOS only)
         if: matrix.platform == 'darwin/amd64' || matrix.platform == 'darwin/arm64'
         shell: bash
