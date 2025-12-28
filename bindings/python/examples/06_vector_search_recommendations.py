@@ -111,8 +111,10 @@ def import_from_jsonl(jsonl_path, db_path):
     with arcadedb.create_database(str(db_path)) as db:
         # Import using SQL IMPORT DATABASE command
         abs_path = Path(jsonl_path).resolve()
-        print(f"Importing from {abs_path}...")
-        db.command("sql", f"IMPORT DATABASE file://{abs_path}")
+        # Convert Windows backslashes to forward slashes for SQL URI
+        import_path = str(abs_path).replace("\\", "/")
+        print(f"Importing from {import_path}...")
+        db.command("sql", f"IMPORT DATABASE file://{import_path}")
 
     return time.time() - start_time
 
