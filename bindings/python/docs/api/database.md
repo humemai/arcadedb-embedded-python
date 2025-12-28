@@ -386,12 +386,14 @@ db.create_vector_index(
     vector_property: str,
     dimensions: int,
     distance_function: str = "cosine",
-    max_connections: int = 16,
-    beam_width: int = 200
+    max_connections: int = 32,
+    beam_width: int = 256
 ) -> VectorIndex
 ```
 
 Create a vector index for similarity search (default JVector implementation).
+
+**Note:** The index is built lazily. Construction happens upon the first query, not at creation time.
 
 **Parameters:**
 
@@ -427,7 +429,6 @@ with db.transaction():
         vertex.set("id", f"doc_{i}")
         vertex.set("embedding", arcadedb.to_java_float_array(embedding))
         vertex.save()
-        index.add_vertex(vertex)
 
 # Search
 query_vector = np.random.rand(384)
@@ -698,6 +699,6 @@ else:
 ## See Also
 
 - [Graph Operations](../guide/graphs.md): Working with vertices and edges
-- [Vector Search](../guide/vectors.md): Similarity search with HNSW indexes
+- [Vector Search](../guide/vectors.md): Similarity search with JVector indexes
 - [Server Mode](../guide/server.md): HTTP API and Studio UI
 - [Quick Start](../getting-started/quickstart.md): Getting started guide
