@@ -13,7 +13,8 @@ Foundation example covering document types, CRUD operations, comprehensive data 
 Complete graph modeling with vertices, edges, NULL handling, and dual query languages (SQL MATCH vs Cypher). Demonstrates 8 people with optional fields, 24 bidirectional edges, graph traversal, and comprehensive queries.
 
 **[03 - Vector Search](03_vector_search.md)** ✅
-Semantic similarity search with HNSW indexing. Demonstrates vector storage, index creation, and nearest neighbor search.
+Semantic similarity search with JVector indexing. Demonstrates vector storage, index
+creation, and nearest neighbor search.
 
 **[04 - CSV Import - Documents](04_csv_import_documents.md)** ✅
 Production CSV import with automatic type inference by Java, NULL handling, and index optimization. Imports MovieLens dataset (36M+ records) with comprehensive performance analysis and result validation with actual data samples.
@@ -22,7 +23,7 @@ Production CSV import with automatic type inference by Java, NULL handling, and 
 Production graph creation from MovieLens dataset. Comprehensive performance analysis comparing Java API vs SQL, synchronous vs async, with/without indexes. 6 benchmark configurations, 10 validation queries, export/import roundtrip testing. Learn when to use Java API (bulk operations: 5,071 edges/sec) vs SQL (complex queries).
 
 **[06 - Vector Search - Movie Recommendations](06_vector_search_recommendations.md)** ✅
-Production-ready vector embeddings and HNSW indexing for semantic movie search. Compare 4 recommendation methods: graph-based collaborative filtering (full/sampled) vs vector similarity (2 models). Graph-based fast mode provides 150-300× speedup (0.2s vs 40-60s). Vector methods are fastest (0.01-0.04s) with no cold start problem.
+Production-ready vector embeddings and JVector indexing for semantic movie search.
 
 **[07 - Multi-Model: Stack Overflow Q&A](07_stackoverflow_multimodel.md)** ✅
 Documents (questions/answers), graph (user relationships, tags), and vectors (duplicate detection) in one comprehensive system. Demonstrates all three models working together with rich Stack Exchange dataset. Features RID-based pagination patterns and index-based vertex lookups for high performance.

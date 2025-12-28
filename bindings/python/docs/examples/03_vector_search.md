@@ -1,53 +1,36 @@
 # Vector Search - Semantic Similarity
 
-**⚠️ EXPERIMENTAL FEATURE**: Vector search in ArcadeDB is under active development. This example demonstrates the API and concepts, but is not recommended for production use until the implementation stabilizes.
-
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/examples/03_vector_search.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/examples/03_vector_search.py)
 
 ## Overview
 
-This example demonstrates semantic similarity search using vector embeddings and HNSW (Hierarchical Navigable Small World) indexing. It covers:
+This example demonstrates semantic similarity search using vector embeddings and JVector
+indexing. It covers:
 
 - Storing 384-dimensional vector embeddings (mimicking sentence-transformers)
-- Creating and populating HNSW indexes
+- Creating and populating JVector indexes
 - Performing nearest-neighbor searches
 - Understanding indexing performance and architecture
 - Best practices for filtering and production deployment
 
 ## Implementation Status
 
-### Current: jelmerk/hnswlib
+### Current: JVector
 
-ArcadeDB currently uses [jelmerk/hnswlib](https://github.com/jelmerk/hnswlib), a Java port of the original C++ HNSW implementation.
+ArcadeDB uses [JVector](https://github.com/datastax/jvector), a state-of-the-art vector search engine.
 
 **Characteristics:**
-- ✅ Mature, proven algorithm
-- ✅ Supports multiple distance functions (cosine, euclidean, inner product)
-- ⚠️ Java port has performance overhead vs native implementations
-- ⚠️ Limited to single-threaded indexing
-- ⚠️ Memory management through JVM
-
-### Future: datastax/jvector
-
-The ArcadeDB team is planning migration to [datastax/jvector](https://github.com/datastax/jvector), a modern Java-native vector search library.
-
-**Expected improvements:**
-- 🚀 Better performance (native Java, no port overhead)
-- 🚀 Multi-threaded indexing support
-- 🚀 More efficient memory usage
-- 🚀 Better integration with Java ecosystems
-- 🚀 Active development and enterprise support
-
-**Timeline:** Pending upstream ArcadeDB Java implementation changes.
-
-!!! warning "Python Bindings Impact"
-    The Python bindings are thin wrappers around Java APIs. When ArcadeDB migrates to jvector, the Python API will remain the same, but you'll automatically benefit from improved performance.
+- ✅ **High Performance**: Native Java implementation with efficient graph traversal.
+- ✅ **Disk-Based**: Uses DiskANN-inspired graph structure to minimize RAM usage.
+- ✅ **Multi-Threaded**: Supports concurrent indexing and search.
+- ✅ **Flexible**: Supports multiple distance functions (Cosine, Euclidean, Dot Product).
+- ✅ **Quantization Support**: Experimental support for INT8 and Binary quantization.
 
 ## Key Concepts
 
 ### Vector Embeddings
 
-Vector embeddings represent text, images, or other data as points in high-dimensional space:
+Vector embeddings represent text, images, or other data as points in high-dimensional space.
 
 ```python
 # Example with sentence-transformers
@@ -63,9 +46,9 @@ embedding = model.encode("This is a sample document")
 - **768D**: sentence-transformers/all-mpnet-base-v2 (higher quality)
 - **1536D**: OpenAI text-embedding-3-small (best quality, paid)
 
-### HNSW Index
+### JVector Index
 
-Hierarchical Navigable Small World graphs enable fast approximate nearest-neighbor search:
+JVector uses a graph-based index (HNSW + DiskANN) to enable fast approximate nearest-neighbor search.
 
 ```python
 index = db.create_vector_index(
@@ -80,230 +63,118 @@ index = db.create_vector_index(
 
 **Parameters explained:**
 
-- **dimensions**: Must match your embedding model
+- **dimensions**: Must match your embedding model.
 - **distance_function**:
-  - `cosine`: Best for normalized vectors (text embeddings)
-  - `euclidean`: Straight-line distance (image features)
-  - `inner_product`: Dot product (when magnitude matters)
-- **max_connections**: Connections per node (32 default, 16-64 range)
-  - Higher = better accuracy, more memory
-  - 32 is good balance for most use cases
-- **beam_width**: Search beam width (256 default, 100-400 range)
-  - Higher = better recall, slower search
-
-### Distance vs Similarity
-
-**Cosine Distance** (used in this example):
-- Formula: `distance = 1 - cosine_similarity`
-- Range: [0, 2]
-  - 0 = identical vectors (same direction)
-  - 1 = orthogonal vectors (unrelated)
-  - 2 = opposite vectors (negation)
-- Best for normalized vectors where direction matters
-
-**Cosine Similarity** (for reference):
-- Formula: `similarity = dot(a, b) / (norm(a) * norm(b))`
-- Range: [-1, 1]
-  - 1 = identical
-  - 0 = orthogonal
-  - -1 = opposite
+  - `cosine`: Best for normalized vectors (text embeddings).
+  - `euclidean`: Straight-line distance (image features).
+  - `inner_product`: Dot product (when magnitude matters).
+- **max_connections**: Connections per node (default: 32). Higher = better accuracy, more memory.
+- **beam_width**: Search beam width (default: 256). Higher = better recall, slower search.
 
 ## Architecture & Performance
 
+### Lazy Index Building
+
+The vector index is built lazily. The actual construction of the index happens when the
+first query is executed, not when the index is created or when data is added. This means
+the first search query might take longer than subsequent queries as it triggers the
+index build process ("warm up").
+
 ### Index Structure
 
-When you create and populate a vector index, ArcadeDB stores:
+When you create and populate a vector index, ArcadeDB stores the graph and metadata in specific files.
 
-**Files created** (for 10K documents, 384D, M=32):
+**Files created** (for 10K documents, 384D, max_connections=32):
 ```
-Article_414002873519545.5.v0.hnswidx         4 KB   (metadata only)
-Article_0.1.65536.v0.bucket                 24 MB   (vertices + embeddings)
-Article_0_in_edges.3.65536.v0.bucket        22 MB   (incoming edges)
-Article_0_out_edges.2.65536.v0.bucket       22 MB   (outgoing edges)
-VectorProximity0_0.7.65536.v0.bucket        90 MB   (HNSW proximity edges)
+Article_...v1.umtidx                        256 KB   (updatable memory table index)
+Article_...v0.lsmvecidx                     256 KB   (LSM index metadata)
+Article_...v0.vecgraph                       16 MB   (vector graph structure)
+Article_0.1.65536.v0.bucket                  23 MB   (vertices + embeddings)
+Article_0_in_edges...bucket                   0 B    (unused)
+Article_0_out_edges...bucket                  0 B    (unused)
 ─────────────────────────────────────────────────
-Total:                                     160 MB
+Total:                                      ~40 MB
 ```
 
-**Key insight**: The `.hnswidx` file is tiny (4KB) - it only stores metadata. The actual HNSW graph is stored as edges in the database!
+**Key insight**: The vector graph is stored in a dedicated `.vecgraph` file (16MB), separate from the standard graph edges. The vertices and embeddings are stored in the standard bucket (23MB). The `.umtidx` and `.lsmvecidx` files store metadata and in-memory structures.
 
 ### Indexing Performance
 
 **Batch indexing** (10,000 documents):
-- Total time: ~130 seconds
-- Per document: ~13ms
-- What happens:
-  1. HNSW algorithm runs in RAM (graph construction)
-  2. Each document connects to M≈16 neighbors
-  3. Bidirectional edges created (~32 edge writes per doc)
-  4. Transaction commits write to disk (~9KB edges per doc)
+- **Total time**: ~15 seconds (including database creation and insertion)
+- **Per document**: ~1.5ms
+- **Peak Memory**: ~1.34 GB (Total process memory including JVM overhead and Python runtime)
 
-**Why it's expensive:**
-- Complex graph operations (finding best insertion point)
-- Distance calculations at each level
-- Writing edges to disk (bulk of the time)
-- Sequential processing (single-threaded in current implementation)
+**What happens:**
+1.  JVector algorithm runs in RAM and storage (graph construction).
+2.  Each document connects to `max_connections` neighbors.
+3.  Graph structure is updated in the `.vecgraph` file.
+4.  Transaction commits write to disk.
 
 ### Search Performance
 
 **Query characteristics** (k=5 nearest neighbors):
-- Visited vertices: ~log(N) × ef ≈ 1,500-2,000 (not all 10,000!)
-- HNSW navigates intelligently through graph
-- Vertices loaded on-demand from disk
-- Hot vertices cached by ArcadeDB's page cache
-
-**Memory during search:**
-- Query vector: ~1.5 KB (384 floats)
-- Visited vertices: ~4 MB working set
-- Page cache: Varies (hot data stays in RAM)
-- Total: Scales logarithmically, not linearly with dataset size
+- **Speed**: Logarithmic time complexity (does not scan all documents).
+- **Memory**: Working set scales with `beam_width` and `max_connections`, not dataset size.
+- **Caching**: Hot vertices are cached by ArcadeDB's page cache.
 
 ## Production Best Practices
 
-### 1. Incremental Indexing (Recommended)
+### 1. Incremental Indexing
 
-**❌ Don't do this** (batch re-indexing):
+ArcadeDB's LSM (Log-Structured Merge) tree architecture handles indexing automatically.
+
+**✅ Recommended Approach**:
 ```python
-# Bad: Index after inserting all documents
+# Index is updated automatically as you insert
 with db.transaction():
     for doc in documents:
         vertex = db.new_vertex("Article")
         vertex.set("embedding", embedding)
         vertex.save()
-
-# Batch indexing (slow, expensive)
-result = db.query("sql", "SELECT FROM Article")
-with db.transaction():
-    for record in result:
-        index.add_vertex(record.asVertex())  # 130s for 10K docs!
+        # No manual index.add_vertex() needed!
 ```
-
-**✅ Do this instead** (incremental indexing):
-```python
-# Good: Index during insertion
-with db.transaction():
-    for doc in documents:
-        vertex = db.new_vertex("Article")
-        vertex.set("embedding", embedding)
-        vertex.save()
-
-        # Index immediately
-        index.add_vertex(vertex)  # Only pays cost once
-```
-
-**Why it's better:**
-- Pay indexing cost only once per document
-- No separate batch indexing step
-- Natural for incremental data ingestion
-- Simpler code
 
 ### 2. Filtering Strategies
 
-Vector databases face a fundamental challenge: **HNSW doesn't support pre-filtering**.
+JVector supports **native filtering** by passing a set of allowed Record IDs (RIDs) to the search method. This allows you to combine SQL's powerful filtering with vector search.
 
-#### Option A: Oversample + Post-filter (Recommended)
+**Native Filtering (Recommended)**:
 
 ```python
-def search_with_filters(index, query_embedding, k=5, filters=None,
-                       oversample_factor=20):
+def search_with_filters(db, index, query_embedding, k=5, filters=None):
     """
-    Search with metadata filters using oversampling.
-
-    Gets k × oversample_factor candidates, then filters to k results.
+    Search with metadata filters using native JVector filtering.
     """
-    k_oversample = k * oversample_factor
-    candidates = index.find_nearest(query_embedding, k=k_oversample)
+    allowed_rids = None
 
-    if not filters:
-        return list(candidates)[:k]
+    if filters:
+        # 1. Find RIDs matching the filter using SQL
+        conditions = []
+        params = {}
+        for i, (prop, value) in enumerate(filters.items()):
+            param_name = f"p{i}"
+            conditions.append(f"{prop} = :{param_name}")
+            params[param_name] = value
 
-    results = []
-    for vertex, distance in candidates:
-        matches = all(
-            vertex.get(prop) == value
-            for prop, value in filters.items()
-        )
-        if matches:
-            results.append((vertex, distance))
-            if len(results) >= k:
-                break
+        where_clause = " AND ".join(conditions)
+        query = f"SELECT FROM Article WHERE {where_clause}"
 
-    return results
+        # Get RIDs of matching documents
+        result_set = db.query("sql", query, params)
+        allowed_rids = [record.getIdentity().toString() for record in result_set]
 
-# Usage
-results = search_with_filters(
-    index,
-    query_embedding,
-    k=5,
-    filters={"category": "tech", "year": 2024},
-    oversample_factor=20  # Get 100 candidates, filter to 5
-)
+        if not allowed_rids:
+            return [] # No documents match the filter
+
+    # 2. Pass allowed_rids to find_nearest
+    return index.find_nearest(query_embedding, k=k, allowed_rids=allowed_rids)
 ```
 
 **Pros:**
-- Works with single index
-- Simple implementation
-- Good for moderately selective filters (>1% of data)
-
-**Cons:**
-- Wastes computation on filtered results
-- May not find k results if filter is very selective
-- Need to tune oversample_factor
-
-#### Option B: Multiple Indexes (For Static Partitions)
-
-```python
-# Create separate indexes per category
-tech_index = db.create_vector_index(
-    vertex_type="TechArticle",
-    vector_property="embedding",
-    dimensions=384,
-    ...
-)
-
-science_index = db.create_vector_index(
-    vertex_type="ScienceArticle",
-    vector_property="embedding",
-    dimensions=384,
-    ...
-)
-
-# Query specific index
-results = tech_index.find_nearest(query_embedding, k=5)
-```
-
-**Pros:**
-- No wasted computation
-- Smaller indexes = faster search
-- Perfect for static categories
-
-**Cons:**
-- Index management complexity
-- Storage overhead (N × 115MB per index)
-- Can't easily combine filters
-
-#### Option C: Hybrid (For Highly Selective Filters)
-
-```python
-# If filter results in <1000 documents, brute force
-filtered = db.query("sql",
-    "SELECT FROM Article WHERE category = 'tech' AND year = 2024")
-
-if len(filtered) < 1000:
-    # Brute force distance calculation
-    results = []
-    for record in filtered:
-        vertex = record.asVertex()
-        embedding = vertex.get("embedding")
-        distance = cosine_distance(query_embedding, embedding)
-        results.append((vertex, distance))
-
-    results.sort(key=lambda x: x[1])
-    return results[:k]
-else:
-    # Use HNSW with oversampling
-    return search_with_filters(index, query_embedding, k, filters)
-```
+- Accurate results (no approximation).
+- Efficient (JVector skips disallowed nodes).
+- Leverages SQL for complex metadata queries.
 
 ### 3. Memory Considerations
 
@@ -313,113 +184,69 @@ RAM ≈ 4 bytes × dimensions × num_vectors × (1 + M/2)
 ```
 
 **Examples:**
-- 10K vectors, 384D, M=32: ~50 MB
-- 100K vectors, 384D, M=32: ~500 MB
-- 1M vectors, 384D, M=32: ~5 GB
-- 1M vectors, 1536D, M=32: ~16 GB
+- 10K vectors, 384D: ~50 MB (Graph memory)
+- 100K vectors, 384D: ~500 MB (Graph memory)
+- 1M vectors, 384D: ~5 GB (Graph memory)
 
-**Note:** This is working set, not total database size. ArcadeDB uses page caching, so hot data stays in RAM while cold data is read from disk on-demand.
-
-### 4. Choosing Parameters
-
-**Start with defaults:**
-```python
-max_connections=32, beam_width=256
-```
-
-**Then tune based on needs:**
-
-**Higher accuracy needed?**
-- Increase M to 32-48 (more memory, better recall)
-- Increase ef to 200-300 (slower search, better recall)
-
-**Faster build needed?**
-- Decrease ef_construction to 64-100 (faster build, slightly worse index)
-
-**Faster search needed?**
-- Decrease ef to 50-100 (faster search, slightly worse recall)
-- Decrease M to 8-12 (less memory, faster but less accurate)
+**Note:** ArcadeDB uses page caching, so hot data stays in RAM while cold data is read from disk on-demand.
 
 ## Example Output
 
 ```
 ======================================================================
-🔍 ArcadeDB Python - Example 03: Vector Search
+🔍 ArcadeDB Python - Example 03: Vector Search (JVector)
 ======================================================================
-
-⚠️  EXPERIMENTAL: Vector search is under active development
-   This example demonstrates the API but may have known issues.
-   Not recommended for production use yet.
 
 Step 1: Creating database...
    ✅ Database created at: ./my_test_databases/vector_search_db
    💡 Using embedded mode - no server needed!
    ⏱️  Time: 0.234s
 
-Step 2: Creating schema for document embeddings...
-   ✅ Created Article vertex type with embedding property
-   💡 Vector property type: ARRAY_OF_FLOATS (required for HNSW)
+Step 2: Defining schema...
+   ✅ Schema created: Article vertex type
+   💡 Vector property type: ARRAY_OF_FLOATS
    ⏱️  Time: 0.012s
 
-Step 3: Creating sample documents with mock embeddings...
-   💡 Using 384D embeddings (like sentence-transformers)
-   💡 Generating 10,000 documents across 100 categories...
-   ✅ Generated 100 uniformly distributed category base vectors
-      (Categories maximally separated on unit sphere)
-   ✅ Inserted 10,000 documents with 384D embeddings
+Step 3: Generating mock data...
+   ✅ Generated 10000 mock documents
+   💡 Embedding dimensions: 384
    ⏱️  Time: 1.347s
 
-Step 4: Creating HNSW vector index...
-   💡 HNSW Parameters:
+Step 4: Inserting data...
+      Inserted 1000/10000 documents...
+      ...
+      Inserted 10000/10000 documents...
+   ✅ Inserted 10000 documents
+   ⏱️  Time: 12.543s
+
+Step 5: Creating vector index...
+   💡 JVector Parameters:
       • dimensions: 384 (matches embedding size)
       • distance_function: cosine (best for normalized vectors)
-      • m: 16 (connections per node)
-      • ef: 128 (search quality)
-      • max_items: 10000
-   ✅ Created HNSW vector index
+      • max_connections: 32 (connections per node, higher = more accurate but slower)
+      • beam_width: 256 (search quality, higher = more accurate)
+   ✅ Created JVector vector index
+   💡 LSM index automatically indexes existing records upon creation.
+   ✅ Indexing handled by ArcadeDB engine.
    ⏱️  Time: 0.163s
-
-Step 5: Populating vector index with existing documents...
-   ⚠️  BATCH INDEXING: One-time operation for existing data
-   💡 Production Best Practices:
-      • INDEX AS YOU INSERT: Call index.add_vertex() during creation
-      • AVOID RE-INDEXING: Batch approach is for initial load only
-      • FILTERING: Build ONE index, use oversampling for filters
-      • PERFORMANCE: ~13ms per document (HNSW graph + disk writes)
-   ✅ Indexed 10,000 documents in HNSW index
-   ⏱️  Time: 129.847s
-   ⏱️  Per-document indexing time: 12.98ms
 
 Step 6: Performing semantic similarity searches...
    Running 10 queries on randomly sampled categories...
 
    🔍 Query 1: Find documents similar to Category 42
       Top 5 MOST similar documents (smallest distance):
-      1. Category 42: Document 67
+      1. Article 67 about category_42
          Category: category_42, Distance: 0.7634
-      2. Category 42: Document 12
+      2. Article 12 about category_42
          Category: category_42, Distance: 0.7698
       ...
 
-   ⏱️  All queries time: 4.521s
+   ⏱️  All queries time: 0.521s
+
+======================================================================
+✅ Vector search example completed successfully!
+======================================================================
 ```
-
-## Testing Notes
-
-The `test_vector_search` test in [`test_core.py`](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_core.py) validates:
-
-- ✅ Vector property creation (ARRAY_OF_FLOATS)
-- ✅ HNSW index creation with parameters
-- ✅ Vector insertion (NumPy arrays or Python lists)
-- ✅ Nearest-neighbor search
-- ✅ Result ranking by distance
-
-**Key findings from testing:**
-- Index creation is fast (~0.16s) - just metadata
-- Index population is expensive (~13ms per document) - graph building
-- Search is efficient (logarithmic, not linear in dataset size)
-- Works with both NumPy arrays and plain Python lists
-- Distance values correct (cosine distance = 1 - similarity)
 
 ## Related Documentation
 
@@ -427,28 +254,3 @@ The `test_vector_search` test in [`test_core.py`](https://github.com/humemai/arc
 - [Transactions](../api/transactions.md) - Transaction management
 - [Query Language](../api/query.md) - SQL and Cypher
 - [ArcadeDB Vector Search](https://docs.arcadedb.com/) - Official documentation
-
-## Limitations & Roadmap
-
-**Current limitations:**
-- ⚠️ Single-threaded indexing (slow for large datasets)
-- ⚠️ No native filtered search (requires oversampling)
-- ⚠️ JVM memory overhead vs native implementations
-- ⚠️ Limited to jelmerk/hnswlib performance characteristics
-
-**Planned improvements:**
-- 🚀 Migration to datastax/jvector (faster, native Java)
-- 🚀 Multi-threaded indexing support
-- 🚀 Better memory management
-- 🚀 Potential filtered search support
-
-**For production use:**
-Until the implementation stabilizes, consider mature alternatives:
-- [PostgreSQL + pgvector](https://github.com/pgvector/pgvector) - Stable, production-ready
-- [Pinecone](https://www.pinecone.io/) - Managed vector database
-- [Weaviate](https://weaviate.io/) - Open-source vector database
-- [Qdrant](https://qdrant.tech/) - High-performance vector search
-
----
-
-*This example is educational and demonstrates current capabilities. Monitor [ArcadeDB releases](https://github.com/humemai/arcadedb-embedded-python/releases) for vector search stability updates.*
