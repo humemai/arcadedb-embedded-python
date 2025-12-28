@@ -6,25 +6,24 @@ This document describes the build architecture for creating platform-specific Py
 
 **Goal:** Distribute a single `arcadedb-embedded` package that works on 6 platforms with **zero Java installation required**.
 
-**Achievement:** 6 platform-specific wheels (~155-161MB each) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
+**Achievement:** 6 platform-specific wheels (~215MB each) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
 
 ## Supported Platforms
 
 | Platform | Wheel Size | JRE Size | Runner | Build Method | Notes |
 |----------|-----------|----------|---------|--------------|-------|
-| **linux/amd64** | 160.9M | 62.7M | `ubuntu-24.04` | Docker native | Most common Linux platform |
-| **linux/arm64** | 159.9M | 61.8M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
-| **darwin/amd64** | 157.8M | 55.3M | `macos-15-intel` | Native build | Intel Macs (2006-2020) |
-| **darwin/arm64** | 156.7M | 53.9M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
-| **windows/amd64** | 157.4M | 51.5M | `windows-2025` | Native build | 64-bit Windows |
-| **windows/arm64** | 155.1M | 47.3M | `windows-11-arm` | Native build | ARM64 Windows (Surface, etc.) |
+| **linux/amd64** | 215.0M | 62.7M | `ubuntu-24.04` | Docker native | Most common Linux platform |
+| **linux/arm64** | 214.1M | 61.8M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
+| **darwin/amd64** | 211.9M | 55.3M | `macos-15-intel` | Native build | Intel Macs (2006-2020) |
+| **darwin/arm64** | 210.8M | 53.9M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
+| **windows/amd64** | 211.6M | 51.6M | `windows-2025` | Native build | 64-bit Windows |
+| **windows/arm64** | 209.4M | 47.6M | `windows-11-arm` | Native build | ARM64 Windows (Surface, etc.) |
 
 **All platforms:**
 
 - ✅ 205/205 tests passing
-- ✅ 167.4M JARs (83 files, identical across platforms)
+- ✅ 226.0M JARs (83 files, identical across platforms)
 - ✅ All native runners (no QEMU emulation)
-- ✅ ~40MB savings vs initial builds (195.9M → 155-161M)
 - ✅ Reproducible builds (pinned runner versions)
 
 ## Architecture
@@ -379,22 +378,22 @@ bindings/python/
 - Python package: ~5M
 - **Total:** 195.9M wheel
 
-### After Optimization (157-160M)
+### After Optimization (215M)
 
-- ArcadeDB JARs: 167.4M (83 files, gRPC excluded)
+- ArcadeDB JARs: 226.0M (83 files, gRPC excluded)
 - Bundled JRE: ~63M
 - Python package: ~5M
-- **Total:** 157-160M wheel
-- **Savings:** ~40MB per wheel
+- **Total:** ~215M wheel (compressed)
+- **Installed:** ~289M (uncompressed)
 
 ### Why Sizes Vary by Platform
 
 - JRE binaries differ by platform (different native code)
-- darwin/amd64: 157.8M (Intel Mac JRE)
-- darwin/arm64: 156.7M (Apple Silicon JRE, more efficient)
-- windows/amd64: 157.4M (Windows JRE)
-- linux/amd64: 160.9M (Linux x64 JRE)
-- linux/arm64: 159.9M (Linux ARM64 JRE)
+- darwin/amd64: ~215M (Intel Mac JRE)
+- darwin/arm64: ~215M (Apple Silicon JRE)
+- windows/amd64: ~215M (Windows JRE)
+- linux/amd64: ~215M (Linux x64 JRE)
+- linux/arm64: ~215M (Linux ARM64 JRE)
 
 ## Development
 
