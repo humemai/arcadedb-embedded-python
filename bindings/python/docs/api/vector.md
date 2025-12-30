@@ -266,7 +266,7 @@ index = db.create_vector_index(
     vector_property="embedding",
     dimensions=384,
     distance_function="cosine",
-    max_connections=16,
+    max_connections=32,
     beam_width=200  # Higher for better recall
 )
 
