@@ -82,7 +82,9 @@ def download_dataset(url, path):
 
 
 def load_ann_data(dataset, count, num_queries, k_values):
-    path = f"{dataset}.hdf5"
+    if not os.path.exists("datasets"):
+        os.makedirs("datasets")
+    path = os.path.join("datasets", f"{dataset}.hdf5")
     download_dataset(DATASETS[dataset], path)
 
     with h5py.File(path, "r") as f:
