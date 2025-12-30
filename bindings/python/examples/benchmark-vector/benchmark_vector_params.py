@@ -114,7 +114,9 @@ def load_ann_benchmark_data(dataset_name, count, num_queries, k_values):
     if not url:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
-    filename = f"{dataset_name}.hdf5"
+    if not os.path.exists("datasets"):
+        os.makedirs("datasets")
+    filename = os.path.join("datasets", f"{dataset_name}.hdf5")
     download_dataset(url, filename)
 
     print(f"  Loading {dataset_name} from {filename}...")
