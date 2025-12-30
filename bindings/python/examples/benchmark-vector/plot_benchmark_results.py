@@ -227,6 +227,8 @@ def plot_dataset(dataset_key, dataset_name):
     plt.grid(True, which="both", ls="-", alpha=0.2)
     plt.legend()
     plt.yscale("log")  # Latency often spans orders of magnitude
+    plt.ylim(0.0, 250)
+    plt.xlim(0.0, 1.025)
 
     # Save plot
     output_png = os.path.join(FIGURES_DIR, f"plot_{dataset_key}.png")
