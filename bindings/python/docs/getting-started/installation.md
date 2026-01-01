@@ -10,7 +10,7 @@ pip install arcadedb-embedded
 
 **Requirements:**
 
-- **Python 3.8+ only** - No Java installation required!
+- **Python 3.10–3.14** (packaged; primary testing on 3.11) - No Java installation required!
 - **Supported Platforms**: Prebuilt wheels for **6 platforms**
   - Linux: x86_64, ARM64
   - macOS: Intel (x86_64), Apple Silicon (ARM64)
@@ -43,15 +43,15 @@ The `arcadedb-embedded` package (~209-215MB wheel, ~274-289MB installed) include
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
 - ✅ **Vector Search**: Graph-based indexing for embeddings
-- ✅ **Data Import**: CSV, JSON, Neo4j importers
+- ✅ **Data Import**: CSV, XML, ArcadeDB JSONL import
 
 !!! tip "Platform Selection"
     pip automatically selects the correct platform-specific wheel for your system. You don't need to specify the platform manually.
 
 ## Python Version
 
-- **Supported**: Python 3.8, 3.9, 3.10, 3.11, 3.12
-- **Recommended**: Python 3.10 or higher
+- **Supported**: Python 3.10, 3.11, 3.12, 3.13, 3.14 (packaged classifiers)
+- **Recommended**: Python 3.11 or higher
 
 ## Dependencies
 
@@ -131,7 +131,7 @@ If pip can't find the package:
 
 3. Check your Python version:
    ```bash
-   python --version  # Should be 3.8 or higher
+   python --version  # Should be within 3.10–3.14
    ```
 
 ### Import Errors
