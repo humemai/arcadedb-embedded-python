@@ -8,7 +8,8 @@
 
     Native Python bindings for ArcadeDB with full test coverage
 
-    **Status**: ✅ Production Ready | **Tests**: 204 + 7 Examples Passing
+    **Status**: ✅ Production Ready
+    **Tests**: ✅ 204 + 7 Examples Passing
 
 -   :fontawesome-brands-python:{ .lg .middle } __Pure Python API__
 
@@ -56,14 +57,31 @@ These bindings provide native Python access to ArcadeDB's full capabilities with
 - __Direct JVM Integration__: Run database directly in your Python process via JPype
 - __Best Performance__: No network overhead, direct method calls
 - __Use Cases__: Single-process applications, high-performance scenarios
-- __Example__: `db.command("sql", "SELECT * FROM MyType")`
+- __Example__:
+  ```python
+  with db.transaction():
+      vertex = db.new_vertex("Person")
+      vertex.set("name", "Alice")
+      vertex.save()
+  ```
 
 ### HTTP API (Server Mode)
 
 - __Remote Access__: HTTP REST endpoints when server is running
 - __Multi-Language__: Any language can connect via HTTP
 - __Use Cases__: Multi-process applications, web services, remote access
-- __Example__: `requests.post("http://localhost:2480/api/v1/query/mydb")`
+- __Example__:
+  ```python
+  import requests
+  from requests.auth import HTTPBasicAuth
+
+  requests.post(
+      "http://localhost:2480/api/v1/command/mydb",
+      json={"language": "sql", "command": "SELECT FROM Person"},
+            auth=HTTPBasicAuth("root", "password"),
+            timeout=30,
+  )
+  ```
 
 Both APIs can be used __simultaneously__ on the same server instance.
 
@@ -88,9 +106,8 @@ Both APIs can be used __simultaneously__ on the same server instance.
     - ⚡ **High performance** - Direct JVM integration via JPype
     - 🔒 **ACID transactions** - Full transaction support
     - 🎯 **Vector storage** - JVector indexing for embeddings
-    - 📥 **Data import** - CSV, JSON, Neo4j importers
+    - 📥 **Data import** - CSV, JSON
     - 🔎 **Full-text search** - Lucene integration
-    - 🗺️ **Geospatial** - JTS for spatial queries
 
 </div>
 
@@ -102,11 +119,14 @@ import arcadedb_embedded as arcadedb
 # Create database (context manager for automatic cleanup)
 with arcadedb.create_database("/tmp/mydb") as db:
     # Create schema
-    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.schema.create_document_type("Person")
 
     # Insert data (requires transaction)
     with db.transaction():
-        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        person = db.new_document("Person")
+        person.set("name", "Alice")
+        person.set("age", 30)
+        person.save()
 
     # Query data
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
@@ -119,16 +139,18 @@ with arcadedb.create_database("/tmp/mydb") as db:
 
 ## Package Coverage
 
-These bindings provide **~85% coverage** of ArcadeDB's Java API, focusing on features most relevant to Python developers:
+These bindings provide **comprehensive coverage** of ArcadeDB's Java API, focusing on features most relevant to Python developers:
 
 | Module | Coverage | Description |
 |--------|----------|-------------|
 | Core Operations | ✅ 100% | Database, queries, transactions |
-| Server Mode | ✅ 100% | HTTP server, Studio UI |
+| Schema Management | ✅ 100% | Types, properties, indexes |
+| Server Mode | ✅ 90% | HTTP server, Studio UI, database management |
 | Vector Search | ✅ 100% | JVector indexing, similarity search |
-| Data Import | ✅ 100% | CSV, JSON, Neo4j |
-| Graph API | ⚠️ 60% | Basic graph operations (Python-relevant subset) |
-| Gremlin | ⚠️ 70% | Query execution |
+| Data Import | ⚠️ 70% | CSV, XML, ArcadeDB JSONL |
+| Data Export | ✅ 100% | JSONL, GraphML, GraphSON, CSV |
+| Graph API | ✅ 85% | Full support via SQL, Cypher, Gremlin |
+| Gremlin | ✅ 100% | Full query execution |
 
 See [Java API Coverage](java-api-coverage.md) for detailed comparison.
 
@@ -174,7 +196,7 @@ import arcadedb_embedded as arcadedb
 
 ## Requirements
 
-- **Python**: 3.8 - 3.12
+- **Python**: 3.10–3.14 (packaged; primary testing on 3.11)
 - **OS**: Linux, macOS, or Windows (x86_64 or ARM64)
 
 !!! note "Self-Contained"
