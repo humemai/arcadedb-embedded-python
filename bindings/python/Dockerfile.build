@@ -3,12 +3,14 @@
 # Excludes JARs listed in jar_exclusions.txt to optimize size
 #
 # REQUIRED BUILD ARGS (passed from build.sh):
+#   PYTHON_VERSION - Python version for wheel (e.g., 3.11, 3.12, 3.13, 3.14)
 #   PACKAGE_NAME - always: arcadedb-embedded
 #   PACKAGE_DESCRIPTION - package description
 #   ARCADEDB_TAG - version tag from pom.xml (e.g., 25.10.1-SNAPSHOT)
 #                  Default below is fallback; build.sh extracts and passes actual version
 #   TARGET_PLATFORM - target platform for JRE (e.g., linux-x64, linux-arm64, darwin-x64)
 
+ARG PYTHON_VERSION=3.12
 ARG PACKAGE_NAME=arcadedb-embedded
 ARG PACKAGE_DESCRIPTION="ArcadeDB embedded multi-model database with bundled JRE - no Java installation required"
 ARG ARCADEDB_TAG=25.10.1-SNAPSHOT
@@ -82,7 +84,7 @@ RUN echo "🔨 Building minimal JRE for platform: ${TARGET_PLATFORM}" && \
 
 # Stage 3: Build Python wheel
 
-FROM python:3.12-slim AS python-builder
+FROM python:${PYTHON_VERSION}-slim AS python-builder
 
 # Install system dependencies (JDK needed for JPype at build/test time, build-essential for jpype1 compilation)
 RUN apt-get update && apt-get install -y \
@@ -161,7 +163,7 @@ FROM python-builder AS export
 # The dist directory is preserved from python-builder stage
 
 # Stage 5: Test the built wheel
-FROM python:3.12-slim AS tester
+FROM python:${PYTHON_VERSION}-slim AS tester
 
 # Install Java runtime for JPype
 RUN apt-get update && apt-get install -y \
