@@ -84,7 +84,7 @@ python 06_vector_search_recommendations.py --help
 
 **Recommendations:**
 - **Setup:** Use fresh copy or import from JSONL to avoid conflicts
-- **Memory:** 8GB JVM heap for large dataset (`ARCADEDB_JVM_MAX_HEAP="8g"`)
+- **Memory:** 8GB JVM heap for large dataset (`ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"`)
 - **Embeddings:** Cached automatically, use `--force-embed` to regenerate
 - **Models:** Both models included for comparison
 
