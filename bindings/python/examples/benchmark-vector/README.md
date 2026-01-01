@@ -117,7 +117,7 @@ indexing process. The reported **Build Time** for ArcadeDB is calculated as: `In
 Creation Time + Warmup Time`.
 
 **Note on Memory Usage**: The ArcadeDB benchmark was executed with a JVM heap limit of
-`ARCADEDB_JVM_MAX_HEAP='16g'`. However, we observed that the actual Resident Set Size
+`ARCADEDB_JVM_ARGS='-Xmx16g -Xms16g'`. However, we observed that the actual Resident Set Size
 (RSS) memory consumption exceeded this limit significantly, reaching as high as **41GB**
 in some test cases. This discrepancy suggests significant off-heap memory usage or other
 overheads that require further investigation in the future.
