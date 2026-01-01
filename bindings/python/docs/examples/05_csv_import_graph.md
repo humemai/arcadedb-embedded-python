@@ -408,7 +408,7 @@ python 05_csv_import_graph.py --size small --method java --no-async --export
 ### JVM Settings
 
 ```bash
-export ARCADEDB_JVM_MAX_HEAP="8g"
+export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"
 export ARCADEDB_JVM_ARGS="-Xms8g"
 ```
 
