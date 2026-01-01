@@ -25,7 +25,7 @@ pytest tests/
 
 **Required:**
 
-- Python 3.8+
+- Python 3.10–3.14 (dev baseline 3.11)
 - Java 21+ (JDK or JRE)
 - Docker (for building distributions)
 - Git
@@ -72,7 +72,7 @@ pip install pytest pytest-cov black isort mypy numpy
 
 ```bash
 # Check Python
-python --version  # Should be 3.8+
+python --version  # Should be within 3.10–3.14
 
 # Check Java
 java -version     # Should be 21+
@@ -90,21 +90,39 @@ arcadedb/bindings/python/
 │       ├── __init__.py            # Package initialization
 │       ├── core.py                # Database, DatabaseFactory
 │       ├── server.py              # ArcadeDBServer
-│       ├── importer.py            # Data import utilities
-│       ├── vector.py              # Vector search support
+│       ├── schema.py              # Schema management
 │       ├── results.py             # Query result handling
 │       ├── transactions.py        # Transaction management
+│       ├── vector.py              # Vector search support
+│       ├── importer.py            # Data import (CSV, XML)
+│       ├── exporter.py            # Data export (JSONL, GraphML, etc.)
+│       ├── batch.py               # Batch operations
+│       ├── async_executor.py      # Async query execution
+│       ├── type_conversion.py     # Python-Java type conversion
 │       ├── exceptions.py          # Exception classes
 │       ├── jvm.py                 # JVM startup logic
-│       └── jars/                  # JAR files (downloaded)
+│       ├── _version.py            # Version info
+│       └── jars/                  # JAR files (bundled/downloaded)
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py                # pytest fixtures
+│   ├── README.md                  # Testing documentation
 │   ├── test_core.py               # Core tests
 │   ├── test_server.py             # Server tests
+│   ├── test_schema.py             # Schema tests
+│   ├── test_resultset.py          # Result handling tests
 │   ├── test_importer.py           # Importer tests
+│   ├── test_exporter.py           # Exporter tests
+│   ├── test_vector.py             # Vector search tests
+│   ├── test_vector_sql.py         # Vector SQL tests
 │   ├── test_gremlin.py            # Gremlin tests
+│   ├── test_batch_context.py      # Batch operations tests
+│   ├── test_async_executor.py     # Async execution tests
+│   ├── test_type_conversion.py    # Type conversion tests
+│   ├── test_transaction_config.py # Transaction tests
 │   ├── test_concurrency.py        # Concurrency tests
+│   ├── test_database_utils.py     # Database utilities tests
+│   ├── test_numpy_support.py      # NumPy integration tests
 │   └── test_server_patterns.py    # Server pattern tests
 ├── docs/                          # MkDocs documentation
 │   ├── getting-started/
@@ -113,14 +131,27 @@ arcadedb/bindings/python/
 │   ├── examples/
 │   └── development/
 ├── examples/                      # Example scripts
-│   └── basic.py
+│   ├── 01_simple_document_store.py
+│   ├── 02_social_network_graph.py
+│   ├── 03_vector_search.py
+│   ├── 04_csv_import_documents.py
+│   ├── 05_csv_import_graph.py
+│   ├── 06_vector_search_recommendations.py
+│   ├── 07_stackoverflow_multimodel.py
+│   ├── 08_server_mode_rest_api.py
+│   ├── download_data.py           # Data download helper
+│   ├── data/                      # Example datasets
+│   └── benchmark-vector/          # Vector benchmark suite
 ├── pyproject.toml                 # Package configuration
+├── setup.py                       # Setup configuration
 ├── setup_jars.py                  # JAR download script
 ├── extract_version.py             # Version extraction
 ├── write_version.py               # Version writing
-├── build.sh                   # Build script
+├── jar_exclusions.txt             # JAR optimization list
+├── build.sh                       # Build script
+├── build-native.sh                # Native build script
+├── ensure-build-tools.sh          # Build tools setup
 ├── Dockerfile.build               # Build container
-├── docker-compose.yml             # Docker services
 └── mkdocs.yml                     # Documentation config
 ```
 

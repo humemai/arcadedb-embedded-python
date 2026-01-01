@@ -144,4 +144,5 @@ When all tests pass, you should see:
 
 - [API Reference](../../api/database.md) - Database API documentation
 - [User Guide](../../guide/core/database.md) - Database usage guide
-- [Contributing](contributing.md) - How to contribute tests
+- [Contributing](../contributing.md) - How to contribute to the project
+- [Best Practices](best-practices.md) - Testing best practices

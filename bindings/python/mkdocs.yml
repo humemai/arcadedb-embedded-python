@@ -135,6 +135,7 @@ nav:
   - Distributions: getting-started/distributions.md
 - Examples:
   - Overview: examples/index.md
+  - Quick Start: examples/basic.md
   - 01 - Simple Document Store: examples/01_simple_document_store.md
   - 02 - Social Network Graph: examples/02_social_network_graph.md
   - 03 - Vector Search: examples/03_vector_search.md
@@ -143,6 +144,8 @@ nav:
   - 06 - Vector Search (Movies): examples/06_vector_search_recommendations.md
   - 07 - StackOverflow (Multi-Model): examples/07_stackoverflow_multimodel.md
   - 08 - Server Mode (HTTP/Studio): examples/08_server_mode_rest_api.md
+  - Data Import Patterns: examples/import.md
+  - Vector Search Patterns: examples/vectors.md
 - User Guide:
   - Access Methods: api-access-methods.md
   - Core Operations:
@@ -162,6 +165,11 @@ nav:
   - Transactions: api/transactions.md
   - Vector: api/vector.md
   - Importer: api/importer.md
+  - Batch Context: api/batch.md
+  - Async Executor: api/async_executor.md
+  - Schema: api/schema.md
+  - Exporter: api/exporter.md
+  - Type Conversion: api/type_conversion.md
   - Exceptions: api/exceptions.md
 - Development:
   - Architecture: development/architecture.md
@@ -174,6 +182,17 @@ nav:
     - Getting Started: development/testing/overview.md
     - Core Tests: development/testing/test-core.md
     - Server Tests: development/testing/test-server.md
+    - API Tests:
+      - AsyncExecutor: development/testing/test-async-executor.md
+      - BatchContext: development/testing/test-batch-context.md
+      - Schema: development/testing/test-schema.md
+      - Exporter: development/testing/test-exporter.md
+      - ResultSet: development/testing/test-resultset.md
+      - Type Conversion: development/testing/test-type-conversion.md
+      - Database Utils: development/testing/test-database-utils.md
+      - Transaction Config: development/testing/test-transaction-config.md
+      - NumPy Support: development/testing/test-numpy-support.md
+      - Vector Search: development/testing/test-vector.md
     - Advanced Testing:
       - Concurrency: development/testing/test-concurrency.md
       - Server Patterns: development/testing/test-server-patterns.md
