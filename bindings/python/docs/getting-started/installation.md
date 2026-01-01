@@ -10,7 +10,7 @@ pip install arcadedb-embedded
 
 **Requirements:**
 
-- **Python 3.10–3.14** (packaged; primary testing on 3.11) - No Java installation required!
+- **Python 3.10–3.14** (packaged; primary testing on 3.12) - No Java installation required!
 - **Supported Platforms**: Prebuilt wheels for **6 platforms**
   - Linux: x86_64, ARM64
   - macOS: Intel (x86_64), Apple Silicon (ARM64)
@@ -51,7 +51,7 @@ The `arcadedb-embedded` package (~209-215MB wheel, ~274-289MB installed) include
 ## Python Version
 
 - **Supported**: Python 3.10, 3.11, 3.12, 3.13, 3.14 (packaged classifiers)
-- **Recommended**: Python 3.11 or higher
+- **Recommended**: Python 3.12 or higher
 
 ## Dependencies
 
