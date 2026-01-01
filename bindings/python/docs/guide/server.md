@@ -71,6 +71,86 @@ server = arcadedb.create_server(
 | `host` | `"0.0.0.0"` | Host to bind to |
 | `mode` | `"development"` | Server mode (`development` or `production`) |
 
+## Multi-Process Access {#multi-process-access}
+
+ArcadeDB's embedded mode uses file-based locking, which prevents multiple processes from accessing the same database simultaneously. **Server mode solves this problem** by providing a central HTTP endpoint that multiple processes (or applications) can connect to.
+
+### Why Use Server Mode for Multi-Process?
+
+```python
+# ❌ Embedded mode - Only ONE process can access the database
+import arcadedb_embedded as arcadedb
+
+# Process 1
+db1 = arcadedb.create_database("./mydb")  # Gets file lock
+
+# Process 2 (different Python process)
+db2 = arcadedb.create_database("./mydb")  # ❌ ERROR: Lock conflict!
+```
+
+```python
+# ✅ Server mode - Multiple processes/apps can access
+import arcadedb_embedded as arcadedb
+
+# Start server once (Process 1)
+with arcadedb.create_server("./databases") as server:
+    print(f"Server at: {server.get_studio_url()}")
+
+    # Now ANY number of clients can connect via HTTP
+    # - Web applications
+    # - Background workers
+    # - Data analysis scripts
+    # - Multiple Python processes
+
+    input("Server running... Press Enter to stop")
+```
+
+### Benefits of Server Mode
+
+1. **True Multi-Process Access**: Multiple Python processes can work with the same database
+2. **Language Agnostic**: Access from JavaScript, Java, Python, curl, etc.
+3. **Network Access**: Remote applications can connect
+4. **Web UI**: Built-in Studio for visual database exploration
+5. **Production Ready**: Proper authentication and security
+
+### When to Use Each Mode
+
+| Use Case | Mode | Reason |
+|----------|------|--------|
+| Single script/notebook | Embedded | Simpler, no server needed |
+| Web application | Server | Multiple requests need access |
+| Microservices | Server | Each service connects via HTTP |
+| Data pipeline with workers | Server | Workers run in parallel |
+| Development/exploration | Embedded | Quick and easy |
+| Production deployment | Server | Scalable and secure |
+
+### Multi-Threaded Access
+
+Within a **single Python process**, multiple threads can safely share an embedded database:
+
+```python
+import arcadedb_embedded as arcadedb
+from threading import Thread
+
+db = arcadedb.create_database("./mydb")
+
+def worker(thread_id):
+    # ✅ Multiple threads in SAME process can share the database
+    with db.transaction():
+        db.command("sql", f"INSERT INTO Log SET thread = {thread_id}")
+
+# Start multiple threads
+threads = [Thread(target=worker, args=(i,)) for i in range(10)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+
+db.close()
+```
+
+For more details, see [Concurrency Tests](../development/testing/test-concurrency.md).
+
 ## Next Steps
 
 - **[Graph Operations](graphs.md)**: Visualize graphs in Studio

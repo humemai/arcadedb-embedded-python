@@ -14,7 +14,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 pip install arcadedb-embedded
 ```
 
-**Requirements:** Python 3.8+ only - No Java installation needed!
+**Requirements:** Python 3.10–3.14 (packaged; primary testing on 3.11) - No Java installation needed!
 
 ## What's Inside
 
@@ -59,7 +59,7 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
 - ✅ **Vector Search**: Graph-based indexing for embeddings
-- ✅ **Data Import**: CSV, JSON, Neo4j importers
+- ✅ **Data Import**: CSV, XML, ArcadeDB JSONL import
 
 **Optimized:**
 
