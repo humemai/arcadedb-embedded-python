@@ -406,6 +406,10 @@ jobs:
             echo "The arcadedb-embedded package has been successfully built and tested." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Package**: arcadedb-embedded" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "ℹ️ **Note**: Some platform/Python combinations are excluded from testing:" >> $GITHUB_STEP_SUMMARY
+            echo "- Windows ARM64 + Python 3.10, 3.14 (no GitHub-hosted runners available)" >> $GITHUB_STEP_SUMMARY
+            echo "- macOS x86_64 + Python 3.13, 3.14 (no suitable dependencies available)" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Some platforms failed testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

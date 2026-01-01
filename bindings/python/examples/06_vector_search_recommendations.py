@@ -20,7 +20,7 @@ Graph-Based Collaborative Filtering Performance:
   - Best for real-time recommendations
 
 For the large dataset (20M ratings), use these environment variables:
-  ARCADEDB_JVM_MAX_HEAP="8g" ARCADEDB_JVM_ARGS="-Xms8g"
+  ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"
 
 KNOWN ISSUES: ArcadeDB Bugs and Limitations
 --------------------------------------------

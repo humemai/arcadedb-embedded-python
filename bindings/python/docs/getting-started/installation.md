@@ -162,6 +162,37 @@ pip install --force-reinstall arcadedb-embedded \
   --extra-index-url https://pypi.org/simple/
 ```
 
+## JVM Configuration
+
+The bundled JVM can be configured via the `ARCADEDB_JVM_ARGS` environment variable **before** importing `arcadedb_embedded`:
+
+```bash
+# Default (4GB heap)
+python your_script.py
+
+# Custom memory for large datasets
+export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"
+python your_script.py
+```
+
+**Common Options:**
+
+JVM arguments use two flag types:
+
+- **`-X` flags**: JVM runtime options (heap, GC, etc.)
+  - `-Xmx<size>`: Maximum heap memory (e.g., `-Xmx8g` for 8GB)
+  - `-Xms<size>`: Initial heap size (recommended: same as `-Xmx`)
+  - `-XX:MaxDirectMemorySize=<size>`: Limit off-heap buffers
+
+- **`-D` flags**: System properties for ArcadeDB configuration
+  - `-Darcadedb.vectorIndex.locationCacheSize=<count>`: Vector location cache limit
+  - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: HNSW build cache limit
+
+!!! warning "Set Before Import"
+    `ARCADEDB_JVM_ARGS` must be set **before** the first `import arcadedb_embedded` in your Python process. The JVM can only be configured once.
+
+For detailed configuration and memory tuning, see [Troubleshooting - Memory Configuration](../development/troubleshooting.md#memory-configuration).
+
 ## Next Steps
 
 - [Quick Start Guide](quickstart.md) - Get started in 5 minutes

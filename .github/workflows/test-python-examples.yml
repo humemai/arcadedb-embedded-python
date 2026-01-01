@@ -238,7 +238,7 @@ jobs:
         shell: bash
         env:
           # Increase JVM heap for large CSV imports (example 04)
-          ARCADEDB_JVM_MAX_HEAP: "8g"
+          ARCADEDB_JVM_ARGS: "-Xmx8g -Xms8g"
         run: |
           cd bindings/python/examples
 
@@ -450,6 +450,10 @@ jobs:
             echo "All examples ran successfully across all 6 platforms." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Platforms tested**: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "ℹ️ **Note**: Some platform/Python combinations are excluded from testing:" >> $GITHUB_STEP_SUMMARY
+            echo "- Windows ARM64 + Python 3.10, 3.14 (no GitHub-hosted runners available)" >> $GITHUB_STEP_SUMMARY
+            echo "- macOS x86_64 + Python 3.13, 3.14 (no suitable dependencies available)" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Some platforms failed example testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

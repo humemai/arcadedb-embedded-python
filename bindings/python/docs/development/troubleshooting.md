@@ -235,23 +235,128 @@ rm ./mydb/.lock
 
 ---
 
-### Memory Issues
+### Memory Configuration
 
-**Problem**: Out of memory errors
+#### JVM Memory Configuration
+
+Configure JVM memory via the `ARCADEDB_JVM_ARGS` environment variable **before** importing `arcadedb_embedded`:
+
+**Basic Configuration:**
+
+```bash
+# Default: 4GB heap
+python script.py
+
+# Production: 8GB heap with matching initial size
+export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"
+python script.py
+
+# One-liner
+ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python script.py
+```
+
+**Common JVM Options:**
+
+| Option | Description | Example |
+|--------|-------------|----------|
+| `-Xmx<size>` | Maximum heap memory | `-Xmx8g` (8 gigabytes) |
+| `-Xms<size>` | Initial heap size (recommended: same as `-Xmx`) | `-Xms8g` |
+| `-XX:MaxDirectMemorySize=<size>` | Limit off-heap direct buffers | `-XX:MaxDirectMemorySize=8g` |
+| `-Darcadedb.vectorIndex.locationCacheSize=<count>` | Max vector locations to cache (default: -1 = unlimited) | `-Darcadedb.vectorIndex.locationCacheSize=100000` |
+| `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>` | Max vectors cached during HNSW build (default: 10000) | `-Darcadedb.vectorIndex.graphBuildCacheSize=3000` |
+| `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>` | Mutations before graph rebuild (default: 100) | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=200` |
+
+**Vector Index Memory Tuning:**
+
+For applications using vector indexes, control memory usage:
+
+```bash
+# Conservative: bounded caches for large vector datasets
+export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
+  -Darcadedb.vectorIndex.locationCacheSize=100000 \
+  -Darcadedb.vectorIndex.graphBuildCacheSize=3000"
+python vector_app.py
+```
+
+**Cache Size Guidelines:**
+
+- `locationCacheSize`: Number of vector locations (each ~56 bytes)
+  - 100000 entries ≈ 5.6 MB
+  - -1 = unlimited (backward compatible, may consume unbounded memory)
+  - Recommended: 100000 for datasets with 1M+ vectors
+
+- `graphBuildCacheSize`: Number of vectors during HNSW build
+  - Memory ≈ cacheSize × (dimensions × 4 + 64) bytes
+  - For 768-dim: 10000 entries ≈ 30 MB
+  - Lower values reduce build-time memory spikes
+  - Recommended: 3000-5000 for high-dimensional vectors
+
+**Memory Planning:**
+
+```text
+Total Process Memory = JVM Heap + Off-Heap Components
+
+Off-Heap Components:
+- Direct buffers (MaxDirectMemorySize)
+- Metaspace (class definitions)
+- Page cache
+- Thread stacks
+- Vector index caches (if bounded)
+
+Rule of thumb: Plan for 1.5-2× your heap size in actual RAM
+```
+
+**Example Configurations:**
+
+```bash
+# Small datasets (<1M records, <100K vectors)
+ARCADEDB_JVM_ARGS="-Xmx2g -Xms2g"
+
+# Medium datasets (1M-10M records, 100K-1M vectors)
+ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g"
+
+# Large datasets (10M+ records, 1M+ vectors) with bounded caches
+ARCADEDB_JVM_ARGS="-Xmx16g -Xms16g -XX:MaxDirectMemorySize=16g \
+  -Darcadedb.vectorIndex.locationCacheSize=100000 \
+  -Darcadedb.vectorIndex.graphBuildCacheSize=5000"
+
+# High-dimensional vectors (e.g., 1536-dim embeddings)
+ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
+  -Darcadedb.vectorIndex.locationCacheSize=50000 \
+  -Darcadedb.vectorIndex.graphBuildCacheSize=2000"
+```
+
+!!! warning "Configuration Timing"
+    `ARCADEDB_JVM_ARGS` must be set **before** the first `import arcadedb_embedded`. The
+    JVM can only be configured once per Python process.
+
+!!! tip "Alternative: ARCADEDB_JVM_ERROR_FILE"
+    Set crash log location:
+    ```bash
+    export ARCADEDB_JVM_ERROR_FILE="/var/log/arcade/errors.log"
+    ```
+
+#### Out of Memory Errors
+
+**Problem**: `OutOfMemoryError` or heap space errors
 
 **Solutions**:
 
-1. **Increase JVM Heap**:
-   ```python
-   import jpype
-
-   # Set before first import
-   jpype.startJVM("-Xmx4g")  # 4GB heap
-
-   import arcadedb_embedded as arcadedb
+1. **Increase Heap via Environment Variable** (Recommended):
+   ```bash
+   export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"
+   python script.py
    ```
 
-2. **Use Batch Processing**:
+2. **Bound Vector Caches** (for vector workloads):
+   ```bash
+   export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g \
+     -Darcadedb.vectorIndex.locationCacheSize=100000 \
+     -Darcadedb.vectorIndex.graphBuildCacheSize=3000"
+   python script.py
+   ```
+
+3. **Use Batch Processing**:
    ```python
    batch_size = 1000
    for i in range(0, len(data), batch_size):
@@ -259,7 +364,7 @@ rm ./mydb/.lock
        process_batch(batch)
    ```
 
-3. **Close ResultSets**:
+4. **Close ResultSets**:
    ```python
    result = db.query("sql", "SELECT FROM LargeTable")
    try:
