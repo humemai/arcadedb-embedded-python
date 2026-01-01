@@ -14,7 +14,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 pip install arcadedb-embedded
 ```
 
-**Requirements:** Python 3.10–3.14 (packaged; primary testing on 3.11) - No Java installation needed!
+**Requirements:** Python 3.10–3.14 (packaged; primary testing on 3.12) - No Java installation needed!
 
 ## What's Inside
 
