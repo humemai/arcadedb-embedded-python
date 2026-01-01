@@ -476,7 +476,7 @@ python 04_csv_import_documents.py --size small
 python 04_csv_import_documents.py --size large
 
 # With custom JVM heap for large datasets
-ARCADEDB_JVM_MAX_HEAP="8g" python 04_csv_import_documents.py --size large
+ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python 04_csv_import_documents.py --size large
 ```
 
 **Command-line options:**
