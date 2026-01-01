@@ -286,7 +286,7 @@ Now that you've created your first database, explore more features:
 
 -   :material-upload:{ .lg .middle } [__Import Data__](../guide/import.md)
 
-    Bulk import from CSV, JSON, Neo4j
+    Bulk import from CSV, JSON, ArcadeDB JSONL exports
 
 </div>
 

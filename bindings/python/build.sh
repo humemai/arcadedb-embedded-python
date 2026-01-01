@@ -174,11 +174,11 @@ echo ""
 
 if [[ "$USE_NATIVE" == true ]]; then
     # Native build
-    echo -e "${YELLOW}� Building natively on ${PLATFORM}...${NC}"
+    echo -e "${YELLOW} Building natively on ${PLATFORM}...${NC}"
     "$SCRIPT_DIR/build-native.sh" "$PLATFORM" "$PACKAGE_NAME" "$DESCRIPTION" "$DOCKER_TAG" "${BUILD_VERSION:-}"
 else
     # Docker build
-    echo -e "${YELLOW}�🐳 Building in Docker...${NC}"
+    echo -e "${YELLOW} 🐳 Building in Docker...${NC}"
 
     # Check if BUILD_VERSION is set (from CI/CD)
     BUILD_VERSION_ARG=""
