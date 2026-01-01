@@ -10,24 +10,25 @@ The Python bindings provide **excellent coverage for real-world use** (~85% of c
 
 #### Coverage by Category
 
-| Category | Coverage | Status |
-|----------|----------|--------|
-| **Core Database Operations** | 90% | ✅ Excellent |
-| **Query Execution** | 100% | ✅ Complete |
-| **Transactions** | 100% | ✅ Complete |
-| **Server Mode** | 90% | ✅ Excellent |
-| **Data Import** | 70% | ✅ Good |
-| **Data Export** | 100% | ✅ Complete |
-| **Graph API** | 85% | ✅ Excellent |
-| **Schema API** | 100% | ✅ Complete |
-| **Index Management** | 90% | ✅ Excellent |
-| **Advanced Features** | 5% | ❌ Minimal |
+| Category                     | Coverage | Status       |
+| ---------------------------- | -------- | ------------ |
+| **Core Database Operations** | 90%      | ✅ Excellent |
+| **Query Execution**          | 100%     | ✅ Complete  |
+| **Transactions**             | 100%     | ✅ Complete  |
+| **Server Mode**              | 90%      | ✅ Excellent |
+| **Data Import**              | 70%      | ✅ Good      |
+| **Data Export**              | 100%     | ✅ Complete  |
+| **Graph API**                | 85%      | ✅ Excellent |
+| **Schema API**               | 100%     | ✅ Complete  |
+| **Index Management**         | 90%      | ✅ Excellent |
+| **Advanced Features**        | 5%       | ❌ Minimal   |
 
 ### Detailed Coverage
 
 #### 1. Core Database Operations - 90%
 
 **DatabaseFactory:**
+
 - ✅ `create()` - Create new database
 - ✅ `open()` - Open existing database
 - ✅ `exists()` - Check if database exists
@@ -35,6 +36,7 @@ The Python bindings provide **excellent coverage for real-world use** (~85% of c
 - ❌ `setSecurity()` - Not exposed (server-managed)
 
 **Database:**
+
 - ✅ `query(language, query, *args)` - Full support for all query languages
 - ✅ `command(language, command, *args)` - Full support for write operations
 - ✅ `begin()`, `commit()`, `rollback()` - Full transaction support
@@ -48,6 +50,7 @@ The Python bindings provide **excellent coverage for real-world use** (~85% of c
 #### 2. Query Execution - 100%
 
 All query languages fully supported:
+
 - ✅ SQL
 - ✅ Cypher
 - ✅ Gremlin
@@ -55,6 +58,7 @@ All query languages fully supported:
 - ✅ GraphQL
 
 **ResultSet & Results:**
+
 - ✅ Pythonic iteration (`__iter__`, `__next__`)
 - ✅ `has_next()`, `next()`
 - ✅ `get_property()`, `has_property()`, `get_property_names()`
@@ -65,6 +69,7 @@ All query languages fully supported:
 **Full graph operations support through query languages (recommended approach):**
 
 **Vertex & Edge Creation:**
+
 - ✅ `db.new_vertex(type)` - Direct API
 - ✅ `db.new_document(type)` - Direct API
 - ✅ SQL: `CREATE VERTEX`, `CREATE EDGE`, `CREATE PROPERTY`
@@ -72,6 +77,7 @@ All query languages fully supported:
 - ✅ Embedded property manipulation via returned Java objects
 
 **Graph Traversals & Queries:**
+
 - ✅ SQL traversal: `SELECT * FROM User WHERE out('Follows').name = 'Alice'`
 - ✅ Cypher patterns: `MATCH (a:User)-[:FOLLOWS]->(b) RETURN b`
 - ✅ Gremlin: Full traversal support `g.V().has('name','Alice').out('follows')`
@@ -79,11 +85,13 @@ All query languages fully supported:
 - ✅ Graph algorithms via queries
 
 **What's Not Exposed:**
+
 - ❌ Direct Java vertex/edge object methods (`vertex.getEdges()`, `edge.getInVertex()`)
   - **Not needed:** Use SQL/Cypher/Gremlin queries instead (cleaner, more efficient)
 - ❌ Graph event listeners and callbacks
 
 **Query-Based Approach (Recommended):**
+
 ```python
 # Create edges via SQL
 db.command("sql", """
@@ -108,6 +116,7 @@ result = db.query("cypher", """
 #### 4. Schema Management - 100%
 
 Full Pythonic Schema API available via `db.schema`:
+
 - ✅ `create_document_type()`, `create_vertex_type()`, `create_edge_type()`
 - ✅ `create_property()`, `drop_property()`
 - ✅ `drop_type()`, `exists_type()`, `get_type()`
@@ -137,6 +146,7 @@ Full Pythonic Schema API available via `db.schema`:
 #### 7. Data Import - 70% (3 primary formats)
 
 **Supported:**
+
 - ✅ CSV - `import_csv()` with full edge/vertex/document support
 - ✅ XML - `import_xml()` with nesting and attribute extraction
 - ✅ ArcadeDB JSONL exports - `IMPORT DATABASE file://...` via SQL
@@ -145,11 +155,13 @@ Full Pythonic Schema API available via `db.schema`:
 - ✅ Automatic type inference
 
 **Not Implemented:**
+
 - ❌ RDF, OrientDB, GloVe, Word2Vec formats
 - ❌ Direct JSON array import (use JSONL instead)
 - ❌ SQL/database import
 
-**Note:** The 70% coverage reflects that the 3 supported formats (CSV, XML, ArcadeDB JSONL export/import) cover most real-world data migration scenarios.
+**Note:** The 70% coverage reflects that the 3 supported formats (CSV, XML, ArcadeDB
+JSONL export/import) cover most real-world data migration scenarios.
 
 #### 8. Data Export - 100%
 
@@ -175,6 +187,7 @@ Full Pythonic Schema API available via `db.schema`:
 #### 10. Advanced Features - 5%
 
 **Not Implemented:**
+
 - ❌ Callbacks & Events (DocumentCallback, RecordCallback, DatabaseEvents)
 - ❌ Low-Level APIs (WAL, bucket scanning, binary protocol)
 - ❌ Async operations & parallel queries
@@ -185,7 +198,9 @@ Full Pythonic Schema API available via `db.schema`:
 
 ### Design Philosophy: Query-First Approach
 
-The Python bindings follow a **"query-first, API-second"** philosophy, which is ideal for Python developers. Instead of exposing every Java object, operations are enabled through:
+The Python bindings follow a **"query-first, API-second"** philosophy, which is ideal
+for Python developers. Instead of exposing every Java object, operations are enabled
+through:
 
 - **SQL DDL** for schema management
 - **Cypher/SQL** for graph operations
@@ -207,34 +222,39 @@ index = index_builder.withUnique(true).create()
 
 ### Use Case Suitability
 
-| Use Case | Suitable? | Notes |
-|----------|-----------|-------|
-| Embedded database in Python app | ✅ Perfect | Core use case |
-| Graph analytics with Cypher | ✅ Excellent | All query languages work |
-| Graph traversals & pattern matching | ✅ Excellent | SQL, Cypher, Gremlin fully supported |
-| Document store | ✅ Excellent | Full SQL support |
-| Vector similarity search | ✅ Excellent | Native NumPy integration |
-| Development with Studio UI | ✅ Excellent | Server mode included |
-| Data migration (CSV/XML/JSONL import) | ✅ Good | 3 major formats covered |
-| Real-time event processing | ⚠️ Limited | No async, no callbacks |
-| Multi-master replication | ❌ Not supported | Java/Server only |
-| Custom query language | ❌ Not supported | Use built-in languages |
+| Use Case                              | Suitable?        | Notes                                |
+| ------------------------------------- | ---------------- | ------------------------------------ |
+| Embedded database in Python app       | ✅ Perfect       | Core use case                        |
+| Graph analytics with Cypher           | ✅ Excellent     | All query languages work             |
+| Graph traversals & pattern matching   | ✅ Excellent     | SQL, Cypher, Gremlin fully supported |
+| Document store                        | ✅ Excellent     | Full SQL support                     |
+| Vector similarity search              | ✅ Excellent     | Native NumPy integration             |
+| Development with Studio UI            | ✅ Excellent     | Server mode included                 |
+| Data migration (CSV/XML/JSONL import) | ✅ Good          | 3 major formats covered              |
+| Real-time event processing            | ⚠️ Limited       | No async, no callbacks               |
+| Multi-master replication              | ❌ Not supported | Java/Server only                     |
+| Custom query language                 | ❌ Not supported | Use built-in languages               |
 
 ### Conclusion
 
-**For 90% of Python developers:** These bindings are **production-ready** and provide everything needed for:
+**For 90% of Python developers:** These bindings are **production-ready** and provide
+everything needed for:
+
 - Embedded multi-model database
 - Graph, document, vector, and time-series data
 - SQL, Cypher, and Gremlin queries
 - Development and production deployment
 
 **Not suitable for:**
+
 - Applications requiring async/await patterns
 - Custom database extensions or plugins
 - Direct manipulation of Graph API objects
 - High-availability clustering from Python
 
-The **practical coverage for real-world applications is 85%+**, which is excellent. The 40-45% "total coverage" number is misleading because it counts low-level Java APIs that Python developers shouldn't use anyway.
+The **practical coverage for real-world applications is 85%+**, which is excellent. The
+40-45% "total coverage" number is misleading because it counts low-level Java APIs that
+Python developers shouldn't use anyway.
 
 ---
 
