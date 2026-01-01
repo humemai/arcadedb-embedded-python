@@ -14,6 +14,7 @@ NC='\033[0m' # No Color
 
 # Parse command line arguments
 PLATFORM="${1:-}"
+PYTHON_VERSION="${2:-3.12}"
 
 print_header() {
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
@@ -23,7 +24,7 @@ print_header() {
 }
 
 print_usage() {
-    echo "Usage: $0 [PLATFORM]"
+    echo "Usage: $0 [PLATFORM] [PYTHON_VERSION]"
     echo ""
     echo "Builds arcadedb-embedded package with bundled JRE"
     echo "No external Java installation required!"
@@ -37,16 +38,19 @@ print_usage() {
     echo "  windows/amd64  Windows x86_64 (native build on Windows)"
     echo "  windows/arm64  Windows ARM64 (native build on Windows)"
     echo ""
+    echo "PYTHON_VERSION:"
+    echo "  Python version for wheel (default: 3.12)"
+    echo "  Examples: 3.10, 3.11, 3.12, 3.13, 3.14"
+    echo ""
     echo "Build Methods:"
     echo "  Native: macOS and Windows build natively on their platforms"
     echo "  Docker: Linux uses Docker for manylinux compliance"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Build for current platform (auto-detect)"
-    echo "  $0 linux/amd64        # Build for Linux x86_64 (via Docker)"
-    echo "  $0 linux/arm64        # Build for Linux ARM64 (via Docker)"
-    echo "  $0 darwin/arm64       # Build for macOS ARM64 (native on macOS)"
-    echo "  $0 windows/arm64      # Build for Windows ARM64 (native on Windows)"
+    echo "  $0                    # Build for current platform with Python 3.12"
+    echo "  $0 linux/amd64        # Build for Linux x86_64 with Python 3.12 (via Docker)"
+    echo "  $0 linux/amd64 3.11   # Build for Linux x86_64 with Python 3.11 (via Docker)"
+    echo "  $0 darwin/arm64 3.12  # Build for macOS ARM64 with Python 3.12 (native)"
     echo ""
     echo "Package features:"
     echo "  ✅ Bundled platform-specific JRE (no Java required)"
@@ -157,6 +161,7 @@ fi
 echo -e "${CYAN}📋 Build Configuration:${NC}"
 echo -e "   Package: ${YELLOW}arcadedb-embedded${NC}"
 echo -e "   Platform: ${YELLOW}${PLATFORM}${NC}"
+echo -e "   Python Version: ${YELLOW}${PYTHON_VERSION}${NC}"
 echo -e "   JRE: ${YELLOW}Bundled (end users need no Java)${NC}"
 echo -e "   Build Method: ${YELLOW}${BUILD_METHOD}${NC}"
 echo ""
@@ -209,6 +214,7 @@ else
     docker build \
         --pull \
         --platform "$DOCKER_PLATFORM" \
+        --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
         --build-arg PACKAGE_NAME="$PACKAGE_NAME" \
         --build-arg PACKAGE_DESCRIPTION="$DESCRIPTION" \
         --build-arg ARCADEDB_TAG="$DOCKER_TAG" \
@@ -223,6 +229,7 @@ else
     echo -e "${CYAN}🧪 Running tests in Docker...${NC}"
     docker build \
         --platform "$DOCKER_PLATFORM" \
+        --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
         --build-arg PACKAGE_NAME="$PACKAGE_NAME" \
         --build-arg PACKAGE_DESCRIPTION="$DESCRIPTION" \
         --build-arg ARCADEDB_TAG="$DOCKER_TAG" \

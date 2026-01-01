@@ -171,8 +171,8 @@ jobs:
         shell: bash
         run: |
           cd bindings/python
-          echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }}..."
-          ./build.sh ${{ matrix.platform }}
+          echo "🔨 Building arcadedb-embedded for ${{ matrix.platform }} with Python ${{ matrix.python-version }}..."
+          ./build.sh ${{ matrix.platform }} ${{ matrix.python-version }}
 
       # Note: Java is NOT required - arcadedb-embedded has bundled JRE!
 
