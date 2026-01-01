@@ -16,7 +16,7 @@ The example creates a task management system showcasing:
 
 ## Source Code
 
-The complete example is available at: [`examples/01_simple_document_store.py`](../../examples/01_simple_document_store.py)
+The complete example is available at: [`examples/01_simple_document_store.py`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/01_simple_document_store.py)
 
 ## Key Learning Points
 
@@ -160,4 +160,4 @@ A: Yes! ArcadeDB is schema-flexible. You can add properties dynamically while be
 
 ---
 
-*Need help? Check our [troubleshooting guide](../troubleshooting.md) or [open an issue](https://github.com/humemai/arcadedb-embedded-python/issues).*
+*Need help? Check our [troubleshooting guide](../development/troubleshooting.md) or [open an issue](https://github.com/humemai/arcadedb-embedded-python/issues).*

@@ -8,7 +8,7 @@ ArcadeDB's Importer supports multiple data formats:
 
 - **CSV**: Tabular data with headers
 - **JSON**: Single JSON documents or arrays
-- **Neo4j**: Direct migration from Neo4j exports
+- **ArcadeDB JSONL export/import**: Full database export/restore via `IMPORT DATABASE`
 
 **Key Features:**
 
@@ -49,15 +49,11 @@ importer.import_json(
 )
 ```
 
-### Neo4j Import
+### ArcadeDB JSONL Import (full database)
 
 ```python
-# Migrate from Neo4j export
-importer.import_neo4j(
-    file_path="neo4j_export.json",
-    vertex_types=["User", "Product"],
-    edge_types=["PURCHASED", "REVIEWED"]
-)
+# Import ArcadeDB JSONL export (schema + data)
+db.command("sql", "IMPORT DATABASE file:///exports/mydb.jsonl.tgz WITH commitEvery = 50000")
 ```
 
 ## Format Selection
@@ -125,23 +121,21 @@ id,name,email,age
 
 ---
 
-### Neo4j - Graph Migration
+### ArcadeDB JSONL - Full Database Restore
 
 **Best For:**
-- Neo4j to ArcadeDB migration
-- Graph data with relationships
-- Existing Neo4j exports
+- Re-importing ArcadeDB `EXPORT DATABASE` outputs
+- Moving databases between environments
+- Backups and restores with schema + data
 
 **Advantages:**
-- Direct migration
-- Preserves graph structure
-- Handles relationships automatically
-- 3-pass process (nodes, edges, properties)
+- Preserves full database (schema, indexes, data)
+- Single command: `IMPORT DATABASE file://...`
+- Works with compressed `.jsonl.tgz` exports
 
 **Disadvantages:**
-- Neo4j-specific format
-- More complex
-- Requires understanding of both databases
+- Full-database scope (not selective)
+- Requires access to ArcadeDB server or embedded instance
 
 ## Schema Design
 
