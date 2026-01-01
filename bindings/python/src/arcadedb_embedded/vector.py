@@ -97,7 +97,7 @@ class VectorIndex:
 
         2. **COSINE**:
            - Returns **Normalized Distance** (Lower is better).
-           - Formula: $(1 - \cos(\theta)) / 2$
+           - Formula: $(1 - \\cos(\\theta)) / 2$
            - Range: [0.0, 1.0]
            - 0.0: Identical vectors (angle 0)
            - 0.5: Orthogonal vectors (angle 90)
@@ -105,7 +105,7 @@ class VectorIndex:
 
         3. **DOT_PRODUCT**:
            - Returns **Negative Dot Product** (Lower is better).
-           - Formula: $- (A \cdot B)$
+           - Formula: $- (A \\cdot B)$
            - Range: (-inf, +inf)
            - Lower values indicate higher similarity (larger positive dot product).
 
