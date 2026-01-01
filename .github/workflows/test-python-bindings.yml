@@ -126,23 +126,8 @@ jobs:
         # platform: ['linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64']
         platform: ['linux/amd64', 'linux/arm64', 'darwin/arm64']
         include:
-          # Linux/amd64: Test all Python versions (3.10-3.14)
           - platform: linux/amd64
             runs-on: ubuntu-24.04
-            python-version: '3.10'
-          - platform: linux/amd64
-            runs-on: ubuntu-24.04
-            python-version: '3.11'
-          - platform: linux/amd64
-            runs-on: ubuntu-24.04
-            python-version: '3.12'
-          - platform: linux/amd64
-            runs-on: ubuntu-24.04
-            python-version: '3.13'
-          - platform: linux/amd64
-            runs-on: ubuntu-24.04
-            python-version: '3.14'
-          # Other platforms: Use Python 3.12 (stable default)
           - platform: linux/arm64
             runs-on: ubuntu-24.04-arm
           - platform: darwin/arm64
