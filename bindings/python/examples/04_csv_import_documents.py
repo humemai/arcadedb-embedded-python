@@ -61,14 +61,14 @@ Usage:
 4. Run with custom batch size:
    python 04_csv_import_documents.py --batch-size 10000
 5. Run with custom JVM heap, parallel threads, and batch size:
-   ARCADEDB_JVM_MAX_HEAP="8g" python 04_csv_import_documents.py --dataset movielens-large --parallel 8 --batch-size 10000
+   ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python 04_csv_import_documents.py --dataset movielens-large --parallel 8 --batch-size 10000
 
 The script will automatically download the dataset if it doesn't exist.
 
 Memory Requirements:
 - Small dataset (~100K ratings): 4GB heap (default) is sufficient
 - Large dataset (~33M ratings): 4GB heap (default) should work, 8GB for safety
-- Very large datasets (100M+ records): Set ARCADEDB_JVM_MAX_HEAP="8g" or higher
+- Very large datasets (100M+ records): Set ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" or higher
 - Must be set BEFORE running the script (before JVM starts)
 
 Dataset Options:
@@ -1001,16 +1001,22 @@ else:
 print()
 
 # Check JVM heap configuration for large imports
-jvm_heap = os.environ.get("ARCADEDB_JVM_MAX_HEAP")
-if jvm_heap:
-    print(f"💡 JVM Max Heap: {jvm_heap}")
+jvm_args = os.environ.get("ARCADEDB_JVM_ARGS")
+if jvm_args and "-Xmx" in jvm_args:
+    import re
+
+    match = re.search(r"-Xmx(\S+)", jvm_args)
+    heap_size = match.group(1) if match else "unknown"
+    print(f"💡 JVM Max Heap: {heap_size}")
 else:
     print("💡 JVM Max Heap: 4g (default)")
     print("   ℹ️  Using default JVM heap (4g)")
     if args.dataset == "movielens-large":
         print("   💡 For large datasets, you can increase it:")
-        print('      export ARCADEDB_JVM_MAX_HEAP="8g"  # or run with:')
-        print('      ARCADEDB_JVM_MAX_HEAP="8g" python 04_csv_import_documents.py')
+        print('      export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"  # or run with:')
+        print(
+            '      ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python 04_csv_import_documents.py'
+        )
 print()
 
 # -----------------------------------------------------------------------------

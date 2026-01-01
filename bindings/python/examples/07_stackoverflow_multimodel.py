@@ -12,10 +12,10 @@ This example uses Stack Overflow data dump (Users, Posts, Comments, etc.)
 to build a comprehensive knowledge graph with semantic search capabilities.
 
 Dataset Options (disk size → recommended JVM heap):
-- stackoverflow-tiny: ~34 MB → 2 GB (ARCADEDB_JVM_MAX_HEAP='2g' ARCADEDB_JVM_ARGS='-Xms2g')
-- stackoverflow-small: ~642 MB → 8 GB (ARCADEDB_JVM_MAX_HEAP='4g' ARCADEDB_JVM_ARGS='-Xms8g')
-- stackoverflow-medium: ~2.9 GB → 32 GB (ARCADEDB_JVM_MAX_HEAP='32g' ARCADEDB_JVM_ARGS='-Xms32g')
-- stackoverflow-large: ~323 GB → 64+ GB (ARCADEDB_JVM_MAX_HEAP='64g' ARCADEDB_JVM_ARGS='-Xms64g')
+- stackoverflow-tiny: ~34 MB → 2 GB (ARCADEDB_JVM_ARGS='-Xmx2g -Xms2g')
+- stackoverflow-small: ~642 MB → 8 GB (ARCADEDB_JVM_ARGS='-Xmx8g -Xms8g')
+- stackoverflow-medium: ~2.9 GB → 32 GB (ARCADEDB_JVM_ARGS='-Xmx32g -Xms32g')
+- stackoverflow-large: ~323 GB → 64+ GB (ARCADEDB_JVM_ARGS='-Xmx64g -Xms64g')
 
 Usage:
     # Phase 1 only (import + index)
@@ -6401,14 +6401,18 @@ Phases:
         sys.exit(1)
 
     # Check JVM heap configuration
-    jvm_heap = os.environ.get("ARCADEDB_JVM_MAX_HEAP")
-    if jvm_heap:
-        print(f"💡 JVM Max Heap: {jvm_heap}")
+    jvm_args = os.environ.get("ARCADEDB_JVM_ARGS")
+    if jvm_args and "-Xmx" in jvm_args:
+        import re
+
+        match = re.search(r"-Xmx(\S+)", jvm_args)
+        heap_size = match.group(1) if match else "unknown"
+        print(f"💡 JVM Max Heap: {heap_size}")
     else:
         print("💡 JVM Max Heap: 4g (default)")
         if args.dataset in ["stackoverflow-medium", "stackoverflow-large"]:
             print("   ⚠️  Consider increasing heap for large datasets:")
-            print('      export ARCADEDB_JVM_MAX_HEAP="8g"')
+            print('      export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"')
     print()
 
     # Schema analysis mode
