@@ -597,9 +597,10 @@ LIMIT 5
 
 ## Next Steps
 
-- Learn about [Vector Embeddings](03_vector_embeddings_search.md) for AI-powered recommendations
-- Explore [CSV Import](04_csv_import_to_graph.md) for real-world data migration
-- See [Multi-Model](05_ecommerce_multimodel.md) for combining graph with document storage
+- Learn about [Vector Search](03_vector_search.md) for AI-powered recommendations
+- Explore [CSV Import (Documents)](04_csv_import_documents.md) for importing tabular data
+- See [CSV Import (Graph)](05_csv_import_graph.md) for importing graph data from CSV
+- Check out [Multi-Model Example](07_stackoverflow_multimodel.md) for combining graph with document storage
 
 ---
 
