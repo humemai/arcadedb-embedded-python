@@ -202,10 +202,9 @@ import arcadedb_embedded as arcadedb
 - **OS**: Linux, macOS, or Windows (x86_64 or ARM64)
 
 !!! note "Self-Contained"
-    Everything needed to run ArcadeDB is included in the wheel.
-    - **Bundled JRE**: Platform-specific Java 21 runtime (~63MB)
-    - **ArcadeDB JARs**: Core database engine (~226MB)
-    - **JPype**: Bridge between Python and the bundled JVM
+    Everything needed to run ArcadeDB is included in the wheel: **Bundled JRE**
+    (Platform-specific Java 21 runtime, ~63MB), **ArcadeDB JARs** (Core database engine,
+    ~226MB), **JPype** (Bridge between Python and the bundled JVM).
 
 ## Community & Support
 
