@@ -125,6 +125,14 @@ jobs:
             runs-on: windows-2025
           - platform: windows/arm64
             runs-on: windows-11-arm
+        exclude:
+          # Windows ARM64 doesn't have Python 3.10, 3.13, or 3.14
+          - platform: windows/arm64
+            python-version: '3.10'
+          - platform: windows/arm64
+            python-version: '3.13'
+          - platform: windows/arm64
+            python-version: '3.14'
 
     steps:
       - name: Checkout code
@@ -186,9 +194,11 @@ jobs:
         shell: bash
         run: |
           # Install dependencies needed by examples
-          # Note: macOS Intel needs NumPy 1.x for PyTorch compatibility
+          # PyTorch is required by sentence-transformers, even on macOS
+          # For Python 3.13+, wheels might only be on PyTorch official index
           if [[ "$OSTYPE" == "darwin"* ]]; then
-            # macOS: Default wheels are CPU/MPS (no CUDA)
+            # macOS: Install CPU-only PyTorch (supports MPS acceleration)
+            pip install torch --index-url https://download.pytorch.org/whl/cpu
             pip install "numpy<2.0" requests sentence-transformers
           else
             # Linux & Windows: Install CPU-only PyTorch to save space (avoid CUDA)
@@ -404,7 +414,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: example-logs-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || matrix.platform == 'windows/amd64' && 'windows-amd64' || 'windows-arm64' }}
+          name: example-logs-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || matrix.platform == 'windows/amd64' && 'windows-amd64' || 'windows-arm64' }}-py${{ matrix.python-version }}
           path: |
             bindings/python/examples/*.log
             bindings/python/examples/example-results.txt
@@ -414,7 +424,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: example-databases-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || matrix.platform == 'windows/amd64' && 'windows-amd64' || 'windows-arm64' }}
+          name: example-databases-${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || matrix.platform == 'linux/arm64' && 'linux-arm64' || matrix.platform == 'darwin/amd64' && 'darwin-amd64' || matrix.platform == 'darwin/arm64' && 'darwin-arm64' || matrix.platform == 'windows/amd64' && 'windows-amd64' || 'windows-arm64' }}-py${{ matrix.python-version }}
           path: bindings/python/examples/my_test_databases/
           retention-days: 3
 
