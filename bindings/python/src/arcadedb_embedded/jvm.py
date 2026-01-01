@@ -70,41 +70,33 @@ def start_jvm():
 
     JVM Memory Configuration (via environment variables):
     -----------------------------------------------------
-    ARCADEDB_JVM_MAX_HEAP (default: "4g")
-        Maximum heap memory the JVM can use (e.g., "8g", "16g").
-        This is the main memory control - increase for large datasets.
-        Examples:
-            export ARCADEDB_JVM_MAX_HEAP="8g"    # 8 gigabytes
-            export ARCADEDB_JVM_MAX_HEAP="512m"  # 512 megabytes
-
     ARCADEDB_JVM_ARGS (optional)
-        Additional JVM arguments for advanced configuration.
+        JVM arguments for memory and advanced configuration (space-separated).
+        If not specified, defaults to: "-Xmx4g -Djava.awt.headless=true"
+
         Common memory-related options:
+            -Xmx<size>
+                Maximum heap memory (e.g., "-Xmx8g")
             -Xms<size>
-                Set initial heap size (recommended: same as -Xmx)
+                Initial heap size (recommended: same as -Xmx)
             -XX:MaxDirectMemorySize=<size>
                 Limit off-heap direct buffer memory
-            -XX:MaxMetaspaceSize=<size>
-                Limit metadata (class definitions) memory
+            -Darcadedb.vectorIndex.locationCacheSize=<count>
+                Max vector locations to cache (controls LSM vector memory)
+            -Darcadedb.vectorIndex.graphBuildCacheSize=<count>
+                Max vectors cached during HNSW graph build
 
         Examples:
-            # Set initial heap = max heap (eliminates resizing overhead)
-            export ARCADEDB_JVM_ARGS="-Xms8g"
+            # Production with 8GB heap and bounded vector caches
+            export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
+              -Darcadedb.vectorIndex.locationCacheSize=100000 \
+              -Darcadedb.vectorIndex.graphBuildCacheSize=3000"
 
-            # Multiple options (space-separated)
-            export ARCADEDB_JVM_ARGS="-Xms8g -XX:MaxDirectMemorySize=2g"
+            # Development/testing (smaller memory)
+            export ARCADEDB_JVM_ARGS="-Xmx2g -Xms2g"
 
     ARCADEDB_JVM_ERROR_FILE (optional)
         Path for JVM crash logs (default: ./log/hs_err_pid%p.log)
-
-    Performance Tips:
-    -----------------
-    For production or large datasets:
-        export ARCADEDB_JVM_MAX_HEAP="8g"
-        export ARCADEDB_JVM_ARGS="-Xms8g"  # Initial = Max (best practice)
-
-    For development/testing (smaller memory):
-        export ARCADEDB_JVM_MAX_HEAP="2g"
 
     Note: Environment variables must be set BEFORE importing arcadedb_embedded,
           as the JVM can only be configured once per Python process.
@@ -126,29 +118,20 @@ def start_jvm():
     # Get bundled JRE's JVM library path
     jvm_path = get_bundled_jre_lib_path()
 
-    # JVM Memory Configuration
-    # Maximum heap memory (most important setting for large datasets)
-    max_heap = os.environ.get("ARCADEDB_JVM_MAX_HEAP", "4g")
-
-    # Prepare JVM arguments
-    jvm_args = [
-        f"-Xmx{max_heap}",  # Max heap size
-        "-Djava.awt.headless=true",  # Headless mode for server use
-    ]
+    # JVM arguments: use env or defaults
+    jvm_args_str = os.environ.get("ARCADEDB_JVM_ARGS")
+    if jvm_args_str:
+        jvm_args = jvm_args_str.split()
+    else:
+        # Default: 4GB heap, headless mode
+        jvm_args = ["-Xmx4g", "-Djava.awt.headless=true"]
 
     # Configure JVM crash log location (hs_err_pid*.log files)
-    # Default: ./log/hs_err_pid%p.log (keeps crash logs with application logs)
     error_file = os.environ.get("ARCADEDB_JVM_ERROR_FILE")
     if error_file:
         jvm_args.append(f"-XX:ErrorFile={error_file}")
     else:
         jvm_args.append("-XX:ErrorFile=./log/hs_err_pid%p.log")
-
-    # Additional custom JVM arguments (for power users)
-    # Example: export ARCADEDB_JVM_ARGS="-Xms8g -XX:MaxDirectMemorySize=2g"
-    extra_args = os.environ.get("ARCADEDB_JVM_ARGS")
-    if extra_args:
-        jvm_args.extend(extra_args.split())
 
     try:
         # Always use bundled JRE

@@ -510,9 +510,14 @@ class Importer:
                     "outofmemoryerror",
                 ]
             ):
-                current_heap = os.environ.get("ARCADEDB_JVM_MAX_HEAP")
-                if current_heap:
-                    heap_msg = f"Current JVM heap: {current_heap}\n"
+                current_args = os.environ.get("ARCADEDB_JVM_ARGS")
+                if current_args and "-Xmx" in current_args:
+                    # Extract heap size from args
+                    import re
+
+                    match = re.search(r"-Xmx(\S+)", current_args)
+                    heap_size = match.group(1) if match else "unknown"
+                    heap_msg = f"Current JVM heap: {heap_size}\n"
                 else:
                     heap_msg = "Current JVM heap: 4g (default)\n"
 
@@ -520,7 +525,7 @@ class Importer:
                     f"Import failed ({format_type} -> {import_type}): Out of memory.\n"
                     f"{heap_msg}"
                     f"💡 Try increasing heap size with environment variable:\n"
-                    f'   export ARCADEDB_JVM_MAX_HEAP="8g"\n'
+                    f'   export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"\n'
                     f"   Note: Must be set BEFORE running Python (before JVM starts)\n"
                     f"Original error: {e}"
                 ) from e
