@@ -286,9 +286,9 @@ jobs:
               f.write("|--------|-------|\n")
 
               # Show test results
-              f.write("| ✅ Passed | ${{ steps.pytest.outputs.passed or 'N/A' }} |\n")
-              f.write("| ⏭️ Skipped | ${{ steps.pytest.outputs.skipped or 'N/A' }} |\n")
-              f.write("| ❌ Failed | ${{ steps.pytest.outputs.failed or 'N/A' }} |\n")
+              f.write("| ✅ Passed | ${{ steps.pytest.outputs.passed || 'N/A' }} |\n")
+              f.write("| ⏭️ Skipped | ${{ steps.pytest.outputs.skipped || 'N/A' }} |\n")
+              f.write("| ❌ Failed | ${{ steps.pytest.outputs.failed || 'N/A' }} |\n")
               f.write("\n")
 
               f.write("### 📦 Package Info:\n")
