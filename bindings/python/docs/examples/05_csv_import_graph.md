@@ -474,7 +474,7 @@ export ARCADEDB_JVM_ARGS="-Xms8g"
 
 ## Next Steps
 
-**[Example 06 - Vector Search: Movie Recommendations](06_vector_search_movies.md)** 🚧 **COMING SOON**
+**[Example 06 - Vector Search: Movie Recommendations](06_vector_search_recommendations.md)**
 
 Semantic similarity search with MovieLens data:
 - Generate embeddings from movie titles/genres
@@ -491,4 +491,4 @@ Semantic similarity search with MovieLens data:
 
 ---
 
-*Ready for graph databases? Start with [Example 05](../examples/05_csv_import_graph.py)!*
+*Ready for graph databases? View the [complete source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/05_csv_import_graph.py)!*
