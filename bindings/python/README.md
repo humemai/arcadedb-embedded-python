@@ -30,7 +30,7 @@ pip install arcadedb-embedded
 
 **Requirements:**
 
-- **Python 3.10–3.14** (packaged/tested on CPython 3.11) - No Java installation required!
+- **Python 3.10–3.14** (packaged/tested on CPython 3.12) - No Java installation required!
 - **Supported Platforms**: Prebuilt wheels for **6 platforms**
   - Linux: x86_64, ARM64
   - macOS: Intel (x86_64), Apple Silicon (ARM64)
