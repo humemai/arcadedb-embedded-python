@@ -252,5 +252,5 @@ Step 6: Performing semantic similarity searches...
 
 - [Database API](../api/database.md) - Core database operations
 - [Transactions](../api/transactions.md) - Transaction management
-- [Query Language](../api/query.md) - SQL and Cypher
+- [Query Guide](../guide/core/queries.md) - SQL and Cypher queries
 - [ArcadeDB Vector Search](https://docs.arcadedb.com/) - Official documentation
