@@ -165,9 +165,11 @@ FROM python-builder AS export
 # Stage 5: Test the built wheel
 FROM python:${PYTHON_VERSION}-slim AS tester
 
-# Install Java runtime for JPype
+# Install Java runtime and build tools for JPype
+# (build-essential may be needed if pip needs to compile jpype1 during install)
 RUN apt-get update && apt-get install -y \
     openjdk-21-jre-headless \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
