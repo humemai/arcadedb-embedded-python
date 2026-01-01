@@ -33,6 +33,31 @@ java -version
 ```
 ---
 
+### Package Import Errors
+
+**Problem**: Can't import arcadedb_embedded module
+
+**Solutions**:
+
+1. **Verify Installation**:
+   ```bash
+   pip show arcadedb-embedded
+   pip list | grep arcadedb
+   ```
+
+2. **Reinstall Package**:
+   ```bash
+   pip uninstall arcadedb-embedded
+   pip install arcadedb-embedded
+   ```
+
+3. **Check Python Path**:
+   ```python
+   import sys
+   print(sys.path)
+   ```
+---
+
 ### JPype Installation Fails
 
 **Symptom:**
@@ -107,6 +132,37 @@ if __name__ == "__main__":
 
 ---
 
+### Database Connection Issues
+
+**Problem**: Can't connect to database
+
+**Solutions**:
+
+1. **Check Database Path**:
+   ```python
+   import os
+   db_path = "databases/mydb"
+   print(f"Exists: {os.path.exists(db_path)}")
+   ```
+
+2. **Verify Database Created**:
+   ```python
+   import arcadedb_embedded as arcadedb
+
+   # Create if not exists
+   if not os.path.exists(db_path):
+       db = arcadedb.create_database(db_path)
+   else:
+       db = arcadedb.open_database(db_path)
+   ```
+
+3. **Check Permissions**:
+   ```bash
+   ls -la databases/
+   chmod -R 755 databases/
+   ```
+---
+
 ### Database Already Exists
 
 **Symptom:**
@@ -179,6 +235,74 @@ rm ./mydb/.lock
 
 ---
 
+### Memory Issues
+
+**Problem**: Out of memory errors
+
+**Solutions**:
+
+1. **Increase JVM Heap**:
+   ```python
+   import jpype
+
+   # Set before first import
+   jpype.startJVM("-Xmx4g")  # 4GB heap
+
+   import arcadedb_embedded as arcadedb
+   ```
+
+2. **Use Batch Processing**:
+   ```python
+   batch_size = 1000
+   for i in range(0, len(data), batch_size):
+       batch = data[i:i + batch_size]
+       process_batch(batch)
+   ```
+
+3. **Close ResultSets**:
+   ```python
+   result = db.query("sql", "SELECT FROM LargeTable")
+   try:
+       for row in result:
+           process(row)
+   finally:
+       result.close()
+   ```
+
+---
+
+### Data Type Issues
+
+**Problem**: Type conversion errors
+
+**Solutions**:
+
+1. **Use Correct Types**:
+   ```python
+   # Integer
+   vertex.set("age", 25)
+
+   # String
+   vertex.set("name", "Alice")
+
+   # List
+   vertex.set("tags", ["python", "database"])
+
+   # DateTime
+   from datetime import datetime
+   vertex.set("created", datetime.now())
+   ```
+
+2. **Convert NumPy Arrays**:
+   ```python
+   from arcadedb_embedded import to_java_float_array
+   import numpy as np
+
+   arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+   vertex.set("embedding", to_java_float_array(arr))
+   ```
+---
+
 ### Transaction Already Active
 
 **Symptom:**
@@ -246,6 +370,51 @@ Or quote strings in SQL:
 ```python
 db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
 #                                              ↑    ↑ quotes
+```
+
+---
+
+### Function Name Errors
+
+**Problem**: SQL function not recognized
+
+**Solutions**:
+
+1. **Check Function Name Case**:
+   ```python
+   # Wrong
+   db.command("sql", "INSERT INTO Product SET created = SYSDATE()")
+
+   # Correct
+   db.command("sql", "INSERT INTO Product SET created = sysdate()")
+   ```
+
+2. **Use Built-in Functions**:
+   ```python
+   # Date/time
+   db.command("sql", "INSERT INTO Event SET timestamp = sysdate()")
+
+   # UUID
+   db.command("sql", "INSERT INTO User SET id = uuid()")
+   ```
+
+---
+
+### Multi-line Query Issues
+
+**Problem**: SQL parser errors with complex queries
+
+**Solution**: Use single-line queries or proper escaping:
+```python
+# ✅ Single line
+query = "INSERT INTO Product SET name = 'test', created_at = sysdate()"
+
+# ✅ Multi-line with proper formatting
+query = """
+INSERT INTO Product SET
+    name = 'test',
+    created_at = sysdate()
+""".strip()
 ```
 
 ---
@@ -712,14 +881,14 @@ with DebugTransaction(db):
 ### Query Debugging
 
 ```python
-def debug_query(db, language, query, params=None):
+def debug_query(db, language, query, *args):
     """Execute query with debugging."""
     print(f"Query: {query}")
-    if params:
-        print(f"Params: {params}")
+    if args:
+        print(f"Params: {args}")
 
     try:
-        result = db.query(language, query, params)
+        result = db.query(language, query, *args)
         rows = list(result)
         print(f"Results: {len(rows)} rows")
         return rows

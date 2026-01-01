@@ -30,7 +30,7 @@ pip install arcadedb-embedded
 
 **Requirements:**
 
-- **Python 3.8+ only** - No Java installation required!
+- **Python 3.10–3.14** (packaged/tested on CPython 3.11) - No Java installation required!
 - **Supported Platforms**: Prebuilt wheels for **6 platforms**
   - Linux: x86_64, ARM64
   - macOS: Intel (x86_64), Apple Silicon (ARM64)
@@ -76,7 +76,7 @@ with arcadedb.create_database("/tmp/mydb") as db:
 - ⚡ **High performance**: Direct JVM integration via JPype
 - 🔒 **ACID transactions**: Full transaction support
 - 🎯 **Vector storage**: Store and query vector embeddings with JVector indexing
-- 📥 **Data import**: Built-in CSV, JSON, Neo4j importers
+- 📥 **Data import**: Built-in CSV, XML, ArcadeDB JSONL import
 
 ---
 
@@ -207,10 +207,16 @@ arcadedb_embedded/
 ├── server.py            # ArcadeDBServer for HTTP mode
 ├── results.py           # ResultSet and Result wrappers
 ├── transactions.py      # TransactionContext manager
+├── schema.py            # Schema management API
 ├── vector.py            # Vector search and JVector indexing
-├── importer.py          # Data import (CSV, JSON, Neo4j)
+├── importer.py          # Data import (CSV, XML)
+├── exporter.py          # Data export (JSONL, GraphML, GraphSON, CSV)
+├── batch.py             # Batch operations context
+├── async_executor.py    # Asynchronous query execution
+├── type_conversion.py   # Python-Java type conversion utilities
 ├── exceptions.py        # ArcadeDBError exception
-└── jvm.py              # JVM lifecycle management
+├── jvm.py               # JVM lifecycle management
+└── _version.py          # Package version info
 ```
 
 **[Architecture details](https://humemai.github.io/arcadedb-embedded-python/latest/development/architecture/)**

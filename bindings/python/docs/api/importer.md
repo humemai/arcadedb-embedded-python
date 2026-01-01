@@ -1,49 +1,19 @@
 # Importer API
 
-The `Importer` class and convenience functions provide high-performance data import capabilities for ArcadeDB, supporting multiple formats including JSON, CSV, and Neo4j exports.
+The `Importer` class and convenience functions provide high-performance data import capabilities for ArcadeDB. The Java importer supports CSV/TSV and XML. For full-database migrations, use ArcadeDB's native JSONL export/import via the `IMPORT DATABASE file://...` SQL command (see JSONL example below).
 
 ## Overview
 
 The importer uses streaming parsers for memory efficiency and performs batch transactions (default 1000 records per commit) for optimal performance. It can import data as documents, vertices, or edges depending on your schema needs.
 
 **Supported Formats:**
-- **JSON**: Single or multiple objects
 - **CSV/TSV**: Comma or tab-separated values
-- **Neo4j**: JSONL export format from Neo4j
+- **XML**: Attribute-focused importer
+- **ArcadeDB JSONL export/import**: Use `IMPORT DATABASE file://...` via SQL for full database moves (see example)
 
 ## Module Functions
 
-Convenience functions for common import tasks without creating an `Importer` instance:
-
-### `import_json(database, file_path, **options)`
-
-Import a JSON file containing one or more objects.
-
-**Parameters:**
-- `database` (Database): Database instance to import into
-- `file_path` (str): Path to JSON file
-- `**options`: Additional options
-  - `commit_every` (int): Records per transaction (default: 1000)
-  - `mapping` (Dict): JSON path to database type mappings (optional)
-
-**Returns:**
-- `Dict[str, Any]`: Import statistics with keys:
-  - `documents`: Number of documents imported
-  - `vertices`: Number of vertices imported
-  - `edges`: Number of edges imported
-  - `errors`: Number of errors encountered
-  - `duration_ms`: Import duration in milliseconds
-
-**Example:**
-```python
-import arcadedb_embedded as arcadedb
-
-db = arcadedb.open_database("./mydb")
-stats = arcadedb.import_json(db, "data.json")
-print(f"Imported {stats['documents']} documents in {stats['duration_ms']}ms")
-```
-
----
+Convenience functions for common import tasks without creating an `Importer` instance. These call the underlying Java importer (CSV/TSV, XML) or native SQL for full-database JSONL imports.
 
 ### `import_csv(database, file_path, type_name, **options)`
 
@@ -51,20 +21,17 @@ Import CSV or TSV files as documents, vertices, or edges.
 
 **Parameters:**
 - `database` (Database): Database instance
-- `file_path` (str): Path to CSV file
+- `file_path` (str): Path to CSV/TSV file
 - `type_name` (str): Target type name
 - `**options`: Format-specific options
-  - `delimiter` (str): Field delimiter (default: ',', use '\t' for TSV)
-  - `header` (bool): File has header row (default: True)
-  - `commit_every` (int): Records per transaction (default: 1000)
-  - `vertex_type` (str): Import as vertices (optional)
-  - `edge_type` (str): Import as edges (optional)
-  - `from_property` (str): Source column for edges (default: 'from')
-  - `to_property` (str): Target column for edges (default: 'to')
-  - `verbose` (bool): Print errors during import (default: False)
-
-**Returns:**
-- `Dict[str, Any]`: Import statistics
+    - `delimiter` (str): Field delimiter (default: ',', use '\t' for TSV)
+    - `header` (bool): File has header row (default: True)
+    - `commit_every` (int): Records per transaction (default: 1000)
+    - `vertex_type` (str): Import as vertices (optional)
+    - `edge_type` (str): Import as edges (optional)
+    - `from_property` (str): Source column for edges (default: 'from')
+    - `to_property` (str): Target column for edges (default: 'to')
+    - `verbose` (bool): Print errors during import (default: False)
 
 **Examples:**
 
@@ -76,58 +43,44 @@ stats = arcadedb.import_csv(db, "people.csv", "Person")
 **Import as Vertices:**
 ```python
 stats = arcadedb.import_csv(
-    db, "users.csv", "User",
-    vertex_type="User",
-    commit_every=500
+        db, "users.csv", "User",
+        vertex_type="User",
+        commit_every=500
 )
 ```
 
 **Import as Edges:**
 ```python
-# CSV must have columns for source and target RIDs
 stats = arcadedb.import_csv(
-    db, "follows.csv", "Follows",
-    edge_type="Follows",
-    from_property="user_rid",  # Column containing source RID
-    to_property="follows_rid",  # Column containing target RID
-    header=True
+        db, "follows.csv", "Follows",
+        edge_type="Follows",
+        from_property="user_rid",
+        to_property="follows_rid",
+        header=True
 )
 ```
 
 **Import TSV:**
 ```python
 stats = arcadedb.import_csv(
-    db, "data.tsv", "Data",
-    delimiter='\t'
+        db, "data.tsv", "Data",
+        delimiter='\t'
 )
 ```
 
----
+### ArcadeDB JSONL import (native SQL)
 
-### `import_neo4j(database, file_path, **options)`
+Use SQL `IMPORT DATABASE file://...` for JSONL exports produced by ArcadeDB. This preserves schema and data and is recommended for full migrations.
 
-Import Neo4j JSONL export files (created with `neo4j-admin export`).
-
-**Parameters:**
-- `database` (Database): Database instance
-- `file_path` (str): Path to Neo4j export file
-- `**options`: Additional options
-  - `commit_every` (int): Records per transaction (default: 1000)
-  - `verbose` (bool): Show detailed progress (default: False)
-
-**Returns:**
-- `Dict[str, Any]`: Import statistics
-
-**Example:**
 ```python
-stats = arcadedb.import_neo4j(db, "neo4j_export.jsonl", verbose=True)
-print(f"Imported {stats['vertices']} vertices and {stats['edges']} edges")
+import arcadedb_embedded as arcadedb
+
+db = arcadedb.create_database("./restored_db")
+db.command("sql", "IMPORT DATABASE file:///tmp/export.jsonl.tgz WITH commitEvery = 50000")
+db.close()
 ```
 
-**Note:** Neo4j imports use Java's `Neo4jImporter` which performs a 3-pass import:
-1. Schema analysis
-2. Vertex import
-3. Edge import
+For XML imports, use the `Importer` class directly (see below) with `format_type='xml'`.
 
 ---
 
@@ -158,10 +111,10 @@ Import data from a file with auto-detection or explicit format specification.
 
 **Parameters:**
 - `file_path` (str): Path to file to import
-- `format_type` (Optional[str]): Format type ('json', 'csv', 'neo4j')
-  - If None, auto-detects from file extension:
-    - `.json` → 'json'
-    - `.csv`, `.tsv` → 'csv'
+- `format_type` (Optional[str]): Format type ('csv', 'xml')
+    - If None, auto-detects from file extension:
+        - `.csv`, `.tsv` → 'csv'
+        - `.xml` → 'xml'
 - `type_name` (Optional[str]): Target type name (required for CSV)
 - `commit_every` (int): Records per transaction (default: 1000)
 - `**options`: Format-specific options (see individual format documentation)
@@ -288,38 +241,6 @@ stats = arcadedb.import_csv(
 - Edge type must exist in schema before import
 - Additional columns become edge properties
 
----
-
-### Neo4j Format
-
-Imports Neo4j JSONL exports created with:
-```bash
-neo4j-admin export --to=export.jsonl
-```
-
-**Process:**
-1. **Schema Pass**: Analyzes structure, creates types
-2. **Vertex Pass**: Imports all nodes as vertices
-3. **Edge Pass**: Imports all relationships as edges
-
-**Options:**
-- `verbose` (bool): Show detailed progress (default: False)
-
-**Example:**
-```python
-# Export from Neo4j:
-# neo4j-admin export --to=/tmp/mydb_export.jsonl
-
-# Import to ArcadeDB:
-stats = arcadedb.import_neo4j(db, "/tmp/mydb_export.jsonl", verbose=True)
-
-print(f"Vertices: {stats['vertices']}")
-print(f"Edges: {stats['edges']}")
-print(f"Time: {stats['duration_ms']}ms")
-```
-
----
-
 ## Performance Tips
 
 ### Batch Size
@@ -343,8 +264,7 @@ stats = arcadedb.import_csv(db, "data.csv", "Data", commit_every=5000)
 
 The importer uses streaming parsers:
 - **CSV**: Line-by-line processing (very efficient)
-- **JSON**: Uses Java's streaming parser
-- **Neo4j**: Multi-pass streaming
+- **XML**: Streaming parser; keep attributes consistent across rows
 
 ### Schema Pre-Creation
 
@@ -491,30 +411,24 @@ db.command("sql", "CREATE INDEX ON Product (category) NOTUNIQUE")
 db.close()
 ```
 
-### Neo4j Migration
+### ArcadeDB JSONL Import (native export)
+
+Use ArcadeDB's built-in SQL command to import JSONL exports created by `EXPORT DATABASE`.
 
 ```python
 import arcadedb_embedded as arcadedb
 
-# Export from Neo4j (run in Neo4j):
-# neo4j-admin export --to=/exports/mydb.jsonl
+db = arcadedb.create_database("./restored_db")
+import_path = "/exports/mydb.jsonl.tgz"  # JSONL export created by ArcadeDB
 
-# Import to ArcadeDB
-db = arcadedb.create_database("./migrated_db")
+# Use SQL IMPORT DATABASE with optional tuning parameters
+db.command("sql", f"IMPORT DATABASE file://{import_path} WITH commitEvery = 50000")
 
-stats = arcadedb.import_neo4j(
-    db, "/exports/mydb.jsonl",
-    commit_every=5000,
-    verbose=True
-)
-
-print(f"Migration complete!")
-print(f"Vertices: {stats['vertices']:,}")
-print(f"Edges: {stats['edges']:,}")
-print(f"Time: {stats['duration_ms'] / 1000:.2f}s")
-
+print("Import complete!")
 db.close()
 ```
+
+This approach preserves the full database (schema + data) and is the recommended path for large migrations or round-tripping ArcadeDB exports.
 
 ---
 

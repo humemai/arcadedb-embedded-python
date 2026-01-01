@@ -274,10 +274,6 @@ method_name(param1: type, param2: type = default) -> ReturnType
 result = obj.method_name("value", param2=True)
 ```
 
-**See Also:**
-
-- [Related Method](related.md)
-
 ## Testing Documentation
 
 ### Verify All Links Work

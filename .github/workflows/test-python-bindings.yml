@@ -107,13 +107,14 @@ jobs:
 
   # Second job: Build and test on each platform
   test:
-    name: Test arcadedb-embedded (${{ matrix.platform }})
+    name: Test arcadedb-embedded (${{ matrix.platform }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.runs-on }}
     needs: download-jars
     strategy:
       # Don't cancel other matrix jobs if one fails
       fail-fast: false
       matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
         include:
           - platform: linux/amd64
             runs-on: ubuntu-24.04
@@ -135,7 +136,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
       - name: Download ArcadeDB JARs artifact
         # Skip for Linux: Docker build downloads JARs from ArcadeDB image directly
@@ -190,7 +191,7 @@ jobs:
       - name: Set up Python for host testing
         uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
       # Note: Java is NOT required for arcadedb-embedded (JRE is bundled)
       # This package works without any external Java installation!

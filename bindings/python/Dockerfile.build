@@ -82,11 +82,12 @@ RUN echo "🔨 Building minimal JRE for platform: ${TARGET_PLATFORM}" && \
 
 # Stage 3: Build Python wheel
 
-FROM python:3.11-slim AS python-builder
+FROM python:3.12-slim AS python-builder
 
-# Install system dependencies (JDK needed for JPype at build/test time)
+# Install system dependencies (JDK needed for JPype at build/test time, build-essential for jpype1 compilation)
 RUN apt-get update && apt-get install -y \
     openjdk-21-jdk \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Set JAVA_HOME
@@ -160,7 +161,7 @@ FROM python-builder AS export
 # The dist directory is preserved from python-builder stage
 
 # Stage 5: Test the built wheel
-FROM python:3.11-slim AS tester
+FROM python:3.12-slim AS tester
 
 # Install Java runtime for JPype
 RUN apt-get update && apt-get install -y \

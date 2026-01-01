@@ -729,9 +729,9 @@ result = db.query("sql", "SELECT city, COUNT(*) FROM Person GROUP BY city")
 
 ## Additional Resources
 
-- [Example 05: CSV Import Graph](../examples/05_csv_import_graph.py) - Shows optimized bulk creation with Java API
-- [Example 02: Social Network](../examples/02_social_network_graph.py) - Shows both SQL and Cypher for queries
-- [Example 03: Vector Search](../examples/03_vector_search.py) - Uses Java API for vertex creation
+- [Example 05: CSV Import Graph](../examples/05_csv_import_graph.md) - Shows optimized bulk creation with Java API ([source](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/05_csv_import_graph.py))
+- [Example 02: Social Network](../examples/02_social_network_graph.md) - Shows both SQL and Cypher for queries ([source](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/02_social_network_graph.py))
+- [Example 03: Vector Search](../examples/03_vector_search.md) - Uses Java API for vertex creation ([source](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/03_vector_search.py))
 - [ArcadeDB SQL Documentation](https://docs.arcadedb.com/#SQL)
 - [ArcadeDB Cypher Documentation](https://docs.arcadedb.com/#Cypher)
 - [ArcadeDB Java API Documentation](https://docs.arcadedb.com/#Java-API)
