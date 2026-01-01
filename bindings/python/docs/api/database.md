@@ -378,6 +378,32 @@ with db.transaction():
 
 ---
 
+### lookup_by_rid
+
+```python
+db.lookup_by_rid(rid: str) -> Any
+```
+
+Lookup a record by its RID.
+
+**Parameters:**
+
+- `rid` (str): Record ID string (e.g. "#10:5")
+
+**Returns:**
+
+- `Record` object (Vertex, Document, or Edge) or `None` if not found
+
+**Example:**
+
+```python
+record = db.lookup_by_rid("#10:5")
+if record:
+    print(record.get("name"))
+```
+
+---
+
 ### create_vector_index
 
 ```python
@@ -387,7 +413,8 @@ db.create_vector_index(
     dimensions: int,
     distance_function: str = "cosine",
     max_connections: int = 32,
-    beam_width: int = 256
+    beam_width: int = 256,
+    quantization: str = None
 ) -> VectorIndex
 ```
 
@@ -401,8 +428,9 @@ Create a vector index for similarity search (default JVector implementation).
 - `vector_property` (str): Property storing vector arrays
 - `dimensions` (int): Vector dimensionality
 - `distance_function` (str): `"cosine"`, `"euclidean"`, or `"inner_product"`
-- `max_connections` (int): Max connections per node (default: 16). Maps to `maxConnections` in JVector.
-- `beam_width` (int): Beam width for search/construction (default: 200). Maps to `beamWidth` in JVector.
+- `max_connections` (int): Max connections per node (default: 32). Maps to `maxConnections` in JVector.
+- `beam_width` (int): Beam width for search/construction (default: 256). Maps to `beamWidth` in JVector.
+- `quantization` (str): Vector quantization type (default: None). Options: `"INT8"`, `"BINARY"`. Reduces memory usage and speeds up search at the cost of some precision.
 
 **Returns:**
 
