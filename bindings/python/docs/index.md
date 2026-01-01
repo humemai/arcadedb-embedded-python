@@ -2,7 +2,7 @@
 
 <div class="grid cards" markdown>
 
--   :material-rocket-launch:{ .lg .middle } __Production Ready__
+-   :material-rocket-launch:{ .lg .middle } **Production Ready**
 
     ---
 
@@ -11,7 +11,7 @@
     **Status**: ✅ Production Ready
     **Tests**: ✅ 204 + 7 Examples Passing
 
--   :fontawesome-brands-python:{ .lg .middle } __Pure Python API__
+-   :fontawesome-brands-python:{ .lg .middle } **Pure Python API**
 
     ---
 
@@ -19,7 +19,7 @@
 
     [:octicons-arrow-right-24: Quick Start](getting-started/quickstart.md)
 
--   :material-graph:{ .lg .middle } __Multi-Model Database__
+-   :material-graph:{ .lg .middle } **Multi-Model Database**
 
     ---
 
@@ -27,7 +27,7 @@
 
     [:octicons-arrow-right-24: Learn More](guide/core/database.md)
 
--   :material-lightning-bolt:{ .lg .middle } __High Performance__
+-   :material-lightning-bolt:{ .lg .middle } **High Performance**
 
     ---
 
@@ -50,14 +50,15 @@ ArcadeDB is a next-generation multi-model database that supports:
 
 ## Why Python Bindings?
 
-These bindings provide native Python access to ArcadeDB's full capabilities with __two access methods__:
+These bindings provide native Python access to ArcadeDB's full capabilities with **two
+access methods**:
 
 ### Java API (Embedded Mode)
 
-- __Direct JVM Integration__: Run database directly in your Python process via JPype
-- __Best Performance__: No network overhead, direct method calls
-- __Use Cases__: Single-process applications, high-performance scenarios
-- __Example__:
+- **Direct JVM Integration**: Run database directly in your Python process via JPype
+- **Best Performance**: No network overhead, direct method calls
+- **Use Cases**: Single-process applications, high-performance scenarios
+- **Example**:
   ```python
   with db.transaction():
       vertex = db.new_vertex("Person")
@@ -67,10 +68,10 @@ These bindings provide native Python access to ArcadeDB's full capabilities with
 
 ### HTTP API (Server Mode)
 
-- __Remote Access__: HTTP REST endpoints when server is running
-- __Multi-Language__: Any language can connect via HTTP
-- __Use Cases__: Multi-process applications, web services, remote access
-- __Example__:
+- **Remote Access**: HTTP REST endpoints when server is running
+- **Multi-Language**: Any language can connect via HTTP
+- **Use Cases**: Multi-process applications, web services, remote access
+- **Example**:
   ```python
   import requests
   from requests.auth import HTTPBasicAuth
@@ -83,13 +84,13 @@ These bindings provide native Python access to ArcadeDB's full capabilities with
   )
   ```
 
-Both APIs can be used __simultaneously__ on the same server instance.
+Both APIs can be used **simultaneously** on the same server instance.
 
 ## Additional Features
 
-- __Multiple Query Languages__: SQL, Cypher, Gremlin, MongoDB syntax
-- __ACID Transactions__: Full transactional guarantees
-- __Type Safety__: Pythonic API with proper error handling
+- **Multiple Query Languages**: SQL, Cypher, Gremlin, MongoDB syntax
+- **ACID Transactions**: Full transactional guarantees
+- **Type Safety**: Pythonic API with proper error handling
 
 ## Features
 
@@ -139,7 +140,8 @@ with arcadedb.create_database("/tmp/mydb") as db:
 
 ## Package Coverage
 
-These bindings provide **comprehensive coverage** of ArcadeDB's Java API, focusing on features most relevant to Python developers:
+These bindings provide **comprehensive coverage** of ArcadeDB's Java API, focusing on
+features most relevant to Python developers:
 
 | Module | Coverage | Description |
 |--------|----------|-------------|
@@ -176,19 +178,19 @@ import arcadedb_embedded as arcadedb
 
 <div class="grid cards" markdown>
 
--   :material-download:{ .lg .middle } [__Install__](getting-started/installation.md)
+-   :material-download:{ .lg .middle } [**Install**](getting-started/installation.md)
 
     Installation instructions
 
--   :material-run-fast:{ .lg .middle } [__Quick Start__](getting-started/quickstart.md)
+-   :material-run-fast:{ .lg .middle } [**Quick Start**](getting-started/quickstart.md)
 
     Get up and running in 5 minutes
 
--   :material-book-open-variant:{ .lg .middle } [__User Guide__](guide/core/database.md)
+-   :material-book-open-variant:{ .lg .middle } [**User Guide**](guide/core/database.md)
 
     Comprehensive guide to all features
 
--   :material-api:{ .lg .middle } [__API Reference__](api/database.md)
+-   :material-api:{ .lg .middle } [**API Reference**](api/database.md)
 
     Detailed API documentation
 
@@ -196,7 +198,7 @@ import arcadedb_embedded as arcadedb
 
 ## Requirements
 
-- **Python**: 3.10–3.14 (packaged; primary testing on 3.11)
+- **Python**: 3.10–3.14 (packaged; primary testing on 3.12)
 - **OS**: Linux, macOS, or Windows (x86_64 or ARM64)
 
 !!! note "Self-Contained"

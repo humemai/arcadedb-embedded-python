@@ -25,7 +25,7 @@ pytest tests/
 
 **Required:**
 
-- Python 3.10–3.14 (dev baseline 3.11)
+- Python 3.10–3.14 (dev baseline 3.12)
 - Java 21+ (JDK or JRE)
 - Docker (for building distributions)
 - Git
