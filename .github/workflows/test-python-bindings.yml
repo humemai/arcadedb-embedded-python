@@ -263,7 +263,7 @@ jobs:
 
           summary_file = os.environ.get('GITHUB_STEP_SUMMARY', '/dev/null')
 
-          with open(summary_file, 'a') as f:
+          with open(summary_file, 'a', encoding='utf-8') as f:
               f.write("## 🧪 Test Results: arcadedb-embedded (${{ matrix.platform }})\n")
               f.write("\n")
 
