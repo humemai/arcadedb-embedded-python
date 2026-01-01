@@ -46,7 +46,7 @@ arcadedb_embedded/
 
 **`importer.py`**
 - `Importer`: Data import orchestration
-- Format handlers (CSV, JSON, Neo4j)
+- Format handlers (CSV, XML, ArcadeDB JSONL)
 - Batch processing
 - Type inference
 
@@ -623,7 +623,7 @@ def download_arcadedb_jars(version):
 
 ## See Also
 
-- [Core API Reference](../api/core.md) - Database and record APIs
+- [Database API Reference](../api/database.md) - Core database operations
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions
 - [JPype Documentation](https://jpype.readthedocs.io/) - JPype library docs
 - [ArcadeDB Java API](https://docs.arcadedb.com/) - Underlying Java API

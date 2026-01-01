@@ -403,5 +403,4 @@ except Exception as e:
 
 - [Importer API Reference](../../api/importer.md)
 - [Data Import Guide](../../guide/import.md)
-- [CSV Import Examples](../../examples/import-csv/)
-- [Neo4j Migration Guide](../../examples/neo4j-migration/)
+- [Import Examples](../../examples/import.md)
