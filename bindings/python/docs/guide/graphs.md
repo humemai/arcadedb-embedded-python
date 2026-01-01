@@ -316,8 +316,92 @@ with db.transaction():
     edge.save()
 ```
 
+## Gremlin Queries {#gremlin-queries}
+
+ArcadeDB supports [Apache Gremlin](https://tinkerpop.apache.org/gremlin.html), the graph traversal language from Apache TinkerPop. Gremlin provides powerful functional-style graph operations.
+
+### Using Gremlin
+
+```python
+import arcadedb_embedded as arcadedb
+
+db = arcadedb.create_database("./graph_db", create_if_not_exists=True)
+
+# Create schema
+with db.transaction():
+    db.command("CREATE VERTEX TYPE Person IF NOT EXISTS")
+    db.command("CREATE EDGE TYPE Knows IF NOT EXISTS")
+
+# Insert data with Gremlin
+with db.transaction():
+    db.command("gremlin", """
+        g.addV('Person').property('name', 'Alice').property('age', 30)
+         .as('alice')
+         .addV('Person').property('name', 'Bob').property('age', 25)
+         .as('bob')
+         .addE('Knows').from('alice').to('bob')
+         .iterate()
+    """)
+
+# Query with Gremlin
+results = db.query("gremlin", """
+    g.V().hasLabel('Person').has('age', gt(25)).values('name')
+""")
+
+for record in results:
+    print(record)  # Outputs: Alice
+```
+
+### Gremlin vs Cypher vs SQL
+
+| Feature | Gremlin | Cypher | SQL |
+|---------|---------|--------|-----|
+| **Style** | Functional/Imperative | Declarative | Declarative |
+| **Graph Traversal** | ✅ Excellent | ✅ Excellent | ⚠️ Limited |
+| **Readability** | Medium | High | High |
+| **Standards Body** | Apache TinkerPop | openCypher | ANSI SQL |
+| **Best For** | Complex traversals | Pattern matching | Relational queries |
+
+### Common Gremlin Patterns
+
+```python
+# Find all vertices
+results = db.query("gremlin", "g.V()")
+
+# Find vertices by label
+results = db.query("gremlin", "g.V().hasLabel('Person')")
+
+# Find vertices by property
+results = db.query("gremlin", "g.V().has('name', 'Alice')")
+
+# Traverse outgoing edges
+results = db.query("gremlin", """
+    g.V().has('name', 'Alice')
+     .out('Knows')
+     .values('name')
+""")
+
+# Complex graph algorithms
+results = db.query("gremlin", """
+    g.V().has('name', 'Alice')
+     .repeat(out('Knows'))
+     .times(2)
+     .dedup()
+     .values('name')
+""")
+```
+
+### When to Use Gremlin
+
+- **Complex multi-hop traversals**: Following paths through the graph
+- **Graph algorithms**: PageRank, shortest path, community detection
+- **Imperative logic**: Need programmatic control over traversal
+- **Apache TinkerPop ecosystem**: Using TinkerPop-compatible tools
+
+For more details, see [Gremlin Tests](../development/testing/test-gremlin.md).
+
 ## Next Steps
 
 - **[Vector Search](vectors.md)**: Add vector embeddings to vertices for similarity search
-- **[Data Import](import.md)**: Import graph data from CSV, JSON, or Neo4j
+- **[Data Import](import.md)**: Import graph data from CSV, JSON, or ArcadeDB JSONL exports
 - **[Server Mode](server.md)**: Visualize your graph in Studio UI
