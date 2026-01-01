@@ -75,7 +75,7 @@ SHELL_PID=$!
 sleep 1
 
 # Find the Python child process (not the shell wrapper)
-# Match any python* process (python, python3, python3.11, etc.)
+# Match any python* process (python, python3, python3.12, etc.)
 PYTHON_PID=$(pgrep -P $SHELL_PID -f python 2> /dev/null | head -1)
 
 # If we didn't find a Python child, try looking for any child process
