@@ -2,7 +2,7 @@
 
 The `test_server.py` file contains **4 tests** covering basic server functionality.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_server.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_server.py){ .md-button }
 
 ## Overview
 
@@ -38,7 +38,7 @@ with db.transaction():
 # Query
 result = db.query("sql", "SELECT FROM Person")
 for person in result:
-    print(person.get_property("name"))
+    print(person.get("name"))
 
 # Stop server
 server.stop()
@@ -79,7 +79,7 @@ with arcadedb.create_server(root_path="./databases") as server:
     # Query
     result = db.query("sql", "SELECT FROM Person")
     for person in result:
-        print(person.get_property("name"))
+        print(person.get("name"))
 ```
 
 ### 3. Custom Configuration

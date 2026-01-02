@@ -117,8 +117,8 @@ with arcadedb.create_database("/tmp/quickstart") as db:
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
 
     for record in result:
-        name = record.get_property('name')
-        age = record.get_property('age')
+        name = record.get('name')
+        age = record.get('age')
         print(f"Name: {name}, Age: {age}")
 ```
 
@@ -170,17 +170,17 @@ def main():
         print("\n📋 All people:")
         result = db.query("sql", "SELECT FROM Person ORDER BY age")
         for record in result:
-            print(f"  - {record.get_property('name')}, age {record.get_property('age')}")
+            print(f"  - {record.get('name')}, age {record.get('age')}")
 
         # Query with filter
         print("\n🔍 People over 25:")
         result = db.query("sql", "SELECT FROM Person WHERE age > 25 ORDER BY age")
         for record in result:
-            print(f"  - {record.get_property('name')}, age {record.get_property('age')}")
+            print(f"  - {record.get('name')}, age {record.get('age')}")
 
         # Count
         result = db.query("sql", "SELECT count(*) as total FROM Person")
-        total = result[0].get_property('total')
+        total = result[0].get('total')
         print(f"\n📊 Total people: {total}")
 
 if __name__ == "__main__":

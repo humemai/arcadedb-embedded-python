@@ -2,7 +2,7 @@
 
 The `test_database_utils.py` file contains **5 tests** covering utility functions for database operations.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_database_utils.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_database_utils.py){ .md-button }
 
 ## Overview
 

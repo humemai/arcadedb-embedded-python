@@ -234,7 +234,7 @@ ResultSet (results.py)
 
 Result (results.py)
     ├─ get() → Any
-    ├─ get_property() → Any
+    ├─ get() → Any
     ├─ to_dict() → dict
     └─ to_json() → str
 ```

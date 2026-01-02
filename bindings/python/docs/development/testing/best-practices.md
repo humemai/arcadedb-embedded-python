@@ -152,7 +152,7 @@ arcadedb.import_csv(db, "people.csv", type_name="Person")
 # Good: Iterate directly
 result = db.query("sql", "SELECT FROM Person")
 for person in result:
-    process(person.get_property("name"))
+    process(person.get("name"))
 ```
 
 ### ✅ Convert to List When Needed
