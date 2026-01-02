@@ -144,7 +144,7 @@ try:
     person = result.next()
 
     # Property might not exist
-    phone = person.get_property("phone_number")  # Typo or missing
+    phone = person.get("phone_number")  # Typo or missing
 
 except ArcadeDBError as e:
     print(f"Property error: {e}")
@@ -288,7 +288,7 @@ def get_user_safely(db, email):
 # Usage
 user = get_user_safely(db, "alice@example.com")
 if user:
-    print(f"Found user: {user.get_property('name')}")
+    print(f"Found user: {user.get('name')}")
 else:
     print("User not found or error occurred")
 ```
