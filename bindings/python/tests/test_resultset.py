@@ -141,7 +141,7 @@ def test_resultset_first(temp_db_path):
         first_record = result.first()
 
         assert first_record is not None
-        assert first_record.get_property("value") == "first"
+        assert first_record.get("value") == "first"
 
         # Test first() returns None for empty results
         result_empty = db.query(
@@ -164,7 +164,7 @@ def test_resultset_one(temp_db_path):
         result = db.query("sql", "SELECT FROM OneTest WHERE value = 'unique'")
         record = result.one()
         assert record is not None
-        assert record.get_property("value") == "unique"
+        assert record.get("value") == "unique"
 
         # Test one() raises error for empty results
         try:
@@ -197,7 +197,7 @@ def test_resultset_iteration_patterns(temp_db_path):
 
         # Test traditional iteration
         result = db.query("sql", "SELECT FROM IterTest ORDER BY num")
-        nums_iter = [r.get_property("num") for r in result]
+        nums_iter = [r.get("num") for r in result]
         assert len(nums_iter) == 10
         assert nums_iter[0] == 0
         assert nums_iter[9] == 9
@@ -210,7 +210,7 @@ def test_resultset_iteration_patterns(temp_db_path):
         # Test first on iterated result
         result3 = db.query("sql", "SELECT FROM IterTest ORDER BY num DESC")
         first = result3.first()
-        assert first.get_property("num") == 9  # Descending order
+        assert first.get("num") == 9  # Descending order
 
 
 def test_result_representation(temp_db_path):
@@ -277,7 +277,7 @@ def test_resultset_with_complex_queries(temp_db_path):
         )
         highest_north = result2.first()
         assert highest_north is not None
-        assert highest_north.get_property("region") == "North"
+        assert highest_north.get("region") == "North"
 
 
 def test_resultset_empty_handling(temp_db_path):
@@ -355,4 +355,4 @@ def test_result_get_rid_and_vertex(temp_db_path):
         assert "Vertex" in str(vertex) or "Vertex" in vertex.getClass().getName()
 
         # Verify we can use the vertex object
-        assert vertex.getString("name") == "Alice"
+        assert vertex.get("name") == "Alice"

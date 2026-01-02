@@ -29,6 +29,9 @@ from .exceptions import ArcadeDBError
 # Import exporter classes
 from .exporter import export_database, export_to_csv
 
+# Import graph classes
+from .graph import Document, Edge, Vertex
+
 # Import importer classes
 from .importer import Importer, import_csv, import_xml
 

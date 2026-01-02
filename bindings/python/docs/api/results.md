@@ -42,8 +42,8 @@ result_set = db.command("sql", "SELECT * FROM Person LIMIT 10")
 ```python
 # Using for loop (most Pythonic)
 for result in result_set:
-    name = result.get_property("name")
-    age = result.get_property("age")
+    name = result.get("name")
+    age = result.get("age")
     print(f"{name}: {age}")
 
 # As iterator
@@ -148,7 +148,7 @@ for result in result_set:
 
 ---
 
-### `get_property(name: str) -> Any`
+### `get(name: str) -> Any`
 
 Get the value of a property by name.
 
@@ -158,7 +158,7 @@ Get the value of a property by name.
 
 **Returns:**
 
-- `Any`: Property value (type depends on the data)
+- `Any`: Property value (type depends on the data), or `None` if property doesn't exist
   - Automatically converts Java types to Python types
   - Java `Boolean` → Python `bool`
   - Java `Integer`/`Long` → Python `int`
@@ -166,21 +166,21 @@ Get the value of a property by name.
   - Java `String` → Python `str`
   - Java collections → Python lists/dicts
 
-**Raises:**
-
-- `ArcadeDBError`: If property doesn't exist or access fails
-
 **Example:**
 
 ```python
 result_set = db.query("sql", "SELECT name, age, active FROM User")
 
 for result in result_set:
-    name = result.get_property("name")     # str
-    age = result.get_property("age")       # int
-    active = result.get_property("active") # bool (converted from Java Boolean)
+    name = result.get("name")     # str
+    age = result.get("age")       # int
+    active = result.get("active") # bool (converted from Java Boolean)
 
     print(f"{name} is {age} years old, active: {active}")
+
+    # Handle optional properties with fallback
+    email = result.get("email") or "unknown@example.com"
+    print(f"Email: {email}")
 ```
 
 ---
@@ -204,7 +204,7 @@ result_set = db.query("sql", "SELECT * FROM Person")
 
 for result in result_set:
     if result.has_property("email"):
-        email = result.get_property("email")
+        email = result.get("email")
         print(f"Email: {email}")
     else:
         print("No email address")
@@ -230,7 +230,7 @@ for result in result_set:
     print(f"Properties: {', '.join(properties)}")
 
     for prop in properties:
-        value = result.get_property(prop)
+        value = result.get(prop)
         print(f"  {prop}: {value}")
 ```
 
@@ -300,12 +300,12 @@ users = [result.to_dict() for result in result_set]
 
 # List of specific property values
 result_set = db.query("sql", "SELECT name FROM User")
-names = [result.get_property("name") for result in result_set]
+names = [result.get("name") for result in result_set]
 
 # Dictionary keyed by ID
 result_set = db.query("sql", "SELECT id, name FROM User")
 user_map = {
-    result.get_property("id"): result.get_property("name")
+    result.get("id"): result.get("name")
     for result in result_set
 }
 ```
@@ -367,12 +367,12 @@ result_set = db.query("sql", "SELECT * FROM Product")
 for result in result_set:
     # Safely get optional properties
     discount = (
-        result.get_property("discount")
+        result.get("discount")
         if result.has_property("discount")
         else 0.0
     )
 
-    price = result.get_property("price")
+    price = result.get("price")
     final_price = price * (1 - discount)
     print(f"Price: ${final_price:.2f}")
 ```
@@ -386,14 +386,105 @@ result_set = db.query("sql", "SELECT FROM Person")
 
 for result in result_set:
     # Get ArcadeDB metadata
-    rid = result.get_property("@rid")      # Record ID (e.g., "#1:0")
-    rec_type = result.get_property("@type") # Type name (e.g., "Person")
+    rid = result.get("@rid")      # Record ID (e.g., "#1:0")
+    rec_type = result.get("@type") # Type name (e.g., "Person")
 
     # Get user properties
-    name = result.get_property("name")
+    name = result.get("name")
 
     print(f"[{rid}] {rec_type}: {name}")
 ```
+
+---
+
+### Converting Results to Vertices for Modification
+
+Query results are **read-only** by default. To modify a vertex or edge returned from a query, convert it to a mutable `Vertex` or `Edge` object using `.get_vertex()` or `.get_edge()`.
+
+#### `get_vertex() -> Optional[Vertex]`
+
+Convert a Result to a mutable Vertex object (if the result is a vertex).
+
+```python
+import arcadedb_embedded as arcadedb
+
+db = arcadedb.open_database("./mydb")
+
+# Query returns read-only Results
+result_set = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
+
+with db.transaction():
+    for result in result_set:
+        # Convert Result to mutable Vertex
+        vertex = result.get_vertex()
+
+        if vertex:
+            # Now you can modify it
+            vertex.set("age", 31)
+            vertex.set("updated", True)
+            vertex.save()
+
+            print(f"Updated: {result.get('name')}")
+```
+
+#### `get_edge() -> Optional[Edge]`
+
+Convert a Result to a mutable Edge object (if the result is an edge).
+
+```python
+# Query edges
+result_set = db.query("sql", "SELECT FROM FRIEND_OF")
+
+with db.transaction():
+    for result in result_set:
+        # Convert Result to mutable Edge
+        edge = result.get_edge()
+
+        if edge:
+            edge.set("strength", 0.95)
+            edge.save()
+```
+
+#### Full Example: Bulk Update with Caching
+
+```python
+import arcadedb_embedded as arcadedb
+
+db = arcadedb.open_database("./mydb")
+
+# Query all movies
+movies = list(db.query("sql", "SELECT FROM Movie"))
+print(f"Processing {len(movies)} movies...")
+
+with db.transaction():
+    for movie_result in movies:
+        # Convert to mutable vertex
+        movie = movie_result.get_vertex()
+
+        if not movie:
+            continue
+
+        # Modify the vertex
+        title = movie_result.get("title")
+
+        # Add embedding or update properties
+        movie.set("processed", True)
+        movie.set("updated_at", "2024-01-02")
+        movie.save()
+
+        print(f"✓ Updated: {title}")
+
+db.close()
+```
+
+**Key Distinction:**
+
+| Object | Read | Write |
+|--------|------|-------|
+| `Result` (from query) | ✅ Yes | ❌ No |
+| `Vertex`/`Edge` (mutable) | ✅ Yes | ✅ Yes |
+| Created with `db.new_vertex()` | ✅ Yes | ✅ Yes |
+| Looked up with `db.lookup_by_rid()` | ✅ Yes | ✅ Yes |
 
 ---
 
@@ -420,9 +511,9 @@ def search_users(name_pattern):
 
     for result in result_set:
         user = {
-            'name': result.get_property("name"),
-            'email': result.get_property("email"),
-            'created_at': result.get_property("created_at")
+            'name': result.get("name"),
+            'email': result.get("email"),
+            'created_at': result.get("created_at")
         }
         users.append(user)
 
@@ -460,8 +551,8 @@ query = """
 result_set = db.query("sql", query)
 
 for result in result_set:
-    person_name = result.get_property("name")
-    friends_of_friends = result.get_property("friends_of_friends")
+    person_name = result.get("name")
+    friends_of_friends = result.get("friends_of_friends")
 
     print(f"{person_name}'s extended network:")
 
@@ -501,10 +592,10 @@ print("Product Statistics by Category:")
 print("-" * 60)
 
 for result in result_set:
-    category = result.get_property("category")
-    count = result.get_property("product_count")
-    avg_price = result.get_property("avg_price")
-    max_price = result.get_property("max_price")
+    category = result.get("category")
+    count = result.get("product_count")
+    avg_price = result.get("avg_price")
+    max_price = result.get("max_price")
 
     print(f"{category}:")
     print(f"  Products: {count}")
@@ -564,8 +655,8 @@ result_set = db.query("cypher", cypher_query)
 
 print("TechCorp Employees:")
 for result in result_set:
-    employee = result.get_property("employee")
-    position = result.get_property("position")
+    employee = result.get("employee")
+    position = result.get("position")
     print(f"  {employee} - {position}")
 
 db.close()
@@ -583,11 +674,11 @@ result_set = db.query("sql", "SELECT * FROM Person")
 for result in result_set:
     try:
         # Safe property access
-        name = result.get_property("name")
+        name = result.get("name")
 
         # May not exist
         if result.has_property("phone"):
-            phone = result.get_property("phone")
+            phone = result.get("phone")
         else:
             phone = "N/A"
 
@@ -623,7 +714,7 @@ The `Result` class explicitly converts Java `Boolean` to Python `bool`:
 result_set = db.query("sql", "SELECT active FROM User")
 
 for result in result_set:
-    active = result.get_property("active")  # Python bool
+    active = result.get("active")  # Python bool
     if active:  # Works as expected
         print("User is active")
 ```
@@ -637,16 +728,16 @@ for result in result_set:
 ```python
 # Less efficient: Multiple property accesses
 for result in result_set:
-    if result.get_property("age") > 25:
-        name = result.get_property("name")
-        age = result.get_property("age")
+    if result.get("age") > 25:
+        name = result.get("name")
+        age = result.get("age")
         print(f"{name}: {age}")
 
 # More efficient: Access once, reuse
 for result in result_set:
-    age = result.get_property("age")
+    age = result.get("age")
     if age > 25:
-        name = result.get_property("name")
+        name = result.get("name")
         print(f"{name}: {age}")
 ```
 
@@ -675,7 +766,7 @@ result_set = db.query("sql", "SELECT * FROM LargeTable")
 # Process as you iterate (memory efficient)
 total = 0
 for result in result_set:
-    value = result.get_property("amount")
+    value = result.get("amount")
     total += value
 
 # Better than:

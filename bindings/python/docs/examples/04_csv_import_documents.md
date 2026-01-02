@@ -1,5 +1,7 @@
 # Example 04: CSV Import - Tables (Documents)
 
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/04_csv_import_documents.py){ .md-button }
+
 **Production-ready CSV import with automatic type inference, NULL handling, and index optimization**
 
 ## Overview
@@ -163,7 +165,7 @@ stats = arcadedb.import_csv(
 # Check for NULL values
 null_genres = list(db.query(
     "sql", "SELECT count(*) as c FROM Movie WHERE genres IS NULL"
-))[0].get_property("c")
+))[0].get("c")
 
 if null_genres > 0:
     print(f"   🔍 NULL values detected:")
@@ -819,8 +821,8 @@ movie_schema = db.get_schema().get_type("Movie")
 indexed_props = movie_schema.get_indexed_properties()
 
 # All 36.3M records are intact
-movie_count = list(db.query("sql", "SELECT count(*) as c FROM Movie"))[0].get_property("c")
-rating_count = list(db.query("sql", "SELECT count(*) as c FROM Rating"))[0].get_property("c")
+movie_count = list(db.query("sql", "SELECT count(*) as c FROM Movie"))[0].get("c")
+rating_count = list(db.query("sql", "SELECT count(*) as c FROM Rating"))[0].get("c")
 
 # Query performance is identical to original import
 result = db.query("sql", "SELECT FROM Movie WHERE movieId = 500")  # Fast indexed lookup!

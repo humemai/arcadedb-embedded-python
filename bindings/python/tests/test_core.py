@@ -32,8 +32,8 @@ def test_database_operations(temp_db_path):
 
         assert len(records) == 1
         record = records[0]
-        assert record.get_property("name") == "test"
-        assert record.get_property("value") == 42
+        assert record.get("name") == "test"
+        assert record.get("value") == 42
 
 
 def test_rich_data_types(temp_db_path):
@@ -104,26 +104,26 @@ def test_rich_data_types(temp_db_path):
         record = records[0]
 
         # Verify data types and values
-        assert record.get_property("title") == "Setup Development Environment"
-        assert record.get_property("priority") == "high"
-        assert record.get_property("completed") is False
-        assert record.get_property("estimated_hours") == 4.5
-        assert record.get_property("priority_score") == 8
-        assert record.get_property("cost") is not None  # DECIMAL type
-        assert record.get_property("task_id") is not None  # UUID as string
-        assert record.get_property("created_date") is not None  # DATE type
-        assert record.get_property("due_datetime") is not None  # DATETIME type
+        assert record.get("title") == "Setup Development Environment"
+        assert record.get("priority") == "high"
+        assert record.get("completed") is False
+        assert record.get("estimated_hours") == 4.5
+        assert record.get("priority_score") == 8
+        assert record.get("cost") is not None  # DECIMAL type
+        assert record.get("task_id") is not None  # UUID as string
+        assert record.get("created_date") is not None  # DATE type
+        assert record.get("due_datetime") is not None  # DATETIME type
 
         # Test aggregation queries
         result = db.query("sql", "SELECT count(*) as total FROM Task")
-        total = list(result)[0].get_property("total")
+        total = list(result)[0].get("total")
         assert total == 2
 
         # Test filtering by boolean
         result = db.query("sql", "SELECT FROM Task WHERE completed = true")
         completed_tasks = list(result)
         assert len(completed_tasks) == 1
-        assert completed_tasks[0].get_property("title") == "Write Documentation"
+        assert completed_tasks[0].get("title") == "Write Documentation"
 
         # Test UPDATE operations
         with db.transaction():
@@ -138,7 +138,7 @@ def test_rich_data_types(temp_db_path):
             "sql",
             "SELECT count(*) as completed_count FROM Task " "WHERE completed = true",
         )
-        completed_count = list(result)[0].get_property("completed_count")
+        completed_count = list(result)[0].get("completed_count")
         assert completed_count == 2
 
         # Test DELETE operations
@@ -147,7 +147,7 @@ def test_rich_data_types(temp_db_path):
 
         # Verify deletion
         result = db.query("sql", "SELECT count(*) as remaining FROM Task")
-        remaining = list(result)[0].get_property("remaining")
+        remaining = list(result)[0].get("remaining")
         assert remaining == 0
 
 
@@ -185,10 +185,10 @@ def test_arcadedb_sql_features(temp_db_path):
         record = records[0]
 
         # Verify function results
-        assert record.get_property("id") is not None  # UUID function worked
-        assert record.get_property("created_at") is not None  # sysDate() worked
-        assert record.get_property("custom_date") is not None  # date() worked
-        assert record.get_property("custom_datetime") is not None  # datetime() worked
+        assert record.get("id") is not None  # UUID function worked
+        assert record.get("created_at") is not None  # sysDate() worked
+        assert record.get("custom_date") is not None  # date() worked
+        assert record.get("custom_datetime") is not None  # datetime() worked
 
         # Test JSON-like document operations
         with db.transaction():
@@ -209,8 +209,8 @@ def test_arcadedb_sql_features(temp_db_path):
         result = db.query("sql", "SELECT FROM TestEntity WHERE name = 'Test Document'")
         doc_record = list(result)[0]
 
-        assert doc_record.get_property("name") == "Test Document"
-        metadata = doc_record.get_property("metadata")
+        assert doc_record.get("name") == "Test Document"
+        metadata = doc_record.get("metadata")
         assert metadata is not None
         # Metadata is a Java LinkedHashMap, not a Python dict
         assert hasattr(metadata, "get")  # Check it's a map-like object
@@ -228,7 +228,7 @@ def test_transactions(temp_db_path):
 
         # Verify data was committed
         result = db.query("sql", "SELECT count(*) as count FROM TransactionTest")
-        count = list(result)[0].get_property("count")
+        count = list(result)[0].get("count")
         assert count == 2
 
         # Test transaction rollback
@@ -241,7 +241,7 @@ def test_transactions(temp_db_path):
 
         # Verify rollback worked
         result = db.query("sql", "SELECT count(*) as count FROM TransactionTest")
-        count = list(result)[0].get_property("count")
+        count = list(result)[0].get("count")
         assert count == 2  # Should still be 2
 
 
@@ -263,21 +263,21 @@ def test_graph_operations(temp_db_path):
             bob.set("name", "Bob")
             bob.save()
 
-        # Create edge using Java API
+        # Create edge using Python API
         with db.transaction():
-            # Query vertices to get Java objects
+            # Query vertices to get Python Vertex objects
             alice_result = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
             bob_result = db.query("sql", "SELECT FROM Person WHERE name = 'Bob'")
 
             alice_wrapper = list(alice_result)[0]
             bob_wrapper = list(bob_result)[0]
 
-            # Extract Java vertices
-            alice_vertex = alice_wrapper._java_result.getElement().get().asVertex()
-            bob_vertex = bob_wrapper._java_result.getElement().get().asVertex()
+            # Extract Python vertices
+            alice_vertex = alice_wrapper.get_vertex()
+            bob_vertex = bob_wrapper.get_vertex()
 
-            # Create edge using vertex.newEdge()
-            edge = alice_vertex.newEdge("Knows", bob_vertex)
+            # Create edge using vertex.new_edge()
+            edge = alice_vertex.new_edge("Knows", bob_vertex)
             edge.save()
 
         # Test graph traversal
@@ -290,7 +290,7 @@ def test_graph_operations(temp_db_path):
         """,
         )
 
-        names = [record.get_property("value") for record in result]
+        names = [record.get("value") for record in result]
         assert "Bob" in names
 
 
@@ -322,7 +322,7 @@ def test_result_methods(temp_db_path):
 
         # Test property access
         assert record.has_property("name")
-        assert record.get_property("name") == "test"
+        assert record.get("name") == "test"
         assert not record.has_property("nonexistent")
 
         # Test property names
@@ -360,7 +360,7 @@ def test_cypher_queries(temp_db_path):
             result = db.query(
                 "cypher", "MATCH (p:Person) WHERE p.age > 20 RETURN p.name as name"
             )
-            names = [record.get_property("name") for record in result]
+            names = [record.get("name") for record in result]
 
             assert len(names) == 2
             assert "Alice" in names
@@ -396,36 +396,36 @@ def test_unicode_support(temp_db_path):
         result = db.query("sql", "SELECT FROM User WHERE name = 'José García'")
         records = list(result)
         assert len(records) == 1
-        assert records[0].get_property("name") == "José García"
-        assert records[0].get_property("city") == "São Paulo"
+        assert records[0].get("name") == "José García"
+        assert records[0].get("city") == "São Paulo"
 
         # Query Chinese characters
         result = db.query("sql", "SELECT FROM User WHERE city = '北京'")
         records = list(result)
         assert len(records) == 1
-        assert records[0].get_property("name") == "王小明"
+        assert records[0].get("name") == "王小明"
 
         # Query Japanese characters
         result = db.query("sql", "SELECT FROM User WHERE city = '東京'")
         records = list(result)
         assert len(records) == 1
-        assert records[0].get_property("name") == "田中太郎"
+        assert records[0].get("name") == "田中太郎"
 
         # Query Arabic characters
         result = db.query("sql", "SELECT FROM User WHERE name = 'محمد'")
         records = list(result)
         assert len(records) == 1
-        assert records[0].get_property("city") == "القاهرة"
+        assert records[0].get("city") == "القاهرة"
 
         # Query with emoji
         result = db.query("sql", "SELECT FROM User WHERE name = 'Test 😀'")
         records = list(result)
         assert len(records) == 1
-        assert records[0].get_property("description") == "🎉 Unicode test"
+        assert records[0].get("description") == "🎉 Unicode test"
 
         # Count all records
         result = db.query("sql", "SELECT count(*) as count FROM User")
-        count = list(result)[0].get_property("count")
+        count = list(result)[0].get("count")
         assert count == 5
 
 
@@ -450,12 +450,12 @@ def test_schema_queries(temp_db_path):
         records = list(result)
         assert len(records) == 1
         person_type = records[0]
-        assert person_type.get_property("name") == "Person"
+        assert person_type.get("name") == "Person"
 
         # Query all types
         result = db.query("sql", "SELECT FROM schema:types ORDER BY name")
         types = list(result)
-        type_names = [t.get_property("name") for t in types]
+        type_names = [t.get("name") for t in types]
         assert "Person" in type_names
         assert "Company" in type_names
         assert "WorksFor" in type_names
@@ -493,7 +493,7 @@ def test_large_result_set_handling(temp_db_path):
         count = 0
         last_id = -1
         for record in result:
-            record_id = record.get_property("id")
+            record_id = record.get("id")
             assert record_id > last_id, "Records should be ordered"
             last_id = record_id
             count += 1
@@ -514,7 +514,7 @@ def test_large_result_set_handling(temp_db_path):
         batches = list(result)
         assert len(batches) == 10  # 10 batches (0-9)
         for batch in batches:
-            assert batch.get_property("cnt") == 100
+            assert batch.get("cnt") == 100
 
 
 def test_property_type_conversions(temp_db_path):
@@ -541,34 +541,34 @@ def test_property_type_conversions(temp_db_path):
         record = list(result)[0]
 
         # Test type conversions
-        str_val = record.get_property("str_prop")
+        str_val = record.get("str_prop")
         assert str_val == "text"
 
-        int_val = record.get_property("int_prop")
+        int_val = record.get("int_prop")
         assert int_val == 42
         assert isinstance(int_val, int)
 
-        long_val = record.get_property("long_prop")
+        long_val = record.get("long_prop")
         assert long_val == 9223372036854775807
         assert isinstance(long_val, int)
 
-        float_val = record.get_property("float_prop")
+        float_val = record.get("float_prop")
         assert abs(float_val - 3.14) < 0.01
         assert isinstance(float_val, float)
 
-        double_val = record.get_property("double_prop")
+        double_val = record.get("double_prop")
         assert abs(double_val - 3.14159265359) < 0.0001
         assert isinstance(double_val, float)
 
-        bool_val = record.get_property("bool_prop")
+        bool_val = record.get("bool_prop")
         assert bool_val is True
         assert isinstance(bool_val, bool)
 
-        null_val = record.get_property("null_prop")
+        null_val = record.get("null_prop")
         assert null_val is None
 
         # Date should be converted to some Python type
-        date_val = record.get_property("date_prop")
+        date_val = record.get("date_prop")
         assert date_val is not None
 
 
@@ -603,29 +603,29 @@ def test_complex_graph_traversal(temp_db_path):
             diana.set("age", 28)
             diana.save()
 
-        # Create edges using Java API
+        # Create edges using Python API
         with db.transaction():
             # Query to get all vertices
             query_result = db.query("sql", "SELECT FROM Person")
             person_cache = {}
             for wrapper in query_result:
-                java_vertex = wrapper._java_result.getElement().get().asVertex()
-                name = wrapper.get_property("name")
-                person_cache[name] = java_vertex
+                vertex = wrapper.get_vertex()
+                name = wrapper.get("name")
+                person_cache[name] = vertex
 
             # Alice follows Bob and Charlie
-            edge1 = person_cache["Alice"].newEdge("Follows", person_cache["Bob"])
+            edge1 = person_cache["Alice"].new_edge("Follows", person_cache["Bob"])
             edge1.save()
 
-            edge2 = person_cache["Alice"].newEdge("Follows", person_cache["Charlie"])
+            edge2 = person_cache["Alice"].new_edge("Follows", person_cache["Charlie"])
             edge2.save()
 
             # Bob follows Diana
-            edge3 = person_cache["Bob"].newEdge("Follows", person_cache["Diana"])
+            edge3 = person_cache["Bob"].new_edge("Follows", person_cache["Diana"])
             edge3.save()
 
             # Charlie likes Bob
-            edge4 = person_cache["Charlie"].newEdge("Likes", person_cache["Bob"])
+            edge4 = person_cache["Charlie"].new_edge("Likes", person_cache["Bob"])
             edge4.save()
 
         # Test: Find who Alice follows
@@ -633,7 +633,7 @@ def test_complex_graph_traversal(temp_db_path):
             "sql",
             "SELECT expand(out('Follows').name) FROM Person " "WHERE name = 'Alice'",
         )
-        names = [r.get_property("value") for r in result]
+        names = [r.get("value") for r in result]
         assert "Bob" in names
         assert "Charlie" in names
 
@@ -643,21 +643,21 @@ def test_complex_graph_traversal(temp_db_path):
             "SELECT expand(out('Follows').out('Follows').name) "
             "FROM Person WHERE name = 'Alice'",
         )
-        names = [r.get_property("value") for r in result]
+        names = [r.get("value") for r in result]
         assert "Diana" in names
 
         # Test: Find who follows Bob
         result = db.query(
             "sql", "SELECT expand(in('Follows').name) FROM Person " "WHERE name = 'Bob'"
         )
-        names = [r.get_property("value") for r in result]
+        names = [r.get("value") for r in result]
         assert "Alice" in names
 
         # Test: Mixed edge types
         result = db.query(
             "sql", "SELECT expand(in('Likes').name) FROM Person " "WHERE name = 'Bob'"
         )
-        names = [r.get_property("value") for r in result]
+        names = [r.get("value") for r in result]
         assert "Charlie" in names
 
 
@@ -673,13 +673,13 @@ def test_lookup_by_rid(temp_db_path):
             user.set("name", "John Doe")
             user.save()
             # Get RID as string
-            rid = user.getIdentity().toString()
+            rid = str(user.get_identity())
 
         # Lookup by RID
         found_user = db.lookup_by_rid(rid)
         assert found_user is not None
         assert found_user.get("name") == "John Doe"
-        assert found_user.getIdentity().toString() == rid
+        assert str(found_user.get_identity()) == rid
 
         # Test lookup with invalid RID format
         with pytest.raises(arcadedb.ArcadeDBError):

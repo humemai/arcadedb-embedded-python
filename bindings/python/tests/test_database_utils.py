@@ -59,7 +59,7 @@ def test_drop_database(temp_db_path):
     # Verify data exists
     with db.transaction():
         result = db.query("sql", "SELECT count(*) as count FROM Test")
-        count = result.first().get_property("count")
+        count = result.first().get("count")
         assert count == 1
 
     # Drop the database
@@ -95,7 +95,7 @@ def test_database_methods_integration(temp_db_path):
 
         # Test first()
         first_person = result.first()
-        assert first_person.get_property("name") == "Alice"
+        assert first_person.get("name") == "Alice"
 
         # New query for to_list()
         result2 = db.query("sql", "SELECT FROM Person ORDER BY name")

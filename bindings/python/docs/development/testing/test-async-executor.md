@@ -2,7 +2,7 @@
 
 The `test_async_executor.py` file contains **8 tests** covering asynchronous operations and parallel execution.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_async_executor.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_async_executor.py){ .md-button }
 
 ## Overview
 

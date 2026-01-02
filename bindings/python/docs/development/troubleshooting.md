@@ -274,7 +274,8 @@ For applications using vector indexes, control memory usage:
 # Conservative: bounded caches for large vector datasets
 export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
   -Darcadedb.vectorIndex.locationCacheSize=100000 \
-  -Darcadedb.vectorIndex.graphBuildCacheSize=3000"
+  -Darcadedb.vectorIndex.graphBuildCacheSize=3000 \
+  -Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
 python vector_app.py
 ```
 
@@ -318,12 +319,14 @@ ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g"
 # Large datasets (10M+ records, 1M+ vectors) with bounded caches
 ARCADEDB_JVM_ARGS="-Xmx16g -Xms16g -XX:MaxDirectMemorySize=16g \
   -Darcadedb.vectorIndex.locationCacheSize=100000 \
-  -Darcadedb.vectorIndex.graphBuildCacheSize=5000"
+  -Darcadedb.vectorIndex.graphBuildCacheSize=5000 \
+  -Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
 
 # High-dimensional vectors (e.g., 1536-dim embeddings)
 ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
   -Darcadedb.vectorIndex.locationCacheSize=50000 \
-  -Darcadedb.vectorIndex.graphBuildCacheSize=2000"
+  -Darcadedb.vectorIndex.graphBuildCacheSize=2000 \
+  -Darcadedb.vectorIndex.mutationsBeforeRebuild=150"
 ```
 
 !!! warning "Configuration Timing"
