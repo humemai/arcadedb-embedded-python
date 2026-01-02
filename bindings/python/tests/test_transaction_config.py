@@ -72,7 +72,7 @@ def test_transaction_config_with_operations(temp_db):
 
     # Verify data was written
     result = temp_db.query("sql", "SELECT count(*) as cnt FROM ConfigTest")
-    count = next(result).get_property("cnt")
+    count = next(result).get("cnt")
     assert count == 2
 
     # Switch to performance mode
@@ -85,7 +85,7 @@ def test_transaction_config_with_operations(temp_db):
 
     # Verify
     result = temp_db.query("sql", "SELECT count(*) as cnt FROM ConfigTest")
-    count = next(result).get_property("cnt")
+    count = next(result).get("cnt")
     assert count == 3
 
 
@@ -106,7 +106,7 @@ def test_manual_transaction_mode(temp_db):
         # Verify data was written
         with temp_db.transaction():
             result = temp_db.query("sql", "SELECT count(*) as cnt FROM ManualTest")
-            count = next(result).get_property("cnt")
+            count = next(result).get("cnt")
 
         assert count == 2
 
@@ -128,7 +128,7 @@ def test_wal_flush_with_batch_operations(temp_db):
 
     # Verify all records were written
     result = temp_db.query("sql", "SELECT count(*) as cnt FROM BatchTest")
-    count = next(result).get_property("cnt")
+    count = next(result).get("cnt")
     assert count == 500
 
     # Test with maximum performance
@@ -140,7 +140,7 @@ def test_wal_flush_with_batch_operations(temp_db):
 
     # Verify all records were written
     result = temp_db.query("sql", "SELECT count(*) as cnt FROM BatchTest")
-    count = next(result).get_property("cnt")
+    count = next(result).get("cnt")
     assert count == 1000
 
 
@@ -181,7 +181,7 @@ def test_combined_config_changes(temp_db):
 
     # Verify everything worked
     result = temp_db.query("sql", "SELECT count(*) as cnt FROM Combined")
-    count = next(result).get_property("cnt")
+    count = next(result).get("cnt")
     assert count == 2
 
     # Restore durability settings

@@ -67,20 +67,20 @@ Performance Optimization: Index-Based Vertex Lookups
 For Phase 2 graph creation, vertex caching uses O(1) index lookups instead of
 SQL IN queries for dramatically better performance:
 
-FAST (O(1) per vertex - lookupByKey):
+FAST (O(1) per vertex - lookup_by_key):
     for vid in vertex_ids:
-        cursor = graph_db._java_db.lookupByKey("VertexType", ["Id"], [vid])
-        if cursor.hasNext():
-            cache[vid] = cursor.next().getRecord().asVertex()
+        vertex = graph_db.lookup_by_key("VertexType", ["Id"], [vid])
+        if vertex:
+            cache[vid] = vertex
 
 SLOW (O(n) - SQL IN operator):
     ids_str = ",".join(str(id) for id in vertex_ids)
     query = f"SELECT FROM VertexType WHERE Id IN [{ids_str}]"
     for result in graph_db.query("sql", query):
-        cache[result.get_property("Id")] = result._java_result.getElement().get().asVertex()
+        cache[result.get("Id")] = result
 
 Why: SQL IN queries with large ID lists are slow even with indexes. Direct
-lookupByKey() uses the index for O(1) access per vertex, resulting in 10-100x
+lookup_by_key() uses the index for O(1) access per vertex, resulting in 10-100x
 speedup for vertex caching operations. This optimization requires that the
 lookup field (Id) has a UNIQUE or NOTUNIQUE index defined.
 """
@@ -188,17 +188,17 @@ class StackOverflowValidator:
             (
                 "Count users",
                 "SELECT count(*) as count FROM User",
-                lambda r: r[0].get_property("count") > 0,
+                lambda r: r[0].get("count") > 0,
             ),
             (
                 "Count posts",
                 "SELECT count(*) as count FROM Post",
-                lambda r: r[0].get_property("count") > 0,
+                lambda r: r[0].get("count") > 0,
             ),
             (
                 "Count comments",
                 "SELECT count(*) as count FROM Comment",
-                lambda r: r[0].get_property("count") > 0,
+                lambda r: r[0].get("count") > 0,
             ),
             (
                 "Find user by ID",
@@ -218,22 +218,22 @@ class StackOverflowValidator:
             (
                 "Count badges",
                 "SELECT count(*) as count FROM Badge",
-                lambda r: r[0].get_property("count") > 0,
+                lambda r: r[0].get("count") > 0,
             ),
             (
                 "Count votes",
                 "SELECT count(*) as count FROM Vote",
-                lambda r: r[0].get_property("count") > 0,
+                lambda r: r[0].get("count") > 0,
             ),
             (
                 "Count tags",
                 "SELECT count(*) as count FROM Tag",
-                lambda r: r[0].get_property("count") > 0,
+                lambda r: r[0].get("count") > 0,
             ),
             (
                 "Count post links",
                 "SELECT count(*) as count FROM PostLink",
-                lambda r: r[0].get_property("count") > 0,
+                lambda r: r[0].get("count") > 0,
             ),
         ]
 
@@ -318,7 +318,7 @@ class StackOverflowValidator:
 
         for entity in entities:
             result = list(db.query("sql", f"SELECT count(*) as count FROM {entity}"))
-            count = result[0].get_property("count")
+            count = result[0].get("count")
             counts[entity] = count
             total_count += count
 
@@ -529,8 +529,8 @@ class StackOverflowValidator:
             post_sample = list(db.query("sql", "SELECT Id FROM Post LIMIT 100"))
 
             if user_sample and post_sample:
-                random_user_id = random.choice(user_sample).get_property("Id")
-                random_post_id = random.choice(post_sample).get_property("Id")
+                random_user_id = random.choice(user_sample).get("Id")
+                random_post_id = random.choice(post_sample).get("Id")
 
                 queries_valid = StackOverflowValidator.run_phase1_validation_queries(
                     db, random_user_id, random_post_id, indent=f"{indent}     "
@@ -679,7 +679,7 @@ class StackOverflowValidator:
             result = list(
                 db.query("sql", f"SELECT count(*) as count FROM {vertex_type}")
             )
-            count = result[0].get_property("count")
+            count = result[0].get("count")
             counts[vertex_type] = count
             total_count += count
 
@@ -764,7 +764,7 @@ class StackOverflowValidator:
 
         for edge_type in edge_types:
             result = list(db.query("sql", f"SELECT count(*) as count FROM {edge_type}"))
-            count = result[0].get_property("count")
+            count = result[0].get("count")
             counts[edge_type] = count
             total_count += count
 
@@ -827,86 +827,86 @@ class StackOverflowValidator:
                 "sql",
                 "Count User vertices",
                 "SELECT count(*) as count FROM User",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count Question vertices",
                 "SELECT count(*) as count FROM Question",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count Answer vertices",
                 "SELECT count(*) as count FROM Answer",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count Tag vertices",
                 "SELECT count(*) as count FROM Tag",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count Badge vertices",
                 "SELECT count(*) as count FROM Badge",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count Comment vertices",
                 "SELECT count(*) as count FROM Comment",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             # === Edge Count Queries (SQL) ===
             (
                 "sql",
                 "Count ASKED edges",
                 "SELECT count(*) as count FROM ASKED",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count ANSWERED edges",
                 "SELECT count(*) as count FROM ANSWERED",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count HAS_ANSWER edges",
                 "SELECT count(*) as count FROM HAS_ANSWER",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count ACCEPTED_ANSWER edges",
                 "SELECT count(*) as count FROM ACCEPTED_ANSWER",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count TAGGED_WITH edges",
                 "SELECT count(*) as count FROM TAGGED_WITH",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count COMMENTED_ON edges",
                 "SELECT count(*) as count FROM COMMENTED_ON",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count EARNED edges",
                 "SELECT count(*) as count FROM EARNED",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
                 "Count LINKED_TO edges",
                 "SELECT count(*) as count FROM LINKED_TO",
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             # === User Activity Queries ===
             (
@@ -919,7 +919,7 @@ class StackOverflowValidator:
                 ORDER BY question_count DESC
                 LIMIT 1
                 """,
-                lambda r: len(r) > 0 and r[0].get_property("question_count") > 0,
+                lambda r: len(r) > 0 and r[0].get("question_count") > 0,
             ),
             (
                 "sql",
@@ -931,7 +931,7 @@ class StackOverflowValidator:
                 ORDER BY answer_count DESC
                 LIMIT 1
                 """,
-                lambda r: len(r) > 0 and r[0].get_property("answer_count") > 0,
+                lambda r: len(r) > 0 and r[0].get("answer_count") > 0,
             ),
             (
                 "sql",
@@ -943,7 +943,7 @@ class StackOverflowValidator:
                 ORDER BY badge_count DESC
                 LIMIT 1
                 """,
-                lambda r: len(r) > 0 and r[0].get_property("badge_count") > 0,
+                lambda r: len(r) > 0 and r[0].get("badge_count") > 0,
             ),
             # === Question-Answer Relationship Queries ===
             (
@@ -965,7 +965,7 @@ class StackOverflowValidator:
                 FROM Question
                 WHERE out('ACCEPTED_ANSWER').size() > 0
                 """,
-                lambda r: r[0].get_property("count") >= 0,
+                lambda r: r[0].get("count") >= 0,
             ),
             (
                 "sql",
@@ -975,7 +975,7 @@ class StackOverflowValidator:
                 FROM Answer
                 WHERE in('HAS_ANSWER').size() = 0
                 """,
-                lambda r: r[0].get_property("orphan_count") >= 0,
+                lambda r: r[0].get("orphan_count") >= 0,
             ),
             # === Tag Queries (optional - may be 0 in small datasets) ===
             (
@@ -1011,7 +1011,7 @@ class StackOverflowValidator:
                 FROM Comment
                 WHERE out('COMMENTED_ON').size() > 0
                 """,
-                lambda r: r[0].get_property("linked_count") > 0,
+                lambda r: r[0].get("linked_count") > 0,
             ),
             (
                 "sql",
@@ -1047,7 +1047,7 @@ class StackOverflowValidator:
                 FROM ASKED
                 WHERE CreationDate IS NOT NULL
                 """,
-                lambda r: r[0].get_property("with_date") > 0,
+                lambda r: r[0].get("with_date") > 0,
             ),
             (
                 "sql",
@@ -1058,7 +1058,7 @@ class StackOverflowValidator:
                 FROM ANSWERED
                 WHERE CreationDate IS NOT NULL
                 """,
-                lambda r: r[0].get_property("with_date") > 0,
+                lambda r: r[0].get("with_date") > 0,
             ),
             (
                 "sql",
@@ -1068,7 +1068,7 @@ class StackOverflowValidator:
                 FROM EARNED
                 WHERE Date IS NOT NULL AND Class IS NOT NULL
                 """,
-                lambda r: r[0].get_property("complete_count") >= 0,
+                lambda r: r[0].get("complete_count") >= 0,
             ),
             (
                 "sql",
@@ -1079,7 +1079,7 @@ class StackOverflowValidator:
                 FROM LINKED_TO
                 WHERE LinkTypeId IS NOT NULL
                 """,
-                lambda r: r[0].get_property("with_type") > 0,
+                lambda r: r[0].get("with_type") > 0,
             ),
             # === Multi-hop Traversal Queries (Gremlin) ===
             (
@@ -1125,7 +1125,7 @@ class StackOverflowValidator:
                  .where(__.out('ASKED'))
                  .count()
                 """,
-                lambda r: len(r) > 0 and int(r[0].get_property("result")) > 0,
+                lambda r: len(r) > 0 and int(r[0].get("result")) > 0,
             ),
         ]
 
@@ -1205,7 +1205,7 @@ class StackOverflowValidator:
                         for prop in prop_names:
                             try:
                                 if first.has_property(prop):
-                                    val = first.get_property(prop)
+                                    val = first.get(prop)
                                     props.append(f"{prop}={val}")
                             except Exception:
                                 pass
@@ -2216,14 +2216,10 @@ class Phase1XMLImporter:
         # Sample random IDs
         try:
             user_sample = list(self.db.query("sql", "SELECT Id FROM User LIMIT 100"))
-            random_user_id = (
-                random.choice(user_sample).get_property("Id") if user_sample else 1
-            )
+            random_user_id = random.choice(user_sample).get("Id") if user_sample else 1
 
             post_sample = list(self.db.query("sql", "SELECT Id FROM Post LIMIT 100"))
-            random_post_id = (
-                random.choice(post_sample).get_property("Id") if post_sample else 1
-            )
+            random_post_id = random.choice(post_sample).get("Id") if post_sample else 1
         except Exception:
             random_user_id = 1
             random_post_id = 1
@@ -2263,7 +2259,7 @@ class Phase1XMLImporter:
                         ]
                         for prop in prop_names:
                             if first.has_property(prop):
-                                props[prop] = first.get_property(prop)
+                                props[prop] = first.get(prop)
                     except Exception:
                         pass
 
@@ -2785,13 +2781,13 @@ class Phase2GraphConverter:
             for user in chunk:
                 # Extract properties
                 vertex_data = {
-                    "Id": user.get_property("Id"),
-                    "DisplayName": user.get_property("DisplayName"),
-                    "Reputation": user.get_property("Reputation"),
-                    "CreationDate": user.get_property("CreationDate"),
-                    "Views": user.get_property("Views"),
-                    "UpVotes": user.get_property("UpVotes"),
-                    "DownVotes": user.get_property("DownVotes"),
+                    "Id": user.get("Id"),
+                    "DisplayName": user.get("DisplayName"),
+                    "Reputation": user.get("Reputation"),
+                    "CreationDate": user.get("CreationDate"),
+                    "Views": user.get("Views"),
+                    "UpVotes": user.get("UpVotes"),
+                    "DownVotes": user.get("DownVotes"),
                 }
 
                 batch.append(vertex_data)
@@ -2813,7 +2809,7 @@ class Phase2GraphConverter:
             batch = []
 
             # Update pagination cursor
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
 
@@ -2862,19 +2858,19 @@ class Phase2GraphConverter:
             chunk_answers = []
 
             for post in chunk:
-                post_type_id = post.get_property("PostTypeId")
+                post_type_id = post.get("PostTypeId")
 
                 if post_type_id == 1:  # Question
                     vertex_data = {
-                        "Id": post.get_property("Id"),
-                        "Title": post.get_property("Title"),
-                        "Body": post.get_property("Body"),
-                        "Score": post.get_property("Score"),
-                        "ViewCount": post.get_property("ViewCount"),
-                        "CreationDate": post.get_property("CreationDate"),
-                        "AnswerCount": post.get_property("AnswerCount"),
-                        "CommentCount": post.get_property("CommentCount"),
-                        "FavoriteCount": post.get_property("FavoriteCount"),
+                        "Id": post.get("Id"),
+                        "Title": post.get("Title"),
+                        "Body": post.get("Body"),
+                        "Score": post.get("Score"),
+                        "ViewCount": post.get("ViewCount"),
+                        "CreationDate": post.get("CreationDate"),
+                        "AnswerCount": post.get("AnswerCount"),
+                        "CommentCount": post.get("CommentCount"),
+                        "FavoriteCount": post.get("FavoriteCount"),
                         # Vote aggregates will be added later
                         "UpVotes": 0,
                         "DownVotes": 0,
@@ -2884,11 +2880,11 @@ class Phase2GraphConverter:
 
                 elif post_type_id == 2:  # Answer
                     vertex_data = {
-                        "Id": post.get_property("Id"),
-                        "Body": post.get_property("Body"),
-                        "Score": post.get_property("Score"),
-                        "CreationDate": post.get_property("CreationDate"),
-                        "CommentCount": post.get_property("CommentCount"),
+                        "Id": post.get("Id"),
+                        "Body": post.get("Body"),
+                        "Score": post.get("Score"),
+                        "CreationDate": post.get("CreationDate"),
+                        "CommentCount": post.get("CommentCount"),
                         # Vote aggregates will be added later
                         "UpVotes": 0,
                         "DownVotes": 0,
@@ -2927,7 +2923,7 @@ class Phase2GraphConverter:
                 answer_count += len(chunk_answers)
 
             # Update pagination cursor (after all inserts for this chunk)
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
 
@@ -2992,9 +2988,9 @@ class Phase2GraphConverter:
 
             # Aggregate votes from this chunk (in-memory processing)
             for vote in chunk:
-                post_id = vote.get_property("PostId")
-                vote_type = vote.get_property("VoteTypeId")
-                bounty = vote.get_property("BountyAmount") or 0
+                post_id = vote.get("PostId")
+                vote_type = vote.get("VoteTypeId")
+                bounty = vote.get("BountyAmount") or 0
 
                 if post_id not in post_votes:
                     post_votes[post_id] = {"up": 0, "down": 0, "bounty": 0}
@@ -3023,7 +3019,7 @@ class Phase2GraphConverter:
             )
 
             # Update pagination cursor
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         query_phase_time = time.time() - overall_start
 
@@ -3146,9 +3142,9 @@ class Phase2GraphConverter:
 
             for tag in chunk:
                 vertex_data = {
-                    "Id": tag.get_property("Id"),
-                    "TagName": tag.get_property("TagName"),
-                    "Count": tag.get_property("Count"),
+                    "Id": tag.get("Id"),
+                    "TagName": tag.get("TagName"),
+                    "Count": tag.get("Count"),
                 }
 
                 batch.append(vertex_data)
@@ -3170,7 +3166,7 @@ class Phase2GraphConverter:
             batch = []
 
             # Update pagination cursor
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
 
@@ -3211,10 +3207,10 @@ class Phase2GraphConverter:
 
             for badge in chunk:
                 vertex_data = {
-                    "Id": badge.get_property("Id"),
-                    "Name": badge.get_property("Name"),
-                    "Date": badge.get_property("Date"),
-                    "Class": badge.get_property("Class"),
+                    "Id": badge.get("Id"),
+                    "Name": badge.get("Name"),
+                    "Date": badge.get("Date"),
+                    "Class": badge.get("Class"),
                 }
 
                 batch.append(vertex_data)
@@ -3236,7 +3232,7 @@ class Phase2GraphConverter:
             batch = []
 
             # Update pagination cursor
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
 
@@ -3277,10 +3273,10 @@ class Phase2GraphConverter:
 
             for comment in chunk:
                 vertex_data = {
-                    "Id": comment.get_property("Id"),
-                    "Text": comment.get_property("Text"),
-                    "Score": comment.get_property("Score"),
-                    "CreationDate": comment.get_property("CreationDate"),
+                    "Id": comment.get("Id"),
+                    "Text": comment.get("Text"),
+                    "Score": comment.get("Score"),
+                    "CreationDate": comment.get("CreationDate"),
                 }
 
                 batch.append(vertex_data)
@@ -3302,7 +3298,7 @@ class Phase2GraphConverter:
             batch = []
 
             # Update pagination cursor
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
 
@@ -3371,7 +3367,7 @@ class Phase2GraphConverter:
     def _create_asked_edges(self, doc_db):
         """Create ASKED edges: User -> Question.
 
-        Uses vertex.newEdge() method (like example 05) for performance.
+        Uses vertex.new_edge() method (like example 05) for performance.
         Caches Java vertex objects for batch edge creation.
         """
         count = 0
@@ -3405,27 +3401,27 @@ class Phase2GraphConverter:
 
             # Build vertex cache using O(1) index lookups
             cache_start = time.time()
-            user_ids = list({p.get_property("OwnerUserId") for p in chunk})
-            question_ids = list({p.get_property("Id") for p in chunk})
+            user_ids = list({p.get("OwnerUserId") for p in chunk})
+            question_ids = list({p.get("Id") for p in chunk})
 
             user_cache = {}
             question_cache = {}
 
             # Fetch User vertices using direct index lookup (O(1))
             for uid in user_ids:
-                cursor = self.graph_db._java_db.lookupByKey("User", ["Id"], [uid])
-                if cursor.hasNext():
-                    user_cache[uid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("User", ["Id"], [uid])
+                if vertex:
+                    user_cache[uid] = vertex
 
             # Fetch Question vertices using direct index lookup (O(1))
             for qid in question_ids:
-                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [qid])
-                if cursor.hasNext():
-                    question_cache[qid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Question", ["Id"], [qid])
+                if vertex:
+                    question_cache[qid] = vertex
 
             cache_time = time.time() - cache_start
 
-            # Create edges using vertex.newEdge()
+            # Create edges using vertex.new_edge()
             db_start = time.time()
             edges_created = 0
             skipped_missing_user = 0
@@ -3433,15 +3429,15 @@ class Phase2GraphConverter:
             with self.graph_db.transaction():
                 # Process all records from chunk (already filtered by SQL)
                 for post in chunk:
-                    user_id = post.get_property("OwnerUserId")
-                    question_id = post.get_property("Id")
-                    creation_date = post.get_property("CreationDate")
+                    user_id = post.get("OwnerUserId")
+                    question_id = post.get("Id")
+                    creation_date = post.get("CreationDate")
 
                     user_vertex = user_cache.get(user_id)
                     question_vertex = question_cache.get(question_id)
 
                     if user_vertex and question_vertex:
-                        edge = user_vertex.newEdge("ASKED", question_vertex)
+                        edge = user_vertex.new_edge("ASKED", question_vertex)
                         if creation_date:
                             edge.set(
                                 "CreationDate", self._to_epoch_millis(creation_date)
@@ -3475,7 +3471,7 @@ class Phase2GraphConverter:
                 item_name="edges",
             )
 
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
         print_summary_stats(
@@ -3508,7 +3504,7 @@ class Phase2GraphConverter:
     def _create_answered_edges(self, doc_db):
         """Create ANSWERED edges: User -> Answer.
 
-        Uses vertex.newEdge() method (like example 05) for performance.
+        Uses vertex.new_edge() method (like example 05) for performance.
         """
         count = 0
         batch_times = []
@@ -3537,40 +3533,40 @@ class Phase2GraphConverter:
 
             # Build vertex cache using O(1) index lookups
             cache_start = time.time()
-            user_ids = list({p.get_property("OwnerUserId") for p in chunk})
-            answer_ids = list({p.get_property("Id") for p in chunk})
+            user_ids = list({p.get("OwnerUserId") for p in chunk})
+            answer_ids = list({p.get("Id") for p in chunk})
 
             user_cache = {}
             answer_cache = {}
 
             # Fetch User vertices using direct index lookup (O(1))
             for uid in user_ids:
-                cursor = self.graph_db._java_db.lookupByKey("User", ["Id"], [uid])
-                if cursor.hasNext():
-                    user_cache[uid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("User", ["Id"], [uid])
+                if vertex:
+                    user_cache[uid] = vertex
 
             # Fetch Answer vertices using direct index lookup (O(1))
             for aid in answer_ids:
-                cursor = self.graph_db._java_db.lookupByKey("Answer", ["Id"], [aid])
-                if cursor.hasNext():
-                    answer_cache[aid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Answer", ["Id"], [aid])
+                if vertex:
+                    answer_cache[aid] = vertex
 
             cache_time = time.time() - cache_start
 
-            # Create edges using vertex.newEdge()
+            # Create edges using vertex.new_edge()
             db_start = time.time()
             edges_created = 0
             with self.graph_db.transaction():
                 for post in chunk:
-                    user_id = post.get_property("OwnerUserId")
-                    answer_id = post.get_property("Id")
-                    creation_date = post.get_property("CreationDate")
+                    user_id = post.get("OwnerUserId")
+                    answer_id = post.get("Id")
+                    creation_date = post.get("CreationDate")
 
                     user_vertex = user_cache.get(user_id)
                     answer_vertex = answer_cache.get(answer_id)
 
                     if user_vertex and answer_vertex:
-                        edge = user_vertex.newEdge("ANSWERED", answer_vertex)
+                        edge = user_vertex.new_edge("ANSWERED", answer_vertex)
                         if creation_date:
                             edge.set(
                                 "CreationDate", self._to_epoch_millis(creation_date)
@@ -3594,7 +3590,7 @@ class Phase2GraphConverter:
                 item_name="edges",
             )
 
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
         print_summary_stats(
@@ -3610,7 +3606,7 @@ class Phase2GraphConverter:
     def _create_has_answer_edges(self, doc_db):
         """Create HAS_ANSWER edges: Question -> Answer.
 
-        Uses vertex.newEdge() method (like example 05) for performance.
+        Uses vertex.new_edge() method (like example 05) for performance.
         """
         count = 0
         batch_times = []
@@ -3639,39 +3635,39 @@ class Phase2GraphConverter:
 
             # Build vertex cache using O(1) index lookups
             cache_start = time.time()
-            question_ids = list({p.get_property("ParentId") for p in chunk})
-            answer_ids = list({p.get_property("Id") for p in chunk})
+            question_ids = list({p.get("ParentId") for p in chunk})
+            answer_ids = list({p.get("Id") for p in chunk})
 
             question_cache = {}
             answer_cache = {}
 
             # Fetch Question vertices using direct index lookup (O(1))
             for qid in question_ids:
-                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [qid])
-                if cursor.hasNext():
-                    question_cache[qid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Question", ["Id"], [qid])
+                if vertex:
+                    question_cache[qid] = vertex
 
             # Fetch Answer vertices using direct index lookup (O(1))
             for aid in answer_ids:
-                cursor = self.graph_db._java_db.lookupByKey("Answer", ["Id"], [aid])
-                if cursor.hasNext():
-                    answer_cache[aid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Answer", ["Id"], [aid])
+                if vertex:
+                    answer_cache[aid] = vertex
 
             cache_time = time.time() - cache_start
 
-            # Create edges using vertex.newEdge()
+            # Create edges using vertex.new_edge()
             db_start = time.time()
             edges_created = 0
             with self.graph_db.transaction():
                 for post in chunk:
-                    question_id = post.get_property("ParentId")
-                    answer_id = post.get_property("Id")
+                    question_id = post.get("ParentId")
+                    answer_id = post.get("Id")
 
                     question_vertex = question_cache.get(question_id)
                     answer_vertex = answer_cache.get(answer_id)
 
                     if question_vertex and answer_vertex:
-                        edge = question_vertex.newEdge("HAS_ANSWER", answer_vertex)
+                        edge = question_vertex.new_edge("HAS_ANSWER", answer_vertex)
                         edge.save()
                         edges_created += 1
 
@@ -3691,7 +3687,7 @@ class Phase2GraphConverter:
                 item_name="edges",
             )
 
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
         print_summary_stats(
@@ -3707,7 +3703,7 @@ class Phase2GraphConverter:
     def _create_accepted_answer_edges(self, doc_db):
         """Create ACCEPTED_ANSWER edges: Question -> Answer.
 
-        Uses vertex.newEdge() method (like example 05) for performance.
+        Uses vertex.new_edge() method (like example 05) for performance.
         """
         count = 0
         batch_times = []
@@ -3736,39 +3732,41 @@ class Phase2GraphConverter:
 
             # Build vertex cache using O(1) index lookups
             cache_start = time.time()
-            question_ids = list({p.get_property("Id") for p in chunk})
-            answer_ids = list({p.get_property("AcceptedAnswerId") for p in chunk})
+            question_ids = list({p.get("Id") for p in chunk})
+            answer_ids = list({p.get("AcceptedAnswerId") for p in chunk})
 
             question_cache = {}
             answer_cache = {}
 
             # Fetch Question vertices using direct index lookup (O(1))
             for qid in question_ids:
-                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [qid])
-                if cursor.hasNext():
-                    question_cache[qid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Question", ["Id"], [qid])
+                if vertex:
+                    question_cache[qid] = vertex
 
             # Fetch Answer vertices using direct index lookup (O(1))
             for aid in answer_ids:
-                cursor = self.graph_db._java_db.lookupByKey("Answer", ["Id"], [aid])
-                if cursor.hasNext():
-                    answer_cache[aid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Answer", ["Id"], [aid])
+                if vertex:
+                    answer_cache[aid] = vertex
 
             cache_time = time.time() - cache_start
 
-            # Create edges using vertex.newEdge()
+            # Create edges using vertex.new_edge()
             db_start = time.time()
             edges_created = 0
             with self.graph_db.transaction():
                 for post in chunk:
-                    question_id = post.get_property("Id")
-                    answer_id = post.get_property("AcceptedAnswerId")
+                    question_id = post.get("Id")
+                    answer_id = post.get("AcceptedAnswerId")
 
                     question_vertex = question_cache.get(question_id)
                     answer_vertex = answer_cache.get(answer_id)
 
                     if question_vertex and answer_vertex:
-                        edge = question_vertex.newEdge("ACCEPTED_ANSWER", answer_vertex)
+                        edge = question_vertex.new_edge(
+                            "ACCEPTED_ANSWER", answer_vertex
+                        )
                         edge.save()
                         edges_created += 1
 
@@ -3788,7 +3786,7 @@ class Phase2GraphConverter:
                 item_name="edges",
             )
 
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
         print_summary_stats(
@@ -3807,7 +3805,7 @@ class Phase2GraphConverter:
         Parse Tags field (format: '<tag1><tag2><tag3>') and create
         edges to Tag vertices.
 
-        Uses vertex.newEdge() method (like example 05) for performance.
+        Uses vertex.new_edge() method (like example 05) for performance.
         """
         count = 0
         batch_times = []
@@ -3834,13 +3832,11 @@ class Phase2GraphConverter:
                 break
 
             # Update last_rid from the last record of the SCANNED batch
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
             # Filter for Questions with Tags
             filtered_chunk = [
-                p
-                for p in chunk
-                if p.get_property("PostTypeId") == 1 and p.get_property("Tags")
+                p for p in chunk if p.get("PostTypeId") == 1 and p.get("Tags")
             ]
 
             # Parse tags and build cache (Java vertex objects)
@@ -3850,8 +3846,8 @@ class Phase2GraphConverter:
             question_tag_map = {}
 
             for post in filtered_chunk:
-                question_id = post.get_property("Id")
-                tags_str = post.get_property("Tags")
+                question_id = post.get("Id")
+                tags_str = post.get("Tags")
 
                 if tags_str:
                     # Parse tags (handle both '|tag|' and '<tag>' formats)
@@ -3872,9 +3868,9 @@ class Phase2GraphConverter:
 
             # Fetch Question vertices using direct index lookup (O(1))
             for qid in question_ids:
-                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [qid])
-                if cursor.hasNext():
-                    question_cache[qid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Question", ["Id"], [qid])
+                if vertex:
+                    question_cache[qid] = vertex
 
             # Fetch Tag vertices - lookup by TagName (no index, use SQL)
             # Note: Could optimize by adding TagName index in schema creation
@@ -3883,13 +3879,13 @@ class Phase2GraphConverter:
                 tag_query = f"SELECT FROM Tag WHERE TagName = '{escaped_tag}'"
                 result_set = self.graph_db.query("sql", tag_query)
                 for result in result_set:
-                    vertex = result._java_result.getElement().get().asVertex()
+                    vertex = result.get_vertex()
                     tag_cache[tag_name] = vertex
                     break  # Only need first result
 
             cache_time = time.time() - cache_start
 
-            # Create edges using vertex.newEdge()
+            # Create edges using vertex.new_edge()
             db_start = time.time()
             edges_created = 0
             with self.graph_db.transaction():
@@ -3900,7 +3896,7 @@ class Phase2GraphConverter:
                         for tag_name in tags:
                             tag_vertex = tag_cache.get(tag_name)
                             if tag_vertex:
-                                edge = question_vertex.newEdge(
+                                edge = question_vertex.new_edge(
                                     "TAGGED_WITH", tag_vertex
                                 )
                                 edge.save()
@@ -3941,7 +3937,7 @@ class Phase2GraphConverter:
         Comments can reference either Questions (PostTypeId=1) or
         Answers (PostTypeId=2).
 
-        Uses vertex.newEdge() method (like example 05) for performance.
+        Uses vertex.new_edge() method (like example 05) for performance.
         """
         count = 0
         batch_times = []
@@ -3968,8 +3964,8 @@ class Phase2GraphConverter:
 
             # Build vertex cache (Java vertex objects)
             cache_start = time.time()
-            comment_ids = list({c.get_property("Id") for c in chunk})
-            post_ids = list({c.get_property("PostId") for c in chunk})
+            comment_ids = list({c.get("Id") for c in chunk})
+            post_ids = list({c.get("PostId") for c in chunk})
 
             comment_cache = {}
             question_cache = {}
@@ -3977,33 +3973,33 @@ class Phase2GraphConverter:
 
             # Fetch Comment vertices using O(1) index lookup
             for cid in comment_ids:
-                cursor = self.graph_db._java_db.lookupByKey("Comment", ["Id"], [cid])
-                if cursor.hasNext():
-                    comment_cache[cid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Comment", ["Id"], [cid])
+                if vertex:
+                    comment_cache[cid] = vertex
 
             # Fetch Question and Answer vertices using O(1) index lookup
             for pid in post_ids:
                 # Try to find in Questions
-                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [pid])
-                if cursor.hasNext():
-                    question_cache[pid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Question", ["Id"], [pid])
+                if vertex:
+                    question_cache[pid] = vertex
                 else:
                     # Try to find in Answers
-                    cursor = self.graph_db._java_db.lookupByKey("Answer", ["Id"], [pid])
-                    if cursor.hasNext():
-                        answer_cache[pid] = cursor.next().getRecord().asVertex()
+                    vertex = self.graph_db.lookup_by_key("Answer", ["Id"], [pid])
+                    if vertex:
+                        answer_cache[pid] = vertex
 
             cache_time = time.time() - cache_start
 
-            # Create edges using vertex.newEdge()
+            # Create edges using vertex.new_edge()
             db_start = time.time()
             edges_created = 0
             with self.graph_db.transaction():
                 for comment in chunk:
-                    comment_id = comment.get_property("Id")
-                    post_id = comment.get_property("PostId")
-                    creation_date = comment.get_property("CreationDate")
-                    score = comment.get_property("Score")
+                    comment_id = comment.get("Id")
+                    post_id = comment.get("PostId")
+                    creation_date = comment.get("CreationDate")
+                    score = comment.get("Score")
 
                     comment_vertex = comment_cache.get(comment_id)
                     # Check if post is a Question or Answer
@@ -4012,7 +4008,7 @@ class Phase2GraphConverter:
                     )
 
                     if comment_vertex and post_vertex:
-                        edge = comment_vertex.newEdge("COMMENTED_ON", post_vertex)
+                        edge = comment_vertex.new_edge("COMMENTED_ON", post_vertex)
                         if creation_date:
                             edge.set(
                                 "CreationDate", self._to_epoch_millis(creation_date)
@@ -4038,7 +4034,7 @@ class Phase2GraphConverter:
                 item_name="edges",
             )
 
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
         print_summary_stats(
@@ -4054,7 +4050,7 @@ class Phase2GraphConverter:
     def _create_earned_edges(self, doc_db):
         """Create EARNED edges: User -> Badge.
 
-        Uses vertex.newEdge() method (like example 05) for performance.
+        Uses vertex.new_edge() method (like example 05) for performance.
         """
         count = 0
         batch_times = []
@@ -4080,41 +4076,41 @@ class Phase2GraphConverter:
 
             # Build vertex cache (Java vertex objects)
             cache_start = time.time()
-            user_ids = list({b.get_property("UserId") for b in chunk})
-            badge_ids = list({b.get_property("Id") for b in chunk})
+            user_ids = list({b.get("UserId") for b in chunk})
+            badge_ids = list({b.get("Id") for b in chunk})
 
             user_cache = {}
             badge_cache = {}
 
             # Fetch User vertices using O(1) index lookup
             for uid in user_ids:
-                cursor = self.graph_db._java_db.lookupByKey("User", ["Id"], [uid])
-                if cursor.hasNext():
-                    user_cache[uid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("User", ["Id"], [uid])
+                if vertex:
+                    user_cache[uid] = vertex
 
             # Fetch Badge vertices using O(1) index lookup
             for bid in badge_ids:
-                cursor = self.graph_db._java_db.lookupByKey("Badge", ["Id"], [bid])
-                if cursor.hasNext():
-                    badge_cache[bid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Badge", ["Id"], [bid])
+                if vertex:
+                    badge_cache[bid] = vertex
 
             cache_time = time.time() - cache_start
 
-            # Create edges using vertex.newEdge()
+            # Create edges using vertex.new_edge()
             db_start = time.time()
             edges_created = 0
             with self.graph_db.transaction():
                 for badge in chunk:
-                    user_id = badge.get_property("UserId")
-                    badge_id = badge.get_property("Id")
-                    date = badge.get_property("Date")
-                    badge_class = badge.get_property("Class")
+                    user_id = badge.get("UserId")
+                    badge_id = badge.get("Id")
+                    date = badge.get("Date")
+                    badge_class = badge.get("Class")
 
                     user_vertex = user_cache.get(user_id)
                     badge_vertex = badge_cache.get(badge_id)
 
                     if user_vertex and badge_vertex:
-                        edge = user_vertex.newEdge("EARNED", badge_vertex)
+                        edge = user_vertex.new_edge("EARNED", badge_vertex)
                         if date:
                             edge.set("Date", self._to_epoch_millis(date))
                         if badge_class is not None:
@@ -4138,7 +4134,7 @@ class Phase2GraphConverter:
                 item_name="edges",
             )
 
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
         print_summary_stats(
@@ -4157,7 +4153,7 @@ class Phase2GraphConverter:
         PostLink contains PostId, RelatedPostId, and LinkTypeId.
         Both posts can be Questions or Answers.
 
-        Uses vertex.newEdge() method (like example 05) for performance.
+        Uses vertex.new_edge() method (like example 05) for performance.
         """
         count = 0
         batch_times = []
@@ -4187,40 +4183,40 @@ class Phase2GraphConverter:
             cache_start = time.time()
             post_ids = set()
             for link in chunk:
-                post_ids.add(link.get_property("PostId"))
-                post_ids.add(link.get_property("RelatedPostId"))
+                post_ids.add(link.get("PostId"))
+                post_ids.add(link.get("RelatedPostId"))
 
             post_cache = {}
 
             # Fetch Post vertices (Questions and Answers) using O(1) index lookup
             for pid in post_ids:
                 # Try to find in Questions
-                cursor = self.graph_db._java_db.lookupByKey("Question", ["Id"], [pid])
-                if cursor.hasNext():
-                    post_cache[pid] = cursor.next().getRecord().asVertex()
+                vertex = self.graph_db.lookup_by_key("Question", ["Id"], [pid])
+                if vertex:
+                    post_cache[pid] = vertex
                 else:
                     # Try to find in Answers
-                    cursor = self.graph_db._java_db.lookupByKey("Answer", ["Id"], [pid])
-                    if cursor.hasNext():
-                        post_cache[pid] = cursor.next().getRecord().asVertex()
+                    vertex = self.graph_db.lookup_by_key("Answer", ["Id"], [pid])
+                    if vertex:
+                        post_cache[pid] = vertex
 
             cache_time = time.time() - cache_start
 
-            # Create edges using vertex.newEdge()
+            # Create edges using vertex.new_edge()
             db_start = time.time()
             edges_created = 0
             with self.graph_db.transaction():
                 for link in chunk:
-                    post_id = link.get_property("PostId")
-                    related_id = link.get_property("RelatedPostId")
-                    link_type = link.get_property("LinkTypeId")
-                    creation_date = link.get_property("CreationDate")
+                    post_id = link.get("PostId")
+                    related_id = link.get("RelatedPostId")
+                    link_type = link.get("LinkTypeId")
+                    creation_date = link.get("CreationDate")
 
                     from_vertex = post_cache.get(post_id)
                     to_vertex = post_cache.get(related_id)
 
                     if from_vertex and to_vertex:
-                        edge = from_vertex.newEdge("LINKED_TO", to_vertex)
+                        edge = from_vertex.new_edge("LINKED_TO", to_vertex)
                         if link_type is not None:
                             edge.set("LinkTypeId", link_type)
                         if creation_date:
@@ -4246,7 +4242,7 @@ class Phase2GraphConverter:
                 item_name="edges",
             )
 
-            last_rid = chunk[-1].get_property("rid")
+            last_rid = chunk[-1].get("rid")
 
         elapsed = time.time() - start
         print_summary_stats(
@@ -4271,15 +4267,14 @@ class Phase2GraphConverter:
         with self.graph_db.transaction():
             for vertex_data in batch:
                 # Convert datetime objects to epoch milliseconds for Java
-                converted_data = {}
+                vertex = self.graph_db.new_vertex(vertex_type)
                 for key, value in vertex_data.items():
                     if isinstance(value, datetime):
                         # Convert to epoch milliseconds (Java timestamp format)
-                        converted_data[key] = int(value.timestamp() * 1000)
+                        vertex.set(key, int(value.timestamp() * 1000))
                     else:
-                        converted_data[key] = value
-
-                self.graph_db.new_vertex(vertex_type).set(converted_data).save()
+                        vertex.set(key, value)
+                vertex.save()
 
         return time.time() - batch_start
 
@@ -4457,14 +4452,14 @@ class Phase3VectorEmbeddings:
                 "SELECT count(*) as count FROM Question WHERE embedding IS NOT NULL",
             )
         )
-        if result and result[0].get_property("count") > 0:
-            count = result[0].get_property("count")
+        if result and result[0].get("count") > 0:
+            count = result[0].get("count")
             print(f"✓ Embeddings already exist ({count:,} Questions)")
             return
 
         # Count total questions
         total_result = list(db.query("sql", "SELECT count(*) as count FROM Question"))
-        total = total_result[0].get_property("count")
+        total = total_result[0].get("count")
 
         if total == 0:
             print("⚠️  No Questions found")
@@ -4496,11 +4491,11 @@ class Phase3VectorEmbeddings:
             texts = []
             ids = []
             for q in batch:
-                title = q.get_property("Title") if q.has_property("Title") else ""
-                body = q.get_property("Body") if q.has_property("Body") else ""
+                title = q.get("Title") if q.has_property("Title") else ""
+                body = q.get("Body") if q.has_property("Body") else ""
                 text = f"{title} {body}".strip()
                 texts.append(text)
-                ids.append(q.get_property("Id"))
+                ids.append(q.get("Id"))
 
             # Generate embeddings for this batch
             embed_start = time.time()
@@ -4539,7 +4534,7 @@ class Phase3VectorEmbeddings:
             )
 
             # Update last_rid for pagination
-            last_rid = batch[-1].get_property("rid")
+            last_rid = batch[-1].get("rid")
 
         elapsed = time.time() - start_time
         print_summary_stats(
@@ -4560,14 +4555,14 @@ class Phase3VectorEmbeddings:
                 "SELECT count(*) as count FROM Answer WHERE embedding IS NOT NULL",
             )
         )
-        if result and result[0].get_property("count") > 0:
-            count = result[0].get_property("count")
+        if result and result[0].get("count") > 0:
+            count = result[0].get("count")
             print(f"✓ Embeddings already exist ({count:,} Answers)")
             return
 
         # Count total answers
         total_result = list(db.query("sql", "SELECT count(*) as count FROM Answer"))
-        total = total_result[0].get_property("count")
+        total = total_result[0].get("count")
 
         if total == 0:
             print("⚠️  No Answers found")
@@ -4599,9 +4594,9 @@ class Phase3VectorEmbeddings:
             texts = []
             ids = []
             for a in batch:
-                body = a.get_property("Body") if a.has_property("Body") else ""
+                body = a.get("Body") if a.has_property("Body") else ""
                 texts.append(body)
-                ids.append(a.get_property("Id"))
+                ids.append(a.get("Id"))
 
             # Generate embeddings for this batch
             embed_start = time.time()
@@ -4640,7 +4635,7 @@ class Phase3VectorEmbeddings:
             )
 
             # Update last_rid for pagination
-            last_rid = batch[-1].get_property("rid")
+            last_rid = batch[-1].get("rid")
 
         elapsed = time.time() - start_time
         print_summary_stats(
@@ -4661,14 +4656,14 @@ class Phase3VectorEmbeddings:
                 "SELECT count(*) as count FROM Comment WHERE embedding IS NOT NULL",
             )
         )
-        if result and result[0].get_property("count") > 0:
-            count = result[0].get_property("count")
+        if result and result[0].get("count") > 0:
+            count = result[0].get("count")
             print(f"✓ Embeddings already exist ({count:,} Comments)")
             return
 
         # Count total comments
         total_result = list(db.query("sql", "SELECT count(*) as count FROM Comment"))
-        total = total_result[0].get_property("count")
+        total = total_result[0].get("count")
 
         if total == 0:
             print("⚠️  No Comments found")
@@ -4700,9 +4695,9 @@ class Phase3VectorEmbeddings:
             texts = []
             ids = []
             for c in batch:
-                text = c.get_property("Text") if c.has_property("Text") else ""
+                text = c.get("Text") if c.has_property("Text") else ""
                 texts.append(text)
-                ids.append(c.get_property("Id"))
+                ids.append(c.get("Id"))
 
             # Generate embeddings for this batch
             embed_start = time.time()
@@ -4741,7 +4736,7 @@ class Phase3VectorEmbeddings:
             )
 
             # Update last_rid for pagination
-            last_rid = batch[-1].get_property("rid")
+            last_rid = batch[-1].get("rid")
 
         elapsed = time.time() - start_time
         print_summary_stats(
@@ -4762,14 +4757,14 @@ class Phase3VectorEmbeddings:
                 "SELECT count(*) as count FROM User WHERE embedding IS NOT NULL",
             )
         )
-        if result and result[0].get_property("count") > 0:
-            count = result[0].get_property("count")
+        if result and result[0].get("count") > 0:
+            count = result[0].get("count")
             print(f"✓ Embeddings already exist ({count:,} Users)")
             return
 
         # Count total users
         total_result = list(db.query("sql", "SELECT count(*) as count FROM User"))
-        total = total_result[0].get_property("count")
+        total = total_result[0].get("count")
 
         if total == 0:
             print("⚠️  No Users found")
@@ -4802,13 +4797,9 @@ class Phase3VectorEmbeddings:
             ids = []
             for u in batch:
                 display_name = (
-                    u.get_property("DisplayName")
-                    if u.has_property("DisplayName")
-                    else ""
+                    u.get("DisplayName") if u.has_property("DisplayName") else ""
                 )
-                about_me = (
-                    u.get_property("AboutMe") if u.has_property("AboutMe") else ""
-                )
+                about_me = u.get("AboutMe") if u.has_property("AboutMe") else ""
 
                 # Combine DisplayName and AboutMe
                 if about_me:
@@ -4817,7 +4808,7 @@ class Phase3VectorEmbeddings:
                     text = display_name.strip()
 
                 texts.append(text)
-                ids.append(u.get_property("Id"))
+                ids.append(u.get("Id"))
 
             # Generate embeddings for this batch
             embed_start = time.time()
@@ -4856,7 +4847,7 @@ class Phase3VectorEmbeddings:
             )
 
             # Update last_rid for pagination
-            last_rid = batch[-1].get_property("rid")
+            last_rid = batch[-1].get("rid")
 
         elapsed = time.time() - start_time
         print_summary_stats(
@@ -4918,7 +4909,7 @@ class Phase3VectorEmbeddings:
                 "SELECT count(*) as count FROM Question WHERE embedding IS NOT NULL",
             )
         )
-        num_questions = count_result[0].get_property("count")
+        num_questions = count_result[0].get("count")
 
         if num_questions == 0:
             print("⚠️  No Questions with embeddings found")
@@ -4958,7 +4949,7 @@ class Phase3VectorEmbeddings:
                 "SELECT count(*) as count FROM Answer WHERE embedding IS NOT NULL",
             )
         )
-        num_answers = count_result[0].get_property("count")
+        num_answers = count_result[0].get("count")
 
         if num_answers == 0:
             print("⚠️  No Answers with embeddings found")
@@ -4998,7 +4989,7 @@ class Phase3VectorEmbeddings:
                 "SELECT count(*) as count FROM Comment WHERE embedding IS NOT NULL",
             )
         )
-        num_comments = count_result[0].get_property("count")
+        num_comments = count_result[0].get("count")
 
         if num_comments == 0:
             print("⚠️  No Comments with embeddings found")
@@ -5037,7 +5028,7 @@ class Phase3VectorEmbeddings:
                 "sql", "SELECT count(*) as count FROM User WHERE embedding IS NOT NULL"
             )
         )
-        num_users = count_result[0].get_property("count")
+        num_users = count_result[0].get("count")
 
         if num_users == 0:
             print("⚠️  No Users with embeddings found")
@@ -5452,12 +5443,12 @@ class Phase4Analytics:
             print("  " + "─" * 76)
 
             for i, result in enumerate(results, 1):
-                name = result.get_property("DisplayName") or "Unknown"
-                rep = result.get_property("Reputation") or 0
-                q_count = result.get_property("questions") or 0
-                a_count = result.get_property("answers") or 0
-                badge_count = result.get_property("badges") or 0
-                score = result.get_property("activity_score") or 0
+                name = result.get("DisplayName") or "Unknown"
+                rep = result.get("Reputation") or 0
+                q_count = result.get("questions") or 0
+                a_count = result.get("answers") or 0
+                badge_count = result.get("badges") or 0
+                score = result.get("activity_score") or 0
 
                 print(
                     f"  {i:<6}{name[:24]:<25}{rep:<10}{q_count:<6}{a_count:<6}{badge_count:<8}{score:<8.0f}"
@@ -5513,11 +5504,11 @@ class Phase4Analytics:
             print("  " + "─" * 76)
 
             for i, result in enumerate(results, 1):
-                tag = result.get_property("TagName") or "Unknown"
-                q_count = result.get_property("question_count") or 0
-                a_count = result.get_property("answer_count") or 0
-                c_count = result.get_property("comment_count") or 0
-                score = result.get_property("engagement_score") or 0
+                tag = result.get("TagName") or "Unknown"
+                q_count = result.get("question_count") or 0
+                a_count = result.get("answer_count") or 0
+                c_count = result.get("comment_count") or 0
+                score = result.get("engagement_score") or 0
 
                 print(
                     f"  {i:<6}{tag[:24]:<25}{q_count:<12}{a_count:<10}{c_count:<10}{score:<10.0f}"
@@ -5563,7 +5554,7 @@ class Phase4Analytics:
                 print()
                 return
 
-            tag_name = tag_result[0].get_property("TagName")
+            tag_name = tag_result[0].get("TagName")
             print(f"  Analyzing experts for tag: {tag_name}")
             print()
 
@@ -5587,9 +5578,9 @@ class Phase4Analytics:
             print("  " + "─" * 76)
 
             for i, result in enumerate(results, 1):
-                name = result.get_property("DisplayName") or "Unknown"
-                rep = result.get_property("Reputation") or 0
-                answers = result.get_property("total_answers") or 0
+                name = result.get("DisplayName") or "Unknown"
+                rep = result.get("Reputation") or 0
+                answers = result.get("total_answers") or 0
 
                 print(f"  {i:<6}{name[:29]:<30}{rep:<15}{answers:<10}")
 
@@ -5635,9 +5626,9 @@ class Phase4Analytics:
             print("  " + "─" * 76)
 
             for i, result in enumerate(results, 1):
-                title = result.get_property("title") or "Unknown"
-                answer_count = result.get_property("answer_count") or 0
-                score = result.get_property("score") or 0
+                title = result.get("title") or "Unknown"
+                answer_count = result.get("answer_count") or 0
+                score = result.get("score") or 0
 
                 print(f"  [{i}] Answers: {answer_count}, Score: {score}")
                 print(f"      {title[:70]}...")
@@ -5691,8 +5682,8 @@ class Phase4Analytics:
 
             if results:
                 for i, result in enumerate(results, 1):
-                    user1 = result.get_property("user1") or "Unknown"
-                    user2 = result.get_property("user2") or "Unknown"
+                    user1 = result.get("user1") or "Unknown"
+                    user2 = result.get("user2") or "Unknown"
 
                     print(f"  [{i}] {user1} ← answered by → {user2}")
             else:
@@ -5744,7 +5735,7 @@ class Phase4Analytics:
                 print()
                 return
 
-            seed_title = seed_result[0].get_property("Title")
+            seed_title = seed_result[0].get("Title")
             print(f"  Seed Question: {seed_title[:70]}...")
             print()
 
@@ -5820,13 +5811,13 @@ class Phase4Analytics:
                 print()
                 return
 
-            seed_name = seed_result[0].get_property("DisplayName")
-            seed_rep = seed_result[0].get_property("Reputation")
+            seed_name = seed_result[0].get("DisplayName")
+            seed_rep = seed_result[0].get("Reputation")
             print(f"  Seed User: {seed_name} (Reputation: {seed_rep})")
             print()
 
             # Create embedding for seed user
-            seed_about = seed_result[0].get_property("AboutMe") or ""
+            seed_about = seed_result[0].get("AboutMe") or ""
             seed_embedding = self.model.encode(
                 [seed_about[:500]],  # Limit to 500 chars
                 show_progress_bar=False,
@@ -5897,13 +5888,11 @@ class Phase4Analytics:
             print(f"  {'Year':<10}{'Count':<15}{'Bar':<50}")
             print("  " + "─" * 76)
 
-            max_count = max(
-                (r.get_property("question_count") or 0 for r in results), default=1
-            )
+            max_count = max((r.get("question_count") or 0 for r in results), default=1)
 
             for result in results:
-                year = result.get_property("year") or "Unknown"
-                count = result.get_property("question_count") or 0
+                year = result.get("year") or "Unknown"
+                count = result.get("question_count") or 0
                 bar_length = int((count / max_count) * 40) if max_count > 0 else 0
                 bar = "█" * bar_length
 
@@ -5974,9 +5963,9 @@ class Phase4Analytics:
             print("  " + "─" * 76)
 
             for category, result in results:
-                count = result.get_property("count") or 0
-                avg_ans = result.get_property("avg_answers") or 0
-                avg_com = result.get_property("avg_comments") or 0
+                count = result.get("count") or 0
+                avg_ans = result.get("avg_answers") or 0
+                avg_com = result.get("avg_comments") or 0
 
                 print(f"  {category:<15}{count:<12}{avg_ans:<15.2f}{avg_com:<15.2f}")
 
@@ -6010,33 +5999,33 @@ class Phase4Analytics:
 
             # Run separate count queries
             users = (
-                list(db.query("sql", "SELECT count(*) as count FROM User"))[
-                    0
-                ].get_property("count")
+                list(db.query("sql", "SELECT count(*) as count FROM User"))[0].get(
+                    "count"
+                )
                 or 0
             )
             questions = (
-                list(db.query("sql", "SELECT count(*) as count FROM Question"))[
-                    0
-                ].get_property("count")
+                list(db.query("sql", "SELECT count(*) as count FROM Question"))[0].get(
+                    "count"
+                )
                 or 0
             )
             answers = (
-                list(db.query("sql", "SELECT count(*) as count FROM Answer"))[
-                    0
-                ].get_property("count")
+                list(db.query("sql", "SELECT count(*) as count FROM Answer"))[0].get(
+                    "count"
+                )
                 or 0
             )
             tags = (
-                list(db.query("sql", "SELECT count(*) as count FROM Tag"))[
-                    0
-                ].get_property("count")
+                list(db.query("sql", "SELECT count(*) as count FROM Tag"))[0].get(
+                    "count"
+                )
                 or 0
             )
             comments = (
-                list(db.query("sql", "SELECT count(*) as count FROM Comment"))[
-                    0
-                ].get_property("count")
+                list(db.query("sql", "SELECT count(*) as count FROM Comment"))[0].get(
+                    "count"
+                )
                 or 0
             )
 
@@ -6057,8 +6046,8 @@ class Phase4Analytics:
             """
 
             conn = list(db.query("sql", connectivity_query))[0]
-            avg_ans = conn.get_property("avg_answers_per_question") or 0
-            avg_com = conn.get_property("avg_comments_per_post") or 0
+            avg_ans = conn.get("avg_answers_per_question") or 0
+            avg_com = conn.get("avg_comments_per_post") or 0
 
             print(f"    • Average answers per question: {avg_ans:.2f}")
             print(f"    • Average comments per post: {avg_com:.2f}")
@@ -6080,7 +6069,7 @@ class Phase4Analytics:
                 print("    Sample questions across the knowledge base:")
 
                 for i, sample in enumerate(samples, 1):
-                    title = sample.get_property("Title") or "N/A"
+                    title = sample.get("Title") or "N/A"
                     print(f"      [{i}] {title[:60]}...")
 
                 print()

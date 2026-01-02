@@ -194,7 +194,7 @@ Schedule asynchronous record creation.
 
 **Parameters:**
 
-- `record`: Java MutableDocument or Vertex to create
+- `record`: Document, Vertex, or Edge object to create
 - `callback` (Optional[Callable]): Success callback
 
 **Example:**
@@ -227,7 +227,7 @@ Schedule asynchronous record update.
 
 **Parameters:**
 
-- `record`: Java MutableDocument to update
+- `record`: Document, Vertex, or Edge object to update
 - `callback` (Optional[Callable]): Success callback
 
 **Example:**
@@ -239,9 +239,10 @@ results = list(db.query("sql", "SELECT FROM User WHERE active = false"))
 async_exec = db.async_executor()
 
 for result in results:
-    record = result._java_result.getElement().get()
-    record.set("active", True)
-    async_exec.update_record(record)
+    element = result.get_element()
+    mutable = element.modify()
+    mutable.set("active", True)
+    async_exec.update_record(mutable)
 
 async_exec.wait_completion()
 async_exec.close()
@@ -262,7 +263,7 @@ Schedule asynchronous record deletion.
 
 **Parameters:**
 
-- `record`: Java record to delete
+- `record`: Document, Vertex, or Edge object to delete
 - `callback` (Optional[Callable]): Success callback
 
 **Example:**
@@ -275,8 +276,8 @@ to_delete = list(db.query("sql", "SELECT FROM LogEntry WHERE timestamp < ?",
 async_exec = db.async_executor()
 
 for result in to_delete:
-    record = result._java_result.getElement().get()
-    async_exec.delete_record(record)
+    element = result.get_element()
+    async_exec.delete_record(element)
 
 async_exec.wait_completion()
 async_exec.close()
@@ -309,7 +310,7 @@ Execute async query.
 ```python
 def process_results(resultset):
     for result in resultset:
-        print(result.get_property("name"))
+        print(result.get("name"))
 
 async_exec = db.async_executor()
 async_exec.query("sql", "SELECT FROM User WHERE age > 18", process_results)

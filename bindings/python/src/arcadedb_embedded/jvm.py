@@ -85,12 +85,15 @@ def start_jvm():
                 Max vector locations to cache (controls LSM vector memory)
             -Darcadedb.vectorIndex.graphBuildCacheSize=<count>
                 Max vectors cached during HNSW graph build
+            -Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>
+                Mutations threshold before rebuilding HNSW graph
 
         Examples:
             # Production with 8GB heap and bounded vector caches
             export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
               -Darcadedb.vectorIndex.locationCacheSize=100000 \
-              -Darcadedb.vectorIndex.graphBuildCacheSize=3000"
+              -Darcadedb.vectorIndex.graphBuildCacheSize=3000 \
+              -Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
 
             # Development/testing (smaller memory)
             export ARCADEDB_JVM_ARGS="-Xmx2g -Xms2g"

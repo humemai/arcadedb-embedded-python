@@ -99,8 +99,8 @@ def test_server_pattern_recommended(cleanup_test_dirs):
     print("\n3. Querying via embedded access...")
     result = db.query("sql", "SELECT FROM Product WHERE name = 'Laptop'")
     record = list(result)[0]
-    name = record.get_property("name")
-    price = record.get_property("price")
+    name = record.get("name")
+    price = record.get("price")
     print(f"   ✅ Found: {name} costs ${price}")
 
     # Step 4: HTTP access would work here too
@@ -212,7 +212,7 @@ def test_server_context_manager(cleanup_test_dirs):
             db.command("sql", "INSERT INTO Note SET text = 'Test'")
 
         result = db.query("sql", "SELECT count(*) as count FROM Note")
-        count = list(result)[0].get_property("count")
+        count = list(result)[0].get("count")
         print(f"   ✅ Created {count} notes")
 
         db.close()
@@ -252,7 +252,7 @@ def test_pattern1_embedded_first_requires_close(cleanup_test_dirs):
         db.command("sql", "INSERT INTO Person SET name = 'Bob', age = 25")
 
     result = db.query("sql", "SELECT count(*) as count FROM Person")
-    count = list(result)[0].get_property("count")
+    count = list(result)[0].get("count")
     print(f"   ✅ Created database with {count} records")
 
     # Step 2: MUST close database to release file lock
@@ -284,8 +284,8 @@ def test_pattern1_embedded_first_requires_close(cleanup_test_dirs):
 
     result = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
     record = list(result)[0]
-    name = record.get_property("name")
-    age = record.get_property("age")
+    name = record.get("name")
+    age = record.get("age")
     print(f"   ✅ Retrieved via server: {name}, age {age}")
 
     # Step 6: Add more data through server
@@ -294,7 +294,7 @@ def test_pattern1_embedded_first_requires_close(cleanup_test_dirs):
         db.command("sql", "INSERT INTO Person SET name = 'Charlie', age = 35")
 
     result = db.query("sql", "SELECT count(*) as count FROM Person")
-    count = list(result)[0].get_property("count")
+    count = list(result)[0].get("count")
     print(f"   ✅ Total records now: {count}")
 
     # Step 7: Both embedded and HTTP access now available

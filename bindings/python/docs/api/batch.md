@@ -197,7 +197,8 @@ with db.batch_context() as batch:
 ```
 
 !!! note "Edge Creation is Synchronous"
-    Unlike vertex/document creation, edge creation with `newEdge()` is synchronous and immediately persists the edge. The callback is called immediately after creation.
+    Unlike vertex/document creation, edge creation with `new_edge()` is synchronous and
+    immediately persists the edge. The callback is called immediately after creation.
 
 ---
 
@@ -225,8 +226,8 @@ to_delete = list(db.query("sql", "SELECT FROM User WHERE inactive = true"))
 
 with db.batch_context() as batch:
     for result in to_delete:
-        java_record = result._java_result.getElement().get()
-        batch.delete_record(java_record)
+        element = result.get_element()
+        batch.delete_record(element)
 ```
 
 ---

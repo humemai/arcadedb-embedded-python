@@ -2,7 +2,7 @@
 
 The `test_importer.py` file contains **12 tests** covering CSV, JSON, and Neo4j data import.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_importer.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_importer.py){ .md-button }
 
 ## Overview
 
@@ -154,10 +154,10 @@ result = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
 alice = list(result)[0]
 
 # Types are inferred
-assert isinstance(alice.get_property("age"), int)
-assert isinstance(alice.get_property("active"), bool)
-assert isinstance(alice.get_property("score"), float)
-assert alice.get_property("notes") is None
+assert isinstance(alice.get("age"), int)
+assert isinstance(alice.get("active"), bool)
+assert isinstance(alice.get("score"), float)
+assert alice.get("notes") is None
 ```
 
 **Type inference rules:**
@@ -211,7 +211,7 @@ result = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
 alice = list(result)[0]
 
 # Nested structures preserved
-address = alice.get_property("address")
+address = alice.get("address")
 assert address["city"] == "NYC"
 ```
 
@@ -246,7 +246,7 @@ result = db.query("sql", "SELECT FROM KNOWS")
 assert len(list(result)) == 1
 
 edge = list(result)[0]
-assert edge.get_property("since") == 2020
+assert edge.get("since") == 2020
 ```
 
 #### 3. Neo4j Full Graph
