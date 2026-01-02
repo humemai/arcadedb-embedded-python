@@ -201,7 +201,7 @@ with db.transaction():
 
     # Query within transaction (sees uncommitted changes)
     result = db.query("sql", "SELECT COUNT(*) as cnt FROM Item")
-    count = result.next().get_property("cnt")
+    count = result.next().get("cnt")
     print(f"Created {count} items")
 
 # All commits together or none commit
@@ -215,7 +215,7 @@ with db.transaction():
 with db.transaction():
     account = db.query("sql", "SELECT FROM Account WHERE name = 'Alice'").next()
 
-    current_balance = float(account.get_property("balance"))
+    current_balance = float(account.get("balance"))
     withdrawal = 500.00
 
     if current_balance >= withdrawal:
@@ -223,7 +223,7 @@ with db.transaction():
         new_balance = current_balance - withdrawal
         db.command("sql",
                    f"UPDATE Account SET balance = {new_balance} "
-                   f"WHERE @rid = {account.get_property('@rid')}")
+                   f"WHERE @rid = {account.get('@rid')}")
         print(f"Withdrawal successful. New balance: {new_balance}")
     else:
         # Raise exception to trigger rollback
@@ -365,7 +365,7 @@ with db.transaction():
 
     # Validation check
     result = db.query("sql", "SELECT COUNT(*) as cnt FROM Product")
-    count = result.next().get_property("cnt")
+    count = result.next().get("cnt")
 
     if count < 5:
         # Trigger rollback by raising exception
@@ -451,14 +451,14 @@ def reader_thread():
     """Reader sees consistent data."""
     # Read before transaction commits
     result = db.query("sql", "SELECT balance FROM Account WHERE name = 'Alice'")
-    balance = result.next().get_property("balance")
+    balance = result.next().get("balance")
     print(f"Balance: {balance}")  # Sees old value (1000)
 
     time.sleep(1)  # Wait for writer to commit
 
     # Read after transaction commits
     result = db.query("sql", "SELECT balance FROM Account WHERE name = 'Alice'")
-    balance = result.next().get_property("balance")
+    balance = result.next().get("balance")
     print(f"Balance: {balance}")  # Sees new value (2000)
 
 # Start threads
@@ -567,11 +567,11 @@ with db.transaction():
     counter = result.next()
 
     # Modify
-    current_value = counter.get_property("value")
+    current_value = counter.get("value")
     new_value = current_value + 1
 
     # Write
-    rid = counter.get_property("@rid")
+    rid = counter.get("@rid")
     db.command("sql", f"UPDATE {rid} SET value = {new_value}")
 ```
 

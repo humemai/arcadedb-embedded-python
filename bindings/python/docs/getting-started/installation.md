@@ -71,7 +71,7 @@ print(f"ArcadeDB Python bindings version: {arcadedb.__version__}")
 # Test database creation
 with arcadedb.create_database("/tmp/test") as db:
     result = db.query("sql", "SELECT 1 as test")
-    print(f"Database working: {result[0].get_property('test') == 1}")
+    print(f"Database working: {result[0].get('test') == 1}")
 ```
 
 Expected output (version will match what you installed):
@@ -187,6 +187,7 @@ JVM arguments use two flag types:
 - **`-D` flags**: System properties for ArcadeDB configuration
   - `-Darcadedb.vectorIndex.locationCacheSize=<count>`: Vector location cache limit
   - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: HNSW build cache limit
+  - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: Mutations threshold before rebuilding HNSW
 
 !!! warning "Set Before Import"
     `ARCADEDB_JVM_ARGS` must be set **before** the first `import arcadedb_embedded` in your Python process. The JVM can only be configured once.

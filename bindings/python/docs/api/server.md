@@ -529,12 +529,12 @@ with arcadedb.create_server() as server:
     print("Users:")
     result = users_db.query("sql", "SELECT FROM User")
     for r in result:
-        print(f"  {r.get_property('email')}")
+        print(f"  {r.get('email')}")
 
     print("Products:")
     result = products_db.query("sql", "SELECT FROM Product")
     for r in result:
-        print(f"  {r.get_property('sku')}")
+        print(f"  {r.get('sku')}")
 
     # Close databases
     users_db.close()
