@@ -152,7 +152,7 @@ def generate_embeddings(db, model, model_name, property_suffix="", limit=None):
             f"SELECT count(*) as count FROM Movie WHERE {embedding_prop} IS NOT NULL"
         )
         result = list(db.query("sql", query))
-        existing_embeddings = result[0].get_property("count")
+        existing_embeddings = result[0].get("count")
 
         if existing_embeddings > 0 and not args.force_embed:
             print(f"Found {existing_embeddings} existing embeddings for {model_name}")
@@ -179,8 +179,8 @@ def generate_embeddings(db, model, model_name, property_suffix="", limit=None):
     # Format: "Title (Year): Genres"
     texts = []
     for movie in movies:
-        title = movie.get_property("title")
-        genres = movie.get_property("genres")
+        title = movie.get("title")
+        genres = movie.get("genres")
         text = f"{title}: {genres}"
         texts.append(text)
 
@@ -207,17 +207,22 @@ def generate_embeddings(db, model, model_name, property_suffix="", limit=None):
 
     with db.transaction():
         # Use the same movies list we generated embeddings for
-        for movie, embedding in zip(movies, embeddings):
-            # Get vertex, then modify to get mutable version
-            java_vertex = movie._java_result.getElement().get().asVertex().modify()
+        for movie_result, embedding in zip(movies, embeddings):
+            # Convert Result to Vertex
+            movie = movie_result.get_vertex()
+            if not movie:
+                continue
+
+            # Get mutable version of vertex
+            mutable_vertex = movie.modify()
 
             # Set embedding property with custom name
             java_embedding = arcadedb.to_java_float_array(embedding)
-            java_vertex.set(embedding_prop, java_embedding)
+            mutable_vertex.set(embedding_prop, java_embedding)
             # Create vector_id property
-            movie_id = str(movie.get_property("movieId"))
-            java_vertex.set(vector_id_prop, movie_id)
-            java_vertex.save()
+            movie_id = str(movie_result.get("movieId"))
+            mutable_vertex.set(vector_id_prop, movie_id)
+            mutable_vertex.save()
 
     elapsed_store = time.time() - start_store
     print(f"✓ Stored {total:,} embeddings in {elapsed_store:.1f}s")
@@ -290,7 +295,7 @@ def graph_based_recommendations(db, movie_title, limit=5, mode="full"):
         return 0.0
 
     # Get movieId for indexed lookups
-    query_movie_id = movies[0].get_property("movieId")
+    query_movie_id = movies[0].get("movieId")
 
     if mode == "fast":
         # Fast mode: Limit intermediate results for 100-300x speedup
@@ -346,9 +351,9 @@ def graph_based_recommendations(db, movie_title, limit=5, mode="full"):
     print(f"   Results ({mode} mode):")
     for i, row in enumerate(results, 1):
         print(
-            f"   {i}. {row.get_property('title')} "
-            f"(Rating: {row.get_property('avg_rating'):.1f}, "
-            f"Votes: {row.get_property('rating_count')})"
+            f"   {i}. {row.get('title')} "
+            f"(Rating: {row.get('avg_rating'):.1f}, "
+            f"Votes: {row.get('rating_count')})"
         )
 
     return elapsed
@@ -384,8 +389,8 @@ def vector_based_recommendations(
         return 0.0
 
     movie = movies[0]
-    title = movie.get_property("title")
-    genres = movie.get_property("genres")
+    title = movie.get("title")
+    genres = movie.get("genres")
     text = f"{title}: {genres}"
 
     # Generate embedding for query

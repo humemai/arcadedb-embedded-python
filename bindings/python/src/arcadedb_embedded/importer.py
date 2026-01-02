@@ -489,7 +489,7 @@ class Importer:
                             "sql", f"SELECT count(*) as count FROM `{target_type}`"
                         )
                         count_record = list(count_result)[0]
-                        actual_count = count_record.get_property("count")
+                        actual_count = count_record.get("count")
                         if actual_count > 0:
                             final_stats["documents"] = actual_count
                     except:

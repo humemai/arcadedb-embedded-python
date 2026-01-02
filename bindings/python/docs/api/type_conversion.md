@@ -124,16 +124,16 @@ from arcadedb_embedded.type_conversion import convert_java_to_python
 # Read from database (automatic conversion)
 result = list(db.query("sql", "SELECT FROM User WHERE username = 'alice'"))[0]
 
-# Get Java property (automatically converted to Python)
-username = result.get_property("username")  # str
-age = result.get_property("age")            # int
-tags = result.get_property("tags")          # list
-profile = result.get_property("profile")    # dict
+# Get Python properties (automatically converted)
+username = result.get("username")  # str
+age = result.get("age")            # int
+tags = result.get("tags")          # list
+profile = result.get("profile")    # dict
 
-# Manual conversion (if needed)
-java_obj = result._java_result.getElement().get()
-java_property = java_obj.get("username")
-python_value = convert_java_to_python(java_property)
+# Manual conversion (if needed for custom types)
+element = result.get_element()
+java_property = element.get("username")  # Uses wrapper method
+# Properties are automatically converted
 ```
 
 ## Type-Specific Conversions
@@ -286,9 +286,9 @@ results = db.query(
 
 # Reading results (automatically converted back to Python)
 for result in results:
-    name = result.get_property("name")         # str
-    age = result.get_property("age")           # int
-    created = result.get_property("createdAt") # datetime
+    name = result.get("name")         # str
+    age = result.get("age")           # int
+    created = result.get("createdAt") # datetime
 ```
 
 ## Collection Type Preservation
@@ -357,13 +357,13 @@ with db.transaction():
 results = list(db.query("sql", "SELECT FROM Product"))
 product = results[0]
 
-print(f"Product ID: {product.get_property('productId')} ({type(product.get_property('productId')).__name__})")
-print(f"Name: {product.get_property('name')} ({type(product.get_property('name')).__name__})")
-print(f"In Stock: {product.get_property('inStock')} ({type(product.get_property('inStock')).__name__})")
-print(f"Price: {product.get_property('price')} ({type(product.get_property('price')).__name__})")
-print(f"Tax: {product.get_property('tax')} ({type(product.get_property('tax')).__name__})")
-print(f"Created At: {product.get_property('createdAt')} ({type(product.get_property('createdAt')).__name__})")
-print(f"Tags: {product.get_property('tags')} ({type(product.get_property('tags')).__name__})")
+print(f"Product ID: {product.get('productId')} ({type(product.get('productId')).__name__})")
+print(f"Name: {product.get('name')} ({type(product.get('name')).__name__})")
+print(f"In Stock: {product.get('inStock')} ({type(product.get('inStock')).__name__})")
+print(f"Price: {product.get('price')} ({type(product.get('price')).__name__})")
+print(f"Tax: {product.get('tax')} ({type(product.get('tax')).__name__})")
+print(f"Created At: {product.get('createdAt')} ({type(product.get('createdAt')).__name__})")
+print(f"Tags: {product.get('tags')} ({type(product.get('tags')).__name__})")
 
 db.close()
 ```

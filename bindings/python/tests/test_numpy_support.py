@@ -31,7 +31,7 @@ def test_numpy_array_conversion_in_command(temp_db):
 
     # Verify
     result = db.query("sql", "SELECT FROM VectorData").first()
-    stored_vec = result.get_property("vector")
+    stored_vec = result.get("vector")
 
     # Check values (approximate for float)
     assert len(stored_vec) == 3
@@ -81,12 +81,12 @@ def test_batch_context_numpy_support(temp_db):
 
     # Verify Vertex
     result = db.query("sql", "SELECT FROM VectorData").first()
-    stored_vec = result.get_property("vector")
+    stored_vec = result.get("vector")
     assert len(stored_vec) == 3
     assert abs(stored_vec[0] - 0.1) < 0.0001
 
     # Verify Document
     result = db.query("sql", "SELECT FROM DocData").first()
-    stored_emb = result.get_property("embedding")
+    stored_emb = result.get("embedding")
     assert len(stored_emb) == 3
     assert abs(stored_emb[0] - 0.4) < 0.0001

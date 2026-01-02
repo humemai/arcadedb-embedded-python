@@ -198,21 +198,21 @@ class DataLoader:
                     break
 
                 for record in chunk:
-                    movie_id = record.get_property("movieId")
+                    movie_id = record.get("movieId")
                     links_data[movie_id] = {
                         "imdbId": (
-                            record.get_property("imdbId")
+                            record.get("imdbId")
                             if record.has_property("imdbId")
                             else None
                         ),
                         "tmdbId": (
-                            record.get_property("tmdbId")
+                            record.get("tmdbId")
                             if record.has_property("tmdbId")
                             else None
                         ),
                     }
 
-                last_rid = chunk[-1].get_property("rid")
+                last_rid = chunk[-1].get("rid")
                 batch_count += 1
 
         elapsed = time.time() - start_time
@@ -237,11 +237,11 @@ class DataLoader:
                     """,
                 )
             )
-            total_users = result[0].get_property("count")
+            total_users = result[0].get("count")
 
             # Count movies
             result = list(source_db.query("sql", "SELECT COUNT(*) as count FROM Movie"))
-            total_movies = result[0].get_property("count")
+            total_movies = result[0].get("count")
 
             # Count ratings
             result = list(
@@ -250,7 +250,7 @@ class DataLoader:
                     "SELECT COUNT(*) as count FROM Rating WHERE timestamp IS NOT NULL",
                 )
             )
-            total_ratings = result[0].get_property("count")
+            total_ratings = result[0].get("count")
 
             # Count tags
             result = list(
@@ -260,7 +260,7 @@ class DataLoader:
                     "WHERE timestamp IS NOT NULL AND tag IS NOT NULL",
                 )
             )
-            total_tags = result[0].get_property("count")
+            total_tags = result[0].get("count")
 
         print(
             f"✓ Found {total_users:,} users, {total_movies:,} movies, "
@@ -320,7 +320,7 @@ class VertexCreator:
                 ) as source_db:
                     query = "SELECT DISTINCT userId FROM Rating ORDER BY userId"
                     for record in source_db.query("sql", query):
-                        user_id = record.get_property("userId")
+                        user_id = record.get("userId")
                         batch.create_vertex("User", userId=user_id)
                         user_count += 1
 
@@ -342,7 +342,7 @@ class VertexCreator:
                 batch_user_ids = []
 
                 for record in source_db.query("sql", query):
-                    user_id = record.get_property("userId")
+                    user_id = record.get("userId")
                     batch_user_ids.append(user_id)
 
                     if len(batch_user_ids) >= self.batch_size:
@@ -378,7 +378,7 @@ class VertexCreator:
                 batch_user_ids = []
 
                 for record in source_db.query("sql", query):
-                    user_id = record.get_property("userId")
+                    user_id = record.get("userId")
                     batch_user_ids.append(user_id)
 
                     if len(batch_user_ids) >= self.batch_size:
@@ -442,14 +442,14 @@ class VertexCreator:
                             break
 
                         for record in chunk:
-                            movie_id = record.get_property("movieId")
+                            movie_id = record.get("movieId")
                             title = (
-                                record.get_property("title")
+                                record.get("title")
                                 if record.has_property("title")
                                 else ""
                             )
                             genres = (
-                                record.get_property("genres")
+                                record.get("genres")
                                 if record.has_property("genres")
                                 else ""
                             )
@@ -471,7 +471,7 @@ class VertexCreator:
                             movie_count += 1
 
                         batch_count += 1
-                        last_rid = chunk[-1].get_property("rid")
+                        last_rid = chunk[-1].get("rid")
                         self._report_progress(
                             "Movie",
                             batch_count,
@@ -501,14 +501,14 @@ class VertexCreator:
 
                     with self.db.transaction():
                         for record in chunk:
-                            movie_id = record.get_property("movieId")
+                            movie_id = record.get("movieId")
                             title = (
-                                record.get_property("title")
+                                record.get("title")
                                 if record.has_property("title")
                                 else ""
                             )
                             genres = (
-                                record.get_property("genres")
+                                record.get("genres")
                                 if record.has_property("genres")
                                 else ""
                             )
@@ -534,7 +534,7 @@ class VertexCreator:
 
                     movie_count += len(chunk)
                     batch_count += 1
-                    last_rid = chunk[-1].get_property("rid")
+                    last_rid = chunk[-1].get("rid")
                     self._report_progress(
                         "Movie",
                         batch_count,
@@ -564,14 +564,14 @@ class VertexCreator:
 
                     with self.db.transaction():
                         for record in chunk:
-                            movie_id = record.get_property("movieId")
+                            movie_id = record.get("movieId")
                             title = (
-                                record.get_property("title")
+                                record.get("title")
                                 if record.has_property("title")
                                 else ""
                             )
                             genres = (
-                                record.get_property("genres")
+                                record.get("genres")
                                 if record.has_property("genres")
                                 else ""
                             )
@@ -601,7 +601,7 @@ class VertexCreator:
 
                     movie_count += len(chunk)
                     batch_count += 1
-                    last_rid = chunk[-1].get_property("rid")
+                    last_rid = chunk[-1].get("rid")
                     self._report_progress(
                         "Movie",
                         batch_count,
@@ -715,22 +715,20 @@ class EdgeCreator:
 
                     # Create edges
                     for record in chunk:
-                        user_id = record.get_property("userId")
-                        movie_id = record.get_property("movieId")
-                        rating = record.get_property("rating")
-                        timestamp = record.get_property("timestamp")
+                        user_id = record.get("userId")
+                        movie_id = record.get("movieId")
+                        rating = record.get("rating")
+                        timestamp = record.get("timestamp")
 
                         if self.use_java_api:
                             user_vertex = user_cache.get(user_id)
                             movie_vertex = movie_cache.get(movie_id)
                             if user_vertex and movie_vertex:
-                                edge = user_vertex.newEdge(
+                                edge = user_vertex.new_edge(
                                     "RATED",
                                     movie_vertex,
-                                    "rating",
-                                    rating,
-                                    "timestamp",
-                                    timestamp,
+                                    rating=rating,
+                                    timestamp=timestamp,
                                 )
                                 edge.save()
                                 edge_count += 1
@@ -748,7 +746,7 @@ class EdgeCreator:
                                 edge_count += 1
 
                 batch_count += 1
-                last_rid = chunk[-1].get_property("rid")
+                last_rid = chunk[-1].get("rid")
                 total_query_time = query_time + cache_time
                 self._report_progress(
                     "RATED",
@@ -808,22 +806,20 @@ class EdgeCreator:
 
                     # Create edges
                     for record in chunk:
-                        user_id = record.get_property("userId")
-                        movie_id = record.get_property("movieId")
-                        tag = record.get_property("tag") or ""
-                        timestamp = record.get_property("timestamp")
+                        user_id = record.get("userId")
+                        movie_id = record.get("movieId")
+                        tag = record.get("tag") or ""
+                        timestamp = record.get("timestamp")
 
                         if self.use_java_api:
                             user_vertex = user_cache.get(user_id)
                             movie_vertex = movie_cache.get(movie_id)
                             if user_vertex and movie_vertex:
-                                edge = user_vertex.newEdge(
+                                edge = user_vertex.new_edge(
                                     "TAGGED",
                                     movie_vertex,
-                                    "tag",
-                                    tag,
-                                    "timestamp",
-                                    timestamp,
+                                    tag=tag,
+                                    timestamp=timestamp,
                                 )
                                 edge.save()
                                 edge_count += 1
@@ -843,7 +839,7 @@ class EdgeCreator:
                                 edge_count += 1
 
                 batch_count += 1
-                last_rid = chunk[-1].get_property("rid")
+                last_rid = chunk[-1].get("rid")
                 total_query_time = query_time + cache_time
                 self._report_progress(
                     "TAGGED",
@@ -874,8 +870,8 @@ class EdgeCreator:
         For Java API: Returns (user_vertices, movie_vertices)
         For SQL: Returns (user_rids, movie_rids)
         """
-        user_ids = list({r.get_property("userId") for r in chunk})
-        movie_ids = list({r.get_property("movieId") for r in chunk})
+        user_ids = list({r.get("userId") for r in chunk})
+        movie_ids = list({r.get("movieId") for r in chunk})
 
         user_cache = {}
         movie_cache = {}
@@ -886,16 +882,16 @@ class EdgeCreator:
                 user_ids_str = ",".join(str(uid) for uid in user_ids)
                 query = f"SELECT FROM User WHERE userId IN [{user_ids_str}]"
                 for result in self.db.query("sql", query):
-                    uid = result.get_property("userId")
-                    vertex = result._java_result.getElement().get().asVertex()
+                    uid = result.get("userId")
+                    vertex = result.get_vertex()
                     user_cache[uid] = vertex
 
             if movie_ids:
                 movie_ids_str = ",".join(str(mid) for mid in movie_ids)
                 query = f"SELECT FROM Movie WHERE movieId IN [{movie_ids_str}]"
                 for result in self.db.query("sql", query):
-                    mid = result.get_property("movieId")
-                    vertex = result._java_result.getElement().get().asVertex()
+                    mid = result.get("movieId")
+                    vertex = result.get_vertex()
                     movie_cache[mid] = vertex
         else:
             # Fetch RIDs for SQL CREATE EDGE
@@ -906,8 +902,8 @@ class EdgeCreator:
                     f"WHERE userId IN [{user_ids_str}]"
                 )
                 for result in self.db.query("sql", query):
-                    uid = result.get_property("userId")
-                    rid = result.get_property("rid").toString()
+                    uid = result.get("userId")
+                    rid = result.get("rid").toString()
                     user_cache[uid] = rid
 
             if movie_ids:
@@ -917,8 +913,8 @@ class EdgeCreator:
                     f"WHERE movieId IN [{movie_ids_str}]"
                 )
                 for result in self.db.query("sql", query):
-                    mid = result.get_property("movieId")
-                    rid = result.get_property("rid").toString()
+                    mid = result.get("movieId")
+                    rid = result.get("rid").toString()
                     movie_cache[mid] = rid
 
         return user_cache, movie_cache
@@ -978,13 +974,13 @@ def import_from_jsonl(jsonl_path: Path, target_db_path: Path) -> float:
     # Count imported records
     with arcadedb.open_database(str(target_db_path)) as db:
         result = list(db.query("sql", "SELECT count(*) as count FROM Movie"))
-        movie_count = result[0].get_property("count")
+        movie_count = result[0].get("count")
         result = list(db.query("sql", "SELECT count(*) as count FROM Rating"))
-        rating_count = result[0].get_property("count")
+        rating_count = result[0].get("count")
         result = list(db.query("sql", "SELECT count(*) as count FROM Tag"))
-        tag_count = result[0].get_property("count")
+        tag_count = result[0].get("count")
         result = list(db.query("sql", "SELECT count(*) as count FROM Link"))
-        link_count = result[0].get_property("count")
+        link_count = result[0].get("count")
         total_records = movie_count + rating_count + tag_count + link_count
 
     print(f"  ✓ Imported {total_records:,} records in {elapsed:.2f}s")
@@ -1171,15 +1167,15 @@ def validate_counts_and_samples(
     """
     # Count vertices
     result = list(db.query("sql", "SELECT count(*) as count FROM User"))
-    user_count_check = result[0].get_property("count")
+    user_count_check = result[0].get("count")
     result = list(db.query("sql", "SELECT count(*) as count FROM Movie"))
-    movie_count_check = result[0].get_property("count")
+    movie_count_check = result[0].get("count")
 
     # Count edges
     result = list(db.query("sql", "SELECT count(*) as count FROM RATED"))
-    rated_count_check = result[0].get_property("count")
+    rated_count_check = result[0].get("count")
     result = list(db.query("sql", "SELECT count(*) as count FROM TAGGED"))
-    tagged_count_check = result[0].get_property("count")
+    tagged_count_check = result[0].get("count")
 
     # Sample data validation: check a specific user's ratings
     sample_user_query = """
@@ -1191,8 +1187,8 @@ def validate_counts_and_samples(
     sample_user_results = list(db.query("sql", sample_user_query))
     if sample_user_results:
         sample_user = sample_user_results[0]
-        user1_ratings = sample_user.get_property("rating_count")
-        user1_tags = sample_user.get_property("tag_count")
+        user1_ratings = sample_user.get("rating_count")
+        user1_tags = sample_user.get("tag_count")
     else:
         user1_ratings = None
         user1_tags = None
@@ -1206,8 +1202,8 @@ def validate_counts_and_samples(
     movie_results = list(db.query("sql", sample_movie_query))
     if movie_results:
         sample_movie = movie_results[0]
-        movie1_title = sample_movie.get_property("title")
-        movie1_genres = sample_movie.get_property("genres")
+        movie1_title = sample_movie.get("title")
+        movie1_genres = sample_movie.get("genres")
     else:
         movie1_title = None
         movie1_genres = None
@@ -1572,8 +1568,8 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     print(f"  Found {len(movies)} movies in {elapsed:.3f}s")
     if movies and len(movies) > 0:
         sample_movie = movies[0]
-        print(f"  Sample: '{sample_movie.get_property('title')}'")
-        print(f"  Genres: {sample_movie.get_property('genres')}")
+        print(f"  Sample: '{sample_movie.get('title')}'")
+        print(f"  Genres: {sample_movie.get('genres')}")
 
     if check_baseline and len(expected_queries) > 0:
         expected_count = expected_queries[0].get("count")
@@ -1607,7 +1603,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     print(f"  Found {len(high_rated)} movies with 5.0 rating in {elapsed:.3f}s")
     if high_rated:
         for i, movie in enumerate(high_rated[:3]):
-            print(f"  {i+1}. {movie.get_property('title')}")
+            print(f"  {i+1}. {movie.get('title')}")
 
     if check_baseline and len(expected_queries) > 1:
         expected_count = expected_queries[1].get("count")
@@ -1651,21 +1647,19 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     }
     if stats:
         top_user = stats[0]
-        query3_result["sample"]["top_user_id"] = top_user.get_property("userId")
-        query3_result["sample"]["top_user_ratings"] = top_user.get_property(
-            "num_ratings"
-        )
+        query3_result["sample"]["top_user_id"] = top_user.get("userId")
+        query3_result["sample"]["top_user_ratings"] = top_user.get("num_ratings")
     results.append(query3_result)
 
     print(f"  Computed statistics for top users in {elapsed:.3f}s")
     print(f"  {'User':<8} {'#Ratings':<10} {'Avg':<8} {'Min':<6} {'Max':<6}")
     print(f"  {'-'*8} {'-'*10} {'-'*8} {'-'*6} {'-'*6}")
     for record in stats:
-        user_id = record.get_property("userId")
-        num = record.get_property("num_ratings")
-        avg = record.get_property("avg_rating")
-        min_r = record.get_property("min_rating")
-        max_r = record.get_property("max_rating")
+        user_id = record.get("userId")
+        num = record.get("num_ratings")
+        avg = record.get("avg_rating")
+        min_r = record.get("min_rating")
+        max_r = record.get("max_rating")
         print(f"  {user_id:<8} {num:<10} {avg:<8.2f} {min_r:<6.1f} {max_r:<6.1f}")
 
     if check_baseline and len(expected_queries) > 2:
@@ -1674,7 +1668,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
         exp_top_ratings = expected_sample.get("top_user_ratings")
 
         if exp_top_id is not None and stats:
-            actual_top_id = stats[0].get_property("userId")
+            actual_top_id = stats[0].get("userId")
             if actual_top_id != exp_top_id:
                 print(
                     f"  ❌ Top user mismatch: expected {exp_top_id}, "
@@ -1685,7 +1679,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
                 print(f"  ✓ Top user matches baseline: {actual_top_id}")
 
         if exp_top_ratings is not None and stats:
-            actual_ratings = stats[0].get_property("num_ratings")
+            actual_ratings = stats[0].get("num_ratings")
             if actual_ratings != exp_top_ratings:
                 print(
                     f"  ❌ Top user ratings mismatch: expected {exp_top_ratings}, "
@@ -1725,19 +1719,17 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     }
     if top_movies:
         top_movie = top_movies[0]
-        query4_result["sample"]["top_movie"] = top_movie.get_property("title")
-        query4_result["sample"]["top_movie_count"] = top_movie.get_property(
-            "num_ratings"
-        )
+        query4_result["sample"]["top_movie"] = top_movie.get("title")
+        query4_result["sample"]["top_movie_count"] = top_movie.get("num_ratings")
     results.append(query4_result)
 
     print(f"  Found top 10 movies in {elapsed:.3f}s")
     print(f"  {'#':<4} {'Title':<50} {'Ratings':<10} {'Avg':<6}")
     print(f"  {'-'*4} {'-'*50} {'-'*10} {'-'*6}")
     for i, record in enumerate(top_movies, 1):
-        title = record.get_property("title")
-        num = record.get_property("num_ratings")
-        avg = record.get_property("avg_rating")
+        title = record.get("title")
+        num = record.get("num_ratings")
+        avg = record.get("avg_rating")
         print(f"  {i:<4} {title:<50.50} {num:<10} {avg:<6.2f}")
 
     if check_baseline and len(expected_queries) > 3:
@@ -1746,7 +1738,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
         exp_top_count = expected_sample.get("top_movie_count")
 
         if exp_top_movie is not None and top_movies:
-            actual_movie = top_movies[0].get_property("title")
+            actual_movie = top_movies[0].get("title")
             if actual_movie != exp_top_movie:
                 print(
                     f"  ❌ Top movie mismatch: expected '{exp_top_movie}', "
@@ -1757,7 +1749,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
                 print(f"  ✓ Top movie matches baseline: {actual_movie}")
 
         if exp_top_count is not None and top_movies:
-            actual_count = top_movies[0].get_property("num_ratings")
+            actual_count = top_movies[0].get("num_ratings")
             if actual_count != exp_top_count:
                 print(
                     f"  ❌ Top movie count mismatch: expected {exp_top_count}, "
@@ -1796,16 +1788,16 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     }
     if tagged_movies:
         top_tagged = tagged_movies[0]
-        query5_result["sample"]["top_movie"] = top_tagged.get_property("title")
-        query5_result["sample"]["top_movie_tags"] = top_tagged.get_property("num_tags")
+        query5_result["sample"]["top_movie"] = top_tagged.get("title")
+        query5_result["sample"]["top_movie_tags"] = top_tagged.get("num_tags")
     results.append(query5_result)
 
     print(f"  Found top 10 tagged movies in {elapsed:.3f}s")
     print(f"  {'#':<4} {'Title':<50} {'Tags':<6}")
     print(f"  {'-'*4} {'-'*50} {'-'*6}")
     for i, record in enumerate(tagged_movies, 1):
-        title = record.get_property("title")
-        num = record.get_property("num_tags")
+        title = record.get("title")
+        num = record.get("num_tags")
         print(f"  {i:<4} {title:<50.50} {num:<6}")
 
     if check_baseline and len(expected_queries) > 4:
@@ -1814,7 +1806,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
         exp_top_tags = expected_sample.get("top_movie_tags")
 
         if exp_top_movie is not None and tagged_movies:
-            actual_movie = tagged_movies[0].get_property("title")
+            actual_movie = tagged_movies[0].get("title")
             if actual_movie != exp_top_movie:
                 print(
                     f"  ❌ Most tagged mismatch: expected '{exp_top_movie}', "
@@ -1825,7 +1817,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
                 print(f"  ✓ Most tagged matches baseline: {actual_movie}")
 
         if exp_top_tags is not None and tagged_movies:
-            actual_tags = tagged_movies[0].get_property("num_tags")
+            actual_tags = tagged_movies[0].get("num_tags")
             if actual_tags != exp_top_tags:
                 print(
                     f"  ❌ Tag count mismatch: expected {exp_top_tags}, "
@@ -1872,10 +1864,10 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     for i, record in enumerate(collaborative):
         if i >= 10:  # Only display first 10
             break
-        other = record.get_property("other_user")
-        movie = record.get_property("common_movie")
-        my_r = record.get_property("my_rating")
-        their_r = record.get_property("their_rating")
+        other = record.get("other_user")
+        movie = record.get("common_movie")
+        my_r = record.get("my_rating")
+        their_r = record.get("their_rating")
         print(f"  {other:<8} {movie:<40.40} {my_r:<6.1f} {their_r:<6.1f}")
 
     if check_baseline and len(expected_queries) > 5:
@@ -1926,8 +1918,8 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     for i, record in enumerate(similar_users):
         if i >= 10:  # Only display first 10
             break
-        user = record.get_property("similar_user")
-        shared = record.get_property("shared_high_ratings")
+        user = record.get("similar_user")
+        shared = record.get("shared_high_ratings")
         print(f"  {user:<8} {shared:<20}")
 
     if check_baseline and len(expected_queries) > 6:
@@ -1969,12 +1961,12 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     print(f"  {'Rating':<10} {'Frequency':<12} {'Bar':<40}")
     print(f"  {'-'*10} {'-'*12} {'-'*40}")
     if distribution:
-        max_freq = max(r.get_property("frequency") for r in distribution)
+        max_freq = max(r.get("frequency") for r in distribution)
     else:
         max_freq = 1
     for record in distribution:
-        rating = record.get_property("rating")
-        freq = record.get_property("frequency")
+        rating = record.get("rating")
+        freq = record.get("frequency")
         bar_len = int((freq / max_freq) * 40)
         bar = "█" * bar_len
         # Handle NULL ratings (introduced by NULL injection)
@@ -2025,8 +2017,8 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     for i, record in enumerate(gremlin_results):
         if i >= 10:  # Only display first 10
             break
-        title = record.get_property("title")
-        rating = record.get_property("rating")
+        title = record.get("title")
+        rating = record.get("rating")
         print(f"  {i+1:<4} {title:<50.50} {rating:<8.1f}")
 
     if check_baseline and len(expected_queries) > 8:
@@ -2072,8 +2064,8 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     }
     if collab_gremlin:
         top_user = collab_gremlin[0]
-        query10_result["sample"]["top_user_id"] = top_user.get_property("other_user")
-        query10_result["sample"]["top_shared"] = top_user.get_property("shared_movies")
+        query10_result["sample"]["top_user_id"] = top_user.get("other_user")
+        query10_result["sample"]["top_shared"] = top_user.get("shared_movies")
     results.append(query10_result)
 
     print(f"  Found {len(collab_gremlin)} users in {elapsed:.3f}s")
@@ -2082,8 +2074,8 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
     for i, record in enumerate(collab_gremlin):
         if i >= 10:  # Only display first 10
             break
-        user = record.get_property("other_user")
-        shared = record.get_property("shared_movies")
+        user = record.get("other_user")
+        shared = record.get("shared_movies")
         print(f"  {user:<8} {shared:<15}")
 
     if check_baseline and len(expected_queries) > 9:
@@ -2092,7 +2084,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
         exp_top_shared = expected_sample.get("top_shared")
 
         if exp_top_id is not None and collab_gremlin:
-            actual_top_id = collab_gremlin[0].get_property("other_user")
+            actual_top_id = collab_gremlin[0].get("other_user")
             if actual_top_id != exp_top_id:
                 print(
                     f"  ❌ Top user mismatch: expected {exp_top_id}, "
@@ -2103,7 +2095,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
                 print(f"  ✓ Top user matches baseline: {actual_top_id}")
 
         if exp_top_shared is not None and collab_gremlin:
-            actual_shared = collab_gremlin[0].get_property("shared_movies")
+            actual_shared = collab_gremlin[0].get("shared_movies")
             if actual_shared != exp_top_shared:
                 print(
                     f"  ❌ Shared count mismatch: expected {exp_top_shared}, "

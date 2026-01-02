@@ -123,20 +123,20 @@ db.command("sql", f"CREATE VERTEX Person SET name = '{name.replace(\"'\", \"''\"
 ```python
 # Create document with API
 doc = db.new_document("User")
-doc.set_property("name", "Alice")
-doc.set_property("age", 30)
+doc.set("name", "Alice")
+doc.set("age", 30)
 doc.save()
 
 # Create vertex with API
 vertex = db.new_vertex("Person")
-vertex.set_property("name", "Bob")
-vertex.set_property("age", 25)
+vertex.set("name", "Bob")
+vertex.set("age", 25)
 vertex.save()
 
 # Safe handling of special characters (no escaping needed!)
 vertex = db.new_vertex("Person")
-vertex.set_property("name", "O'Brien")  # Automatically escaped
-vertex.set_property("bio", 'Text with "quotes" and \'apostrophes\'')  # Safe!
+vertex.set("name", "O'Brien")  # Automatically escaped
+vertex.set("bio", 'Text with "quotes" and \'apostrophes\'')  # Safe!
 vertex.save()
 ```
 
@@ -168,8 +168,8 @@ start = time.time()
 with db.transaction():
     for i in range(10000):
         vertex = db.new_vertex("Person")
-        vertex.set_property("userId", i)
-        vertex.set_property("name", f"User{i}")
+        vertex.set("userId", i)
+        vertex.set("name", f"User{i}")
         vertex.save()
 print(f"API: {time.time() - start:.2f}s")  # ~0.3s (11x faster!)
 ```
@@ -201,22 +201,22 @@ db.command("sql", """
 - SQL injection risk
 - Hard to handle errors (what if Alice doesn't exist?)
 
-#### Option 2: Java API (Recommended)
+#### Option 2: Python Graph API (Recommended)
 
 ```python
 # Get vertices first
-alice = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
-bob = db.query("sql", "SELECT FROM Person WHERE name = 'Bob'")
+alice_results = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
+bob_results = db.query("sql", "SELECT FROM Person WHERE name = 'Bob'")
 
-alice_vertex = list(alice)[0]._java_result.getElement().get().asVertex()
-bob_vertex = list(bob)[0]._java_result.getElement().get().asVertex()
+alice_vertex = list(alice_results)[0].get_vertex()
+bob_vertex = list(bob_results)[0].get_vertex()
 
-# Create edge using vertex.newEdge() API
-edge = alice_vertex.newEdge(
+# Create edge using vertex.new_edge() API
+edge = alice_vertex.new_edge(
     "FRIEND_OF",
     bob_vertex,
-    "since", "2020-01-15",
-    "closeness", "close"
+    since="2020-01-15",
+    closeness="close"
 )
 edge.save()
 ```
@@ -242,13 +242,13 @@ movie_cache = {}
 with db.transaction():
     # Cache users
     for user_wrapper in db.query("sql", "SELECT FROM User"):
-        user_id = user_wrapper.get_property("userId")
-        user_cache[user_id] = user_wrapper._java_result.getElement().get().asVertex()
+        user_id = user_wrapper.get("userId")
+        user_cache[user_id] = user_wrapper.get_vertex()
 
     # Cache movies
     for movie_wrapper in db.query("sql", "SELECT FROM Movie"):
-        movie_id = movie_wrapper.get_property("movieId")
-        movie_cache[movie_id] = movie_wrapper._java_result.getElement().get().asVertex()
+        movie_id = movie_wrapper.get("movieId")
+        movie_cache[movie_id] = movie_wrapper.get_vertex()
 
 # Step 2: Create edges using cached vertices
 with db.transaction():
@@ -257,7 +257,7 @@ with db.transaction():
         movie_vertex = movie_cache.get(rating['movieId'])
 
         if user_vertex and movie_vertex:
-            edge = user_vertex.newEdge(
+            edge = user_vertex.new_edge(
                 "RATED",
                 movie_vertex,
                 "rating", rating['value'],
@@ -395,17 +395,16 @@ db.command("sql", "UPDATE Person SET loginCount = loginCount + 1 WHERE name = 'A
 - Conditional bulk updates
 - Computed updates (increment, formulas)
 
-### Option 2: Java API (Single record updates)
+### Option 2: Python Graph API (Single record updates)
 
 ```python
 # ✅ Update single record you already have
 result = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
-person_wrapper = list(result)[0]
+person_vertex = list(result)[0].get_vertex()
 
 # Update properties
-person_vertex = person_wrapper._java_result.getElement().get().asVertex()
-person_vertex.setProperty("age", 31)
-person_vertex.setProperty("city", "Boston")
+person_vertex.set("age", 31)
+person_vertex.set("city", "Boston")
 person_vertex.save()
 ```
 
@@ -420,16 +419,16 @@ person_vertex.save()
 # ❌ Avoid: Looping to update many records
 result = db.query("sql", "SELECT FROM Person WHERE age >= 18")
 for person_wrapper in result:  # Could be 10,000 iterations!
-    person = person_wrapper._java_result.getElement().get().asVertex()
-    person.setProperty("verified", True)
-    person.save()  # Separate save operation for EACH record
+    person_vertex = person_wrapper.get_vertex()
+    person_vertex.set("verified", True)
+    person_vertex.save()  # Separate save operation for EACH record
 # -> 10,000 individual operations instead of 1
 # -> 100x slower than SQL UPDATE
 ```
 
 **The distinction:**
 - **Batch = many records, one condition** → Use SQL (one operation)
-- **Single record in hand** → Use Java API (type-safe)
+- **Single record in hand** → Use Python Graph API (type-safe)
 
 ---
 
@@ -456,14 +455,16 @@ db.command("sql", "DELETE VERTEX Person WHERE name = 'Alice'")
 - Conditional deletion
 - Cascade deletion (vertices with edges)
 
-### Option 2: Java API (When you have the object)
+### Option 2: Python Graph API (When you have the object)
 
 ```python
 # Delete a specific vertex you already have
-vertex._java_result.getElement().get().asVertex().delete()
+vertex = result.get_vertex()
+vertex.delete()
 
-# Or through the wrapper
-person_wrapper._java_result.getElement().get().delete()
+# Or for any element
+element = result.get_element()
+element.delete()
 ```
 
 **Best for:**
@@ -585,13 +586,13 @@ db.command("sql", f"CREATE VERTEX Person SET userId = {i}")
 
 # ✅ Good: API for all creation (single or bulk)
 v = db.new_vertex("Person")
-v.set_property("userId", i)
+v.set("userId", i)
 v.save()
 ```
 
 **Always faster and safer**, even for single records.
 
-### 3. Edge Creation → Always Cache + Java API
+### 3. Edge Creation → Always Cache + Python Graph API
 
 ```python
 # ❌ Avoid: SQL subqueries (slow even for single edge)
@@ -604,13 +605,13 @@ db.command("sql", f"""
 # ✅ Good: Cache vertices, use API (always)
 vertex_cache = {}
 for v_wrapper in db.query("sql", "SELECT FROM Person"):
-    id = v_wrapper.get_property("id")
-    vertex_cache[id] = v_wrapper._java_result.getElement().get().asVertex()
+    id = v_wrapper.get("id")
+    vertex_cache[id] = v_wrapper.get_vertex()
 
 # Then create edges
 from_v = vertex_cache[edge_data['from_id']]
 to_v = vertex_cache[edge_data['to_id']]
-edge = from_v.newEdge("KNOWS", to_v)
+edge = from_v.new_edge("KNOWS", to_v)
 edge.save()
 ```
 
@@ -636,18 +637,19 @@ db.command("sql", f"CREATE VERTEX Person SET name = '{user_name}'")  # SQL injec
 # ✅ Safe: API with user input (always do this)
 user_name = get_user_input()  # Any string is safe
 v = db.new_vertex("Person")
-v.set_property("name", user_name)  # Automatically escaped
+v.set("name", user_name)  # Automatically escaped
 v.save()
 ```
 
 API handles escaping automatically - **never use SQL for user input**.
 
-### 6. Updates → Use Java API (Unless Batch)
+### 6. Updates → Use Python Graph API (Unless Batch)
 
 ```python
 # Single record update - Use API
-person_wrapper._java_result.getElement().get().asVertex().setProperty("age", 31)
-person_wrapper._java_result.getElement().get().asVertex().save()
+person_vertex = person_wrapper.get_vertex()
+person_vertex.set("age", 31)
+person_vertex.save()
 
 # Batch update - Use SQL
 db.command("sql", "UPDATE Person SET verified = true WHERE age >= 18")
@@ -666,8 +668,8 @@ db.command("sql", "CREATE INDEX ON Person (email) UNIQUE")
 with db.transaction():
     for data in dataset:
         v = db.new_vertex("Person")
-        v.set_property("name", data['name'])
-        v.set_property("email", data['email'])
+        v.set("name", data['name'])
+        v.set("email", data['email'])
         v.save()
 
 # 3. Queries (SQL - only option)
