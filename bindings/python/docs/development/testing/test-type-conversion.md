@@ -2,7 +2,7 @@
 
 The `test_type_conversion.py` file contains **10 tests** covering Python ↔ Java type conversion for all ArcadeDB data types.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_type_conversion.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_type_conversion.py){ .md-button }
 
 ## Overview
 
@@ -43,11 +43,11 @@ vertex.save()
 
 # Retrieve and verify types
 result = db.query("sql", "SELECT FROM Test").first()
-assert result.get_property("int_val") == 42
-assert result.get_property("float_val") == 3.14
-assert result.get_property("str_val") == "hello"
-assert result.get_property("bool_val") is True
-assert result.get_property("none_val") is None
+assert result.get("int_val") == 42
+assert result.get("float_val") == 3.14
+assert result.get("str_val") == "hello"
+assert result.get("bool_val") is True
+assert result.get("none_val") is None
 ```
 
 ---
@@ -75,9 +75,9 @@ vertex.save()
 
 # Retrieve
 result = db.query("sql", "SELECT FROM Event").first()
-assert result.get_property("timestamp") == datetime(2024, 1, 15, 14, 30, 0)
-assert result.get_property("event_date") == date(2024, 1, 15)
-assert result.get_property("start_time") == time(14, 30, 0)
+assert result.get("timestamp") == datetime(2024, 1, 15, 14, 30, 0)
+assert result.get("event_date") == date(2024, 1, 15)
+assert result.get("start_time") == time(14, 30, 0)
 ```
 
 ---
@@ -103,8 +103,8 @@ vertex.save()
 
 # Retrieve
 result = db.query("sql", "SELECT FROM Product").first()
-price = result.get_property("price")
-tax = result.get_property("tax")
+price = result.get("price")
+tax = result.get("tax")
 
 assert isinstance(price, Decimal)
 assert price == Decimal("19.99")
@@ -134,9 +134,9 @@ vertex.save()
 
 # Retrieve
 result = db.query("sql", "SELECT FROM User").first()
-assert result.get_property("tags") == ["python", "java", "database"]
-assert result.get_property("scores") == [95, 87, 92]
-assert result.get_property("nested") == [[1, 2], [3, 4]]
+assert result.get("tags") == ["python", "java", "database"]
+assert result.get("scores") == [95, 87, 92]
+assert result.get("nested") == [[1, 2], [3, 4]]
 ```
 
 ---
@@ -159,7 +159,7 @@ vertex.save()
 
 # Retrieve
 result = db.query("sql", "SELECT FROM User").first()
-roles = result.get_property("roles")
+roles = result.get("roles")
 
 assert isinstance(roles, set)
 assert len(roles) == 3
@@ -195,7 +195,7 @@ vertex.save()
 
 # Retrieve
 result = db.query("sql", "SELECT FROM User").first()
-profile = result.get_property("profile")
+profile = result.get("profile")
 
 assert profile["firstName"] == "Alice"
 assert profile["address"]["city"] == "New York"
@@ -222,7 +222,7 @@ vertex.save()
 
 # Retrieve
 result = db.query("sql", "SELECT FROM File").first()
-retrieved = result.get_property("data")
+retrieved = result.get("data")
 
 assert isinstance(retrieved, bytes)
 assert retrieved == binary_data
@@ -249,7 +249,7 @@ vertex.save()
 
 # Retrieve
 result = db.query("sql", "SELECT FROM User").first()
-assert result.get_property("middle_name") is None
+assert result.get("middle_name") is None
 ```
 
 ---
@@ -275,8 +275,8 @@ vertex.save()
 
 # Retrieve
 result = db.query("sql", "SELECT FROM Test").first()
-assert result.get_property("small") == 42
-assert result.get_property("large") == 2 ** 40
+assert result.get("small") == 42
+assert result.get("large") == 2 ** 40
 ```
 
 ---
@@ -319,7 +319,7 @@ result = db.query("sql", "SELECT FROM Test").first()
 
 # Verify all values match
 for key, original_value in original.items():
-    retrieved_value = result.get_property(key)
+    retrieved_value = result.get(key)
     assert retrieved_value == original_value, f"{key}: {retrieved_value} != {original_value}"
 ```
 
@@ -334,7 +334,7 @@ vertex.save()
 
 # Retrieve
 result = db.query("sql", "SELECT FROM Type").first()
-retrieved = result.get_property("property")
+retrieved = result.get("property")
 
 assert retrieved == value
 ```
@@ -347,7 +347,7 @@ vertex.set("num", value)
 vertex.save()
 
 result = db.query("sql", "SELECT FROM Type").first()
-retrieved = result.get_property("num")
+retrieved = result.get("num")
 
 assert isinstance(retrieved, int)
 assert type(retrieved) == type(value)
@@ -371,18 +371,18 @@ vertex.save()
 
 ```python
 # Type preserved
-assert isinstance(result.get_property("int_val"), int)
-assert isinstance(result.get_property("str_val"), str)
+assert isinstance(result.get("int_val"), int)
+assert isinstance(result.get("str_val"), str)
 
 # Value equality
-assert result.get_property("value") == expected_value
+assert result.get("value") == expected_value
 
 # Collection contents
-assert len(result.get_property("list")) == 3
-assert "item" in result.get_property("set")
+assert len(result.get("list")) == 3
+assert "item" in result.get("set")
 
 # None handling
-assert result.get_property("null_val") is None
+assert result.get("null_val") is None
 ```
 
 ## Supported Type Mappings

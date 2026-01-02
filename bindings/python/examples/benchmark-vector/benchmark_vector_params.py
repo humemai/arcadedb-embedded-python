@@ -42,7 +42,6 @@ import os
 import shutil
 import time
 
-import arcadedb_embedded as arcadedb
 import h5py
 import numpy as np
 import requests
@@ -80,14 +79,17 @@ DATASET_METRICS = {
 
 # Build parameters define the index structure and trigger a rebuild
 BUILD_PARAMS = {
-    "max_connections": [16, 32, 64],
-    "ef_construction_factors": [8, 16, 32],
+    # "max_connections": [16, 32, 64],
+    "max_connections": [32],
+    # "ef_construction_factors": [8, 16, 32],
+    "ef_construction_factors": [8],
     "quantization": ["NONE"],
 }
 
 # Search parameters affect traversal only and are swept per build
 SEARCH_PARAMS = {
-    "overquery_factors": [1, 4, 8, 16, 32, 64, 128],
+    # "overquery_factors": [1, 4, 8, 16, 32, 64, 128],
+    "overquery_factors": [16],
 }
 
 
@@ -281,19 +283,13 @@ def evaluate_index(
         latencies.append((time.perf_counter() - t0) * 1000)
 
         result_ids_ordered = []
-        for item_tuple in results:
-            try:
-                item = item_tuple[0]
-                vertex = item
-                if hasattr(item, "get_vertex"):
-                    vertex = item.get_vertex()
-                elif hasattr(item, "asVertex"):
-                    vertex = item.asVertex()
+        for idx, item_tuple in enumerate(results):
+            item = item_tuple[0]
 
-                vid = vertex.getInteger("id")
+            # Use .get() method from Pythonic API
+            vid = item.get("id")
+            if vid is not None:
                 result_ids_ordered.append(vid)
-            except Exception:
-                pass
 
         for k in k_values:
             top_k_ids = set(result_ids_ordered[:k])
@@ -420,13 +416,69 @@ def run_benchmark():
         default="medium",
         help="Benchmark dataset size",
     )
+    parser.add_argument(
+        "--xmx",
+        type=str,
+        default="16g",
+        help="JVM max heap size (e.g., 16g, 32g)",
+    )
+    parser.add_argument(
+        "--xms",
+        type=str,
+        default="16g",
+        help="JVM initial heap size (e.g., 16g, 32g)",
+    )
+    parser.add_argument(
+        "--max-direct-memory",
+        type=str,
+        default="16g",
+        help="JVM MaxDirectMemorySize (e.g., 16g, 32g)",
+    )
+    parser.add_argument(
+        "--location-cache-size",
+        type=str,
+        default="500000",
+        help="Vector index locationCacheSize (-1 for unlimited)",
+    )
+    parser.add_argument(
+        "--graph-build-cache-size",
+        type=str,
+        default="50000",
+        help="Vector index graphBuildCacheSize",
+    )
+    parser.add_argument(
+        "--mutations-before-rebuild",
+        type=str,
+        default="100",
+        help="Vector index mutationsBeforeRebuild (default: 100)",
+    )
     args = parser.parse_args()
 
-    db_base_path = f"./jvector_{args.dataset}_size_{args.dataset_size}"
+    # Configure JVM before importing arcadedb
+    jvm_args = (
+        f"-Xmx{args.xmx} -Xms{args.xms} "
+        f"-XX:MaxDirectMemorySize={args.max_direct_memory} "
+        f"-Darcadedb.vectorIndex.locationCacheSize={args.location_cache_size} "
+        f"-Darcadedb.vectorIndex.graphBuildCacheSize={args.graph_build_cache_size} "
+        f"-Darcadedb.vectorIndex.mutationsBeforeRebuild={args.mutations_before_rebuild}"
+    )
+    os.environ["ARCADEDB_JVM_ARGS"] = jvm_args
+    print(f"JVM Configuration: {jvm_args}\n")
+
+    # Import arcadedb after setting JVM args and make it global
+    global arcadedb
+    import arcadedb_embedded as arcadedb
+
+    # Create config suffix for naming
+    config_suffix = f"xmx{args.xmx}_loc{args.location_cache_size}_graph{args.graph_build_cache_size}_mut{args.mutations_before_rebuild}"
+
+    db_base_path = f"./jvector_{args.dataset}_size_{args.dataset_size}_{config_suffix}"
     k_values = [10]
 
     # Output file
-    md_file = f"benchmark_jvector_{args.dataset}_size_{args.dataset_size}.md"
+    md_file = (
+        f"benchmark_jvector_{args.dataset}_size_{args.dataset_size}_{config_suffix}.md"
+    )
 
     all_dataset_sizes = {
         "tiny": {"name": "tiny", "count": 1000, "queries": 10},
@@ -446,6 +498,11 @@ def run_benchmark():
         "Source": DATASETS[args.dataset],
         "Metric": metric.capitalize(),
         "K Values": str(k_values),
+        "JVM Heap": f"-Xmx{args.xmx} -Xms{args.xms}",
+        "JVM Direct Memory": f"-XX:MaxDirectMemorySize={args.max_direct_memory}",
+        "Location Cache Size": args.location_cache_size,
+        "Graph Build Cache Size": args.graph_build_cache_size,
+        "Mutations Before Rebuild": args.mutations_before_rebuild,
     }
 
     print("Starting Benchmark...")

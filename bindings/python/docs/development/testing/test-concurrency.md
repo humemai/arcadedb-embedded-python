@@ -2,7 +2,7 @@
 
 The `test_concurrency.py` file contains **4 tests** that explain ArcadeDB's concurrency model and file locking behavior.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_concurrency.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_concurrency.py){ .md-button }
 
 ## Overview
 
@@ -110,7 +110,7 @@ def increment_counter(thread_id, iterations):
         with db.transaction():
             # Read current value
             result = db.query("sql", "SELECT FROM Counter")
-            current = list(result)[0].get_property("value")
+            current = list(result)[0].get("value")
 
             # Increment
             db.command("sql", f"UPDATE Counter SET value = {current + 1}")
@@ -134,7 +134,7 @@ for thread in threads:
 
 # Verify final count
 result = db.query("sql", "SELECT FROM Counter")
-final_value = list(result)[0].get_property("value")
+final_value = list(result)[0].get("value")
 
 # Should be num_threads * iterations_per_thread
 assert final_value == 50
@@ -222,8 +222,8 @@ db2 = arcadedb.open_database("./test_db")
 result = db2.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
 person = list(result)[0]
 
-assert person.get_property("name") == "Alice"
-assert person.get_property("age") == 30
+assert person.get("name") == "Alice"
+assert person.get("age") == 30
 
 db2.close()
 ```

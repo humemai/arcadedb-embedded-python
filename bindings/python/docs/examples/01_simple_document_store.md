@@ -1,5 +1,7 @@
 # Simple Document Store Example
 
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/01_simple_document_store.py){ .md-button }
+
 This comprehensive example demonstrates ArcadeDB's document capabilities using a task management system. You'll learn about data types, NULL handling, SQL operations, and the differences between document and graph storage models.
 
 ## Overview

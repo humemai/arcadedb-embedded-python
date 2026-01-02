@@ -2,7 +2,7 @@
 
 The `test_server_patterns.py` file contains **6 tests** demonstrating different ways to access ArcadeDB via server.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_server_patterns.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_server_patterns.py){ .md-button }
 
 ## When Do You Need Server Patterns?
 
