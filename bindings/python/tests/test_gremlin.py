@@ -30,25 +30,25 @@ def test_gremlin_queries(temp_db_path):
             bob.set("age", 25)
             bob.save()
 
-        # Create edge using Java API
+        # Create edge using Python API
         with db.transaction():
-            # Query vertices to get Java objects
+            # Query vertices to get Python Vertex objects
             query_result = db.query("sql", "SELECT FROM Person")
             person_cache = {}
             for wrapper in query_result:
-                java_vertex = wrapper._java_result.getElement().get().asVertex()
-                name = wrapper.get_property("name")
-                person_cache[name] = java_vertex
+                vertex = wrapper.get_vertex()
+                name = wrapper.get("name")
+                person_cache[name] = vertex
 
             # Create edge
-            edge = person_cache["Alice"].newEdge("knows", person_cache["Bob"])
+            edge = person_cache["Alice"].new_edge("knows", person_cache["Bob"])
             edge.save()
 
         # Query using Gremlin (if available)
         # Note: Actual Gremlin syntax may need to be adjusted
         try:
             result = db.query("gremlin", "g.V().hasLabel('Person').values('name')")
-            names = [record.get_property("result") for record in result]
+            names = [record.get("result") for record in result]
             assert "Alice" in names or "Bob" in names
         except Exception as e:
             pytest.skip(f"Gremlin query failed: {e}")
@@ -78,24 +78,24 @@ def test_gremlin_traversal(temp_db_path):
             philly.set("name", "Philadelphia")
             philly.save()
 
-        # Add roads using Java API
+        # Add roads using Python API
         with db.transaction():
-            # Query cities to get Java objects
+            # Query cities to get Python Vertex objects
             query_result = db.query("sql", "SELECT FROM City")
             city_cache = {}
             for wrapper in query_result:
-                java_vertex = wrapper._java_result.getElement().get().asVertex()
-                name = wrapper.get_property("name")
-                city_cache[name] = java_vertex
+                vertex = wrapper.get_vertex()
+                name = wrapper.get("name")
+                city_cache[name] = vertex
 
             # Create edges
-            edge1 = city_cache["New York"].newEdge(
-                "road", city_cache["Boston"], "distance", 215
+            edge1 = city_cache["New York"].new_edge(
+                "road", city_cache["Boston"], distance=215
             )
             edge1.save()
 
-            edge2 = city_cache["New York"].newEdge(
-                "road", city_cache["Philadelphia"], "distance", 95
+            edge2 = city_cache["New York"].new_edge(
+                "road", city_cache["Philadelphia"], distance=95
             )
             edge2.save()
 
@@ -104,7 +104,7 @@ def test_gremlin_traversal(temp_db_path):
             result = db.query(
                 "gremlin", "g.V().has('name', 'New York').out('road').values('name')"
             )
-            cities = [record.get_property("result") for record in result]
+            cities = [record.get("result") for record in result]
             assert "Boston" in cities or "Philadelphia" in cities
         except Exception as e:
             pytest.skip(f"Gremlin traversal failed: {e}")
