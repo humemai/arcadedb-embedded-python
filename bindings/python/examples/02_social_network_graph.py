@@ -864,8 +864,8 @@ def demonstrate_gremlin_queries(db):
         )
 
         for row in result:
-            name = row.get_property("name")
-            city = row.get_property("city")
+            name = row.get("name")
+            city = row.get("city")
             print(f"      👥 {name} from {city}")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -887,8 +887,8 @@ def demonstrate_gremlin_queries(db):
         )
 
         for row in result:
-            name = row.get_property("fof")
-            through = row.get_property("friend")
+            name = row.get("fof")
+            through = row.get("friend")
             print(f"      🔗 {name} (through {through})")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -910,7 +910,7 @@ def demonstrate_gremlin_queries(db):
         mutual_friends = list(result)
         if mutual_friends:
             for row in mutual_friends:
-                print(f"      🤝 {row.get_property('result')}")
+                print(f"      🤝 {row.get('result')}")
         else:
             print("      ℹ️  No mutual friends found")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
@@ -933,9 +933,9 @@ def demonstrate_gremlin_queries(db):
         )
 
         for row in result:
-            person1 = row.get_property("p1")
-            person2 = row.get_property("p2")
-            since = row.get_property("edge")
+            person1 = row.get("p1")
+            person2 = row.get("p2")
+            since = row.get("edge")
             print(f"      💙 {person1} → {person2} (since {since})")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -956,8 +956,8 @@ def demonstrate_gremlin_queries(db):
         )
 
         for row in result:
-            name = row.get_property("name")
-            count = row.get_property("friend_count")
+            name = row.get("name")
+            count = row.get("friend_count")
             print(f"      • {name}: {count} friends")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -980,8 +980,8 @@ def demonstrate_gremlin_queries(db):
         )
 
         for row in result:
-            name = row.get_property("name")
-            city = row.get_property("city")
+            name = row.get("name")
+            city = row.get("city")
             print(f"      🌐 {name} from {city}")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 

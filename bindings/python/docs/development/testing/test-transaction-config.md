@@ -2,7 +2,7 @@
 
 The `test_transaction_config.py` file contains **9 tests** covering transaction configuration options and behaviors.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_transaction_config.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_transaction_config.py){ .md-button }
 
 ## Overview
 

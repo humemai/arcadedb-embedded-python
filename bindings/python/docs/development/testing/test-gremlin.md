@@ -2,7 +2,7 @@
 
 The `test_gremlin.py` file contains **1 test** validating Gremlin query language support.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_gremlin.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_gremlin.py){ .md-button }
 
 ## Overview
 
