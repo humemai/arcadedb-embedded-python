@@ -25,7 +25,7 @@ The Python bindings provide **excellent coverage for real-world use** (~85% of c
 
 ### Detailed Coverage
 
-#### 1. Core Database Operations - 90%
+#### 1. Core Database Operations - 95%
 
 **DatabaseFactory:**
 
@@ -42,6 +42,8 @@ The Python bindings provide **excellent coverage for real-world use** (~85% of c
 - ✅ `begin()`, `commit()`, `rollback()` - Full transaction support
 - ✅ `transaction()` - Python context manager (enhancement)
 - ✅ `newDocument(type)`, `newVertex(type)` - Record creation
+- ✅ `lookup_by_rid(rid)` - Direct record lookup
+- ✅ `count_type(type)` - Efficient record counting
 - ✅ `getName()`, `getDatabasePath()`, `isOpen()`, `close()` - Database info
 - ❌ `scanType()`, `scanBucket()` - Use SQL SELECT instead
 - ❌ `lookupByKey()` - Use SQL WHERE clause instead
@@ -61,20 +63,20 @@ All query languages fully supported:
 
 - ✅ Pythonic iteration (`__iter__`, `__next__`)
 - ✅ `has_next()`, `next()`
-- ✅ `get_property()`, `has_property()`, `get_property_names()`
+- ✅ `get()`, `has_property()`, `get_property_names()`
 - ✅ `to_json()`, `to_dict()` (Python enhancement)
 
-#### 3. Graph API - 85%
+#### 3. Graph API - 95%
 
-**Full graph operations support through query languages (recommended approach):**
+**Hybrid approach: Pythonic object manipulation + Powerful Query Languages**
 
-**Vertex & Edge Creation:**
+**Vertex & Edge Manipulation (Pythonic):**
 
-- ✅ `db.new_vertex(type)` - Direct API
-- ✅ `db.new_document(type)` - Direct API
-- ✅ SQL: `CREATE VERTEX`, `CREATE EDGE`, `CREATE PROPERTY`
-- ✅ Cypher: `CREATE`, `MERGE`, relationship syntax
-- ✅ Embedded property manipulation via returned Java objects
+- ✅ `db.new_vertex(type)` - Returns vertex object
+- ✅ `vertex.set(name, value)` - Fluent property setting
+- ✅ `vertex.save()` - Persist changes
+- ✅ `vertex.new_edge(label, target, **props)` - Create edges (bidirectionality controlled by EdgeType schema)
+- ✅ `db.lookup_by_rid(rid)` - Direct lookup (e.g., `db.lookup_by_rid("#10:0")`)
 
 **Graph Traversals & Queries:**
 
@@ -82,15 +84,24 @@ All query languages fully supported:
 - ✅ Cypher patterns: `MATCH (a:User)-[:FOLLOWS]->(b) RETURN b`
 - ✅ Gremlin: Full traversal support `g.V().has('name','Alice').out('follows')`
 - ✅ Path finding, shortest paths, pattern matching
-- ✅ Graph algorithms via queries
 
 **What's Not Exposed:**
 
-- ❌ Direct Java vertex/edge object methods (`vertex.getEdges()`, `edge.getInVertex()`)
-  - **Not needed:** Use SQL/Cypher/Gremlin queries instead (cleaner, more efficient)
 - ❌ Graph event listeners and callbacks
 
-**Query-Based Approach (Recommended):**
+**Object-Oriented Approach (Recommended):**
+
+```python
+# Create vertices with fluent Python API
+alice = db.new_vertex("Person").set("name", "Alice").save()
+bob = db.new_vertex("Person").set("name", "Bob").save()
+
+# Create edge with properties (bidirectionality determined by EdgeType schema)
+edge = alice.new_edge("Follows", bob, since=date.today())
+edge.save()
+```
+
+**Query-Based Approach (Also Supported):**
 
 ```python
 # Create edges via SQL
@@ -180,7 +191,7 @@ JSONL export/import) cover most real-world data migration scenarios.
 - ✅ Similarity search - `index.find_nearest()`
 - ✅ Add/remove vectors - Automatic via vertex save/delete
 - ✅ Distance functions - cosine, euclidean, inner_product
-- ✅ Vector parameters - max_connections, beam_width, quantization
+- ✅ Vector parameters - max_connections, beam_width
 - ✅ Automatic indexing - Existing records indexed on creation
 - ✅ List vector indexes - `schema.list_vector_indexes()`
 
@@ -274,7 +285,7 @@ vector indexes, converting arrays, managing vertices manually).
 ```python
 # Lots of Java API calls
 java_embedding = arcadedb.to_java_float_array(embedding)
-vertex = db._java_db.newVertex("Document")
+vertex = db._java_db.new_vertex("Document")
 vertex.set("embedding", java_embedding)
 index = db.create_vector_index(...)
 ```
