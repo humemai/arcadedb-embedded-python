@@ -358,7 +358,7 @@ for prop in properties:
     print(f"{prop.get_name()}: {prop.get_type()}")
 
 # Get specific property
-username_prop = type_obj.get_property("username")
+username_prop = type_obj.get("username")
 if username_prop:
     print(f"Type: {username_prop.get_type()}")
     print(f"Mandatory: {username_prop.is_mandatory()}")
@@ -393,7 +393,7 @@ with db.transaction():
     user_type.create_property("createdAt", "DATETIME")
 
     # Make username required and unique
-    username_prop = user_type.get_property("username")
+    username_prop = user_type.get("username")
     username_prop.set_mandatory(True)
     username_prop.set_not_null(True)
 
@@ -444,7 +444,7 @@ db.close()
 # Add property to existing type
 with db.transaction():
     user_type = schema.get_type("User")
-    if not user_type.get_property("phoneNumber"):
+    if not user_type.get("phoneNumber"):
         user_type.create_property("phoneNumber", "STRING")
         print("✅ Added phoneNumber property")
 
@@ -604,7 +604,7 @@ def migrate_schema_v1_to_v2(db):
         user_type = schema.get_type("User")
 
         # Add new property
-        if not user_type.get_property("status"):
+        if not user_type.get("status"):
             user_type.create_property("status", "STRING")
             print("✅ Added status property")
 
@@ -634,7 +634,7 @@ if not schema.exists_type("User"):
 ```python
 # ✅ Good: Check property exists
 user_type = schema.get_type("User")
-email_prop = user_type.get_property("email")
+email_prop = user_type.get("email")
 if email_prop:
     print(f"Email type: {email_prop.get_type()}")
 else:

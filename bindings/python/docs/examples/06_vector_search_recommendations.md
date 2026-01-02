@@ -1,5 +1,7 @@
 # Example 06: Vector Search Movie Recommendations
 
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/06_vector_search_recommendations.py){ .md-button }
+
 **Production-ready vector embeddings and JVector indexing for semantic movie search**
 
 ## Overview
