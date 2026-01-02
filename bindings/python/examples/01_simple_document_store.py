@@ -224,13 +224,13 @@ result = db.query("sql", "SELECT FROM Task ORDER BY priority_score DESC")
 # Using the new first() method and automatic type conversion
 for record in result:
     # Automatic type conversion: no more Java objects!
-    title = record.get_property("title")  # Now returns Python str directly
-    priority = record.get_property("priority")  # Python str
-    completed = record.get_property("completed")  # Python bool
-    estimated_hours = record.get_property("estimated_hours")  # Python float or None
-    cost = record.get_property("cost")  # Python Decimal or None
-    due = record.get_property("due_datetime")  # Python datetime or None
-    task_id = record.get_property("task_id")  # Python str
+    title = record.get("title")  # Now returns Python str directly
+    priority = record.get("priority")  # Python str
+    completed = record.get("completed")  # Python bool
+    estimated_hours = record.get("estimated_hours")  # Python float or None
+    cost = record.get("cost")  # Python Decimal or None
+    due = record.get("due_datetime")  # Python datetime or None
+    task_id = record.get("task_id")  # Python str
 
     status = "✅" if completed else "⏳"
 
@@ -245,7 +245,7 @@ for record in result:
 
 print()
 print("   💡 NEW: Automatic type conversion!")
-print("      • get_property() now returns native Python types")
+print("      • get() now returns native Python types")
 print("      • No more Java objects (Integer, BigDecimal, etc.)")
 print("      • Decimals are Python Decimal, dates are datetime")
 
@@ -279,8 +279,8 @@ result = db.query("sql", "SELECT FROM Task WHERE due_datetime IS NULL")
 
 count = 0
 for record in result:
-    title = str(record.get_property("title"))
-    priority = str(record.get_property("priority"))
+    title = str(record.get("title"))
+    priority = str(record.get("priority"))
     print(f"      • [{priority}] {title}")
     count += 1
 
@@ -297,7 +297,7 @@ result = db.query("sql", "SELECT FROM Task WHERE cost IS NULL")
 
 count = 0
 for record in result:
-    title = str(record.get_property("title"))
+    title = str(record.get("title"))
     print(f"      • {title}")
     count += 1
 
@@ -348,11 +348,11 @@ print("   📊 Updated task list (with NULL handling):")
 result = db.query("sql", "SELECT FROM Task ORDER BY completed, priority_score DESC")
 
 for record in result:
-    title = str(record.get_property("title"))
-    priority = str(record.get_property("priority"))
-    completed = record.get_property("completed")
-    cost = record.get_property("cost")
-    estimated_hours = record.get_property("estimated_hours")
+    title = str(record.get("title"))
+    priority = str(record.get("priority"))
+    completed = record.get("completed")
+    cost = record.get("cost")
+    estimated_hours = record.get("estimated_hours")
 
     status = "✅" if completed else "⏳"
 
@@ -389,8 +389,8 @@ result = db.query(
 )
 print("   📊 Tasks by priority:")
 for record in result:
-    priority = str(record.get_property("priority"))
-    count = record.get_property("count")
+    priority = str(record.get("priority"))
+    count = record.get("count")
     print(f"      • {priority}: {count}")
 
 # Count completed vs incomplete
@@ -400,8 +400,8 @@ result = db.query(
 print("   📊 Completion status:")
 # Using first() and iteration
 for record in result:
-    completed = record.get_property("completed")
-    count = record.get_property("count")
+    completed = record.get("completed")
+    count = record.get("count")
     status = "Completed" if completed else "Incomplete"
     print(f"      • {status}: {count}")
 
@@ -451,7 +451,7 @@ print()
 
 # Verify deletion
 result = db.query("sql", "SELECT count(*) as remaining FROM Task")
-remaining = list(result)[0].get_property("remaining")
+remaining = list(result)[0].get("remaining")
 print(f"   📊 Remaining tasks: {remaining}")
 print()
 
@@ -460,8 +460,8 @@ print("   📋 Remaining tasks:")
 result = db.query("sql", "SELECT FROM Task ORDER BY priority DESC")
 
 for record in result:
-    title = str(record.get_property("title"))
-    priority = str(record.get_property("priority"))
+    title = str(record.get("title"))
+    priority = str(record.get("priority"))
     print(f"      ⏳ [{priority:6}] {title}")
 
 print()

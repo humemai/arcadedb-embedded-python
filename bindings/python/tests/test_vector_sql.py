@@ -26,17 +26,17 @@ class TestVectorSQL:
         """Test basic vector math functions."""
         # vectorAdd
         rs = test_db.query("sql", "SELECT vectorAdd([1.0, 2.0], [3.0, 4.0]) as res")
-        assert next(rs).get_property("res") == [4.0, 6.0]
+        assert next(rs).get("res") == [4.0, 6.0]
 
         # vectorMultiply (element-wise)
         rs = test_db.query(
             "sql", "SELECT vectorMultiply([1.0, 2.0], [2.0, 2.0]) as res"
         )
-        assert next(rs).get_property("res") == [2.0, 4.0]
+        assert next(rs).get("res") == [2.0, 4.0]
 
         # vectorScale
         rs = test_db.query("sql", "SELECT vectorScale([4.0, 6.0], 0.5) as res")
-        assert next(rs).get_property("res") == [2.0, 3.0]
+        assert next(rs).get("res") == [2.0, 3.0]
 
     def test_vector_aggregations(self, test_db):
         """Test vector aggregation functions."""
@@ -49,19 +49,19 @@ class TestVectorSQL:
 
         # vectorSum (element-wise sum across rows)
         rs = test_db.query("sql", "SELECT vectorSum(v) as res FROM VecData")
-        assert next(rs).get_property("res") == [4.0, 6.0]
+        assert next(rs).get("res") == [4.0, 6.0]
 
         # vectorAvg (element-wise average across rows)
         rs = test_db.query("sql", "SELECT vectorAvg(v) as res FROM VecData")
-        assert next(rs).get_property("res") == [2.0, 3.0]
+        assert next(rs).get("res") == [2.0, 3.0]
 
         # vectorMin (element-wise min across rows)
         rs = test_db.query("sql", "SELECT vectorMin(v) as res FROM VecData")
-        assert next(rs).get_property("res") == [1.0, 2.0]
+        assert next(rs).get("res") == [1.0, 2.0]
 
         # vectorMax (element-wise max across rows)
         rs = test_db.query("sql", "SELECT vectorMax(v) as res FROM VecData")
-        assert next(rs).get_property("res") == [3.0, 4.0]
+        assert next(rs).get("res") == [3.0, 4.0]
 
     def test_vector_distance_functions(self, test_db):
         """Test vector distance functions."""
@@ -71,23 +71,23 @@ class TestVectorSQL:
         # vectorCosineSimilarity
         # Cosine similarity of orthogonal vectors is 0.0
         rs = test_db.query("sql", f"SELECT vectorCosineSimilarity({v1}, {v2}) as res")
-        assert abs(next(rs).get_property("res") - 0.0) < 0.001
+        assert abs(next(rs).get("res") - 0.0) < 0.001
 
         # vectorL2Distance (Euclidean)
         # Euclidean distance between (1,0) and (0,1) is sqrt(2) ~= 1.414
         rs = test_db.query("sql", f"SELECT vectorL2Distance({v1}, {v2}) as res")
-        assert abs(next(rs).get_property("res") - 1.414) < 0.001
+        assert abs(next(rs).get("res") - 1.414) < 0.001
 
         # vectorDotProduct
         # Dot product of orthogonal vectors is 0
         rs = test_db.query("sql", f"SELECT vectorDotProduct({v1}, {v2}) as res")
-        assert abs(next(rs).get_property("res") - 0.0) < 0.001
+        assert abs(next(rs).get("res") - 0.0) < 0.001
 
     def test_vector_normalization(self, test_db):
         """Test vector normalization."""
         v = [3.0, 4.0]  # Length is 5
         rs = test_db.query("sql", f"SELECT vectorNormalize({v}) as res")
-        res = next(rs).get_property("res")
+        res = next(rs).get("res")
         assert abs(res[0] - 0.6) < 0.001
         assert abs(res[1] - 0.8) < 0.001
 
@@ -99,7 +99,7 @@ class TestVectorSQL:
         # Just check if it runs and returns something byte-like or array
         try:
             rs = test_db.query("sql", f"SELECT vectorQuantizeInt8({v}) as res")
-            res = next(rs).get_property("res")
+            res = next(rs).get("res")
             assert res is not None
         except Exception as e:
             # Might fail if not supported in this build yet, but should be
@@ -206,8 +206,8 @@ class TestVectorSQL:
         assert len(results) > 0
 
         # Check result content
-        # results[0] is the row, get_property("res") is the list of vertices
-        neighbors = results[0].get_property("res")
+        # results[0] is the row, get("res") is the list of vertices
+        neighbors = results[0].get("res")
         assert len(neighbors) == 1
 
         vertex = neighbors[0]
@@ -258,7 +258,7 @@ class TestVectorSQL:
 
         # Should find 1 result if working
         assert len(results) > 0
-        neighbors = results[0].get_property("res")
+        neighbors = results[0].get("res")
         assert len(neighbors) == 1
 
         vertex = neighbors[0]
@@ -296,7 +296,7 @@ class TestVectorSQL:
             rs = test_db.query(
                 "sql", f"SELECT vectorNeighbors('{index_name}', {query_vec}, 1) as res"
             )
-            res = next(rs).get_property("res")
+            res = next(rs).get("res")
             # Should return list of RIDs or similar
             assert len(res) > 0
         except Exception:
@@ -363,13 +363,13 @@ class TestVectorSQL:
                 if not row:
                     continue
 
-                found_id = row.get_property("id")
+                found_id = row.get("id")
                 assert found_id != i, f"Found deleted vector at index {i}"
 
             else:
                 # Should find it
                 assert row is not None, f"Did not find vector at index {i}"
-                found_id = row.get_property("id")
+                found_id = row.get("id")
                 assert (
                     found_id == i
                 ), f"Found wrong vector for index {i}: found {found_id}"
@@ -435,7 +435,7 @@ class TestVectorSQL:
         results = list(rs)
         assert len(results) == 2
 
-        names = [r.get_property("name") for r in results]
+        names = [r.get("name") for r in results]
         print(f"Search results: {names}")
 
         # Should be Apple and Banana

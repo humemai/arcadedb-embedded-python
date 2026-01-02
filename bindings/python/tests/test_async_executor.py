@@ -39,7 +39,7 @@ def test_async_executor_basic_create():
 
         # Verify all records created
         result = db.query("sql", "SELECT count(*) as count FROM User")
-        count = result.first().get_property("count")
+        count = result.first().get("count")
         assert count == 100
 
         db.close()
@@ -301,12 +301,12 @@ def test_async_vs_sync_performance():
         sync_count = (
             db.query("sql", "SELECT count(*) as c FROM Benchmark WHERE type = 'sync'")
             .first()
-            .get_property("c")
+            .get("c")
         )
         async_count = (
             db.query("sql", "SELECT count(*) as c FROM Benchmark WHERE type = 'async'")
             .first()
-            .get_property("c")
+            .get("c")
         )
 
         assert sync_count == 0  # We deleted sync records

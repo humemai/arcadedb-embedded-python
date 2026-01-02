@@ -210,7 +210,7 @@ try:\n\
         \n\
         result = db.query("sql", "SELECT FROM TestDoc")\n\
         for record in result:\n\
-            print(f"✅ Query result: {record.get_property('\''name'\'')} = {record.get_property('\''value'\'')}")\n\
+            print(f"✅ Query result: {record.get('\''name'\'')} = {record.get('\''value'\'')}")\n\
     \n\
     print("🎉 All tests passed!")\n\
 finally:\n\

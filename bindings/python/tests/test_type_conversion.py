@@ -31,33 +31,33 @@ def test_basic_type_conversion(temp_db_path):
         record = result.first()
 
         # Test string conversion
-        assert record.get_property("string_val") == "hello"
-        assert isinstance(record.get_property("string_val"), str)
+        assert record.get("string_val") == "hello"
+        assert isinstance(record.get("string_val"), str)
 
         # Test integer conversion
-        assert record.get_property("int_val") == 42
-        assert isinstance(record.get_property("int_val"), int)
+        assert record.get("int_val") == 42
+        assert isinstance(record.get("int_val"), int)
 
         # Test long conversion
-        assert record.get_property("long_val") == 9223372036854775807
-        assert isinstance(record.get_property("long_val"), int)
+        assert record.get("long_val") == 9223372036854775807
+        assert isinstance(record.get("long_val"), int)
 
         # Test float conversion
-        float_val = record.get_property("float_val")
+        float_val = record.get("float_val")
         assert abs(float_val - 3.14) < 0.01
         assert isinstance(float_val, float)
 
         # Test double conversion
-        double_val = record.get_property("double_val")
+        double_val = record.get("double_val")
         assert abs(double_val - 2.71828) < 0.0001
         assert isinstance(double_val, float)
 
         # Test boolean conversion
-        assert record.get_property("bool_val") is True
-        assert isinstance(record.get_property("bool_val"), bool)
+        assert record.get("bool_val") is True
+        assert isinstance(record.get("bool_val"), bool)
 
         # Test null conversion
-        assert record.get_property("null_val") is None
+        assert record.get("null_val") is None
 
 
 def test_decimal_conversion(temp_db_path):
@@ -71,7 +71,7 @@ def test_decimal_conversion(temp_db_path):
         result = db.query("sql", "SELECT FROM DecimalTest")
         record = result.first()
 
-        price = record.get_property("price")
+        price = record.get("price")
         # Should be converted to Python Decimal for precision
         assert isinstance(price, Decimal)
         assert price == Decimal("99.95")
@@ -97,13 +97,13 @@ def test_date_conversion(temp_db_path):
         record = result.first()
 
         # Test date conversion
-        created_date = record.get_property("created_date")
+        created_date = record.get("created_date")
         assert created_date is not None
         # Should be converted to Python date/datetime
         assert isinstance(created_date, (date, datetime))
 
         # Test datetime conversion
-        created_datetime = record.get_property("created_datetime")
+        created_datetime = record.get("created_datetime")
         assert created_datetime is not None
         assert isinstance(created_datetime, datetime)
 
@@ -130,7 +130,7 @@ def test_collection_conversion(temp_db_path):
         record = result.first()
 
         # Test list conversion
-        tags = record.get_property("tags")
+        tags = record.get("tags")
         assert isinstance(tags, list)
         assert len(tags) == 3
         assert "python" in tags
@@ -138,7 +138,7 @@ def test_collection_conversion(temp_db_path):
         assert "graph" in tags
 
         # Test map/dict conversion
-        metadata = record.get_property("metadata")
+        metadata = record.get("metadata")
         assert isinstance(metadata, dict)
         assert metadata["version"] == 1
         assert metadata["active"] is True
@@ -170,7 +170,7 @@ def test_nested_collection_conversion(temp_db_path):
         result = db.query("sql", "SELECT FROM NestedTest")
         record = result.first()
 
-        nested_data = record.get_property("nested_data")
+        nested_data = record.get("nested_data")
         assert isinstance(nested_data, dict)
 
         # Test nested list of dicts
@@ -305,18 +305,18 @@ def test_python_to_java_conversion(temp_db_path):
         result = db.query("sql", "SELECT FROM PyToJavaTest")
         record = result.first()
 
-        assert record.get_property("name") == "test"
-        assert record.get_property("count") == 42
+        assert record.get("name") == "test"
+        assert record.get("count") == 42
         # BigDecimal may be converted to float or Decimal depending on Java handling
-        price = record.get_property("price")
+        price = record.get("price")
         assert isinstance(price, (Decimal, float))
         assert abs(float(price) - 99.95) < 0.01
-        assert record.get_property("active") is True
-        assert isinstance(record.get_property("tags"), list)
-        assert len(record.get_property("tags")) == 3
-        assert isinstance(record.get_property("metadata"), dict)
+        assert record.get("active") is True
+        assert isinstance(record.get("tags"), list)
+        assert len(record.get("tags")) == 3
+        assert isinstance(record.get("metadata"), dict)
         # Set may be converted to list or remain as set/collection
-        unique_items = record.get_property("unique_items")
+        unique_items = record.get("unique_items")
         assert unique_items is not None
 
 
@@ -341,13 +341,13 @@ def test_array_conversion(temp_db_path):
         record = result.first()
 
         # Test array conversion
-        numbers = record.get_property("numbers")
+        numbers = record.get("numbers")
         assert isinstance(numbers, list)
         assert len(numbers) == 5
         assert numbers[0] == 1
         assert numbers[4] == 5
 
-        names = record.get_property("names")
+        names = record.get("names")
         assert isinstance(names, list)
         assert len(names) == 3
         assert "Alice" in names

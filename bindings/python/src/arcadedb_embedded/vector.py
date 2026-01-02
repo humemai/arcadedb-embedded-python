@@ -153,12 +153,15 @@ class VectorIndex:
             # Convert query vector to Java float array
             java_vector = to_java_float_array(query_vector)
 
+            # Import Document wrapper and Java classes once
+            from com.arcadedb.database import RID
+            from java.util import HashSet
+
+            from .graph import Document
+
             # Prepare RID filter if provided
             allowed_rids_set = None
             if allowed_rids:
-                from com.arcadedb.database import RID
-                from java.util import HashSet
-
                 allowed_rids_set = HashSet()
                 for rid_str in allowed_rids:
                     allowed_rids_set.add(RID(self._database._java_db, rid_str))
@@ -181,7 +184,9 @@ class VectorIndex:
                         rid = pair.getFirst()
                         score = pair.getSecond()
                         record = self._database._java_db.lookupByRID(rid, True)
-                        all_results.append((record, float(score)))
+                        # Wrap the record in Python wrapper
+                        wrapped_record = Document.wrap(record)
+                        all_results.append((wrapped_record, float(score)))
 
             # Handle TypeIndex (multiple buckets)
             if "TypeIndex" in self._java_index.getClass().getName():

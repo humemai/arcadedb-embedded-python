@@ -118,7 +118,7 @@ class TestLSMVectorIndex:
                 v = test_db.new_vertex("Doc")
                 v.set("embedding", arcadedb.to_java_float_array(vec))
                 v.save()
-                rids.append(v.getIdentity().toString())
+                rids.append(str(v.get_identity()))
 
         query = [1.0, 0.0, 0.0]
 
@@ -127,29 +127,29 @@ class TestLSMVectorIndex:
         allowed_rids = [rids[2], rids[3]]
         results = index.find_nearest(query, k=1, allowed_rids=allowed_rids)
         assert len(results) == 1
-        assert results[0][0].getIdentity().toString() == rids[2]
+        assert str(results[0][0].get_identity()) == rids[2]
 
         # Scenario 2: Filter allows V2 and V3. k=2.
         # Should return both V2 and V3. V2 first.
         results = index.find_nearest(query, k=2, allowed_rids=allowed_rids)
         assert len(results) == 2
-        assert results[0][0].getIdentity().toString() == rids[2]
-        assert results[1][0].getIdentity().toString() == rids[3]
+        assert str(results[0][0].get_identity()) == rids[2]
+        assert str(results[1][0].get_identity()) == rids[3]
 
         # Scenario 3: Filter allows V0, V1, V2. k=2.
         # Should return V0 and V1.
         allowed_rids = [rids[0], rids[1], rids[2]]
         results = index.find_nearest(query, k=2, allowed_rids=allowed_rids)
         assert len(results) == 2
-        assert results[0][0].getIdentity().toString() == rids[0]
-        assert results[1][0].getIdentity().toString() == rids[1]
+        assert str(results[0][0].get_identity()) == rids[0]
+        assert str(results[1][0].get_identity()) == rids[1]
 
         # Scenario 4: Filter allows V3. k=5.
         # Should return only V3.
         allowed_rids = [rids[3]]
         results = index.find_nearest(query, k=5, allowed_rids=allowed_rids)
         assert len(results) == 1
-        assert results[0][0].getIdentity().toString() == rids[3]
+        assert str(results[0][0].get_identity()) == rids[3]
 
     def test_lsm_vector_delete_and_search_others(self, test_db):
         """Test deleting vertices in a larger dataset and ensuring others are still found."""
@@ -182,7 +182,7 @@ class TestLSMVectorIndex:
                 v.set("embedding", arcadedb.to_java_float_array(vec))
                 v.set("id", i)
                 v.save()
-                rids.append(v.getIdentity().toString())
+                rids.append(str(v.get_identity()))
 
         # Delete every 10th vector (indices 0, 10, 20, ...)
         deleted_indices = set(range(0, num_vectors, 10))
@@ -206,7 +206,7 @@ class TestLSMVectorIndex:
                 # If deleted, we should NOT find this specific RID
                 if len(results) > 0:
                     found_vertex, _ = results[0]
-                    found_rid = found_vertex.getIdentity().toString()
+                    found_rid = str(found_vertex.get_identity())
                     assert (
                         found_rid != rid
                     ), f"Deleted vector at index {i} (RID {rid}) was found!"
@@ -214,7 +214,7 @@ class TestLSMVectorIndex:
                 # If not deleted, we SHOULD find this specific RID as top match (exact match)
                 assert len(results) >= 1, f"Existing vector at index {i} not found"
                 found_vertex, _ = results[0]
-                found_rid = found_vertex.getIdentity().toString()
+                found_rid = str(found_vertex.get_identity())
                 assert (
                     found_rid == rid
                 ), f"Vector at index {i} mismatch. Expected {rid}, got {found_rid}"
@@ -1027,7 +1027,7 @@ class TestLSMVectorIndex:
         # Extract names from results
         found_names = []
         for record, distance in results:
-            assert record.getType().getName() == "MyDoc"
+            assert record.get_type_name() == "MyDoc"
             found_names.append(record.get("name"))
 
             # Verify embedding is present and correct type

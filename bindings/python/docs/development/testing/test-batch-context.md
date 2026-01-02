@@ -2,7 +2,7 @@
 
 The `test_batch_context.py` file contains **13 tests** covering high-level batch operations with progress tracking.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_batch_context.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_batch_context.py){ .md-button }
 
 ## Overview
 
@@ -33,7 +33,7 @@ with db.batch_context(batch_size=100, parallel=2) as batch:
         batch.create_vertex("User", userId=i, name=f"User{i}")
 
 # Verify count
-count = db.query("sql", "SELECT count(*) as count FROM User").first().get_property("count")
+count = db.query("sql", "SELECT count(*) as count FROM User").first().get("count")
 assert count == 500
 ```
 
@@ -91,7 +91,7 @@ with db.batch_context() as batch:
             since="2024-01-01"
         )
 
-edge_count = db.query("sql", "SELECT count(*) FROM Follows").first().get_property("count")
+edge_count = db.query("sql", "SELECT count(*) FROM Follows").first().get("count")
 assert edge_count == 9
 ```
 

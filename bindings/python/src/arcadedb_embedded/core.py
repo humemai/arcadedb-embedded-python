@@ -7,6 +7,7 @@ Database and DatabaseFactory classes for embedded database access.
 from typing import Any, List, Optional
 
 from .exceptions import ArcadeDBError
+from .graph import Document, Edge, Vertex
 from .jvm import start_jvm
 from .results import ResultSet
 from .transactions import TransactionContext
@@ -101,21 +102,21 @@ class Database:
         """Create a transaction context manager."""
         return TransactionContext(self)
 
-    def new_vertex(self, type_name: str):
+    def new_vertex(self, type_name: str) -> Vertex:
         """Create a new vertex."""
         self._check_not_closed()
         try:
-            return self._java_db.newVertex(type_name)
+            return Vertex(self._java_db.newVertex(type_name))
         except Exception as e:
             raise ArcadeDBError(
                 f"Failed to create vertex of type '{type_name}': {e}"
             ) from e
 
-    def new_document(self, type_name: str):
+    def new_document(self, type_name: str) -> Document:
         """Create a new document."""
         self._check_not_closed()
         try:
-            return self._java_db.newDocument(type_name)
+            return Document(self._java_db.newDocument(type_name))
         except Exception as e:
             raise ArcadeDBError(
                 f"Failed to create document of type '{type_name}': {e}"
@@ -158,6 +159,41 @@ class Database:
         except Exception as e:
             raise ArcadeDBError(f"Failed to get database path: {e}") from e
 
+    def lookup_by_key(self, type_name: str, keys: List[str], values: List[Any]):
+        """
+        Lookup records by indexed key (O(1) index-based lookup).
+
+        Args:
+            type_name: Type name
+            keys: List of property names (must be indexed)
+            values: List of property values
+
+        Returns:
+            Python-wrapped records or None
+
+        Example:
+            >>> records = list(db.lookup_by_key("User", ["email"], ["alice@example.com"]))
+            >>> if records:
+            ...     user = records[0]
+        """
+        self._check_not_closed()
+        try:
+            import jpype
+
+            # Convert to Java arrays
+            keys_array = jpype.JArray(jpype.JString)(keys)
+            values_array = jpype.JArray(jpype.JObject)(values)
+
+            cursor = self._java_db.lookupByKey(type_name, keys_array, values_array)
+
+            # Return first result wrapped, or None
+            if cursor.hasNext():
+                java_record = cursor.next().getRecord()
+                return Document.wrap(java_record)
+            return None
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to lookup by key in '{type_name}': {e}") from e
+
     def lookup_by_rid(self, rid: str) -> Any:
         """
         Lookup a record by its RID.
@@ -175,10 +211,26 @@ class Database:
         """
         self._check_not_closed()
         try:
+            import jpype
             from com.arcadedb.database import RID
 
             java_rid = RID(self._java_db, rid)
-            return self._java_db.lookupByRID(java_rid, True)
+            java_record = self._java_db.lookupByRID(java_rid, True)
+
+            if java_record is None:
+                return None
+
+            # Wrap in appropriate Python class
+            if isinstance(java_record, jpype.JClass("com.arcadedb.graph.Vertex")):
+                return Vertex(java_record)
+            elif isinstance(java_record, jpype.JClass("com.arcadedb.graph.Edge")):
+                return Edge(java_record)
+            elif isinstance(
+                java_record, jpype.JClass("com.arcadedb.database.Document")
+            ):
+                return Document(java_record)
+
+            return java_record
         except Exception as e:
             raise ArcadeDBError(f"Failed to lookup RID '{rid}': {e}") from e
 

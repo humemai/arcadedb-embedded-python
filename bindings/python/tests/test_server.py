@@ -75,7 +75,7 @@ def test_server_database_operations(temp_server_root):
         result = db.query("sql", "SELECT FROM Person")
         records = list(result)
         assert len(records) == 1
-        assert records[0].get_property("name") == "Alice"
+        assert records[0].get("name") == "Alice"
 
         # Close database
         db.close()

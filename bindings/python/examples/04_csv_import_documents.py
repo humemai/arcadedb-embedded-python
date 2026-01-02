@@ -719,7 +719,7 @@ def drop_all_indexes(db, verbose=True):
             print(f"   📊 Found {len(indexes)} indexes")
 
         for index_record in indexes:
-            index_name = index_record.get_property("name")
+            index_name = index_record.get("name")
 
             # Try to drop all indexes
             # Note: Some system indexes cannot be dropped and will fail gracefully
@@ -1107,7 +1107,7 @@ print(f"   ⏱️  Rate: {rate:.0f} records/sec")
 null_genres = (
     db.query("sql", "SELECT count(*) as c FROM Movie WHERE genres IS NULL")
     .first()
-    .get_property("c")
+    .get("c")
 )
 
 if null_genres > 0:
@@ -1129,7 +1129,7 @@ print()
 # Query the schema that Java created during import
 result = db.query("sql", "SELECT properties FROM schema:types WHERE name = 'Movie'")
 for record in result:
-    properties = record.get_property("properties")
+    properties = record.get("properties")
 
     print("   📋 Movie schema (auto-inferred by Java):")
     if properties:
@@ -1174,7 +1174,7 @@ print(f"   ⏱️  Rate: {rate:.0f} records/sec")
 null_timestamps = (
     db.query("sql", "SELECT count(*) as c FROM Rating WHERE timestamp IS NULL")
     .first()
-    .get_property("c")
+    .get("c")
 )
 
 if null_timestamps > 0:
@@ -1210,12 +1210,12 @@ print(f"   ⏱️  Rate: {rate:.0f} records/sec")
 null_imdb = (
     db.query("sql", "SELECT count(*) as c FROM Link WHERE imdbId IS NULL")
     .first()
-    .get_property("c")
+    .get("c")
 )
 null_tmdb = (
     db.query("sql", "SELECT count(*) as c FROM Link WHERE tmdbId IS NULL")
     .first()
-    .get_property("c")
+    .get("c")
 )
 
 if null_imdb > 0 or null_tmdb > 0:
@@ -1255,9 +1255,7 @@ print(f"   ⏱️  Rate: {rate:.0f} records/sec")
 
 # Check NULL values in tag field
 null_tags = (
-    db.query("sql", "SELECT count(*) as c FROM Tag WHERE tag IS NULL")
-    .first()
-    .get_property("c")
+    db.query("sql", "SELECT count(*) as c FROM Tag WHERE tag IS NULL").first().get("c")
 )
 
 if null_tags > 0:
@@ -1283,7 +1281,7 @@ for doc_type in ["Movie", "Rating", "Link", "Tag"]:
     )
 
     for record in result:
-        properties = record.get_property("properties")
+        properties = record.get("properties")
 
         print(f"   📋 {doc_type} schema (auto-inferred by Java):")
         if properties:
@@ -1506,8 +1504,8 @@ for i in range(len(TEST_QUERIES)):
 
         # Check if this is a COUNT query (has 'count' property)
         if first_before.has_property("count"):
-            count_before = first_before.get_property("count")
-            count_after = first_after.get_property("count")
+            count_before = first_before.get("count")
+            count_after = first_after.get("count")
             if count_before != count_after:
                 print(
                     f"   ❌ {query_name}: count values differ: "
@@ -1518,8 +1516,8 @@ for i in range(len(TEST_QUERIES)):
             detail = f" → Count value: {count_before:,}"
         # Show first result's title or movieId for regular queries
         elif first_before.has_property("title"):
-            title_before = first_before.get_property("title")
-            title_after = first_after.get_property("title")
+            title_before = first_before.get("title")
+            title_after = first_after.get("title")
             if title_before != title_after:
                 print(
                     f"   ❌ {query_name}: first result differs: "
@@ -1532,8 +1530,8 @@ for i in range(len(TEST_QUERIES)):
             else:
                 detail = f" → First: '{title_before}'"
         elif first_before.has_property("movieId"):
-            movieId_before = first_before.get_property("movieId")
-            movieId_after = first_after.get_property("movieId")
+            movieId_before = first_before.get("movieId")
+            movieId_after = first_after.get("movieId")
             if movieId_before != movieId_after:
                 print(
                     f"   ❌ {query_name}: first result differs: "
@@ -1618,8 +1616,8 @@ for genre in genre_searches:
     if result:
         # Show first movie as example
         first_movie = result[0]
-        title = str(first_movie.get_property("title"))
-        genres = str(first_movie.get_property("genres"))
+        title = str(first_movie.get("title"))
+        genres = str(first_movie.get("genres"))
         print(f"        Example: {title}")
         print(f"        Genres: {genres}")
 
@@ -1640,7 +1638,7 @@ count_result = list(
     db.query("sql", "SELECT count(*) as count FROM Movie WHERE genres LIKE '%Action%'")
 )
 count_time = time.time() - count_start
-action_count = count_result[0].get_property("count") if count_result else 0
+action_count = count_result[0].get("count") if count_result else 0
 action_count = action_count if action_count is not None else 0
 print(f"      • Total Action movies: {action_count:,} found in {count_time:.3f}s")
 print("      • This requires scanning all records (no early termination)")
@@ -1668,7 +1666,7 @@ print("   📊 Record counts by type:")
 step_start = time.time()
 for doc_type in ["Movie", "Rating", "Link", "Tag"]:
     result = db.query("sql", f"SELECT count(*) as count FROM {doc_type}")
-    count = list(result)[0].get_property("count")
+    count = list(result)[0].get("count")
     print(f"      • {doc_type}: {count:,} records")
 print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
 print()
@@ -1678,9 +1676,9 @@ print("   🎬 Sample movies:")
 step_start = time.time()
 result = db.query("sql", "SELECT FROM Movie LIMIT 5")
 for record in result:
-    movie_id = record.get_property("movieId")
-    title = str(record.get_property("title"))
-    genres = str(record.get_property("genres"))
+    movie_id = record.get("movieId")
+    title = str(record.get("title"))
+    genres = str(record.get("genres"))
     print(f"      • [{movie_id}] {title}")
     print(f"        Genres: {genres}")
 print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
@@ -1699,10 +1697,10 @@ result = db.query(
        FROM Rating""",
 )
 record = list(result)[0]
-total = record.get_property("total_ratings")
-avg_rating = record.get_property("avg_rating")
-min_rating = record.get_property("min_rating")
-max_rating = record.get_property("max_rating")
+total = record.get("total_ratings")
+avg_rating = record.get("avg_rating")
+min_rating = record.get("min_rating")
+max_rating = record.get("max_rating")
 print(f"      • Total ratings: {total:,}")
 print(f"      • Average rating: {avg_rating:.2f}")
 print(f"      • Min rating: {min_rating}")
@@ -1721,8 +1719,8 @@ result = db.query(
        ORDER BY rating""",
 )
 for record in result:
-    rating = record.get_property("rating")
-    count = record.get_property("count")
+    rating = record.get("rating")
+    count = record.get("count")
     bar = "█" * int(count / 3000)  # Scale for visualization
     # Handle NULL ratings (introduced by NULL injection)
     if rating is None:
@@ -1746,8 +1744,8 @@ result = db.query(
        LIMIT 10""",
 )
 for idx, record in enumerate(result, 1):
-    genres = str(record.get_property("genres"))
-    count = record.get_property("count")
+    genres = str(record.get("genres"))
+    count = record.get("count")
     # Truncate long genre lists
     if len(genres) > 50:
         genres = genres[:47] + "..."
@@ -1767,8 +1765,8 @@ result = db.query(
        LIMIT 10""",
 )
 for idx, record in enumerate(result, 1):
-    user_id = record.get_property("userId")
-    rating_count = record.get_property("rating_count")
+    user_id = record.get("userId")
+    rating_count = record.get("rating_count")
     print(f"      {idx:2}. User {user_id}: {rating_count} ratings")
 print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
 print()
@@ -1785,13 +1783,13 @@ result = db.query(
        LIMIT 10""",
 )
 for idx, record in enumerate(result, 1):
-    movie_id = record.get_property("movieId")
-    tag_count = record.get_property("tag_count")
+    movie_id = record.get("movieId")
+    tag_count = record.get("tag_count")
     # Look up movie title
     movie_result = db.query(
         "sql", f"SELECT title FROM Movie WHERE movieId = {movie_id}"
     )
-    title = str(list(movie_result)[0].get_property("title"))
+    title = str(list(movie_result)[0].get("title"))
     print(f"      {idx:2}. {title} ({tag_count} tags)")
 print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
 print()
@@ -1808,8 +1806,8 @@ result = db.query(
        LIMIT 10""",
 )
 for idx, record in enumerate(result, 1):
-    tag = str(record.get_property("tag"))
-    count = record.get_property("count")
+    tag = str(record.get("tag"))
+    count = record.get("count")
     print(f"      {idx:2}. '{tag}' ({count} uses)")
 print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")
 print()
@@ -1820,10 +1818,10 @@ total_ratings = db.query("sql", "SELECT count(*) as c FROM Rating")
 total_links = db.query("sql", "SELECT count(*) as c FROM Link")
 total_tags = db.query("sql", "SELECT count(*) as c FROM Tag")
 
-movies_count = list(total_movies)[0].get_property("c")
-ratings_count = list(total_ratings)[0].get_property("c")
-links_count = list(total_links)[0].get_property("c")
-tags_count = list(total_tags)[0].get_property("c")
+movies_count = list(total_movies)[0].get("c")
+ratings_count = list(total_ratings)[0].get("c")
+links_count = list(total_links)[0].get("c")
+tags_count = list(total_tags)[0].get("c")
 
 total_records = movies_count + ratings_count + links_count + tags_count
 
@@ -1978,7 +1976,7 @@ if args.export and export_filename:
 
         for doc_type in ["Movie", "Rating", "Link", "Tag"]:
             result = roundtrip_db.query("sql", f"SELECT count(*) as c FROM {doc_type}")
-            count = result.first().get_property("c")
+            count = result.first().get("c")
 
             # Compare with expected counts
             if doc_type == "Movie" and count != movies_count:

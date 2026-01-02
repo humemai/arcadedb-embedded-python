@@ -16,6 +16,8 @@ from typing import Any, List, Optional, Union
 
 import jpype
 
+from .exceptions import ArcadeDBError
+
 
 class IndexType(Enum):
     """Index types supported by ArcadeDB."""
@@ -89,8 +91,6 @@ class Schema:
             >>> schema.create_document_type("Product")
             >>> schema.create_document_type("LargeDataset", buckets=10)
         """
-        from .exceptions import ArcadeDBError
-
         self._db._check_not_closed()
 
         try:
@@ -119,7 +119,6 @@ class Schema:
             >>> schema.create_vertex_type("User")
             >>> schema.create_vertex_type("Company", buckets=5)
         """
-        from .exceptions import ArcadeDBError
 
         self._db._check_not_closed()
 
@@ -149,8 +148,6 @@ class Schema:
             >>> schema.create_edge_type("Follows")
             >>> schema.create_edge_type("Purchased", buckets=5)
         """
-        from .exceptions import ArcadeDBError
-
         self._db._check_not_closed()
 
         try:
@@ -241,8 +238,6 @@ class Schema:
             >>> schema = db.schema
             >>> schema.drop_type("OldType")
         """
-        from .exceptions import ArcadeDBError
-
         self._db._check_not_closed()
 
         try:
@@ -266,8 +261,6 @@ class Schema:
             >>> schema = db.schema
             >>> user_type = schema.get_type("User")
         """
-        from .exceptions import ArcadeDBError
-
         self._db._check_not_closed()
 
         try:
@@ -338,8 +331,6 @@ class Schema:
         """
         import jpype
 
-        from .exceptions import ArcadeDBError
-
         self._db._check_not_closed()
 
         # Convert enum to string
@@ -404,8 +395,6 @@ class Schema:
             >>> schema = db.schema
             >>> prop = schema.get_or_create_property("User", "email", "STRING")
         """
-        from .exceptions import ArcadeDBError
-
         self._db._check_not_closed()
 
         # Convert enum to string
@@ -452,7 +441,6 @@ class Schema:
             >>> schema = db.schema
             >>> schema.drop_property("User", "old_field")
         """
-        from .exceptions import ArcadeDBError
 
         self._db._check_not_closed()
 
@@ -498,8 +486,6 @@ class Schema:
             >>> schema.create_index("Article", ["content"],
             ...                     index_type=IndexType.FULL_TEXT)
         """
-        from .exceptions import ArcadeDBError
-
         self._db._check_not_closed()
 
         # Convert enum to string
@@ -551,7 +537,6 @@ class Schema:
             >>> schema = db.schema
             >>> idx = schema.get_or_create_index("User", ["email"], unique=True)
         """
-        from .exceptions import ArcadeDBError
 
         self._db._check_not_closed()
 
@@ -598,7 +583,6 @@ class Schema:
             >>> # Force drop corrupted index
             >>> schema.drop_index("User[email]", force=True)
         """
-        from .exceptions import ArcadeDBError
 
         self._db._check_not_closed()
 

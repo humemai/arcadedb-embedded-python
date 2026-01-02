@@ -19,7 +19,7 @@ def test_batch_context_basic(temp_db):
 
     # Verify all vertices were created
     result = db.query("sql", "SELECT count(*) as count FROM User")
-    count = next(result).get_property("count")
+    count = next(result).get("count")
     assert count == 500, f"Expected 500 vertices, got {count}"
 
 
@@ -39,7 +39,7 @@ def test_batch_context_with_documents(temp_db):
 
     # Verify all documents were created
     result = db.query("sql", "SELECT count(*) as count FROM LogEntry")
-    count = next(result).get_property("count")
+    count = next(result).get("count")
     assert count == 200, f"Expected 200 documents, got {count}"
 
 
@@ -69,10 +69,10 @@ def test_batch_context_with_edges(temp_db):
     people = list(db.query("sql", "SELECT FROM Person"))
     assert len(people) == 3
 
-    # Get Java vertex objects for edge creation
-    alice = people[0]._java_result.getElement().get().asVertex()
-    bob = people[1]._java_result.getElement().get().asVertex()
-    charlie = people[2]._java_result.getElement().get().asVertex()
+    # Get Vertex objects for edge creation
+    alice = people[0].get_vertex()
+    bob = people[1].get_vertex()
+    charlie = people[2].get_vertex()
 
     # Create edges in batch (edges need to be created in transaction context)
     with db.transaction():
@@ -83,7 +83,7 @@ def test_batch_context_with_edges(temp_db):
 
     # Verify edges were created
     result = db.query("sql", "SELECT count(*) as count FROM KNOWS")
-    count = next(result).get_property("count")
+    count = next(result).get("count")
     assert count == 3, f"Expected 3 edges, got {count}"
 
 
@@ -110,7 +110,7 @@ def test_batch_context_with_callbacks(temp_db):
 
     # Verify all items were created
     result = db.query("sql", "SELECT count(*) as count FROM Item")
-    count = next(result).get_property("count")
+    count = next(result).get("count")
     assert count == 100
 
 
@@ -150,7 +150,7 @@ def test_batch_context_create_record(temp_db):
 
     # Verify all nodes were created
     result = db.query("sql", "SELECT count(*) as count FROM Node")
-    count = next(result).get_property("count")
+    count = next(result).get("count")
     assert count == 150
 
 
@@ -192,7 +192,7 @@ def test_batch_context_wait_completion(temp_db):
 
     # Verify all events were created
     result = db.query("sql", "SELECT count(*) as count FROM Event")
-    count = next(result).get_property("count")
+    count = next(result).get("count")
     assert count == 2000
 
 
@@ -252,7 +252,7 @@ def test_batch_context_different_batch_sizes(temp_db):
 
     # Verify all records were created
     result = db.query("sql", "SELECT count(*) as count FROM Record")
-    count = next(result).get_property("count")
+    count = next(result).get("count")
     assert count == 100
 
 
@@ -276,15 +276,14 @@ def test_batch_context_update_record(temp_db):
     with db.transaction():
         with db.batch_context(batch_size=50) as batch:
             for counter in counters:
-                java_vertex = (
-                    counter._java_result.getElement().get().asVertex().modify()
-                )
-                java_vertex.set("value", counter.get_property("value") * 2)
-                batch.update_record(java_vertex)
+                vertex = counter.get_vertex()
+                mutable_vertex = vertex.modify()
+                mutable_vertex.set("value", counter.get("value") * 2)
+                batch.update_record(mutable_vertex._java_document)
 
     # Verify updates
     result = db.query("sql", "SELECT sum(value) as total FROM Counter")
-    total = next(result).get_property("total")
+    total = next(result).get("total")
     # Sum of (0*2 + 1*2 + 2*2 + ... + 99*2) = 2 * sum(0..99) = 2 * 4950 = 9900
     assert total == 9900
 
@@ -309,12 +308,12 @@ def test_batch_context_delete_record(temp_db):
     # Delete in batch
     with db.batch_context(batch_size=50) as batch:
         for record in to_delete:
-            java_record = record._java_result.getElement().get()
-            batch.delete_record(java_record)
+            element = record.get_element()
+            batch.delete_record(element._java_document)
 
     # Verify deletions (should have 100 odd IDs left)
     result = db.query("sql", "SELECT count(*) as count FROM Temporary")
-    count = next(result).get_property("count")
+    count = next(result).get("count")
     assert count == 100, f"Expected 100 records, got {count}"
 
 
@@ -342,26 +341,27 @@ def test_batch_context_mixed_operations(temp_db):
             # Update existing records
             existing = list(db.query("sql", "SELECT FROM Mixed WHERE status = 'old'"))
             for record in existing[:25]:  # Update first 25
-                java_vertex = record._java_result.getElement().get().asVertex().modify()
-                java_vertex.set("status", "updated")
-                batch.update_record(java_vertex)
+                vertex = record.get_vertex()
+                mutable = vertex.modify()
+                mutable.set("status", "updated")
+                batch.update_record(mutable._java_document)
 
             # Delete some records
             for record in existing[25:]:  # Delete last 25
-                java_record = record._java_result.getElement().get()
-                batch.delete_record(java_record)
+                element = record.get_element()
+                batch.delete_record(element._java_document)
 
     # Verify final state
     result = db.query("sql", "SELECT count(*) as count FROM Mixed")
-    total = next(result).get_property("count")
+    total = next(result).get("count")
     assert total == 75  # 25 updated + 50 new
 
     result = db.query(
         "sql", "SELECT count(*) as count FROM Mixed WHERE status = 'updated'"
     )
-    updated = next(result).get_property("count")
+    updated = next(result).get("count")
     assert updated == 25
 
     result = db.query("sql", "SELECT count(*) as count FROM Mixed WHERE status = 'new'")
-    new = next(result).get_property("count")
+    new = next(result).get("count")
     assert new == 50

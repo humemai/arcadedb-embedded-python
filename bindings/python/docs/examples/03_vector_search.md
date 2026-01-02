@@ -1,6 +1,6 @@
 # Vector Search - Semantic Similarity
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/examples/03_vector_search.py)
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/03_vector_search.py){ .md-button }
 
 ## Overview
 
@@ -24,7 +24,6 @@ ArcadeDB uses [JVector](https://github.com/datastax/jvector), a state-of-the-art
 - ✅ **Disk-Based**: Uses DiskANN-inspired graph structure to minimize RAM usage.
 - ✅ **Multi-Threaded**: Supports concurrent indexing and search.
 - ✅ **Flexible**: Supports multiple distance functions (Cosine, Euclidean, Dot Product).
-- ✅ **Quantization Support**: Experimental support for INT8 and Binary quantization.
 
 ## Key Concepts
 
@@ -162,7 +161,7 @@ def search_with_filters(db, index, query_embedding, k=5, filters=None):
 
         # Get RIDs of matching documents
         result_set = db.query("sql", query, params)
-        allowed_rids = [record.getIdentity().toString() for record in result_set]
+        allowed_rids = [record.get_rid() for record in result_set]
 
         if not allowed_rids:
             return [] # No documents match the filter

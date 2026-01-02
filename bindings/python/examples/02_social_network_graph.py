@@ -334,14 +334,16 @@ def create_sample_data(db):
             ("Bob Smith", "Henry Clark", "2020-06-03", "casual"),
         ]
 
-        # Create friendships using Java API with vertex caching
+        # Create friendships using Python API with vertex caching
         with db.transaction():
             # Build vertex cache by name for fast lookups
             person_cache = {}
-            for person_wrapper in db.query("sql", "SELECT FROM Person"):
-                name = person_wrapper.get_property("name")
-                java_vertex = person_wrapper._java_result.getElement().get().asVertex()
-                person_cache[name] = java_vertex
+            for person_result in db.query("sql", "SELECT FROM Person"):
+                # Convert Result to Vertex using get_vertex()
+                vertex = person_result.get_vertex()
+                if vertex:
+                    name = person_result.get("name")
+                    person_cache[name] = vertex
 
             # Create edges using cached vertices
             from jpype import JClass
@@ -357,13 +359,13 @@ def create_sample_data(db):
                 date_obj = LocalDate.parse(since_date)
 
                 # Create bidirectional friendship edges
-                edge1 = v1.newEdge(
-                    "FRIEND_OF", v2, "since", date_obj, "closeness", closeness
+                edge1 = v1.new_edge(
+                    "FRIEND_OF", v2, since=date_obj, closeness=closeness
                 )
                 edge1.save()
 
-                edge2 = v2.newEdge(
-                    "FRIEND_OF", v1, "since", date_obj, "closeness", closeness
+                edge2 = v2.new_edge(
+                    "FRIEND_OF", v1, since=date_obj, closeness=closeness
                 )
                 edge2.save()
 
@@ -440,8 +442,8 @@ def demonstrate_sql_queries(db):
 
         # Using traditional iteration with automatic type conversion
         for row in result:
-            name = row.get_property("name")  # Auto-converted to Python str
-            through = row.get_property("through_friend")  # Auto-converted
+            name = row.get("name")  # Auto-converted to Python str
+            through = row.get("through_friend")  # Auto-converted
             print(f"      🔗 {name} (through {through})")
 
         # 3. Find mutual friends using SQL MATCH
@@ -462,10 +464,10 @@ def demonstrate_sql_queries(db):
         # Using first() to check if any results exist
         first_mutual = result.first()
         if first_mutual:
-            print(f"      🤝 {first_mutual.get_property('mutual_friend')}")
+            print(f"      🤝 {first_mutual.get('mutual_friend')}")
             # Continue with rest of results
             for row in result:
-                print(f"      🤝 {row.get_property('mutual_friend')}")
+                print(f"      🤝 {row.get('mutual_friend')}")
         else:
             print("      ℹ️  No mutual friends found")
             print("      💡 Used first() to check for results efficiently")
@@ -485,9 +487,9 @@ def demonstrate_sql_queries(db):
 
         # Automatic type conversion for all data types
         for row in result:
-            city = row.get_property("city")  # Python str
-            count = row.get_property("person_count")  # Python int
-            avg_age = row.get_property("avg_age")  # Python float
+            city = row.get("city")  # Python str
+            count = row.get("person_count")  # Python int
+            avg_age = row.get("avg_age")  # Python float
             print(f"      • {city}: {count} people, avg age {avg_age:.1f}")
 
         # 5. Find people with NULL values (no email)
@@ -523,9 +525,9 @@ def demonstrate_sql_queries(db):
 
         # Automatic type conversion for floats
         for row in result:
-            name = row.get_property("name")  # Python str
-            reputation = row.get_property("reputation")  # Python float
-            city = row.get_property("city")  # Python str
+            name = row.get("name")  # Python str
+            reputation = row.get("reputation")  # Python float
+            city = row.get("city")  # Python str
             stars = "⭐" * int(reputation)
             print(f"      • {name} ({city}): {reputation:.1f} {stars}")
 
@@ -563,9 +565,7 @@ def demonstrate_cypher_queries(db):
         )
 
         for row in result:
-            print(
-                f"      👥 {row.get_property('name')} from {row.get_property('city')}"
-            )
+            print(f"      👥 {row.get('name')} from {row.get('city')}")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
         # 2. Find friends of friends using Cypher
@@ -584,8 +584,8 @@ def demonstrate_cypher_queries(db):
         )
 
         for row in result:
-            name = row.get_property("name")
-            through_friend = row.get_property("through_friend")
+            name = row.get("name")
+            through_friend = row.get("through_friend")
             print(f"      🔗 {name} (through {through_friend})")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -606,7 +606,7 @@ def demonstrate_cypher_queries(db):
         mutual_friends = list(result)
         if mutual_friends:
             for row in mutual_friends:
-                print(f"      🤝 {row.get_property('mutual_friend')}")
+                print(f"      🤝 {row.get('mutual_friend')}")
         else:
             print("      ℹ️  No mutual friends found")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
@@ -624,9 +624,9 @@ def demonstrate_cypher_queries(db):
         )
 
         for row in result:
-            person1 = row.get_property("person1")
-            person2 = row.get_property("person2")
-            since = row.get_property("since")
+            person1 = row.get("person1")
+            person2 = row.get("person2")
+            since = row.get("since")
             print(f"      💙 {person1} → {person2} (since {since})")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -644,8 +644,8 @@ def demonstrate_cypher_queries(db):
         )
 
         for row in result:
-            name = row.get_property("name")
-            count = row.get_property("friend_count")
+            name = row.get("name")
+            count = row.get("friend_count")
             print(f"      • {name}: {count} friends")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -664,10 +664,7 @@ def demonstrate_cypher_queries(db):
         )
 
         for row in result:
-            print(
-                f"      🌐 {row.get_property('name')} from "
-                f"{row.get_property('city')}"
-            )
+            print(f"      🌐 {row.get('name')} from " f"{row.get('city')}")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
         print(f"  ⏱️  Cypher section: {time.time() - section_start:.3f}s")
@@ -702,8 +699,8 @@ def demonstrate_gremlin_queries(db):
         )
 
         for row in result:
-            name = row.get_property("name")
-            city = row.get_property("city")
+            name = row.get("name")
+            city = row.get("city")
             print(f"      👥 {name} from {city}")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -725,8 +722,8 @@ def demonstrate_gremlin_queries(db):
         )
 
         for row in result:
-            name = row.get_property("fof")
-            through = row.get_property("friend")
+            name = row.get("fof")
+            through = row.get("friend")
             print(f"      🔗 {name} (through {through})")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -748,7 +745,7 @@ def demonstrate_gremlin_queries(db):
         mutual_friends = list(result)
         if mutual_friends:
             for row in mutual_friends:
-                print(f"      🤝 {row.get_property('result')}")
+                print(f"      🤝 {row.get('result')}")
         else:
             print("      ℹ️  No mutual friends found")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
@@ -771,9 +768,9 @@ def demonstrate_gremlin_queries(db):
         )
 
         for row in result:
-            person1 = row.get_property("p1")
-            person2 = row.get_property("p2")
-            since = row.get_property("edge")
+            person1 = row.get("p1")
+            person2 = row.get("p2")
+            since = row.get("edge")
             print(f"      💙 {person1} → {person2} (since {since})")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -794,8 +791,8 @@ def demonstrate_gremlin_queries(db):
         )
 
         for row in result:
-            name = row.get_property("name")
-            count = row.get_property("friend_count")
+            name = row.get("name")
+            count = row.get("friend_count")
             print(f"      • {name}: {count} friends")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -818,8 +815,8 @@ def demonstrate_gremlin_queries(db):
         )
 
         for row in result:
-            name = row.get_property("name")
-            city = row.get_property("city")
+            name = row.get("name")
+            city = row.get("city")
             print(f"      🌐 {name} from {city}")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
@@ -883,8 +880,8 @@ def compare_query_languages(db):
 
             sql_results = list(result_sql)
             for row in sql_results:
-                name = row.get_property("name")
-                city = row.get_property("city")
+                name = row.get("name")
+                city = row.get("city")
                 print(f"      👥 {name} ({city})")
             sql_count = len(sql_results)
             sql_time = time.time() - sql_time_start
@@ -917,10 +914,10 @@ def compare_query_languages(db):
 
         cypher_results = list(result_cypher)
         for row in cypher_results:
-            name = row.get_property("name")
-            city = row.get_property("city")
-            closeness = row.get_property("closeness")
-            since = row.get_property("since")
+            name = row.get("name")
+            city = row.get("city")
+            closeness = row.get("closeness")
+            since = row.get("since")
             print(f"      👥 {name} ({city}) - {closeness} since {since}")
         cypher_time = time.time() - cypher_time_start
         print(f"      ⏱️  Cypher Time: {cypher_time:.4f}s")
@@ -952,8 +949,8 @@ def compare_query_languages(db):
 
             gremlin_results = list(result_gremlin)
             for row in gremlin_results:
-                friend = row.get_property("friend")
-                edge = row.get_property("edge")
+                friend = row.get("friend")
+                edge = row.get("edge")
                 # Gremlin valueMap returns lists, so extract first value
                 name_val = friend.get("name")
                 name = name_val[0] if isinstance(name_val, list) else name_val

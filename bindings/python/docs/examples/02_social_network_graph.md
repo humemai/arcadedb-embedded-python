@@ -2,6 +2,8 @@
 
 **Status: Complete and Fully Functional**
 
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/02_social_network_graph.py){ .md-button }
+
 ## Overview
 
 This example demonstrates how to use ArcadeDB as a graph database to model and query social networks. It showcases the power of graph databases for representing and traversing complex relationships between entities.
@@ -265,8 +267,8 @@ result = db.query("cypher", """
 """)
 
 for row in result:
-    name = row.get_property('name')  # Use .get_property() not ['name']
-    city = row.get_property('city')
+    name = row.get('name')  # Use .get() not ['name']
+    city = row.get('city')
     print(f"Friend: {name} from {city}")
 ```
 
@@ -533,10 +535,10 @@ When you run the example, you'll see comprehensive output showing all graph oper
 
 ### Property Access Pattern
 ```python
-# Always use .get_property() for query results
+# Always use .get() for query results
 for row in result:
-    name = row.get_property('name')  # ✅ Correct
-    city = row.get_property('city')  # ✅ Correct
+    name = row.get('name')  # ✅ Correct
+    city = row.get('city')  # ✅ Correct
     # name = row['name']             # ❌ Wrong - will fail
 ```
 

@@ -160,6 +160,7 @@ nav:
   - Graph Operations: guide/graphs.md
 - API Reference:
   - Database: api/database.md
+  - Record Wrappers: api/record-wrappers.md
   - Results: api/results.md
   - Server: api/server.md
   - Transactions: api/transactions.md

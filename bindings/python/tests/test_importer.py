@@ -68,9 +68,9 @@ def test_csv_import_as_documents(temp_db_path, sample_csv_path):
         records = list(result)
 
         assert len(records) == 3
-        assert records[0].get_property("name") == "Alice"
-        assert records[0].get_property("age") == 30
-        assert records[0].get_property("city") == "New York"
+        assert records[0].get("name") == "Alice"
+        assert records[0].get("age") == 30
+        assert records[0].get("city") == "New York"
 
 
 def test_csv_import_as_vertices(temp_db_path, sample_csv_vertices_path):
@@ -99,8 +99,8 @@ def test_csv_import_as_vertices(temp_db_path, sample_csv_vertices_path):
         vertices = list(result)
 
         assert len(vertices) == 3
-        assert vertices[0].get_property("name") == "Product A"
-        assert vertices[0].get_property("category") == "Electronics"
+        assert vertices[0].get("name") == "Product A"
+        assert vertices[0].get("category") == "Electronics"
 
 
 def test_csv_import_with_custom_delimiter(temp_db_path):
@@ -128,8 +128,8 @@ def test_csv_import_with_custom_delimiter(temp_db_path):
             records = list(result)
 
             assert len(records) == 2
-            assert records[0].get_property("name") == "Item1"
-            assert records[0].get_property("value") == 100
+            assert records[0].get("name") == "Item1"
+            assert records[0].get("value") == 100
     finally:
         os.unlink(temp_file.name)
 
@@ -155,7 +155,7 @@ def test_importer_class_api(temp_db_path, sample_csv_path):
 
         # Verify data
         result = db.query("sql", "SELECT count(*) as cnt FROM Person")
-        count = list(result)[0].get_property("cnt")
+        count = list(result)[0].get("cnt")
         assert count == 3
 
 
@@ -184,9 +184,9 @@ def test_csv_type_inference(temp_db_path):
             record = list(result)[0]
 
             # Check that types were inferred correctly
-            count = record.get_property("count")
-            price = record.get_property("price")
-            active = record.get_property("active")
+            count = record.get("count")
+            price = record.get("price")
+            active = record.get("active")
 
             assert isinstance(count, int)
             assert count == 42
@@ -221,7 +221,7 @@ def test_csv_import_with_nulls(temp_db_path):
             alice = list(result)[0]
 
             # Empty string should be converted to None
-            city = alice.get_property("city")
+            city = alice.get("city")
             assert city is None or city == ""
     finally:
         os.unlink(temp_file.name)
@@ -311,7 +311,7 @@ def test_large_csv_batch_commit(temp_db_path):
 
             # Verify all records imported
             result = db.query("sql", "SELECT count(*) as cnt FROM Record")
-            count = list(result)[0].get_property("cnt")
+            count = list(result)[0].get("cnt")
             assert count == 100
     finally:
         os.unlink(temp_file.name)
@@ -345,7 +345,7 @@ def test_csv_import_integration(temp_db_path):
             )
             eng_employees = list(result)
             assert len(eng_employees) == 2
-            assert eng_employees[0].get_property("name") == "Alice"
+            assert eng_employees[0].get("name") == "Alice"
 
             # 2. Aggregate by department
             result = db.query(
@@ -361,7 +361,7 @@ def test_csv_import_integration(temp_db_path):
             )
             high_earners = list(result)
             assert len(high_earners) == 2
-            assert high_earners[0].get_property("name") == "Charlie"
+            assert high_earners[0].get("name") == "Charlie"
     finally:
         os.unlink(temp_file.name)
 
@@ -391,19 +391,19 @@ def test_csv_complex_data_types(temp_db_path):
             items = list(result)
 
             # Item with quotes in name
-            assert items[3].get_property("name") == 'Item "D"'
-            assert items[3].get_property("notes") == "Quoted, value"
+            assert items[3].get("name") == 'Item "D"'
+            assert items[3].get("notes") == "Quoted, value"
 
             # Zero values
-            assert items[1].get_property("count") == 0
-            assert items[2].get_property("ratio") == 0.0
+            assert items[1].get("count") == 0
+            assert items[2].get("ratio") == 0.0
 
             # Large numbers
-            assert items[2].get_property("count") == 999999
-            assert items[3].get_property("price") == 1234.5678
+            assert items[2].get("count") == 999999
+            assert items[3].get("price") == 1234.5678
 
             # Empty string (CSV treats as empty string, not null)
-            tags = items[2].get_property("tags")
+            tags = items[2].get("tags")
             assert tags == "" or tags is None
     finally:
         os.unlink(temp_file.name)
@@ -434,7 +434,7 @@ def test_csv_null_and_empty_values(temp_db_path):
             # depending on the schema inference
             for item in items:
                 for prop in item.get_property_names():
-                    val = item.get_property(prop)
+                    val = item.get(prop)
                     # Value can be None, empty string, or actual value
                     # Just verify it doesn't raise an exception
                     assert val is None or isinstance(val, (str, int, float, bool))
@@ -466,12 +466,12 @@ def test_csv_unicode_and_special_chars(temp_db_path):
             result = db.query("sql", "SELECT FROM UnicodeTest ORDER BY id")
             items = list(result)
 
-            assert "Café" in items[0].get_property("name")
-            assert "☕" in items[0].get_property("description")
-            assert "日本" in items[1].get_property("name")
-            assert "🇯🇵" in items[1].get_property("description")
-            assert "²" in items[3].get_property("description")
-            assert "❤️" in items[4].get_property("description")
+            assert "Café" in items[0].get("name")
+            assert "☕" in items[0].get("description")
+            assert "日本" in items[1].get("name")
+            assert "🇯🇵" in items[1].get("description")
+            assert "²" in items[3].get("description")
+            assert "❤️" in items[4].get("description")
     finally:
         os.unlink(temp_file.name)
 
@@ -501,13 +501,13 @@ def test_large_dataset_performance(temp_db_path):
 
             # Verify random sampling
             result = db.query("sql", "SELECT count(*) as cnt FROM LargeTest")
-            count = list(result)[0].get_property("cnt")
+            count = list(result)[0].get("cnt")
             assert count == 1000
 
             # Verify some values
             result = db.query("sql", "SELECT FROM LargeTest WHERE id = 500")
             item = list(result)[0]
-            assert item.get_property("name") == "Item 500"
-            assert abs(item.get_property("value") - 750.0) < 0.01
+            assert item.get("name") == "Item 500"
+            assert abs(item.get("value") - 750.0) < 0.01
     finally:
         os.unlink(temp_file.name)
