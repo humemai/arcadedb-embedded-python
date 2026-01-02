@@ -460,7 +460,7 @@ it ensures you get `k` results that match your criteria.
 ```python
 # 1. Query for matching RIDs using SQL or index lookup
 rs = db.query("sql", "SELECT @rid FROM Article WHERE category = 'Programming'")
-allowed_rids = [doc.getIdentity().toString() for doc in rs]
+allowed_rids = [doc.get_rid() for doc in rs]
 
 # 2. Perform vector search restricted to those RIDs
 query_embedding = model.encode("python tutorial")

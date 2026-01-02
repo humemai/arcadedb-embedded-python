@@ -2,7 +2,7 @@
 
 The `test_core.py` file contains **13 tests** covering fundamental database operations.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_core.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_core.py){ .md-button }
 
 ## Overview
 
@@ -84,7 +84,7 @@ Validates the `with` statement for automatic cleanup.
 # Database automatically closed when exiting context
 with arcadedb.create_database("./test_db") as db:
     result = db.query("sql", "SELECT 1 as num")
-    assert list(result)[0].get_property("num") == 1
+    assert list(result)[0].get("num") == 1
 
 # Database is automatically closed here
 ```
@@ -114,8 +114,8 @@ with arcadedb.create_database("./test_db") as db:
     # Read (Query)
     result = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
     person = list(result)[0]
-    assert person.get_property("name") == "Alice"
-    assert person.get_property("age") == 30
+    assert person.get("name") == "Alice"
+    assert person.get("age") == 30
 
     # Update
     with db.transaction():
@@ -123,7 +123,7 @@ with arcadedb.create_database("./test_db") as db:
 
     result = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
     person = list(result)[0]
-    assert person.get_property("age") == 31
+    assert person.get("age") == 31
 
     # Delete
     with db.transaction():
@@ -214,8 +214,8 @@ with arcadedb.create_database("./test_db") as db:
     """)
 
     alice = list(result)[0]
-    assert alice.get_property("name") == "Alice"
-    assert "Bob" in str(alice.get_property("friends"))
+    assert alice.get("name") == "Alice"
+    assert "Bob" in str(alice.get("friends"))
 ```
 
 **What it tests:**
@@ -249,8 +249,8 @@ with arcadedb.create_database("./test_db") as db:
     items = []
     for result in result_set:
         items.append({
-            'id': result.get_property('id'),
-            'value': result.get_property('value')
+            'id': result.get('id'),
+            'value': result.get('value')
         })
 
     assert len(items) == 3
@@ -289,7 +289,7 @@ with arcadedb.create_database("./test_db") as db:
     # Query with Cypher
     result = db.query("cypher", "MATCH (p:Person) RETURN p.name as name, p.age as age")
 
-    people = [(r.get_property("name"), r.get_property("age")) for r in result]
+    people = [(r.get("name"), r.get("age")) for r in result]
     assert len(people) == 2
 ```
 
@@ -341,8 +341,8 @@ with arcadedb.create_database("./test_db") as db:
 
     assert len(results) == 2
     # Verify results ordered by distance
-    assert results[0][0].get_property("name") == "doc1"  # Exact match
-    assert results[1][0].get_property("name") == "doc2"  # Second closest
+    assert results[0][0].get("name") == "doc1"  # Exact match
+    assert results[1][0].get("name") == "doc2"  # Second closest
 ```
 
 !!! note "Implementation Status"
@@ -410,7 +410,7 @@ with arcadedb.create_database("./test_db") as db:
         db.command("sql", "INSERT INTO Message SET text = '🎮 ArcadeDB 🚀'")
 
     result = db.query("sql", "SELECT FROM Message")
-    texts = [r.get_property("text") for r in result]
+    texts = [r.get("text") for r in result]
 
     assert "¿cómo estás?" in texts[0]
     assert "你好世界" in texts[1]
@@ -442,7 +442,7 @@ with arcadedb.create_database("./test_db") as db:
 
     # Query schema
     types_result = db.query("sql", "SELECT FROM schema:types")
-    type_names = [r.get_property("name") for r in types_result]
+    type_names = [r.get("name") for r in types_result]
 
     assert "Person" in type_names
     assert "Company" in type_names
@@ -452,7 +452,7 @@ with arcadedb.create_database("./test_db") as db:
     props_result = db.query("sql", "SELECT FROM schema:type:Person")
     person_type = list(props_result)[0]
 
-    assert person_type.get_property("name") == "Person"
+    assert person_type.get("name") == "Person"
 ```
 
 **What it tests:**
@@ -484,7 +484,7 @@ with arcadedb.create_database("./test_db") as db:
     # Iterate efficiently
     count = 0
     for record in result:
-        assert record.get_property("id") == count
+        assert record.get("id") == count
         count += 1
 
     assert count == 1000
@@ -525,17 +525,17 @@ with arcadedb.create_database("./test_db") as db:
     record = list(result)[0]
 
     # Verify types
-    assert isinstance(record.get_property("str_val"), str)
-    assert isinstance(record.get_property("int_val"), int)
-    assert isinstance(record.get_property("float_val"), float)
-    assert isinstance(record.get_property("bool_val"), bool)
-    assert record.get_property("null_val") is None
+    assert isinstance(record.get("str_val"), str)
+    assert isinstance(record.get("int_val"), int)
+    assert isinstance(record.get("float_val"), float)
+    assert isinstance(record.get("bool_val"), bool)
+    assert record.get("null_val") is None
 
     # Values match
-    assert record.get_property("str_val") == "text"
-    assert record.get_property("int_val") == 42
-    assert record.get_property("float_val") == 3.14
-    assert record.get_property("bool_val") is True
+    assert record.get("str_val") == "text"
+    assert record.get("int_val") == 42
+    assert record.get("float_val") == 3.14
+    assert record.get("bool_val") is True
 ```
 
 **What it tests:**
@@ -594,7 +594,7 @@ result_set = db.query("sql", "SELECT FROM MyType")
 
 # Iterate to get Result objects
 for result in result_set:
-    value = result.get_property("field_name")
+    value = result.get("field_name")
     # Process value...
 
 # Or convert to list

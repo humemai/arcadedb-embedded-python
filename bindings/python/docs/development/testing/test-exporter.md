@@ -2,7 +2,7 @@
 
 The `test_exporter.py` file contains **5 test classes** covering database export to JSONL, GraphML, GraphSON, and CSV formats.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_exporter.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py){ .md-button }
 
 ## Overview
 
