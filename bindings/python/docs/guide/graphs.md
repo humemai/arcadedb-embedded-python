@@ -71,7 +71,7 @@ with db.transaction():
     vertex.set("email", "charlie@example.com")
     vertex.save()
 
-    print(f"✅ Created vertex with RID: {vertex.getIdentity()}")
+    print(f"✅ Created vertex with RID: {vertex.get_rid()}")
 ```
 
 !!! tip "When to Use Each Approach"
@@ -84,11 +84,11 @@ with db.transaction():
 
 ### Why No `db.new_edge()` Method?
 
-Unlike `db.new_vertex()` and `db.new_document()`, there is no `db.new_edge()` method. This is by design in the Java API and reflected in Python:
+Unlike `db.new_vertex()` and `db.new_document()`, there is no `db.new_edge()` method. This is by design in ArcadeDB's API:
 
 - Edges conceptually **belong to vertices** - they represent relationships
 - You must have both vertices before creating a connection
-- Edges are created by calling `vertex.newEdge(edgeType, toVertex, properties)`
+- Edges are created by calling `vertex.new_edge(edgeType, toVertex, **properties)`
 
 ### Creating Edges with SQL
 
@@ -113,12 +113,12 @@ with db.transaction():
     """)
 ```
 
-### Creating Edges with the API
+### Creating Edges with the Python Graph API
 
 To create edges programmatically, you must:
 
 1. Create or retrieve both vertices
-2. Call `newEdge()` on the source vertex
+2. Call `new_edge()` on the source vertex
 3. Save the edge
 
 ```python
@@ -136,7 +136,7 @@ with db.transaction():
 
     # Create edge FROM alice TO bob
     # Note: Called on the vertex, not the database!
-    edge = alice.newEdge("Knows", bob)
+    edge = alice.new_edge("Knows", bob)
     edge.set("since", "2020-01-15")
     edge.save()
 
@@ -153,12 +153,12 @@ result_alice = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
 result_bob = db.query("sql", "SELECT FROM Person WHERE name = 'Bob'")
 
 if result_alice.has_next() and result_bob.has_next():
-    alice = result_alice.next()._java_result
-    bob = result_bob.next()._java_result
+    alice = result_alice.next().get_vertex()
+    bob = result_bob.next().get_vertex()
 
     with db.transaction():
         # Create edge between existing vertices
-        edge = alice.newEdge("Knows", bob)
+        edge = alice.new_edge("Knows", bob)
         edge.set("since", "2020-01-15")
         edge.save()
 ```
@@ -232,15 +232,15 @@ def create_social_network():
             charlie.save()
 
             # Create relationships
-            edge1 = alice.newEdge("Knows", bob)
+            edge1 = alice.new_edge("Knows", bob)
             edge1.set("since", 2020)
             edge1.save()
 
-            edge2 = bob.newEdge("Knows", charlie)
+            edge2 = bob.new_edge("Knows", charlie)
             edge2.set("since", 2019)
             edge2.save()
 
-            edge3 = charlie.newEdge("Knows", alice)
+            edge3 = charlie.new_edge("Knows", alice)
             edge3.set("since", 2021)
             edge3.save()
 
@@ -254,8 +254,8 @@ def create_social_network():
         """)
 
         for record in result:
-            name = record.get_property('name')
-            age = record.get_property('age')
+            name = record.get('name')
+            age = record.get('age')
             print(f"  - {name}, age {age}")
 
         print("\nFinding friends of friends:")
@@ -266,7 +266,7 @@ def create_social_network():
         """)
 
         for record in result:
-            print(f"  - {record.get_property('name')}")
+            print(f"  - {record.get('name')}")
 
 if __name__ == "__main__":
     create_social_network()
@@ -312,9 +312,139 @@ with db.transaction():
     v2.save()  # ✅ Must save first!
 
     # Now can create edge
-    edge = v1.newEdge("Knows", v2)
+    edge = v1.new_edge("Knows", v2)
     edge.save()
 ```
+
+## Deleting Records
+
+Deleting vertices, edges, and documents requires understanding cascade behavior and the different deletion approaches available.
+
+### Deletion Approaches
+
+#### 1. SQL DELETE (Recommended for reliability)
+
+Use SQL `DELETE` for reliable deletion in all scenarios:
+
+```python
+with db.transaction():
+    # Delete vertex by RID
+    db.command("sql", "DELETE FROM Person WHERE @rid = #1:0")
+
+    # Delete by property
+    db.command("sql", "DELETE FROM Person WHERE name = 'Alice'")
+
+    # Delete edges
+    db.command("sql", "DELETE FROM Knows WHERE @rid = #2:0")
+```
+
+**Advantages:**
+- ✅ Works reliably in all situations
+- ✅ Supports complex WHERE clauses
+- ✅ Batch delete multiple records
+- ✅ Best for query results
+
+#### 2. Wrapper `.delete()` Method
+
+Use the `.delete()` method on fresh lookups:
+
+```python
+with db.transaction():
+    # Works on objects from lookup_by_rid()
+    vertex = db.lookup_by_rid("#1:0")
+    vertex.delete()
+
+    # Works on newly created objects
+    new_vertex = db.new_vertex("Person")
+    new_vertex.set("name", "Bob")
+    new_vertex.save()
+    new_vertex.delete()
+```
+
+**⚠️ Important Limitation:**
+- ❌ Does NOT work on query results
+- ✅ Works on fresh lookups via `lookup_by_rid()`
+- ✅ Works on newly created objects
+
+```python
+# ❌ DON'T DO THIS - delete() won't work on query results
+results = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
+for record in results:
+    record.delete()  # This is a no-op!
+
+# ✅ DO THIS INSTEAD - use SQL DELETE
+with db.transaction():
+    db.command("sql", "DELETE FROM Person WHERE name = 'Alice'")
+```
+
+### Cascade Behavior
+
+#### Vertex Deletion
+
+When you delete a vertex, **all connected edges are automatically deleted**:
+
+```python
+with db.transaction():
+    # Create test data
+    alice = db.new_vertex("Person").set("name", "Alice").save()
+    bob = db.new_vertex("Person").set("name", "Bob").save()
+    edge = alice.new_edge("Knows", bob).save()
+
+    alice_id = str(alice.get_identity())
+
+# Verify setup
+vertices_before = list(db.query("sql", "SELECT FROM Person"))
+edges_before = list(db.query("sql", "SELECT FROM Knows"))
+print(f"Before: {len(vertices_before)} vertices, {len(edges_before)} edges")
+
+# Delete vertex
+with db.transaction():
+    alice = db.lookup_by_rid(alice_id)
+    alice.delete()
+
+# Check results
+vertices_after = list(db.query("sql", "SELECT FROM Person"))
+edges_after = list(db.query("sql", "SELECT FROM Knows"))
+print(f"After: {len(vertices_after)} vertices, {len(edges_after)} edges")
+# Output: After: 1 vertices, 0 edges (edge cascaded!)
+```
+
+#### Edge Deletion
+
+When you delete an edge, **vertices remain intact**:
+
+```python
+with db.transaction():
+    # Create test data
+    alice = db.new_vertex("Person").set("name", "Alice").save()
+    bob = db.new_vertex("Person").set("name", "Bob").save()
+    edge = alice.new_edge("Knows", bob).save()
+
+    edge_id = str(edge.get_identity())
+
+# Delete edge
+with db.transaction():
+    edge = db.lookup_by_rid(edge_id)
+    edge.delete()
+
+# Check results - vertices still exist
+vertices = list(db.query("sql", "SELECT FROM Person"))
+edges = list(db.query("sql", "SELECT FROM Knows"))
+print(f"Vertices: {len(vertices)}")  # Output: 2
+print(f"Edges: {len(edges)}")        # Output: 0
+```
+
+### Best Practices for Deletion
+
+| Scenario | Recommended Approach | Why |
+|----------|----------------------|-----|
+| Delete from query results | SQL DELETE | `.delete()` doesn't work on query results |
+| Delete single record by RID | SQL DELETE or `.delete()` | Both work, SQL is more flexible |
+| Delete with complex WHERE clause | SQL DELETE | Much more readable and powerful |
+| Delete in loop | SQL DELETE with WHERE clause | Single operation is faster than loop |
+| Interactive/programmatic delete | `.delete()` on fresh lookup | Immediate feedback on same object |
+
+**Summary: Use SQL DELETE by default**, except for immediate interactive deletion where you need to delete an object you just fetched.
 
 ## Gremlin Queries {#gremlin-queries}
 
