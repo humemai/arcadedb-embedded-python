@@ -151,7 +151,7 @@ Execute a query and return results. Queries are read-only and don't require a tr
 # Simple query
 result = db.query("sql", "SELECT FROM Person WHERE age > 25")
 for record in result:
-    print(record.get_property('name'))
+    print(record.get('name'))
 
 # Parameterized query
 result = db.query("sql", "SELECT FROM Person WHERE age > ?", 25)
@@ -337,13 +337,13 @@ with db.transaction():
     vertex.set("age", 30)
     vertex.save()
 
-    print(f"Created: {vertex.getIdentity()}")
+    print(f"Created: {vertex.get_rid()}")
 ```
 
 !!! info "Creating Edges"
     There is no `db.new_edge()` method. Edges are created **from vertices**:
     ```python
-    edge = vertex1.newEdge("Knows", vertex2)
+    edge = vertex1.new_edge("Knows", vertex2)
     edge.save()
     ```
     See [Graph Operations](../guide/graphs.md) for details.
@@ -413,8 +413,7 @@ db.create_vector_index(
     dimensions: int,
     distance_function: str = "cosine",
     max_connections: int = 32,
-    beam_width: int = 256,
-    quantization: str = None
+    beam_width: int = 256
 ) -> VectorIndex
 ```
 
@@ -430,7 +429,6 @@ Create a vector index for similarity search (default JVector implementation).
 - `distance_function` (str): `"cosine"`, `"euclidean"`, or `"inner_product"`
 - `max_connections` (int): Max connections per node (default: 32). Maps to `maxConnections` in JVector.
 - `beam_width` (int): Beam width for search/construction (default: 256). Maps to `beamWidth` in JVector.
-- `quantization` (str): Vector quantization type (default: None). Options: `"INT8"`, `"BINARY"`. Reduces memory usage and speeds up search at the cost of some precision.
 
 **Returns:**
 
