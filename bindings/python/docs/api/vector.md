@@ -116,8 +116,7 @@ db.create_vector_index(
     dimensions: int,
     distance_function: str = "cosine",
     max_connections: int = 32,
-    beam_width: int = 256,
-    quantization: str = None
+    beam_width: int = 256
 ) -> VectorIndex
 ```
 
@@ -138,9 +137,6 @@ db.create_vector_index(
   - Maps to `beamWidth` in JVector
   - Higher = better recall, slower search
   - Typical range: 100-400
-- `quantization` (str): Vector quantization type (default: None)
-  - Options: `"INT8"`, `"BINARY"`
-  - Reduces memory usage and speeds up search at the cost of some precision
 
 **Returns:**
 

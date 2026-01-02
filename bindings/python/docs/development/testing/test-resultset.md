@@ -2,7 +2,7 @@
 
 The `test_resultset.py` file contains **12 tests** covering query result handling, iteration patterns, and data conversion.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_resultset.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py){ .md-button }
 
 ## Overview
 
@@ -37,7 +37,7 @@ users = list(results)
 
 assert len(users) == 100
 for user in users:
-    print(user.get_property("name"))
+    print(user.get("name"))
 ```
 
 ---
@@ -126,7 +126,7 @@ results = db.query("sql", "SELECT FROM User ORDER BY age DESC")
 # Get first (oldest) user
 oldest = results.first()
 assert oldest is not None
-assert oldest.get_property("age") == 65
+assert oldest.get("age") == 65
 
 # Empty result
 empty = db.query("sql", "SELECT FROM User WHERE age > 200")
@@ -149,7 +149,7 @@ Tests getting single expected result.
 # Should return exactly one
 results = db.query("sql", "SELECT FROM User WHERE username = 'alice'")
 user = results.one()
-assert user.get_property("username") == "alice"
+assert user.get("username") == "alice"
 
 # Multiple results - raises error
 results = db.query("sql", "SELECT FROM User")
@@ -183,13 +183,13 @@ results = db.query("sql", "SELECT FROM User")
 
 # For loop
 for user in results:
-    print(user.get_property("name"))
+    print(user.get("name"))
 
 # List comprehension
-names = [u.get_property("name") for u in results]
+names = [u.get("name") for u in results]
 
 # Generator expression
-ages = (u.get_property("age") for u in results)
+ages = (u.get("age") for u in results)
 
 # Manual iteration
 results = db.query("sql", "SELECT FROM User")
@@ -234,8 +234,8 @@ Tests results from complex queries.
 # Aggregation
 results = db.query("sql", "SELECT COUNT(*) as count, AVG(age) as avg_age FROM User")
 stats = results.first()
-count = stats.get_property("count")
-avg_age = stats.get_property("avg_age")
+count = stats.get("count")
+avg_age = stats.get("avg_age")
 
 # Graph traversal
 results = db.query("sql", "SELECT expand(out('Follows')) FROM User WHERE username = 'alice'")
@@ -244,7 +244,7 @@ friends = list(results)
 # Computed properties
 results = db.query("sql", "SELECT name, age, age * 2 as double_age FROM User")
 for result in results:
-    print(result.get_property("double_age"))
+    print(result.get("double_age"))
 ```
 
 ---
@@ -335,8 +335,8 @@ vertex.save()
 results = db.query("sql", "SELECT FROM User")
 
 for result in results:
-    name = result.get_property("name")
-    age = result.get_property("age")
+    name = result.get("name")
+    age = result.get("age")
     print(f"{name}: {age}")
 ```
 
@@ -388,10 +388,10 @@ assert results.first() is None
 
 # Property exists
 result = results.first()
-assert result.get_property("name") is not None
+assert result.get("name") is not None
 
 # Property value
-assert result.get_property("age") == 30
+assert result.get("age") == 30
 ```
 
 ## Key Takeaways
