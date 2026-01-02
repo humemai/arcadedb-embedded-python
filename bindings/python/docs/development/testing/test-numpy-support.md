@@ -2,7 +2,7 @@
 
 The `test_numpy_support.py` file contains **3 tests** covering NumPy array integration with ArcadeDB vectors.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_numpy_support.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_numpy_support.py){ .md-button }
 
 ## Overview
 
@@ -38,7 +38,7 @@ vertex.save()
 
 # Retrieve
 result = db.query("sql", "SELECT FROM Document").first()
-stored_embedding = result.get_property("embedding")
+stored_embedding = result.get("embedding")
 
 # Verify
 np.testing.assert_array_almost_equal(embedding, stored_embedding)
@@ -84,7 +84,7 @@ results = db.query(
 )
 
 for result in results:
-    print(result.get_property("docId"))
+    print(result.get("docId"))
 ```
 
 ---
@@ -118,7 +118,7 @@ vertex.save()
 
 # Retrieve and verify types
 result = db.query("sql", "SELECT FROM Document").first()
-assert isinstance(result.get_property("vec_f32"), list)
+assert isinstance(result.get("vec_f32"), list)
 ```
 
 ## Test Patterns
@@ -137,7 +137,7 @@ vertex.save()
 ### Retrieve as NumPy
 ```python
 result = db.query("sql", "SELECT FROM Document").first()
-embedding_list = result.get_property("embedding")
+embedding_list = result.get("embedding")
 
 # Convert back to NumPy
 embedding = np.array(embedding_list, dtype=np.float32)
@@ -173,7 +173,7 @@ assert embedding.shape == (384,)
 assert embedding.dtype == np.float32
 
 # List to array conversion
-embedding_list = result.get_property("embedding")
+embedding_list = result.get("embedding")
 embedding = np.array(embedding_list, dtype=np.float32)
 assert isinstance(embedding, np.ndarray)
 ```
