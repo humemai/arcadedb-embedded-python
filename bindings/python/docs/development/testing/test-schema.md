@@ -2,7 +2,7 @@
 
 The `test_schema.py` file contains **12 test classes** covering schema management, type creation, properties, and indexes.
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/tests/test_schema.py){ .md-button }
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_schema.py){ .md-button }
 
 ## Overview
 
@@ -105,7 +105,7 @@ user_type = schema.get_type("User")
 user_type.create_property("name", "STRING")
 
 # With constraints
-name_prop = user_type.get_property("name")
+name_prop = user_type.get("name")
 name_prop.set_mandatory(True)
 name_prop.set_not_null(True)
 
@@ -130,7 +130,7 @@ user_type.create_property("temp", "STRING")
 # Delete property
 user_type.delete_property("temp")
 
-assert user_type.get_property("temp") is None
+assert user_type.get("temp") is None
 ```
 
 ---
@@ -279,7 +279,7 @@ user_type = schema.get_type("User")
 user_type.create_property("name", "STRING")
 
 # Set constraints
-prop = user_type.get_property("name")
+prop = user_type.get("name")
 prop.set_mandatory(True)
 prop.set_not_null(True)
 ```
@@ -298,14 +298,14 @@ assert schema.exists_type("User")
 
 # Type has property
 user_type = schema.get_type("User")
-assert user_type.get_property("name") is not None
+assert user_type.get("name") is not None
 
 # Index exists
 indexes = user_type.get_indexes()
 assert len(indexes) > 0
 
 # Property type
-prop = user_type.get_property("age")
+prop = user_type.get("age")
 assert str(prop.get_type()) == "INTEGER"
 ```
 

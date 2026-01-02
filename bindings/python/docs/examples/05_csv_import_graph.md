@@ -1,5 +1,7 @@
 # Example 05: CSV Import - Graph
 
+[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/05_csv_import_graph.py){ .md-button }
+
 **Production-ready graph creation from MovieLens dataset with comprehensive performance analysis**
 
 ## Overview
@@ -314,19 +316,19 @@ db.command("sql", "CREATE PROPERTY TAGGED.timestamp LONG IF NOT EXISTS")
 # Create User vertices
 user_ids = db.query("sql", "SELECT DISTINCT userId FROM Rating")
 for record in user_ids:
-    user_id = record.get_property("userId")
+    user_id = record.get("userId")
     vertex = db.new_vertex("User")
-    vertex.set_property("userId", user_id)
-    vertex.set_property("name", f"User {user_id}")
+    vertex.set("userId", user_id)
+    vertex.set("name", f"User {user_id}")
     vertex.save()
 
 # Create Movie vertices
 movies = db.query("sql", "SELECT * FROM Movie")
 for movie_doc in movies:
     vertex = db.new_vertex("Movie")
-    vertex.set_property("movieId", movie_doc.get_property("movieId"))
-    vertex.set_property("title", movie_doc.get_property("title"))
-    vertex.set_property("genres", movie_doc.get_property("genres"))
+    vertex.set("movieId", movie_doc.get("movieId"))
+    vertex.set("title", movie_doc.get("title"))
+    vertex.set("genres", movie_doc.get("genres"))
     vertex.save()
 ```
 
@@ -336,8 +338,8 @@ for movie_doc in movies:
 # Create RATED edges
 ratings = db.query("sql", "SELECT * FROM Rating")
 for rating_doc in ratings:
-    user_id = rating_doc.get_property("userId")
-    movie_id = rating_doc.get_property("movieId")
+    user_id = rating_doc.get("userId")
+    movie_id = rating_doc.get("movieId")
 
     # Resolve foreign keys to vertices
     user = db.query("sql", f"SELECT FROM User WHERE userId = {user_id}")[0]
@@ -345,8 +347,8 @@ for rating_doc in ratings:
 
     # Create edge
     edge = user.new_edge("RATED", movie, True, "User", "Movie")
-    edge.set_property("rating", rating_doc.get_property("rating"))
-    edge.set_property("timestamp", rating_doc.get_property("timestamp"))
+    edge.set("rating", rating_doc.get("rating"))
+    edge.set("timestamp", rating_doc.get("timestamp"))
     edge.save()
 ```
 
@@ -354,12 +356,12 @@ for rating_doc in ratings:
 
 ```python
 # Verify vertex counts
-user_count = db.query("sql", "SELECT count(*) as c FROM User")[0].get_property("c")
-movie_count = db.query("sql", "SELECT count(*) as c FROM Movie")[0].get_property("c")
+user_count = db.query("sql", "SELECT count(*) as c FROM User")[0].get("c")
+movie_count = db.query("sql", "SELECT count(*) as c FROM Movie")[0].get("c")
 
 # Verify edge counts
-rated_count = db.query("sql", "SELECT count(*) as c FROM RATED")[0].get_property("c")
-tagged_count = db.query("sql", "SELECT count(*) as c FROM TAGGED")[0].get_property("c")
+rated_count = db.query("sql", "SELECT count(*) as c FROM RATED")[0].get("c")
+tagged_count = db.query("sql", "SELECT count(*) as c FROM TAGGED")[0].get("c")
 
 print(f"✅ Users:  {user_count:,}")
 print(f"✅ Movies: {movie_count:,}")

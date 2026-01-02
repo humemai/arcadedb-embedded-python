@@ -31,7 +31,7 @@ with arcadedb.create_database("/tmp/mydb") as db:
     # Query data
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
     for record in result:
-        print(f"Name: {record.get_property('name')}")
+        print(f"Name: {record.get('name')}")
 ```
 
 **Server-Managed Database (Optional):**
@@ -53,7 +53,7 @@ try:
 
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
     for record in result:
-        print(f"Name: {record.get_property('name')}")
+        print(f"Name: {record.get('name')}")
 
 finally:
     server.stop()
