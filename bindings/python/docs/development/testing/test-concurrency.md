@@ -98,11 +98,13 @@ import arcadedb_embedded as arcadedb
 
 # Create database
 db = arcadedb.create_database("./test_db")
-db.command("sql", "CREATE DOCUMENT TYPE Counter")
+# Schema operations are auto-transactional
+db.schema.create_document_type("Counter")
 
 # Insert initial record
 with db.transaction():
-    db.command("sql", "INSERT INTO Counter SET value = 0")
+    counter = db.new_document("Counter")
+    counter.set("value", 0).save()
 
 def increment_counter(thread_id, iterations):
     """Each thread increments the counter"""
@@ -162,7 +164,8 @@ db.close()
 
     def worker():
         with db.transaction():
-            db.command("sql", "INSERT INTO MyType SET data = 'value'")
+            rec = db.new_document("MyType")
+            rec.set("data", "value").save()
 
     # Multiple threads share the same db instance
     threads = [Thread(target=worker) for _ in range(10)]
@@ -177,6 +180,7 @@ Use a single database instance shared across threads:
 ```python
 # Good: Share one database instance
 db = arcadedb.create_database("./mydb")
+db.schema.create_document_type("MyType")
 
 def thread_worker():
     result = db.query("sql", "SELECT FROM MyType")
@@ -208,10 +212,11 @@ import arcadedb_embedded as arcadedb
 
 # First: Create and populate
 db1 = arcadedb.create_database("./test_db")
-db1.command("sql", "CREATE DOCUMENT TYPE Person")
+db1.schema.create_document_type("Person")
 
 with db1.transaction():
-    db1.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+    person = db1.new_document("Person")
+    person.set("name", "Alice").set("age", 30).save()
 
 # Close to release file lock
 db1.close()
@@ -271,9 +276,10 @@ import sys
 
 # Create test database
 db = arcadedb.create_database("./test_db")
-db.command("sql", "CREATE DOCUMENT TYPE Data")
+db.schema.create_document_type("Data")
 with db.transaction():
-    db.command("sql", "INSERT INTO Data SET value = 'test'")
+    doc = db.new_document("Data")
+    doc.set("value", "test").save()
 db.close()
 
 # Attempt to access from subprocess
@@ -382,7 +388,8 @@ db = arcadedb.create_database("./mydb")
 
 def worker(worker_id):
     with db.transaction():
-        db.command("sql", f"INSERT INTO Data SET worker = {worker_id}")
+        rec = db.new_document("Data")
+        rec.set("worker", worker_id).save()
 
 threads = [Thread(target=worker, args=(i,)) for i in range(10)]
 for t in threads:

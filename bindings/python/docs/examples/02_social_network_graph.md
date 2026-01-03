@@ -134,8 +134,11 @@ Represent entities in your domain:
 ```python
 # Person vertex with properties (using embedded ArcadeDB)
 with db.transaction():
-    db.command("sql", "CREATE VERTEX Person SET name = ?, age = ?, city = ?",
-               "Alice Johnson", 28, "New York")
+    person = db.new_vertex("Person")
+    person.set("name", "Alice Johnson")
+    person.set("age", 28)
+    person.set("city", "New York")
+    person.save()
 ```
 
 ### Edges (Relationships)
@@ -143,37 +146,39 @@ Connect vertices with optional properties:
 ```python
 # Bidirectional friendship with relationship metadata
 with db.transaction():
-    # Create edge using property-based lookups (recommended approach)
-    db.command("sql", """
-        CREATE EDGE FRIEND_OF
-        FROM (SELECT FROM Person WHERE name = 'Alice Johnson')
-        TO (SELECT FROM Person WHERE name = 'Bob Smith')
-        SET since = date('2020-05-15'), closeness = 'close'
-    """)
+    alice = list(db.query("sql", "SELECT FROM Person WHERE name = 'Alice Johnson'"))[0].get_vertex()
+    bob = list(db.query("sql", "SELECT FROM Person WHERE name = 'Bob Smith'"))[0].get_vertex()
+
+    edge = alice.new_edge("FRIEND_OF", bob)
+    edge.set("since", "2020-05-15")
+    edge.set("closeness", "close")
+    edge.save()
 ```
 
 ### Schema Definition
 Define types and properties upfront for consistency:
 ```python
-# Create vertex type with properties (using transactions)
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE PROPERTY Person.name STRING")
-    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
-    db.command("sql", "CREATE PROPERTY Person.city STRING")
-    db.command("sql", "CREATE PROPERTY Person.joined_date DATE")
-    db.command("sql", "CREATE PROPERTY Person.email STRING")      # Optional (can be NULL)
-    db.command("sql", "CREATE PROPERTY Person.phone STRING")      # Optional (can be NULL)
-    db.command("sql", "CREATE PROPERTY Person.verified BOOLEAN")
-    db.command("sql", "CREATE PROPERTY Person.reputation FLOAT")  # Optional (can be NULL)
+import arcadedb
+
+with arcadedb.create_database("./social_network_db") as db:
+    # Create vertex type with properties (schema ops are auto-transactional)
+    db.schema.create_vertex_type("Person")
+    db.schema.create_property("Person", "name", "STRING")
+    db.schema.create_property("Person", "age", "INTEGER")
+    db.schema.create_property("Person", "city", "STRING")
+    db.schema.create_property("Person", "joined_date", "DATE")
+    db.schema.create_property("Person", "email", "STRING")      # Optional (can be NULL)
+    db.schema.create_property("Person", "phone", "STRING")      # Optional (can be NULL)
+    db.schema.create_property("Person", "verified", "BOOLEAN")
+    db.schema.create_property("Person", "reputation", "FLOAT")  # Optional (can be NULL)
 
     # Create edge type with properties
-    db.command("sql", "CREATE EDGE TYPE FRIEND_OF")
-    db.command("sql", "CREATE PROPERTY FRIEND_OF.since DATE")
-    db.command("sql", "CREATE PROPERTY FRIEND_OF.closeness STRING")
+    db.schema.create_edge_type("FRIEND_OF")
+    db.schema.create_property("FRIEND_OF", "since", "DATE")
+    db.schema.create_property("FRIEND_OF", "closeness", "STRING")
 
     # Create indexes for performance
-    db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
+    db.schema.create_index("Person", ["name"], unique=False)
 ```
 
 ## Query Language Comparison
@@ -277,40 +282,38 @@ for row in result:
 Graph vertices can have optional properties with NULL values:
 
 ```python
-# Insert person with NULL email and phone
-with db.transaction():
-    db.command("sql", """
-        CREATE VERTEX Person SET
-            name = 'Eve Brown',
-            age = 29,
-            city = 'Seattle',
-            joined_date = date('2020-08-22'),
-            email = NULL,
-            phone = NULL,
-            verified = false,
-            reputation = 3.2
+import arcadedb
+
+with arcadedb.open_database("./social_network_db") as db:
+    # Insert person with NULL email and phone
+    with db.transaction():
+        db.command("sql", """
+            CREATE VERTEX Person SET
+                name = 'Eve Brown',
+                age = 29,
+                city = 'Seattle',
+                joined_date = date('2020-08-22'),
+                email = NULL,
+                phone = NULL,
+                verified = false,
+                reputation = 3.2
+        """)
+
+    # Querying for NULL Values - Find vertices with missing optional properties
+    # Find people without email addresses (reads don't need transaction)
+    result = db.query("sql", """
+        SELECT name, phone, verified
+        FROM Person
+        WHERE email IS NULL
     """)
-```
 
-### Querying for NULL Values
-
-Find vertices with missing optional properties:
-
-```python
-# Find people without email addresses
-result = db.query("sql", """
-    SELECT name, phone, verified
-    FROM Person
-    WHERE email IS NULL
-""")
-
-# Find verified people with reputation scores (exclude NULLs)
-result = db.query("sql", """
-    SELECT name, reputation, city
-    FROM Person
-    WHERE verified = true AND reputation IS NOT NULL
-    ORDER BY reputation DESC
-""")
+    # Find verified people with reputation scores (exclude NULLs)
+    result = db.query("sql", """
+        SELECT name, reputation, city
+        FROM Person
+        WHERE verified = true AND reputation IS NOT NULL
+        ORDER BY reputation DESC
+    """)
 ```
 
 This pattern is useful for:
@@ -376,29 +379,37 @@ RETURN DISTINCT connected.name as name
 
 Edges can store metadata about relationships:
 ```python
-# Create friendship with properties
-db.command("sql", """
-    CREATE EDGE FRIEND_OF FROM ? TO ?
-    SET since = date(?), closeness = ?, interaction_frequency = ?
-""", alice_rid, bob_rid, "2020-05-15", "close", "daily")
+import arcadedb
 
-# Query based on relationship properties
-result = db.query("cypher", """
-    MATCH (p1:Person)-[f:FRIEND_OF {closeness: 'close'}]->(p2:Person)
-    RETURN p1.name as person1, p2.name as person2, f.since as since
-    ORDER BY f.since
-""")
+with arcadedb.open_database("./social_network_db") as db:
+    # Create friendship with properties (inside transaction)
+    with db.transaction():
+        db.command("sql", """
+            CREATE EDGE FRIEND_OF FROM ? TO ?
+            SET since = date(?), closeness = ?, interaction_frequency = ?
+        """, alice_rid, bob_rid, "2020-05-15", "close", "daily")
+
+    # Query based on relationship properties (reads don't need transaction)
+    result = db.query("cypher", """
+        MATCH (p1:Person)-[f:FRIEND_OF {closeness: 'close'}]->(p2:Person)
+        RETURN p1.name as person1, p2.name as person2, f.since as since
+        ORDER BY f.since
+    """)
 ```
 
 ## Bidirectional Relationships
 
 For symmetric relationships like friendship:
 ```python
-# Create both directions
-db.command("sql", "CREATE EDGE FRIEND_OF FROM ? TO ? SET since = date(?), closeness = ?",
-           alice_rid, bob_rid, "2020-05-15", "close")
-db.command("sql", "CREATE EDGE FRIEND_OF FROM ? TO ? SET since = date(?), closeness = ?",
-           bob_rid, alice_rid, "2020-05-15", "close")
+import arcadedb
+
+with arcadedb.open_database("./social_network_db") as db:
+    # Create both directions (inside transaction)
+    with db.transaction():
+        db.command("sql", "CREATE EDGE FRIEND_OF FROM ? TO ? SET since = date(?), closeness = ?",
+                   alice_rid, bob_rid, "2020-05-15", "close")
+        db.command("sql", "CREATE EDGE FRIEND_OF FROM ? TO ? SET since = date(?), closeness = ?",
+                   bob_rid, alice_rid, "2020-05-15", "close")
 ```
 
 This allows queries to work in either direction without specifying directionality.
@@ -418,20 +429,16 @@ db.command("sql", "CREATE INDEX ON Person (city, age) IF NOT EXISTS")
 ### Batch Operations
 For large datasets, use batch operations:
 ```python
-# Batch vertex creation
-batch_vertices = []
-for person_data in large_dataset:
-    batch_vertices.append(f"CREATE VERTEX Person SET name = '{person_data['name']}', ...")
+import arcadedb
 
-# Execute as transaction
-db.begin()
-try:
-    for statement in batch_vertices:
-        db.command("sql", statement)
-    db.commit()
-except Exception as e:
-    db.rollback()
-    raise
+with arcadedb.open_database("./social_network_db") as db:
+    # Batch vertex creation (all inside single transaction)
+    large_dataset = [{"name": "Person1"}, {"name": "Person2"}]  # Example data
+
+    with db.transaction():
+        for person_data in large_dataset:
+            db.command("sql", f"CREATE VERTEX Person SET name = '{person_data['name']}'")
+            # Transaction automatically commits at end of 'with' block
 ```
 
 ## Expected Output
