@@ -29,6 +29,47 @@ plt.rcParams.update(
 )
 
 
+def format_memory(mb):
+    """Format memory in MB/GB with friendly units."""
+    if mb is None:
+        return "n/a"
+    if mb >= 1024:
+        gb = mb / 1024
+        return f"{gb:.2f} GB" if gb < 10 else f"{gb:.1f} GB"
+    if mb >= 100:
+        return f"{mb:.0f} MB"
+    if mb >= 10:
+        return f"{mb:.1f} MB"
+    return f"{mb:.2f} MB"
+
+
+def format_duration_seconds(sec):
+    """Format a duration given in seconds using ms/s/min/h rules."""
+    if sec is None:
+        return "n/a"
+    if sec < 1:
+        return f"{sec * 1000:.0f} ms"
+    if sec < 60:
+        return f"{sec:.2f} s"
+    if sec < 3600:
+        return f"{sec / 60:.1f} min"
+    return f"{sec / 3600:.2f} h"
+
+
+def format_duration_ms(ms):
+    """Format a duration given in milliseconds using ms/s/min/h rules."""
+    if ms is None:
+        return "n/a"
+    if ms < 1000:
+        return f"{ms:.1f} ms"
+    sec = ms / 1000
+    if sec < 60:
+        return f"{sec:.2f} s"
+    if sec < 3600:
+        return f"{sec / 60:.1f} min"
+    return f"{sec / 3600:.2f} h"
+
+
 def parse_markdown_table(file_path):
     """Parse markdown table from benchmark results."""
     with open(file_path, "r") as f:
@@ -244,7 +285,7 @@ def plot_location_cache_sweep(sweep_dir, output_dir):
             ax1.text(
                 bar.get_x() + bar.get_width() / 2,
                 val + 50,
-                f"{val:.0f}",
+                format_memory(val),
                 ha="center",
                 va="bottom",
                 fontsize=10,
@@ -264,7 +305,7 @@ def plot_location_cache_sweep(sweep_dir, output_dir):
         ax2.text(
             bar.get_x() + bar.get_width() / 2,
             val + 0.5,
-            f"{val:.1f}s",
+            format_duration_seconds(val),
             ha="center",
             va="bottom",
             fontsize=10,
@@ -403,7 +444,7 @@ def plot_graph_cache_sweep(sweep_dir, output_dir):
         ax1.text(
             bar.get_x() + bar.get_width() / 2,
             val + 0.5,
-            f"{val:.1f}s",
+            format_duration_seconds(val),
             ha="center",
             va="bottom",
             fontsize=10,
@@ -424,7 +465,7 @@ def plot_graph_cache_sweep(sweep_dir, output_dir):
             ax2.text(
                 bar.get_x() + bar.get_width() / 2,
                 val + 50,
-                f"{val:.0f}",
+                format_memory(val),
                 ha="center",
                 va="bottom",
                 fontsize=10,
@@ -685,7 +726,7 @@ def plot_memory_summary(sweep_dir, output_dir):
         # Annotations
         for _, row in df.iterrows():
             if pd.notna(row["mem"]):
-                mem_str = f"{row['mem']:.0f}MB"
+                mem_str = format_memory(row["mem"])
                 ax.annotate(
                     mem_str,
                     (row["plot_x"], row["plot_y"]),
@@ -723,7 +764,7 @@ def plot_memory_summary(sweep_dir, output_dir):
         # Annotations
         for _, row in df.iterrows():
             if pd.notna(row["duration"]):
-                dur_str = f"{row['duration']:.0f}s"
+                dur_str = format_duration_seconds(row["duration"])
                 ax.annotate(
                     dur_str,
                     (row["plot_x"], row["plot_y"]),
@@ -761,11 +802,7 @@ def plot_memory_summary(sweep_dir, output_dir):
         # Annotations
         for _, row in df.iterrows():
             if pd.notna(row["latency_before"]):
-                latency = row["latency_before"]
-                if latency < 1000:
-                    lat_str = f"{latency:.1f}ms"
-                else:
-                    lat_str = f"{latency/1000:.2f}s"
+                lat_str = format_duration_ms(row["latency_before"])
                 ax.annotate(
                     lat_str,
                     (row["plot_x"], row["plot_y"]),
@@ -803,11 +840,7 @@ def plot_memory_summary(sweep_dir, output_dir):
         # Annotations
         for _, row in df.iterrows():
             if pd.notna(row["latency_after"]):
-                latency = row["latency_after"]
-                if latency < 1000:
-                    lat_str = f"{latency:.1f}ms"
-                else:
-                    lat_str = f"{latency/1000:.2f}s"
+                lat_str = format_duration_ms(row["latency_after"])
                 ax.annotate(
                     lat_str,
                     (row["plot_x"], row["plot_y"]),

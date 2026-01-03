@@ -766,8 +766,8 @@ def wait_for_compaction(db, max_wait_seconds=600, verbose=True):
 
     while (time.time() - wait_start) < max_wait_seconds:
         try:
-            with db.transaction():
-                db.query("sql", "SELECT count(*) FROM Movie LIMIT 1").first()
+            # Read-only probe; no transaction required
+            db.query("sql", "SELECT count(*) FROM Movie LIMIT 1").first()
             if verbose:
                 print("   ✅ Background compaction complete")
             return True

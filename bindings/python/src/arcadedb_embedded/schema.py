@@ -5,10 +5,9 @@ This module provides a Pythonic, type-safe interface for schema operations
 instead of requiring SQL strings.
 
 Example:
-    >>> schema = db.schema
-    >>> schema.create_vertex_type("User")
-    >>> schema.create_property("User", "email", "STRING")
-    >>> schema.create_index("User", ["email"], unique=True)
+    >>> db.schema.create_vertex_type("User")
+    >>> db.schema.create_property("User", "email", "STRING")
+    >>> db.schema.create_index("User", ["email"], unique=True)
 """
 
 from enum import Enum
@@ -87,9 +86,8 @@ class Schema:
             ArcadeDBError: If type already exists or database is closed
 
         Example:
-            >>> schema = db.schema
-            >>> schema.create_document_type("Product")
-            >>> schema.create_document_type("LargeDataset", buckets=10)
+            >>> db.schema.create_document_type("Product")
+            >>> db.schema.create_document_type("LargeDataset", buckets=10)
         """
         self._db._check_not_closed()
 
@@ -115,9 +113,8 @@ class Schema:
             ArcadeDBError: If type already exists or database is closed
 
         Example:
-            >>> schema = db.schema
-            >>> schema.create_vertex_type("User")
-            >>> schema.create_vertex_type("Company", buckets=5)
+            >>> db.schema.create_vertex_type("User")
+            >>> db.schema.create_vertex_type("Company", buckets=5)
         """
 
         self._db._check_not_closed()
@@ -144,9 +141,8 @@ class Schema:
             ArcadeDBError: If type already exists or database is closed
 
         Example:
-            >>> schema = db.schema
-            >>> schema.create_edge_type("Follows")
-            >>> schema.create_edge_type("Purchased", buckets=5)
+            >>> db.schema.create_edge_type("Follows")
+            >>> db.schema.create_edge_type("Purchased", buckets=5)
         """
         self._db._check_not_closed()
 
@@ -171,8 +167,7 @@ class Schema:
             Java DocumentType object
 
         Example:
-            >>> schema = db.schema
-            >>> doc_type = schema.get_or_create_document_type("Product")
+            >>> doc_type = db.schema.get_or_create_document_type("Product")
         """
         self._db._check_not_closed()
 
@@ -194,8 +189,7 @@ class Schema:
             Java VertexType object
 
         Example:
-            >>> schema = db.schema
-            >>> vertex_type = schema.get_or_create_vertex_type("User")
+            >>> vertex_type = db.schema.get_or_create_vertex_type("User")
         """
         self._db._check_not_closed()
 
@@ -215,8 +209,7 @@ class Schema:
             Java EdgeType object
 
         Example:
-            >>> schema = db.schema
-            >>> edge_type = schema.get_or_create_edge_type("Follows")
+            >>> edge_type = db.schema.get_or_create_edge_type("Follows")
         """
         self._db._check_not_closed()
 
@@ -235,8 +228,7 @@ class Schema:
             ArcadeDBError: If type doesn't exist or database is closed
 
         Example:
-            >>> schema = db.schema
-            >>> schema.drop_type("OldType")
+            >>> db.schema.drop_type("OldType")
         """
         self._db._check_not_closed()
 
@@ -258,8 +250,7 @@ class Schema:
             ArcadeDBError: If type doesn't exist
 
         Example:
-            >>> schema = db.schema
-            >>> user_type = schema.get_type("User")
+            >>> user_type = db.schema.get_type("User")
         """
         self._db._check_not_closed()
 
@@ -279,8 +270,7 @@ class Schema:
             True if type exists, False otherwise
 
         Example:
-            >>> schema = db.schema
-            >>> if schema.exists_type("User"):
+            >>> if db.schema.exists_type("User"):
             ...     print("User type exists")
         """
         self._db._check_not_closed()
@@ -293,8 +283,7 @@ class Schema:
             List of Java DocumentType/VertexType/EdgeType objects
 
         Example:
-            >>> schema = db.schema
-            >>> all_types = schema.get_types()
+            >>> all_types = db.schema.get_types()
             >>> for type_obj in all_types:
             ...     print(type_obj.getName())
         """
@@ -324,10 +313,9 @@ class Schema:
             ArcadeDBError: If type doesn't exist or property already exists
 
         Example:
-            >>> schema = db.schema
-            >>> schema.create_property("User", "email", "STRING")
-            >>> schema.create_property("User", "age", PropertyType.INTEGER)
-            >>> schema.create_property("User", "tags", "LIST", of_type="STRING")
+            >>> db.schema.create_property("User", "email", "STRING")
+            >>> db.schema.create_property("User", "age", PropertyType.INTEGER)
+            >>> db.schema.create_property("User", "tags", "LIST", of_type="STRING")
         """
         import jpype
 
@@ -392,8 +380,7 @@ class Schema:
             Java Property object
 
         Example:
-            >>> schema = db.schema
-            >>> prop = schema.get_or_create_property("User", "email", "STRING")
+            >>> prop = db.schema.get_or_create_property("User", "email", "STRING")
         """
         self._db._check_not_closed()
 
@@ -438,8 +425,7 @@ class Schema:
             ArcadeDBError: If type or property doesn't exist
 
         Example:
-            >>> schema = db.schema
-            >>> schema.drop_property("User", "old_field")
+            >>> db.schema.drop_property("User", "old_field")
         """
 
         self._db._check_not_closed()
@@ -475,15 +461,14 @@ class Schema:
             ArcadeDBError: If type doesn't exist or index creation fails
 
         Example:
-            >>> schema = db.schema
             >>> # Simple index
-            >>> schema.create_index("User", ["email"], unique=True)
+            >>> db.schema.create_index("User", ["email"], unique=True)
             >>>
             >>> # Composite index
-            >>> schema.create_index("Order", ["customerId", "orderDate"])
+            >>> db.schema.create_index("Order", ["customerId", "orderDate"])
             >>>
             >>> # Full-text index
-            >>> schema.create_index("Article", ["content"],
+            >>> db.schema.create_index("Article", ["content"],
             ...                     index_type=IndexType.FULL_TEXT)
         """
         self._db._check_not_closed()
@@ -534,8 +519,7 @@ class Schema:
             Java Index object
 
         Example:
-            >>> schema = db.schema
-            >>> idx = schema.get_or_create_index("User", ["email"], unique=True)
+            >>> idx = db.schema.get_or_create_index("User", ["email"], unique=True)
         """
 
         self._db._check_not_closed()
@@ -578,10 +562,9 @@ class Schema:
             ArcadeDBError: If index doesn't exist (when force=False) or drop fails
 
         Example:
-            >>> schema = db.schema
-            >>> schema.drop_index("User[email]")
+            >>> db.schema.drop_index("User[email]")
             >>> # Force drop corrupted index
-            >>> schema.drop_index("User[email]", force=True)
+            >>> db.schema.drop_index("User[email]", force=True)
         """
 
         self._db._check_not_closed()
@@ -602,8 +585,7 @@ class Schema:
             List of Java Index objects
 
         Example:
-            >>> schema = db.schema
-            >>> all_indexes = schema.get_indexes()
+            >>> all_indexes = db.schema.get_indexes()
             >>> for idx in all_indexes:
             ...     print(idx.getName())
         """
@@ -621,8 +603,7 @@ class Schema:
             True if index exists, False otherwise
 
         Example:
-            >>> schema = db.schema
-            >>> if schema.exists_index("User[email]"):
+            >>> if db.schema.exists_index("User[email]"):
             ...     print("Index exists")
         """
         self._db._check_not_closed()
@@ -638,8 +619,7 @@ class Schema:
             Java Index object or None if not found
 
         Example:
-            >>> schema = db.schema
-            >>> idx = schema.get_index_by_name("User[email]")
+            >>> idx = db.schema.get_index_by_name("User[email]")
             >>> if idx:
             ...     print(f"Index type: {idx.getType()}")
         """

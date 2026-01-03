@@ -88,8 +88,10 @@ def test_server_pattern_recommended(cleanup_test_dirs):
     print("\n2. Creating database through server...")
     db = server.create_database("mydb")
 
+    # Schema operations are auto-transactional
+    db.schema.create_document_type("Product")
+
     with db.transaction():
-        db.schema.create_document_type("Product")
         db.command("sql", "INSERT INTO Product SET name = 'Laptop', price = 999")
         db.command("sql", "INSERT INTO Product SET name = 'Mouse', price = 29")
 
@@ -137,8 +139,10 @@ def test_server_thread_safety(cleanup_test_dirs):
 
     db = server.create_database("testdb")
 
+    # Schema operations are auto-transactional
+    db.schema.create_document_type("Item")
+
     with db.transaction():
-        db.schema.create_document_type("Item")
         for i in range(20):
             db.command("sql", f"INSERT INTO Item SET id = {i}, value = {i * 10}")
 
@@ -207,8 +211,10 @@ def test_server_context_manager(cleanup_test_dirs):
 
         db = server.create_database("contextdb")
 
+        # Schema operations are auto-transactional
+        db.schema.create_document_type("Note")
+
         with db.transaction():
-            db.schema.create_document_type("Note")
             db.command("sql", "INSERT INTO Note SET text = 'Test'")
 
         result = db.query("sql", "SELECT count(*) as count FROM Note")
@@ -246,8 +252,10 @@ def test_pattern1_embedded_first_requires_close(cleanup_test_dirs):
     print("\n1. Creating database with embedded API...")
     db = arcadedb.create_database(db_path)
 
+    # Schema operations are auto-transactional
+    db.schema.create_document_type("Person")
+
     with db.transaction():
-        db.schema.create_document_type("Person")
         db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
         db.command("sql", "INSERT INTO Person SET name = 'Bob', age = 25")
 

@@ -22,6 +22,7 @@ def test_async_executor_basic_create():
 
         # Get async executor
         async_exec = db.async_executor()
+        async_exec.set_commit_every(25)  # Explicit transaction cadence for writes
         assert async_exec is not None
 
         # Create records asynchronously
@@ -241,6 +242,7 @@ def test_async_executor_global_callback(temp_db):
         success_count[0] += 1
 
     async_exec = db.async_executor()
+    async_exec.set_commit_every(10)
 
     # NOTE: Global callbacks via on_ok() have JPype proxy creation issues
     # Use per-operation callbacks instead as a workaround

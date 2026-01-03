@@ -80,25 +80,25 @@ def main():
 
     try:
         # Create/open database using same pattern as working example
-        db = arcadedb.create_database(database_path)
-        print(f"✅ Database created at: {database_path}")
-        print("💡 Using embedded mode - no server needed!")
-        print("💡 Database files are kept so you can inspect them!")
-        print(f"⏱️  Time: {time.time() - step_start:.3f}s")
+        with arcadedb.create_database(database_path) as db:
+            print(f"✅ Database created at: {database_path}")
+            print("💡 Using embedded mode - no server needed!")
+            print("💡 Database files are kept so you can inspect them!")
+            print(f"⏱️  Time: {time.time() - step_start:.3f}s")
 
-        # Create schema
-        create_schema(db)
+            # Create schema
+            create_schema(db)
 
-        # Create sample data
-        create_sample_data(db)
+            # Create sample data
+            create_sample_data(db)
 
-        # Demonstrate graph queries
-        demonstrate_graph_queries(db)
+            # Demonstrate graph queries
+            demonstrate_graph_queries(db)
 
-        # Compare SQL vs Cypher approaches
-        compare_query_languages(db)
+            # Compare SQL vs Cypher approaches
+            compare_query_languages(db)
 
-        print("\n✅ Social network graph example completed successfully!")
+            print("\n✅ Social network graph example completed successfully!")
 
     except Exception as e:
         print(f"❌ Error in social network example: {e}")
@@ -106,10 +106,6 @@ def main():
 
         traceback.print_exc()
         sys.exit(1)
-
-    # Close database connection (like 01_simple_document_store.py)
-    db.close()
-    print("✅ Database connection closed")
 
     # Note: We're NOT deleting the database directory
     # You can inspect the files in ./my_test_databases/social_network_db/
@@ -125,35 +121,33 @@ def create_schema(db):
     step_start = time.time()
 
     try:
-        # Create schema in a transaction (like the working example)
-        with db.transaction():
-            # Create Person vertex type
-            db.schema.create_vertex_type("Person")
-            print("  ✓ Created Person vertex type")
+        # Schema operations are auto-transactional; no explicit transaction needed
+        db.schema.create_vertex_type("Person")
+        print("  ✓ Created Person vertex type")
 
-            # Create properties for Person (various data types, some optional/NULL)
-            db.schema.create_property("Person", "name", "STRING")
-            db.schema.create_property("Person", "age", "INTEGER")
-            db.schema.create_property("Person", "city", "STRING")
-            db.schema.create_property("Person", "joined_date", "DATE")
-            db.schema.create_property("Person", "email", "STRING")  # Optional
-            db.schema.create_property("Person", "phone", "STRING")  # Optional
-            db.schema.create_property("Person", "verified", "BOOLEAN")
-            db.schema.create_property("Person", "reputation", "FLOAT")  # Optional
-            print("  ✓ Created Person properties (including optional fields)")
+        # Create properties for Person (various data types, some optional/NULL)
+        db.schema.create_property("Person", "name", "STRING")
+        db.schema.create_property("Person", "age", "INTEGER")
+        db.schema.create_property("Person", "city", "STRING")
+        db.schema.create_property("Person", "joined_date", "DATE")
+        db.schema.create_property("Person", "email", "STRING")  # Optional
+        db.schema.create_property("Person", "phone", "STRING")  # Optional
+        db.schema.create_property("Person", "verified", "BOOLEAN")
+        db.schema.create_property("Person", "reputation", "FLOAT")  # Optional
+        print("  ✓ Created Person properties (including optional fields)")
 
-            # Create FRIEND_OF edge type
-            db.schema.create_edge_type("FRIEND_OF")
-            print("  ✓ Created FRIEND_OF edge type")
+        # Create FRIEND_OF edge type
+        db.schema.create_edge_type("FRIEND_OF")
+        print("  ✓ Created FRIEND_OF edge type")
 
-            # Create properties for FRIEND_OF edge
-            db.schema.create_property("FRIEND_OF", "since", "DATE")
-            db.schema.create_property("FRIEND_OF", "closeness", "STRING")
-            print("  ✓ Created FRIEND_OF properties")
+        # Create properties for FRIEND_OF edge
+        db.schema.create_property("FRIEND_OF", "since", "DATE")
+        db.schema.create_property("FRIEND_OF", "closeness", "STRING")
+        print("  ✓ Created FRIEND_OF properties")
 
-            # Create indexes for better performance using Schema API
-            db.schema.create_index("Person", ["name"], unique=False)
-            print("  ✓ Created index on Person.name")
+        # Create indexes for better performance using Schema API
+        db.schema.create_index("Person", ["name"], unique=False)
+        print("  ✓ Created index on Person.name")
 
         print(f"  ⏱️  Time: {time.time() - step_start:.3f}s")
 

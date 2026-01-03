@@ -508,16 +508,15 @@ class Database:
 
         Example:
             >>> # Create a vertex type with properties
-            >>> schema = db.schema
-            >>> schema.create_vertex_type("User")
-            >>> schema.create_property("User", "name", PropertyType.STRING)
-            >>> schema.create_property("User", "age", PropertyType.INTEGER)
+            >>> db.schema.create_vertex_type("User")
+            >>> db.schema.create_property("User", "name", PropertyType.STRING)
+            >>> db.schema.create_property("User", "age", PropertyType.INTEGER)
             >>>
             >>> # Create an index
-            >>> schema.create_index("User", ["name"], unique=True)
+            >>> db.schema.create_index("User", ["name"], unique=True)
             >>>
             >>> # Create edge type
-            >>> schema.create_edge_type("Follows")
+            >>> db.schema.create_edge_type("Follows")
 
         Note:
             Schema changes are immediately persisted and visible to all

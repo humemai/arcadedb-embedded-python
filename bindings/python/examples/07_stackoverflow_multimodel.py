@@ -35,6 +35,13 @@ Requirements:
 - lxml (for XML parsing)
 - Stack Overflow data dump in data/stackoverflow-{dataset}/ directory
 
+⚠️  BEST PRACTICE NOTE (Database Lifecycle):
+This script's phase methods use manual db.open() and db.close().
+For modern Python applications, consider wrapping within class methods:
+    with arcadedb.create_database(path) as db:
+        # All operations here
+This ensures proper closure even if exceptions occur.
+
 IMPORTANT: RID-Based Pagination Pattern
 ----------------------------------------
 When paginating with RID (@rid > last_rid LIMIT N) AND applying WHERE filters,
@@ -1688,13 +1695,12 @@ def create_indexes(db, indexes, retry_delay=10, max_retries=60, verbose=True):
 
         for attempt in range(1, max_retries + 1):
             try:
-                with db.transaction():
-                    if uniqueness == "UNIQUE":
-                        db.schema.create_index(table, [column], unique=True)
-                    elif uniqueness == "FULL_TEXT":
-                        db.schema.create_index(table, [column], index_type="FULL_TEXT")
-                    else:  # NOTUNIQUE
-                        db.schema.create_index(table, [column], unique=False)
+                if uniqueness == "UNIQUE":
+                    db.schema.create_index(table, [column], unique=True)
+                elif uniqueness == "FULL_TEXT":
+                    db.schema.create_index(table, [column], index_type="FULL_TEXT")
+                else:  # NOTUNIQUE
+                    db.schema.create_index(table, [column], unique=False)
 
                 if verbose:
                     print(
@@ -2010,19 +2016,19 @@ class Phase1XMLImporter:
 
     def _create_document_types(self):
         """Create document types with properties based on discovered schemas."""
-        with self.db.transaction():
-            for entity_name, schema in self.schemas.items():
-                # Create document type
-                self.db.schema.create_document_type(entity_name)
+        # Schema operations are auto-transactional
+        for entity_name, schema in self.schemas.items():
+            # Create document type
+            self.db.schema.create_document_type(entity_name)
 
-                # Define all properties with their types
-                for field_name, field_stats in schema.fields.items():
-                    self.db.schema.create_property(
-                        entity_name, field_name, field_stats.type_name
-                    )
+            # Define all properties with their types
+            for field_name, field_stats in schema.fields.items():
+                self.db.schema.create_property(
+                    entity_name, field_name, field_stats.type_name
+                )
 
-                prop_count = len(schema.fields)
-                print(f"    ✓ Created {entity_name} ({prop_count} properties)")
+            prop_count = len(schema.fields)
+            print(f"    ✓ Created {entity_name} ({prop_count} properties)")
 
     def _import_xml_generic(self, xml_path: Path, entity_name: str):
         """Generic XML importer using discovered schema.
@@ -2538,139 +2544,128 @@ class Phase2GraphConverter:
         self.graph_db = arcadedb.create_database(str(self.graph_db_path))
         print(f"    • Created graph database: {self.graph_db_path.name}")
 
-        with self.graph_db.transaction():
-            # Create vertex types
-            print("\n  Creating vertex types...")
+        # Create vertex types (schema ops are auto-transactional)
+        print("\n  Creating vertex types...")
 
-            # User vertex
-            self.graph_db.schema.create_vertex_type("User")
-            self.graph_db.schema.create_property("User", "Id", "INTEGER")
-            self.graph_db.schema.create_property("User", "DisplayName", "STRING")
-            self.graph_db.schema.create_property("User", "Reputation", "INTEGER")
-            self.graph_db.schema.create_property("User", "CreationDate", "DATETIME")
-            self.graph_db.schema.create_property("User", "Views", "INTEGER")
-            self.graph_db.schema.create_property("User", "UpVotes", "INTEGER")
-            self.graph_db.schema.create_property("User", "DownVotes", "INTEGER")
-            # Vector embedding for semantic search (Phase 3)
-            self.graph_db.schema.create_property("User", "embedding", "ARRAY_OF_FLOATS")
-            self.graph_db.schema.create_property("User", "vector_id", "STRING")
-            print("    ✓ User (Id, DisplayName, Reputation, ...)")
+        # User vertex
+        self.graph_db.schema.create_vertex_type("User")
+        self.graph_db.schema.create_property("User", "Id", "INTEGER")
+        self.graph_db.schema.create_property("User", "DisplayName", "STRING")
+        self.graph_db.schema.create_property("User", "Reputation", "INTEGER")
+        self.graph_db.schema.create_property("User", "CreationDate", "DATETIME")
+        self.graph_db.schema.create_property("User", "Views", "INTEGER")
+        self.graph_db.schema.create_property("User", "UpVotes", "INTEGER")
+        self.graph_db.schema.create_property("User", "DownVotes", "INTEGER")
+        # Vector embedding for semantic search (Phase 3)
+        self.graph_db.schema.create_property("User", "embedding", "ARRAY_OF_FLOATS")
+        self.graph_db.schema.create_property("User", "vector_id", "STRING")
+        print("    ✓ User (Id, DisplayName, Reputation, ...)")
 
-            # Question vertex (Post where PostTypeId=1)
-            self.graph_db.schema.create_vertex_type("Question")
-            self.graph_db.schema.create_property("Question", "Id", "INTEGER")
-            self.graph_db.schema.create_property("Question", "Title", "STRING")
-            self.graph_db.schema.create_property("Question", "Body", "STRING")
-            self.graph_db.schema.create_property("Question", "Score", "INTEGER")
-            self.graph_db.schema.create_property("Question", "ViewCount", "INTEGER")
-            self.graph_db.schema.create_property("Question", "CreationDate", "DATETIME")
-            self.graph_db.schema.create_property("Question", "AnswerCount", "INTEGER")
-            self.graph_db.schema.create_property("Question", "CommentCount", "INTEGER")
-            self.graph_db.schema.create_property("Question", "FavoriteCount", "INTEGER")
-            # Vote aggregates (from Vote documents)
-            self.graph_db.schema.create_property("Question", "UpVotes", "INTEGER")
-            self.graph_db.schema.create_property("Question", "DownVotes", "INTEGER")
-            self.graph_db.schema.create_property("Question", "BountyAmount", "INTEGER")
-            # Vector embedding for semantic search (Phase 3)
-            self.graph_db.schema.create_property(
-                "Question", "embedding", "ARRAY_OF_FLOATS"
-            )
-            self.graph_db.schema.create_property("Question", "vector_id", "STRING")
-            print("    ✓ Question (Id, Title, Body, Score, Vote aggregates, ...)")
+        # Question vertex (Post where PostTypeId=1)
+        self.graph_db.schema.create_vertex_type("Question")
+        self.graph_db.schema.create_property("Question", "Id", "INTEGER")
+        self.graph_db.schema.create_property("Question", "Title", "STRING")
+        self.graph_db.schema.create_property("Question", "Body", "STRING")
+        self.graph_db.schema.create_property("Question", "Score", "INTEGER")
+        self.graph_db.schema.create_property("Question", "ViewCount", "INTEGER")
+        self.graph_db.schema.create_property("Question", "CreationDate", "DATETIME")
+        self.graph_db.schema.create_property("Question", "AnswerCount", "INTEGER")
+        self.graph_db.schema.create_property("Question", "CommentCount", "INTEGER")
+        self.graph_db.schema.create_property("Question", "FavoriteCount", "INTEGER")
+        # Vote aggregates (from Vote documents)
+        self.graph_db.schema.create_property("Question", "UpVotes", "INTEGER")
+        self.graph_db.schema.create_property("Question", "DownVotes", "INTEGER")
+        self.graph_db.schema.create_property("Question", "BountyAmount", "INTEGER")
+        # Vector embedding for semantic search (Phase 3)
+        self.graph_db.schema.create_property("Question", "embedding", "ARRAY_OF_FLOATS")
+        self.graph_db.schema.create_property("Question", "vector_id", "STRING")
+        print("    ✓ Question (Id, Title, Body, Score, Vote aggregates, ...)")
 
-            # Answer vertex (Post where PostTypeId=2)
-            self.graph_db.schema.create_vertex_type("Answer")
-            self.graph_db.schema.create_property("Answer", "Id", "INTEGER")
-            self.graph_db.schema.create_property("Answer", "Body", "STRING")
-            self.graph_db.schema.create_property("Answer", "Score", "INTEGER")
-            self.graph_db.schema.create_property("Answer", "CreationDate", "DATETIME")
-            self.graph_db.schema.create_property("Answer", "CommentCount", "INTEGER")
-            # Vote aggregates (from Vote documents)
-            self.graph_db.schema.create_property("Answer", "UpVotes", "INTEGER")
-            self.graph_db.schema.create_property("Answer", "DownVotes", "INTEGER")
-            # Vector embedding for semantic search (Phase 3)
-            self.graph_db.schema.create_property(
-                "Answer", "embedding", "ARRAY_OF_FLOATS"
-            )
-            self.graph_db.schema.create_property("Answer", "vector_id", "STRING")
-            print("    ✓ Answer (Id, Body, Score, Vote aggregates, ...)")
+        # Answer vertex (Post where PostTypeId=2)
+        self.graph_db.schema.create_vertex_type("Answer")
+        self.graph_db.schema.create_property("Answer", "Id", "INTEGER")
+        self.graph_db.schema.create_property("Answer", "Body", "STRING")
+        self.graph_db.schema.create_property("Answer", "Score", "INTEGER")
+        self.graph_db.schema.create_property("Answer", "CreationDate", "DATETIME")
+        self.graph_db.schema.create_property("Answer", "CommentCount", "INTEGER")
+        # Vote aggregates (from Vote documents)
+        self.graph_db.schema.create_property("Answer", "UpVotes", "INTEGER")
+        self.graph_db.schema.create_property("Answer", "DownVotes", "INTEGER")
+        # Vector embedding for semantic search (Phase 3)
+        self.graph_db.schema.create_property("Answer", "embedding", "ARRAY_OF_FLOATS")
+        self.graph_db.schema.create_property("Answer", "vector_id", "STRING")
+        print("    ✓ Answer (Id, Body, Score, Vote aggregates, ...)")
 
-            # Tag vertex
-            self.graph_db.schema.create_vertex_type("Tag")
-            self.graph_db.schema.create_property("Tag", "Id", "INTEGER")
-            self.graph_db.schema.create_property("Tag", "TagName", "STRING")
-            self.graph_db.schema.create_property("Tag", "Count", "INTEGER")
-            print("    ✓ Tag (Id, TagName, Count)")
+        # Tag vertex
+        self.graph_db.schema.create_vertex_type("Tag")
+        self.graph_db.schema.create_property("Tag", "Id", "INTEGER")
+        self.graph_db.schema.create_property("Tag", "TagName", "STRING")
+        self.graph_db.schema.create_property("Tag", "Count", "INTEGER")
+        print("    ✓ Tag (Id, TagName, Count)")
 
-            # Badge vertex
-            self.graph_db.schema.create_vertex_type("Badge")
-            self.graph_db.schema.create_property("Badge", "Id", "INTEGER")
-            self.graph_db.schema.create_property("Badge", "Name", "STRING")
-            self.graph_db.schema.create_property("Badge", "Date", "DATETIME")
-            self.graph_db.schema.create_property("Badge", "Class", "INTEGER")
-            print("    ✓ Badge (Id, Name, Date, Class)")
+        # Badge vertex
+        self.graph_db.schema.create_vertex_type("Badge")
+        self.graph_db.schema.create_property("Badge", "Id", "INTEGER")
+        self.graph_db.schema.create_property("Badge", "Name", "STRING")
+        self.graph_db.schema.create_property("Badge", "Date", "DATETIME")
+        self.graph_db.schema.create_property("Badge", "Class", "INTEGER")
+        print("    ✓ Badge (Id, Name, Date, Class)")
 
-            # Comment vertex
-            self.graph_db.schema.create_vertex_type("Comment")
-            self.graph_db.schema.create_property("Comment", "Id", "INTEGER")
-            self.graph_db.schema.create_property("Comment", "Text", "STRING")
-            self.graph_db.schema.create_property("Comment", "Score", "INTEGER")
-            self.graph_db.schema.create_property("Comment", "CreationDate", "DATETIME")
-            # Vector embedding for semantic search (Phase 3)
-            self.graph_db.schema.create_property(
-                "Comment", "embedding", "ARRAY_OF_FLOATS"
-            )
-            self.graph_db.schema.create_property("Comment", "vector_id", "STRING")
-            print("    ✓ Comment (Id, Text, Score, CreationDate)")
+        # Comment vertex
+        self.graph_db.schema.create_vertex_type("Comment")
+        self.graph_db.schema.create_property("Comment", "Id", "INTEGER")
+        self.graph_db.schema.create_property("Comment", "Text", "STRING")
+        self.graph_db.schema.create_property("Comment", "Score", "INTEGER")
+        self.graph_db.schema.create_property("Comment", "CreationDate", "DATETIME")
+        # Vector embedding for semantic search (Phase 3)
+        self.graph_db.schema.create_property("Comment", "embedding", "ARRAY_OF_FLOATS")
+        self.graph_db.schema.create_property("Comment", "vector_id", "STRING")
+        print("    ✓ Comment (Id, Text, Score, CreationDate)")
 
-            # Create edge types
-            print("\n  Creating edge types...")
+        # Create edge types
+        print("\n  Creating edge types...")
 
-            # User -> Question (ASKED)
-            self.graph_db.schema.create_edge_type("ASKED")
-            self.graph_db.schema.create_property("ASKED", "CreationDate", "DATETIME")
-            print("    ✓ ASKED (User -> Question, with CreationDate)")
+        # User -> Question (ASKED)
+        self.graph_db.schema.create_edge_type("ASKED")
+        self.graph_db.schema.create_property("ASKED", "CreationDate", "DATETIME")
+        print("    ✓ ASKED (User -> Question, with CreationDate)")
 
-            # User -> Answer (ANSWERED)
-            self.graph_db.schema.create_edge_type("ANSWERED")
-            self.graph_db.schema.create_property("ANSWERED", "CreationDate", "DATETIME")
-            print("    ✓ ANSWERED (User -> Answer, with CreationDate)")
+        # User -> Answer (ANSWERED)
+        self.graph_db.schema.create_edge_type("ANSWERED")
+        self.graph_db.schema.create_property("ANSWERED", "CreationDate", "DATETIME")
+        print("    ✓ ANSWERED (User -> Answer, with CreationDate)")
 
-            # Question -> Answer (HAS_ANSWER)
-            self.graph_db.schema.create_edge_type("HAS_ANSWER")
-            print("    ✓ HAS_ANSWER (Question -> Answer)")
+        # Question -> Answer (HAS_ANSWER)
+        self.graph_db.schema.create_edge_type("HAS_ANSWER")
+        print("    ✓ HAS_ANSWER (Question -> Answer)")
 
-            # Question -> Answer (ACCEPTED_ANSWER, specific answer)
-            self.graph_db.schema.create_edge_type("ACCEPTED_ANSWER")
-            print("    ✓ ACCEPTED_ANSWER (Question -> Answer)")
+        # Question -> Answer (ACCEPTED_ANSWER, specific answer)
+        self.graph_db.schema.create_edge_type("ACCEPTED_ANSWER")
+        print("    ✓ ACCEPTED_ANSWER (Question -> Answer)")
 
-            # Question -> Tag (TAGGED_WITH)
-            self.graph_db.schema.create_edge_type("TAGGED_WITH")
-            print("    ✓ TAGGED_WITH (Question -> Tag)")
+        # Question -> Tag (TAGGED_WITH)
+        self.graph_db.schema.create_edge_type("TAGGED_WITH")
+        print("    ✓ TAGGED_WITH (Question -> Tag)")
 
-            # Comment -> Post (COMMENTED_ON, to Question or Answer)
-            self.graph_db.schema.create_edge_type("COMMENTED_ON")
-            self.graph_db.schema.create_property(
-                "COMMENTED_ON", "CreationDate", "DATETIME"
-            )
-            self.graph_db.schema.create_property("COMMENTED_ON", "Score", "INTEGER")
-            print(
-                "    ✓ COMMENTED_ON (Comment -> Question/Answer, with CreationDate, Score)"
-            )
+        # Comment -> Post (COMMENTED_ON, to Question or Answer)
+        self.graph_db.schema.create_edge_type("COMMENTED_ON")
+        self.graph_db.schema.create_property("COMMENTED_ON", "CreationDate", "DATETIME")
+        self.graph_db.schema.create_property("COMMENTED_ON", "Score", "INTEGER")
+        print(
+            "    ✓ COMMENTED_ON (Comment -> Question/Answer, with CreationDate, Score)"
+        )
 
-            # User -> Badge (EARNED)
-            self.graph_db.schema.create_edge_type("EARNED")
-            self.graph_db.schema.create_property("EARNED", "Date", "DATETIME")
-            self.graph_db.schema.create_property("EARNED", "Class", "INTEGER")
-            print("    ✓ EARNED (User -> Badge, with Date, Class)")
+        # User -> Badge (EARNED)
+        self.graph_db.schema.create_edge_type("EARNED")
+        self.graph_db.schema.create_property("EARNED", "Date", "DATETIME")
+        self.graph_db.schema.create_property("EARNED", "Class", "INTEGER")
+        print("    ✓ EARNED (User -> Badge, with Date, Class)")
 
-            # Post -> Post (LINKED_TO, via PostLink)
-            self.graph_db.schema.create_edge_type("LINKED_TO")
-            self.graph_db.schema.create_property("LINKED_TO", "LinkTypeId", "INTEGER")
-            self.graph_db.schema.create_property(
-                "LINKED_TO", "CreationDate", "DATETIME"
-            )
-            print("    ✓ LINKED_TO (Post -> Post, with LinkTypeId, CreationDate)")
+        # Post -> Post (LINKED_TO, via PostLink)
+        self.graph_db.schema.create_edge_type("LINKED_TO")
+        self.graph_db.schema.create_property("LINKED_TO", "LinkTypeId", "INTEGER")
+        self.graph_db.schema.create_property("LINKED_TO", "CreationDate", "DATETIME")
+        print("    ✓ LINKED_TO (Post -> Post, with LinkTypeId, CreationDate)")
 
         print("\n  ✅ Vertex and edge types created")
         print("     • 6 vertex types: User, Question, Answer, Tag, Badge, Comment")

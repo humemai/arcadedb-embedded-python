@@ -11,8 +11,8 @@ from arcadedb_embedded.graph import Document, Edge, Vertex
 def test_vertex_wrapper_creation(temp_db_path):
     """Test creating vertices using Python wrappers."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Person")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Person")
 
         with db.transaction():
             # Create vertex using db.new_vertex() - should return Vertex wrapper
@@ -30,8 +30,8 @@ def test_vertex_wrapper_creation(temp_db_path):
 def test_document_wrapper_creation(temp_db_path):
     """Test creating documents using Python wrappers."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_document_type("Task")
+        # Schema operations are auto-transactional
+        db.schema.create_document_type("Task")
 
         with db.transaction():
             # Create document using db.new_document() - should return Document wrapper
@@ -51,9 +51,9 @@ def test_document_wrapper_creation(temp_db_path):
 def test_new_edge_pythonic_method(temp_db_path):
     """Test new_edge() Pythonic method with keyword arguments."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Person")
-            db.schema.create_edge_type("Knows")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Person")
+        db.schema.create_edge_type("Knows")
 
         with db.transaction():
             alice = db.new_vertex("Person")
@@ -75,8 +75,8 @@ def test_new_edge_pythonic_method(temp_db_path):
 def test_get_vertex_from_query_results(temp_db_path):
     """Test .get_vertex() returns proper Vertex wrapper."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("City")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("City")
 
         with db.transaction():
             db.command(
@@ -107,9 +107,9 @@ def test_get_vertex_from_query_results(temp_db_path):
 def test_get_edge_from_query_results(temp_db_path):
     """Test .get_edge() returns proper Edge wrapper."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Person")
-            db.schema.create_edge_type("Friends")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Person")
+        db.schema.create_edge_type("Friends")
 
         with db.transaction():
             alice = db.new_vertex("Person")
@@ -134,9 +134,9 @@ def test_get_edge_from_query_results(temp_db_path):
 def test_get_element_generic_wrapper(temp_db_path):
     """Test .get_element() returns appropriate wrapper type."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Node")
-            db.schema.create_document_type("Doc")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Node")
+        db.schema.create_document_type("Doc")
 
         with db.transaction():
             # Create vertex
@@ -161,10 +161,10 @@ def test_get_element_generic_wrapper(temp_db_path):
 def test_lookup_by_key_returns_wrapper(temp_db_path):
     """Test lookup_by_key() returns proper Python wrapper."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("User")
-            db.schema.create_property("User", "username", "STRING")
-            db.schema.create_index("User", ["username"], unique=True)
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("User")
+        db.schema.create_property("User", "username", "STRING")
+        db.schema.create_index("User", ["username"], unique=True)
 
         with db.transaction():
             user = db.new_vertex("User")
@@ -187,10 +187,10 @@ def test_lookup_by_key_returns_wrapper(temp_db_path):
 def test_document_wrap_static_method(temp_db_path):
     """Test Document.wrap() static method for automatic type detection."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Person")
-            db.schema.create_edge_type("Knows")
-            db.schema.create_document_type("Note")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Person")
+        db.schema.create_edge_type("Knows")
+        db.schema.create_document_type("Note")
 
         with db.transaction():
             # Create different types
@@ -228,8 +228,8 @@ def test_document_wrap_static_method(temp_db_path):
 def test_wrapper_delete_method(temp_db_path):
     """Test delete() method on wrappers."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("TempNode")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("TempNode")
 
         with db.transaction():
             node = db.new_vertex("TempNode")
@@ -253,8 +253,8 @@ def test_wrapper_delete_method(temp_db_path):
 def test_wrapper_modify_method(temp_db_path):
     """Test modify() method returns mutable version."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Config")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Config")
 
         with db.transaction():
             config = db.new_vertex("Config")
@@ -278,9 +278,9 @@ def test_wrapper_modify_method(temp_db_path):
 def test_no_bidirectional_parameter(temp_db_path):
     """Test that bidirectional parameter is no longer used."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Node")
-            db.schema.create_edge_type("Link")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Node")
+        db.schema.create_edge_type("Link")
 
         with db.transaction():
             node1 = db.new_vertex("Node").set("id", 1).save()
@@ -305,8 +305,8 @@ def test_no_bidirectional_parameter(temp_db_path):
 def test_wrapper_identity_methods(temp_db_path):
     """Test wrapper identity-related methods."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Item")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Item")
 
         with db.transaction():
             item = db.new_vertex("Item")
@@ -325,8 +325,8 @@ def test_wrapper_identity_methods(temp_db_path):
 def test_wrapper_property_methods(temp_db_path):
     """Test wrapper property-related methods."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_document_type("Product")
+        # Schema operations are auto-transactional
+        db.schema.create_document_type("Product")
 
         with db.transaction():
             product = db.new_document("Product")
@@ -356,9 +356,9 @@ def test_wrapper_property_methods(temp_db_path):
 def test_vertex_delete_cascade(temp_db_path):
     """Test that deleting a vertex cascades to delete its edges."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Node")
-            db.schema.create_edge_type("Links")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Node")
+        db.schema.create_edge_type("Links")
 
         # Create vertices and edge
         with db.transaction():
@@ -388,9 +388,9 @@ def test_vertex_delete_cascade(temp_db_path):
 def test_edge_delete_leaves_vertices(temp_db_path):
     """Test that deleting an edge leaves its vertices intact."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Node")
-            db.schema.create_edge_type("Links")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Node")
+        db.schema.create_edge_type("Links")
 
         # Create vertices and edge
         with db.transaction():
@@ -430,9 +430,8 @@ def test_edge_delete_leaves_vertices(temp_db_path):
 def test_document_delete_sql(temp_db_path):
     """Test deleting documents using SQL DELETE."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            # Create a document type for testing
-            db.schema.create_document_type("Record")
+        # Schema operations are auto-transactional
+        db.schema.create_document_type("Record")
 
         # Create document
         with db.transaction():
@@ -456,8 +455,8 @@ def test_document_delete_sql(temp_db_path):
 def test_delete_via_wrapper_on_fresh_lookup(temp_db_path):
     """Test that .delete() works on objects from lookup_by_rid()."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_vertex_type("Item")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Item")
 
         # Create item
         with db.transaction():

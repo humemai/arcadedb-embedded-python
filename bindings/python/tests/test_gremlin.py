@@ -13,10 +13,9 @@ from tests.conftest import has_gremlin_support
 def test_gremlin_queries(temp_db_path):
     """Test Gremlin query language support."""
     with arcadedb.create_database(temp_db_path) as db:
-        # Create graph schema
-        with db.transaction():
-            db.schema.create_vertex_type("Person")
-            db.schema.create_edge_type("knows")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("Person")
+        db.schema.create_edge_type("knows")
 
         # Insert data using Java API
         with db.transaction():
@@ -59,10 +58,9 @@ def test_gremlin_queries(temp_db_path):
 def test_gremlin_traversal(temp_db_path):
     """Test Gremlin graph traversal."""
     with arcadedb.create_database(temp_db_path) as db:
-        # Create graph
-        with db.transaction():
-            db.schema.create_vertex_type("City")
-            db.schema.create_edge_type("road")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("City")
+        db.schema.create_edge_type("road")
 
         # Add cities using Java API
         with db.transaction():

@@ -94,7 +94,7 @@ arcadedb/bindings/python/
 │       ├── results.py             # Query result handling
 │       ├── transactions.py        # Transaction management
 │       ├── vector.py              # Vector search support
-│       ├── importer.py            # Data import (CSV, XML)
+│       ├── importer.py            # Data import (CSV)
 │       ├── exporter.py            # Data export (JSONL, GraphML, etc.)
 │       ├── batch.py               # Batch operations
 │       ├── async_executor.py      # Async query execution
@@ -257,8 +257,8 @@ def test_create_database(tmp_path):
 
     try:
         # Test operations
-        with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE User")
+        # Schema operations are auto-transactional
+        db.schema.create_vertex_type("User")
 
         # Verify
         result = db.query("sql", "SELECT FROM schema:types WHERE name = 'User'")
@@ -272,13 +272,13 @@ def test_transaction_rollback(tmp_path):
     db = arcadedb.create_database(str(db_path))
 
     try:
-        with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE User")
+        db.schema.create_vertex_type("User")
 
         # Should rollback
         with pytest.raises(Exception):
             with db.transaction():
-                db.command("sql", "INSERT INTO User SET name = 'Alice'")
+                user = db.new_vertex("User")
+                user.set("name", "Alice").save()
                 raise Exception("Force rollback")
 
         # Verify rollback

@@ -18,9 +18,9 @@ def test_numpy_array_conversion_in_command(temp_db):
     """Test automatic conversion of NumPy arrays in db.command()."""
     db = temp_db
 
-    with db.transaction():
-        db.schema.create_vertex_type("VectorData")
-        db.schema.create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
+    # Schema operations are auto-transactional
+    db.schema.create_vertex_type("VectorData")
+    db.schema.create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
 
     # Create a NumPy array
     vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
@@ -45,11 +45,12 @@ def test_numpy_array_conversion_in_query(temp_db):
     """Test automatic conversion of NumPy arrays in db.query()."""
     db = temp_db
 
-    with db.transaction():
-        db.schema.create_vertex_type("VectorData")
-        db.schema.create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
+    # Schema operations are auto-transactional
+    db.schema.create_vertex_type("VectorData")
+    db.schema.create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
 
-        # Insert data manually first
+    # Insert data manually first
+    with db.transaction():
         db.command("sql", "INSERT INTO VectorData SET vector = ?", [0.1, 0.2, 0.3])
 
     vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
@@ -66,11 +67,11 @@ def test_batch_context_numpy_support(temp_db):
     """Test automatic conversion of NumPy arrays in BatchContext."""
     db = temp_db
 
-    with db.transaction():
-        db.schema.create_vertex_type("VectorData")
-        db.schema.create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
-        db.schema.create_document_type("DocData")
-        db.schema.create_property("DocData", "embedding", "ARRAY_OF_FLOATS")
+    # Schema operations are auto-transactional
+    db.schema.create_vertex_type("VectorData")
+    db.schema.create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
+    db.schema.create_document_type("DocData")
+    db.schema.create_property("DocData", "embedding", "ARRAY_OF_FLOATS")
 
     vec1 = np.array([0.1, 0.2, 0.3], dtype=np.float32)
     vec2 = np.array([0.4, 0.5, 0.6], dtype=np.float32)
