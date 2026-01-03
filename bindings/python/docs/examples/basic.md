@@ -33,37 +33,34 @@ Learn how to:
 ```python
 import arcadedb_embedded as arcadedb
 
-# Create/open a database
-db = arcadedb.create_database("mydb", create_if_not_exists=True)
-
-# Use the database
-with db.transaction() as tx:
+# Create a new database with context manager (auto-closes)
+with arcadedb.create_database("mydb", create_if_not_exists=True) as db:
     # Your operations here
     pass
 
-# Close when done
-db.close()
+# Or open existing database
+with arcadedb.open_database("./mydb") as db:
+    # Perform operations
+    pass
 ```
 
 ### Basic Document Operations
 
 ```python
-# Create document type
-with db.transaction() as tx:
-    db.command("sql", "CREATE DOCUMENT TYPE Product")
+import arcadedb_embedded as arcadedb
 
-# Insert document
-with db.transaction() as tx:
-    result = db.command("sql", """
-        INSERT INTO Product SET
-            name = 'Laptop',
-            price = 999.99,
-            inStock = true
-    """)
+with arcadedb.create_database("mydb") as db:
+    # Create document type (schema ops are auto-transactional)
+    db.schema.create_document_type("Product")
 
-# Query documents
-with db.transaction() as tx:
-    results = db.query("sql", "SELECT FROM Product WHERE price < 1000")
+    # Insert document
+    with db.transaction():
+        product = db.new_document("Product")
+        product.set("name", "Laptop").set("price", 999.99).set("inStock", True)
+        product.save()
+
+    # Query documents (reads don't need transaction)
+    results = db.query("SELECT FROM Product WHERE price < 1000")
     for record in results:
         print(record.get("name"), record.get("price"))
 ```
@@ -71,28 +68,32 @@ with db.transaction() as tx:
 ### Basic Graph Operations
 
 ```python
-# Create vertex types
-with db.transaction() as tx:
-    db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE Knows")
+import arcadedb_embedded as arcadedb
 
-# Create vertices and edges
-with db.transaction() as tx:
-    alice = db.command("sql", "CREATE VERTEX Person SET name = 'Alice'")[0]
-    bob = db.command("sql", "CREATE VERTEX Person SET name = 'Bob'")[0]
+with arcadedb.create_database("mydb") as db:
+    # Create vertex types (schema ops are auto-transactional)
+    db.schema.create_vertex_type("Person")
+    db.schema.create_edge_type("Knows")
 
-    db.command("sql", f"""
-        CREATE EDGE Knows
-        FROM {alice.get_identity()}
-        TO {bob.get_identity()}
-    """)
+    # Create vertices and edges
+    with db.transaction():
+        alice = db.new_vertex("Person")
+        alice.set("name", "Alice").save()
 
-# Traverse graph (Cypher)
-with db.transaction() as tx:
-    results = db.query("cypher", """
+        bob = db.new_vertex("Person")
+        bob.set("name", "Bob").save()
+
+        edge = alice.new_edge("Knows", bob)
+        edge.save()
+
+    # Traverse graph (reads don't need transaction)
+    results = db.query("""
         MATCH (p:Person)-[:Knows]->(friend:Person)
         RETURN p.name, friend.name
     """)
+
+    for record in results:
+        print(record)
 ```
 
 ## More Examples

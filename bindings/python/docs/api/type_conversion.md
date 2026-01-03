@@ -149,10 +149,11 @@ java_int = convert_python_to_java(42)          # Java Integer
 # Large integers → Long
 java_long = convert_python_to_java(2**40)     # Java Long
 
-# Reading integers
-vertex = db.new_vertex("User")
-vertex.set("age", 30)                          # Python int → Java Integer
-age = vertex.get("age")                        # Java Integer → Python int
+# Reading integers (requires an active transaction)
+with db.transaction():
+    vertex = db.new_vertex("User")
+    vertex.set("age", 30)                      # Python int → Java Integer
+    age = vertex.get("age")                    # Java Integer → Python int
 ```
 
 ---
@@ -169,13 +170,14 @@ java_double = convert_python_to_java(3.14159)
 # Decimal → BigDecimal (for precision)
 java_decimal = convert_python_to_java(Decimal("123.456789"))
 
-# Reading
-vertex = db.new_vertex("Product")
-vertex.set("price", 19.99)                     # float → Double
-vertex.set("tax", Decimal("1.23"))             # Decimal → BigDecimal
+# Reading (requires an active transaction)
+with db.transaction():
+    vertex = db.new_vertex("Product")
+    vertex.set("price", 19.99)                 # float → Double
+    vertex.set("tax", Decimal("1.23"))         # Decimal → BigDecimal
 
-price = vertex.get("price")                    # Double → float
-tax = vertex.get("tax")                        # BigDecimal → Decimal
+    price = vertex.get("price")                # Double → float
+    tax = vertex.get("tax")                    # BigDecimal → Decimal
 ```
 
 ---
@@ -183,14 +185,15 @@ tax = vertex.get("tax")                        # BigDecimal → Decimal
 ### Strings
 
 ```python
-# String conversion (mostly transparent)
-vertex = db.new_vertex("User")
-vertex.set("name", "Alice")                    # str → String
-name = vertex.get("name")                      # String → str
+# String conversion (requires an active transaction)
+with db.transaction():
+    vertex = db.new_vertex("User")
+    vertex.set("name", "Alice")                # str → String
+    name = vertex.get("name")                  # String → str
 
-# Unicode handling
-vertex.set("emoji", "Hello 👋 World 🌍")
-emoji = vertex.get("emoji")                    # Full Unicode support
+    # Unicode handling
+    vertex.set("emoji", "Hello 👋 World 🌍")
+    emoji = vertex.get("emoji")                # Full Unicode support
 ```
 
 ---
@@ -200,20 +203,21 @@ emoji = vertex.get("emoji")                    # Full Unicode support
 ```python
 from datetime import datetime, date, time
 
-# datetime → LocalDateTime
-vertex = db.new_vertex("Event")
-vertex.set("timestamp", datetime.now())
+# datetime → LocalDateTime (requires an active transaction)
+with db.transaction():
+    vertex = db.new_vertex("Event")
+    vertex.set("timestamp", datetime.now())
 
-# date → LocalDate
-vertex.set("birthDate", date(1990, 1, 15))
+    # date → LocalDate
+    vertex.set("birthDate", date(1990, 1, 15))
 
-# time → LocalTime
-vertex.set("startTime", time(14, 30, 0))
+    # time → LocalTime
+    vertex.set("startTime", time(14, 30, 0))
 
-# Reading back
-timestamp = vertex.get("timestamp")            # datetime
-birth_date = vertex.get("birthDate")           # date
-start_time = vertex.get("startTime")           # time
+    # Reading back
+    timestamp = vertex.get("timestamp")        # datetime
+    birth_date = vertex.get("birthDate")       # date
+    start_time = vertex.get("startTime")       # time
 ```
 
 ---
@@ -221,14 +225,15 @@ start_time = vertex.get("startTime")           # time
 ### Binary Data
 
 ```python
-# bytes → byte[]
+# bytes → byte[] (requires an active transaction)
 binary_data = b"Hello World"
-vertex = db.new_vertex("File")
-vertex.set("data", binary_data)
+with db.transaction():
+    vertex = db.new_vertex("File")
+    vertex.set("data", binary_data)
 
-# Reading back
-data = vertex.get("data")                      # bytes
-print(data.decode("utf-8"))                    # "Hello World"
+    # Reading back
+    data = vertex.get("data")                  # bytes
+    print(data.decode("utf-8"))                # "Hello World"
 ```
 
 ---
@@ -236,18 +241,19 @@ print(data.decode("utf-8"))                    # "Hello World"
 ### Lists and Sets
 
 ```python
-# list → ArrayList
-vertex = db.new_vertex("User")
-vertex.set("tags", ["python", "java", "database"])
-tags = vertex.get("tags")                      # list
+# list → ArrayList (requires an active transaction)
+with db.transaction():
+    vertex = db.new_vertex("User")
+    vertex.set("tags", ["python", "java", "database"])
+    tags = vertex.get("tags")                  # list
 
-# set → HashSet
-vertex.set("roles", {"admin", "user"})
-roles = vertex.get("roles")                    # set
+    # set → HashSet
+    vertex.set("roles", {"admin", "user"})
+    roles = vertex.get("roles")                # set
 
-# Nested lists
-vertex.set("matrix", [[1, 2], [3, 4]])
-matrix = vertex.get("matrix")                  # [[1, 2], [3, 4]]
+    # Nested lists
+    vertex.set("matrix", [[1, 2], [3, 4]])
+    matrix = vertex.get("matrix")              # [[1, 2], [3, 4]]
 ```
 
 ---
@@ -255,21 +261,22 @@ matrix = vertex.get("matrix")                  # [[1, 2], [3, 4]]
 ### Dictionaries (Maps)
 
 ```python
-# dict → HashMap
-vertex = db.new_vertex("User")
-vertex.set("profile", {
-    "firstName": "Alice",
-    "lastName": "Smith",
-    "address": {
-        "city": "New York",
-        "zip": "10001"
-    }
-})
+# dict → HashMap (requires an active transaction)
+with db.transaction():
+    vertex = db.new_vertex("User")
+    vertex.set("profile", {
+        "firstName": "Alice",
+        "lastName": "Smith",
+        "address": {
+            "city": "New York",
+            "zip": "10001"
+        }
+    })
 
-# Reading back
-profile = vertex.get("profile")                # dict
-print(profile["firstName"])                    # "Alice"
-print(profile["address"]["city"])              # "New York"
+    # Reading back
+    profile = vertex.get("profile")            # dict
+    print(profile["firstName"])                # "Alice"
+    print(profile["address"]["city"])          # "New York"
 ```
 
 ## Query Parameter Conversion
@@ -294,18 +301,19 @@ for result in results:
 ## Collection Type Preservation
 
 ```python
-# Lists preserve order
-vertex = db.new_vertex("Sequence")
-vertex.set("numbers", [3, 1, 4, 1, 5, 9])
-numbers = vertex.get("numbers")                # [3, 1, 4, 1, 5, 9]
+# Lists preserve order (requires an active transaction)
+with db.transaction():
+    vertex = db.new_vertex("Sequence")
+    vertex.set("numbers", [3, 1, 4, 1, 5, 9])
+    numbers = vertex.get("numbers")            # [3, 1, 4, 1, 5, 9]
 
-# Sets remove duplicates
-vertex.set("unique", {3, 1, 4, 1, 5, 9})
-unique = vertex.get("unique")                  # {1, 3, 4, 5, 9}
+    # Sets remove duplicates
+    vertex.set("unique", {3, 1, 4, 1, 5, 9})
+    unique = vertex.get("unique")              # {1, 3, 4, 5, 9}
 
-# Dicts preserve keys
-vertex.set("mapping", {"a": 1, "b": 2, "c": 3})
-mapping = vertex.get("mapping")                # {"a": 1, "b": 2, "c": 3}
+    # Dicts preserve keys
+    vertex.set("mapping", {"a": 1, "b": 2, "c": 3})
+    mapping = vertex.get("mapping")            # {"a": 1, "b": 2, "c": 3}
 ```
 
 ## Complete Example
@@ -316,11 +324,10 @@ from datetime import datetime, date
 from decimal import Decimal
 
 # Create database
-db = arcadedb.create_database("./type_demo", create_if_not_exists=True)
+db = arcadedb.create_database("./type_demo")
 
-# Create schema
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE Product")
+# Create schema (auto-transactional)
+db.schema.create_vertex_type("Product")
 
 # Test all type conversions
 with db.transaction():
@@ -391,9 +398,10 @@ from arcadedb_embedded.type_conversion import convert_python_to_java, convert_ja
 python_data = {"name": "Alice", "age": 30}
 java_map = convert_python_to_java(python_data)
 
-# Use Java object directly
-java_record = db.new_vertex("User")._java_object
-java_record.set("profile", java_map)
+# Use Java object directly (requires an active transaction)
+with db.transaction():
+    java_record = db.new_vertex("User")._java_object
+    java_record.set("profile", java_map)
 
 # Manual Java → Python
 java_property = java_record.get("profile")
