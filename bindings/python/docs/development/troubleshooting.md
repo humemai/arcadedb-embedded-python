@@ -491,19 +491,23 @@ db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
 1. **Check Function Name Case**:
    ```python
    # Wrong
-   db.command("sql", "INSERT INTO Product SET created = SYSDATE()")
+   with db.transaction():
+       db.command("sql", "INSERT INTO Product SET created = SYSDATE()")
 
    # Correct
-   db.command("sql", "INSERT INTO Product SET created = sysdate()")
+   with db.transaction():
+       db.command("sql", "INSERT INTO Product SET created = sysdate()")
    ```
 
 2. **Use Built-in Functions**:
    ```python
    # Date/time
-   db.command("sql", "INSERT INTO Event SET timestamp = sysdate()")
+   with db.transaction():
+       db.command("sql", "INSERT INTO Event SET timestamp = sysdate()")
 
    # UUID
-   db.command("sql", "INSERT INTO User SET id = uuid()")
+   with db.transaction():
+       db.command("sql", "INSERT INTO User SET id = uuid()")
    ```
 
 ---
@@ -514,7 +518,7 @@ db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
 
 **Solution**: Use single-line queries or proper escaping:
 ```python
-# ✅ Single line
+# ✅ Single line (wrap in a transaction when executing)
 query = "INSERT INTO Product SET name = 'test', created_at = sysdate()"
 
 # ✅ Multi-line with proper formatting

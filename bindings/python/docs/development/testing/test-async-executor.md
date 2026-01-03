@@ -30,6 +30,7 @@ Basic async record creation with 100 vertices.
 **Pattern:**
 ```python
 async_exec = db.async_executor()
+async_exec.set_commit_every(25)  # Batch writes into transactions
 
 for i in range(100):
     vertex = db.new_vertex("User")
@@ -78,6 +79,7 @@ Tests parallel worker configuration.
 ```python
 async_exec = db.async_executor()
 async_exec.set_parallel_level(4)
+async_exec.set_commit_every(100)
 
 for i in range(1000):
     vertex = db.new_vertex("Product")
@@ -129,6 +131,7 @@ Tests pending operation tracking.
 **Pattern:**
 ```python
 async_exec = db.async_executor()
+async_exec.set_commit_every(25)
 
 # Queue operations
 for i in range(500):
@@ -193,6 +196,7 @@ def track_operation(record):
 
 async_exec = db.async_executor()
 async_exec.set_global_callback(track_operation)
+async_exec.set_commit_every(25)
 
 # All operations invoke callback
 for i in range(50):
@@ -231,6 +235,7 @@ sync_time = time.time() - start
 start = time.time()
 async_exec = db.async_executor()
 async_exec.set_parallel_level(8)
+async_exec.set_commit_every(250)
 for i in range(1000):
     vertex = db.new_vertex("User")
     vertex.set("userId", i)
