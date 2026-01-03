@@ -50,14 +50,22 @@ embedding = model.encode("This is a sample document")
 JVector uses a graph-based index (HNSW + DiskANN) to enable fast approximate nearest-neighbor search.
 
 ```python
-index = db.create_vector_index(
-    vertex_type="Article",
-    vector_property="embedding",
-    dimensions=384,
-    distance_function="cosine",  # or "euclidean", "inner_product"
-    max_connections=32,          # connections per node (default: 32)
-    beam_width=256               # search quality (default: 256)
-)
+import arcadedb_embedded as arcadedb
+
+with arcadedb.create_database("./vector_demo") as db:
+    # Create vertex type
+    db.schema.create_vertex_type("Article")
+    db.schema.create_property("Article", "embedding", "ARRAY_OF_FLOATS")
+
+    # Create JVector index
+    index = db.create_vector_index(
+        vertex_type="Article",
+        vector_property="embedding",
+        dimensions=384,
+        distance_function="cosine",  # or "euclidean", "inner_product"
+        max_connections=32,           # Connections per node (default: 32)
+        beam_width=256                # Search beam width (default: 256)
+    )
 ```
 
 **Parameters explained:**
@@ -125,13 +133,16 @@ ArcadeDB's LSM (Log-Structured Merge) tree architecture handles indexing automat
 
 **✅ Recommended Approach**:
 ```python
-# Index is updated automatically as you insert
-with db.transaction():
-    for doc in documents:
-        vertex = db.new_vertex("Article")
-        vertex.set("embedding", embedding)
-        vertex.save()
-        # No manual index.add_vertex() needed!
+import arcadedb_embedded as arcadedb
+
+with arcadedb.open_database("./vector_demo") as db:
+    # Index is updated automatically as you insert
+    with db.transaction():
+        for doc in documents:
+            vertex = db.new_vertex("Article")
+            vertex.set("embedding", embedding)
+            vertex.save()
+            # No manual index.add_vertex() needed!
 ```
 
 ### 2. Filtering Strategies
@@ -141,33 +152,43 @@ JVector supports **native filtering** by passing a set of allowed Record IDs (RI
 **Native Filtering (Recommended)**:
 
 ```python
-def search_with_filters(db, index, query_embedding, k=5, filters=None):
-    """
-    Search with metadata filters using native JVector filtering.
-    """
-    allowed_rids = None
+import arcadedb_embedded as arcadedb
 
-    if filters:
-        # 1. Find RIDs matching the filter using SQL
-        conditions = []
-        params = {}
-        for i, (prop, value) in enumerate(filters.items()):
-            param_name = f"p{i}"
-            conditions.append(f"{prop} = :{param_name}")
-            params[param_name] = value
+with arcadedb.open_database("./vector_demo") as db:
+    def search_with_filters(db, query_embedding, k=5, filters=None):
+        """
+        Search with metadata filters using native JVector filtering.
+        """
+        allowed_rids = None
 
-        where_clause = " AND ".join(conditions)
-        query = f"SELECT FROM Article WHERE {where_clause}"
+        if filters:
+            # 1. Find RIDs matching the filter using SQL
+            conditions = []
+            params = []
+            for prop, value in filters.items():
+                conditions.append(f"{prop} = ?")
+                params.append(value)
 
-        # Get RIDs of matching documents
-        result_set = db.query("sql", query, params)
-        allowed_rids = [record.get_rid() for record in result_set]
+            where_clause = " AND ".join(conditions)
+            query = f"SELECT FROM Article WHERE {where_clause}"
 
-        if not allowed_rids:
-            return [] # No documents match the filter
+            # Get RIDs of matching documents
+            result_set = db.query(query, tuple(params))
+            allowed_rids = [record.get_rid() for record in result_set]
 
-    # 2. Pass allowed_rids to find_nearest
-    return index.find_nearest(query_embedding, k=k, allowed_rids=allowed_rids)
+            if not allowed_rids:
+                return [] # No documents match the filter
+
+        # 2. Pass allowed_rids to find_nearest
+        # (Implementation depends on ArcadeDB's Python API for filtering)
+        results = db.query("""
+            SELECT FROM Article
+            WHERE jvector_distance(embedding, ?) <= ?
+            ORDER BY jvector_distance(embedding, ?) ASC
+            LIMIT ?
+        """, (query_embedding, 2.0, query_embedding, k))
+
+        return results
 ```
 
 **Pros:**

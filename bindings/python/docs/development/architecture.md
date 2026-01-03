@@ -46,7 +46,7 @@ arcadedb_embedded/
 
 **`importer.py`**
 - `Importer`: Data import orchestration
-- Format handlers (CSV, XML, ArcadeDB JSONL)
+- Format handlers (CSV, ArcadeDB JSONL)
 - Batch processing
 - Type inference
 
