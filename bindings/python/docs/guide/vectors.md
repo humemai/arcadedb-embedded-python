@@ -35,30 +35,7 @@ pip install arcadedb-embedded sentence-transformers
 ```python
 import arcadedb_embedded as arcadedb
 from arcadedb_embedded import to_java_float_array
-
-# Create database and schema
-db = arcadedb.create_database("./vector_demo")
-
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE Document")
-    db.command("sql", "CREATE PROPERTY Document.text STRING")
-    db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
-
-# Create vector index
-index = db.create_vector_index(
-    vertex_type="Document",
-    vector_property="embedding",
-    dimensions=384,  # Match your model
-    distance_function="cosine"
-)
-```
-
-### 3. Index Documents
-
-```python
 from sentence_transformers import SentenceTransformer
-
-model = SentenceTransformer('all-MiniLM-L6-v2')
 
 documents = [
     "Python is a programming language",
@@ -66,32 +43,39 @@ documents = [
     "Machine learning uses neural networks"
 ]
 
-with db.transaction():
-    for doc_text in documents:
-        # Generate embedding
-        embedding = model.encode(doc_text)
-
-        # Create vertex
-        vertex = db.new_vertex("Document")
-        vertex.set("text", doc_text)
-        vertex.set("embedding", to_java_float_array(embedding))
-        vertex.save()
-
-        # Note: LSM vector index automatically indexes new records
-```
-
-### 4. Search
-
-```python
 query = "What is Python?"
-query_embedding = model.encode(query)
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
-results = index.find_nearest(query_embedding, k=3)
+with arcadedb.create_database("./vector_demo") as db:
+    db.schema.create_vertex_type("Document")
+    db.schema.create_property("Document", "text", "STRING")
+    db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
 
-for vertex, distance in results:
-    text = vertex.get("text")
-    similarity = 1 - distance  # Convert distance to similarity
-    print(f"[{similarity:.3f}] {text}")
+    index = db.create_vector_index(
+        vertex_type="Document",
+        vector_property="embedding",
+        dimensions=384,  # Match your model
+        distance_function="cosine"
+    )
+
+    # Index documents
+    with db.transaction():
+        for doc_text in documents:
+            embedding = model.encode(doc_text)
+
+            vertex = db.new_vertex("Document")
+            vertex.set("text", doc_text)
+            vertex.set("embedding", to_java_float_array(embedding))
+            vertex.save()
+
+    # Search
+    query_embedding = model.encode(query)
+    results = index.find_nearest(query_embedding, k=3)
+
+    for vertex, distance in results:
+        text = vertex.get("text")
+        similarity = 1 - distance  # Convert distance to similarity
+        print(f"[{similarity:.3f}] {text}")
 ```
 
 ## Embedding Models
@@ -209,12 +193,18 @@ text_embedding = model.get_text_features(**inputs)[0].detach().numpy()
 
 **Usage:**
 ```python
-index = db.create_vector_index(
-    vertex_type="Document",
-    vector_property="embedding",
-    dimensions=384,
-    distance_function="cosine"  # Default
-)
+import arcadedb_embedded as arcadedb
+
+with arcadedb.create_database("./vector_demo") as db:
+    db.schema.create_vertex_type("Document")
+    db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
+
+    index = db.create_vector_index(
+        vertex_type="Document",
+        vector_property="embedding",
+        dimensions=384,
+        distance_function="cosine"  # Default
+    )
 ```
 
 **When to Use:**
@@ -234,12 +224,18 @@ index = db.create_vector_index(
 
 **Usage:**
 ```python
-index = db.create_vector_index(
-    vertex_type="Image",
-    vector_property="features",
-    dimensions=512,
-    distance_function="euclidean"
-)
+import arcadedb_embedded as arcadedb
+
+with arcadedb.create_database("./vector_demo") as db:
+    db.schema.create_vertex_type("Image")
+    db.schema.create_property("Image", "features", "ARRAY_OF_FLOATS")
+
+    index = db.create_vector_index(
+        vertex_type="Image",
+        vector_property="features",
+        dimensions=512,
+        distance_function="euclidean"
+    )
 ```
 
 **When to Use:**
@@ -259,12 +255,18 @@ index = db.create_vector_index(
 
 **Usage:**
 ```python
-index = db.create_vector_index(
-    vertex_type="User",
-    vector_property="preferences",
-    dimensions=128,
-    distance_function="inner_product"
-)
+import arcadedb_embedded as arcadedb
+
+with arcadedb.create_database("./vector_demo") as db:
+    db.schema.create_vertex_type("User")
+    db.schema.create_property("User", "preferences", "ARRAY_OF_FLOATS")
+
+    index = db.create_vector_index(
+        vertex_type="User",
+        vector_property="preferences",
+        dimensions=128,
+        distance_function="inner_product"
+    )
 ```
 
 **When to Use:**
@@ -279,12 +281,18 @@ index = db.create_vector_index(
 Controls connections per node in the graph. Maps to `maxConnections` in JVector.
 
 ```python
-index = db.create_vector_index(
-    vertex_type="Doc",
-    vector_property="embedding",
-    dimensions=384,
-    max_connections=32  # Number of connections (default: 32)
-)
+import arcadedb_embedded as arcadedb
+
+with arcadedb.create_database("./vector_demo") as db:
+    db.schema.create_vertex_type("Doc")
+    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+    index = db.create_vector_index(
+        vertex_type="Doc",
+        vector_property="embedding",
+        dimensions=384,
+        max_connections=32  # Number of connections (default: 32)
+    )
 ```
 
 **Trade-offs:**
@@ -307,12 +315,18 @@ index = db.create_vector_index(
 Controls search quality vs speed. Maps to `beamWidth` in JVector.
 
 ```python
-index = db.create_vector_index(
-    vertex_type="Doc",
-    vector_property="embedding",
-    dimensions=384,
-    beam_width=256  # Search candidate list size (default: 256)
-)
+import arcadedb_embedded as arcadedb
+
+with arcadedb.create_database("./vector_demo") as db:
+    db.schema.create_vertex_type("Doc")
+    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+    index = db.create_vector_index(
+        vertex_type="Doc",
+        vector_property="embedding",
+        dimensions=384,
+        beam_width=256  # Search candidate list size (default: 256)
+    )
 ```
 
 **Trade-offs:**
@@ -362,20 +376,20 @@ results = index.find_nearest(
 ### Basic Schema
 
 ```python
-with db.transaction():
-    # Vertex type for documents
-    db.command("sql", "CREATE VERTEX TYPE Document")
-    db.command("sql", "CREATE PROPERTY Document.id STRING")
-    db.command("sql", "CREATE PROPERTY Document.text STRING")
-    db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
-    db.command("sql", "CREATE INDEX ON Document (id) UNIQUE")
+import arcadedb_embedded as arcadedb
 
-# Vector index
-index = db.create_vector_index(
-    vertex_type="Document",
-    vector_property="embedding",
-    dimensions=384
-)
+with arcadedb.create_database("./vector_demo") as db:
+    db.schema.create_vertex_type("Document")
+    db.schema.create_property("Document", "id", "STRING")
+    db.schema.create_property("Document", "text", "STRING")
+    db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
+    db.schema.create_type_index("Document", ["id"], unique=True)
+
+    index = db.create_vector_index(
+        vertex_type="Document",
+        vector_property="embedding",
+        dimensions=384
+    )
 ```
 
 ---
@@ -383,25 +397,25 @@ index = db.create_vector_index(
 ### With Metadata
 
 ```python
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE Article")
-    db.command("sql", "CREATE PROPERTY Article.id STRING")
-    db.command("sql", "CREATE PROPERTY Article.title STRING")
-    db.command("sql", "CREATE PROPERTY Article.content STRING")
-    db.command("sql", "CREATE PROPERTY Article.category STRING")
-    db.command("sql", "CREATE PROPERTY Article.created_at DATETIME")
-    db.command("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
+import arcadedb_embedded as arcadedb
 
-    # Regular indexes for filtering
-    db.command("sql", "CREATE INDEX ON Article (id) UNIQUE")
-    db.command("sql", "CREATE INDEX ON Article (category) NOTUNIQUE")
+with arcadedb.create_database("./vector_demo") as db:
+    db.schema.create_vertex_type("Article")
+    db.schema.create_property("Article", "id", "STRING")
+    db.schema.create_property("Article", "title", "STRING")
+    db.schema.create_property("Article", "content", "STRING")
+    db.schema.create_property("Article", "category", "STRING")
+    db.schema.create_property("Article", "created_at", "DATETIME")
+    db.schema.create_property("Article", "embedding", "ARRAY_OF_FLOATS")
 
-# Vector index
-index = db.create_vector_index(
-    vertex_type="Article",
-    vector_property="embedding",
-    dimensions=384
-)
+    db.schema.create_type_index("Article", ["id"], unique=True)
+    db.schema.create_type_index("Article", ["category"], unique=False)
+
+    index = db.create_vector_index(
+        vertex_type="Article",
+        vector_property="embedding",
+        dimensions=384
+    )
 ```
 
 ---
@@ -409,28 +423,28 @@ index = db.create_vector_index(
 ### Multiple Vector Types
 
 ```python
-# Products with text and image embeddings
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE Product")
-    db.command("sql", "CREATE PROPERTY Product.name STRING")
-    db.command("sql", "CREATE PROPERTY Product.description STRING")
-    db.command("sql", "CREATE PROPERTY Product.text_embedding ARRAY_OF_FLOATS")
-    db.command("sql", "CREATE PROPERTY Product.image_embedding ARRAY_OF_FLOATS")
+import arcadedb_embedded as arcadedb
 
-# Separate indexes for each embedding type
-text_index = db.create_vector_index(
-    vertex_type="Product",
-    vector_property="text_embedding",
-    dimensions=384,
-    distance_function="cosine"
-)
+with arcadedb.create_database("./vector_demo") as db:
+    db.schema.create_vertex_type("Product")
+    db.schema.create_property("Product", "name", "STRING")
+    db.schema.create_property("Product", "description", "STRING")
+    db.schema.create_property("Product", "text_embedding", "ARRAY_OF_FLOATS")
+    db.schema.create_property("Product", "image_embedding", "ARRAY_OF_FLOATS")
 
-image_index = db.create_vector_index(
-    vertex_type="Product",
-    vector_property="image_embedding",
-    dimensions=512,
-    distance_function="euclidean"
-)
+    text_index = db.create_vector_index(
+        vertex_type="Product",
+        vector_property="text_embedding",
+        dimensions=384,
+        distance_function="cosine"
+    )
+
+    image_index = db.create_vector_index(
+        vertex_type="Product",
+        vector_property="image_embedding",
+        dimensions=512,
+        distance_function="euclidean"
+    )
 ```
 
 ## Search Patterns
@@ -458,16 +472,21 @@ Filter candidates *before* vector search using `allowed_rids`. This is more effi
 it ensures you get `k` results that match your criteria.
 
 ```python
-# 1. Query for matching RIDs using SQL or index lookup
-rs = db.query("sql", "SELECT @rid FROM Article WHERE category = 'Programming'")
-allowed_rids = [doc.get_rid() for doc in rs]
+import arcadedb_embedded as arcadedb
 
-# 2. Perform vector search restricted to those RIDs
-query_embedding = model.encode("python tutorial")
-results = index.find_nearest(query_embedding, k=10, allowed_rids=allowed_rids)
+with arcadedb.create_database("./vector_demo") as db:
+    # Assume schema and vector index are already created on Article.embedding
 
-for vertex, distance in results:
-    print(f"{vertex.get('title')} (distance: {distance:.4f})")
+    # 1. Query for matching RIDs using SQL or index lookup
+    rs = db.query("sql", "SELECT @rid FROM Article WHERE category = 'Programming'")
+    allowed_rids = [doc.get_rid() for doc in rs]
+
+    # 2. Perform vector search restricted to those RIDs
+    query_embedding = model.encode("python tutorial")
+    results = index.find_nearest(query_embedding, k=10, allowed_rids=allowed_rids)
+
+    for vertex, distance in results:
+        print(f"{vertex.get('title')} (distance: {distance:.4f})")
 ```
 
 **Option 2: Post-filtering**
@@ -580,18 +599,31 @@ This means the first search query might take longer than subsequent queries as i
 triggers the index build process ("warm up").
 
 ```python
-# Create index (instant)
-index = db.create_vector_index(...)
+import arcadedb_embedded as arcadedb
 
-# Add data (fast)
-# ...
+with arcadedb.create_database("./vector_demo") as db:
+    db.schema.create_vertex_type("Doc")
+    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
 
-# First query (slower - triggers index build)
-print("Warming up index...")
-index.find_nearest(query_embedding, k=1)
+    index = db.create_vector_index(
+        vertex_type="Doc",
+        vector_property="embedding",
+        dimensions=384,
+        distance_function="cosine"
+    )
 
-# Subsequent queries (fast)
-results = index.find_nearest(query_embedding, k=10)
+    # Add data (fast)
+    with db.transaction():
+        vertex = db.new_vertex("Doc")
+        vertex.set("embedding", to_java_float_array(model.encode("warmup")))
+        vertex.save()
+
+    # First query (slower - triggers index build)
+    print("Warming up index...")
+    index.find_nearest(model.encode("warmup"), k=1)
+
+    # Subsequent queries (fast)
+    results = index.find_nearest(model.encode("example query"), k=10)
 ```
 
 ### Batch Indexing

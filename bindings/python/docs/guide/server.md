@@ -132,12 +132,15 @@ Within a **single Python process**, multiple threads can safely share an embedde
 import arcadedb_embedded as arcadedb
 from threading import Thread
 
-db = arcadedb.create_database("./mydb")
+# Use context manager so the database closes cleanly after threads finish
+with arcadedb.create_database("./mydb") as db:
+    db.schema.create_document_type("Log")
 
-def worker(thread_id):
-    # ✅ Multiple threads in SAME process can share the database
-    with db.transaction():
-        db.command("sql", f"INSERT INTO Log SET thread = {thread_id}")
+    def worker(thread_id):
+        # ✅ Multiple threads in SAME process can share the database
+        with db.transaction():
+            rec = db.new_document("Log")
+            rec.set("thread", thread_id).save()
 
 # Start multiple threads
 threads = [Thread(target=worker, args=(i,)) for i in range(10)]

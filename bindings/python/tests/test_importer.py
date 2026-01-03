@@ -599,8 +599,8 @@ def test_csv_null_and_empty_values(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            with db.transaction():
-                db.schema.create_document_type("NullTest")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("NullTest")
 
             stats = arcadedb.import_csv(db, temp_file.name, "NullTest")
             assert stats["documents"] == 4
@@ -635,8 +635,8 @@ def test_csv_unicode_and_special_chars(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            with db.transaction():
-                db.schema.create_document_type("UnicodeTest")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("UnicodeTest")
 
             stats = arcadedb.import_csv(db, temp_file.name, "UnicodeTest")
             assert stats["documents"] == 5
@@ -665,8 +665,8 @@ def test_large_dataset_performance(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            with db.transaction():
-                db.schema.create_document_type("LargeTest")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("LargeTest")
 
             # Import with custom batch size
             stats = arcadedb.import_csv(

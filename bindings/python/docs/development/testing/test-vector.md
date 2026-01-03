@@ -39,36 +39,63 @@ SQL vector operations are tested separately in `test_vector_sql.py`, including v
 
 ### Create JVector (LSM-backed) index
 ```python
-db.schema.create_vertex_type("Doc")
-db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+with arcadedb.create_database("./test_db") as db:
+    # Schema operations are auto-transactional
+    db.schema.create_vertex_type("Doc")
+    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
 
-index = db.create_vector_index(
-    "Doc",
-    "embedding",
-    dimensions=384,
-    distance_function="cosine",   # default
-    max_connections=32,            # graph degree
-    beam_width=256                 # search/construction beam
-)
+    index = db.create_vector_index(
+        "Doc",
+        "embedding",
+        dimensions=384,
+        distance_function="cosine",   # default
+        max_connections=32,            # graph degree
+        beam_width=256                 # search/construction beam
+    )
 ```
 
 ### Search with filters and overquery factor
 ```python
-query = [1.0, 0.0, 0.0]
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("Doc")
+    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
 
-results = index.find_nearest(
-    query,
-    k=2,
-    allowed_rids=["#12:0", "#12:1"],
-    overquery_factor=16,
-)
+    index = db.create_vector_index(
+        "Doc",
+        "embedding",
+        dimensions=3,
+    )
+
+    # Insert test vertices with embeddings
+    with db.transaction():
+        doc1 = db.new_vertex("Doc", docId=1, embedding=[1.0, 0.0, 0.0])
+        doc1.save()
+        doc2 = db.new_vertex("Doc", docId=2, embedding=[0.0, 1.0, 0.0])
+        doc2.save()
+
+    # Search with filters
+    query = [1.0, 0.0, 0.0]
+    results = index.find_nearest(
+        query,
+        k=2,
+        allowed_rids=[doc1.get_rid(), doc2.get_rid()],
+        overquery_factor=16,
+    )
 ```
 
 ### Batch insert vectors
 ```python
-with db.batch_context(batch_size=1000, parallel=4) as batch:
-    for i, vec in enumerate(vectors):
-        batch.create_vertex("Doc", docId=i, embedding=vec)
+with arcadedb.create_database("./test_db") as db:
+    # Schema operations are auto-transactional
+    db.schema.create_vertex_type("Doc")
+    db.schema.create_property("Doc", "docId", "INTEGER")
+    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+    # Batch insert (auto-transactional)
+    vectors = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    with db.batch_context(batch_size=1000, parallel=4) as batch:
+        for i, vec in enumerate(vectors):
+            batch.create_vertex("Doc", docId=i, embedding=vec)
 ```
 
 ## Key Takeaways

@@ -43,7 +43,7 @@ The `arcadedb-embedded` package (~209-215MB wheel, ~274-289MB installed) include
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
 - ✅ **Vector Search**: Graph-based indexing for embeddings
-- ✅ **Data Import**: CSV, XML, ArcadeDB JSONL import
+- ✅ **Data Import**: CSV and ArcadeDB JSONL import (XML supported but has limitations)
 
 !!! tip "Platform Selection"
     pip automatically selects the correct platform-specific wheel for your system. You don't need to specify the platform manually.
@@ -92,9 +92,6 @@ cd bindings/python/
 
 # Build for your current platform (auto-detected)
 ./build.sh
-
-# Or build with Docker for Linux
-docker-compose up arcadedb-python-build
 ```
 
 Built wheels will be in `dist/`:

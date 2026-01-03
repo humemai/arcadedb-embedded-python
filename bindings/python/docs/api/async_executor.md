@@ -426,7 +426,7 @@ import arcadedb_embedded as arcadedb
 import time
 
 # Create database
-db = arcadedb.create_database("./async_demo", create_if_not_exists=True)
+db = arcadedb.create_database("./async_demo")
 
 # Create schema
 with db.transaction():
@@ -501,6 +501,16 @@ print(f"Speedup: {sync_time / async_time:.1f}x")
 - **Speedup: 3-5x**
 
 ## Best Practices
+
+### 0. Set a Commit Cadence
+
+```python
+async_exec = db.async_executor()
+async_exec.set_commit_every(500)  # Ensures async writes are persisted transactionally
+```
+
+- Configure `set_commit_every()` for every async workload so writes are grouped into transactions.
+- Tune the batch size to balance commit overhead and memory.
 
 ### 1. Always Close the Executor
 

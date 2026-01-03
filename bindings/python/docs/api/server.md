@@ -708,6 +708,8 @@ curl -X POST http://localhost:2480/api/v1/command/mydb \
   }'
 ```
 
+> Server HTTP commands are auto-transactional per request. For multiple writes that must succeed together, wrap them in an explicit transaction using the HTTP transactional endpoints or perform them via the embedded API within `with db.transaction():`.
+
 ### Full REST API Documentation
 
 See the [official ArcadeDB HTTP API documentation](https://docs.arcadedb.com/#HTTP-API) for complete endpoint reference.

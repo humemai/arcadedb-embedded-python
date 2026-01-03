@@ -9,7 +9,7 @@
     Native Python bindings for ArcadeDB with full test coverage
 
     **Status**: ✅ Production Ready
-    **Tests**: ✅ 204 + 7 Examples Passing
+    **Tests**: ✅ 221 + 7 Examples Passing
 
 -   :fontawesome-brands-python:{ .lg .middle } **Pure Python API**
 
@@ -117,9 +117,9 @@ Both APIs can be used **simultaneously** on the same server instance.
 ```python
 import arcadedb_embedded as arcadedb
 
-# Create database (context manager for automatic cleanup)
+# Create database (context manager for automatic open and close)
 with arcadedb.create_database("/tmp/mydb") as db:
-    # Create schema
+    # Create schema (auto-transactional)
     db.schema.create_document_type("Person")
 
     # Insert data (requires transaction)
@@ -133,6 +133,8 @@ with arcadedb.create_database("/tmp/mydb") as db:
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
     for record in result:
         print(f"Name: {record.get('name')}")
+
+    # db.drop()  # Permanently deletes the database
 ```
 
 !!! tip "Resource Management"
@@ -149,7 +151,7 @@ features most relevant to Python developers:
 | Schema Management | ✅ 100% | Types, properties, indexes |
 | Server Mode | ✅ 90% | HTTP server, Studio UI, database management |
 | Vector Search | ✅ 100% | JVector indexing, similarity search |
-| Data Import | ⚠️ 70% | CSV, XML, ArcadeDB JSONL |
+| Data Import | ⚠️ 70% | CSV, ArcadeDB JSONL (XML has limitations) |
 | Data Export | ✅ 100% | JSONL, GraphML, GraphSON, CSV |
 | Graph API | ✅ 85% | Full support via SQL, Cypher, Gremlin |
 | Gremlin | ✅ 100% | Full query execution |

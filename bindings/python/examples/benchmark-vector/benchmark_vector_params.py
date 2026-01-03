@@ -213,19 +213,14 @@ def compute_ground_truth(
 # -----------------------------
 
 
-def setup_database(db_path, data):
+def setup_database(db, data):
     start_setup = time.perf_counter()
 
-    if os.path.exists(db_path):
-        shutil.rmtree(db_path)
-
-    db = arcadedb.create_database(db_path)
-
     print("  Importing data into ArcadeDB...")
-    with db.transaction():
-        db.schema.create_vertex_type("VectorData")
-        db.schema.create_property("VectorData", "id", "INTEGER")
-        db.schema.create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
+    # Schema operations are auto-transactional
+    db.schema.create_vertex_type("VectorData")
+    db.schema.create_property("VectorData", "id", "INTEGER")
+    db.schema.create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
 
     with db.batch_context(batch_size=10000) as batch:
         for i, vec in enumerate(data):
@@ -234,7 +229,7 @@ def setup_database(db_path, data):
     setup_time = time.perf_counter() - start_setup
     print(f"  Database setup completed in {setup_time:.4f}s")
 
-    return db, setup_time
+    return setup_time
 
 
 def build_index(db, dim, metric, max_connections, beam_width, quantization="NONE"):
@@ -545,10 +540,20 @@ def run_benchmark():
                     f"\n  [Build Config] max_connections={max_connections}, beam={beam_width}"
                 )
 
-                # 1. Setup & Build
-                db, setup_time = setup_database(db_path, data)
+                if os.path.exists(db_path):
+                    shutil.rmtree(db_path)
 
-                try:
+                # 1. Setup & Build inside managed lifecycle
+                results_before = {}
+                warmup_time = 0.0
+                build_time = 0.0
+                warmup_time_after = 0.0
+                open_time = 0.0
+                setup_time = 0.0
+
+                with arcadedb.create_database(db_path) as db:
+                    setup_time = setup_database(db, data)
+
                     index, build_time = build_index(
                         db, dim, metric, max_connections, beam_width, quantization
                     )
@@ -562,20 +567,17 @@ def run_benchmark():
 
                     # 3. Run "Before" Queries
                     print("    Running 'Before' queries...")
-                    results_before = {}
                     for oq in SEARCH_PARAMS["overquery_factors"]:
                         results_before[oq] = evaluate_index(
                             index, queries, ground_truth, k_values, overquery_factor=oq
                         )
 
-                    # 4. Persist (Close)
                     print("    Persisting (Closing DB)...")
-                    db.close()
 
-                    # 5. Reload (Open)
-                    print("    Reloading (Opening DB)...")
-                    t0 = time.perf_counter()
-                    db = arcadedb.open_database(db_path)
+                # 5. Reload (Open)
+                print("    Reloading (Opening DB)...")
+                t0 = time.perf_counter()
+                with arcadedb.open_database(db_path) as db:
                     open_time = time.perf_counter() - t0
 
                     # Re-acquire index
@@ -624,11 +626,8 @@ def run_benchmark():
                                 f"      -> k={k}, oq={oq}: Recall={row['recall_after']:.4f}, Latency={row['latency_after']:.2f}ms"
                             )
 
-                finally:
-                    if db and db.is_open():
-                        db.close()
-                    if os.path.exists(db_path):
-                        shutil.rmtree(db_path)
+                if os.path.exists(db_path):
+                    shutil.rmtree(db_path)
 
     print(f"\nBenchmark complete. Results saved to {md_file}")
 

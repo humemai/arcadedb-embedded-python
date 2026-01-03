@@ -105,11 +105,12 @@ Comprehensive test of Create, Read, Update, Delete operations.
 ```python
 with arcadedb.create_database("./test_db") as db:
     # Create schema
-    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.schema.create_document_type("Person")
 
     # Create (Insert)
     with db.transaction():
-        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        person = db.new_document("Person")
+        person.set("name", "Alice").set("age", 30).save()
 
     # Read (Query)
     result = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
@@ -151,11 +152,12 @@ Tests ACID transaction behavior.
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    db.command("sql", "CREATE DOCUMENT TYPE Product")
+    db.schema.create_document_type("Product")
 
     # Successful transaction
     with db.transaction():
-        db.command("sql", "INSERT INTO Product SET name = 'Widget', price = 10")
+        product = db.new_document("Product")
+        product.set("name", "Widget").set("price", 10).save()
 
     # Changes are committed
     result = db.query("sql", "SELECT FROM Product")
@@ -164,7 +166,8 @@ with arcadedb.create_database("./test_db") as db:
     # Failed transaction (exception causes rollback)
     try:
         with db.transaction():
-            db.command("sql", "INSERT INTO Product SET name = 'Gadget', price = 20")
+            product = db.new_document("Product")
+            product.set("name", "Gadget").set("price", 20).save()
             raise Exception("Simulated error")
     except Exception:
         pass
@@ -191,13 +194,16 @@ Tests vertex and edge creation.
 ```python
 with arcadedb.create_database("./test_db") as db:
     # Create vertex types
-    db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE Knows")
+    db.schema.create_vertex_type("Person")
+    db.schema.create_edge_type("Knows")
 
     with db.transaction():
         # Create vertices
-        db.command("sql", "CREATE VERTEX Person SET name = 'Alice'")
-        db.command("sql", "CREATE VERTEX Person SET name = 'Bob'")
+        alice = db.new_vertex("Person")
+        alice.set("name", "Alice").save()
+
+        bob = db.new_vertex("Person")
+        bob.set("name", "Bob").save()
 
         # Create edge between them
         db.command("sql", """
@@ -235,12 +241,15 @@ Tests ResultSet and Result wrapper classes.
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    db.command("sql", "CREATE DOCUMENT TYPE Item")
+    db.schema.create_document_type("Item")
 
     with db.transaction():
-        db.command("sql", "INSERT INTO Item SET id = 1, value = 'first'")
-        db.command("sql", "INSERT INTO Item SET id = 2, value = 'second'")
-        db.command("sql", "INSERT INTO Item SET id = 3, value = 'third'")
+        item = db.new_document("Item")
+        item.set("id", 1).set("value", "first").save()
+        item = db.new_document("Item")
+        item.set("id", 2).set("value", "second").save()
+        item = db.new_document("Item")
+        item.set("id", 3).set("value", "third").save()
 
     # Query returns ResultSet
     result_set = db.query("sql", "SELECT FROM Item ORDER BY id")
@@ -275,8 +284,8 @@ Tests Neo4j Cypher query language support (when available).
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE KNOWS")
+    db.schema.create_vertex_type("Person")
+    db.schema.create_edge_type("KNOWS")
 
     with db.transaction():
         # Use Cypher to create nodes and relationships
@@ -391,23 +400,28 @@ Tests international characters and emoji.
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    db.command("sql", "CREATE DOCUMENT TYPE Message")
+    db.schema.create_document_type("Message")
 
     with db.transaction():
         # Spanish
-        db.command("sql", "INSERT INTO Message SET text = 'Hola, ¿cómo estás?'")
+        msg = db.new_document("Message")
+        msg.set("text", "Hola, ¿cómo estás?").save()
 
         # Chinese
-        db.command("sql", "INSERT INTO Message SET text = '你好世界'")
+        msg = db.new_document("Message")
+        msg.set("text", "你好世界").save()
 
         # Japanese
-        db.command("sql", "INSERT INTO Message SET text = 'こんにちは'")
+        msg = db.new_document("Message")
+        msg.set("text", "こんにちは").save()
 
         # Arabic
-        db.command("sql", "INSERT INTO Message SET text = 'مرحبا بالعالم'")
+        msg = db.new_document("Message")
+        msg.set("text", "مرحبا بالعالم").save()
 
         # Emoji
-        db.command("sql", "INSERT INTO Message SET text = '🎮 ArcadeDB 🚀'")
+        msg = db.new_document("Message")
+        msg.set("text", "🎮 ArcadeDB 🚀").save()
 
     result = db.query("sql", "SELECT FROM Message")
     texts = [r.get("text") for r in result]
@@ -435,10 +449,10 @@ Tests querying database metadata.
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    # Create schema
-    db.command("sql", "CREATE DOCUMENT TYPE Person")
-    db.command("sql", "CREATE VERTEX TYPE Company")
-    db.command("sql", "CREATE EDGE TYPE WorksAt")
+    # Create schema (auto-transactional)
+    db.schema.create_document_type("Person")
+    db.schema.create_vertex_type("Company")
+    db.schema.create_edge_type("WorksAt")
 
     # Query schema
     types_result = db.query("sql", "SELECT FROM schema:types")
@@ -471,12 +485,13 @@ Tests handling 1000+ records efficiently.
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    db.command("sql", "CREATE DOCUMENT TYPE Record")
+    db.schema.create_document_type("Record")
 
     # Insert 1000 records
     with db.transaction():
         for i in range(1000):
-            db.command("sql", f"INSERT INTO Record SET id = {i}, value = 'record_{i}'")
+            rec = db.new_document("Record")
+            rec.set("id", i).set("value", f"record_{i}").save()
 
     # Query all records
     result = db.query("sql", "SELECT FROM Record ORDER BY id")
@@ -508,18 +523,17 @@ Tests Python ↔ Java type mapping.
 from datetime import datetime
 
 with arcadedb.create_database("./test_db") as db:
-    db.command("sql", "CREATE DOCUMENT TYPE TypeTest")
+    db.schema.create_document_type("TypeTest")
 
     with db.transaction():
-        db.command("sql", """
-            INSERT INTO TypeTest SET
-                str_val = 'text',
-                int_val = 42,
-                float_val = 3.14,
-                bool_val = true,
-                null_val = null,
-                date_val = date('2025-10-21')
-        """)
+        doc = db.new_document("TypeTest")
+        doc.set("str_val", "text")
+        doc.set("int_val", 42)
+        doc.set("float_val", 3.14)
+        doc.set("bool_val", True)
+        doc.set("null_val", None)
+        doc.set("date_val", datetime(2025, 10, 21))
+        doc.save()
 
     result = db.query("sql", "SELECT FROM TypeTest")
     record = list(result)[0]
@@ -580,8 +594,9 @@ Always use transactions for write operations:
 
 ```python
 with db.transaction():
-    db.command("sql", "INSERT INTO ...")
-    db.command("sql", "UPDATE ...")
+    rec = db.new_document("MyType")
+    rec.set("value", 1).save()
+    db.command("sql", "UPDATE MyType SET value = 2")
     # Automatically commits on success
     # Automatically rolls back on exception
 ```
