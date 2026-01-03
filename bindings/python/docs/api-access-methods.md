@@ -21,14 +21,19 @@ import arcadedb_embedded as arcadedb
 
 # Direct database access - NO server needed
 with arcadedb.create_database("/tmp/mydb") as db:
-    # Create schema
-    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    # Create schema (auto-transactional)
+    db.schema.create_document_type("Person")
+    db.schema.create_property("Person", "name", "STRING")
+    db.schema.create_property("Person", "age", "INTEGER")
 
     # Insert data (requires transaction)
     with db.transaction():
-        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        person = db.new_document("Person")
+        person.set("name", "Alice")
+        person.set("age", 30)
+        person.save()
 
-    # Query data
+    # Query data (SQL is fine for reads)
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
     for record in result:
         print(f"Name: {record.get('name')}")
@@ -46,10 +51,17 @@ server.start()
 try:
     db = server.create_database("mydb")
 
-    # Same Java API calls as standalone
+    # Schema operations are auto-transactional
+    db.schema.create_document_type("Person")
+    db.schema.create_property("Person", "name", "STRING")
+    db.schema.create_property("Person", "age", "INTEGER")
+
+    # Data operations require explicit transactions
     with db.transaction():
-        db.command("sql", "CREATE DOCUMENT TYPE Person")
-        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        person = db.new_document("Person")
+        person.set("name", "Alice")
+        person.set("age", 30)
+        person.save()
 
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
     for record in result:
@@ -111,6 +123,9 @@ try:
         }
     )
     assert response.status_code == 200
+    # Note: HTTP commands are auto-transactional per request. For multi-statement atomicity, use
+    # the HTTP transactional endpoints or perform batch writes with the embedded API via
+    # `with db.transaction():`.
 
     # Query data via HTTP
     response = requests.post(
@@ -144,9 +159,17 @@ try:
     # Create database using Java API (fastest)
     db = server.create_database("hybriddb")
 
+    # Schema operations are auto-transactional
+    db.schema.create_document_type("Person")
+    db.schema.create_property("Person", "name", "STRING")
+    db.schema.create_property("Person", "age", "INTEGER")
+
+    # Data operations require explicit transactions
     with db.transaction():
-        db.command("sql", "CREATE DOCUMENT TYPE Person")
-        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        person = db.new_document("Person")
+        person.set("name", "Alice")
+        person.set("age", 30)
+        person.save()
 
     # Query same data using HTTP API (remote access)
     auth = HTTPBasicAuth("root", "password123")

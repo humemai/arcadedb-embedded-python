@@ -32,13 +32,12 @@ Tests creating vertex, edge, and document types.
 
 **Pattern:**
 ```python
-schema = db.schema
+with arcadedb.create_database("./test_db") as db:
+    # Basic type
+    db.schema.create_vertex_type("User")
 
-# Basic type
-schema.create_vertex_type("User")
-
-# With buckets
-schema.create_vertex_type("Product", buckets=10)
+    # With buckets
+    db.schema.create_vertex_type("Product", buckets=10)
 ```
 
 ---
@@ -54,16 +53,19 @@ Tests querying schema for types.
 
 **Pattern:**
 ```python
-# Get type
-user_type = schema.get_type("User")
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("User")
 
-# Check existence
-if schema.exists_type("User"):
-    print("User type exists")
+    # Get type
+    user_type = db.schema.get_type("User")
 
-# List all types
-for type_obj in schema.get_types():
-    print(type_obj.get_name())
+    # Check existence
+    if db.schema.exists_type("User"):
+        print("User type exists")
+
+    # List all types
+    for type_obj in db.schema.get_types():
+        print(type_obj.get_name())
 ```
 
 ---
@@ -77,12 +79,13 @@ Tests removing types from schema.
 
 **Pattern:**
 ```python
-schema.create_vertex_type("Temp")
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("Temp")
 
-# Delete type
-schema.delete_type("Temp")
+    # Delete type
+    db.schema.delete_type("Temp")
 
-assert not schema.exists_type("Temp")
+    assert not db.schema.exists_type("Temp")
 ```
 
 ---
@@ -99,18 +102,21 @@ Tests adding properties to types.
 
 **Pattern:**
 ```python
-user_type = schema.get_type("User")
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("User")
 
-# Basic property
-user_type.create_property("name", "STRING")
+    user_type = db.schema.get_type("User")
 
-# With constraints
-name_prop = user_type.get("name")
-name_prop.set_mandatory(True)
-name_prop.set_not_null(True)
+    # Basic property
+    user_type.create_property("name", "STRING")
 
-# List property
-user_type.create_property("tags", "LIST", of_type="STRING")
+    # With constraints
+    name_prop = user_type.get("name")
+    name_prop.set_mandatory(True)
+    name_prop.set_not_null(True)
+
+    # List property
+    user_type.create_property("tags", "LIST", of_type="STRING")
 ```
 
 ---
@@ -124,13 +130,21 @@ Tests removing properties from types.
 
 **Pattern:**
 ```python
-user_type = schema.get_type("User")
-user_type.create_property("temp", "STRING")
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("User")
 
-# Delete property
-user_type.delete_property("temp")
+    user_type = db.schema.get_type("User")
+    user_type.create_property("temp", "STRING")
 
-assert user_type.get("temp") is None
+    # Delete property
+    user_type.drop_property("temp")
+
+    # Verify deletion
+    try:
+        user_type.get("temp")
+        assert False, "Property should have been deleted"
+    except (AttributeError, KeyError):
+        pass  # Expected
 ```
 
 ---
@@ -146,14 +160,27 @@ Tests creating indexes on types.
 
 **Pattern:**
 ```python
-# Unique index
-schema.create_index("User", ["username"], unique=True)
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("User")
+    user_type = db.schema.get_type("User")
+    user_type.create_property("username", "STRING")
+    user_type.create_property("email", "STRING")
 
-# Composite index
-schema.create_index("Event", ["userId", "timestamp"])
+    # Unique index
+    db.schema.create_index("User", ["username"], unique=True)
 
-# Full-text index
-schema.create_index("Article", ["content"], index_type="FULL_TEXT")
+    # Composite index
+    db.schema.create_vertex_type("Event")
+    event_type = db.schema.get_type("Event")
+    event_type.create_property("userId", "STRING")
+    event_type.create_property("timestamp", "DATETIME")
+    db.schema.create_index("Event", ["userId", "timestamp"])
+
+    # Full-text index
+    db.schema.create_vertex_type("Article")
+    article_type = db.schema.get_type("Article")
+    article_type.create_property("content", "STRING")
+    db.schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 ```
 
 ---
@@ -168,14 +195,22 @@ Tests querying indexes.
 
 **Pattern:**
 ```python
-# Get all indexes
-for index in schema.get_indexes():
-    print(index.get_name())
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("User")
+    user_type = db.schema.get_type("User")
+    user_type.create_property("username", "STRING")
+    user_type.create_property("email", "STRING")
+    db.schema.create_index("User", ["username"], unique=True)
+    db.schema.create_index("User", ["email"], unique=True)
 
-# Get indexes for type
-user_type = schema.get_type("User")
-for index in user_type.get_indexes():
-    print(f"Index: {index.get_property_names()}")
+    # Get all indexes
+    for index in db.schema.get_indexes():
+        print(index.get_name())
+
+    # Get indexes for type
+    indexes = user_type.get_indexes()
+    for index in indexes:
+        print(f"Index: {index.get_property_names()}")
 ```
 
 ---
@@ -189,11 +224,22 @@ Tests removing indexes.
 
 **Pattern:**
 ```python
-# Create index
-schema.create_index("User", ["email"], unique=True)
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("User")
+    user_type = db.schema.get_type("User")
+    user_type.create_property("email", "STRING")
 
-# Delete index
-schema.drop_index("User[email]")
+    # Create index
+    db.schema.create_index("User", ["email"], unique=True)
+
+    # Verify index exists
+    assert len(user_type.get_indexes()) > 0
+
+    # Delete index
+    db.schema.drop_index("User[email]")
+
+    # Verify deletion
+    assert len(user_type.get_indexes()) == 0
 ```
 
 ---
@@ -216,15 +262,18 @@ Tests all ArcadeDB property types.
 
 **Pattern:**
 ```python
-type_obj = schema.create_vertex_type("AllTypes")
+with arcadedb.create_database("./test_db") as db:
+    type_obj = db.schema.create_vertex_type("AllTypes")
 
-# Create all property types
-type_obj.create_property("name", "STRING")
-type_obj.create_property("age", "INTEGER")
-type_obj.create_property("score", "DOUBLE")
-type_obj.create_property("active", "BOOLEAN")
-type_obj.create_property("birthDate", "DATE")
-type_obj.create_property("tags", "LIST", of_type="STRING")
+    # Create all property types
+    type_obj.create_property("name", "STRING")
+    type_obj.create_property("age", "INTEGER")
+    type_obj.create_property("score", "DOUBLE")
+    type_obj.create_property("active", "BOOLEAN")
+    type_obj.create_property("birthDate", "DATE")
+    type_obj.create_property("created", "DATETIME")
+    type_obj.create_property("tags", "LIST", of_type="STRING")
+    type_obj.create_property("metadata", "MAP")
 ```
 
 ---
@@ -239,79 +288,89 @@ Tests complete schema workflows.
 
 **Pattern:**
 ```python
-# Complete schema setup
-schema = db.schema
+with arcadedb.create_database("./test_db") as db:
+    # Complete schema setup
+    # Create types
+    user_type = db.schema.create_vertex_type("User")
+    post_type = db.schema.create_vertex_type("Post")
+    likes_type = db.schema.create_edge_type("Likes")
 
-# Create types
-user_type = schema.create_vertex_type("User")
-post_type = schema.create_vertex_type("Post")
-likes_type = schema.create_edge_type("Likes")
+    # Add properties
+    user_type.create_property("username", "STRING")
+    user_type.create_property("email", "STRING")
+    post_type.create_property("title", "STRING")
+    post_type.create_property("content", "STRING")
 
-# Add properties
-user_type.create_property("username", "STRING")
-user_type.create_property("email", "STRING")
-post_type.create_property("title", "STRING")
-post_type.create_property("content", "STRING")
-
-# Create indexes
-schema.create_index("User", ["username"], unique=True)
-
-schema.create_index("User", ["email"], unique=True)
+    # Create indexes
+    db.schema.create_index("User", ["username"], unique=True)
+    db.schema.create_index("User", ["email"], unique=True)
+    db.schema.create_index("Post", ["title"])
 ```
 
 ## Test Patterns
 
 ### Type Creation
 ```python
-schema = db.schema
-
-# In transaction
-with db.transaction():
-    schema.create_vertex_type("User")
-    schema.create_edge_type("Follows")
+with arcadedb.create_database("./test_db") as db:
+    # Schema operations are auto-transactional (no wrapper needed)
+    db.schema.create_vertex_type("User")
+    db.schema.create_edge_type("Follows")
 ```
 
 ### Property Definition
 ```python
-user_type = schema.get_type("User")
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("User")
 
-# Add property
-user_type.create_property("name", "STRING")
+    user_type = db.schema.get_type("User")
 
-# Set constraints
-prop = user_type.get("name")
-prop.set_mandatory(True)
-prop.set_not_null(True)
+    # Add property
+    user_type.create_property("name", "STRING")
+
+    # Set constraints
+    prop = user_type.get("name")
+    prop.set_mandatory(True)
+    prop.set_not_null(True)
 ```
 
 ### Index Creation
 ```python
-# Unique index
-schema.create_index("User", ["username"], unique=True)
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("User")
+    db.schema.create_property("User", "username", "STRING")
+
+    # Unique index
+    db.schema.create_index("User", ["username"], unique=True)
 ```
 
 ## Common Assertions
 
 ```python
-# Type exists
-assert schema.exists_type("User")
+with arcadedb.create_database("./test_db") as db:
+    db.schema.create_vertex_type("User")
+    db.schema.create_property("User", "name", "STRING")
+    db.schema.create_property("User", "age", "INTEGER")
 
-# Type has property
-user_type = schema.get_type("User")
-assert user_type.get("name") is not None
+    # Type exists
+    assert db.schema.exists_type("User")
 
-# Index exists
-indexes = user_type.get_indexes()
-assert len(indexes) > 0
+    # Type has property
+    user_type = db.schema.get_type("User")
+    assert user_type.get("name") is not None
 
-# Property type
-prop = user_type.get("age")
-assert str(prop.get_type()) == "INTEGER"
+    # Index exists (after creating one)
+    schema.create_index("User", ["name"])
+    indexes = user_type.get_indexes()
+    assert len(indexes) > 0
+
+    # Property type
+    prop = user_type.get("age")
+    assert str(prop.get_type()) == "INTEGER"
 ```
 
 ## Key Takeaways
 
-1. **Create in transactions** - Schema operations need transactions
+1. **Schema ops are auto-transactional** - No wrapper needed for type/property/index creation
 2. **Check existence** - Use `exists_type()` before creating
 3. **Set constraints** - Use `set_mandatory()`, `set_not_null()`
 4. **Index frequently queried** - Properties used in WHERE clauses
