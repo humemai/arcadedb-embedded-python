@@ -19,22 +19,22 @@ import arcadedb_embedded as arcadedb
 
 db = arcadedb.create_database("./mydb")
 
-# Get schema
-schema = db.schema
+# Create types (Schema operations are auto-transactional)
+# Vertex type
+user_type = db.schema.create_vertex_type("User")
 
-# Create types
-with db.transaction():
-    # Vertex type
-    user_type = schema.create_vertex_type("User")
+# Edge type
+follows_type = db.schema.create_edge_type("Follows")
 
-    # Edge type
-    follows_type = schema.create_edge_type("Follows")
-
-    # Document type
-    log_type = schema.create_document_type("LogEntry")
+# Document type
+log_type = db.schema.create_document_type("LogEntry")
 
 db.close()
 ```
+
+!!! note "Auto-Transactional"
+    Schema operations (create type, create property, create index) are **auto-transactional**.
+    Do **not** wrap them in `with db.transaction():` blocks.
 
 ## Type Creation Methods
 
@@ -61,12 +61,12 @@ Create a new vertex type.
 **Example:**
 
 ```python
-with db.transaction():
-    # Basic vertex type
-    user_type = schema.create_vertex_type("User")
+# Schema operations are auto-transactional
+# Basic vertex type
+user_type = schema.create_vertex_type("User")
 
-    # With custom buckets
-    product_type = schema.create_vertex_type("Product", buckets=10)
+# With custom buckets
+product_type = schema.create_vertex_type("Product", buckets=10)
 ```
 
 ---
@@ -94,12 +94,12 @@ Create a new edge type.
 **Example:**
 
 ```python
-with db.transaction():
-    # Basic edge type
-    follows_type = schema.create_edge_type("Follows")
+# Schema operations are auto-transactional
+# Basic edge type
+follows_type = schema.create_edge_type("Follows")
 
-    # With custom buckets
-    purchased_type = schema.create_edge_type("Purchased", buckets=5)
+# With custom buckets
+purchased_type = schema.create_edge_type("Purchased", buckets=5)
 ```
 
 ---
@@ -127,12 +127,12 @@ Create a new document type.
 **Example:**
 
 ```python
-with db.transaction():
-    # Basic document type
-    log_type = schema.create_document_type("LogEntry")
+# Schema operations are auto-transactional
+# Basic document type
+log_type = schema.create_document_type("LogEntry")
 
-    # With custom buckets
-    event_type = schema.create_document_type("Event", buckets=8)
+# With custom buckets
+event_type = schema.create_document_type("Event", buckets=8)
 ```
 
 ## Property Definition
@@ -169,23 +169,23 @@ Create a property on a type.
 **Example:**
 
 ```python
-with db.transaction():
-    user_type = schema.create_vertex_type("User")
+# Schema operations are auto-transactional
+user_type = schema.create_vertex_type("User")
 
-    # String property
-    user_type.create_property("name", "STRING")
+# String property
+user_type.create_property("name", "STRING")
 
-    # Integer property
-    user_type.create_property("age", "INTEGER")
+# Integer property
+user_type.create_property("age", "INTEGER")
 
-    # Date property
-    user_type.create_property("birthDate", "DATE")
+# Date property
+user_type.create_property("birthDate", "DATE")
 
-    # List property
-    user_type.create_property("tags", "LIST", of_type="STRING")
+# List property
+user_type.create_property("tags", "LIST", of_type="STRING")
 
-    # Embedded property
-    user_type.create_property("profile", "EMBEDDED")
+# Embedded property
+user_type.create_property("profile", "EMBEDDED")
 ```
 
 ---
@@ -193,22 +193,22 @@ with db.transaction():
 ### Property with Constraints
 
 ```python
-with db.transaction():
-    user_type = schema.create_vertex_type("User")
+# Schema operations are auto-transactional
+user_type = schema.create_vertex_type("User")
 
-    # Required property
-    name_prop = user_type.create_property("name", "STRING")
-    name_prop.set_mandatory(True)
-    name_prop.set_not_null(True)
+# Required property
+name_prop = user_type.create_property("name", "STRING")
+name_prop.set_mandatory(True)
+name_prop.set_not_null(True)
 
-    # Property with default
-    status_prop = user_type.create_property("status", "STRING")
-    status_prop.set_default("active")
+# Property with default
+status_prop = user_type.create_property("status", "STRING")
+status_prop.set_default("active")
 
-    # Property with min/max
-    age_prop = user_type.create_property("age", "INTEGER")
-    age_prop.set_min(0)
-    age_prop.set_max(150)
+# Property with min/max
+age_prop = user_type.create_property("age", "INTEGER")
+age_prop.set_min(0)
+age_prop.set_max(150)
 ```
 
 ## Index Creation
@@ -244,15 +244,15 @@ Create an index on a type.
 **Example:**
 
 ```python
-with db.transaction():
-    # Unique index on username
-    schema.create_index("User", ["username"], unique=True)
+# Schema operations are auto-transactional
+# Unique index on username
+schema.create_index("User", ["username"], unique=True)
 
-    # Composite index
-    schema.create_index("Event", ["userId", "timestamp"])
+# Composite index
+schema.create_index("Event", ["userId", "timestamp"])
 
-    # Full-text index
-    schema.create_index("Article", ["content"], index_type="FULL_TEXT")
+# Full-text index
+schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 ```
 
 **HNSW Parameters:**
@@ -313,8 +313,7 @@ Check if type exists.
 
 ```python
 if not schema.exists_type("User"):
-    with db.transaction():
-        schema.create_vertex_type("User")
+    schema.create_vertex_type("User")  # Schema ops are auto-transactional
 ```
 
 ---
@@ -378,47 +377,43 @@ for index in indexes:
 import arcadedb_embedded as arcadedb
 
 # Create database
-db = arcadedb.create_database("./social_network", create_if_not_exists=True)
+db = arcadedb.create_database("./social_network")
 
-schema = db.schema
+# Create schema (auto-transactional)
+# User vertex type
+user_type = db.schema.create_vertex_type("User")
+user_type.create_property("username", "STRING")
+user_type.create_property("email", "STRING")
+user_type.create_property("age", "INTEGER")
+user_type.create_property("tags", "LIST", of_type="STRING")
+user_type.create_property("createdAt", "DATETIME")
 
-# Create schema
-with db.transaction():
-    # User vertex type
-    user_type = schema.create_vertex_type("User")
-    user_type.create_property("username", "STRING")
-    user_type.create_property("email", "STRING")
-    user_type.create_property("age", "INTEGER")
-    user_type.create_property("tags", "LIST", of_type="STRING")
-    user_type.create_property("createdAt", "DATETIME")
+# Make username required and unique
+username_prop = user_type.get("username")
+username_prop.set_mandatory(True)
+username_prop.set_not_null(True)
 
-    # Make username required and unique
-    username_prop = user_type.get("username")
-    username_prop.set_mandatory(True)
-    username_prop.set_not_null(True)
+# Post vertex type
+post_type = db.schema.create_vertex_type("Post")
+post_type.create_property("title", "STRING")
+post_type.create_property("content", "STRING")
+post_type.create_property("timestamp", "DATETIME")
 
-    # Post vertex type
-    post_type = schema.create_vertex_type("Post")
-    post_type.create_property("title", "STRING")
-    post_type.create_property("content", "STRING")
-    post_type.create_property("timestamp", "DATETIME")
+# Follows edge type
+follows_type = db.schema.create_edge_type("Follows")
+follows_type.create_property("since", "DATETIME")
 
-    # Follows edge type
-    follows_type = schema.create_edge_type("Follows")
-    follows_type.create_property("since", "DATETIME")
+# Likes edge type
+likes_type = db.schema.create_edge_type("Likes")
+likes_type.create_property("timestamp", "DATETIME")
 
-    # Likes edge type
-    likes_type = schema.create_edge_type("Likes")
-    likes_type.create_property("timestamp", "DATETIME")
-
-    # Create indexes
-    schema.create_index("User", ["username"], unique=True)
-
-    schema.create_index("Post", ["timestamp"])
+# Create indexes
+db.schema.create_index("User", ["username"], unique=True)
+db.schema.create_index("Post", ["timestamp"])
 
 # Verify schema
 print("\n📋 Schema Summary:")
-for type_obj in schema.get_types():
+for type_obj in db.schema.get_types():
     print(f"\nType: {type_obj.get_name()}")
     print(f"  Records: {type_obj.count_records()}")
 
@@ -441,56 +436,49 @@ db.close()
 ## Schema Evolution
 
 ```python
-# Add property to existing type
-with db.transaction():
-    user_type = schema.get_type("User")
-    if not user_type.get("phoneNumber"):
-        user_type.create_property("phoneNumber", "STRING")
-        print("✅ Added phoneNumber property")
+# Add property to existing type (auto-transactional)
+user_type = schema.get_type("User")
+if not user_type.get("phoneNumber"):
+    user_type.create_property("phoneNumber", "STRING")
+    print("✅ Added phoneNumber property")
 
-# Add index to existing type
-with db.transaction():
-    if not any(idx.get_property_names() == ["email"]
-               for idx in schema.get_type("User").get_indexes()):
-        schema.create_index("User", ["email"], unique=True)
-        print("✅ Added email index")
+# Add index to existing type (auto-transactional)
+if not any(idx.get_property_names() == ["email"]
+           for idx in schema.get_type("User").get_indexes()):
+    schema.create_index("User", ["email"], unique=True)
+    print("✅ Added email index")
 ```
 
 ## Best Practices
 
-### 1. Create Schema in Transaction
+### 1. Schema Ops Are Auto-Transactional
 
 ```python
-# ✅ Good: Create in transaction
+# ✅ Correct
+schema.create_vertex_type("User")
+schema.create_edge_type("Follows")
+
+# ❌ Unnecessary
 with db.transaction():
     schema.create_vertex_type("User")
-    schema.create_edge_type("Follows")
-
-# ❌ Bad: Create without transaction
-schema.create_vertex_type("User")  # May fail
-```
 
 ### 2. Check Existence Before Creating
 
 ```python
 # ✅ Good: Check first
 if not schema.exists_type("User"):
-    with db.transaction():
-        schema.create_vertex_type("User")
+    schema.create_vertex_type("User")
 
 # ❌ Bad: Don't check
-with db.transaction():
-    schema.create_vertex_type("User")  # May error if exists
+schema.create_vertex_type("User")  # May error if exists
 ```
 
 ### 3. Create Indexes for Frequent Queries
 
 ```python
 # ✅ Good: Index frequently queried properties
-with db.transaction():
-    schema.create_index("Event", ["timestamp"])
-
-    schema.create_index("Event", ["userId", "timestamp"])
+schema.create_index("Event", ["timestamp"])
+schema.create_index("Event", ["userId", "timestamp"])
 ```
 
 ### 4. Use Appropriate Bucket Counts
@@ -504,16 +492,14 @@ elif expected_records < 1000000:
 else:
     buckets = 20
 
-with db.transaction():
-    schema.create_vertex_type("BigData", buckets=buckets)
+schema.create_vertex_type("BigData", buckets=buckets)
 ```
 
 ### 5. Set Property Constraints
 
 ```python
-# ✅ Good: Define constraints
-with db.transaction():
-    user_type = schema.create_vertex_type("User")
+# ✅ Good: Define constraints (schema ops are auto-transactional)
+user_type = schema.create_vertex_type("User")
 
     # Required username
     username = user_type.create_property("username", "STRING")
@@ -533,20 +519,16 @@ with db.transaction():
 ```python
 def init_schema(db):
     """Initialize schema if not exists"""
-    schema = db.schema
-
-    if schema.exists_type("User"):
+    if db.schema.exists_type("User"):
         print("Schema already initialized")
         return
 
-    with db.transaction():
-        # Create types
-        user_type = schema.create_vertex_type("User")
-        user_type.create_property("username", "STRING")
-        user_type.create_property("email", "STRING")
+    # Schema operations are auto-transactional
+    user_type = db.schema.create_vertex_type("User")
+    user_type.create_property("username", "STRING")
+    user_type.create_property("email", "STRING")
 
-        # Create indexes
-        schema.create_index("User", ["username"], unique=True)
+    db.schema.create_index("User", ["username"], unique=True)
 
     print("✅ Schema initialized")
 
@@ -559,10 +541,9 @@ init_schema(db)
 ```python
 def export_schema(db):
     """Export schema to dict"""
-    schema = db.schema
     schema_dict = {}
 
-    for type_obj in schema.get_types():
+    for type_obj in db.schema.get_types():
         type_name = type_obj.get_name()
         schema_dict[type_name] = {
             "type": type_obj.__class__.__name__,
@@ -598,21 +579,18 @@ print(json.dumps(schema_export, indent=2))
 ```python
 def migrate_schema_v1_to_v2(db):
     """Migrate schema from v1 to v2"""
-    schema = db.schema
+    user_type = db.schema.get_type("User")
 
-    with db.transaction():
-        user_type = schema.get_type("User")
+    # Add new property
+    if not user_type.get("status"):
+        user_type.create_property("status", "STRING")
+        print("✅ Added status property")
 
-        # Add new property
-        if not user_type.get("status"):
-            user_type.create_property("status", "STRING")
-            print("✅ Added status property")
-
-        # Add new index
-        if not any(idx.get_property_names() == ["status"]
-                   for idx in user_type.get_indexes()):
-            schema.create_index("User", ["status"])
-            print("✅ Added status index")
+    # Add new index
+    if not any(idx.get_property_names() == ["status"]
+               for idx in user_type.get_indexes()):
+        db.schema.create_index("User", ["status"])
+        print("✅ Added status index")
 
 # Use it
 migrate_schema_v1_to_v2(db)
@@ -625,8 +603,7 @@ migrate_schema_v1_to_v2(db)
 ```python
 # ✅ Good: Check first
 if not schema.exists_type("User"):
-    with db.transaction():
-        schema.create_vertex_type("User")
+    schema.create_vertex_type("User")
 ```
 
 ### Property Not Found
@@ -644,9 +621,8 @@ else:
 ### Index Creation Fails
 
 ```python
-# ✅ Good: Create index in transaction
-with db.transaction():
-    schema.create_index("User", ["username"], unique=True)
+# ✅ Good: Create index (auto-transactional)
+schema.create_index("User", ["username"], unique=True)
 ```
 
 ## See Also
