@@ -31,8 +31,9 @@ import arcadedb_embedded as arcadedb
 
 db = arcadedb.create_database("/tmp/mydb")
 try:
-    # Use database
-    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    # Schema operations are auto-transactional
+    db.schema.create_document_type("Person")
+    db.schema.create_property("Person", "name", "STRING")
 finally:
     db.close()
 ```
@@ -72,7 +73,7 @@ Open an existing database.
 ```python
 with arcadedb.open_database("/tmp/mydb") as db:
     result = db.query("sql", "SELECT FROM Person")
-    print(f"Found {len(result)} records")
+    print(f"Found {len(list(result))} records")
 ```
 
 ---
@@ -201,19 +202,24 @@ Execute a command (write operation). Commands modify data and **require a transa
 **Example:**
 
 ```python
-# Must be in a transaction
+# Schema operations are auto-transactional
+db.schema.create_document_type("Person")
+db.schema.create_property("Person", "name", "STRING")
+db.schema.create_property("Person", "age", "INTEGER")
+
+# Data operations must be in a transaction
 with db.transaction():
-    # Create type
-    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    doc = db.new_document("Person")
+    doc.set("name", "Alice")
+    doc.set("age", 30)
+    doc.save()
 
-    # Insert data
-    db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)
-
-    # Update data
-    db.command("sql", "UPDATE Person SET age = 31 WHERE name = 'Alice'")
+    # Update data via API
+    doc.set("age", 31)
+    doc.save()
 
     # Delete data
-    db.command("sql", "DELETE FROM Person WHERE name = 'Alice'")
+    db.delete(doc)
 ```
 
 !!! warning "Transaction Required"
@@ -221,10 +227,14 @@ with db.transaction():
     ```python
     # ✅ Correct
     with db.transaction():
-        db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+        doc = db.new_document("Person")
+        doc.set("name", "Alice")
+        doc.save()
 
     # ❌ Will fail
-    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+    doc = db.new_document("Person")
+    doc.set("name", "Alice")
+    # doc.save() outside a transaction will raise
     ```
 
 ---
@@ -245,8 +255,10 @@ Create a transaction context manager.
 
 ```python
 with db.transaction():
-    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
-    db.command("sql", "INSERT INTO Person SET name = 'Bob'")
+    for name in ["Alice", "Bob"]:
+        doc = db.new_document("Person")
+        doc.set("name", name)
+        doc.save()
     # Automatic commit on success, rollback on exception
 ```
 
@@ -256,8 +268,10 @@ with db.transaction():
 # Alternative: manual control
 db.begin()
 try:
-    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
-    db.command("sql", "INSERT INTO Person SET name = 'Bob'")
+    for name in ["Alice", "Bob"]:
+        doc = db.new_document("Person")
+        doc.set("name", name)
+        doc.save()
     db.commit()
 except Exception as e:
     db.rollback()
@@ -668,7 +682,18 @@ from arcadedb_embedded import ArcadeDBError
 
 try:
     with arcadedb.create_database("/tmp/mydb") as db:
-        db.command("sql", "INVALID SQL")
+        # Schema operations are auto-transactional
+        db.schema.create_document_type("User")
+        db.schema.create_property("User", "email", "STRING")
+        db.schema.create_index("User", ["email"], unique=True)
+
+        # Data operations require an explicit transaction
+        with db.transaction():
+            doc = db.new_document("User")
+            doc.set("email", "alice@example.com").save()
+
+            dup = db.new_document("User")
+            dup.set("email", "alice@example.com").save()
 except ArcadeDBError as e:
     print(f"Error: {e}")
 ```
@@ -694,7 +719,8 @@ db.close()
 ```python
 # ✅ Good
 with db.transaction():
-    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+    person = db.new_document("Person")
+    person.set("name", "Alice").save()
 
 # ❌ Will fail
 db.command("sql", "INSERT INTO Person SET name = 'Alice'")

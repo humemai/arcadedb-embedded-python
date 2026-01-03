@@ -97,15 +97,21 @@ db.command("sql", "CREATE INDEX ON Person (lastName, firstName) NOTUNIQUE")
 #### Option 1: SQL (Simple cases, educational)
 
 ```python
-# Create document with SQL
-db.command("sql", "CREATE DOCUMENT User SET name = 'Alice', age = 30")
+# Create document with SQL (requires transaction)
+with db.transaction():
+    db.command("sql", "CREATE DOCUMENT User SET name = 'Alice', age = 30")
 
-# Create vertex with SQL
-db.command("sql", "CREATE VERTEX Person SET name = 'Bob', age = 25")
+# Create vertex with SQL (requires transaction)
+with db.transaction():
+    db.command("sql", "CREATE VERTEX Person SET name = 'Bob', age = 25")
 
 # ⚠️ String escaping required for user input!
 name = "O'Brien"  # Has single quote
-db.command("sql", f"CREATE VERTEX Person SET name = '{name.replace(\"'\", \"''\")}', age = 35")
+with db.transaction():
+    db.command(
+        "sql",
+        f"CREATE VERTEX Person SET name = '{name.replace("'", "''")}', age = 35",
+    )
 ```
 
 **Pros:**
@@ -121,42 +127,34 @@ db.command("sql", f"CREATE VERTEX Person SET name = '{name.replace(\"'\", \"''\"
 #### Option 2: Java API (Recommended)
 
 ```python
-# Create document with API
-doc = db.new_document("User")
-doc.set("name", "Alice")
-doc.set("age", 30)
-doc.save()
+# Create document with API (requires transaction)
+with db.transaction():
+    doc = db.new_document("User")
+    doc.set("name", "Alice")
+    doc.set("age", 30)
+    doc.save()
 
-# Create vertex with API
-vertex = db.new_vertex("Person")
-vertex.set("name", "Bob")
-vertex.set("age", 25)
-vertex.save()
+# Create vertex with API (requires transaction)
+with db.transaction():
+    vertex = db.new_vertex("Person")
+    vertex.set("name", "Bob")
+    vertex.set("age", 25)
+    vertex.save()
 
 # Safe handling of special characters (no escaping needed!)
-vertex = db.new_vertex("Person")
-vertex.set("name", "O'Brien")  # Automatically escaped
-vertex.set("bio", 'Text with "quotes" and \'apostrophes\'')  # Safe!
-vertex.save()
+with db.transaction():
+    vertex = db.new_vertex("Person")
+    vertex.set("name", "O'Brien")  # Automatically escaped
+    vertex.set("bio", 'Text with "quotes" and \'apostrophes\'')  # Safe!
+    vertex.save()
 ```
-
-**Pros:**
-- **Type safe** - properties handled correctly
-- **No SQL injection** - values properly escaped
-- **10-30x faster** than SQL
-- Handles special characters automatically
-- **Production-ready**
-
-**Cons:**
-- More verbose (3 lines vs 1)
-- Less familiar to SQL developers (but worth learning!)
 
 #### Bulk Creation Performance Comparison
 
 ```python
-# ❌ SLOW: SQL approach for 10,000 vertices
 import time
 
+# ❌ SLOW: SQL approach for 10,000 vertices
 start = time.time()
 with db.transaction():
     for i in range(10000):
@@ -183,13 +181,14 @@ print(f"API: {time.time() - start:.2f}s")  # ~0.3s (11x faster!)
 #### Option 1: SQL with Subqueries (Simple cases)
 
 ```python
-# Create edge between two vertices using subqueries
-db.command("sql", """
-    CREATE EDGE FRIEND_OF
-    FROM (SELECT FROM Person WHERE name = 'Alice')
-    TO (SELECT FROM Person WHERE name = 'Bob')
-    SET since = date('2020-01-15'), closeness = 'close'
-""")
+# Create edge between two vertices using subqueries (requires transaction)
+with db.transaction():
+    db.command("sql", """
+        CREATE EDGE FRIEND_OF
+        FROM (SELECT FROM Person WHERE name = 'Alice')
+        TO (SELECT FROM Person WHERE name = 'Bob')
+        SET since = date('2020-01-15'), closeness = 'close'
+    """)
 ```
 
 **Pros:**
@@ -211,14 +210,15 @@ bob_results = db.query("sql", "SELECT FROM Person WHERE name = 'Bob'")
 alice_vertex = list(alice_results)[0].get_vertex()
 bob_vertex = list(bob_results)[0].get_vertex()
 
-# Create edge using vertex.new_edge() API
-edge = alice_vertex.new_edge(
-    "FRIEND_OF",
-    bob_vertex,
-    since="2020-01-15",
-    closeness="close"
-)
-edge.save()
+# Create edge using vertex.new_edge() API (requires transaction)
+with db.transaction():
+    edge = alice_vertex.new_edge(
+        "FRIEND_OF",
+        bob_vertex,
+        since="2020-01-15",
+        closeness="close",
+    )
+    edge.save()
 ```
 
 **Pros:**

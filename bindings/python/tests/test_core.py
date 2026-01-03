@@ -18,9 +18,8 @@ def test_database_creation(temp_db_path):
 def test_database_operations(temp_db_path):
     """Test basic database operations."""
     with arcadedb.create_database(temp_db_path) as db:
-        # Create a document type
-        with db.transaction():
-            db.schema.create_document_type("TestDoc")
+        # Create a document type (schema ops auto-transactional)
+        db.schema.create_document_type("TestDoc")
 
         # Insert data
         with db.transaction():
@@ -47,20 +46,19 @@ def test_rich_data_types(temp_db_path):
     - Aggregation queries and filtering
     """
     with arcadedb.create_database(temp_db_path) as db:
-        # Create document type with rich data types
-        with db.transaction():
-            db.schema.create_document_type("Task")
+        # Create document type with rich data types (schema ops auto-transactional)
+        db.schema.create_document_type("Task")
 
-            # Define properties with various ArcadeDB data types
-            db.schema.create_property("Task", "title", "STRING")
-            db.schema.create_property("Task", "priority", "STRING")
-            db.schema.create_property("Task", "completed", "BOOLEAN")
-            db.schema.create_property("Task", "created_date", "DATE")
-            db.schema.create_property("Task", "due_datetime", "DATETIME")
-            db.schema.create_property("Task", "estimated_hours", "FLOAT")
-            db.schema.create_property("Task", "priority_score", "INTEGER")
-            db.schema.create_property("Task", "cost", "DECIMAL")
-            db.schema.create_property("Task", "task_id", "STRING")  # UUID as string
+        # Define properties with various ArcadeDB data types
+        db.schema.create_property("Task", "title", "STRING")
+        db.schema.create_property("Task", "priority", "STRING")
+        db.schema.create_property("Task", "completed", "BOOLEAN")
+        db.schema.create_property("Task", "created_date", "DATE")
+        db.schema.create_property("Task", "due_datetime", "DATETIME")
+        db.schema.create_property("Task", "estimated_hours", "FLOAT")
+        db.schema.create_property("Task", "priority_score", "INTEGER")
+        db.schema.create_property("Task", "cost", "DECIMAL")
+        db.schema.create_property("Task", "task_id", "STRING")  # UUID as string
 
         # Insert sample data showcasing various data types
         with db.transaction():
@@ -161,8 +159,7 @@ def test_arcadedb_sql_features(temp_db_path):
     - Data type handling in queries
     """
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_document_type("TestEntity")
+        db.schema.create_document_type("TestEntity")
 
         # Test built-in SQL functions
         with db.transaction():
@@ -249,9 +246,8 @@ def test_graph_operations(temp_db_path):
     """Test graph operations."""
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph schema
-        with db.transaction():
-            db.schema.create_vertex_type("Person")
-            db.schema.create_edge_type("Knows")
+        db.schema.create_vertex_type("Person")
+        db.schema.create_edge_type("Knows")
 
         # Create vertices using Java API
         with db.transaction():
@@ -304,8 +300,8 @@ def test_error_handling():
 def test_result_methods(temp_db_path):
     """Test Result object methods."""
     with arcadedb.create_database(temp_db_path) as db:
+        db.schema.create_document_type("ResultTest")
         with db.transaction():
-            db.schema.create_document_type("ResultTest")
             db.command(
                 "sql",
                 """
@@ -346,9 +342,8 @@ def test_cypher_queries(temp_db_path):
     """Test Cypher query language support."""
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph schema
-        with db.transaction():
-            db.schema.create_vertex_type("Person")
-            db.schema.create_edge_type("FRIEND_OF")
+        db.schema.create_vertex_type("Person")
+        db.schema.create_edge_type("FRIEND_OF")
 
         # Insert data using Cypher (if available)
         try:
@@ -374,8 +369,8 @@ def test_cypher_queries(temp_db_path):
 def test_unicode_support(temp_db_path):
     """Test Unicode and international character support."""
     with arcadedb.create_database(temp_db_path) as db:
+        db.schema.create_document_type("User")
         with db.transaction():
-            db.schema.create_document_type("User")
             # Test various Unicode: Spanish, Chinese, Japanese, Arabic, Emoji
             db.command(
                 "sql",
@@ -433,17 +428,16 @@ def test_schema_queries(temp_db_path):
     """Test querying database schema information."""
     with arcadedb.create_database(temp_db_path) as db:
         # Create schema with various property types
-        with db.transaction():
-            db.schema.create_document_type("Person")
-            db.schema.create_property("Person", "name", "STRING")
-            db.schema.create_property("Person", "age", "INTEGER")
-            db.schema.create_property("Person", "email", "STRING")
-            db.schema.create_index("Person", ["email"], unique=True)
+        db.schema.create_document_type("Person")
+        db.schema.create_property("Person", "name", "STRING")
+        db.schema.create_property("Person", "age", "INTEGER")
+        db.schema.create_property("Person", "email", "STRING")
+        db.schema.create_index("Person", ["email"], unique=True)
 
-            db.schema.create_vertex_type("Company")
-            db.schema.create_property("Company", "name", "STRING")
+        db.schema.create_vertex_type("Company")
+        db.schema.create_property("Company", "name", "STRING")
 
-            db.schema.create_edge_type("WorksFor")
+        db.schema.create_edge_type("WorksFor")
 
         # Query schema:types to get type information
         result = db.query("sql", "SELECT FROM schema:types WHERE name = 'Person'")
@@ -478,8 +472,8 @@ def test_schema_queries(temp_db_path):
 def test_large_result_set_handling(temp_db_path):
     """Test handling large result sets efficiently."""
     with arcadedb.create_database(temp_db_path) as db:
+        db.schema.create_document_type("LargeData")
         with db.transaction():
-            db.schema.create_document_type("LargeData")
             # Insert 1000 records
             for i in range(1000):
                 db.command(
@@ -520,8 +514,10 @@ def test_large_result_set_handling(temp_db_path):
 def test_property_type_conversions(temp_db_path):
     """Test that property types are correctly converted between Python/Java."""
     with arcadedb.create_database(temp_db_path) as db:
+        # Schema operations are auto-transactional
+        db.schema.create_document_type("TypeTest")
+
         with db.transaction():
-            db.schema.create_document_type("TypeTest")
             db.command(
                 "sql",
                 """
@@ -576,10 +572,9 @@ def test_complex_graph_traversal(temp_db_path):
     """Test complex graph traversal patterns."""
     with arcadedb.create_database(temp_db_path) as db:
         # Create social network graph
-        with db.transaction():
-            db.schema.create_vertex_type("Person")
-            db.schema.create_edge_type("Follows")
-            db.schema.create_edge_type("Likes")
+        db.schema.create_vertex_type("Person")
+        db.schema.create_edge_type("Follows")
+        db.schema.create_edge_type("Likes")
 
         # Create vertices using Java API
         with db.transaction():
