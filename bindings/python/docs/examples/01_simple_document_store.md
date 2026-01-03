@@ -27,34 +27,38 @@ The complete example is available at: [`examples/01_simple_document_store.py`](h
 ArcadeDB provides comprehensive data type support with NULL handling:
 
 ```python
-# Schema with typed properties for performance and validation
-with db.transaction():
-    db.command("sql", "CREATE DOCUMENT TYPE Task")
-    db.command("sql", "CREATE PROPERTY Task.title STRING")
-    db.command("sql", "CREATE PROPERTY Task.priority STRING")
-    db.command("sql", "CREATE PROPERTY Task.completed BOOLEAN")
-    db.command("sql", "CREATE PROPERTY Task.tags LIST OF STRING")  # Type-safe arrays
-    db.command("sql", "CREATE PROPERTY Task.created_date DATE")
-    db.command("sql", "CREATE PROPERTY Task.due_datetime DATETIME")
-    db.command("sql", "CREATE PROPERTY Task.estimated_hours FLOAT")
-    db.command("sql", "CREATE PROPERTY Task.priority_score INTEGER")
-    db.command("sql", "CREATE PROPERTY Task.cost DECIMAL")
-    db.command("sql", "CREATE PROPERTY Task.task_id STRING")
+from datetime import date
+import uuid
+import arcadedb
 
-# Insert with NULL values for optional fields and uuid() for unique ID
-db.command("sql", """
-    INSERT INTO Task SET
-        title = 'Write documentation',
-        priority = 'medium',
-        completed = false,
-        tags = ['work', 'writing'],
-        created_date = date('2024-01-16'),
-        due_datetime = NULL,
-        estimated_hours = 8.0,
-        priority_score = 70,
-        cost = NULL,
-        task_id = uuid()
-""")
+with arcadedb.create_database("./task_db") as db:
+    # Schema operations are auto-transactional (no wrapper needed)
+    db.schema.create_document_type("Task")
+    db.schema.create_property("Task", "title", "STRING")
+    db.schema.create_property("Task", "priority", "STRING")
+    db.schema.create_property("Task", "completed", "BOOLEAN")
+    db.schema.create_property("Task", "tags", "LIST OF STRING")  # Type-safe arrays
+    db.schema.create_property("Task", "created_date", "DATE")
+    db.schema.create_property("Task", "due_datetime", "DATETIME")
+    db.schema.create_property("Task", "estimated_hours", "FLOAT")
+    db.schema.create_property("Task", "priority_score", "INTEGER")
+    db.schema.create_property("Task", "cost", "DECIMAL")
+    db.schema.create_property("Task", "task_id", "STRING")
+
+    # Insert with Python objects (auto-converted) and UUID
+    with db.transaction():
+        task = db.new_document("Task")
+        task.set("title", "Write documentation")
+        task.set("priority", "medium")
+        task.set("completed", False)
+        task.set("tags", ["work", "writing"])
+        task.set("created_date", date(2024, 1, 16))
+        task.set("due_datetime", None)
+        task.set("estimated_hours", 8.0)
+        task.set("priority_score", 70)
+        task.set("cost", None)
+        task.set("task_id", str(uuid.uuid4()))
+        task.save()
 ```
 
 ### 2. SQL Functions and NULL Queries
@@ -62,27 +66,32 @@ db.command("sql", """
 Learn about built-in functions and NULL handling:
 
 ```python
-# Built-in functions: date() for DATE type, uuid() for unique IDs
-db.command("sql", """
-    INSERT INTO Task SET
-        title = 'Buy groceries',
-        task_id = uuid(),
-        created_date = date('2024-01-15'),
-        due_datetime = '2024-01-20 18:00:00',
-        cost = 150.00
-""")
+from datetime import datetime
+import uuid
+import arcadedb
 
-# Query for NULL values
-result = db.query("sql", "SELECT FROM Task WHERE due_datetime IS NULL")
-result = db.query("sql", "SELECT FROM Task WHERE cost IS NULL")
+with arcadedb.open_database("./task_db") as db:
+    # Insert with Python-native types (UUID, datetime handled by converter)
+    with db.transaction():
+        task = db.new_document("Task")
+        task.set("title", "Buy groceries")
+        task.set("task_id", str(uuid.uuid4()))
+        task.set("created_date", date(2024, 1, 15))
+        task.set("due_datetime", datetime(2024, 1, 20, 18, 0, 0))
+        task.set("cost", 150.00)
+        task.save()
 
-# UPDATE to set NULL (clear optional values)
-db.command("sql", """
-    UPDATE Task SET
-        cost = NULL,
-        estimated_hours = NULL
-    WHERE title = 'Call dentist'
-""")
+    # Query for NULL values (reads don't need transaction)
+    result = db.query("sql", "SELECT FROM Task WHERE due_datetime IS NULL")
+    result = db.query("sql", "SELECT FROM Task WHERE cost IS NULL")
+
+    # UPDATE via API (fetch + mutate in transaction)
+    with db.transaction():
+        for record in db.query("sql", "SELECT FROM Task WHERE title = 'Call dentist'"):
+            doc = record.get_element()
+            doc.set("cost", None)
+            doc.set("estimated_hours", None)
+            doc.save()
 ```
 
 ### 3. Record Types Explained
