@@ -34,83 +34,81 @@ def run_benchmark_for_dim(dim):
     if os.path.exists(DB_PATH):
         shutil.rmtree(DB_PATH)
 
-    db = create_database(DB_PATH)
+    with create_database(DB_PATH) as db:
 
-    # Generate Data
-    print("Generating data...")
-    vectors = [generate_vector(dim) for _ in range(NUM_VECTORS)]
+        # Generate Data
+        print("Generating data...")
+        vectors = [generate_vector(dim) for _ in range(NUM_VECTORS)]
 
-    # Generate Queries (use existing vectors to ensure matches)
-    query_indices = random.sample(range(NUM_VECTORS), NUM_QUERIES)
-    queries = [vectors[i] for i in query_indices]
+        # Generate Queries (use existing vectors to ensure matches)
+        query_indices = random.sample(range(NUM_VECTORS), NUM_QUERIES)
+        queries = [vectors[i] for i in query_indices]
 
-    results = {"NONE": [], "INT8": [], "BINARY": []}
+        results = {"NONE": [], "INT8": [], "BINARY": []}
 
-    for q_type in ["NONE", "INT8", "BINARY"]:
-        print(f"\n--- Testing {q_type} (Dim={dim}) ---")
-        type_name = f"Vector_{q_type}_{dim}"
+        for q_type in ["NONE", "INT8", "BINARY"]:
+            print(f"\n--- Testing {q_type} (Dim={dim}) ---")
+            type_name = f"Vector_{q_type}_{dim}"
 
-        # Create Type
-        if db.schema.exists_type(type_name):
-            db.schema.drop_type(type_name)
-        db.schema.create_vertex_type(type_name)
-        db.schema.create_property(type_name, "vector", "ARRAY_OF_FLOATS")
-        db.schema.create_property(type_name, "id", "INTEGER")
+            # Create Type
+            if db.schema.exists_type(type_name):
+                db.schema.drop_type(type_name)
+            db.schema.create_vertex_type(type_name)
+            db.schema.create_property(type_name, "vector", "ARRAY_OF_FLOATS")
+            db.schema.create_property(type_name, "id", "INTEGER")
 
-        # Insert Data
-        print("Inserting data...")
-        with db.transaction():
-            for i, vec in enumerate(vectors):
-                v = db.new_vertex(type_name)
-                v.set("id", i)
-                v.set("vector", arcadedb.to_java_float_array(vec))
-                v.save()
+            # Insert Data
+            print("Inserting data...")
+            with db.transaction():
+                for i, vec in enumerate(vectors):
+                    v = db.new_vertex(type_name)
+                    v.set("id", i)
+                    v.set("vector", arcadedb.to_java_float_array(vec))
+                    v.save()
 
-        # Create Index
-        print("Creating index...")
-        import json
+            # Create Index
+            print("Creating index...")
+            import json
 
-        metadata = {"dimensions": dim}
-        if q_type != "NONE":
-            metadata["quantization"] = q_type
+            metadata = {"dimensions": dim}
+            if q_type != "NONE":
+                metadata["quantization"] = q_type
 
-        try:
-            sql = f"CREATE INDEX ON {type_name} (vector) LSM_VECTOR METADATA {json.dumps(metadata)}"
-            db.command("sql", sql)
-        except Exception as e:
-            print(f"ERROR creating index for {q_type}: {e}")
-            # Fill with empty results so we can continue
-            results[q_type] = [set() for _ in range(NUM_QUERIES)]
-            continue
+            try:
+                sql = f"CREATE INDEX ON {type_name} (vector) LSM_VECTOR METADATA {json.dumps(metadata)}"
+                db.command("sql", sql)
+            except Exception as e:
+                print(f"ERROR creating index for {q_type}: {e}")
+                # Fill with empty results so we can continue
+                results[q_type] = [set() for _ in range(NUM_QUERIES)]
+                continue
 
-        # Search
-        print("Searching...")
-        try:
-            index = db.schema.get_vector_index(type_name, "vector")
+            # Search
+            print("Searching...")
+            try:
+                index = db.schema.get_vector_index(type_name, "vector")
 
-            for i, query_vec in enumerate(queries):
-                try:
-                    res = index.find_nearest(query_vec, k=K)
+                for i, query_vec in enumerate(queries):
+                    try:
+                        res = index.find_nearest(query_vec, k=K)
 
-                    # Extract IDs
-                    ids = set()
-                    for r in res:
-                        try:
-                            # r is a tuple (Vertex, score)
-                            vertex = r[0]
-                            ids.add(vertex.get("id"))
-                        except Exception as e:
-                            pass  # print(f"Warning: Could not get ID from result {r}: {e}")
+                        # Extract IDs
+                        ids = set()
+                        for r in res:
+                            try:
+                                # r is a tuple (Vertex, score)
+                                vertex = r[0]
+                                ids.add(vertex.get("id"))
+                            except Exception as e:
+                                pass  # print(f"Warning: Could not get ID from result {r}: {e}")
 
-                    results[q_type].append(ids)
-                except Exception as e:
-                    print(f"Error searching query {i}: {e}")
-                    results[q_type].append(set())
-        except Exception as e:
-            print(f"Error getting index: {e}")
-            results[q_type] = [set() for _ in range(NUM_QUERIES)]
-
-    db.close()
+                        results[q_type].append(ids)
+                    except Exception as e:
+                        print(f"Error searching query {i}: {e}")
+                        results[q_type].append(set())
+            except Exception as e:
+                print(f"Error getting index: {e}")
+                results[q_type] = [set() for _ in range(NUM_QUERIES)]
 
     # Calculate Recall
     int8_recall_sum = 0

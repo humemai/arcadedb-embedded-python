@@ -58,7 +58,7 @@ def test_set_auto_transaction(temp_db):
 
 def test_transaction_config_with_operations(temp_db):
     """Test transaction config methods work alongside normal operations."""
-    # Create schema using Pythonic API
+    # Schema operations are auto-transactional
     temp_db.schema.create_vertex_type("ConfigTest")
 
     # Configure for maximum durability
@@ -91,7 +91,7 @@ def test_transaction_config_with_operations(temp_db):
 
 def test_manual_transaction_mode(temp_db):
     """Test manual transaction control with auto-transaction disabled."""
-    # Create schema using Pythonic API
+    # Schema operations are auto-transactional
     temp_db.schema.create_vertex_type("ManualTest")
 
     # Disable auto-transaction
@@ -117,6 +117,7 @@ def test_manual_transaction_mode(temp_db):
 
 def test_wal_flush_with_batch_operations(temp_db):
     """Test WAL flush modes with batch operations."""
+    # Schema operations are auto-transactional
     temp_db.schema.create_vertex_type("BatchTest")
 
     # Test with maximum durability
@@ -166,9 +167,11 @@ def test_combined_config_changes(temp_db):
     temp_db.set_read_your_writes(True)
     temp_db.set_auto_transaction(True)
 
-    # Create some data using Pythonic API
+    # Schema operations are auto-transactional
+    temp_db.schema.create_vertex_type("Combined")
+
+    # Create some data (requires transaction)
     with temp_db.transaction():
-        temp_db.schema.create_vertex_type("Combined")
         temp_db.command("sql", "CREATE VERTEX Combined SET value = 1")
 
     # Switch to performance settings

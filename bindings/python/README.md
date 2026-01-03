@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 204 Passing | **Platforms**: 6 Supported
+**Status**: ✅ Production Ready | **Tests**: 221 Passing | **Platforms**: 6 Supported
 
 ---
 
@@ -45,7 +45,7 @@ We publish development versions (`X.Y.Z.devN`) for every push to main when `pom.
 ```python
 import arcadedb_embedded as arcadedb
 
-# Create database (context manager for automatic cleanup)
+# Create database (context manager for automatic open and close)
 with arcadedb.create_database("/tmp/mydb") as db:
     # Create schema
     db.command("sql", "CREATE DOCUMENT TYPE Person")
@@ -76,7 +76,7 @@ with arcadedb.create_database("/tmp/mydb") as db:
 - ⚡ **High performance**: Direct JVM integration via JPype
 - 🔒 **ACID transactions**: Full transaction support
 - 🎯 **Vector storage**: Store and query vector embeddings with JVector indexing
-- 📥 **Data import**: Built-in CSV, XML, ArcadeDB JSONL import
+- 📥 **Data import**: Built-in CSV and ArcadeDB JSONL import
 
 ---
 
@@ -94,12 +94,12 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 
 | Platform      | Wheel Size | JRE Size | Installed Size | Tests         |
 | ------------- | ---------- | -------- | -------------- | ------------- |
-| Windows ARM64 | 209.4M     | 47.6M    | ~274M          | 204 passed ✅ |
-| macOS ARM64   | 210.8M     | 53.9M    | ~280M          | 204 passed ✅ |
-| macOS Intel   | 211.9M     | 55.3M    | ~281M          | 204 passed ✅ |
-| Windows x64   | 211.6M     | 51.6M    | ~278M          | 204 passed ✅ |
-| Linux ARM64   | 214.1M     | 61.8M    | ~288M          | 204 passed ✅ |
-| Linux x64     | 215.0M     | 62.7M    | ~289M          | 204 passed ✅ |
+| Windows ARM64 | 209.4M     | 47.6M    | ~274M          | 221 passed ✅ |
+| macOS ARM64   | 210.8M     | 53.9M    | ~280M          | 221 passed ✅ |
+| macOS Intel   | 211.9M     | 55.3M    | ~281M          | 221 passed ✅ |
+| Windows x64   | 211.6M     | 51.6M    | ~278M          | 221 passed ✅ |
+| Linux ARM64   | 214.1M     | 61.8M    | ~288M          | 221 passed ✅ |
+| Linux x64     | 215.0M     | 62.7M    | ~289M          | 221 passed ✅ |
 
 **Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See `jar_exclusions.txt` for details.
 
@@ -109,7 +109,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 204 tests + 7 example scripts passing on all 6 platforms
+**Status**: 221 tests + 7 example scripts passing on all 6 platforms
 
 ```bash
 # Run all tests
@@ -209,7 +209,7 @@ arcadedb_embedded/
 ├── transactions.py      # TransactionContext manager
 ├── schema.py            # Schema management API
 ├── vector.py            # Vector search and JVector indexing
-├── importer.py          # Data import (CSV, XML)
+├── importer.py          # Data import (CSV, JSONL)
 ├── exporter.py          # Data export (JSONL, GraphML, GraphSON, CSV)
 ├── batch.py             # Batch operations context
 ├── async_executor.py    # Asynchronous query execution

@@ -18,6 +18,46 @@ ArcadeDB transactions provide:
 - **Context managers** automatically handle commit/rollback
 - **Rollback on exception** ensures data integrity
 
+## Transaction Scope
+
+It is important to distinguish between operations that require explicit transactions and those that are auto-transactional:
+
+| Operation Type | Examples | Transaction Requirement |
+| :--- | :--- | :--- |
+| **Schema Operations** | `create_vertex_type()`, `create_property()`, `create_index()`, `db.command("sql", "DROP INDEX...")` | **Auto-transactional** (Do NOT wrap in `with db.transaction():`) |
+| **Data Write** | `vertex.save()`, `edge.save()`, `db.command("sql", "INSERT...")`, `db.command("sql", "UPDATE...")`, `db.command("sql", "DELETE...")` | **Required** (Wrap in `with db.transaction():`) |
+| **Bulk Operations** | `db.command("sql", "IMPORT DATABASE...")` | **Auto-transactional** (Built-in transaction management) |
+| **Data Read** | `db.query()`, `db.command("sql", "SELECT...")`, `db.lookup_by_rid()` | **Optional** (Can run outside transaction for better performance) |
+| **Vector Operations** | `db.create_vector_index()` | **Auto-transactional** (Do NOT wrap) |
+
+### Key Distinction: `db.query()` vs `db.command()`
+
+- **`db.query()`**: Always used for **read-only queries**. Returns a `ResultSet` with read-only results. **Does NOT require a transaction.**
+- **`db.command()`**: Used for **both DDL and DML operations**:
+  - DML Read: `SELECT` queries (returns ResultSet, optional transaction)
+  - DML Write: `INSERT`, `UPDATE`, `DELETE` (requires transaction)
+  - DDL: `CREATE TYPE`, `CREATE PROPERTY`, `CREATE INDEX`, `DROP`, etc. (auto-transactional)
+  - Bulk: `IMPORT DATABASE`, `MOVE` (auto-transactional)
+
+### Best Practice Pattern
+
+```python
+# ✅ CORRECT: Queries outside transaction
+results = db.query("SELECT * FROM Person")
+for result in results:
+    name = result.get("name")  # Safe, read-only
+
+# ✅ CORRECT: Write operations inside transaction
+with db.transaction():
+    doc = db.new_document("Person")
+    doc.set("name", "Alice")
+    doc.save()  # Safe, within transaction
+
+# ❌ INCORRECT: Write operation without transaction
+doc = db.new_document("Person")
+doc.save()  # Will fail - requires transaction
+```
+
 ## Transaction Methods
 
 All transaction methods are on the `Database` class:
@@ -169,10 +209,9 @@ import arcadedb_embedded as arcadedb
 db = arcadedb.create_database("./txn_demo")
 
 # Create schema
-with db.transaction():
-    db.command("sql", "CREATE DOCUMENT TYPE Account")
-    db.command("sql", "CREATE PROPERTY Account.name STRING")
-    db.command("sql", "CREATE PROPERTY Account.balance DECIMAL")
+db.schema.create_document_type("Account")
+db.schema.create_property("Account", "name", "STRING")
+db.schema.create_property("Account", "balance", "DECIMAL")
 
 # Insert data
 with db.transaction():
@@ -213,17 +252,20 @@ with db.transaction():
 
 ```python
 with db.transaction():
-    account = db.query("sql", "SELECT FROM Account WHERE name = 'Alice'").next()
+    account_rec = db.query("sql", "SELECT FROM Account WHERE name = 'Alice'").first()
 
-    current_balance = float(account.get("balance"))
+    if not account_rec:
+        raise ValueError("Account not found")
+
+    account_doc = account_rec.get_element()
+    current_balance = float(account_doc.get("balance"))
     withdrawal = 500.00
 
     if current_balance >= withdrawal:
-        # Update balance
+        # Update balance via document API
         new_balance = current_balance - withdrawal
-        db.command("sql",
-                   f"UPDATE Account SET balance = {new_balance} "
-                   f"WHERE @rid = {account.get('@rid')}")
+        account_doc.set("balance", new_balance)
+        account_doc.save()
         print(f"Withdrawal successful. New balance: {new_balance}")
     else:
         # Raise exception to trigger rollback

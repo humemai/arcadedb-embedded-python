@@ -12,7 +12,7 @@ Learn the fundamentals of vector search:
 - Creating vector indexes
 - Generating embeddings
 - Performing similarity searches
-- Understanding HNSW parameters
+- Understanding JVector parameters
 
 ### Movie Recommendations
 
@@ -31,67 +31,68 @@ Build a recommendation system:
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("vector_demo", create_if_not_exists=True)
-
-# Create vertex type with vector property
-with db.transaction() as tx:
-    db.command("sql", """
-        CREATE VERTEX TYPE Product
-        IF NOT EXISTS
-    """)
+with arcadedb.create_database("vector_demo") as db:
+    # Create vertex type with vector property (schema ops are auto-transactional)
+    db.schema.create_vertex_type("Product")
+    db.schema.create_property("Product", "name", "STRING")
+    db.schema.create_property("Product", "description", "STRING")
+    db.schema.create_property("Product", "embedding", "ARRAY_OF_FLOATS")
 
     # Create vector index (1536 dimensions for OpenAI embeddings)
-    db.command("sql", """
-        CREATE INDEX IF NOT EXISTS
-        ON Product (embedding)
-        VECTOR 1536
-    """)
+    db.create_vector_index("Product", "embedding", dimensions=1536)
 ```
 
 ### Insert Vectors
 
 ```python
 import numpy as np
+import arcadedb_embedded as arcadedb
 
-# Generate or load embeddings (example with random vectors)
-def get_embedding(text: str) -> list:
-    # In production, use OpenAI, Sentence Transformers, etc.
-    return np.random.rand(1536).tolist()
+with arcadedb.open_database("./vector_demo") as db:
+    # Generate or load embeddings (example with random vectors)
+    def get_embedding(text: str) -> list:
+        # In production, use OpenAI, Sentence Transformers, etc.
+        return np.random.rand(1536).tolist()
 
-# Insert products with embeddings
-with db.transaction() as tx:
+    # Insert products with embeddings
     products = [
         ("Laptop", "High-performance computing device"),
         ("Mouse", "Wireless ergonomic mouse"),
         ("Keyboard", "Mechanical keyboard with RGB")
     ]
 
-    for name, description in products:
-        embedding = get_embedding(f"{name}: {description}")
-
-        db.command("sql", """
-            CREATE VERTEX Product
-            SET name = ?,
-                description = ?,
-                embedding = ?
-        """, name, description, embedding)
+    with db.transaction():
+        for name, description in products:
+            embedding = get_embedding(f"{name}: {description}")
+            product = db.new_vertex("Product")
+            product.set("name", name)
+            product.set("description", description)
+            product.set("embedding", embedding)
+            product.save()
 ```
 
 ### Search Similar Items
 
 ```python
-# Query for similar products
-search_text = "computer accessories"
-query_embedding = get_embedding(search_text)
+import arcadedb_embedded as arcadedb
 
-with db.transaction() as tx:
-    results = db.query("sql", """
+with arcadedb.open_database("./vector_demo") as db:
+    # Query for similar products (reads don't require a transaction)
+    def get_embedding(text: str) -> list:
+        # In production, use real embedding service
+        import numpy as np
+        return np.random.rand(1536).tolist()
+
+    search_text = "computer accessories"
+    query_embedding = get_embedding(search_text)
+
+    results = db.query("""
         SELECT name, description,
-               vectorDistance(embedding, ?, 'COSINE') as distance
+               vectorL2Distance(embedding, ?) as distance
         FROM Product
         ORDER BY distance ASC
         LIMIT 5
-    """, query_embedding)
+    """, (query_embedding,))
 
     for record in results:
         print(f"{record.get('name')}: {record.get('distance'):.4f}")
@@ -104,36 +105,46 @@ ArcadeDB provides several vector functions:
 ### Distance Metrics
 
 ```python
-# Cosine similarity (0-2, lower = more similar)
-db.query("sql", """
-    SELECT vectorDistance(embedding, ?, 'COSINE') as score
-    FROM Product
-""", query_vector)
+import arcadedb_embedded as arcadedb
 
-# Euclidean distance
-db.query("sql", """
-    SELECT vectorDistance(embedding, ?, 'EUCLIDEAN') as score
-    FROM Product
-""", query_vector)
+with arcadedb.open_database("./vector_demo") as db:
+    query_vector = [0.5] * 1536  # Example embedding
 
-# Dot product
-db.query("sql", """
-    SELECT vectorDistance(embedding, ?, 'DOT') as score
-    FROM Product
-""", query_vector)
+    # Cosine similarity (0-2, lower = more similar)
+    results = db.query("""
+        SELECT vectorCosineSimilarity(embedding, ?) as score
+        FROM Product
+    """, (query_vector,))
+
+    # Euclidean distance (L2)
+    results = db.query("""
+        SELECT vectorL2Distance(embedding, ?) as score
+        FROM Product
+    """, (query_vector,))
+
+    # Dot product
+    results = db.query("""
+        SELECT vectorDotProduct(embedding, ?) as score
+        FROM Product
+    """, (query_vector,))
 ```
 
 ### Nearest Neighbors
 
 ```python
-# Find k-nearest neighbors
-with db.transaction() as tx:
-    results = db.query("sql", """
+import arcadedb_embedded as arcadedb
+
+with arcadedb.open_database("./vector_demo") as db:
+    query_vector = [0.5] * 1536  # Example embedding
+
+    # Find k-nearest neighbors (read-only, no transaction needed)
+    results = db.query("""
         SELECT name,
-               vectorNearest(embedding, ?, 10) as neighbors
+               vectorL2Distance(embedding, ?) as distance
         FROM Product
-        WHERE @rid = #12:0
-    """, query_vector)
+        ORDER BY distance ASC
+        LIMIT 10
+    """, (query_vector,))
 ```
 
 ## Advanced Patterns
@@ -143,17 +154,22 @@ with db.transaction() as tx:
 Combine semantic search with traditional filtering:
 
 ```python
-with db.transaction() as tx:
-    results = db.query("sql", """
+import arcadedb_embedded as arcadedb
+
+with arcadedb.open_database("./vector_demo") as db:
+    query_embedding = [0.5] * 1536  # Example embedding
+
+    # Read-only query, no transaction needed
+    results = db.query("""
         SELECT name, price, category,
-               vectorDistance(embedding, ?, 'COSINE') as similarity
+               vectorL2Distance(embedding, ?) as similarity
         FROM Product
         WHERE category = 'Electronics'
           AND price < 1000
           AND inStock = true
         ORDER BY similarity ASC
         LIMIT 10
-    """, query_embedding)
+    """, (query_embedding,))
 ```
 
 ### Multi-Vector Search
@@ -161,27 +177,32 @@ with db.transaction() as tx:
 Search across multiple vector properties:
 
 ```python
-# Create product with multiple embeddings
-with db.transaction() as tx:
-    db.command("sql", """
-        CREATE VERTEX Product
-        SET name = 'Laptop',
-            title_embedding = ?,
-            description_embedding = ?,
-            image_embedding = ?
-    """, title_vec, desc_vec, image_vec)
+import arcadedb_embedded as arcadedb
 
-# Search combining multiple vectors
-with db.transaction() as tx:
-    results = db.query("sql", """
+with arcadedb.open_database("./vector_demo") as db:
+    # Insert product with multiple embeddings
+    with db.transaction():
+        product = db.new_vertex("Product")
+        product.set("name", "Laptop")
+        product.set("title_embedding", [0.5] * 1536)
+        product.set("description_embedding", [0.3] * 1536)
+        product.set("image_embedding", [0.7] * 1536)
+        product.save()
+
+    # Search combining multiple vectors (read-only, no transaction)
+    query_title = [0.5] * 1536
+    query_desc = [0.3] * 1536
+    query_image = [0.7] * 1536
+
+    results = db.query("""
         SELECT name,
-               (vectorDistance(title_embedding, ?, 'COSINE') * 0.5 +
-                vectorDistance(description_embedding, ?, 'COSINE') * 0.3 +
-                vectorDistance(image_embedding, ?, 'COSINE') * 0.2) as score
+               (vectorL2Distance(title_embedding, ?) * 0.5 +
+                vectorL2Distance(description_embedding, ?) * 0.3 +
+                vectorL2Distance(image_embedding, ?) * 0.2) as score
         FROM Product
         ORDER BY score ASC
         LIMIT 10
-    """, query_title, query_desc, query_image)
+    """, (query_title, query_desc, query_image))
 ```
 
 ### Graph + Vectors
@@ -189,41 +210,56 @@ with db.transaction() as tx:
 Combine graph traversal with vector similarity:
 
 ```python
-# Find similar products bought by friends
-with db.transaction() as tx:
-    results = db.query("cypher", """
-        MATCH (user:User {id: $userId})-[:FRIEND]->(friend:User)
-             ,(friend)-[:PURCHASED]->(product:Product)
-        WHERE vectorDistance(product.embedding, $queryVector, 'COSINE') < 0.5
-        RETURN DISTINCT product.name,
-               vectorDistance(product.embedding, $queryVector, 'COSINE') as similarity
+import arcadedb_embedded as arcadedb
+
+with arcadedb.open_database("./vector_demo") as db:
+    query_vector = [0.5] * 1536  # Example embedding
+
+    # Find similar products bought by friends (read-only, no transaction)
+    results = db.query("""
+        SELECT product.name,
+               vectorL2Distance(product.embedding, ?) as similarity
+        FROM (
+            SELECT expand(purchased)
+            FROM (
+                SELECT expand(friendOf)
+                FROM User
+                WHERE id = ?
+            )
+        ) purchased,
+        Product product
+        WHERE purchased.@rid = product.@rid
+          AND vectorL2Distance(product.embedding, ?) < 0.5
         ORDER BY similarity ASC
         LIMIT 10
-    """, {'userId': 123, 'queryVector': query_vector})
+    """, (query_vector, 123, query_vector))
 ```
 
-## HNSW Index Configuration
+## JVector Index Configuration
 
-Tune vector index performance:
+Tune vector index performance with JVector parameters:
 
 ```python
-# Create index with custom parameters
-with db.transaction() as tx:
-    db.command("sql", """
-        CREATE VERTEX INDEX ON Product (embedding)
-        VECTOR 1536
-        HNSW {
-            m: 16,              -- Max connections per node
-            efConstruction: 200, -- Construction quality
-            ef: 100             -- Search quality
-        }
-    """)
+import arcadedb_embedded as arcadedb
+
+with arcadedb.create_database("./vector_demo") as db:
+    # Create vertex type
+    db.schema.create_vertex_type("Product")
+    db.schema.create_property("Product", "embedding", "ARRAY_OF_FLOATS")
+
+    # Create index with JVector parameters (schema operations are auto-transactional)
+    db.create_vector_index("Product", "embedding",
+                          dimensions=1536,
+                          max_connections=32,     # Connections per node (default: 32)
+                          beam_width=256)         # Search beam width (default: 256)
 ```
 
 **Parameter Guidelines:**
-- **m**: 8-64 (higher = better accuracy, more memory)
-- **efConstruction**: 100-500 (higher = better index quality, slower build)
-- **ef**: 50-500 (higher = better search accuracy, slower queries)
+- **max_connections**: 8-64 (higher = better accuracy, more memory/slower build)
+- **beam_width**: 128-512 (higher = better search accuracy, slower queries)
+  - 128: Fast search, lower accuracy
+  - 256: Balanced (default)
+  - 512: High accuracy, slower search
 
 ## Embedding Providers
 
@@ -277,18 +313,23 @@ def get_embedding(text: str) -> list:
 Generate embeddings in batches for better performance:
 
 ```python
-# Batch embedding generation
-texts = ["product 1", "product 2", "product 3", ...]
-embeddings = model.encode(texts, batch_size=32)
+import arcadedb_embedded as arcadedb
 
-# Batch insert
-with db.transaction() as tx:
-    for text, embedding in zip(texts, embeddings):
-        db.command("sql", """
-            CREATE VERTEX Product
-            SET description = ?,
-                embedding = ?
-        """, text, embedding.tolist())
+with arcadedb.open_database("./vector_demo") as db:
+    # Batch embedding generation
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+
+    texts = ["product 1", "product 2", "product 3"]
+    embeddings = model.encode(texts, batch_size=32)
+
+    # Batch insert with transaction
+    with db.transaction():
+        for text, embedding in zip(texts, embeddings):
+            product = db.new_vertex("Product")
+            product.set("description", text)
+            product.set("embedding", embedding.tolist())
+            product.save()
 ```
 
 ### Index Warming
@@ -296,14 +337,16 @@ with db.transaction() as tx:
 Pre-load vector index into memory:
 
 ```python
-# Warm up the index
-with db.transaction() as tx:
+import arcadedb_embedded as arcadedb
+
+with arcadedb.open_database("./vector_demo") as db:
+    # Warm up the index (read-only, no transaction needed)
     dummy_vector = [0.0] * 1536
-    db.query("sql", """
+    results = db.query("""
         SELECT FROM Product
-        WHERE vectorDistance(embedding, ?, 'COSINE') < 999
+        WHERE vectorL2Distance(embedding, ?) < 999
         LIMIT 1
-    """, dummy_vector)
+    """, (dummy_vector,))
 ```
 
 ## Complete Examples

@@ -24,8 +24,8 @@ import arcadedb_embedded as arcadedb
 from arcadedb_embedded.graph import Document, Vertex, Edge
 
 with arcadedb.create_database("/tmp/mydb") as db:
-    with db.transaction():
-        db.schema.create_document_type("Note")
+    # Schema operations are auto-transactional
+    db.schema.create_document_type("Note")
 
     # Create a document
     with db.transaction():
@@ -188,8 +188,8 @@ traversing edges.
 ### Creating Vertices
 
 ```python
-with db.transaction():
-    db.schema.create_vertex_type("Person")
+# Schema operations are auto-transactional
+db.schema.create_vertex_type("Person")
 
 with db.transaction():
     alice = db.new_vertex("Person")
