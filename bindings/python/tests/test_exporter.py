@@ -617,47 +617,40 @@ class TestAllDataTypes:
         db = arcadedb.create_database(temp_db_path)
 
         try:
-            # Create comprehensive type with all data types
-            with db.transaction():
-                db.schema.create_document_type("DataTypeTest")
+            # Create comprehensive type with all data types (auto-transactional)
+            db.schema.create_document_type("DataTypeTest")
 
-                # Basic types
-                db.schema.create_property("DataTypeTest", "text_field", "STRING")
-                db.schema.create_property("DataTypeTest", "bool_field", "BOOLEAN")
-                db.schema.create_property("DataTypeTest", "int_field", "INTEGER")
-                db.schema.create_property("DataTypeTest", "long_field", "LONG")
-                db.schema.create_property("DataTypeTest", "float_field", "FLOAT")
-                db.schema.create_property("DataTypeTest", "double_field", "DOUBLE")
+            # Basic types
+            db.schema.create_property("DataTypeTest", "text_field", "STRING")
+            db.schema.create_property("DataTypeTest", "bool_field", "BOOLEAN")
+            db.schema.create_property("DataTypeTest", "int_field", "INTEGER")
+            db.schema.create_property("DataTypeTest", "long_field", "LONG")
+            db.schema.create_property("DataTypeTest", "float_field", "FLOAT")
+            db.schema.create_property("DataTypeTest", "double_field", "DOUBLE")
 
-                # Date/time types
-                db.schema.create_property("DataTypeTest", "date_field", "DATE")
-                db.command(
-                    "sql", "CREATE PROPERTY DataTypeTest.datetime_field DATETIME"
-                )
+            # Date/time types
+            db.schema.create_property("DataTypeTest", "date_field", "DATE")
+            db.command("sql", "CREATE PROPERTY DataTypeTest.datetime_field DATETIME")
 
-                # Precision types
-                db.schema.create_property("DataTypeTest", "decimal_field", "DECIMAL")
+            # Precision types
+            db.schema.create_property("DataTypeTest", "decimal_field", "DECIMAL")
 
-                # Collection types
-                db.command(
-                    "sql", "CREATE PROPERTY DataTypeTest.string_list LIST OF STRING"
-                )
-                db.command(
-                    "sql", "CREATE PROPERTY DataTypeTest.int_list LIST OF INTEGER"
-                )
-                db.schema.create_property("DataTypeTest", "mixed_list", "LIST")
+            # Collection types
+            db.command("sql", "CREATE PROPERTY DataTypeTest.string_list LIST OF STRING")
+            db.command("sql", "CREATE PROPERTY DataTypeTest.int_list LIST OF INTEGER")
+            db.schema.create_property("DataTypeTest", "mixed_list", "LIST")
 
-                # Note: EMBEDDED type works best without explicit property definition
-                # ArcadeDB will automatically handle nested objects
+            # Note: EMBEDDED type works best without explicit property definition
+            # ArcadeDB will automatically handle nested objects
 
-                # Create a reference type for LINK testing
-                db.schema.create_vertex_type("RefVertex")
-                db.schema.create_property("RefVertex", "ref_id", "INTEGER")
+            # Create a reference type for LINK testing
+            db.schema.create_vertex_type("RefVertex")
+            db.schema.create_property("RefVertex", "ref_id", "INTEGER")
 
-                # LINK type (reference to another record)
-                db.command(
-                    "sql", "CREATE PROPERTY DataTypeTest.link_field LINK OF RefVertex"
-                )
+            # LINK type (reference to another record)
+            db.command(
+                "sql", "CREATE PROPERTY DataTypeTest.link_field LINK OF RefVertex"
+            )
 
             # Insert test data with all types
             with db.transaction():

@@ -67,8 +67,10 @@ def test_server_database_operations(temp_server_root):
         assert db.is_open()
 
         # Use database
+        # Schema operations are auto-transactional
+        db.schema.create_document_type("Person")
+
         with db.transaction():
-            db.schema.create_document_type("Person")
             db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
 
         # Query

@@ -10,57 +10,42 @@ ArcadeDB's graph model consists of:
 - **Edges (Relationships)**: Connections between vertices with optional properties
 - **Types**: Schema definitions for vertices and edges
 
-## Creating Graph Schema
+## Creating Graph Schema (Python API)
 
-Before creating vertices and edges, define their types:
+Define vertex and edge types with the embedded API (no SQL needed):
 
 ```python
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("/tmp/social") as db:
     # Create vertex types
-    db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE VERTEX TYPE Company")
+    db.schema.create_vertex_type("Person")
+    db.schema.create_vertex_type("Company")
 
     # Create edge types
-    db.command("sql", "CREATE EDGE TYPE Knows")
-    db.command("sql", "CREATE EDGE TYPE WorksFor")
+    db.schema.create_edge_type("Knows")
+    db.schema.create_edge_type("WorksFor")
 
     # Add properties to vertices
-    db.command("sql", "ALTER TYPE Person CREATE PROPERTY name STRING")
-    db.command("sql", "ALTER TYPE Person CREATE PROPERTY age INTEGER")
-    db.command("sql", "ALTER TYPE Person CREATE PROPERTY email STRING")
+    db.schema.create_property("Person", "name", "STRING")
+    db.schema.create_property("Person", "age", "INTEGER")
+    db.schema.create_property("Person", "email", "STRING")
 
     # Add properties to edges
-    db.command("sql", "ALTER TYPE Knows CREATE PROPERTY since DATE")
-    db.command("sql", "ALTER TYPE WorksFor CREATE PROPERTY role STRING")
+    db.schema.create_property("Knows", "since", "DATE")
+    db.schema.create_property("WorksFor", "role", "STRING")
 
     print("✅ Graph schema created")
 ```
 
+!!! info "Prefer the embedded API"
+    SQL still works, but the Python API is safer (no string quoting issues) and keeps your code Python-first.
+
 ## Creating Vertices
 
-### Using SQL
+### Using the API (recommended)
 
-The simplest way to create vertices is with SQL:
-
-```python
-with db.transaction():
-    # Create vertices with properties
-    db.command("sql", """
-        CREATE VERTEX Person
-        SET name = 'Alice', age = 30, email = 'alice@example.com'
-    """)
-
-    db.command("sql", """
-        CREATE VERTEX Person
-        SET name = 'Bob', age = 25, email = 'bob@example.com'
-    """)
-```
-
-### Using the API
-
-You can also create vertices programmatically using the `new_vertex()` method:
+Create vertices programmatically with `new_vertex()`:
 
 ```python
 with db.transaction():
@@ -74,9 +59,21 @@ with db.transaction():
     print(f"✅ Created vertex with RID: {vertex.get_rid()}")
 ```
 
+### Using SQL
+
+SQL is still available if you prefer declarative inserts:
+
+```python
+with db.transaction():
+    db.command("sql", """
+        CREATE VERTEX Person
+        SET name = 'Alice', age = 30, email = 'alice@example.com'
+    """)
+```
+
 !!! tip "When to Use Each Approach"
-    - **SQL**: Best for simple inserts, batch operations, and declarative code
-    - **API**: Best when you need programmatic control, access to the vertex object, or complex logic
+    - **API (default)**: Programmatic control, safer than string-building
+    - **SQL**: Quick ad-hoc inserts or when porting existing scripts
 
 ## Creating Edges
 
@@ -90,30 +87,7 @@ Unlike `db.new_vertex()` and `db.new_document()`, there is no `db.new_edge()` me
 - You must have both vertices before creating a connection
 - Edges are created by calling `vertex.new_edge(edgeType, toVertex, **properties)`
 
-### Creating Edges with SQL
-
-The most straightforward way to create edges is with SQL:
-
-```python
-with db.transaction():
-    # Create vertices first
-    db.command("sql", """
-        CREATE VERTEX Person SET name = 'Alice', id = 1
-    """)
-    db.command("sql", """
-        CREATE VERTEX Person SET name = 'Bob', id = 2
-    """)
-
-    # Create edge between them
-    db.command("sql", """
-        CREATE EDGE Knows
-        FROM (SELECT FROM Person WHERE id = 1)
-        TO (SELECT FROM Person WHERE id = 2)
-        SET since = date('2020-01-15')
-    """)
-```
-
-### Creating Edges with the Python Graph API
+### Creating Edges with the Python Graph API (recommended)
 
 To create edges programmatically, you must:
 
@@ -141,6 +115,20 @@ with db.transaction():
     edge.save()
 
     print(f"✅ Created edge: {alice.get('name')} -> {bob.get('name')}")
+```
+
+### Creating Edges with SQL
+
+You can also create edges declaratively:
+
+```python
+with db.transaction():
+    db.command("sql", """
+        CREATE EDGE Knows
+        FROM (SELECT FROM Person WHERE id = 1)
+        TO (SELECT FROM Person WHERE id = 2)
+        SET since = date('2020-01-15')
+    """)
 ```
 
 ### Creating Edges with Retrieved Vertices
@@ -206,11 +194,11 @@ def create_social_network():
     with arcadedb.create_database("/tmp/social_network") as db:
         # 1. Create schema
         print("Creating schema...")
-        db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE Knows")
-        db.command("sql", "ALTER TYPE Person CREATE PROPERTY name STRING")
-        db.command("sql", "ALTER TYPE Person CREATE PROPERTY age INTEGER")
-        db.command("sql", "ALTER TYPE Knows CREATE PROPERTY since INTEGER")
+        db.schema.create_vertex_type("Person")
+        db.schema.create_edge_type("Knows")
+        db.schema.create_property("Person", "name", "STRING")
+        db.schema.create_property("Person", "age", "INTEGER")
+        db.schema.create_property("Knows", "since", "INTEGER")
 
         # 2. Create vertices and edges
         print("Creating graph data...")
@@ -455,7 +443,7 @@ ArcadeDB supports [Apache Gremlin](https://tinkerpop.apache.org/gremlin.html), t
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("./graph_db", create_if_not_exists=True)
+db = arcadedb.create_database("./graph_db")
 
 # Create schema
 with db.transaction():

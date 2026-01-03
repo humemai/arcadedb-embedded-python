@@ -95,10 +95,13 @@ import os
 db = arcadedb.create_database("./temp_db")
 
 # Step 2: Populate schema and data
-db.command("sql", "CREATE DOCUMENT TYPE Person")
+db.schema.create_document_type("Person")  # Schema ops are auto-transactional
 with db.transaction():
-    db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
-    db.command("sql", "INSERT INTO Person SET name = 'Bob', age = 25")
+    alice = db.new_document("Person")
+    alice.set("name", "Alice").set("age", 30).save()
+
+    bob = db.new_document("Person")
+    bob.set("name", "Bob").set("age", 25).save()
 
 # Step 3: ⚠️ CRITICAL - Must close to release file lock!
 db.close()

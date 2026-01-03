@@ -52,9 +52,8 @@ def sample_csv_vertices_path():
 def test_csv_import_as_documents(temp_db_path, sample_csv_path):
     """Test importing CSV as documents."""
     with arcadedb.create_database(temp_db_path) as db:
-        # Create schema
-        with db.transaction():
-            db.schema.create_document_type("Person")
+        # Create schema (auto-transactional)
+        db.schema.create_document_type("Person")
 
         # Import CSV
         stats = arcadedb.import_csv(db, sample_csv_path, "Person")
@@ -76,9 +75,8 @@ def test_csv_import_as_documents(temp_db_path, sample_csv_path):
 def test_csv_import_as_vertices(temp_db_path, sample_csv_vertices_path):
     """Test importing CSV as vertices."""
     with arcadedb.create_database(temp_db_path) as db:
-        # Create schema
-        with db.transaction():
-            db.schema.create_vertex_type("Product")
+        # Create schema (auto-transactional)
+        db.schema.create_vertex_type("Product")
 
         # Import CSV as vertices
         stats = arcadedb.import_csv(
@@ -114,9 +112,8 @@ def test_csv_import_with_custom_delimiter(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            # Create schema
-            with db.transaction():
-                db.schema.create_document_type("Item")
+            # Create schema (auto-transactional)
+            db.schema.create_document_type("Item")
 
             # Import TSV with tab delimiter
             stats = arcadedb.import_csv(db, temp_file.name, "Item", delimiter="\t")
@@ -137,9 +134,8 @@ def test_csv_import_with_custom_delimiter(temp_db_path):
 def test_importer_class_api(temp_db_path, sample_csv_path):
     """Test using Importer class directly."""
     with arcadedb.create_database(temp_db_path) as db:
-        # Create schema
-        with db.transaction():
-            db.schema.create_document_type("Person")
+        # Create schema (auto-transactional)
+        db.schema.create_document_type("Person")
 
         # Use Importer class
         importer = arcadedb.Importer(db)
@@ -170,9 +166,8 @@ def test_csv_type_inference(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            # Create schema
-            with db.transaction():
-                db.schema.create_document_type("Product")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("Product")
 
             # Import
             stats = arcadedb.import_csv(db, temp_file.name, "Product")
@@ -209,8 +204,8 @@ def test_csv_import_with_nulls(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            with db.transaction():
-                db.schema.create_document_type("Person")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("Person")
 
             stats = arcadedb.import_csv(db, temp_file.name, "Person")
 
@@ -254,8 +249,8 @@ def test_csv_import_without_type_name(temp_db_path, sample_csv_path):
 def test_format_auto_detection(temp_db_path, sample_csv_path):
     """Test that file format is auto-detected from extension."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_document_type("Person")
+        # Schema operations are auto-transactional
+        db.schema.create_document_type("Person")
 
         importer = arcadedb.Importer(db)
 
@@ -268,8 +263,8 @@ def test_format_auto_detection(temp_db_path, sample_csv_path):
 def test_import_statistics(temp_db_path, sample_csv_path):
     """Test that import statistics are returned correctly."""
     with arcadedb.create_database(temp_db_path) as db:
-        with db.transaction():
-            db.schema.create_document_type("Person")
+        # Schema operations are auto-transactional
+        db.schema.create_document_type("Person")
 
         stats = arcadedb.import_csv(db, sample_csv_path, "Person")
 
@@ -299,8 +294,8 @@ def test_large_csv_batch_commit(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            with db.transaction():
-                db.schema.create_document_type("Record")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("Record")
 
             # Import with small batch size
             stats = arcadedb.import_csv(
@@ -329,9 +324,8 @@ def test_csv_import_integration(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            # Create schema
-            with db.transaction():
-                db.schema.create_document_type("Employee")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("Employee")
 
             # Import data
             stats = arcadedb.import_csv(db, temp_file.name, "Employee")
@@ -380,8 +374,8 @@ def test_csv_complex_data_types(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            with db.transaction():
-                db.schema.create_document_type("ComplexItem")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("ComplexItem")
 
             stats = arcadedb.import_csv(db, temp_file.name, "ComplexItem")
             assert stats["documents"] == 4
@@ -421,8 +415,8 @@ def test_csv_null_and_empty_values(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            with db.transaction():
-                db.schema.create_document_type("NullTest")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("NullTest")
 
             stats = arcadedb.import_csv(db, temp_file.name, "NullTest")
             assert stats["documents"] == 4
@@ -457,8 +451,8 @@ def test_csv_unicode_and_special_chars(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            with db.transaction():
-                db.schema.create_document_type("UnicodeTest")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("UnicodeTest")
 
             stats = arcadedb.import_csv(db, temp_file.name, "UnicodeTest")
             assert stats["documents"] == 5
@@ -487,8 +481,8 @@ def test_large_dataset_performance(temp_db_path):
 
     try:
         with arcadedb.create_database(temp_db_path) as db:
-            with db.transaction():
-                db.schema.create_document_type("LargeTest")
+            # Schema operations are auto-transactional
+            db.schema.create_document_type("LargeTest")
 
             # Import with custom batch size
             stats = arcadedb.import_csv(

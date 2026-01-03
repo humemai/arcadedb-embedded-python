@@ -20,39 +20,34 @@ ArcadeDB databases are embedded, file-based databases stored on your local files
 import arcadedb_embedded as arcadedb
 
 # Simple creation
-db = arcadedb.create_database("./mydb")
-
-# Use the database
-with db.transaction():
-    vertex = db.new_vertex("User")
-    vertex.set("name", "Alice")
-    vertex.save()
-
-# Always close when done
-db.close()
+with arcadedb.create_database("./mydb") as db:
+    # Use the database
+    with db.transaction():
+        vertex = db.new_vertex("User")
+        vertex.set("name", "Alice")
+        vertex.save()
 ```
 
 ### Open Existing Database
 
 ```python
 # Open existing database
-db = arcadedb.open_database("./mydb")
-
-# Query data
-result = db.query("sql", "SELECT FROM User")
-for user in result:
-    print(user.get("name"))
-
-db.close()
+with arcadedb.open_database("./mydb") as db:
+    # Query data
+    result = db.query("sql", "SELECT FROM User")
+    for user in result:
+        print(user.get("name"))
 ```
 
 ### Check if Database Exists
 
 ```python
 if arcadedb.database_exists("./mydb"):
-    db = arcadedb.open_database("./mydb")
+    with arcadedb.open_database("./mydb") as db:
+        pass
 else:
-    db = arcadedb.create_database("./mydb")
+    with arcadedb.create_database("./mydb") as db:
+        pass
 ```
 
 ## Database Lifecycle
@@ -63,12 +58,8 @@ else:
 import arcadedb_embedded as arcadedb
 
 # Create new database
-db = arcadedb.create_database("./mydb")
-
-# Database is ready to use
-print(f"Database created at: {db.get_name()}")
-
-db.close()
+with arcadedb.create_database("./mydb") as db:
+    print(f"Database created at: {db.get_name()}")
 ```
 
 **What happens during creation:**
@@ -83,12 +74,8 @@ db.close()
 
 ```python
 # Open existing database
-db = arcadedb.open_database("./mydb")
-
-# Database is ready for operations
-print(f"Database opened: {db.get_name()}")
-
-db.close()
+with arcadedb.open_database("./mydb") as db:
+    print(f"Database opened: {db.get_name()}")
 ```
 
 **Opening modes:**
@@ -99,25 +86,21 @@ db.close()
 ### 3. Using
 
 ```python
-db = arcadedb.open_database("./mydb")
+with arcadedb.open_database("./mydb") as db:
+    # Create schema
+    db.schema.create_vertex_type("Person")
+    db.schema.create_property("Person", "name", "STRING")
 
-# Create schema
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    # Insert data
+    with db.transaction():
+        person = db.new_vertex("Person")
+        person.set("name", "Bob")
+        person.save()
 
-# Insert data
-with db.transaction():
-    person = db.new_vertex("Person")
-    person.set("name", "Bob")
-    person.save()
-
-# Query data
-result = db.query("sql", "SELECT FROM Person")
-for person in result:
-    print(person.get("name"))
-
-db.close()
+    # Query data
+    result = db.query("sql", "SELECT FROM Person")
+    for person in result:
+        print(person.get("name"))
 ```
 
 ### 4. Closing
@@ -144,10 +127,9 @@ with arcadedb.open_database("./mydb") as db:
 ### 5. Dropping
 
 ```python
-db = arcadedb.open_database("./mydb")
-
-# Drop database (deletes all files)
-db.drop()
+with arcadedb.open_database("./mydb") as db:
+    # Drop database (deletes all files)
+    db.drop()
 
 # Database and all files are permanently deleted
 ```
@@ -164,20 +146,19 @@ import arcadedb_embedded as arcadedb
 # Create factory
 factory = arcadedb.DatabaseFactory("./mydb")
 
-# Check existence
+# Open or create via factory
 if factory.exists():
     print("Database exists")
-    db = factory.open()
+    with factory.open() as db:
+        with db.transaction():
+            # Operations
+            pass
 else:
     print("Creating new database")
-    db = factory.create()
-
-# Use database
-with db.transaction():
-    # Operations
-    pass
-
-db.close()
+    with factory.create() as db:
+        with db.transaction():
+            # Operations
+            pass
 ```
 
 ### Factory Pattern Benefits
@@ -241,14 +222,17 @@ with arcadedb.open_database("./mydb") as db:
 import os
 
 # Relative path
-db = arcadedb.create_database("./mydb")
+with arcadedb.create_database("./mydb"):
+    pass
 
 # Absolute path
-db = arcadedb.create_database("/var/data/mydb")
+with arcadedb.create_database("/var/data/mydb"):
+    pass
 
 # User home directory
 home = os.path.expanduser("~")
-db = arcadedb.create_database(f"{home}/databases/mydb")
+with arcadedb.create_database(f"{home}/databases/mydb"):
+    pass
 ```
 
 ### Database Naming
@@ -299,17 +283,11 @@ db = arcadedb.open_database("./mydb")
 ### Multiple Databases
 
 ```python
-# Open multiple databases simultaneously
-db1 = arcadedb.open_database("./database1")
-db2 = arcadedb.open_database("./database2")
-
-try:
+with arcadedb.open_database("./database1") as db1, \
+     arcadedb.open_database("./database2") as db2:
     # Use both databases
     result1 = db1.query("sql", "SELECT FROM User")
     result2 = db2.query("sql", "SELECT FROM Product")
-finally:
-    db1.close()
-    db2.close()
 
 # Or with context managers
 with arcadedb.open_database("./database1") as db1, \
@@ -330,7 +308,8 @@ with arcadedb.open_database("./database1") as db1, \
 ```python
 # If database locked by another process
 try:
-    db = arcadedb.open_database("./mydb")
+    with arcadedb.open_database("./mydb"):
+        pass
 except Exception as e:
     print(f"Database locked: {e}")
 
@@ -351,26 +330,24 @@ def init_database(path: str):
     """Initialize database with schema."""
     # Create if doesn't exist
     if not arcadedb.database_exists(path):
-        db = arcadedb.create_database(path)
+        with arcadedb.create_database(path) as db:
+            with db.transaction():
+                db.command("sql", "CREATE VERTEX TYPE User")
+                db.command("sql", "CREATE PROPERTY User.email STRING")
+                db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 
-        # Create schema
-        with db.transaction():
-            db.command("sql", "CREATE VERTEX TYPE User")
-            db.command("sql", "CREATE PROPERTY User.email STRING")
-            db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+                db.command("sql", "CREATE VERTEX TYPE Post")
+                db.command("sql", "CREATE PROPERTY Post.title STRING")
 
-            db.command("sql", "CREATE VERTEX TYPE Post")
-            db.command("sql", "CREATE PROPERTY Post.title STRING")
+                db.command("sql", "CREATE EDGE TYPE Authored")
 
-            db.command("sql", "CREATE EDGE TYPE Authored")
+            print(f"Database initialized at {path}")
 
-        print(f"Database initialized at {path}")
-        return db
-    else:
-        return arcadedb.open_database(path)
+    return arcadedb.open_database(path)
 
 # Usage
-db = init_database("./myapp")
+with init_database("./myapp") as db:
+    pass
 ```
 
 ### Database Reset
@@ -379,16 +356,18 @@ db = init_database("./myapp")
 def reset_database(path: str):
     """Drop and recreate database."""
     if arcadedb.database_exists(path):
-        db = arcadedb.open_database(path)
-        db.drop()
-        print(f"Database dropped: {path}")
+        with arcadedb.open_database(path) as db:
+            db.drop()
+            print(f"Database dropped: {path}")
 
-    db = arcadedb.create_database(path)
-    print(f"Database created: {path}")
-    return db
+    with arcadedb.create_database(path) as db:
+        print(f"Database created: {path}")
+
+    return arcadedb.open_database(path)
 
 # Usage
-db = reset_database("./mydb")
+with reset_database("./mydb") as db:
+    pass
 ```
 
 ### Database Backup Pattern
@@ -401,8 +380,8 @@ def backup_database(db_path: str, backup_dir: str):
     """Backup database files."""
     # Close database first
     if arcadedb.database_exists(db_path):
-        db = arcadedb.open_database(db_path)
-        db.close()  # Ensure clean state
+        with arcadedb.open_database(db_path):
+            pass  # Ensure clean state
 
     # Create backup with timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -423,13 +402,8 @@ backup_path = backup_database("./mydb", "./backups")
 ```python
 def migrate_database(old_path: str, new_path: str):
     """Migrate data from old to new database."""
-    # Open old database
-    old_db = arcadedb.open_database(old_path)
-
-    # Create new database
-    new_db = arcadedb.create_database(new_path)
-
-    try:
+    with arcadedb.open_database(old_path) as old_db, \
+         arcadedb.create_database(new_path) as new_db:
         # Copy schema
         with new_db.transaction():
             # Create types
@@ -465,9 +439,6 @@ def migrate_database(old_path: str, new_path: str):
                     new_user.save()
 
         print("Migration complete")
-    finally:
-        old_db.close()
-        new_db.close()
 
 # Usage
 migrate_database("./old_db", "./new_db")
@@ -519,29 +490,28 @@ manager.close()
 ### Get Database Name
 
 ```python
-db = arcadedb.open_database("./mydb")
-print(f"Database: {db.get_name()}")  # "mydb"
+with arcadedb.open_database("./mydb") as db:
+    print(f"Database: {db.get_name()}")  # "mydb"
 ```
 
 ### Get Database Path
 
 ```python
-db = arcadedb.open_database("./mydb")
-print(f"Path: {db.get_name()}")
-# Note: Currently returns name, full path API coming soon
+with arcadedb.open_database("./mydb") as db:
+    print(f"Path: {db.get_name()}")
+    # Note: Currently returns name, full path API coming soon
 ```
 
 ### Check Transaction Status
 
 ```python
-db = arcadedb.open_database("./mydb")
+with arcadedb.open_database("./mydb") as db:
+    print(db.is_transaction_active())  # False
 
-print(db.is_transaction_active())  # False
+    with db.transaction():
+        print(db.is_transaction_active())  # True
 
-with db.transaction():
-    print(db.is_transaction_active())  # True
-
-print(db.is_transaction_active())  # False
+    print(db.is_transaction_active())  # False
 ```
 
 ## Error Handling
@@ -550,22 +520,26 @@ print(db.is_transaction_active())  # False
 
 ```python
 try:
-    db = arcadedb.create_database("./mydb")
+    with arcadedb.create_database("./mydb") as db:
+        pass
 except Exception as e:
     print(f"Error: {e}")
     # Database already exists
-    db = arcadedb.open_database("./mydb")
+    with arcadedb.open_database("./mydb") as db:
+        pass
 ```
 
 ### Database Not Found
 
 ```python
 try:
-    db = arcadedb.open_database("./nonexistent")
+    with arcadedb.open_database("./nonexistent") as db:
+        pass
 except Exception as e:
     print(f"Database not found: {e}")
     # Create it
-    db = arcadedb.create_database("./nonexistent")
+    with arcadedb.create_database("./nonexistent") as db:
+        pass
 ```
 
 ### Database Locked
@@ -588,7 +562,8 @@ def open_with_retry(path, max_retries=3):
     raise Exception("Failed to open database after retries")
 
 # Usage
-db = open_with_retry("./mydb")
+with open_with_retry("./mydb") as db:
+    pass
 ```
 
 ### Graceful Shutdown
@@ -642,9 +617,11 @@ finally:
 ```python
 # ✓ Check first
 if arcadedb.database_exists("./mydb"):
-    db = arcadedb.open_database("./mydb")
+    with arcadedb.open_database("./mydb") as db:
+        pass
 else:
-    db = arcadedb.create_database("./mydb")
+    with arcadedb.create_database("./mydb") as db:
+        pass
 
 # ✗ Don't blindly create
 db = arcadedb.create_database("./mydb")  # Error if exists!
@@ -657,7 +634,8 @@ import os
 
 # ✓ Absolute path
 db_path = os.path.abspath("./mydb")
-db = arcadedb.open_database(db_path)
+with arcadedb.open_database(db_path) as db:
+    pass
 
 # ✗ Relative paths can be ambiguous
 db = arcadedb.open_database("./mydb")  # Depends on CWD
@@ -671,14 +649,13 @@ def get_or_create_database(path):
         return arcadedb.open_database(path)
 
     # Create with schema
-    db = arcadedb.create_database(path)
+    with arcadedb.create_database(path) as db:
+        with db.transaction():
+            # Define schema here
+            db.command("sql", "CREATE VERTEX TYPE User")
+            db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 
-    with db.transaction():
-        # Define schema here
-        db.command("sql", "CREATE VERTEX TYPE User")
-        db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
-
-    return db
+    return arcadedb.open_database(path)
 ```
 
 ### 5. Handle Concurrent Access
@@ -688,8 +665,9 @@ def get_or_create_database(path):
 # For multi-process: use server mode instead
 
 # ✓ Single process, multiple threads
-db = arcadedb.open_database("./mydb")
-# Each thread uses same db instance
+with arcadedb.open_database("./mydb") as db:
+    # Each thread uses same db instance
+    pass
 
 # ✗ Multiple processes opening same database
 # Process 1: arcadedb.open_database("./mydb")
@@ -707,8 +685,8 @@ def safe_drop(db_path, backup_path):
     shutil.copytree(db_path, backup_path)
 
     # Then drop
-    db = arcadedb.open_database(db_path)
-    db.drop()
+    with arcadedb.open_database(db_path) as db:
+        db.drop()
 
     print(f"Database dropped, backup at {backup_path}")
 ```
@@ -741,11 +719,11 @@ print(f"Database size: {size_mb:.2f} MB")
 import arcadedb_embedded as arcadedb  # JVM starts here
 
 # JVM runs for entire Python process
-db1 = arcadedb.create_database("./db1")
-db1.close()
+with arcadedb.create_database("./db1") as db1:
+    pass
 
-db2 = arcadedb.open_database("./db1")  # Same JVM
-db2.close()
+with arcadedb.open_database("./db1") as db2:  # Same JVM
+    pass
 
 # JVM shuts down when Python exits
 ```
@@ -754,27 +732,25 @@ db2.close()
 
 ```python
 # All databases share the same JVM
-db1 = arcadedb.open_database("./database1")
-db2 = arcadedb.open_database("./database2")
-db3 = arcadedb.open_database("./database3")
-
-# Efficient: shared JVM resources
-# Remember to close all!
-db1.close()
-db2.close()
-db3.close()
+with arcadedb.open_database("./database1") as db1, \
+     arcadedb.open_database("./database2") as db2, \
+     arcadedb.open_database("./database3") as db3:
+    # Efficient: shared JVM resources
+    pass
 ```
 
 ### Database Path Normalization
 
 ```python
 # ArcadeDB normalizes paths
-db1 = arcadedb.open_database("./mydb")
-db2 = arcadedb.open_database("./mydb/")  # Same as above
-db3 = arcadedb.open_database("mydb")     # Different! (no ./)
+with arcadedb.open_database("./mydb"):
+    pass
 
-# Use consistent paths
-db1.close()
+with arcadedb.open_database("./mydb/"):  # Same as above
+    pass
+
+with arcadedb.open_database("mydb"):     # Different! (no ./)
+    pass
 ```
 
 ## Troubleshooting
@@ -784,9 +760,11 @@ db1.close()
 ```python
 # Check first
 if arcadedb.database_exists("./mydb"):
-    db = arcadedb.open_database("./mydb")
+    with arcadedb.open_database("./mydb") as db:
+        pass
 else:
-    db = arcadedb.create_database("./mydb")
+    with arcadedb.create_database("./mydb") as db:
+        pass
 ```
 
 ### "Database not found"
@@ -797,7 +775,8 @@ import os
 db_path = "./mydb"
 if not os.path.exists(db_path):
     print(f"Path doesn't exist: {db_path}")
-    db = arcadedb.create_database(db_path)
+    with arcadedb.create_database(db_path) as db:
+        pass
 ```
 
 ### "Database is locked"
@@ -818,7 +797,9 @@ if os.path.exists(lock_file):
 import gc
 
 # Force garbage collection after closing
-db.close()
+with arcadedb.open_database("./mydb") as db:
+    pass
+
 gc.collect()  # Clean up Java objects
 ```
 
