@@ -18,6 +18,8 @@ BEGIN → OPERATIONS → COMMIT (success) or ROLLBACK (failure)
 - ✅ **Isolation**: Read committed isolation level
 - ✅ **Durability**: Changes persisted to WAL (Write-Ahead Log) on commit
 
+> Most examples open the database with a context manager (`with arcadedb.open_database(...) as db:`). Where only `db` appears, assume it was opened that way.
+
 ## Quick Start
 
 ### Context Manager (Recommended)
@@ -25,17 +27,16 @@ BEGIN → OPERATIONS → COMMIT (success) or ROLLBACK (failure)
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.open_database("./mydb")
+with arcadedb.open_database("./mydb") as db:
+    # Automatic transaction management
+    with db.transaction():
+        vertex = db.new_vertex("User")
+        vertex.set("name", "Alice")
+        vertex.set("email", "alice@example.com")
+        vertex.save()
 
-# Automatic transaction management
-with db.transaction():
-    vertex = db.new_vertex("User")
-    vertex.set("name", "Alice")
-    vertex.set("email", "alice@example.com")
-    vertex.save()
-
-    # If this block completes successfully → COMMIT
-    # If exception occurs → ROLLBACK
+        # If this block completes successfully → COMMIT
+        # If exception occurs → ROLLBACK
 ```
 
 **Why Context Manager?**
@@ -48,15 +49,16 @@ with db.transaction():
 ### Manual Control
 
 ```python
-db.begin()
-try:
-    vertex = db.new_vertex("User")
-    vertex.set("name", "Bob")
-    vertex.save()
-    db.commit()
-except Exception as e:
-    db.rollback()
-    raise
+with arcadedb.open_database("./mydb") as db:
+    db.begin()
+    try:
+        vertex = db.new_vertex("User")
+        vertex.set("name", "Bob")
+        vertex.save()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise
 ```
 
 ## ACID Guarantees
@@ -66,22 +68,23 @@ except Exception as e:
 All operations in a transaction are treated as a single unit:
 
 ```python
-with db.transaction():
-    # Create user
-    user = db.new_vertex("User")
-    user.set("name", "Charlie")
-    user.save()
+with arcadedb.open_database("./mydb") as db:
+    with db.transaction():
+        # Create user
+        user = db.new_vertex("User")
+        user.set("name", "Charlie")
+        user.save()
 
-    # Create user's profile
-    profile = db.new_document("Profile")
-    profile.set("bio", "Software Engineer")
-    profile.save()
+        # Create user's profile
+        profile = db.new_document("Profile")
+        profile.set("bio", "Software Engineer")
+        profile.save()
 
-    # Link them
-    edge = db.new_edge("HasProfile", user, profile)
-    edge.save()
+        # Link them
+        edge = db.new_edge("HasProfile", user, profile)
+        edge.save()
 
-    # Either ALL three operations succeed, or NONE do
+        # Either ALL three operations succeed, or NONE do
 
 # If any operation fails, entire transaction rolls back
 ```
@@ -91,24 +94,38 @@ with db.transaction():
 Schema validation enforced at transaction commit:
 
 ```python
-# Create schema with constraints
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE User")
-    db.command("sql", "CREATE PROPERTY User.email STRING")
-    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+# Schema operations are auto-transactional (no wrapper needed)
+with arcadedb.open_database("./mydb") as db:
+    db.schema.create_vertex_type("User")
+    db.schema.create_property("User", "email", "STRING")
+    db.schema.create_index("User", ["email"], unique=True)
 
-# Constraint violation causes rollback
-try:
-    with db.transaction():
-        user1 = db.new_vertex("User")
-        user1.set("email", "same@example.com")
-        user1.save()
+    # Data operations require transaction
+    try:
+        with db.transaction():
+            # This will fail if email is not unique
+            user = db.new_vertex("User")
+            user.set("email", "duplicate@example.com").save()
+    except Exception:
+        # Transaction rolled back
+        pass
+```
 
-        user2 = db.new_vertex("User")
-        user2.set("email", "same@example.com")  # Duplicate!
-        user2.save()  # This will fail
-except Exception:
-    print("Transaction rolled back - unique constraint violated")
+#### Constraint violation causes rollback
+
+```python
+with arcadedb.open_database("./mydb") as db:
+    try:
+        with db.transaction():
+            user1 = db.new_vertex("User")
+            user1.set("email", "same@example.com")
+            user1.save()
+
+            user2 = db.new_vertex("User")
+            user2.set("email", "same@example.com")  # Duplicate!
+            user2.save()  # This will fail
+    except Exception:
+        print("Transaction rolled back - unique constraint violated")
 ```
 
 ### Isolation
@@ -121,16 +138,17 @@ except Exception:
 
 ```python
 # Transaction A
-with db.transaction():
-    result = db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
-    user = list(result)[0]
+with arcadedb.open_database("./mydb") as db:
+    with db.transaction():
+        result = db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
+        user = list(result)[0]
 
-    # Transaction B commits changes to Alice here
+        # Transaction B commits changes to Alice here
 
-    result2 = db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
-    user2 = list(result2)[0]
+        result2 = db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
+        user2 = list(result2)[0]
 
-    # user and user2 may have different data (non-repeatable read)
+        # user and user2 may have different data (non-repeatable read)
 ```
 
 **Available Isolation Levels:**
@@ -145,12 +163,13 @@ Currently, Python bindings use the default (`READ_COMMITTED`). Custom isolation 
 Changes are persisted to Write-Ahead Log (WAL) on commit:
 
 ```python
-with db.transaction():
-    vertex = db.new_vertex("Data")
-    vertex.set("value", 42)
-    vertex.save()
-    # On successful exit, changes written to WAL
-    # Crash recovery uses WAL to restore state
+with arcadedb.open_database("./mydb") as db:
+    with db.transaction():
+        vertex = db.new_vertex("Data")
+        vertex.set("value", 42)
+        vertex.save()
+        # On successful exit, changes written to WAL
+        # Crash recovery uses WAL to restore state
 ```
 
 **WAL Configuration:**
@@ -168,51 +187,55 @@ ArcadeDB uses WAL for crash recovery. Configuration handled at database level:
 Context manager automatically rolls back on any exception:
 
 ```python
-try:
-    with db.transaction():
-        vertex = db.new_vertex("User")
-        vertex.set("name", "Dave")
-        vertex.save()
+with arcadedb.open_database("./mydb") as db:
+    try:
+        with db.transaction():
+            vertex = db.new_vertex("User")
+            vertex.set("name", "Dave")
+            vertex.save()
 
-        raise ValueError("Something went wrong!")
-        # ROLLBACK happens automatically
-except ValueError:
-    print("Transaction rolled back")
+            raise ValueError("Something went wrong!")
+            # ROLLBACK happens automatically
+    except ValueError:
+        print("Transaction rolled back")
 ```
 
 ### Explicit Rollback
 
 ```python
-with db.transaction():
-    vertex = db.new_vertex("User")
-    vertex.set("name", "Eve")
-    vertex.save()
+with arcadedb.open_database("./mydb") as db:
+    with db.transaction():
+        vertex = db.new_vertex("User")
+        vertex.set("name", "Eve")
+        vertex.save()
 
-    # Check some condition
-    if not validate_user(vertex):
-        # Force rollback without raising exception
-        db.rollback()
-        return
+        # Check some condition
+        if not validate_user(vertex):
+            # Force rollback without raising exception
+            db.rollback()
+            return
 
-    # Continue with transaction
+        # Continue with transaction
 ```
 
 ### Nested Transactions Not Supported
 
 ```python
-# ✗ This will fail!
-with db.transaction():
-    with db.transaction():  # ERROR: Transaction already active
+with arcadedb.open_database("./mydb") as db:
+    # ✗ This will fail!
+    with db.transaction():
+        with db.transaction():  # ERROR: Transaction already active
+            pass
+
+with arcadedb.open_database("./mydb") as db:
+    # ✓ Use sequential transactions instead
+    with db.transaction():
+        # First transaction
         pass
 
-# ✓ Use sequential transactions instead
-with db.transaction():
-    # First transaction
-    pass
-
-with db.transaction():
-    # Second transaction
-    pass
+    with db.transaction():
+        # Second transaction
+        pass
 ```
 
 ### Transaction Conflicts
@@ -353,21 +376,23 @@ def upsert_user(db, email, name):
 - Large transactions: 10,000+ operations (use batching)
 
 ```python
-# ✗ Too large - single transaction
-with db.transaction():
-    for i in range(1_000_000):
-        vertex = db.new_vertex("Data")
-        vertex.set("value", i)
-        vertex.save()
-
-# ✓ Better - batched transactions
-batch_size = 10_000
-for i in range(0, 1_000_000, batch_size):
+with arcadedb.open_database("./mydb") as db:
+    # ✗ Too large - single transaction
     with db.transaction():
-        for j in range(batch_size):
+        for i in range(1_000_000):
             vertex = db.new_vertex("Data")
-            vertex.set("value", i + j)
+            vertex.set("value", i)
             vertex.save()
+
+with arcadedb.open_database("./mydb") as db:
+    # ✓ Better - batched transactions
+    batch_size = 10_000
+    for i in range(0, 1_000_000, batch_size):
+        with db.transaction():
+            for j in range(batch_size):
+                vertex = db.new_vertex("Data")
+                vertex.set("value", i + j)
+                vertex.save()
 ```
 
 ### Lock Contention
@@ -375,18 +400,20 @@ for i in range(0, 1_000_000, batch_size):
 Minimize time holding locks:
 
 ```python
-# ✗ External operations inside transaction
-with db.transaction():
-    vertex = db.new_vertex("Data")
-    vertex.set("value", expensive_computation())  # Slow!
-    vertex.save()
+with arcadedb.open_database("./mydb") as db:
+    # ✗ External operations inside transaction
+    with db.transaction():
+        vertex = db.new_vertex("Data")
+        vertex.set("value", expensive_computation())  # Slow!
+        vertex.save()
 
-# ✓ Compute before transaction
-value = expensive_computation()
-with db.transaction():
-    vertex = db.new_vertex("Data")
-    vertex.set("value", value)
-    vertex.save()
+with arcadedb.open_database("./mydb") as db:
+    # ✓ Compute before transaction
+    value = expensive_computation()
+    with db.transaction():
+        vertex = db.new_vertex("Data")
+        vertex.set("value", value)
+        vertex.save()
 ```
 
 ### Read vs Write Transactions
@@ -394,16 +421,18 @@ with db.transaction():
 Queries outside transactions are read-only and more efficient:
 
 ```python
-# ✓ Read without transaction
-result = db.query("sql", "SELECT FROM User WHERE active = true")
-for user in result:
-    print(user.get("name"))
-
-# ✗ Unnecessary transaction for reads
-with db.transaction():
+with arcadedb.open_database("./mydb") as db:
+    # ✓ Read without transaction
     result = db.query("sql", "SELECT FROM User WHERE active = true")
     for user in result:
         print(user.get("name"))
+
+with arcadedb.open_database("./mydb") as db:
+    # ✗ Unnecessary transaction for reads
+    with db.transaction():
+        result = db.query("sql", "SELECT FROM User WHERE active = true")
+        for user in result:
+            print(user.get("name"))
 ```
 
 ### Transaction Overhead
@@ -437,10 +466,11 @@ def benchmark_transactions(db, count):
     print(f"Batched: {batched_time:.2f}s")
     print(f"Speedup: {individual_time/batched_time:.1f}x")
 
-benchmark_transactions(db, 1000)
-# Individual: 0.85s
-# Batched: 0.08s
-# Speedup: 10.6x
+with arcadedb.open_database("./mydb") as db:
+    benchmark_transactions(db, 1000)
+    # Individual: 0.85s
+    # Batched: 0.08s
+    # Speedup: 10.6x
 ```
 
 ## Advanced Patterns
@@ -521,16 +551,14 @@ For operations across multiple databases (use multiprocessing):
 from multiprocessing import Process, Queue
 
 def transactional_operation(db_path, data, result_queue):
-    db = arcadedb.open_database(db_path)
-    try:
-        with db.transaction():
-            # Perform operations
-            result = process_data(db, data)
-            result_queue.put(("success", result))
-    except Exception as e:
-        result_queue.put(("error", str(e)))
-    finally:
-        db.close()
+    with arcadedb.open_database(db_path) as db:
+        try:
+            with db.transaction():
+                # Perform operations
+                result = process_data(db, data)
+                result_queue.put(("success", result))
+        except Exception as e:
+            result_queue.put(("error", str(e)))
 
 def distributed_transaction(db_paths, data_list):
     result_queue = Queue()
@@ -560,63 +588,73 @@ def distributed_transaction(db_paths, data_list):
 ### 1. Always Use Context Managers
 
 ```python
-# ✓ Recommended
-with db.transaction():
-    # Operations
+with arcadedb.open_database("./mydb") as db:
+    # ✓ Recommended
+    with db.transaction():
+        # Operations
+        pass
 
-# ✗ Avoid manual control unless necessary
-db.begin()
-try:
-    # Operations
-    db.commit()
-except:
-    db.rollback()
+with arcadedb.open_database("./mydb") as db:
+    # ✗ Avoid manual control unless necessary
+    db.begin()
+    try:
+        # Operations
+        db.commit()
+    except:
+        db.rollback()
 ```
 
 ### 2. Keep Transactions Short
 
 ```python
-# ✓ Short transaction
-with db.transaction():
-    vertex = db.new_vertex("User")
-    vertex.set("name", name)
-    vertex.save()
+with arcadedb.open_database("./mydb") as db:
+    # ✓ Short transaction
+    with db.transaction():
+        vertex = db.new_vertex("User")
+        vertex.set("name", name)
+        vertex.save()
 
-# ✗ Long-running transaction
-with db.transaction():
-    time.sleep(10)  # Holds locks!
+with arcadedb.open_database("./mydb") as db:
+    # ✗ Long-running transaction
+    with db.transaction():
+        time.sleep(10)  # Holds locks!
 ```
 
 ### 3. Don't Ignore Exceptions
 
 ```python
-# ✗ Silently catch exceptions
-try:
-    with db.transaction():
-        # Operations
-except:
-    pass  # Don't do this!
+with arcadedb.open_database("./mydb") as db:
+    # ✗ Silently catch exceptions
+    try:
+        with db.transaction():
+            # Operations
+            pass
+    except:
+        pass  # Don't do this!
 
-# ✓ Log and handle properly
-import logging
+with arcadedb.open_database("./mydb") as db:
+    # ✓ Log and handle properly
+    import logging
 
-try:
-    with db.transaction():
-        # Operations
-except Exception as e:
-    logging.error(f"Transaction failed: {e}")
-    raise
+    try:
+        with db.transaction():
+            # Operations
+            pass
+    except Exception as e:
+        logging.error(f"Transaction failed: {e}")
+        raise
 ```
 
 ### 4. Batch Operations
 
 ```python
-# ✓ Batch for efficiency
-batch_size = 1000
-for i in range(0, len(items), batch_size):
-    with db.transaction():
-        for item in items[i:i+batch_size]:
-            process_item(db, item)
+with arcadedb.open_database("./mydb") as db:
+    # ✓ Batch for efficiency
+    batch_size = 1000
+    for i in range(0, len(items), batch_size):
+        with db.transaction():
+            for item in items[i:i+batch_size]:
+                process_item(db, item)
 ```
 
 ### 5. Retry on Conflicts
@@ -637,16 +675,17 @@ def retry_transaction(db, operation, max_retries=3):
 ### 6. Validate Before Commit
 
 ```python
-with db.transaction():
-    vertex = db.new_vertex("User")
-    vertex.set("email", email)
+with arcadedb.open_database("./mydb") as db:
+    with db.transaction():
+        vertex = db.new_vertex("User")
+        vertex.set("email", email)
 
-    # Validate
-    if not is_valid_email(email):
-        db.rollback()
-        raise ValueError("Invalid email")
+        # Validate
+        if not is_valid_email(email):
+            db.rollback()
+            raise ValueError("Invalid email")
 
-    vertex.save()
+        vertex.save()
 ```
 
 ### 7. Monitor Transaction Duration
@@ -664,6 +703,9 @@ def monitored_transaction(db, operation, max_duration=5.0):
             logging.warning(f"Long transaction: {duration:.2f}s")
 
         return result
+
+with arcadedb.open_database("./mydb") as db:
+    monitored_transaction(db, lambda d: None)
 ```
 
 ## Common Pitfalls
@@ -671,39 +713,43 @@ def monitored_transaction(db, operation, max_duration=5.0):
 ### ❌ Nested Transactions
 
 ```python
-# ✗ Will fail!
-with db.transaction():
+with arcadedb.open_database("./mydb") as db:
+    # ✗ Will fail!
     with db.transaction():
-        pass
+        with db.transaction():
+            pass
 ```
 
 ### ❌ Transaction Leaks
 
 ```python
-# ✗ Transaction never committed/rolled back
-db.begin()
-# ... operations ...
-# Forgot to commit or rollback!
+with arcadedb.open_database("./mydb") as db:
+    # ✗ Transaction never committed/rolled back
+    db.begin()
+    # ... operations ...
+    # Forgot to commit or rollback!
 ```
 
 ### ❌ Large Transactions
 
 ```python
-# ✗ Too much in single transaction
-with db.transaction():
-    for i in range(10_000_000):  # Too many!
-        vertex = db.new_vertex("Data")
-        vertex.save()
+with arcadedb.open_database("./mydb") as db:
+    # ✗ Too much in single transaction
+    with db.transaction():
+        for i in range(10_000_000):  # Too many!
+            vertex = db.new_vertex("Data")
+            vertex.save()
 ```
 
 ### ❌ External Operations Inside Transaction
 
 ```python
-# ✗ Network call while holding locks
-with db.transaction():
-    vertex = db.new_vertex("Data")
-    vertex.set("value", requests.get("http://api.example.com/data").json())
-    vertex.save()
+with arcadedb.open_database("./mydb") as db:
+    # ✗ Network call while holding locks
+    with db.transaction():
+        vertex = db.new_vertex("Data")
+        vertex.set("value", requests.get("http://api.example.com/data").json())
+        vertex.save()
 ```
 
 ## Debugging
@@ -719,9 +765,10 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-with db.transaction():
-    # Transaction events will be logged
-    pass
+with arcadedb.open_database("./mydb") as db:
+    with db.transaction():
+        # Transaction events will be logged
+        pass
 ```
 
 ### Transaction Statistics
@@ -739,16 +786,20 @@ def transaction_stats(db, operation):
 
     print(f"Transaction completed in {duration:.3f}s")
     return result
+
+with arcadedb.open_database("./mydb") as db:
+    transaction_stats(db, lambda d: None)
 ```
 
 ### Monitor Active Transactions
 
 ```python
-# Check if transaction is active
-if db.is_transaction_active():
-    print("Transaction in progress")
-else:
-    print("No active transaction")
+with arcadedb.open_database("./mydb") as db:
+    # Check if transaction is active
+    if db.is_transaction_active():
+        print("Transaction in progress")
+    else:
+        print("No active transaction")
 ```
 
 ## See Also
