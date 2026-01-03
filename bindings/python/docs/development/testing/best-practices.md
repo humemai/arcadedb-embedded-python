@@ -40,7 +40,8 @@ finally:
 ```python
 # Good: Wrapped in transaction
 with db.transaction():
-    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+    person = db.new_document("Person")
+    person.set("name", "Alice").save()
     db.command("sql", "UPDATE Person SET age = 30 WHERE name = 'Alice'")
 # Auto-commit on success, auto-rollback on exception
 ```
@@ -172,7 +173,9 @@ print(f"Found {len(people)} people")
 from arcadedb_embedded.exceptions import ArcadeDBError
 
 try:
-    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+    with db.transaction():
+        person = db.new_document("Person")
+        person.set("name", "Alice").save()
 except ArcadeDBError as e:
     print(f"Database error: {e}")
     # Handle error
@@ -184,7 +187,8 @@ except ArcadeDBError as e:
 # Good: Exception triggers rollback
 try:
     with db.transaction():
-        db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+        person = db.new_document("Person")
+        person.set("name", "Alice").save()
         raise Exception("Something went wrong")
 except Exception:
     pass
@@ -225,7 +229,7 @@ def db():
 
 def test_something(db):
     # db is ready to use
-    db.command("sql", "CREATE DOCUMENT TYPE Test")
+    db.schema.create_document_type("Test")
 ```
 
 ## Performance
@@ -236,7 +240,8 @@ def test_something(db):
 # Good: One transaction for many operations
 with db.transaction():
     for i in range(1000):
-        db.command("sql", f"INSERT INTO Data SET value = {i}")
+        rec = db.new_document("Data")
+        rec.set("value", i).save()
 ```
 
 ### ❌ Don't Use Transaction Per Operation
@@ -245,7 +250,8 @@ with db.transaction():
 # Bad: 1000 separate transactions
 for i in range(1000):
     with db.transaction():
-        db.command("sql", f"INSERT INTO Data SET value = {i}")
+        rec = db.new_document("Data")
+        rec.set("value", i).save()
 ```
 
 ### ✅ Server-Managed Embedded = Fast

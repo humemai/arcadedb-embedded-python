@@ -32,19 +32,19 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 
 | Platform | Wheel Size | JRE Size | Installed Size | Tests |
 |----------|-----------|----------|----------------|-------|
-| Windows ARM64 | 209.4M | 47.6M | ~274M | 204 passed ✅ |
-| macOS ARM64 (Apple Silicon) | 210.8M | 53.9M | ~280M | 204 passed ✅ |
-| macOS Intel (x86_64) | 211.9M | 55.3M | ~281M | 204 passed ✅ |
-| Windows x64 | 211.6M | 51.6M | ~278M | 204 passed ✅ |
-| Linux ARM64 | 214.1M | 61.8M | ~288M | 204 passed ✅ |
-| Linux x64 | 215.0M | 62.7M | ~289M | 204 passed ✅ |
+| Windows ARM64 | 209.4M | 47.6M | ~274M | 221 passed ✅ |
+| macOS ARM64 (Apple Silicon) | 210.8M | 53.9M | ~280M | 221 passed ✅ |
+| macOS Intel (x86_64) | 211.9M | 55.3M | ~281M | 221 passed ✅ |
+| Windows x64 | 211.6M | 51.6M | ~278M | 221 passed ✅ |
+| Linux ARM64 | 214.1M | 61.8M | ~288M | 221 passed ✅ |
+| Linux x64 | 215.0M | 62.7M | ~289M | 221 passed ✅ |
 
 **Key Features:**
 
 - ✅ All platforms use **platform-specific wheels** (not universal)
 - ✅ pip automatically selects the correct wheel for your system
 - ✅ Each platform has its own bundled JRE optimized for that architecture
-- ✅ All 6 platforms tested and verified (204/204 tests passing)
+- ✅ All 6 platforms tested and verified (221/221 tests passing)
 - ✅ Built on native runners (no emulation) for optimal performance
 
 ## What's Included
@@ -59,7 +59,7 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
 - ✅ **Vector Search**: Graph-based indexing for embeddings
-- ✅ **Data Import**: CSV, XML, ArcadeDB JSONL import
+- ✅ **Data Import**: CSV and ArcadeDB JSONL import (XML supported but has limitations)
 
 **Optimized:**
 
@@ -68,7 +68,7 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 
 ## Test Results
 
-**204 out of 204 tests pass** on all platforms (100% success rate):
+**221 out of 221 tests pass** on all platforms (100% success rate):
 
 - ✅ All core database operations
 - ✅ SQL, Cypher, and Gremlin queries
