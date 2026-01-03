@@ -49,7 +49,7 @@ db.batch_context(
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("./mydb", create_if_not_exists=True)
+db = arcadedb.create_database("./mydb")
 
 # Create schema
 with db.transaction():
@@ -358,7 +358,7 @@ with db.batch_context(
 import arcadedb_embedded as arcadedb
 import time
 
-db = arcadedb.create_database("./bulk_db", create_if_not_exists=True)
+db = arcadedb.create_database("./bulk_db")
 
 # Create schema
 with db.transaction():
