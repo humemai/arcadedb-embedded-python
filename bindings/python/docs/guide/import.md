@@ -7,7 +7,6 @@ This guide covers strategies, best practices, and patterns for importing data in
 ArcadeDB's Importer supports multiple data formats:
 
 - **CSV**: Tabular data with headers
-- **JSON**: Single JSON documents or arrays
 - **ArcadeDB JSONL export/import**: Full database export/restore via `IMPORT DATABASE`
 
 **Key Features:**
@@ -25,28 +24,18 @@ ArcadeDB's Importer supports multiple data formats:
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("./mydb")
-importer = db.get_importer()
+with arcadedb.create_database("./mydb") as db:
+    importer = db.get_importer()
 
-# Import CSV file
-importer.import_csv(
-    file_path="products.csv",
-    vertex_type="Product",
-    delimiter=",",
-    header=True
-)
+    # Import CSV file
+    importer.import_csv(
+        file_path="products.csv",
+        vertex_type="Product",
+        delimiter=",",
+        header=True
+    )
 
-print("Import complete!")
-```
-
-### JSON Import
-
-```python
-# Import JSON array
-importer.import_json(
-    file_path="data.json",
-    vertex_type="User"
-)
+    print("Import complete!")
 ```
 
 ### ArcadeDB JSONL Import (full database)
@@ -82,41 +71,6 @@ db.command("sql", "IMPORT DATABASE file:///exports/mydb.jsonl.tgz WITH commitEve
 id,name,email,age
 1,Alice,alice@example.com,30
 2,Bob,bob@example.com,25
-```
-
----
-
-### JSON - Complex Documents
-
-**Best For:**
-- API responses
-- Document databases
-- Nested data structures
-- Complex objects
-
-**Advantages:**
-- Native type support
-- Nested structures
-- Arrays and objects
-- Standard format
-
-**Disadvantages:**
-- Larger file sizes
-- Must load entire file
-- Harder to edit manually
-
-**Example:**
-```json
-[
-  {
-    "id": 1,
-    "name": "Alice",
-    "email": "alice@example.com",
-    "addresses": [
-      {"street": "123 Main St", "city": "NYC"}
-    ]
-  }
-]
 ```
 
 ---
@@ -318,11 +272,10 @@ def split_csv(input_file, chunk_size=100000):
 
 def import_chunk(db_path, chunk_file, vertex_type):
     """Import single chunk."""
-    db = arcadedb.open_database(db_path)
-    importer = db.get_importer()
-    importer.batch_size = 10000
-    importer.import_csv(chunk_file, vertex_type)
-    db.close()
+    with arcadedb.open_database(db_path) as db:
+        importer = db.get_importer()
+        importer.batch_size = 10000
+        importer.import_csv(chunk_file, vertex_type)
     os.remove(chunk_file)
 
 # Split file
@@ -733,16 +686,6 @@ class ImportPipeline:
         """Add CSV import step."""
         try:
             self.importer.import_csv(file_path, vertex_type, **kwargs)
-            self.stats['files_processed'] += 1
-            logger.info(f"Imported {file_path}")
-        except Exception as e:
-            self.stats['errors'].append(f"{file_path}: {e}")
-            logger.error(f"Failed to import {file_path}: {e}")
-
-    def add_json_step(self, file_path, vertex_type):
-        """Add JSON import step."""
-        try:
-            self.importer.import_json(file_path, vertex_type)
             self.stats['files_processed'] += 1
             logger.info(f"Imported {file_path}")
         except Exception as e:
