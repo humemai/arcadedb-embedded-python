@@ -1,6 +1,6 @@
 # Gremlin Tests
 
-The `test_gremlin.py` file contains **1 test** validating Gremlin query language support.
+The `test_gremlin.py` file contains **2 tests** validating Gremlin query language support.
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_gremlin.py){ .md-button }
 
@@ -21,30 +21,27 @@ pip install arcadedb-embedded
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("./test_db")
+with arcadedb.create_database("./test_db") as db:
+    # Create graph schema (auto-transactional)
+    db.schema.create_vertex_type("Person")
+    db.schema.create_edge_type("Knows")
 
-# Create graph schema
-db.command("sql", "CREATE VERTEX TYPE Person")
-db.command("sql", "CREATE EDGE TYPE Knows")
+    # Insert data with Gremlin
+    with db.transaction():
+        db.command("gremlin", """
+            g.addV('Person').property('name', 'Alice').property('age', 30)
+             .addV('Person').property('name', 'Bob').property('age', 25)
+             .next()
+        """)
 
-# Insert data with Gremlin
-with db.transaction():
-    db.command("gremlin", """
-        g.addV('Person').property('name', 'Alice').property('age', 30)
-         .addV('Person').property('name', 'Bob').property('age', 25)
-         .next()
+    # Query with Gremlin
+    result = db.query("gremlin", """
+        g.V().hasLabel('Person').values('name')
     """)
 
-# Query with Gremlin
-result = db.query("gremlin", """
-    g.V().hasLabel('Person').values('name')
-""")
-
-names = [r for r in result]
-assert 'Alice' in names
-assert 'Bob' in names
-
-db.close()
+    names = [r for r in result]
+    assert 'Alice' in names
+    assert 'Bob' in names
 ```
 
 ## Gremlin Examples

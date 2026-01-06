@@ -2,6 +2,17 @@
 
 The `ResultSet` and `Result` classes provide Python-friendly interfaces for working with query results from ArcadeDB. They handle iteration, property access, and type conversion automatically.
 
+!!! tip "Using Context Managers"
+    For automatic resource cleanup, prefer using context managers:
+    ```python
+    with arcadedb.open_database("./mydb") as db:
+        result_set = db.query("sql", "SELECT FROM Person WHERE age > 25")
+        for result in result_set:
+            print(result.get("name"))
+    # Database automatically closed
+    ```
+    Examples below show explicit `db.close()` for clarity, but context managers are recommended in production.
+
 ## Overview
 
 When you execute a query, ArcadeDB returns a `ResultSet` that can be iterated to access individual `Result` objects. Each `Result` represents one row/record from your query.
