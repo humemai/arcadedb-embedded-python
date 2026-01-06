@@ -1,19 +1,24 @@
 # Importer API
 
-The `Importer` class and convenience functions provide high-performance data import capabilities for ArcadeDB. The Java importer supports CSV/TSV and XML. For full-database migrations, use ArcadeDB's native JSONL export/import via the `IMPORT DATABASE file://...` SQL command (see JSONL example below).
+The `Importer` class and convenience functions provide high-performance data import
+capabilities for ArcadeDB. For full-database migrations, use ArcadeDB's native JSONL
+export/import via the `IMPORT DATABASE file://...` SQL command (see JSONL example
+below).
 
 ## Overview
 
 The importer uses streaming parsers for memory efficiency and performs batch transactions (default 1000 records per commit) for optimal performance. It can import data as documents, vertices, or edges depending on your schema needs.
 
 **Supported Formats:**
-- **CSV/TSV**: Comma or tab-separated values
-- **XML**: Attribute-focused importer
+- **CSV/TSV**: Comma or tab-separated values (recommended for bulk imports)
 - **ArcadeDB JSONL export/import**: Use `IMPORT DATABASE file://...` via SQL for full database moves (see example)
+- **XML**: Limited support via Java importer (not recommended for production use)
 
 ## Module Functions
 
-Convenience functions for common import tasks without creating an `Importer` instance. These call the underlying Java importer (CSV/TSV, XML) or native SQL for full-database JSONL imports.
+Convenience functions for common import tasks without creating an `Importer` instance.
+These call the underlying Java importer (CSV/TSV) or native SQL for full-database JSONL
+imports.
 
 ### `import_csv(database, file_path, type_name, **options)`
 
@@ -26,11 +31,13 @@ Import CSV or TSV files as documents, vertices, or edges.
 - `**options`: Format-specific options
     - `delimiter` (str): Field delimiter (default: ',', use '\t' for TSV)
     - `header` (bool): File has header row (default: True)
-    - `commit_every` (int): Records per transaction (default: 1000)
-    - `vertex_type` (str): Import as vertices (optional)
-    - `edge_type` (str): Import as edges (optional)
+    - `commitEvery` or `commit_every` (int): Records per transaction (default: 1000)
+    - `import_type` (str): `"documents"` (default), `"vertices"`, or `"edges"`
+    - `typeIdProperty` (str): ID column when importing vertices (e.g., "id")
+    - `vertexType` (str): Optional explicit vertex type name (defaults to `type_name`)
     - `from_property` (str): Source column for edges (default: 'from')
     - `to_property` (str): Target column for edges (default: 'to')
+    - `edgeType` (str): Optional explicit edge type name (defaults to `type_name`)
     - `verbose` (bool): Print errors during import (default: False)
 
 **Examples:**
@@ -43,41 +50,29 @@ stats = arcadedb.import_csv(db, "people.csv", "Person")
 **Import as Vertices:**
 ```python
 stats = arcadedb.import_csv(
-        db, "users.csv", "User",
-        vertex_type="User",
-        commit_every=500
+    db, "users.csv", "User",
+    import_type="vertices",
+    typeIdProperty="id",
+    commitEvery=500
 )
 ```
 
 **Import as Edges:**
 ```python
 stats = arcadedb.import_csv(
-        db, "follows.csv", "Follows",
-        edge_type="Follows",
-        from_property="user_rid",
-        to_property="follows_rid",
-        header=True
+    db, "follows.csv", "Follows",
+    import_type="edges",
+    from_property="from_rid",
+    to_property="to_rid"
 )
 ```
 
-**Import TSV:**
-```python
-stats = arcadedb.import_csv(
-        db, "data.tsv", "Data",
-        delimiter='\t'
-)
-```
-
-### ArcadeDB JSONL import (native SQL)
-
-Use SQL `IMPORT DATABASE file://...` for JSONL exports produced by ArcadeDB. This preserves schema and data and is recommended for full migrations.
-
+**Full-Database Import (JSONL):**
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("./restored_db")
-db.command("sql", "IMPORT DATABASE file:///tmp/export.jsonl.tgz WITH commitEvery = 50000")
-db.close()
+with arcadedb.create_database("./restored_db") as db:
+    db.command("sql", "IMPORT DATABASE file:///tmp/export.jsonl.tgz WITH commitEvery = 50000")
 ```
 
 For XML imports, use the `Importer` class directly (see below) with `format_type='xml'`.
@@ -130,7 +125,6 @@ Import data from a file with auto-detection or explicit format specification.
 importer = Importer(db)
 
 # Auto-detect format from extension
-stats = importer.import_file("data.json")
 stats = importer.import_file("users.csv", type_name="User")
 
 # Explicit format
@@ -145,31 +139,6 @@ stats = importer.import_file(
 ---
 
 ## Format-Specific Details
-
-### JSON Format
-
-**File Structure:**
-- Single JSON object: `{...}`
-- Array of objects: `[{...}, {...}]`
-- Multiple root objects: `{...}\n{...}`
-
-**Options:**
-- `mapping` (Dict): Map JSON paths to database types (advanced)
-
-**Type Inference:** The importer uses Java's `JSONImporterFormat` which automatically creates schema based on JSON structure.
-
-**Example:**
-```python
-# data.json:
-# [
-#   {"name": "Alice", "age": 30, "city": "NYC"},
-#   {"name": "Bob", "age": 25, "city": "LA"}
-# ]
-
-stats = arcadedb.import_json(db, "data.json", commit_every=1000)
-```
-
----
 
 ### CSV Format
 
@@ -342,35 +311,27 @@ except arcadedb.ArcadeDBError as e:
 ```python
 import arcadedb_embedded as arcadedb
 
-# Open or create database
-db = arcadedb.create_database("./import_demo")
+# Open or create database (auto-closes)
+with arcadedb.create_database("./import_demo") as db:
+    # Create schema with embedded API
+    db.schema.create_vertex_type("Person")
+    db.schema.create_edge_type("Knows")
 
-# Create schema
-db.command("sql", "CREATE DOCUMENT TYPE User")
-db.command("sql", "CREATE VERTEX TYPE Person")
-db.command("sql", "CREATE EDGE TYPE Knows")
+    # Import vertices from CSV
+    stats = arcadedb.import_csv(
+        db, "people.csv", "Person",
+        vertex_type="Person"
+    )
+    print(f"People: {stats['vertices']}")
 
-# Import documents from JSON
-stats1 = arcadedb.import_json(db, "users.json")
-print(f"Users: {stats1['documents']}")
-
-# Import vertices from CSV
-stats2 = arcadedb.import_csv(
-    db, "people.csv", "Person",
-    vertex_type="Person"
-)
-print(f"People: {stats2['vertices']}")
-
-# Import edges from CSV
-stats3 = arcadedb.import_csv(
-    db, "relationships.csv", "Knows",
-    edge_type="Knows",
-    from_property="person1_rid",
-    to_property="person2_rid"
-)
-print(f"Relationships: {stats3['edges']}")
-
-db.close()
+    # Import edges from CSV
+    stats2 = arcadedb.import_csv(
+        db, "relationships.csv", "Knows",
+        edge_type="Knows",
+        from_property="person1_rid",
+        to_property="person2_rid"
+    )
+    print(f"Relationships: {stats2['edges']}")
 ```
 
 ### Large-Scale Import with Progress Tracking
@@ -379,36 +340,30 @@ db.close()
 import arcadedb_embedded as arcadedb
 import time
 
-db = arcadedb.create_database("./large_import")
+with arcadedb.create_database("./large_import") as db:
+    # Create schema with embedded API
+    db.schema.create_vertex_type("Product")
 
-# Create schema
-db.command("sql", "CREATE VERTEX TYPE Product")
+    # Import with progress monitoring
+    print("Starting import...")
+    start = time.time()
 
-# Import with progress monitoring
-print("Starting import...")
-start = time.time()
+    stats = arcadedb.import_csv(
+        db, "products.csv", "Product",
+        vertex_type="Product",
+        commit_every=10000,  # Large batches for performance
+        verbose=True  # Show errors
+    )
 
-stats = arcadedb.import_csv(
-    db, "products.csv", "Product",
-    vertex_type="Product",
-    commit_every=10000,  # Large batches for performance
-    verbose=True  # Show errors
-)
+    elapsed = time.time() - start
 
-elapsed = time.time() - start
+    print(f"\nImport complete!")
+    print(f"Records: {stats['vertices']:,}")
+    print(f"Errors: {stats['errors']}")
+    print(f"Time: {elapsed:.2f}s")
+    print(f"Rate: {stats['vertices'] / elapsed:.0f} records/sec")
 
-print(f"\nImport complete!")
-print(f"Records: {stats['vertices']:,}")
-print(f"Errors: {stats['errors']}")
-print(f"Time: {elapsed:.2f}s")
-print(f"Rate: {stats['vertices'] / elapsed:.0f} records/sec")
-
-# Create indexes after import
-print("\nCreating indexes...")
-db.command("sql", "CREATE INDEX ON Product (sku) UNIQUE")
-db.command("sql", "CREATE INDEX ON Product (category) NOTUNIQUE")
-
-db.close()
+    # Create indexes after import
 ```
 
 ### ArcadeDB JSONL Import (native export)
@@ -418,14 +373,14 @@ Use ArcadeDB's built-in SQL command to import JSONL exports created by `EXPORT D
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("./restored_db")
 import_path = "/exports/mydb.jsonl.tgz"  # JSONL export created by ArcadeDB
 
-# Use SQL IMPORT DATABASE with optional tuning parameters
-db.command("sql", f"IMPORT DATABASE file://{import_path} WITH commitEvery = 50000")
+# Use context manager for lifecycle
+with arcadedb.create_database("./restored_db") as db:
+    # Use SQL IMPORT DATABASE with optional tuning parameters
+    db.command("sql", f"IMPORT DATABASE file://{import_path} WITH commitEvery = 50000")
 
-print("Import complete!")
-db.close()
+    print("Import complete!")
 ```
 
 This approach preserves the full database (schema + data) and is the recommended path for large migrations or round-tripping ArcadeDB exports.
