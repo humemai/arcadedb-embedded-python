@@ -36,7 +36,7 @@ with arcadedb.create_database("/tmp/mydb") as db:
         doc.set("name", "Alice")
         doc.save()
 
-    # Query (SQL is still fine for reads)
+    # Query (No transaction needed. SQL is still fine for reads)
     result = db.query("sql", "SELECT FROM Person")
     for record in result:
         print(record.get("name"))
@@ -47,21 +47,45 @@ with arcadedb.create_database("/tmp/mydb") as db:
 REST requests when server is running - enables remote access:
 
 ```python
+import arcadedb_embedded as arcadedb
 import requests
 from requests.auth import HTTPBasicAuth
 
-# First start server with Java API
+# Start server with Java API
 server = arcadedb.create_server("/tmp/server", "password123")
 server.start()
 
-# Then use HTTP API for remote access
 auth = HTTPBasicAuth("root", "password123")
+
+# Create database via HTTP
+requests.post(
+    f"http://localhost:{server.get_http_port()}/api/v1/server",
+    auth=auth,
+    json={"command": "create database mydb"}
+)
+
+# Create schema
+requests.post(
+    f"http://localhost:{server.get_http_port()}/api/v1/command/mydb",
+    auth=auth,
+    json={"language": "sql", "command": "CREATE DOCUMENT TYPE Person"}
+)
+
+# Insert data
+requests.post(
+    f"http://localhost:{server.get_http_port()}/api/v1/command/mydb",
+    auth=auth,
+    json={"language": "sql", "command": "INSERT INTO Person SET name = 'Alice'"}
+)
+
+# Query data
 response = requests.post(
     f"http://localhost:{server.get_http_port()}/api/v1/command/mydb",
     auth=auth,
     json={"language": "sql", "command": "SELECT FROM Person"}
 )
 result = response.json()
+print(result)
 
 server.stop()
 ```
@@ -122,7 +146,6 @@ with arcadedb.create_database("/tmp/quickstart") as db:
 
 ```python
 with arcadedb.create_database("/tmp/quickstart") as db:
-    # Setup (abbreviated)
     db.schema.create_document_type("Person")
     db.schema.create_property("Person", "name", "STRING")
     db.schema.create_property("Person", "age", "INTEGER")
@@ -161,7 +184,7 @@ def main():
         db.schema.create_document_type("Person")
         db.schema.create_property("Person", "name", "STRING")
         db.schema.create_property("Person", "age", "INTEGER")
-        db.schema.create_type_index("Person", ["name"], unique=False)
+        db.schema.create_index("Person", ["name"], unique=False)
 
         # Insert data (in transaction)
         with db.transaction():
@@ -178,7 +201,7 @@ def main():
 
         print("✅ Inserted 3 records")
 
-        # Query all (SQL still fine for reads)
+        # Query all (No transaction needed. SQL still fine for reads)
         print("\n📋 All people:")
         result = db.query("sql", "SELECT FROM Person ORDER BY age")
         for record in result:
@@ -254,34 +277,6 @@ doc.set("name", "Alice")
 !!! info "Read-Only Operations"
     `db.query()` doesn't require a transaction - only `db.command()` for writes.
 
-### Query Languages
-
-ArcadeDB supports multiple query languages:
-
-=== "SQL"
-
-    ```python
-    result = db.query("sql", "SELECT FROM Person WHERE age > 25")
-    ```
-
-=== "Cypher"
-
-    ```python
-    result = db.query("cypher", "MATCH (p:Person) WHERE p.age > 25 RETURN p")
-    ```
-
-=== "MongoDB"
-
-    ```python
-    result = db.query("mongo", "{ find: 'Person', filter: { age: { $gt: 25 } } }")
-    ```
-
-=== "Gremlin"
-
-    ```python
-    result = db.query("gremlin", "g.V().has('Person', 'age', gt(25))")
-    ```
-
 ## Next Steps
 
 Now that you've created your first database, explore more features:
@@ -302,7 +297,7 @@ Now that you've created your first database, explore more features:
 
 -   :material-upload:{ .lg .middle } [__Import Data__](../guide/import.md)
 
-    Bulk import from CSV, JSON, ArcadeDB JSONL exports
+    Bulk import from CSV and ArcadeDB JSONL exports
 
 </div>
 

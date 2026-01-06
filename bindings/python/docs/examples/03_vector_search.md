@@ -4,18 +4,18 @@
 
 ## Overview
 
-This example demonstrates semantic similarity search using vector embeddings and JVector
-indexing. It covers:
+This example demonstrates semantic similarity search using vector embeddings and HNSW
+(JVector) indexing. It covers:
 
 - Storing 384-dimensional vector embeddings (mimicking sentence-transformers)
-- Creating and populating JVector indexes
+- Creating and populating HNSW (JVector) indexes
 - Performing nearest-neighbor searches
 - Understanding indexing performance and architecture
 - Best practices for filtering and production deployment
 
 ## Implementation Status
 
-### Current: JVector
+### Current: HNSW (JVector)
 
 ArcadeDB uses [JVector](https://github.com/datastax/jvector), a state-of-the-art vector search engine.
 
@@ -45,9 +45,10 @@ embedding = model.encode("This is a sample document")
 - **768D**: sentence-transformers/all-mpnet-base-v2 (higher quality)
 - **1536D**: OpenAI text-embedding-3-small (best quality, paid)
 
-### JVector Index
+### HNSW (JVector) Index
 
-JVector uses a graph-based index (HNSW + DiskANN) to enable fast approximate nearest-neighbor search.
+JVector uses a graph-based index (HNSW + DiskANN) to enable fast approximate
+nearest-neighbor search.
 
 ```python
 import arcadedb_embedded as arcadedb
@@ -135,7 +136,7 @@ ArcadeDB's LSM (Log-Structured Merge) tree architecture handles indexing automat
 ```python
 import arcadedb_embedded as arcadedb
 
-with arcadedb.open_database("./vector_demo") as db:
+with arcadedb.create_database("./vector_demo") as db:
     # Index is updated automatically as you insert
     with db.transaction():
         for doc in documents:
@@ -147,20 +148,20 @@ with arcadedb.open_database("./vector_demo") as db:
 
 ### 2. Filtering Strategies
 
-JVector supports **native filtering** by passing a set of allowed Record IDs (RIDs) to the search method. This allows you to combine SQL's powerful filtering with vector search.
+JVector supports **native filtering** by passing a set of allowed Record IDs (RIDs) to
+the search method. This allows you to combine SQL's powerful filtering with vector
+search.
 
 **Native Filtering (Recommended)**:
 
 ```python
 import arcadedb_embedded as arcadedb
 
-with arcadedb.open_database("./vector_demo") as db:
+with arcadedb.create_database("./vector_demo") as db:
     def search_with_filters(db, query_embedding, k=5, filters=None):
         """
-        Search with metadata filters using native JVector filtering.
+        Search with metadata filters using SQL with vector distance functions.
         """
-        allowed_rids = None
-
         if filters:
             # 1. Find RIDs matching the filter using SQL
             conditions = []
@@ -177,16 +178,15 @@ with arcadedb.open_database("./vector_demo") as db:
             allowed_rids = [record.get_rid() for record in result_set]
 
             if not allowed_rids:
-                return [] # No documents match the filter
+                return []  # No documents match the filter
 
-        # 2. Pass allowed_rids to find_nearest
-        # (Implementation depends on ArcadeDB's Python API for filtering)
+        # 2. Query with vector distance ordering using vectorL2Distance
+        # (Euclidean distance) - also supports vectorCosineSimilarity
         results = db.query("""
             SELECT FROM Article
-            WHERE jvector_distance(embedding, ?) <= ?
-            ORDER BY jvector_distance(embedding, ?) ASC
+            ORDER BY vectorL2Distance(embedding, ?) ASC
             LIMIT ?
-        """, (query_embedding, 2.0, query_embedding, k))
+        """, (query_embedding, k))
 
         return results
 ```

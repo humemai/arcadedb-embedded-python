@@ -17,7 +17,7 @@ Schema tests cover:
 - ✅ **Index Queries** - Getting and listing indexes
 - ✅ **Index Deletion** - Removing indexes
 - ✅ **Property Types** - All ArcadeDB property types
-- ✅ **Vector Indexes** - HNSW configuration and operations
+- ✅ **Vector Indexes** - HNSW (JVector) configuration and operations
 
 ## Test Classes
 
@@ -375,7 +375,7 @@ with arcadedb.create_database("./test_db") as db:
 3. **Set constraints** - Use `set_mandatory()`, `set_not_null()`
 4. **Index frequently queried** - Properties used in WHERE clauses
 5. **Use appropriate types** - Match property types to data
-6. **Configure HNSW** - Tune M, efConstruction, ef for vectors
+6. **Configure JVector** - Tune `max_connections`, `beam_width`, `overquery_factor`, `dimensions` for vectors
 
 ## See Also
 

@@ -58,7 +58,6 @@ The `arcadedb-embedded` package (~209-215MB wheel, ~274-289MB installed) include
 All Python dependencies are automatically installed:
 
 - **JPype1** >= 1.5.0 (Java-Python bridge)
-- **typing-extensions** (for Python < 3.10)
 
 ## Verify Installation
 
@@ -71,7 +70,7 @@ print(f"ArcadeDB Python bindings version: {arcadedb.__version__}")
 # Test database creation
 with arcadedb.create_database("/tmp/test") as db:
     result = db.query("sql", "SELECT 1 as test")
-    print(f"Database working: {result[0].get('test') == 1}")
+    print(f"Database working: {result.first().get('test') == 1}")
 ```
 
 Expected output (version will match what you installed):
@@ -107,58 +106,6 @@ Install locally:
 pip install dist/arcadedb_embedded-*.whl
 ```
 
-## Troubleshooting
-
-### Installation Fails with "No matching distribution"
-
-If pip can't find the package:
-
-1. Make sure you're using the correct installation command with both index URLs:
-   ```bash
-   pip install arcadedb-embedded \
-     --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
-     --extra-index-url https://pypi.org/simple/
-   ```
-
-2. Check your platform is supported:
-   ```bash
-   python -c "import platform; print(platform.machine(), platform.system())"
-   ```
-   Supported: x86_64/amd64/AMD64, aarch64/arm64/ARM64 on Linux, macOS, Windows
-
-3. Check your Python version:
-   ```bash
-   python --version  # Should be within 3.10–3.14
-   ```
-
-### Import Errors
-
-If `import arcadedb_embedded` fails:
-
-```bash
-# Uninstall first
-pip uninstall arcadedb-embedded
-
-# Reinstall
-pip install arcadedb-embedded \
-  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
-  --extra-index-url https://pypi.org/simple/
-```
-
-### Version Conflicts
-
-If you see version conflicts with JPype:
-
-```bash
-# Upgrade JPype
-pip install --upgrade JPype1
-
-# Reinstall ArcadeDB
-pip install --force-reinstall arcadedb-embedded \
-  --index-url https://humemai.github.io/arcadedb-embedded-python/simple/ \
-  --extra-index-url https://pypi.org/simple/
-```
-
 ## JVM Configuration
 
 The bundled JVM can be configured via the `ARCADEDB_JVM_ARGS` environment variable **before** importing `arcadedb_embedded`:
@@ -183,8 +130,8 @@ JVM arguments use two flag types:
 
 - **`-D` flags**: System properties for ArcadeDB configuration
   - `-Darcadedb.vectorIndex.locationCacheSize=<count>`: Vector location cache limit
-  - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: HNSW build cache limit
-  - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: Mutations threshold before rebuilding HNSW
+  - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: JVector build cache limit
+  - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: Mutations threshold before rebuilding JVector
 
 !!! warning "Set Before Import"
     `ARCADEDB_JVM_ARGS` must be set **before** the first `import arcadedb_embedded` in your Python process. The JVM can only be configured once.

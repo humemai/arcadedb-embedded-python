@@ -186,7 +186,7 @@ JSONL export/import) cover most real-world data migration scenarios.
 
 #### 9. Vector Search - 100%
 
-- ✅ Vector index creation - `create_vector_index()` with JVector
+- ✅ Vector index creation - `create_vector_index()` with HNSW (JVector)
 - ✅ NumPy array support - `to_java_float_array()`, `to_python_array()`
 - ✅ Similarity search - `index.find_nearest()`
 - ✅ Add/remove vectors - Automatic via vertex save/delete
