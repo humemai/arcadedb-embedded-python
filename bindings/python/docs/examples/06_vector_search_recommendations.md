@@ -2,15 +2,15 @@
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/06_vector_search_recommendations.py){ .md-button }
 
-**Production-ready vector embeddings and JVector indexing for semantic movie search**
+**Production-ready vector embeddings and HNSW (JVector) indexing for semantic movie search**
 
 ## Overview
 
-This example demonstrates creating vector embeddings for movies and using JVector
+This example demonstrates creating vector embeddings for movies and using HNSW (JVector)
 indexing for fast semantic similarity search. You'll learn:
 
 - **Real embeddings** - Using sentence-transformers for 384-dimensional vectors
-- **JVector vector indexing** - Fast approximate nearest neighbor search (cosine similarity)
+- **HNSW (JVector) vector indexing** - Fast approximate nearest neighbor search (cosine similarity)
 - **Graph vs Vector** - Compare collaborative filtering with semantic similarity
 - **Multi-model comparison** - Two embedding models with different semantic characteristics
 - **Performance optimization** - Graph query sampling for 150-300× speedup
@@ -18,7 +18,7 @@ indexing for fast semantic similarity search. You'll learn:
 ## What You'll Learn
 
 - Generate embeddings using sentence-transformers (all-MiniLM-L6-v2, paraphrase-MiniLM-L6-v2)
-- Create and populate JVector vector indexes with custom edge types
+- Create and populate HNSW (JVector) vector indexes with custom edge types
 - Graph-based collaborative filtering (full vs sampled modes)
 - Vector-based semantic similarity search
 - Performance comparison: 4 recommendation methods
@@ -157,7 +157,7 @@ python 06_vector_search_recommendations.py --help
 
 **How it works:**
 - Encodes movie titles and genres into 384-dimensional vectors
-- Uses JVector index for fast approximate nearest neighbor search
+- Uses HNSW (JVector) index for fast approximate nearest neighbor search
 - Finds movies with similar semantic meaning
 
 **Performance:**
