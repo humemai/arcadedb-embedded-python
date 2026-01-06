@@ -1,6 +1,6 @@
 # Data Import Tests
 
-The `test_importer.py` file contains **12 tests** covering CSV, JSON, and Neo4j data import.
+The `test_importer.py` file contains **16 tests** covering CSV data import.
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_importer.py){ .md-button }
 
@@ -8,9 +8,8 @@ The `test_importer.py` file contains **12 tests** covering CSV, JSON, and Neo4j 
 
 ArcadeDB Python bindings provide built-in importers for:
 
-- ✅ **CSV** - Import as documents, vertices, or edges
-- ✅ **JSON** - Import as documents (uses Java importer)
-- ✅ **Neo4j** - Import APOC export format (nodes and relationships)
+- ✅ **CSV** - Import as documents, vertices, or edges with batch transactions
+- ✅ **ArcadeDB JSONL** - Full database import via `IMPORT DATABASE` SQL command
 
 All importers support:
 
@@ -23,8 +22,7 @@ All importers support:
 | Format | Documents | Vertices | Edges | Type Inference |
 |--------|-----------|----------|-------|----------------|
 | CSV | ✅ | ✅ | ✅ | ✅ |
-| JSON | ✅ | ❌ | ❌ | ✅ (JSON types) |
-| Neo4j | ✅ | ✅ (nodes) | ✅ (rels) | ✅ |
+| ArcadeDB JSONL | ✅ | ✅ | ✅ | ✅ (preserved from export) |
 
 ## Quick Start Examples
 
@@ -33,41 +31,29 @@ All importers support:
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("./mydb")
+with arcadedb.create_database("./mydb") as db:
+    # Create schema first (matches tested flow)
+    db.schema.create_document_type("Person")
 
-# Import as documents
-arcadedb.import_csv(
-    db,
-    "data.csv",
-    type_name="Person",
-    import_as="document"  # or "vertex" or "edge"
-)
+    stats = arcadedb.import_csv(
+        db,
+        "data.csv",
+        type_name="Person",
+    )
+    print(stats)
 ```
 
-### JSON Import
+### ArcadeDB JSONL Import
 
 ```python
-# Import JSON array
-arcadedb.import_json(
-    db,
-    "data.json",
-    type_name="Person"
-)
-```
-
-### Neo4j Import
-
-```python
-# Import Neo4j APOC export
-arcadedb.import_neo4j(
-    db,
-    "neo4j_export.jsonl"
-)
+# Import full database from JSONL export
+with arcadedb.create_database("./restored_db") as db:
+    db.command("sql", "IMPORT DATABASE file:///exports/mydb.jsonl.tgz WITH commitEvery = 50000")
 ```
 
 ## Test Cases
 
-### CSV Import Tests (5 tests)
+### CSV Import Tests (16 tests)
 
 #### 1. CSV as Documents
 
@@ -82,8 +68,7 @@ Charlie,35,Chicago"""
 stats = arcadedb.import_csv(
     db,
     "people.csv",
-    type_name="Person",
-    import_as="document"
+    type_name="Person"
 )
 
 # Verify
@@ -94,15 +79,16 @@ assert len(list(result)) == 3
 #### 2. CSV as Vertices
 
 ```python
-csv_content = """name,age
-Alice,30
-Bob,25"""
+csv_content = """id,name,age
+1,Alice,30
+2,Bob,25"""
 
 stats = arcadedb.import_csv(
     db,
     "people.csv",
     type_name="Person",
-    import_as="vertex"
+    import_type="vertices",
+    typeIdProperty="id"
 )
 
 # Verify vertices created
@@ -123,7 +109,9 @@ stats = arcadedb.import_csv(
     db,
     "relationships.csv",
     type_name="Knows",
-    import_as="edge"
+    import_type="edges",
+    from_property="from_rid",
+    to_property="to_rid"
 )
 ```
 
@@ -168,119 +156,16 @@ assert alice.get("notes") is None
 - `""` (empty) → `None`
 - Everything else → `str`
 
-### JSON Import Tests (2 tests)
-
-#### 1. JSON Array Import
-
-```python
-# JSON array format
-json_content = '''[
-  {"name": "Alice", "age": 30},
-  {"name": "Bob", "age": 25},
-  {"name": "Charlie", "age": 35}
-]'''
-
-stats = arcadedb.import_json(
-    db,
-    "people.json",
-    type_name="Person"
-)
-
-# Only creates documents (not vertices)
-result = db.query("sql", "SELECT FROM Person")
-assert len(list(result)) == 3
-```
-
-#### 2. JSON with Nested Objects
-
-```python
-json_content = '''[
-  {
-    "name": "Alice",
-    "address": {
-      "city": "NYC",
-      "zip": "10001"
-    },
-    "hobbies": ["reading", "gaming"]
-  }
-]'''
-
-stats = arcadedb.import_json(db, "people.json", type_name="Person")
-
-result = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
-alice = list(result)[0]
-
-# Nested structures preserved
-address = alice.get("address")
-assert address["city"] == "NYC"
-```
-
-### Neo4j Import Tests (3 tests)
-
-#### 1. Neo4j Nodes (Vertices)
-
-```python
-# Neo4j APOC export format
-neo4j_content = '''{"type":"node","id":"0","labels":["Person"],"properties":{"name":"Alice","age":30}}
-{"type":"node","id":"1","labels":["Person"],"properties":{"name":"Bob","age":25}}'''
-
-stats = arcadedb.import_neo4j(db, "neo4j_export.jsonl")
-
-# Creates vertices with Person type
-result = db.query("sql", "SELECT FROM Person")
-assert len(list(result)) == 2
-```
-
-#### 2. Neo4j Relationships (Edges)
-
-```python
-# Nodes first
-neo4j_content = '''{"type":"node","id":"0","labels":["Person"],"properties":{"name":"Alice"}}
-{"type":"node","id":"1","labels":["Person"],"properties":{"name":"Bob"}}
-{"type":"relationship","id":"0","label":"KNOWS","start":{"id":"0"},"end":{"id":"1"},"properties":{"since":2020}}'''
-
-stats = arcadedb.import_neo4j(db, "neo4j_export.jsonl")
-
-# Verify edge created
-result = db.query("sql", "SELECT FROM KNOWS")
-assert len(list(result)) == 1
-
-edge = list(result)[0]
-assert edge.get("since") == 2020
-```
-
-#### 3. Neo4j Full Graph
-
-```python
-# Complete graph export
-neo4j_content = '''{"type":"node","id":"0","labels":["Person"],"properties":{"name":"Alice"}}
-{"type":"node","id":"1","labels":["Person"],"properties":{"name":"Bob"}}
-{"type":"node","id":"2","labels":["Person"],"properties":{"name":"Charlie"}}
-{"type":"relationship","id":"0","label":"KNOWS","start":{"id":"0"},"end":{"id":"1"},"properties":{}}
-{"type":"relationship","id":"1","label":"KNOWS","start":{"id":"1"},"end":{"id":"2"},"properties":{}}'''
-
-stats = arcadedb.import_neo4j(db, "graph.jsonl")
-
-print(f"Nodes imported: {stats['nodes_imported']}")
-print(f"Relationships imported: {stats['relationships_imported']}")
-
-# Query graph
-result = db.query("sql", """
-    SELECT name, out('KNOWS').name as friends
-    FROM Person WHERE name = 'Bob'
-""")
-```
-
 ## Import Options
 
 ### Common Options (All Importers)
 
 ```python
-stats = arcadedb.import_xxx(
+stats = arcadedb.import_csv(
     db,
     file_path,
     type_name="MyType",
-    commit_every=1000,  # Commit every N records (default: 1000)
+    commitEvery=1000,  # Commit every N records (default: 1000)
     **options
 )
 ```
@@ -292,22 +177,20 @@ stats = arcadedb.import_csv(
     db,
     "data.csv",
     type_name="Person",
-    import_as="document",  # "document", "vertex", or "edge"
-    delimiter=",",          # Field delimiter (default: ",")
-    quote_char='"',         # Quote character (default: '"')
-    header=True,            # Has header row (default: True)
-    commit_every=1000
+    import_type="documents",  # "documents", "vertices", or "edges"
+    delimiter=",",            # Field delimiter (default: ",")
+    quote_char='"',           # Quote character (default: '"')
+    header=True,              # Has header row (default: True)
+    commitEvery=1000
 )
 ```
 
-### Neo4j Options
+### ArcadeDB JSONL Options
 
 ```python
-stats = arcadedb.import_neo4j(
-    db,
-    "neo4j_export.jsonl",
-    commit_every=1000
-)
+# Full database import via SQL
+with arcadedb.create_database("./restored_db") as db:
+    db.command("sql", "IMPORT DATABASE file:///exports/mydb.jsonl.tgz WITH commitEvery = 50000")
 ```
 
 ## Import Statistics
@@ -326,29 +209,11 @@ print(stats)
 # }
 ```
 
-For Neo4j imports:
-
-```python
-stats = arcadedb.import_neo4j(db, "graph.jsonl")
-
-print(stats)
-# {
-#     'nodes_imported': 100,
-#     'relationships_imported': 250,
-#     'duration_seconds': 0.45,
-#     'errors': 0
-# }
-```
-
 ## Running These Tests
 
 ```bash
 # Run all import tests
 pytest tests/test_importer.py -v
-
-# Run specific format tests
-pytest tests/test_importer.py -k "csv" -v
-pytest tests/test_importer.py -k "neo4j" -v
 
 # Run with output
 pytest tests/test_importer.py -v -s
@@ -364,7 +229,7 @@ arcadedb.import_csv(
     db,
     "huge_file.csv",
     type_name="Data",
-    commit_every=10000  # Fewer, larger transactions
+    commitEvery=10000  # Fewer, larger transactions
 )
 
 # Small files: default is fine
@@ -372,7 +237,7 @@ arcadedb.import_csv(
     db,
     "small_file.csv",
     type_name="Data"
-    # commit_every=1000 (default)
+    # commitEvery=1000 (default)
 )
 ```
 

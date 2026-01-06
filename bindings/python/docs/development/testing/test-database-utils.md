@@ -139,31 +139,34 @@ assert db.schema.exists_type("Likes")
 ```python
 from test_utils import create_test_database, init_social_schema
 
-db = create_test_database("./test_db")
-init_social_schema(db)
+with create_test_database("./test_db") as db:
+    init_social_schema(db)
+    # ... continue with test ...
 ```
 
 ### Data Population
 ```python
 from test_utils import populate_users, populate_edges
 
-# Create users
-user_count = populate_users(db, 100)
+with db:  # Assuming db is created in context
+    # Create users
+    user_count = populate_users(db, 100)
 
-# Create relationships
-edge_count = populate_edges(db, "Follows", density=0.1)
+    # Create relationships
+    edge_count = populate_edges(db, "Follows", density=0.1)
 ```
 
 ### Cleanup
 ```python
 from test_utils import cleanup_database
 
-try:
-    # Test operations
-    pass
-finally:
-    cleanup_database(db)
-    db.close()
+with create_test_database("./test_db") as db:
+    try:
+        # Test operations
+        pass
+    finally:
+        cleanup_database(db)
+        # Database automatically closed by context manager
 ```
 
 ## Utility Functions Reference

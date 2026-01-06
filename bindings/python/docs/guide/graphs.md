@@ -443,21 +443,20 @@ ArcadeDB supports [Apache Gremlin](https://tinkerpop.apache.org/gremlin.html), t
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("./graph_db")
+with arcadedb.create_database("./graph_db") as db:
+    # Create schema (auto-transactional)
+    db.schema.create_vertex_type("Person")
+    db.schema.create_edge_type("Knows")
 
-# Create schema
-with db.transaction():
-    db.command("CREATE VERTEX TYPE Person IF NOT EXISTS")
-    db.command("CREATE EDGE TYPE Knows IF NOT EXISTS")
-
-# Insert data with Gremlin
-with db.transaction():
-    db.command("gremlin", """
-        g.addV('Person').property('name', 'Alice').property('age', 30)
-         .as('alice')
-         .addV('Person').property('name', 'Bob').property('age', 25)
-         .as('bob')
-         .addE('Knows').from('alice').to('bob')
+    # Insert data with Gremlin
+    with db.transaction():
+        db.command("gremlin", """
+            g.addV('Person').property('name', 'Alice').property('age', 30)
+             .as('alice')
+             .addV('Person').property('name', 'Bob').property('age', 25)
+             .as('bob')
+             .addE('Knows').from('alice').to('bob')
+        """)
          .iterate()
     """)
 
@@ -521,5 +520,5 @@ For more details, see [Gremlin Tests](../development/testing/test-gremlin.md).
 ## Next Steps
 
 - **[Vector Search](vectors.md)**: Add vector embeddings to vertices for similarity search
-- **[Data Import](import.md)**: Import graph data from CSV, JSON, or ArcadeDB JSONL exports
+- **[Data Import](import.md)**: Import graph data from CSV or ArcadeDB JSONL exports
 - **[Server Mode](server.md)**: Visualize your graph in Studio UI

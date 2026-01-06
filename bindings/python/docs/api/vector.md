@@ -156,7 +156,7 @@ db.schema.create_vertex_type("Document")
 db.schema.create_property("Document", "id", "STRING")
 db.schema.create_property("Document", "text", "STRING")
 db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
-db.schema.create_type_index("Document", ["id"], unique=True)
+db.schema.create_index("Document", ["id"], unique=True)
 
 # Create vector index
 index = db.create_vector_index(
@@ -256,7 +256,7 @@ db.schema.create_property("Document", "id", "STRING")
 db.schema.create_property("Document", "title", "STRING")
 db.schema.create_property("Document", "content", "STRING")
 db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
-db.schema.create_type_index("Document", ["id"], unique=True)
+db.schema.create_index("Document", ["id"], unique=True)
 
 # Create vector index (384 dimensions for all-MiniLM-L6-v2)
 index = db.create_vector_index(
@@ -331,7 +331,7 @@ db.schema.create_property("Product", "name", "STRING")
 db.schema.create_property("Product", "category", "STRING")
 db.schema.create_property("Product", "price", "DECIMAL")
 db.schema.create_property("Product", "features", "ARRAY_OF_FLOATS")
-db.schema.create_type_index("Product", ["category"], unique=False)
+db.schema.create_index("Product", ["category"], unique=False)
 
 # Create vector index
 index = db.create_vector_index(

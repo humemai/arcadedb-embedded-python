@@ -431,18 +431,18 @@ db.create_vector_index(
 ) -> VectorIndex
 ```
 
-Create a vector index for similarity search (default JVector implementation).
+Create a vector index for similarity search (default HNSW (JVector) implementation).
 
 **Note:** The index is built lazily. Construction happens upon the first query, not at creation time.
 
-**Parameters:**
+**Parameters:**`
 
 - `vertex_type` (str): Vertex type containing vectors
 - `vector_property` (str): Property storing vector arrays
 - `dimensions` (int): Vector dimensionality
 - `distance_function` (str): `"cosine"`, `"euclidean"`, or `"inner_product"`
-- `max_connections` (int): Max connections per node (default: 32). Maps to `maxConnections` in JVector.
-- `beam_width` (int): Beam width for search/construction (default: 256). Maps to `beamWidth` in JVector.
+- `max_connections` (int): Max connections per node (default: 32). Maps to `maxConnections` in HNSW (JVector).
+- `beam_width` (int): Beam width for search/construction (default: 256). Maps to `beamWidth` in HNSW (JVector).
 
 **Returns:**
 
@@ -751,6 +751,6 @@ else:
 ## See Also
 
 - [Graph Operations](../guide/graphs.md): Working with vertices and edges
-- [Vector Search](../guide/vectors.md): Similarity search with JVector indexes
+- [Vector Search](../guide/vectors.md): Similarity search with HNSW (JVector) indexes
 - [Server Mode](../guide/server.md): HTTP API and Studio UI
 - [Quick Start](../getting-started/quickstart.md): Getting started guide
