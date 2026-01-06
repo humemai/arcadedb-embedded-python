@@ -46,7 +46,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
     ---
 
-    CSV, JSON, Neo4j import (12 tests)
+    CSV import with type inference (16 tests)
 
 -   :material-graph: **[Gremlin Tests](testing/test-gremlin.md)**
 
@@ -93,7 +93,7 @@ pytest --cov=arcadedb_embedded --cov-report=html
 | **Server Mode** | HTTP API, Studio UI, configuration, multiple databases |
 | **Concurrency** | File locking, thread safety, multi-process limitations |
 | **Server Patterns** | Embedded+HTTP combinations, lock management |
-| **Data Import** | CSV, JSON, Neo4j exports with type inference |
+| **Data Import** | CSV with type inference, batch commits |
 | **Query Languages** | SQL, Cypher, Gremlin |
 | **Advanced Features** | Unicode support, schema introspection, large datasets |
 
