@@ -1,6 +1,6 @@
 # Core Database Tests
 
-The `test_core.py` file contains **13 tests** covering fundamental database operations.
+The `test_core.py` file contains **15 tests** covering fundamental database operations.
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_core.py){ .md-button }
 
@@ -15,7 +15,7 @@ These tests validate:
 - ✅ Query result handling
 - ✅ Error handling
 - ✅ Cypher queries (when available)
-- ✅ Vector search with HNSW indexes
+- ✅ Vector search with HNSW (JVector) indexes
 - ✅ Unicode support (international characters, emoji)
 - ✅ Schema introspection
 - ✅ Large result sets (1000+ records)
@@ -33,14 +33,11 @@ Validates that databases can be created with proper initialization.
 ```python
 import arcadedb_embedded as arcadedb
 
-# Create a new database
-db = arcadedb.create_database("./test_db")
-
-# Database should be accessible
-assert db is not None
-
-# Clean up
-db.close()
+# Use context manager for automatic cleanup
+with arcadedb.create_database("./test_db") as db:
+    # Database should be accessible
+    assert db is not None
+    # Auto-closes when exiting the with block
 ```
 
 **What it tests:**
@@ -57,14 +54,15 @@ db.close()
 Tests opening existing databases.
 
 ```python
-# Create database first
-db1 = arcadedb.create_database("./test_db")
-db1.close()
+# Create database
+with arcadedb.create_database("./test_db") as db:
+    assert db is not None
+    # Auto-closes
 
 # Open existing database
-db2 = arcadedb.open_database("./test_db")
-assert db2 is not None
-db2.close()
+with arcadedb.open_database("./test_db") as db:
+    assert db is not None
+    # Auto-closes
 ```
 
 **What it tests:**
@@ -355,7 +353,7 @@ with arcadedb.create_database("./test_db") as db:
 ```
 
 !!! note "Implementation Status"
-    Vector search uses the JVector library.
+    Vector search uses the HNSW (JVector) library.
 
 - EMBEDDING property type creation
 - Vector index creation with parameters
