@@ -75,7 +75,7 @@ with arcadedb.create_database("/tmp/mydb") as db:
 - 🔍 **Multiple query languages**: SQL, Cypher, Gremlin, MongoDB
 - ⚡ **High performance**: Direct JVM integration via JPype
 - 🔒 **ACID transactions**: Full transaction support
-- 🎯 **Vector storage**: Store and query vector embeddings with JVector indexing
+- 🎯 **Vector storage**: Store and query vector embeddings with HNSW (JVector) indexing
 - 📥 **Data import**: Built-in CSV and ArcadeDB JSONL import
 
 ---
@@ -208,7 +208,7 @@ arcadedb_embedded/
 ├── results.py           # ResultSet and Result wrappers
 ├── transactions.py      # TransactionContext manager
 ├── schema.py            # Schema management API
-├── vector.py            # Vector search and JVector indexing
+├── vector.py            # Vector search and HNSW (JVector) indexing
 ├── importer.py          # Data import (CSV, JSONL)
 ├── exporter.py          # Data export (JSONL, GraphML, GraphSON, CSV)
 ├── batch.py             # Batch operations context

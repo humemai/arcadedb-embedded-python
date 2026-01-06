@@ -1378,7 +1378,7 @@ for table, column, uniqueness in indexes:
 
 # Check all existing indexes
 #
-# Note: ArcadeDB has 3 index engine types: LSM_TREE, FULL_TEXT, JVECTOR
+# Note: ArcadeDB has 3 index engine types: LSM_TREE, FULL_TEXT, VECTOR
 # The schema metadata query only exposes a boolean 'unique' field, not the engine type.
 # Therefore:
 #   - UNIQUE indexes → unique=true, engine=LSM_TREE

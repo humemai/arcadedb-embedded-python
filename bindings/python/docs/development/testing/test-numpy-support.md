@@ -10,7 +10,7 @@ NumPy support tests cover:
 
 - ✅ **Array Storage** - Storing NumPy arrays as vectors
 - ✅ **Array Retrieval** - Reading vectors as NumPy arrays
-- ✅ **Vector Search** - HNSW similarity search with NumPy
+- ✅ **Vector Search** - HNSW (JVector) similarity search with NumPy
 - ✅ **Type Conversion** - float32/float64 handling
 
 ## Test Coverage
@@ -50,7 +50,7 @@ np.testing.assert_array_almost_equal(embedding, stored_embedding)
 Tests vector similarity search with NumPy arrays.
 
 **What it tests:**
-- Creating HNSW index on vector property
+- Creating HNSW (JVector) index on vector property
 - Inserting NumPy-generated embeddings
 - Performing similarity search
 - Retrieving nearest neighbors
@@ -59,7 +59,7 @@ Tests vector similarity search with NumPy arrays.
 ```python
 import numpy as np
 
-# Create schema with HNSW index
+# Create schema with HNSW (JVector) index
 db.schema.create_vertex_type("Document")
 db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
 
@@ -239,14 +239,14 @@ for i, vec in enumerate(dense_vectors):
 2. **Batch inserts** - Use BatchContext for many vectors
 3. **Convert once** - `.tolist()` only when storing
 4. **Numpy for math** - Use NumPy for vector operations
-5. **HNSW for search** - Enable similarity search
+5. **HNSW (JVector) for search** - Enable similarity search
 
 ## Key Takeaways
 
 1. **Convert to list** - Use `.tolist()` before storing
 2. **Convert back** - Use `np.array()` after retrieving
 3. **Prefer float32** - Best for embeddings
-4. **Use HNSW** - Enable fast similarity search
+4. **Use HNSW (JVector)** - Enable fast similarity search
 5. **Works with ML libs** - Direct integration
 
 ## See Also

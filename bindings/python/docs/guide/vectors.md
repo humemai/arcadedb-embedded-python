@@ -18,7 +18,7 @@ similar items using distance metrics. Perfect for:
 **How It Works:**
 
 1. Generate embeddings using ML models (Sentence Transformers, OpenAI, etc.)
-2. Store vectors in ArcadeDB with JVector indexing
+2. Store vectors in ArcadeDB with HNSW (JVector) indexing
 3. Query with new vectors to find nearest neighbors
 4. Get results ranked by similarity
 
@@ -383,7 +383,7 @@ with arcadedb.create_database("./vector_demo") as db:
     db.schema.create_property("Document", "id", "STRING")
     db.schema.create_property("Document", "text", "STRING")
     db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
-    db.schema.create_type_index("Document", ["id"], unique=True)
+    db.schema.create_index("Document", ["id"], unique=True)
 
     index = db.create_vector_index(
         vertex_type="Document",
@@ -408,8 +408,8 @@ with arcadedb.create_database("./vector_demo") as db:
     db.schema.create_property("Article", "created_at", "DATETIME")
     db.schema.create_property("Article", "embedding", "ARRAY_OF_FLOATS")
 
-    db.schema.create_type_index("Article", ["id"], unique=True)
-    db.schema.create_type_index("Article", ["category"], unique=False)
+    db.schema.create_index("Article", ["id"], unique=True)
+    db.schema.create_index("Article", ["category"], unique=False)
 
     index = db.create_vector_index(
         vertex_type="Article",

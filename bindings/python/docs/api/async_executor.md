@@ -2,6 +2,18 @@
 
 The AsyncExecutor provides low-level async operations for parallel processing, automatic batching, and optimized WAL operations. It offers 3-5x faster bulk inserts compared to sequential operations.
 
+!!! tip "Using Context Managers"
+    For automatic resource cleanup, prefer using context managers:
+    ```python
+    with arcadedb.create_database("./mydb") as db:
+        async_exec = db.async_executor()
+        async_exec.set_parallel_level(8)
+        # Use for bulk operations...
+        async_exec.wait_completion()
+    # Database automatically closed
+    ```
+    Examples below show explicit `db.close()` for clarity, but context managers are recommended in production.
+
 ## Overview
 
 The `AsyncExecutor` class enables:

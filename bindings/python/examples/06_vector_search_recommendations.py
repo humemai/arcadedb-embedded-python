@@ -2,7 +2,7 @@
 """
 Example 06: Vector Search Movie Recommendations
 
-Demonstrates vector embeddings and JVector indexing for semantic movie search.
+Demonstrates vector embeddings and HNSW (JVector) indexing for semantic movie search.
 Compares traditional graph queries with vector similarity search.
 
 PERFORMANCE OPTIMIZATION
@@ -59,7 +59,7 @@ KNOWN ISSUES: ArcadeDB Bugs and Limitations
 
 Features:
 - Real embeddings using sentence-transformers (two models for comparison)
-- JVector indexing for fast similarity search
+- HNSW (JVector) indexing for fast similarity search
 - Compare graph-based vs vector-based recommendations (4 methods)
 - Performance timing and optimization strategies
 
@@ -247,7 +247,7 @@ def create_vector_index(db, property_suffix=""):
     result_list = list(db.query("sql", query))
     num_movies = len(result_list)
 
-    print(f"\nCreating JVector index for {embedding_prop}...")
+    print(f"\nCreating HNSW (JVector) index for {embedding_prop}...")
     print("  metric=cosine, max_connections=32, beam_width=256")
 
     start_time = time.time()
