@@ -342,8 +342,8 @@ for rating_doc in ratings:
     movie_id = rating_doc.get("movieId")
 
     # Resolve foreign keys to vertices
-    user = db.query("sql", f"SELECT FROM User WHERE userId = {user_id}")[0]
-    movie = db.query("sql", f"SELECT FROM Movie WHERE movieId = {movie_id}")[0]
+    user = db.query("sql", f"SELECT FROM User WHERE userId = {user_id}").first()
+    movie = db.query("sql", f"SELECT FROM Movie WHERE movieId = {movie_id}").first()
 
     # Create edge
     edge = user.new_edge("RATED", movie, True, "User", "Movie")
@@ -356,12 +356,12 @@ for rating_doc in ratings:
 
 ```python
 # Verify vertex counts
-user_count = db.query("sql", "SELECT count(*) as c FROM User")[0].get("c")
-movie_count = db.query("sql", "SELECT count(*) as c FROM Movie")[0].get("c")
+user_count = db.query("sql", "SELECT count(*) as c FROM User").first().get("c")
+movie_count = db.query("sql", "SELECT count(*) as c FROM Movie").first().get("c")
 
 # Verify edge counts
-rated_count = db.query("sql", "SELECT count(*) as c FROM RATED")[0].get("c")
-tagged_count = db.query("sql", "SELECT count(*) as c FROM TAGGED")[0].get("c")
+rated_count = db.query("sql", "SELECT count(*) as c FROM RATED").first().get("c")
+tagged_count = db.query("sql", "SELECT count(*) as c FROM TAGGED").first().get("c")
 
 print(f"✅ Users:  {user_count:,}")
 print(f"✅ Movies: {movie_count:,}")
@@ -480,7 +480,7 @@ export ARCADEDB_JVM_ARGS="-Xms8g"
 
 Semantic similarity search with MovieLens data:
 - Generate embeddings from movie titles/genres
-- Build JVector index for nearest-neighbor search
+- Build HNSW (JVector) index for nearest-neighbor search
 - Find similar movies using cosine distance
 - Combine vector similarity with rating data
 - Query: "Movies similar to X that users also liked"

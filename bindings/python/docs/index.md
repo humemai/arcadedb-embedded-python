@@ -44,7 +44,7 @@ ArcadeDB is a next-generation multi-model database that supports:
 - **Graph**: Native property graphs with vertices and edges
 - **Document**: Schema-less JSON documents
 - **Key/Value**: Fast key-value pairs
-- **Vector**: Embeddings with JVector similarity search
+- **Vector**: Embeddings with HNSW (JVector) similarity search
 - **Time Series**: Temporal data with efficient indexing
 - **Search Engine**: Full-text search with Lucene
 
@@ -106,8 +106,8 @@ Both APIs can be used **simultaneously** on the same server instance.
 !!! success "Advanced Features"
     - ⚡ **High performance** - Direct JVM integration via JPype
     - 🔒 **ACID transactions** - Full transaction support
-    - 🎯 **Vector storage** - JVector indexing for embeddings
-    - 📥 **Data import** - CSV, JSON
+    - 🎯 **Vector storage** - HNSW (JVector) indexing for embeddings
+    - 📥 **Data import** - CSV and ArcadeDB JSONL
     - 🔎 **Full-text search** - Lucene integration
 
 </div>
@@ -150,8 +150,8 @@ features most relevant to Python developers:
 | Core Operations | ✅ 100% | Database, queries, transactions |
 | Schema Management | ✅ 100% | Types, properties, indexes |
 | Server Mode | ✅ 90% | HTTP server, Studio UI, database management |
-| Vector Search | ✅ 100% | JVector indexing, similarity search |
-| Data Import | ⚠️ 70% | CSV, ArcadeDB JSONL (XML has limitations) |
+| Vector Search | ✅ 100% | HNSW (JVector) indexing, similarity search |
+| Data Import | ⚠️ 70% | CSV and ArcadeDB JSONL (XML support limited, not recommended) |
 | Data Export | ✅ 100% | JSONL, GraphML, GraphSON, CSV |
 | Graph API | ✅ 85% | Full support via SQL, Cypher, Gremlin |
 | Gremlin | ✅ 100% | Full query execution |
