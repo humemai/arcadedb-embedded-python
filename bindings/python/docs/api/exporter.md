@@ -2,6 +2,15 @@
 
 The Exporter provides utilities for exporting database content to various formats including JSONL, GraphML, and GraphSON.
 
+!!! tip "Using Context Managers"
+    For automatic resource cleanup, prefer using context managers:
+    ```python
+    with arcadedb.open_database("./mydb") as db:
+        export_database(db, "./export.jsonl", format="jsonl")
+    # Database automatically closed
+    ```
+    Examples below show explicit `db.close()` for clarity, but context managers are recommended in production.
+
 ## Overview
 
 The `exporter` module enables:

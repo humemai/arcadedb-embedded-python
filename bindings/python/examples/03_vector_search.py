@@ -3,11 +3,11 @@
 Example 03: Vector Search - Semantic Similarity
 
 This example demonstrates vector embeddings and semantic similarity search using
-ArcadeDB's JVector index.
+ArcadeDB's HNSW (JVector) index.
 
 Key Concepts:
 - Storing vector embeddings (simulated sentence embeddings)
-- Creating JVector indexes for fast nearest-neighbor search
+- Creating HNSW (JVector) indexes for fast nearest-neighbor search
 - Finding semantically similar documents using cosine similarity
 - Understanding vector search parameters (dimensions, distance functions)
 - Index population strategies and performance characteristics
@@ -36,7 +36,7 @@ Note: This example uses mock embeddings for demonstration. In production:
 About Vector Search:
 Vector embeddings represent text/images as points in high-dimensional space.
 Similar items are close together, enabling semantic search beyond keyword matching.
-JVector enables logarithmic search time without loading all vectors into memory.
+HNSW (JVector) enables logarithmic search time without loading all vectors into memory.
 """
 
 import argparse

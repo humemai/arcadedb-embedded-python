@@ -80,7 +80,7 @@ We add a semantic layer by generating embeddings for text content.
 - **Tag**: `TagName` → 384-dimensional vector.
 
 **Key Techniques:**
-- **JVector**: Uses state-of-the-art graph-based indexing (DiskANN/Vamana) for fast approximate nearest neighbor search.
+- **JVector**: Uses state-of-the-art graph-based indexing (HNSW + DiskANN/Vamana) for fast approximate nearest neighbor search.
 - **Sentence Transformers**: Uses `all-MiniLM-L6-v2` (or similar) to generate high-quality embeddings.
 
 ### Phase 4: Analytics (Multi-Model Queries)

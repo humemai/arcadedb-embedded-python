@@ -19,8 +19,8 @@ The test suite covers:
 - ✅ **Concurrency patterns** - File locking, thread safety, multi-process
 - ✅ **Graph operations** - Vertices, edges, traversals
 - ✅ **Query languages** - SQL, Cypher, Gremlin
-- ✅ **Vector search** - JVector-based Vector indexes, similarity search
-- ✅ **Data import** - CSV, JSON, Neo4j exports
+- ✅ **Vector search** - HNSW (JVector) based Vector indexes, similarity search
+- ✅ **Data import** - CSV with batch commits and type inference
 - ✅ **Unicode support** - International characters, emoji
 - ✅ **Schema introspection** - Querying database metadata
 - ✅ **Type conversions** - Python/Java type mapping
@@ -73,7 +73,7 @@ pytest -v -s
 | [`test_server.py`](test-server.md) | 6 | Server mode, HTTP API, configuration |
 | [`test_concurrency.py`](test-concurrency.md) | 4 | File locking, thread safety, multi-process behavior |
 | [`test_server_patterns.py`](test-server-patterns.md) | 4 | Best practices for embedded + server mode |
-| [`test_importer.py`](test-importer.md) | 12 | CSV, JSON, Neo4j import |
+| [`test_importer.py`](test-importer.md) | 16 | CSV import with type inference |
 | [`test_gremlin.py`](test-gremlin.md) | 1 | Gremlin query language (if available) |
 
 ## Common Testing Workflows

@@ -17,19 +17,17 @@ The `Schema` class enables:
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("./mydb")
+# Use context manager to ensure clean close
+with arcadedb.create_database("./mydb") as db:
+    # Create types (Schema operations are auto-transactional)
+    # Vertex type
+    user_type = db.schema.create_vertex_type("User")
 
-# Create types (Schema operations are auto-transactional)
-# Vertex type
-user_type = db.schema.create_vertex_type("User")
+    # Edge type
+    follows_type = db.schema.create_edge_type("Follows")
 
-# Edge type
-follows_type = db.schema.create_edge_type("Follows")
-
-# Document type
-log_type = db.schema.create_document_type("LogEntry")
-
-db.close()
+    # Document type
+    log_type = db.schema.create_document_type("LogEntry")
 ```
 
 !!! note "Auto-Transactional"
@@ -255,12 +253,12 @@ schema.create_index("Event", ["userId", "timestamp"])
 schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 ```
 
-**HNSW Parameters:**
+**Vector (JVector) Parameters:**
 
-- **M**: Max connections (default: 16, range: 2-48)
-- **efConstruction**: Build quality (default: 200, range: 100-500)
-- **ef**: Search quality (default: 100, range: 50-200)
-- **dimension**: Vector size
+- **max_connections**: Max connections per node (default: 32; typical 16-64). Maps to JVector `maxConnections`.
+- **beam_width**: Beam width for build/search (default: 256; typical 128-400). Maps to JVector `beamWidth`.
+- **dimensions**: Vector size (must match your embeddings).
+- **overquery_factor**: Search-time candidate multiplier (default: 16; typical 8-32). Higher improves recall with slower search.
 
 ## Type Inspection
 
@@ -376,61 +374,58 @@ for index in indexes:
 ```python
 import arcadedb_embedded as arcadedb
 
-# Create database
-db = arcadedb.create_database("./social_network")
+# Create database with context manager to ensure clean close
+with arcadedb.create_database("./social_network") as db:
+    # Create schema (auto-transactional)
+    # User vertex type
+    user_type = db.schema.create_vertex_type("User")
+    user_type.create_property("username", "STRING")
+    user_type.create_property("email", "STRING")
+    user_type.create_property("age", "INTEGER")
+    user_type.create_property("tags", "LIST", of_type="STRING")
+    user_type.create_property("createdAt", "DATETIME")
 
-# Create schema (auto-transactional)
-# User vertex type
-user_type = db.schema.create_vertex_type("User")
-user_type.create_property("username", "STRING")
-user_type.create_property("email", "STRING")
-user_type.create_property("age", "INTEGER")
-user_type.create_property("tags", "LIST", of_type="STRING")
-user_type.create_property("createdAt", "DATETIME")
+    # Make username required and unique
+    username_prop = user_type.get("username")
+    username_prop.set_mandatory(True)
+    username_prop.set_not_null(True)
 
-# Make username required and unique
-username_prop = user_type.get("username")
-username_prop.set_mandatory(True)
-username_prop.set_not_null(True)
+    # Post vertex type
+    post_type = db.schema.create_vertex_type("Post")
+    post_type.create_property("title", "STRING")
+    post_type.create_property("content", "STRING")
+    post_type.create_property("timestamp", "DATETIME")
 
-# Post vertex type
-post_type = db.schema.create_vertex_type("Post")
-post_type.create_property("title", "STRING")
-post_type.create_property("content", "STRING")
-post_type.create_property("timestamp", "DATETIME")
+    # Follows edge type
+    follows_type = db.schema.create_edge_type("Follows")
+    follows_type.create_property("since", "DATETIME")
 
-# Follows edge type
-follows_type = db.schema.create_edge_type("Follows")
-follows_type.create_property("since", "DATETIME")
+    # Likes edge type
+    likes_type = db.schema.create_edge_type("Likes")
+    likes_type.create_property("timestamp", "DATETIME")
 
-# Likes edge type
-likes_type = db.schema.create_edge_type("Likes")
-likes_type.create_property("timestamp", "DATETIME")
+    # Create indexes
+    db.schema.create_index("User", ["username"], unique=True)
+    db.schema.create_index("Post", ["timestamp"])
 
-# Create indexes
-db.schema.create_index("User", ["username"], unique=True)
-db.schema.create_index("Post", ["timestamp"])
+    # Verify schema
+    print("\n📋 Schema Summary:")
+    for type_obj in db.schema.get_types():
+        print(f"\nType: {type_obj.get_name()}")
+        print(f"  Records: {type_obj.count_records()}")
 
-# Verify schema
-print("\n📋 Schema Summary:")
-for type_obj in db.schema.get_types():
-    print(f"\nType: {type_obj.get_name()}")
-    print(f"  Records: {type_obj.count_records()}")
+        properties = type_obj.get_properties()
+        if properties:
+            print(f"  Properties:")
+            for prop in properties:
+                print(f"    - {prop.get_name()}: {prop.get_type()}")
 
-    properties = type_obj.get_properties()
-    if properties:
-        print(f"  Properties:")
-        for prop in properties:
-            print(f"    - {prop.get_name()}: {prop.get_type()}")
-
-    indexes = type_obj.get_indexes()
-    if indexes:
-        print(f"  Indexes:")
-        for index in indexes:
-            unique_str = " (UNIQUE)" if index.is_unique() else ""
-            print(f"    - {index.get_name()}{unique_str}")
-
-db.close()
+        indexes = type_obj.get_indexes()
+        if indexes:
+            print(f"  Indexes:")
+            for index in indexes:
+                unique_str = " (UNIQUE)" if index.is_unique() else ""
+                print(f"    - {index.get_name()}{unique_str}")
 ```
 
 ## Schema Evolution
@@ -461,6 +456,7 @@ schema.create_edge_type("Follows")
 # ❌ Unnecessary
 with db.transaction():
     schema.create_vertex_type("User")
+```
 
 ### 2. Check Existence Before Creating
 
@@ -629,6 +625,6 @@ schema.create_index("User", ["username"], unique=True)
 
 - **[Database API](database.md)** - Database operations
 - **[Transactions API](transactions.md)** - Transaction management
-- **[Vector Search Guide](../guide/vectors.md)** - HNSW vector indexes
+- **[Vector Search Guide](../guide/vectors.md)** - HNSW (JVector) indexes
 - **[Example 03: Vector Search](../examples/03_vector_search.md)** - Real-world schema usage
 - **[Example 02: Social Network](../examples/02_social_network_graph.md)** - Graph schema patterns

@@ -172,36 +172,11 @@ with arcadedb.create_database("import_demo") as db:
     )
 
     # Recreate indexes after import (schema ops are auto-transactional)
-    db.schema.create_type_index("MyType", ["id"], unique=True)
+    db.schema.create_index("MyType", ["id"], unique=True)
     db.command("sql", "REBUILD INDEX MyType.id")
 ```
 
-## Import from Other Sources
-
-### JSON Import
-
-```python
-import json
-import arcadedb_embedded as arcadedb
-
-with arcadedb.create_database("json_import_demo") as db:
-    # Create type first
-    db.schema.create_document_type("MyType")
-
-    with open("data.json") as f:
-        data = json.load(f)
-
-    # Insert records (inside transaction)
-    with db.transaction():
-        for item in data:
-            db.command(
-                "sql",
-                "INSERT INTO MyType CONTENT ?",
-                json.dumps(item)
-            )
-```
-
-### Database Migration
+## Database Migration
 
 For migrating from other databases, see:
 - **[Example 05](05_csv_import_graph.md)** - Neo4j to ArcadeDB migration pattern
