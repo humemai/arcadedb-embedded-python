@@ -152,7 +152,7 @@ print(f"Version: {arcadedb.__version__}")
 # Verify database works
 with arcadedb.create_database("/tmp/test") as db:
     result = db.query("sql", "SELECT 1 as test")
-    print(f"Database working: {result[0].get('test') == 1}")
+    print(f"Database working: {result.first().get('test') == 1}")
 ```
 
 ### Platform Detection

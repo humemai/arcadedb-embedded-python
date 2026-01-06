@@ -10,7 +10,7 @@ bindings.
 
 What the tests cover:
 
-- ✅ **JVECTOR/LSM index creation** via `create_vector_index`
+- ✅ **HNSW (JVector)/LSM index creation** via `create_vector_index`
 - ✅ **Nearest-neighbor search** with `find_nearest`
 - ✅ **RID filtering** using `allowed_rids`
 - ✅ **Overquery factor** tuning (`overquery_factor`)
@@ -20,7 +20,7 @@ What the tests cover:
 
 ## Test Coverage (high level)
 
-- `test_create_vector_index` – creates JVECTOR/LSM index and verifies schema listing
+- `test_create_vector_index` – creates HNSW (JVector)/LSM index and verifies schema listing
 - `test_lsm_vector_search` – basic nearest-neighbor search
 - `test_lsm_vector_search_with_filter` – `allowed_rids` filtering
 - `test_lsm_vector_delete_and_search_others` – deletes vertices, ensures others are still found

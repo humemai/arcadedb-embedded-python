@@ -781,7 +781,7 @@ The `schema.json` file is the **authoritative source** for database structure. I
 
 - ✅ **15 buckets per type** - confirms multi-bucket architecture
 - ✅ **1 index per bucket per property** - explains why 6 CREATE INDEX commands create 90 index files
-- ✅ **3 index types**: LSM_TREE (general), FULL_TEXT (text), JVECTOR (vectors)
+- ✅ **3 index types**: LSM_TREE (general), FULL_TEXT (text), HNSW (JVECTOR) (vectors)
 - ✅ **Properties track type inference** - shows Java-inferred LONG/DOUBLE/STRING types
 
 ### Why So Many Files?
@@ -811,21 +811,20 @@ Some index files may appear duplicated with different timestamps due to LSMTree 
 ```python
 # Open existing database (no creation needed)
 # Use movielens_small_db or movielens_large_db depending on which dataset you imported
-db = arcadedb.create_arcadedb("./my_test_databases/movielens_large_db")
+with arcadedb.open_database("./my_test_databases/movielens_large_db") as db:
+    # Schema is automatically loaded (4 types: Movie, Rating, Link, Tag)
+    types = db.schema.get_types()
 
-# Schema is automatically loaded (4 types: Movie, Rating, Link, Tag)
-types = db.get_schema().get_types()
+    # All indexes are automatically active (96 index entries)
+    movie_schema = db.schema.get_type("Movie")
+    indexed_props = movie_schema.get_indexed_properties()
 
-# All indexes are automatically active (96 index entries)
-movie_schema = db.get_schema().get_type("Movie")
-indexed_props = movie_schema.get_indexed_properties()
+    # All 36.3M records are intact
+    movie_count = list(db.query("sql", "SELECT count(*) as c FROM Movie"))[0].get("c")
+    rating_count = list(db.query("sql", "SELECT count(*) as c FROM Rating"))[0].get("c")
 
-# All 36.3M records are intact
-movie_count = list(db.query("sql", "SELECT count(*) as c FROM Movie"))[0].get("c")
-rating_count = list(db.query("sql", "SELECT count(*) as c FROM Rating"))[0].get("c")
-
-# Query performance is identical to original import
-result = db.query("sql", "SELECT FROM Movie WHERE movieId = 500")  # Fast indexed lookup!
+    # Query performance is identical to original import
+    result = db.query("sql", "SELECT FROM Movie WHERE movieId = 500")  # Fast indexed lookup!
 ```
 
 **What gets preserved:**
@@ -839,18 +838,16 @@ result = db.query("sql", "SELECT FROM Movie WHERE movieId = 500")  # Fast indexe
 ### Persistence Best Practices
 
 ```python
-# 1. Always close database properly
-db.close()  # Ensures all data is flushed to disk
-
-# 2. Reopen existing database (don't recreate!)
-db_path = "./my_test_databases/movielens_large_db"  # or movielens_small_db
-if os.path.exists(db_path):
-    db = arcadedb.create_arcadedb(db_path)
-    # All data, schema, indexes automatically available
-else:
-    # First time: create and import
-    db = arcadedb.create_arcadedb(db_path)
+# 1. Always use context managers for proper cleanup
+with arcadedb.create_database(db_path) as db:
     # ... import CSV files ...
+    # Automatically closed and flushed to disk
+
+# 2. Reopen existing database
+db_path = "./my_test_databases/movielens_large_db"  # or movielens_small_db
+with arcadedb.open_database(db_path) as db:
+    # All data, schema, indexes automatically available
+    result = db.query("sql", "SELECT FROM Movie WHERE movieId = 500")
 
 # 3. Schema and indexes are durable
 # No need to recreate schema or rebuild indexes on reload
