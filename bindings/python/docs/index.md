@@ -118,7 +118,7 @@ Both APIs can be used **simultaneously** on the same server instance.
 import arcadedb_embedded as arcadedb
 
 # Create database (context manager for automatic open and close)
-with arcadedb.create_database("/tmp/mydb") as db:
+with arcadedb.create_database("./mydb") as db:
     # Create schema (auto-transactional)
     db.schema.create_document_type("Person")
 

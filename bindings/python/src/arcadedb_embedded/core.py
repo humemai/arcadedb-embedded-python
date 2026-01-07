@@ -342,7 +342,7 @@ class Database:
         WARNING: This deletes all data permanently!
 
         Example:
-            >>> db = arcade.open_database("/tmp/test_db")
+            >>> db = arcade.open_database("./test_db")
             >>> db.drop()  # Database is deleted
         """
         self._check_not_closed()

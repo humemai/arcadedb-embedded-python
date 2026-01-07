@@ -46,7 +46,7 @@ We publish development versions (`X.Y.Z.devN`) for every push to main when `pom.
 import arcadedb_embedded as arcadedb
 
 # Create database (context manager for automatic open and close)
-with arcadedb.create_database("/tmp/mydb") as db:
+with arcadedb.create_database("./mydb") as db:
     # Create schema
     db.command("sql", "CREATE DOCUMENT TYPE Person")
 

@@ -68,7 +68,7 @@ import arcadedb_embedded as arcadedb
 print(f"ArcadeDB Python bindings version: {arcadedb.__version__}")
 
 # Test database creation
-with arcadedb.create_database("/tmp/test") as db:
+with arcadedb.create_database("./test") as db:
     result = db.query("sql", "SELECT 1 as test")
     print(f"Database working: {result.first().get('test') == 1}")
 ```

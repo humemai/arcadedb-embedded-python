@@ -49,8 +49,6 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 
 ## What's Included
 
-## What's Included
-
 **Core Features:**
 
 - ✅ **No Java Installation Required**: Platform-specific JRE bundled (~47-63MB)
@@ -119,11 +117,11 @@ Simple and consistent across all platforms!
 
 ## Size Breakdown
 
-Total package size varies by platform: **155-161MB wheel, ~215-230MB installed**
+Total package size varies by platform: **209-215MB wheel, ~274-289MB installed**
 
 **Common components (identical across platforms):**
 
-- **ArcadeDB JARs**: 167.4 MB (83 files - core database, query engines, Studio UI, protocols)
+- **ArcadeDB JARs**: 226.0 MB (core database, query engines, Studio UI, protocols)
 
 **Platform-specific components:**
 
@@ -133,12 +131,13 @@ Total package size varies by platform: **155-161MB wheel, ~215-230MB installed**
 **Why sizes vary by platform:**
 
 - JRE binaries differ by platform (different native code)
-- ARM platforms tend to have slightly smaller JREs
+- ARM platforms tend to have slightly smaller JREs (~48MB)
+- Intel/x64 platforms have slightly larger JREs (~52-63MB)
 - All platforms use the same JAR files (226.0MB)
 
 **Optimizations:**
 
-- Some components excluded for size (e.g., gRPC wire protocol ~38MB)
+- Some components excluded for size (e.g., gRPC wire protocol)
 - See `jar_exclusions.txt` in repository for details
 
 ## Installation Tips
@@ -150,7 +149,7 @@ import arcadedb_embedded as arcadedb
 print(f"Version: {arcadedb.__version__}")
 
 # Verify database works
-with arcadedb.create_database("/tmp/test") as db:
+with arcadedb.create_database("./test") as db:
     result = db.query("sql", "SELECT 1 as test")
     print(f"Database working: {result.first().get('test') == 1}")
 ```

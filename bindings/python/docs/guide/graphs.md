@@ -17,7 +17,7 @@ Define vertex and edge types with the embedded API (no SQL needed):
 ```python
 import arcadedb_embedded as arcadedb
 
-with arcadedb.create_database("/tmp/social") as db:
+with arcadedb.create_database("./social") as db:
     # Create vertex types
     db.schema.create_vertex_type("Person")
     db.schema.create_vertex_type("Company")
@@ -158,17 +158,22 @@ if result_alice.has_next() and result_bob.has_next():
     IllegalArgumentException: Current vertex is not persistent. Call save() first
     ```
 
-### Creating Edges with Cypher
+### Creating Edges with Gremlin (Recommended)
 
-Cypher provides a clean syntax for creating edges:
+Gremlin provides excellent performance for creating edges:
 
 ```python
 with db.transaction():
-    # Create vertices and edge in one statement
-    db.command("cypher", """
-        CREATE (alice:Person {name: 'Alice', age: 30})
-        CREATE (bob:Person {name: 'Bob', age: 25})
-        CREATE (alice)-[:Knows {since: '2020-01-15'}]->(bob)
+    # Create vertices and edge using Gremlin
+    db.command("gremlin", """
+        alice = g.addV('Person')
+            .property('name', 'Alice')
+            .property('age', 30).next()
+        bob = g.addV('Person')
+            .property('name', 'Bob')
+            .property('age', 25).next()
+        g.addE('Knows').from(alice).to(bob)
+            .property('since', 2020).next()
     """)
 ```
 
@@ -176,10 +181,11 @@ Or connect existing vertices:
 
 ```python
 with db.transaction():
-    db.command("cypher", """
-        MATCH (alice:Person {name: 'Alice'})
-        MATCH (bob:Person {name: 'Bob'})
-        CREATE (alice)-[:Knows {since: '2020-01-15'}]->(bob)
+    db.command("gremlin", """
+        alice = g.V().hasLabel('Person').has('name', 'Alice').next()
+        bob = g.V().hasLabel('Person').has('name', 'Bob').next()
+        g.addE('Knows').from(alice).to(bob)
+            .property('since', 2020).next()
     """)
 ```
 
@@ -191,7 +197,7 @@ Here's a complete example building a small social network:
 import arcadedb_embedded as arcadedb
 
 def create_social_network():
-    with arcadedb.create_database("/tmp/social_network") as db:
+    with arcadedb.create_database("./social_network") as db:
         # 1. Create schema
         print("Creating schema...")
         db.schema.create_vertex_type("Person")
@@ -234,11 +240,14 @@ def create_social_network():
 
         print("✅ Graph created\n")
 
-        # 3. Query the graph
+        # 3. Query the graph with Gremlin (recommended)
         print("Finding Alice's friends:")
-        result = db.query("cypher", """
-            MATCH (person:Person {name: 'Alice'})-[:Knows]->(friend)
-            RETURN friend.name AS name, friend.age AS age
+        result = db.query("gremlin", """
+            g.V().hasLabel('Person').has('name', 'Alice')
+                .out('Knows')
+                .project('name', 'age')
+                .by('name')
+                .by('age')
         """)
 
         for record in result:
@@ -247,14 +256,17 @@ def create_social_network():
             print(f"  - {name}, age {age}")
 
         print("\nFinding friends of friends:")
-        result = db.query("cypher", """
-            MATCH (person:Person {name: 'Alice'})-[:Knows*2]->(fof)
-            WHERE fof.name <> 'Alice'
-            RETURN DISTINCT fof.name AS name
+        result = db.query("gremlin", """
+            g.V().hasLabel('Person').has('name', 'Alice')
+                .out('Knows')
+                .out('Knows')
+                .dedup()
+                .has('name', neq('Alice'))
+                .values('name')
         """)
 
         for record in result:
-            print(f"  - {record.get('name')}")
+            print(f"  - {record}")
 
 if __name__ == "__main__":
     create_social_network()
@@ -283,9 +295,19 @@ db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
 db.command("sql", "CREATE INDEX ON Person (email) UNIQUE")
 ```
 
-### 3. Use Cypher for Complex Graph Queries
+### 3. Use Gremlin for Graph Queries
 
-Cypher is more expressive and readable for graph operations than SQL.
+Gremlin is more performant (63× faster than Cypher) and the recommended approach for graph operations.
+
+```python
+# ✅ Recommended: Gremlin for graph queries
+result = db.query("gremlin", """
+    g.V().hasLabel('Person')
+        .has('name', 'Alice')
+        .out('Knows')
+        .values('name')
+""")
+```
 
 ### 4. Save Vertices Before Creating Edges
 

@@ -25,7 +25,7 @@ Direct JVM method calls via JPype, using the Pythonic embedded API:
 import arcadedb_embedded as arcadedb
 
 # Direct database access (embedded API)
-with arcadedb.create_database("/tmp/mydb") as db:
+with arcadedb.create_database("./mydb") as db:
     # Schema (auto-transactional)
     db.schema.create_document_type("Person")
     db.schema.create_property("Person", "name", "STRING")
@@ -52,7 +52,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 # Start server with Java API
-server = arcadedb.create_server("/tmp/server", "password123")
+server = arcadedb.create_server("./server", "password123")
 server.start()
 
 auth = HTTPBasicAuth("root", "password123")
@@ -103,14 +103,14 @@ server.stop()
 import arcadedb_embedded as arcadedb
 
 # Create database (context manager for automatic open and close)
-with arcadedb.create_database("/tmp/quickstart") as db:
+with arcadedb.create_database("./quickstart") as db:
     print(f"Created database at: {db.get_database_path()}")
 ```
 
 ### 2. Create Schema
 
 ```python
-with arcadedb.create_database("/tmp/quickstart") as db:
+with arcadedb.create_database("./quickstart") as db:
     # Schema operations are auto-transactional
     db.schema.create_document_type("Person")
     db.schema.create_property("Person", "name", "STRING")
@@ -123,7 +123,7 @@ with arcadedb.create_database("/tmp/quickstart") as db:
 All writes must be in a transaction:
 
 ```python
-with arcadedb.create_database("/tmp/quickstart") as db:
+with arcadedb.create_database("./quickstart") as db:
     db.schema.create_document_type("Person")
     db.schema.create_property("Person", "name", "STRING")
     db.schema.create_property("Person", "age", "INTEGER")
@@ -145,7 +145,7 @@ with arcadedb.create_database("/tmp/quickstart") as db:
 ### 4. Query Data
 
 ```python
-with arcadedb.create_database("/tmp/quickstart") as db:
+with arcadedb.create_database("./quickstart") as db:
     db.schema.create_document_type("Person")
     db.schema.create_property("Person", "name", "STRING")
     db.schema.create_property("Person", "age", "INTEGER")
@@ -179,7 +179,7 @@ import arcadedb_embedded as arcadedb
 
 def main():
     # Create database
-    with arcadedb.create_database("/tmp/quickstart") as db:
+    with arcadedb.create_database("./quickstart") as db:
         # Create schema (pythonic API)
         db.schema.create_document_type("Person")
         db.schema.create_property("Person", "name", "STRING")
@@ -246,13 +246,13 @@ Always use `with` statements for automatic cleanup:
 
 ```python
 # ✅ Good - automatic cleanup
-with arcadedb.create_database("/tmp/mydb") as db:
+with arcadedb.create_database("./mydb") as db:
     # Use database
     pass
 # Database automatically closed
 
 # ❌ Avoid - manual cleanup required
-db = arcadedb.create_database("/tmp/mydb")
+db = arcadedb.create_database("./mydb")
 # Use database
 db.close()  # Easy to forget!
 ```
@@ -307,7 +307,7 @@ Now that you've created your first database, explore more features:
 
 ```python
 # Open existing database
-with arcadedb.open_database("/tmp/quickstart") as db:
+with arcadedb.open_database("./quickstart") as db:
     result = db.query("sql", "SELECT FROM Person")
     print(f"Found {len(list(result))} records")
 ```
@@ -326,10 +326,8 @@ with db.transaction():
 ### Error Handling
 
 ```python
-from arcadedb_embedded import ArcadeDBError
-
 try:
-    with arcadedb.create_database("/tmp/mydb") as db:
+    with arcadedb.create_database("./mydb") as db:
         # Schema operations are auto-transactional
         db.schema.create_document_type("User")
         db.schema.create_property("User", "email", "STRING")
@@ -340,9 +338,10 @@ try:
             doc = db.new_document("User")
             doc.set("email", "alice@example.com").save()
 
+            # This will raise an exception due to unique constraint
             dup = db.new_document("User")
             dup.set("email", "alice@example.com").save()
-except ArcadeDBError as e:
+except Exception as e:
     print(f"Database error: {e}")
 ```
 

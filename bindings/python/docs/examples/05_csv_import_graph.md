@@ -313,43 +313,63 @@ db.command("sql", "CREATE PROPERTY TAGGED.timestamp LONG IF NOT EXISTS")
 ### Step 2: Create Vertices (Java API - Recommended)
 
 ```python
-# Create User vertices
-user_ids = db.query("sql", "SELECT DISTINCT userId FROM Rating")
-for record in user_ids:
-    user_id = record.get("userId")
-    vertex = db.new_vertex("User")
-    vertex.set("userId", user_id)
-    vertex.set("name", f"User {user_id}")
-    vertex.save()
+# The example uses VertexCreator class for efficient batch creation
+class VertexCreator:
+    def _create_users(self, total_users: int):
+        """Create User vertices from Rating data."""
+        # Use paginated query to avoid memory issues
+        last_rid = None
+        while True:
+            query = f"""SELECT DISTINCT userId FROM Rating
+                        WHERE @rid > {last_rid} LIMIT {batch_size}"""
+            users = list(db.query("sql", query))
+            if not users:
+                break
 
-# Create Movie vertices
-movies = db.query("sql", "SELECT * FROM Movie")
-for movie_doc in movies:
-    vertex = db.new_vertex("Movie")
-    vertex.set("movieId", movie_doc.get("movieId"))
-    vertex.set("title", movie_doc.get("title"))
-    vertex.set("genres", movie_doc.get("genres"))
-    vertex.save()
+            for record in users:
+                user_id = record.get("userId")
+                vertex = db.new_vertex("User")
+                vertex.set("userId", user_id)
+                vertex.set("name", f"User {user_id}")
+                vertex.save()
+
+            last_rid = users[-1].get_identity()
+
+# See full implementation in Python file for production-ready patterns
 ```
 
 ### Step 3: Create Edges with Foreign Key Resolution
 
 ```python
-# Create RATED edges
-ratings = db.query("sql", "SELECT * FROM Rating")
-for rating_doc in ratings:
-    user_id = rating_doc.get("userId")
-    movie_id = rating_doc.get("movieId")
+# Create RATED edges with efficient index lookups
+class EdgeCreator:
+    def _create_rated_edges(self, total_ratings: int):
+        """Create RATED edges from Rating documents."""
+        last_rid = None
+        while True:
+            # Paginated query
+            query = f"""SELECT * FROM Rating
+                        WHERE @rid > {last_rid} LIMIT {batch_size}"""
+            ratings = list(db.query("sql", query))
+            if not ratings:
+                break
 
-    # Resolve foreign keys to vertices
-    user = db.query("sql", f"SELECT FROM User WHERE userId = {user_id}").first()
-    movie = db.query("sql", f"SELECT FROM Movie WHERE movieId = {movie_id}").first()
+            for rating_doc in ratings:
+                user_id = rating_doc.get("userId")
+                movie_id = rating_doc.get("movieId")
 
-    # Create edge
-    edge = user.new_edge("RATED", movie, True, "User", "Movie")
-    edge.set("rating", rating_doc.get("rating"))
-    edge.set("timestamp", rating_doc.get("timestamp"))
-    edge.save()
+                # Use index lookups (O(1)) instead of SQL queries
+                user_vertex = db.lookup_by_key("User", ["userId"], [user_id])[0]
+                movie_vertex = db.lookup_by_key("Movie", ["movieId"], [movie_id])[0]
+
+                edge = user_vertex.new_edge("RATED", movie_vertex, True, "User", "Movie")
+                edge.set("rating", rating_doc.get("rating"))
+                edge.set("timestamp", rating_doc.get("timestamp"))
+                edge.save()
+
+            last_rid = ratings[-1].get_identity()
+
+# See full implementation in Python file with batch processing
 ```
 
 ### Step 4: Run Validation Queries
@@ -435,44 +455,6 @@ export ARCADEDB_JVM_ARGS="-Xms8g"
 ```
 
 **Note:** Parallel async does NOT help for graph creation in embedded mode. Use synchronous Java API (`--no-async`) for best performance.
-
-## Production Recommendations
-
-### 🎯 **For Bulk Graph Creation:**
-
-1. ✅ **Use Java API synchronous** (`java_noasync`) - Fastest for vertices and edges
-2. ✅ **Create indexes BEFORE bulk operations** - 2-3× speedup for edges
-3. ✅ **Avoid async in embedded mode** - Adds overhead without benefits
-4. ✅ **Use large batch sizes** - 50,000+ for large datasets
-5. ✅ **Plan for 2× heap in RAM** - Total process memory exceeds JVM heap
-
-### 🎯 **For Graph Queries:**
-
-1. ✅ **Use SQL for complex patterns** - MATCH is cleaner than Java API
-2. ✅ **Use indexes for foreign key lookups** - Essential for edge creation
-3. ✅ **Test queries before/after indexes** - Measure actual speedup
-4. ✅ **Validate roundtrip integrity** - Export → Import → Verify
-
-## Lessons Learned
-
-### ✅ **What Works:**
-- Synchronous Java API for bulk operations (5,071 edges/sec)
-- Indexes before bulk edge creation (2-3× speedup)
-- Large batch sizes for commits (50,000+)
-- SQL for complex graph queries (MATCH patterns)
-- Export/import for reproducible benchmarks
-
-### ❌ **What Doesn't Work:**
-- Async in embedded mode (2.5-5× slower)
-- Small batch sizes (more commits = slower)
-- No indexes for foreign key lookups (2-3× slower)
-- Java API for complex graph traversals (verbose)
-
-### 🔍 **Surprising Findings:**
-- SQL competitive with Java API for vertices (8,734 vs 12,341/sec)
-- Total memory = 2× JVM heap (metaspace, page cache, buffers)
-- Export/import faster than expected (25,906 records/sec import)
-- Compression ratio impressive (50-80× for JSONL → gzip)
 
 ## Next Steps
 
