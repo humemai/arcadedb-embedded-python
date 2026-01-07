@@ -17,6 +17,7 @@ with arcadedb.create_database("./mydb") as db:
 # Also good for servers
 with arcadedb.create_server(root_path="./databases") as server:
     server.start()
+    # "mydb" will be created at ./databases/mydb
     db = server.create_database("mydb")
     # ... work ...
 # Server automatically stopped
@@ -101,6 +102,7 @@ db2 = arcadedb.open_database("./mydb")    # ❌ LockException!
 # Recommended: Start server first
 server = arcadedb.create_server(root_path="./databases")
 server.start()
+# "mydb" will be created at ./databases/mydb
 db = server.create_database("mydb")
 
 # Use embedded access (fast!)
@@ -260,6 +262,7 @@ for i in range(1000):
 # Fast: No HTTP overhead, direct JVM call
 server = arcadedb.create_server(root_path="./databases")
 server.start()
+# "mydb" will be created at ./databases/mydb
 db = server.create_database("mydb")
 
 # This is as fast as standalone embedded!
