@@ -291,16 +291,13 @@ index = db.create_vector_index(
     vector_property="embedding_v1",  # or "embedding_v2"
     dimensions=384,
     distance_function="cosine",
-    max_connections=32,  # Number of connections per layer (default: 32)
-    beam_width=256       # Size of dynamic candidate list (default: 256)
 )
 ```
 
 **Key parameters:**
-- **max_items:** Set to actual vertex count for optimal performance
-- **edge_type:** Use unique names for multiple indexes to avoid metadata conflicts
-- **max_connections:** Higher = better recall, more memory (32 is good default)
-- **beam_width:** Higher = better accuracy, slower search (256 is balanced)
+- **vertex_type:** The vertex type to index (e.g., "Movie")
+- **vector_property:** Property containing the embedding vectors
+- **dimensions:** Vector dimensionality (384 for sentence-transformers models)
 - **distance_function:** "cosine" for normalized similarity (0-1 range)
 
 ## Known Issues and Workarounds
@@ -337,51 +334,6 @@ index = db.create_vector_index(
 **Impact:** Cannot backup/restore vector databases using JSONL format. After import, embeddings must be regenerated and indexes rebuilt.
 
 **Current workaround:** This script always starts fresh (copies database or imports from JSONL), then generates embeddings and indexes.
-
-## Best Practices
-
-### Choosing a Recommendation Method
-
-**Real-time recommendations:**
-- Use **Graph-Based Fast** (0.2s, high quality, user-based)
-- Or **Vector Model 2** (0.01-0.03s, semantic similarity)
-
-**Offline batch recommendations:**
-- Use **Graph-Based Full** (most thorough, best quality)
-
-**New movies without ratings:**
-- Use **Vector** methods (no cold start problem)
-
-**Semantic search:**
-- Use **Vector** methods to find similar content by description
-
-### Performance Optimization
-
-**Graph queries:**
-- Use Fast mode with LIMIT 25000 for 150-300× speedup
-- Results are still high-quality (samples ~50 users)
-- Create indexes BEFORE graph traversal (Movie[movieId])
-
-**Vector search:**
-- Cache embeddings (stored in database properties)
-- Use appropriate JVector parameters (max_connections=32, beam_width=256)
-- Choose faster encoding model (paraphrase-MiniLM-L6-v2)
-
-**Memory management:**
-- Small dataset: 4GB JVM heap sufficient
-- Large dataset: 8GB JVM heap recommended
-- Monitor RSS during encoding/indexing phases
-
-### Multi-Model Strategy
-
-**Use both graph and vector:**
-- Graph for user-based collaborative filtering
-- Vector for content-based semantic similarity
-- Combine results for hybrid recommendations
-
-**Use multiple embedding models:**
-- Different models capture different semantic characteristics
-- Compare results to find best fit for your use case
 
 ## Output
 

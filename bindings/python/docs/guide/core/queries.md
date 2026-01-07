@@ -7,20 +7,20 @@ ArcadeDB supports multiple query languages, each with different strengths. This 
 Supported Query Languages:
 
 - **SQL**: Primary language, full-featured, best for most use cases
-- **Cypher**: OpenCypher for graph pattern matching
-- **Gremlin**: Apache TinkerPop for graph traversals
+- **Gremlin**: Apache TinkerPop for high-performance graph traversals (Recommended)
+- **Cypher**: ⚠️ NOT RECOMMENDED - Use Gremlin instead
 - **MongoDB**: MongoDB-compatible syntax (requires mongodbw plugin)
 - **GraphQL**: GraphQL queries (requires graphql plugin)
 
 ## Quick Reference
 
-| Language | Best For | Learning Curve |
-|----------|----------|----------------|
-| SQL      | General queries, analytics | Easy |
-| Cypher   | Graph patterns, relationships | Medium |
-| Gremlin  | Complex graph algorithms | Hard |
-| MongoDB  | Document queries | Easy |
-| GraphQL  | API queries | Medium |
+| Language | Best For | Learning Curve | Status |
+|----------|----------|----------------|--------|
+| SQL      | General queries, analytics | Easy | ✅ Recommended |
+| Gremlin  | Graph traversals, algorithms | Medium | ✅ Recommended |
+| Cypher   | ❌ NOT RECOMMENDED | Medium | ⚠️ Unmaintained transpiler |
+| MongoDB  | Document queries | Easy | Optional |
+| GraphQL  | API queries | Medium | Optional |
 
 ## SQL
 
@@ -234,212 +234,95 @@ result = db.query("sql", """
 """)
 ```
 
-## Cypher
+## ⚠️ Cypher: NOT RECOMMENDED
 
-### Why Cypher?
+**Do not use Cypher** - it is based on an unmaintained transpiler. Use Gremlin instead.
 
-**Graph-first** query language from Neo4j, now OpenCypher standard.
+### Why Not Cypher?
 
-**Strengths:**
-- Intuitive graph patterns
-- Easy relationship queries
-- Readable syntax
-- Industry standard for graphs
+1. **Unmaintained Transpiler**
+   - Based on Cypher For Gremlin (no longer maintained)
+   - Bugs cannot be fixed
+   - No active development
+   - Known limitations cannot be resolved
 
-**Use Cypher when:**
-- Your team knows Neo4j
-- Focus on graph patterns
-- Migrating from Neo4j
-- Prefer declarative style
+2. **Performance Penalty**
+   - **63× slower** than Gremlin
+   - Runtime Cypher → Gremlin transpilation
+   - Not suitable for production
 
----
+3. **Type Conversion Issues**
+   - Cypher's strict typing conflicts with ArcadeDB's flexible typing
+   - May cause unexpected failures
 
-### Basic MATCH
+### What to Use Instead
 
+**For Graph Queries → Use Gremlin:**
 ```python
-# Match all users
-result = db.query("cypher", "MATCH (u:User) RETURN u")
-
-# Match with properties
-result = db.query("cypher", """
-    MATCH (u:User {name: 'Alice'})
-    RETURN u
-""")
-
-# Match with WHERE
-result = db.query("cypher", """
-    MATCH (u:User)
-    WHERE u.age > 25
-    RETURN u.name, u.email
+# ✅ RECOMMENDED: Gremlin
+result = db.query("gremlin", """
+    g.V().hasLabel('User').has('name', 'Alice')
+        .out('FOLLOWS')
+        .values('name')
 """)
 ```
 
----
-
-### Relationship Patterns
-
+**For SQL Developers → Use SQL MATCH:**
 ```python
-# Outgoing relationship
-result = db.query("cypher", """
+# ✅ ALTERNATIVE: SQL MATCH (2.7× faster than Cypher)
+result = db.query("sql", """
     MATCH (u:User {name: 'Alice'})-[:FOLLOWS]->(f)
     RETURN f.name
 """)
+```
 
-# Incoming relationship
+### Migration Guide
+
+If you have existing Cypher code, migrate to Gremlin:
+
+**Old (Cypher - ❌ DON'T USE):**
+```python
 result = db.query("cypher", """
-    MATCH (p:Product)<-[:PURCHASED]-(u:User)
-    WHERE p.id = 'PROD123'
-    RETURN u.name
+    MATCH (u:User {name: 'Alice'})-[:FOLLOWS]->(f:User)
+    WHERE f.age > 25
+    RETURN f.name, f.age
 """)
+```
 
-# Bidirectional
-result = db.query("cypher", """
-    MATCH (u1:User {name: 'Alice'})-[:FRIEND_OF]-(u2:User)
-    RETURN u2.name
-""")
-
-# Variable length paths
-result = db.query("cypher", """
-    MATCH (u1:User {name: 'Alice'})-[:FOLLOWS*1..3]->(u2:User)
-    RETURN u2.name
-""")
-# 1 to 3 hops
-
-# Path with properties
-result = db.query("cypher", """
-    MATCH (u:User)-[r:PURCHASED {verified: true}]->(p:Product)
-    RETURN u.name, p.name, r.date
+**New (Gremlin - ✅ USE THIS):**
+```python
+result = db.query("gremlin", """
+    g.V().hasLabel('User').has('name', 'Alice')
+        .out('FOLLOWS')
+        .has('age', gt(25))
+        .project('name', 'age')
+        .by('name')
+        .by('age')
 """)
 ```
 
 ---
-
-### CREATE and MERGE
-
-```python
-# Create node
-result = db.query("cypher", """
-    CREATE (u:User {name: 'Alice', age: 30})
-    RETURN u
-""")
-
-# Create relationship
-result = db.query("cypher", """
-    MATCH (u1:User {name: 'Alice'}), (u2:User {name: 'Bob'})
-    CREATE (u1)-[:FOLLOWS]->(u2)
-""")
-
-# MERGE (create if not exists)
-result = db.query("cypher", """
-    MERGE (u:User {email: 'alice@example.com'})
-    ON CREATE SET u.created_at = timestamp()
-    ON MATCH SET u.last_seen = timestamp()
-    RETURN u
-""")
-```
-
----
-
-### Aggregations
-
-```python
-# COUNT
-result = db.query("cypher", """
-    MATCH (u:User)
-    RETURN count(u) as total
-""")
-
-# AVG, MIN, MAX
-result = db.query("cypher", """
-    MATCH (u:User)
-    RETURN avg(u.age) as avg_age,
-           min(u.age) as min_age,
-           max(u.age) as max_age
-""")
-
-# GROUP BY (implicit)
-result = db.query("cypher", """
-    MATCH (u:User)-[:PURCHASED]->(p:Product)
-    RETURN p.category, count(u) as buyers
-    ORDER BY buyers DESC
-""")
-
-# COLLECT
-result = db.query("cypher", """
-    MATCH (u:User {name: 'Alice'})-[:FOLLOWS]->(f)
-    RETURN collect(f.name) as following
-""")
-```
-
----
-
-### Parameters
-
-```python
-# Named parameters
-result = db.query("cypher",
-    "MATCH (u:User {name: $name}) WHERE u.age > $min_age RETURN u",
-    {
-        "name": "Alice",
-        "min_age": 25
-    }
-)
-```
-
----
-
-### Advanced Patterns
-
-```python
-# Optional match (like LEFT JOIN)
-result = db.query("cypher", """
-    MATCH (u:User)
-    OPTIONAL MATCH (u)-[:PURCHASED]->(p:Product)
-    RETURN u.name, p.name
-""")
-
-# Multiple patterns
-result = db.query("cypher", """
-    MATCH (u:User {name: 'Alice'})-[:FOLLOWS]->(f)
-    MATCH (f)-[:PURCHASED]->(p:Product)
-    RETURN DISTINCT p.name
-""")
-
-# Path
-result = db.query("cypher", """
-    MATCH path = (u1:User {name: 'Alice'})-[:KNOWS*]-(u2:User {name: 'Bob'})
-    RETURN path
-""")
-
-# Shortest path
-result = db.query("cypher", """
-    MATCH path = shortestPath(
-        (u1:User {name: 'Alice'})-[:KNOWS*]-(u2:User {name: 'Bob'})
-    )
-    RETURN length(path) as degrees_of_separation
-""")
-```
 
 ## Gremlin
 
 ### Why Gremlin?
 
-**Traversal-based** graph query language from Apache TinkerPop.
-
-**Requirements:**
-- More complex setup
+**High-performance graph traversal** language from Apache TinkerPop - the recommended approach for graph queries in ArcadeDB.
 
 **Strengths:**
-- Powerful graph algorithms
-- Imperative traversal style
-- Industry standard
-- Rich graph analytics
+- **63× faster** than Cypher
+- Industry standard (Apache TinkerPop)
+- Actively maintained and supported
+- Used by AWS Neptune, Azure Cosmos DB
+- Excellent for graph algorithms
+- Imperative control over optimization
+- Rich community and documentation
 
 **Use Gremlin when:**
-- Need complex graph algorithms
-- PageRank, community detection
-- Your team knows TinkerPop
-- Building graph analytics
+- Querying graphs (primary use case)
+- Need best performance
+- Complex graph algorithms
+- Any new graph application
 
 ---
 
@@ -536,7 +419,7 @@ result = db.query("gremlin", """
 """)
 ```
 
-## MongoDB Syntax
+---
 
 ### Why MongoDB?
 
