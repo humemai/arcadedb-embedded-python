@@ -4,23 +4,23 @@ This section provides a comprehensive comparison of the ArcadeDB Java API and wh
 
 ### Executive Summary
 
-**Overall Coverage: ~85% of the Java API surface used in practice**
+**Overall Coverage: ~87% of the Java API surface used in practice**
 
-The Python bindings provide **excellent coverage for real-world use** (~85% of common operations), with only a small portion of low-level or niche Java APIs intentionally omitted (~15%).
+The Python bindings provide **excellent coverage for real-world use** (~87% of common operations), with only a small portion of low-level or niche Java APIs intentionally omitted (~13%).
 
 #### Coverage by Category
 
 | Category                     | Coverage | Status       |
 | ---------------------------- | -------- | ------------ |
-| **Core Database Operations** | 90%      | ✅ Excellent |
+| **Core Database Operations** | 95%      | ✅ Excellent |
 | **Query Execution**          | 100%     | ✅ Complete  |
-| **Transactions**             | 100%     | ✅ Complete  |
 | **Server Mode**              | 90%      | ✅ Excellent |
 | **Data Import**              | 70%      | ✅ Good      |
 | **Data Export**              | 100%     | ✅ Complete  |
 | **Graph API**                | 85%      | ✅ Excellent |
 | **Schema API**               | 100%     | ✅ Complete  |
 | **Index Management**         | 90%      | ✅ Excellent |
+| **Vector Search**            | 100%     | ✅ Complete  |
 | **Advanced Features**        | 5%       | ❌ Minimal   |
 
 ### Detailed Coverage
@@ -66,7 +66,7 @@ All query languages fully supported:
 - ✅ `get()`, `has_property()`, `get_property_names()`
 - ✅ `to_json()`, `to_dict()` (Python enhancement)
 
-#### 3. Graph API - 95%
+#### 3. Graph API - 85%
 
 **Hybrid approach: Pythonic object manipulation + Powerful Query Languages**
 
@@ -124,7 +124,7 @@ result = db.query("cypher", """
 """)
 ```
 
-#### 4. Schema Management - 100%
+#### 4. Schema API - 100%
 
 Full Pythonic Schema API available via `db.schema`:
 
