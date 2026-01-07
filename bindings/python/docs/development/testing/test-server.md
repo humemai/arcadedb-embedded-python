@@ -28,6 +28,7 @@ server = arcadedb.create_server(
 server.start()
 
 # Create database
+# "mydb" will be created at ./databases/mydb
 db = server.create_database("mydb")
 
 # Use it

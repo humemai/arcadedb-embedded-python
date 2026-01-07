@@ -155,17 +155,17 @@ The schema is created automatically during import (schema-on-write), eliminating
 
 ```python
 # Import with batch commits for performance
-stats = arcadedb.import_csv(
-    db,
-    movies_csv,
-    "Movie",
-    commit_every=1000  # Commit every 1000 records
-)
+import_options = {
+    "commit_every": args.batch_size,  # Batch size for commits
+}
+stats = arcadedb.import_csv(db, movies_csv, "Movie", **import_options)
 
-# Check for NULL values
-null_genres = list(db.query(
-    "sql", "SELECT count(*) as c FROM Movie WHERE genres IS NULL"
-))[0].get("c")
+# Check for NULL values (using .first() for efficiency)
+null_genres = (
+    db.query("sql", "SELECT count(*) as c FROM Movie WHERE genres IS NULL")
+    .first()
+    .get("c")
+)
 
 if null_genres > 0:
     print(f"   🔍 NULL values detected:")
@@ -194,10 +194,10 @@ if null_genres > 0:
 ```python
 test_queries = [
     ("Find movie by ID", "SELECT FROM Movie WHERE movieId = 500"),
-    ("Find user's ratings", "SELECT FROM Rating WHERE userId = 414 LIMIT 10"),
-    ("Find movie ratings", "SELECT FROM Rating WHERE movieId = 500"),
-    ("Count user's ratings", "SELECT count(*) FROM Rating WHERE userId = 414"),
-    ("Find movies by genre", "SELECT FROM Movie WHERE genres LIKE '%Action%' LIMIT 10"),
+    ("Find user's ratings", "SELECT FROM Rating WHERE userId = 414 ORDER BY movieId, rating LIMIT 10"),
+    ("Find movie ratings", "SELECT FROM Rating WHERE movieId = 500 ORDER BY userId, rating LIMIT 10"),
+    ("Count user's ratings", "SELECT count(*) as count FROM Rating WHERE userId = 414"),
+    ("Find movies by genre", "SELECT FROM Movie WHERE genres LIKE '%Action%' ORDER BY movieId LIMIT 10"),
 ]
 
 # Run each query 10 times for statistical reliability
@@ -662,212 +662,6 @@ This limitation is documented here for future reference. The example code includ
 - Performance validation that detects the issue
 - Detailed comments explaining FULL_TEXT index behavior
 - Result consistency validation (shows queries return identical data regardless of indexes)
-
-## Database Files on Disk
-
-After running the example, the database directory contains several types of files that reflect ArcadeDB's multi-bucket architecture:
-
-### Directory Structure
-
-Example for large dataset (`movielens_large_db`):
-
-```bash
-my_test_databases/movielens_large_db/
-├── configuration.json          # Database configuration
-├── schema.json                 # Current schema (authoritative)
-├── schema.prev.json           # Previous schema version (for rollback)
-├── statistics.json            # Database statistics
-├── dictionary.0.327680.v0.dict  # String compression dictionary
-├── Movie_0.bucket ... Movie_14.bucket    # 15 data buckets for Movie type
-├── Rating_0.bucket ... Rating_14.bucket  # 15 data buckets for Rating type
-├── Link_0.bucket ... Link_14.bucket      # 15 data buckets for Link type
-├── Tag_0.bucket ... Tag_14.bucket        # 15 data buckets for Tag type
-├── Movie_0_*.umtidx ... Movie_14_*.umtidx     # Movie.movieId index files (UNIQUE)
-├── Movie_0_*.numtidx ... Movie_14_*.numtidx   # Movie.genres index files (FULL_TEXT)
-├── Rating_0_*.nuctidx ... Rating_14_*.nuctidx # Rating.userId index files (NOTUNIQUE)
-├── Rating_0_*.numtidx ... Rating_14_*.numtidx # Rating.movieId index files (NOTUNIQUE)
-├── Link_0_*.umtidx ... Link_14_*.umtidx       # Link.movieId index files (UNIQUE)
-└── Tag_0_*.numtidx ... Tag_14_*.numtidx       # Tag.movieId index files (NOTUNIQUE)
-
-Total: ~185 files (60 buckets + 120 index files + 5 metadata files)
-```
-
-**File naming pattern**: `Type_BucketNum_Timestamp.FileID.Size.Version.Extension`
-
-Example: `Movie_0_258729020513975.61.262144.v1.umtidx`
-
-- Type: Movie
-- Bucket: 0
-- Timestamp: 258729020513975
-- File ID: 61
-- Size: 262144 bytes
-- Version: v1
-- Extension: umtidx (Unique Mutable Tree Index)
-
-### Multi-Bucket Architecture
-
-**ArcadeDB creates 15 buckets per type by default** to enable parallel operations:
-
-```text
-Movie type → 15 buckets (Movie_0 through Movie_14)
-Rating type → 15 buckets (Rating_0 through Rating_14)
-Link type → 15 buckets (Link_0 through Link_14)
-Tag type → 15 buckets (Tag_0 through Tag_14)
-```
-
-**When you create an index, ArcadeDB creates one index file per bucket:**
-
-```text
-CREATE INDEX ON Movie (movieId) UNIQUE
-→ Creates 15 index files: Movie_0_*.umtidx through Movie_14_*.umtidx
-
-CREATE INDEX ON Rating (userId) NOTUNIQUE
-→ Creates 15 index files: Rating_0_*.nuctidx through Rating_14_*.nuctidx
-```
-
-**Total index files = buckets × indexed properties:**
-
-- Movie: 15 buckets × 2 properties (movieId + genres) = 30 index files
-- Rating: 15 buckets × 2 properties (userId + movieId) = 30 index files
-- Link: 15 buckets × 1 property (movieId) = 15 index files
-- Tag: 15 buckets × 1 property (movieId) = 15 index files
-- **Total: 90 active index files**
-
-### Schema Metadata (schema.json)
-
-The `schema.json` file is the **authoritative source** for database structure. It contains:
-
-**Example schema excerpt:**
-
-```json
-{
-  "schemaVersion": 62,
-  "types": {
-    "Movie": {
-      "type": "d",
-      "buckets": ["Movie_0", "Movie_1", ..., "Movie_14"],
-      "properties": {
-        "movieId": { "type": "LONG" },
-        "title": { "type": "STRING" },
-        "genres": { "type": "STRING" }
-      },
-      "indexes": {
-        "Movie_0_258729020513975": {
-          "type": "LSM_TREE",
-          "bucket": "Movie_0",
-          "properties": ["movieId"],
-          "unique": true
-        },
-        "Movie_0_258729481567523": {
-          "type": "FULL_TEXT",
-          "bucket": "Movie_0",
-          "properties": ["genres"],
-          "unique": false
-        },
-        ... // 13 more buckets with same indexes
-      }
-    },
-    "Rating": {
-      "buckets": ["Rating_0", ..., "Rating_14"],
-      "indexes": {
-        // 30 indexes: 15 for userId + 15 for movieId
-      }
-    }
-  }
-}
-```
-
-**Key insights from schema:**
-
-- ✅ **15 buckets per type** - confirms multi-bucket architecture
-- ✅ **1 index per bucket per property** - explains why 6 CREATE INDEX commands create 90 index files
-- ✅ **3 index types**: LSM_TREE (general), FULL_TEXT (text), HNSW (JVECTOR) (vectors)
-- ✅ **Properties track type inference** - shows Java-inferred LONG/DOUBLE/STRING types
-
-### Why So Many Files?
-
-**This is expected behavior** - not a bug! ArcadeDB's multi-bucket design enables:
-
-1. **Parallel writes** - Multiple threads can write to different buckets simultaneously
-2. **Parallel index updates** - Each bucket's index can be updated independently
-3. **Better scalability** - Distributes data and indexes across multiple files
-4. **Compaction efficiency** - Smaller files compact faster than monolithic structures
-
-**File count reference:**
-
-- GitHub issue [#2701](https://github.com/ArcadeData/arcadedb/issues/2701): User reported "80 indexes instead of 5 expected"
-- **Resolution**: Working as designed - 1 index per bucket is intentional for parallelism
-
-### Cleanup Note
-
-Some index files may appear duplicated with different timestamps due to LSMTree compaction creating new versions. Old files are automatically cleaned up during subsequent compaction cycles. The `schema.json` metadata always reflects the currently active indexes.
-
-## Database Persistence
-
-**The imported database is fully persistent** - you can reopen it in future sessions and all data, schema, and indexes will be preserved exactly as they were.
-
-### Reopening an Existing Database
-
-```python
-# Open existing database (no creation needed)
-# Use movielens_small_db or movielens_large_db depending on which dataset you imported
-with arcadedb.open_database("./my_test_databases/movielens_large_db") as db:
-    # Schema is automatically loaded (4 types: Movie, Rating, Link, Tag)
-    types = db.schema.get_types()
-
-    # All indexes are automatically active (96 index entries)
-    movie_schema = db.schema.get_type("Movie")
-    indexed_props = movie_schema.get_indexed_properties()
-
-    # All 36.3M records are intact
-    movie_count = list(db.query("sql", "SELECT count(*) as c FROM Movie"))[0].get("c")
-    rating_count = list(db.query("sql", "SELECT count(*) as c FROM Rating"))[0].get("c")
-
-    # Query performance is identical to original import
-    result = db.query("sql", "SELECT FROM Movie WHERE movieId = 500")  # Fast indexed lookup!
-```
-
-**What gets preserved:**
-
-✅ **All 36.3M records** (86K movies, 33.8M ratings, 2.3M tags, 86K links)
-✅ **Schema definitions** (all 4 types with correct property definitions)
-✅ **All indexes** (96 index entries across 16 buckets per type)
-✅ **Query performance** (same indexed query speedup as original import)
-✅ **NULL values** (all NULL data preserved correctly)
-
-### Persistence Best Practices
-
-```python
-# 1. Always use context managers for proper cleanup
-with arcadedb.create_database(db_path) as db:
-    # ... import CSV files ...
-    # Automatically closed and flushed to disk
-
-# 2. Reopen existing database
-db_path = "./my_test_databases/movielens_large_db"  # or movielens_small_db
-with arcadedb.open_database(db_path) as db:
-    # All data, schema, indexes automatically available
-    result = db.query("sql", "SELECT FROM Movie WHERE movieId = 500")
-
-# 3. Schema and indexes are durable
-# No need to recreate schema or rebuild indexes on reload
-```
-
-**Database files on disk**:
-
-Small dataset: `./my_test_databases/movielens_small_db/` (~27 MB, 155 files)
-Large dataset: `./my_test_databases/movielens_large_db/` (~2.0 GB, more files due to data volume)
-
-Contents:
-
-- `schema.json` - Authoritative schema definition (types, properties, indexes)
-- `configuration.json` - Database configuration
-- `*.bucket` - Data files (15 buckets per type, 60 total)
-- `*.umtidx`, `*.numtidx` - Index files (90 index files for 6 indexes across 15 buckets each)
-- Metadata files: `dictionary`, `schema.prev.json`, `statistics.json`
-- Total: 155 files (small dataset), more for large dataset
-
-The database is **production-ready** after import - restart your application, reopen the database, and query immediately with full index performance!
 
 ## Key Takeaways
 
