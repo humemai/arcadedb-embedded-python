@@ -8,17 +8,13 @@ This comprehensive example demonstrates ArcadeDB's document capabilities using a
 
 The example creates a task management system showcasing:
 
-- **Rich Data Types** - STRING, BOOLEAN, INTEGER, FLOAT, DECIMAL, DATE, DATETIME, LIST OF STRING, and Arrays
+- **Rich Data Types** - STRING, BOOLEAN, INTEGER, FLOAT, DECIMAL, DATE, DATETIME, LIST with element types, and Arrays
 - **NULL Handling** - INSERT with NULL, UPDATE to NULL, queries with IS NULL/IS NOT NULL
 - **SQL Operations** - Complete CRUD workflow with ArcadeDB SQL
 - **Built-in Functions** - date() for date literals, uuid() for unique IDs, sysdate() for dynamic timestamps
 - **Record Types** - Understanding Documents vs Vertices vs Edges
 - **Schema Flexibility** - Typed properties for performance with schema-optional flexibility
-- **Type Safety** - LIST OF STRING for validated array data
-
-## Source Code
-
-The complete example is available at: [`examples/01_simple_document_store.py`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/01_simple_document_store.py)
+- **Type Safety** - Validated array data with element type specification
 
 ## Key Learning Points
 
@@ -29,7 +25,7 @@ ArcadeDB provides comprehensive data type support with NULL handling:
 ```python
 from datetime import date
 import uuid
-import arcadedb
+import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./task_db") as db:
     # Schema operations are auto-transactional (no wrapper needed)
@@ -37,7 +33,7 @@ with arcadedb.create_database("./task_db") as db:
     db.schema.create_property("Task", "title", "STRING")
     db.schema.create_property("Task", "priority", "STRING")
     db.schema.create_property("Task", "completed", "BOOLEAN")
-    db.schema.create_property("Task", "tags", "LIST OF STRING")  # Type-safe arrays
+    db.schema.create_property("Task", "tags", "LIST", of_type="STRING")
     db.schema.create_property("Task", "created_date", "DATE")
     db.schema.create_property("Task", "due_datetime", "DATETIME")
     db.schema.create_property("Task", "estimated_hours", "FLOAT")
@@ -68,7 +64,7 @@ Learn about built-in functions and NULL handling:
 ```python
 from datetime import datetime
 import uuid
-import arcadedb
+import arcadedb_embedded as arcadedb
 
 with arcadedb.open_database("./task_db") as db:
     # Insert with Python-native types (UUID, datetime handled by converter)
@@ -82,8 +78,15 @@ with arcadedb.open_database("./task_db") as db:
         task.save()
 
     # Query for NULL values (reads don't need transaction)
-    result = db.query("sql", "SELECT FROM Task WHERE due_datetime IS NULL")
-    result = db.query("sql", "SELECT FROM Task WHERE cost IS NULL")
+    print("Tasks with NULL due_datetime:")
+    result = db.query("sql", "SELECT title, due_datetime, cost FROM Task WHERE due_datetime IS NULL")
+    for record in result:
+        print(f"  Title: {record.get('title')}, Due: {record.get('due_datetime')}, Cost: {record.get('cost')}")
+
+    print("\nTasks with NULL cost:")
+    result = db.query("sql", "SELECT title, due_datetime, cost FROM Task WHERE cost IS NULL")
+    for record in result:
+        print(f"  Title: {record.get('title')}, Due: {record.get('due_datetime')}, Cost: {record.get('cost')}")
 
     # UPDATE via API (fetch + mutate in transaction)
     with db.transaction():
@@ -107,7 +110,7 @@ Understanding when to use different record types:
 The example demonstrates:
 
 - **NULL Values** - Optional fields with IS NULL/IS NOT NULL queries
-- **Type-Safe Arrays** - LIST OF STRING for validated collections
+- **Type-Safe Arrays** - LIST with of_type parameter for validated collections
 - **DECIMAL Handling** - Java BigDecimal conversion via float(str(value))
 - **DATETIME Literals** - String literals automatically parsed to DATETIME type
 - **Schema-Optional Flexibility** - Define properties for performance, add ad-hoc fields when needed
@@ -134,7 +137,7 @@ After running, examine the created files:
 
 ```text
 my_test_databases/task_db/
-├── configuration.json     # Database configuration
+├── configuration.json    # Database configuration
 ├── schema.json           # Type definitions with LIST OF STRING
 ├── Task_*.bucket         # Data storage files with tasks
 ├── dictionary.*.dict     # String compression dictionary
@@ -154,8 +157,10 @@ After mastering this example:
 **Q: How does ArcadeDB handle NULL values?**
 A: All ArcadeDB types support NULL by default. You can INSERT NULL, UPDATE to NULL, and query with IS NULL/IS NOT NULL operators.
 
-**Q: What's the difference between LIST and LIST OF STRING?**
-A: LIST is a generic untyped list. LIST OF STRING provides type validation ensuring all elements are strings, giving better performance and data integrity.
+**Q: How do I create a LIST with STRING elements?**
+A: In Python API: `db.schema.create_property("Task", "tags", "LIST", of_type="STRING")`.
+In SQL: `CREATE PROPERTY Task.tags LIST OF STRING`. Both create a type-safe list of
+strings.
 
 **Q: Why use typed properties?**
 A: They provide better performance, validation, and enable advanced features like indexes. But ArcadeDB is schema-optional - you can still add properties dynamically.

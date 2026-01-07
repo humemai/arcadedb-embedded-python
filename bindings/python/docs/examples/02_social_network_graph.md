@@ -1,6 +1,4 @@
-# Social Network Graph Example ✅
-
-**Status: Complete and Fully Functional**
+# Social Network Graph Example
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/02_social_network_graph.py){ .md-button }
 
@@ -8,9 +6,8 @@
 
 This example demonstrates how to use ArcadeDB as a graph database to model and query social networks. It showcases the power of graph databases for representing and traversing complex relationships between entities.
 
-**File:** `examples/02_social_network_graph.py`
-
 **What You'll Learn:**
+
 - Creating vertex and edge types (schema definition)
 - Modeling entities (Person) and relationships (FRIEND_OF) with properties
 - NULL value handling for optional vertex properties (email, phone, reputation)
@@ -41,86 +38,57 @@ This example includes comprehensive performance benchmarking of all three query 
 
 ### Key Findings:
 
-✅ **Gremlin is significantly faster** - 63× faster overall than Cypher
-✅ **SQL MATCH performs well** - close to Gremlin performance
-⚠️ **Cypher has performance issues** - transpiler overhead, unmaintained codebase
-✅ **Gremlin has 100% feature parity** - can do everything Cypher can do
+✅ **Gremlin is the fastest** - 63× faster than unmaintained Cypher transpiler
+✅ **SQL MATCH is viable** - for SQL developers, 2.7× faster than Cypher
+✅ **Gremlin is industry standard** - used by AWS Neptune, Azure Cosmos DB, and enterprise applications
+✅ **Gremlin is actively maintained** - Apache TinkerPop has ongoing development and community support
 
-### When to Use Each:
+### Recommended Approach: Use Gremlin
 
-**Gremlin (Recommended for Production):**
-- ⚡ Best performance (63× faster than Cypher)
-- 🎯 100% feature parity with Cypher
-- 🔧 Fine-grained control over traversal
-- 📊 Better for complex graph algorithms
-- ✅ Actively maintained (Apache TinkerPop)
+**Gremlin (Primary Recommendation):**
 
-**SQL MATCH (Recommended for SQL Developers):**
-- 🔄 Mix graph and relational queries
+- ⚡ Best performance - 63× faster than Cypher
+- 🎯 100% feature parity - can express any graph pattern
+- 🔧 Fine-grained control over traversal optimization
+- 📊 Perfect for complex graph algorithms
+- ✅ Actively maintained by Apache TinkerPop community
+- 🌍 Industry standard used by AWS Neptune and Azure Cosmos DB
+- 📚 Extensive documentation and community resources
+
+**SQL MATCH (Alternative for SQL Developers):**
+
+- 🔄 Allows mixing graph and relational queries
 - 📈 Good performance (2.7× faster than Cypher)
-- 🛠️ Familiar SQL syntax
-- 📊 Excellent for aggregations
+- 🛠️ Familiar SQL syntax for SQL developers
+- 📊 Excellent for aggregations and reporting
+- ⚠️ Less intuitive for pure graph operations
 
-**Cypher (Use with Caution):**
-- ⚠️ Slowest performance (transpiler overhead)
-- ⚠️ Based on unmaintained Cypher For Gremlin project
-- ⚠️ Type conversion issues
-- ✅ Most readable for simple queries
-- ✅ Familiar to Neo4j users
+**⚠️ Cypher: Not Recommended**
 
-## ⚠️ Cypher Limitations in ArcadeDB
+- Based on unmaintained, outdated transpiler
+- 63× slower than Gremlin
+- Type conversion issues with ArcadeDB's flexible typing
+- Known bugs in transpiler that cannot be fixed
+- Use Gremlin instead - it's faster and better supported
 
-ArcadeDB's Cypher implementation has known limitations you should be aware of:
+### Recommendation
+**Use Gremlin for all new applications.** If you're comfortable with SQL syntax, use SQL MATCH.
 
-### 1. Unmaintained Transpiler
-> "ArcadeDB's Cypher implementation is based on the Cypher For Gremlin Open Source transpiler. This project is not actively maintained by Open Cypher anymore, so issues in the transpiler are hard to fix."
-
-**Impact:**
-- Bugs in the transpiler cannot be easily fixed
-- No active development or improvements
-- May not support newer Cypher features
-- Performance optimizations unlikely
-
-### 2. Type Conversion Issues
-> "ArcadeDB automatically handles the conversion between compatible types, such as strings and numbers when possible. Cypher does not."
-
-**Problem:**
-```cypher
--- Define schema with string ID
-CREATE VERTEX Person SET id = "123"
-
--- Query with integer (may fail or give unpredictable results)
-MATCH (p:Person {id: 123}) RETURN p  -- ⚠️ Type mismatch!
-```
-
-**Solution:** Use strict typing or switch to SQL/Gremlin:
-```sql
--- SQL is more flexible with type conversion
-SELECT FROM Person WHERE id = 123  -- ✅ Works
-```
-
-```gremlin
-// Gremlin with explicit type
-g.V().hasLabel('Person').has('id', '123')  // ✅ Works
-```
-
-### 3. Performance Overhead
-The transpilation process adds significant overhead:
-- Cypher → Gremlin translation at runtime
-- No direct execution path
-- Additional parsing and validation layers
-
-**Recommendation:** For production workloads, prefer Gremlin or SQL MATCH over Cypher.
+The Python example also demonstrates Cypher queries for comparison and educational
+purposes, showing why it's not recommended - Cypher is 63× slower due to its reliance on
+an unmaintained transpiler.
 
 ## Real-World Use Case
 
 Social networks are perfect examples of graph data structures where:
+
 - **Entities** (people, companies, places) become vertices
 - **Relationships** (friendships, follows, likes) become edges
 - **Properties** store additional information about both entities and relationships
 - **Graph queries** efficiently find patterns like "friends of friends" or "mutual connections"
 
 This pattern applies to many domains:
+
 - Social media platforms
 - Professional networks (LinkedIn-style)
 - Recommendation systems
@@ -158,7 +126,7 @@ with db.transaction():
 ### Schema Definition
 Define types and properties upfront for consistency:
 ```python
-import arcadedb
+import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./social_network_db") as db:
     # Create vertex type with properties (schema ops are auto-transactional)
@@ -181,40 +149,124 @@ with arcadedb.create_database("./social_network_db") as db:
     db.schema.create_index("Person", ["name"], unique=False)
 ```
 
-## Query Language Comparison
+## Query Examples
 
-One of ArcadeDB's strengths is supporting multiple query languages for graph operations. This example demonstrates all three and measures their performance.
+The example demonstrates 6 queries in each of three languages:
 
-### SQL Approach
-
-Traditional SQL with subqueries for graph traversal:
+### SQL MATCH Queries
 
 ```sql
--- Find all friends of Alice (using SQL subqueries)
-SELECT name, city FROM Person
-WHERE name IN (
-    SELECT p2.name
-)
-ORDER BY name
+-- 1. Find all friends of Alice
+MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
+      -FRIEND_OF->
+      {type: Person, as: friend}
+RETURN friend.name as name, friend.city as city
+ORDER BY friend.name
 ```
 
-### Cypher Syntax
+```sql
+-- 2. Find friends of friends of Alice
+MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
+      -FRIEND_OF->
+      {type: Person, as: friend}
+      -FRIEND_OF->
+      {type: Person, as: friend_of_friend, where: (name <> 'Alice Johnson')}
+RETURN DISTINCT friend_of_friend.name as name, friend.name as through_friend
+ORDER BY friend_of_friend.name
+```
 
-Neo4j-compatible graph query language:
+```sql
+-- 3. Find mutual friends between Alice and Bob
+MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
+      -FRIEND_OF->
+      {type: Person, as: mutual}
+      <-FRIEND_OF-
+      {type: Person, as: bob, where: (name = 'Bob Smith')}
+RETURN mutual.name as mutual_friend
+ORDER BY mutual.name
+```
+
+```sql
+-- 4. Find close friendships (SQL MATCH)
+MATCH {type: Person, as: p1}
+      -FRIEND_OF{closeness: 'close'}->
+      {type: Person, as: p2}
+RETURN p1.name as person1, p2.name as person2, FRIEND_OF.since as since
+```
+
+```sql
+-- 5. Count friends per person (SQL aggregation)
+SELECT name, COUNT(*) as friend_count
+FROM (MATCH {type: Person, as: p} -FRIEND_OF-> {type: Person})
+GROUP BY name
+ORDER BY friend_count DESC, name
+```
+
+```sql
+-- 6. Find variable-length paths (SQL MATCH)
+MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
+      -FRIEND_OF*1..3-
+      {type: Person, as: connected, where: (name <> 'Alice Johnson')}
+RETURN DISTINCT connected.name as name, connected.city as city
+ORDER BY connected.name
+```
+
+### Cypher Queries (for comparison)
 
 ```cypher
--- Same query in Cypher (more intuitive for graph patterns)
+-- 1. Find all friends of Alice
 MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF]->(friend:Person)
 RETURN friend.name as name, friend.city as city
 ORDER BY friend.name
 ```
 
-### Gremlin Syntax
+```cypher
+-- 2. Find friends of friends of Alice
+MATCH (alice:Person {name: 'Alice Johnson'})
+      -[:FRIEND_OF]->(friend:Person)
+      -[:FRIEND_OF]->(fof:Person)
+WHERE fof.name <> 'Alice Johnson'
+RETURN DISTINCT fof.name as name, friend.name as through_friend
+ORDER BY fof.name
+```
 
-Apache TinkerPop traversal language:
+```cypher
+-- 3. Find mutual friends between Alice and Bob
+MATCH (alice:Person {name: 'Alice Johnson'})
+      -[:FRIEND_OF]->(mutual:Person)
+      <-[:FRIEND_OF]-(bob:Person {name: 'Bob Smith'})
+RETURN mutual.name as mutual_friend
+ORDER BY mutual.name
+```
+
+```cypher
+-- 4. Find close friendships (Cypher)
+MATCH (p1:Person)-[f:FRIEND_OF {closeness: 'close'}]->(p2:Person)
+RETURN p1.name as person1, p2.name as person2, f.since as since
+ORDER BY f.since
+```
+
+```cypher
+-- 5. Count friends per person (Cypher aggregation)
+MATCH (p:Person)
+OPTIONAL MATCH (p)-[:FRIEND_OF]->(friend:Person)
+RETURN p.name as name, COUNT(friend) as friend_count
+ORDER BY friend_count DESC, name
+```
+
+```cypher
+-- 6. Find connections within 3 steps from Alice (Cypher)
+MATCH (alice:Person {name: 'Alice Johnson'})
+      -[:FRIEND_OF*1..3]-(connected:Person)
+WHERE connected.name <> 'Alice Johnson'
+RETURN DISTINCT connected.name as name, connected.city as city
+ORDER BY connected.name
+```
+
+### Gremlin Queries (Recommended)
 
 ```gremlin
-// Same query in Gremlin (fastest performance)
+// 1. Find all friends of Alice
 g.V().hasLabel('Person').has('name', 'Alice Johnson')
     .out('FRIEND_OF')
     .project('name', 'city')
@@ -223,58 +275,62 @@ g.V().hasLabel('Person').has('name', 'Alice Johnson')
     .order().by(select('name'))
 ```
 
-### Gremlin Feature Parity with Cypher
+```gremlin
+// 2. Find friends of friends of Alice
+g.V().hasLabel('Person').has('name', 'Alice Johnson')
+    .out('FRIEND_OF').as('friend')
+    .out('FRIEND_OF').as('fof')
+    .where(values('name').is(neq('Alice Johnson')))
+    .select('fof', 'friend')
+    .by('name')
+    .by('name')
+    .order().by(select('fof'))
+```
 
-**Yes, Gremlin can do everything Cypher can do!** Here are the equivalents:
+```gremlin
+// 3. Find mutual friends between Alice and Bob
+g.V().hasLabel('Person').has('name', 'Alice Johnson')
+    .out('FRIEND_OF').as('mutual')
+    .in('FRIEND_OF').has('name', 'Bob Smith')
+    .select('mutual')
+    .values('name')
+    .order()
+```
 
-| Cypher Pattern | Gremlin Equivalent |
-|----------------|-------------------|
-| `MATCH (a)-[:FRIEND_OF]->(b)` | `g.V().as('a').out('FRIEND_OF').as('b')` |
-| `WHERE a.name = 'Alice'` | `.has('name', 'Alice')` |
-| `RETURN DISTINCT b.name` | `.dedup().values('name')` |
-| `ORDER BY b.name` | `.order().by('name')` |
-| `COUNT(*)` | `.count()` |
-| `-[:FRIEND_OF*1..3]-` | `.repeat(out('FRIEND_OF')).times(3).emit()` |
+```gremlin
+// 4. Find close friendships (Gremlin)
+g.V().hasLabel('Person').as('p1')
+    .outE('FRIEND_OF').has('closeness', 'close').as('edge')
+    .inV().as('p2')
+    .select('p1', 'p2', 'edge')
+    .by('name')
+    .by('name')
+    .by('since')
+    .order().by(select('edge'))
+```
 
-### When to Use Each
+```gremlin
+// 5. Count friends per person (Gremlin aggregation)
+g.V().hasLabel('Person')
+    .project('name', 'friend_count')
+    .by('name')
+    .by(out('FRIEND_OF').count())
+    .order()
+    .by(select('friend_count'), desc)
+    .by(select('name'))
+```
 
-**SQL Approach:**
-- Familiar to SQL developers
-- Good for mixing graph and relational queries
-- Powerful for aggregations and data transformations
-- Works well with traditional reporting tools
-- **Performance:** 2.7× faster than Cypher
-
-**Cypher:**
-- More intuitive for graph patterns
-- Shorter syntax for complex traversals
-- Natural expression of graph relationships
-- Better for pure graph operations
-- **Most popular in industry** (Neo4j ecosystem)
-- **Performance:** Slowest due to transpiler overhead (⚠️ unmaintained)
-
-**Gremlin:**
-- **Best performance** (63× faster than Cypher!)
-- Imperative control over traversal
-- Fine-grained optimization opportunities
-- **100% feature parity with Cypher**
-- Industry standard (Apache TinkerPop)
-- Used by AWS Neptune, Azure Cosmos DB
-- **Recommended for production workloads**
-
-### Property Access in Python
-When processing query results, use the property access API:
-```python
-# Process query results with proper property access
-result = db.query("cypher", """
-    MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF]->(friend:Person)
-    RETURN friend.name as name, friend.city as city
-""")
-
-for row in result:
-    name = row.get('name')  # Use .get() not ['name']
-    city = row.get('city')
-    print(f"Friend: {name} from {city}")
+```gremlin
+// 6. Find connections within 3 steps from Alice (Gremlin)
+g.V().hasLabel('Person').has('name', 'Alice Johnson')
+    .repeat(out('FRIEND_OF').simplePath())
+    .times(3).emit()
+    .where(values('name').is(neq('Alice Johnson')))
+    .dedup()
+    .project('name', 'city')
+    .by('name')
+    .by('city')
+    .order().by(select('name'))
 ```
 
 ## NULL Value Handling in Graphs
@@ -282,7 +338,7 @@ for row in result:
 Graph vertices can have optional properties with NULL values:
 
 ```python
-import arcadedb
+import arcadedb_embedded as arcadedb
 
 with arcadedb.open_database("./social_network_db") as db:
     # Insert person with NULL email and phone
@@ -322,114 +378,22 @@ This pattern is useful for:
 - Filtering by data completeness
 - Quality checks and data validation
 
-## Advanced Graph Patterns
-
-### Friends of Friends
-Finding second-degree connections:
-```sql
--- SQL MATCH
-MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
-      -FRIEND_OF->
-      {type: Person, as: friend}
-      -FRIEND_OF->
-      {type: Person, as: friend_of_friend, where: (name <> 'Alice Johnson')}
-RETURN DISTINCT friend_of_friend.name as name, friend.name as through_friend
-```
-
-```cypher
--- Cypher
-MATCH (alice:Person {name: 'Alice Johnson'})
-      -[:FRIEND_OF]->(friend:Person)
-      -[:FRIEND_OF]->(fof:Person)
-WHERE fof.name <> 'Alice Johnson'
-RETURN DISTINCT fof.name as name, friend.name as through_friend
-```
-
-### Mutual Friends
-Finding common connections between two people:
-```sql
--- SQL MATCH
-MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
-      -FRIEND_OF->
-      {type: Person, as: mutual}
-      <-FRIEND_OF-
-      {type: Person, as: bob, where: (name = 'Bob Smith')}
-RETURN mutual.name as mutual_friend
-```
-
-```cypher
--- Cypher
-MATCH (alice:Person {name: 'Alice Johnson'})
-      -[:FRIEND_OF]->(mutual:Person)
-      <-[:FRIEND_OF]-(bob:Person {name: 'Bob Smith'})
-RETURN mutual.name as mutual_friend
-```
-
-### Variable-Length Paths
-Finding all connections within a certain distance:
-```cypher
--- Cypher (SQL MATCH also supports this with different syntax)
-MATCH (alice:Person {name: 'Alice Johnson'})
-      -[:FRIEND_OF*1..3]-(connected:Person)
-WHERE connected.name <> 'Alice Johnson'
-RETURN DISTINCT connected.name as name
-```
-
-## Working with Relationship Properties
-
-Edges can store metadata about relationships:
-```python
-import arcadedb
-
-with arcadedb.open_database("./social_network_db") as db:
-    # Create friendship with properties (inside transaction)
-    with db.transaction():
-        db.command("sql", """
-            CREATE EDGE FRIEND_OF FROM ? TO ?
-            SET since = date(?), closeness = ?, interaction_frequency = ?
-        """, alice_rid, bob_rid, "2020-05-15", "close", "daily")
-
-    # Query based on relationship properties (reads don't need transaction)
-    result = db.query("cypher", """
-        MATCH (p1:Person)-[f:FRIEND_OF {closeness: 'close'}]->(p2:Person)
-        RETURN p1.name as person1, p2.name as person2, f.since as since
-        ORDER BY f.since
-    """)
-```
-
-## Bidirectional Relationships
-
-For symmetric relationships like friendship:
-```python
-import arcadedb
-
-with arcadedb.open_database("./social_network_db") as db:
-    # Create both directions (inside transaction)
-    with db.transaction():
-        db.command("sql", "CREATE EDGE FRIEND_OF FROM ? TO ? SET since = date(?), closeness = ?",
-                   alice_rid, bob_rid, "2020-05-15", "close")
-        db.command("sql", "CREATE EDGE FRIEND_OF FROM ? TO ? SET since = date(?), closeness = ?",
-                   bob_rid, alice_rid, "2020-05-15", "close")
-```
-
-This allows queries to work in either direction without specifying directionality.
-
 ## Performance Considerations
 
 ### Indexing
 Create indexes on frequently queried properties:
 ```python
 # Index on person names for fast lookups
-db.command("sql", "CREATE INDEX ON Person (name) IF NOT EXISTS")
+db.schema.create_index("Person", ["name"], unique=False)
 
-# Composite indexes for complex queries
-db.command("sql", "CREATE INDEX ON Person (city, age) IF NOT EXISTS")
+# For unique identifiers
+db.schema.create_index("Person", ["person_id"], unique=True)
 ```
 
 ### Batch Operations
 For large datasets, use batch operations:
 ```python
-import arcadedb
+import arcadedb_embedded as arcadedb
 
 with arcadedb.open_database("./social_network_db") as db:
     # Batch vertex creation (all inside single transaction)
@@ -546,7 +510,7 @@ When you run the example, you'll see comprehensive output showing all graph oper
 for row in result:
     name = row.get('name')  # ✅ Correct
     city = row.get('city')  # ✅ Correct
-    # name = row['name']             # ❌ Wrong - will fail
+    # name = row['name']    # ❌ Wrong - will fail
 ```
 
 ### Transaction Handling
@@ -568,48 +532,20 @@ db.command("sql", """
 """)
 ```
 
-## Common Patterns
-
-### Recommendation System
-```cypher
--- Find people you might know (friends of friends who aren't already friends)
-MATCH (me:Person {name: 'Alice Johnson'})
-      -[:FRIEND_OF]->(:Person)
-      -[:FRIEND_OF]->(recommended:Person)
-WHERE NOT (me)-[:FRIEND_OF]-(recommended) AND me <> recommended
-RETURN recommended.name, COUNT(*) as mutual_friends
-ORDER BY mutual_friends DESC
-```
-
-### Social Distance
-```cypher
--- Find shortest path between two people
-MATCH path = shortestPath((start:Person {name: 'Alice Johnson'})
-                         -[:FRIEND_OF*]-(end:Person {name: 'Henry Clark'}))
-RETURN length(path) as degrees_of_separation
-```
-
-### Influencer Detection
-```sql
--- Find most connected people
-SELECT name, in('FRIEND_OF').size() as friend_count
-FROM Person
-ORDER BY friend_count DESC
-LIMIT 5
-```
-
 ## Related Examples
 
-- **01_simple_document_store.py** - Basic database operations and schema
-- **04_csv_import_to_graph.py** - Importing graph data from files
-- **05_ecommerce_multimodel.py** - Combining graph with document storage
+- [**01 - Simple Document Store**](01_simple_document_store.md) - Foundation example with document types and CRUD operations
+- [**03 - Vector Search**](03_vector_search.md) - Semantic similarity search with HNSW indexing
+- [**05 - CSV Import (Graph)**](05_csv_import_graph.md) - Creating graph structures from CSV data
+- [**06 - Vector Search Recommendations**](06_vector_search_recommendations.md) - Semantic search and movie recommendations
+- [**07 - Multi-Model Stack Overflow**](07_stackoverflow_multimodel.md) - Combining graph, documents, and vectors
 
 ## Next Steps
 
-- Learn about [Vector Search](03_vector_search.md) for AI-powered recommendations
-- Explore [CSV Import (Documents)](04_csv_import_documents.md) for importing tabular data
-- See [CSV Import (Graph)](05_csv_import_graph.md) for importing graph data from CSV
-- Check out [Multi-Model Example](07_stackoverflow_multimodel.md) for combining graph with document storage
+- Learn about [Vector Search](03_vector_search.md) for AI-powered semantic search
+- Explore [CSV Import (Graph)](05_csv_import_graph.md) for importing graph data from files
+- See [Multi-Model Stack Overflow](07_stackoverflow_multimodel.md) for combining graph with documents and vectors
+- Check out [Server Mode & HTTP API](08_server_mode_rest_api.md) for production deployment
 
 ---
 
