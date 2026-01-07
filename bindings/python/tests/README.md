@@ -76,6 +76,7 @@ for t in threads: t.join()
 
 server = arcadedb.create_server(root_path="./databases")
 server.start()
+# "mydb" will be created at ./databases/mydb
 db = server.create_database("mydb")
 
 # Now HTTP clients from other processes can connect!
@@ -86,6 +87,7 @@ db = server.create_database("mydb")
 # Pattern 2: Start server first (recommended)
 server = arcadedb.create_server(root_path="./databases")
 server.start()
+# "mydb" will be created at ./databases/mydb
 db = server.create_database("mydb")
 
 # Both embedded + HTTP work immediately

@@ -29,7 +29,7 @@ Create a new database at the specified path.
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("/tmp/mydb")
+db = arcadedb.create_database("./mydb")
 try:
     # Schema operations are auto-transactional
     db.schema.create_document_type("Person")
@@ -41,7 +41,7 @@ finally:
 !!! tip "Use Context Manager"
     Prefer using `with` statement for automatic cleanup:
     ```python
-    with arcadedb.create_database("/tmp/mydb") as db:
+    with arcadedb.create_database("./mydb") as db:
         # Database automatically closed on exit
         pass
     ```
@@ -71,7 +71,7 @@ Open an existing database.
 **Example:**
 
 ```python
-with arcadedb.open_database("/tmp/mydb") as db:
+with arcadedb.open_database("./mydb") as db:
     result = db.query("sql", "SELECT FROM Person")
     print(f"Found {len(list(result))} records")
 ```
@@ -97,10 +97,10 @@ Check if a database exists at the given path.
 **Example:**
 
 ```python
-if arcadedb.database_exists("/tmp/mydb"):
-    db = arcadedb.open_database("/tmp/mydb")
+if arcadedb.database_exists("./mydb"):
+    db = arcadedb.open_database("./mydb")
 else:
-    db = arcadedb.create_database("/tmp/mydb")
+    db = arcadedb.create_database("./mydb")
 ```
 
 ---
@@ -490,7 +490,7 @@ Close the database connection.
 **Example:**
 
 ```python
-db = arcadedb.create_database("/tmp/mydb")
+db = arcadedb.create_database("./mydb")
 try:
     # Use database
     pass
@@ -562,7 +562,7 @@ DatabaseFactory(path: str)
 **Example:**
 
 ```python
-factory = arcadedb.DatabaseFactory("/tmp/mydb")
+factory = arcadedb.DatabaseFactory("./mydb")
 if factory.exists():
     db = factory.open()
 else:
@@ -607,7 +607,7 @@ All database objects support context managers:
 
 ```python
 # Database
-with arcadedb.create_database("/tmp/mydb") as db:
+with arcadedb.create_database("./mydb") as db:
     # Automatic cleanup
     pass
 
@@ -681,7 +681,7 @@ All database operations can raise `ArcadeDBError`:
 from arcadedb_embedded import ArcadeDBError
 
 try:
-    with arcadedb.create_database("/tmp/mydb") as db:
+    with arcadedb.create_database("./mydb") as db:
         # Schema operations are auto-transactional
         db.schema.create_document_type("User")
         db.schema.create_property("User", "email", "STRING")
@@ -706,11 +706,11 @@ except ArcadeDBError as e:
 
 ```python
 # ✅ Good - automatic cleanup
-with arcadedb.create_database("/tmp/mydb") as db:
+with arcadedb.create_database("./mydb") as db:
     pass
 
 # ❌ Avoid - manual cleanup
-db = arcadedb.create_database("/tmp/mydb")
+db = arcadedb.create_database("./mydb")
 db.close()
 ```
 
@@ -740,10 +740,10 @@ db.query("sql", f"SELECT FROM Person WHERE name = '{user_input}'")
 ### 4. Check Database Existence
 
 ```python
-if arcadedb.database_exists("/tmp/mydb"):
-    db = arcadedb.open_database("/tmp/mydb")
+if arcadedb.database_exists("./mydb"):
+    db = arcadedb.open_database("./mydb")
 else:
-    db = arcadedb.create_database("/tmp/mydb")
+    db = arcadedb.create_database("./mydb")
 ```
 
 ---

@@ -22,8 +22,8 @@ Build your first graph database with vertices and edges:
 
 Learn how to:
 - Create vertices and edges
-- Use Cypher queries
-- Traverse graph relationships
+- Use Gremlin queries for high-performance graph traversal
+- Traverse graph relationships efficiently
 - Implement social network patterns
 
 ## Quick Start Code
@@ -34,7 +34,7 @@ Learn how to:
 import arcadedb_embedded as arcadedb
 
 # Create a new database with context manager (auto-closes)
-with arcadedb.create_database("mydb", create_if_not_exists=True) as db:
+with arcadedb.create_database("./mydb") as db:
     # Your operations here
     pass
 
@@ -49,7 +49,7 @@ with arcadedb.open_database("./mydb") as db:
 ```python
 import arcadedb_embedded as arcadedb
 
-with arcadedb.create_database("mydb") as db:
+with arcadedb.create_database("./mydb") as db:
     # Create document type (schema ops are auto-transactional)
     db.schema.create_document_type("Product")
 
@@ -60,7 +60,7 @@ with arcadedb.create_database("mydb") as db:
         product.save()
 
     # Query documents (reads don't need transaction)
-    results = db.query("SELECT FROM Product WHERE price < 1000")
+    results = db.query("sql", "SELECT FROM Product WHERE price < 1000")
     for record in results:
         print(record.get("name"), record.get("price"))
 ```
@@ -70,7 +70,7 @@ with arcadedb.create_database("mydb") as db:
 ```python
 import arcadedb_embedded as arcadedb
 
-with arcadedb.create_database("mydb") as db:
+with arcadedb.create_database("./mydb") as db:
     # Create vertex types (schema ops are auto-transactional)
     db.schema.create_vertex_type("Person")
     db.schema.create_edge_type("Knows")
@@ -87,9 +87,10 @@ with arcadedb.create_database("mydb") as db:
         edge.save()
 
     # Traverse graph (reads don't need transaction)
-    results = db.query("""
-        MATCH (p:Person)-[:Knows]->(friend:Person)
-        RETURN p.name, friend.name
+    results = db.query("gremlin", """
+        g.V().hasLabel('Person')
+         .out('Knows')
+         .values('name')
     """)
 
     for record in results:

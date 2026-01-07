@@ -72,7 +72,7 @@ stats = arcadedb.import_csv(
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./restored_db") as db:
-    db.command("sql", "IMPORT DATABASE file:///tmp/export.jsonl.tgz WITH commitEvery = 50000")
+    db.command("sql", "IMPORT DATABASE file:///export.jsonl.tgz WITH commitEvery = 50000")
 ```
 
 For XML imports, use the `Importer` class directly (see below) with `format_type='xml'`.
