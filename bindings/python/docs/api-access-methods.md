@@ -20,7 +20,7 @@ Direct JVM method calls via JPype - **recommended for most Python applications**
 import arcadedb_embedded as arcadedb
 
 # Direct database access - NO server needed
-with arcadedb.create_database("/tmp/mydb") as db:
+with arcadedb.create_database("./mydb") as db:
     # Create schema (auto-transactional)
     db.schema.create_document_type("Person")
     db.schema.create_property("Person", "name", "STRING")
@@ -45,10 +45,11 @@ with arcadedb.create_database("/tmp/mydb") as db:
 import arcadedb_embedded as arcadedb
 
 # Server manages databases (still Java API calls)
-server = arcadedb.create_server("/tmp/server_data", "password123")
+server = arcadedb.create_server("./server_data", "password123")
 server.start()
 
 try:
+    # "mydb" will be created at ./server_data/databases/mydb
     db = server.create_database("mydb")
 
     # Schema operations are auto-transactional
@@ -89,7 +90,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 # Start server (using Java API)
-server = arcadedb.create_server("/tmp/server_data", "password123")
+server = arcadedb.create_server("./server_data", "password123")
 server.start()
 
 try:
@@ -152,7 +153,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 # Start server
-server = arcadedb.create_server("/tmp/hybrid", "password123")
+server = arcadedb.create_server("./hybrid", "password123")
 server.start()
 
 try:
