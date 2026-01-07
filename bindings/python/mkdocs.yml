@@ -6,7 +6,7 @@ repo_url: https://github.com/humemai/arcadedb-embedded-python
 repo_name: humemai/arcadedb-embedded-python
 edit_uri: edit/python-embedded/bindings/python/docs/
 
-copyright: Copyright &copy; 2025 humemai
+copyright: Copyright &copy; 2026 humemai
 
 theme:
   name: material
