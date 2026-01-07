@@ -23,7 +23,7 @@ as the base class for `Vertex` and `Edge`.
 import arcadedb_embedded as arcadedb
 from arcadedb_embedded.graph import Document, Vertex, Edge
 
-with arcadedb.create_database("/tmp/mydb") as db:
+with arcadedb.create_database("./mydb") as db:
     # Schema operations are auto-transactional
     db.schema.create_document_type("Note")
 

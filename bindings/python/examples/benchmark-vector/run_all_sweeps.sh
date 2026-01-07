@@ -72,9 +72,13 @@ for L in "${LOCS[@]}"; do for G in "${GRAPHS[@]}"; do CONFIGS+=("$H|$L|$G|$DS");
 
 TOTAL=${#CONFIGS[@]}
 CURRENT=0
+MAX_WORKERS=2
 
-for CONFIG in "${CONFIGS[@]}"; do
-    CURRENT=$((CURRENT + 1))
+# Function to run a single benchmark
+run_benchmark() {
+    local CONFIG=$1
+    local CURRENT=$2
+    local TOTAL=$3
 
     IFS='|' read -r HEAP LOCATION_CACHE GRAPH_BUILD_CACHE DATASET_SIZE <<< "$CONFIG"
 
@@ -85,10 +89,10 @@ for CONFIG in "${CONFIGS[@]}"; do
     echo "========================================================================"
     echo "Starting Run $CURRENT/$TOTAL: $RUN_NAME"
     echo "========================================================================"
-    echo "  Heap: $HEAP | Location Cache: $LOCATION_CACHE | Graph Cache: $GRAPH_BUILD_CACHE | Mutations: $MUTATIONS_BEFORE_REBUILD | Dataset: $DATASET_SIZE"
+    echo "  Heap: $HEAP | Location Cache: $LOCATION_CACHE | Graph Cache: $GRAPH_BUILD_CACHE | Dataset: $DATASET_SIZE"
     echo ""
 
-    # Run benchmark in background without subshell
+    # Run benchmark
     cd "${OUTPUT_DIR}"
 
     START_TIME=$(date +%s)
@@ -109,7 +113,28 @@ for CONFIG in "${CONFIGS[@]}"; do
     echo "$DURATION" > "benchmark_logs/jvector-${RUN_NAME}_duration.txt"
 
     cd ..
+
+    echo "Completed Run $CURRENT/$TOTAL: $RUN_NAME (${DURATION}s)"
+}
+
+export -f run_benchmark
+export OUTPUT_DIR DATASET
+
+# Run benchmarks in parallel with limited workers
+for CONFIG in "${CONFIGS[@]}"; do
+    CURRENT=$((CURRENT + 1))
+
+    # Wait if we've reached max workers
+    while [ $(jobs -r | wc -l) -ge $MAX_WORKERS ]; do
+        sleep 1
+    done
+
+    # Launch benchmark in background
+    run_benchmark "$CONFIG" "$CURRENT" "$TOTAL" &
 done
+
+# Wait for all remaining jobs to complete
+wait
 
 echo ""
 

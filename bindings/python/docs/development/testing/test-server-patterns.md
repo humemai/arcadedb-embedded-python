@@ -128,22 +128,25 @@ server.stop()
 
 **Why `close()` is required:**
 
-```
 Your Python process:
-  db = create_database("./temp_db")  🔒 Lock acquired
-  # ... work ...
-  db.close()                         🔓 Lock released
 
-  server.start()
-  server.get_database("mydb")        🔒 Server acquires lock ✅
+```python
+db = create_database("./temp_db")  🔒 Lock acquired
+# ... work ...
+db.close()                         🔓 Lock released
+
+server.start()
+server.get_database("mydb")        🔒 Server acquires lock ✅
+```
 
 Without close():
-  db = create_database("./temp_db")  🔒 Lock acquired
-  # ... work ...
-  # Forgot db.close()!              🔒 Still locked
+```python
+db = create_database("./temp_db")  🔒 Lock acquired
+# ... work ...
+# Forgot db.close()!               🔒 Still locked
 
-  server.start()
-  server.get_database("mydb")        ❌ LockException!
+server.start()
+server.get_database("mydb")        ❌ LockException!
 ```
 
 !!! warning "Common Mistake"

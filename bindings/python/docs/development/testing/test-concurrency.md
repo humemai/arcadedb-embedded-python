@@ -325,6 +325,7 @@ server = arcadedb.create_server(root_path="./databases")
 server.start()
 
 # Create database through server
+# "mydb" will be created at ./databases/mydb
 db = server.create_database("mydb")
 
 # Now you have TWO ways to access:
@@ -406,6 +407,7 @@ db.close()
 # Process 1: Start server
 server = arcadedb.create_server(root_path="./databases")
 server.start()
+# "mydb" will be created at ./databases/mydb
 db = server.create_database("mydb")
 
 # Process 2+: Use HTTP API
