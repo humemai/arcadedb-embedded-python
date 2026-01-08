@@ -127,6 +127,9 @@ extra:
 extra_css:
 - stylesheets/extra.css
 
+extra_javascript:
+- https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
 nav:
 - Home: index.md
 - Getting Started:
@@ -152,7 +155,6 @@ nav:
     - Database Management: guide/core/database.md
     - Queries: guide/core/queries.md
     - Transactions: guide/core/transactions.md
-  - Query Languages vs Java API: guide/Query_vs_API_Guide.md
   - Operations & Logging: guide/operations.md
   - Server Mode: guide/server.md
   - Vector Search: guide/vectors.md
@@ -194,6 +196,8 @@ nav:
       - Transaction Config: development/testing/test-transaction-config.md
       - NumPy Support: development/testing/test-numpy-support.md
       - Vector Search: development/testing/test-vector.md
+      - Graph API: development/testing/test-graph-api.md
+      - Vector SQL: development/testing/test-vector-sql.md
     - Advanced Testing:
       - Concurrency: development/testing/test-concurrency.md
       - Server Patterns: development/testing/test-server-patterns.md
