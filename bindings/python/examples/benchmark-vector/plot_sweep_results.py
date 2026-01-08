@@ -176,16 +176,21 @@ def plot_location_cache_sweep(sweep_dir, output_dir):
         if df.empty:
             continue
 
-        # Find corresponding memory log
+        # Find corresponding memory log using cache parameters
+        # Extract heap size from config for pattern matching
+        heap_str = config["heap"] if config["heap"] else "*"
+        dataset_size_label = config["dataset_size"]
+
         log_pattern = os.path.join(
             sweep_dir,
             "benchmark_logs",
-            f"*_loc{config['location_cache']}_graph{config['graph_cache']}_*_memory.log",
+            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_*_memory.log",
         )
-        log_files = glob.glob(log_pattern)
+        log_files = sorted(glob.glob(log_pattern))  # Sort to get consistent results
         peak_mem = None
         if log_files:
-            peak_mem = get_peak_memory(log_files[0])
+            # Take the most recent (last) file if multiple matches
+            peak_mem = get_peak_memory(log_files[-1])
 
         # Calculate average build time
         build_time = 0
@@ -351,16 +356,21 @@ def plot_graph_cache_sweep(sweep_dir, output_dir):
         if "Build (s)" in df.columns:
             build_time = df["Build (s)"].mean()
 
-        # Find corresponding memory log
+        # Find corresponding memory log using cache parameters
+        # Extract heap size from config for pattern matching
+        heap_str = config["heap"] if config["heap"] else "*"
+        dataset_size_label = config["dataset_size"]
+
         log_pattern = os.path.join(
             sweep_dir,
             "benchmark_logs",
-            f"*_loc{config['location_cache']}_graph{config['graph_cache']}_*_memory.log",
+            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_*_memory.log",
         )
-        log_files = glob.glob(log_pattern)
+        log_files = sorted(glob.glob(log_pattern))  # Sort to get consistent results
         peak_mem = None
         if log_files:
-            peak_mem = get_peak_memory(log_files[0])
+            # Take the most recent (last) file if multiple matches
+            peak_mem = get_peak_memory(log_files[-1])
 
         sweep_data.append(
             {
@@ -623,31 +633,35 @@ def plot_memory_summary(sweep_dir, output_dir):
             else None
         )
 
-        # Find memory log
+        # Find memory log using cache parameters
+        # Extract heap size from config for pattern matching
+        heap_str = config["heap"] if config["heap"] else "*"
+        dataset_size_label = config["dataset_size"]
+
         log_pattern = os.path.join(
             sweep_dir,
             "benchmark_logs",
-            f"*_loc{config['location_cache']}_graph{config['graph_cache']}_*_memory.log",
+            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_*_memory.log",
         )
-        log_files = glob.glob(log_pattern)
+        log_files = sorted(glob.glob(log_pattern))  # Sort to get consistent results
         if not log_files:
             continue
 
-        peak_mem = get_peak_memory(log_files[0])
+        peak_mem = get_peak_memory(log_files[-1])  # Take most recent
         if peak_mem is None:
             continue
 
-        # Find duration log
+        duration = None
+        # Try to find duration log with same parameters
         duration_pattern = os.path.join(
             sweep_dir,
             "benchmark_logs",
-            f"*_loc{config['location_cache']}_graph{config['graph_cache']}_*_duration.txt",
+            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_*duration.txt",
         )
-        duration_files = glob.glob(duration_pattern)
-        duration = None
+        duration_files = sorted(glob.glob(duration_pattern))
         if duration_files:
             try:
-                with open(duration_files[0], "r") as f:
+                with open(duration_files[-1], "r") as f:
                     duration = int(f.read().strip())
             except (ValueError, IOError):
                 pass
