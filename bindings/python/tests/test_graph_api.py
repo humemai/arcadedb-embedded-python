@@ -72,6 +72,56 @@ def test_new_edge_pythonic_method(temp_db_path):
             assert edge.get("strength") == 0.8
 
 
+def test_edge_direction_helpers(temp_db_path):
+    """Test get_out_edges, get_in_edges, and get_both_edges with optional label filters."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.schema.create_vertex_type("Person")
+        db.schema.create_edge_type("Knows")
+        db.schema.create_edge_type("Likes")
+
+        with db.transaction():
+            alice = db.new_vertex("Person").set("name", "Alice").save()
+            bob = db.new_vertex("Person").set("name", "Bob").save()
+            carol = db.new_vertex("Person").set("name", "Carol").save()
+
+            # Outgoing from Alice
+            edge_ab = alice.new_edge("Knows", bob)
+            edge_ab.save()
+            edge_ac = alice.new_edge("Likes", carol)
+            edge_ac.save()
+
+            # Incoming to Alice
+            edge_ba = bob.new_edge("Knows", alice)
+            edge_ba.save()
+            edge_ca = carol.new_edge("Knows", alice)
+            edge_ca.save()
+
+        # Outgoing edges (all)
+        out_edges = alice.get_out_edges()
+        assert {e.get_in().get("name") for e in out_edges} == {"Bob", "Carol"}
+
+        # Outgoing filtered by label
+        knows_out = alice.get_out_edges("Knows")
+        assert {e.get_in().get("name") for e in knows_out} == {"Bob"}
+
+        # Incoming edges (all)
+        in_edges = alice.get_in_edges()
+        assert {e.get_out().get("name") for e in in_edges} == {"Bob", "Carol"}
+
+        # Both directions (all)
+        both_edges = alice.get_both_edges()
+        assert len(both_edges) == 4
+
+        # Both directions filtered by label
+        knows_both = alice.get_both_edges("Knows")
+        assert {e.get_out().get("name") for e in knows_both} == {
+            "Alice",
+            "Bob",
+            "Carol",
+        }
+        assert {e.get_in().get("name") for e in knows_both} == {"Alice", "Bob"}
+
+
 def test_get_vertex_from_query_results(temp_db_path):
     """Test .get_vertex() returns proper Vertex wrapper."""
     with arcadedb.create_database(temp_db_path) as db:

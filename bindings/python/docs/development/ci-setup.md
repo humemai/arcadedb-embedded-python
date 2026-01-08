@@ -111,16 +111,16 @@ After a successful release, you should see:
 
 ### Test Results (CI run #96)
 
-All 6 platforms passing 221 tests and 7 example scripts:
+All 6 platforms passing 222 tests and 7 example scripts:
 
 | Platform | Wheel Size | JRE Size | Tests |
 |----------|-----------|----------|-------|
-| linux/amd64 | 215.0M | 62.7M | 221 passed ✅ |
-| linux/arm64 | 214.1M | 61.8M | 221 passed ✅ |
-| darwin/amd64 | 211.9M | 55.3M | 221 passed ✅ |
-| darwin/arm64 | 210.8M | 53.9M | 221 passed ✅ |
-| windows/amd64 | 211.6M | 51.6M | 221 passed ✅ |
-| windows/arm64 | 209.4M | 47.6M | 221 passed ✅ |
+| linux/amd64 | 215.0M | 62.7M | 222 passed ✅ |
+| linux/arm64 | 214.1M | 61.8M | 222 passed ✅ |
+| darwin/amd64 | 211.9M | 55.3M | 222 passed ✅ |
+| darwin/arm64 | 210.8M | 53.9M | 222 passed ✅ |
+| windows/amd64 | 211.6M | 51.6M | 222 passed ✅ |
+| windows/arm64 | 209.4M | 47.6M | 222 passed ✅ |
 
 **All platforms include:**
 

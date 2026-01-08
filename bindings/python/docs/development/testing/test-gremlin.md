@@ -1,33 +1,12 @@
 # Gremlin Tests
 
-The `test_gremlin.py` file contains **2 tests** validating Gremlin query language support.
-
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_gremlin.py){ .md-button }
 
-## Overview
+These notes mirror the Python tests in [test_gremlin.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_gremlin.py). There are 2 tests validating Gremlin query language support. See [test_gremlin.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_gremlin.py) for details.
 
-```bash
-pip install arcadedb-embedded
-```
+## Gremlin
 
-## What is Gremlin?
-
-[Apache Gremlin](https://tinkerpop.apache.org/gremlin.html) is a graph traversal language from Apache TinkerPop. It provides powerful graph querying capabilities.
-
-## Test Case
-
-### Basic Gremlin Query
-
-```python
-import arcadedb_embedded as arcadedb
-
-with arcadedb.create_database("./test_db") as db:
-    # Create graph schema (auto-transactional)
-    db.schema.create_vertex_type("Person")
-    db.schema.create_edge_type("Knows")
-
-    # Insert data with Gremlin
-    with db.transaction():
+[Apache Gremlin](https://tinkerpop.apache.org/gremlin.html) is a graph traversal language from TinkerPop for querying graph structures.
         db.command("gremlin", """
             g.addV('Person').property('name', 'Alice').property('age', 30)
              .addV('Person').property('name', 'Bob').property('age', 25)
@@ -59,7 +38,13 @@ with db.transaction():
         g.addE('Knows').from(alice).to(bob).property('since', 2020).next()
         g.addE('Knows').from(bob).to(charlie).property('since', 2021).next()
     """)
+```
 
+## Gremlin Examples
+
+### Friends of Friends
+
+```python
 # Find friends of friends
 result = db.query("gremlin", """
     g.V().has('name', 'Alice')
@@ -150,5 +135,4 @@ g.V().has('name', 'Alice').out('Knows').values('name')
 
 - [Gremlin Guide](../../guide/graphs.md#gremlin-queries)
 - [Graph Operations Guide](../../guide/graphs.md)
-- [ArcadeDB Gremlin Docs](https://docs.arcadedb.com/#Gremlin-API)
 - [Apache TinkerPop Docs](https://tinkerpop.apache.org/docs/current/)
