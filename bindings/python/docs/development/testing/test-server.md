@@ -1,19 +1,12 @@
 # Server Tests
 
-The `test_server.py` file contains **4 tests** covering basic server functionality.
-
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_server.py){ .md-button }
 
-## Overview
+These notes mirror the Python tests in [test_server.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_server.py). There are 4 tests covering server creation, database operations, custom config, and context managers. For advanced patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
 
-These tests validate:
+## Test Cases
 
-- ✅ Server creation and startup
-- ✅ Database operations through server (Java API)
-- ✅ Custom configuration
-- ✅ Context manager usage
-
-For advanced server patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
+All 4 tests verify basic server workflows: starting server, creating/accessing databases, ensuring databases persist, and proper cleanup. See [test_server.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_server.py) for implementation.
 
 ## Quick Example
 
@@ -28,7 +21,7 @@ server = arcadedb.create_server(
 server.start()
 
 # Create database
-# "mydb" will be created at ./databases/mydb
+# "mydb" will be created at ./databases/databases/mydb
 db = server.create_database("mydb")
 
 # Use it

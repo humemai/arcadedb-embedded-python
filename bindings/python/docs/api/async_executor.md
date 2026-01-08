@@ -440,9 +440,12 @@ import time
 # Create database
 db = arcadedb.create_database("./async_demo")
 
-# Create schema
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE Product")
+# Create schema (Schema API is auto-transactional)
+db.schema.create_vertex_type("Product")
+db.schema.create_property("Product", "productId", "LONG")
+db.schema.create_property("Product", "name", "STRING")
+db.schema.create_property("Product", "price", "DECIMAL")
+db.schema.create_index("Product", ["productId"], unique=True)
 
 # Prepare async executor
 async_exec = (db.async_executor()

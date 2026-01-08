@@ -98,13 +98,14 @@ try:
     base_url = f"http://localhost:{server.get_http_port()}"
     auth = HTTPBasicAuth("root", "password123")
 
-    # Create database via HTTP
+    # Create database via HTTP (server-level command)
     response = requests.post(
-        f"{base_url}/api/v1/command",
+        f"{base_url}/api/v1/server",
         auth=auth,
-        json={"language": "sql", "command": "CREATE DATABASE mydb"}
+        json={"command": "CREATE DATABASE mydb"}
     )
-    assert response.status_code == 200
+    if not response.ok:
+        raise RuntimeError(f"Server command failed: {response.status_code} {response.text}")
 
     # Create schema via HTTP
     response = requests.post(
@@ -112,7 +113,8 @@ try:
         auth=auth,
         json={"language": "sql", "command": "CREATE DOCUMENT TYPE Person"}
     )
-    assert response.status_code == 200
+    if not response.ok:
+        raise RuntimeError(f"Create type failed: {response.status_code} {response.text}")
 
     # Insert data via HTTP
     response = requests.post(
@@ -123,12 +125,22 @@ try:
             "command": "INSERT INTO Person SET name = 'Alice', age = 30"
         }
     )
-    assert response.status_code == 200
+    if not response.ok:
+        raise RuntimeError(f"Insert failed: {response.status_code} {response.text}")
     # Note: HTTP commands are auto-transactional per request. For multi-statement atomicity, use
     # the HTTP transactional endpoints or perform batch writes with the embedded API via
     # `with db.transaction():`.
 
     # Query data via HTTP
+    response = requests.post(
+        f"{base_url}/api/v1/query/mydb",
+        auth=auth,
+        json={"language": "sql", "command": "SELECT FROM Person WHERE age > 25"}
+    )
+    result = response.json()
+
+    for record in result.get("result", []):
+        print(f"Name: {record.get('name')}")
     response = requests.post(
         f"{base_url}/api/v1/query/mydb",
         auth=auth,
@@ -179,6 +191,8 @@ try:
         auth=auth,
         json={"language": "sql", "command": "SELECT FROM Person"}
     )
+    if not response.ok:
+        raise RuntimeError(f"HTTP query failed: {response.status_code} {response.text}")
 
     result = response.json()
     print(f"HTTP API found {len(result['result'])} records")
@@ -224,14 +238,11 @@ finally:
 
 ## Common Misconceptions
 
-❌ **"Java API is only for Java"**
-✅ Java API is Python calling Java via JPype - fully Pythonic
-
-❌ **"HTTP API is inferior"**
-✅ HTTP API enables remote access - different purpose
-
-❌ **"Must choose one or the other"**
-✅ Both can be used simultaneously on same server
-
-❌ **"Performance difference means HTTP is broken"**
-✅ Performance difference is expected (network vs direct calls)
+- ❌ **"Java API is only for Java"**
+    - ✅ Java API is Python calling Java via JPype (fully Pythonic)
+- ❌ **"HTTP API is inferior"**
+    - ✅ HTTP API enables remote access (different purpose)
+- ❌ **"Must choose one or the other"**
+    - ✅ Both can be used simultaneously on the same server
+- ❌ **"Performance difference means HTTP is broken"**
+    - ✅ Performance difference is expected (network vs direct calls)
