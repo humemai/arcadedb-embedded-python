@@ -2,11 +2,13 @@
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/04_csv_import_documents.py){ .md-button }
 
-**Production-ready CSV import with automatic type inference, NULL handling, and index optimization**
+**Production-ready CSV import with automatic type inference, NULL handling, and index
+optimization**
 
 ## Overview
 
-This example demonstrates importing real-world CSV data from the MovieLens dataset into ArcadeDB documents. You'll learn production-ready patterns for:
+This example demonstrates importing real-world CSV data from the MovieLens dataset into
+ArcadeDB documents. You'll learn production-ready patterns for:
 
 - **Automatic type inference** - Java analyzes CSV and infers optimal ArcadeDB types
 - **Schema-on-write** - Database creates schema automatically during import
@@ -26,7 +28,6 @@ This example demonstrates importing real-world CSV data from the MovieLens datas
 - Composite indexes for multi-column queries
 - **Result validation with actual data samples**
 - Production import patterns for large datasets
-- **FULL_TEXT index limitations with LIKE queries** (⚠️ Known Issue)
 
 ## Prerequisites
 
@@ -38,7 +39,8 @@ pip install arcadedb-embedded
 
 **2. Dataset download (automatic):**
 
-The example automatically downloads the dataset if it doesn't exist. You can also download it manually:
+The example automatically downloads the dataset if it doesn't exist. You can also
+download it manually:
 
 ```bash
 cd bindings/python/examples
@@ -47,10 +49,12 @@ python download_data.py movielens-small # movielens small dataset
 ```
 
 **Two dataset sizes available:**
+
 - **movielens-large**: ~86,000 movies, ~33M ratings (~265 MB) - Realistic performance testing
 - **movielens-small**: ~9,700 movies, ~100,000 ratings (~1 MB) - Quick testing
 
 Both datasets include intentional NULL values for testing:
+
 - `movies.csv`: ~3% NULL genres
 - `ratings.csv`: ~2% NULL timestamps
 - `links.csv`: ~10% NULL imdbId, ~15% NULL tmdbId
@@ -91,6 +95,7 @@ python 04_csv_import_documents.py --help
 ```
 
 **Key options:**
+
 - `--size {small,large}` - Dataset size (default: large)
 - `--parallel PARALLEL` - Number of parallel import threads (default: auto-detect)
 - `--batch-size BATCH_SIZE` - Records per commit batch (default: 5000)
@@ -98,13 +103,15 @@ python 04_csv_import_documents.py --help
 - `--db-name DB_NAME` - Custom database name (default: movielens_{size}_db)
 
 **Recommendations:**
+
 - Parallel threads: 4-8 for best performance (auto-detected by default)
 - Batch size: 5000-50000 (larger = faster imports, more memory)
 - Export: Use `--export` to create reproducible benchmark databases
 
 ## Type Inference by Java
 
-The example uses **automatic type inference** by the Java CSV importer, which analyzes the data and selects optimal ArcadeDB types:
+The example uses **automatic type inference** by the Java CSV importer, which analyzes
+the data and selects optimal ArcadeDB types:
 
 ### Example Inference Results (movielens-large)
 
@@ -147,9 +154,12 @@ if not data_dir.exists():
 
 ### Step 2: Let Java Infer Types Automatically
 
-The Java CSV importer automatically analyzes the CSV data and infers optimal ArcadeDB types (LONG, DOUBLE, STRING). No manual type inference code is needed - the importer handles this intelligently based on the actual data values.
+The Java CSV importer automatically analyzes the CSV data and infers optimal ArcadeDB
+types (LONG, DOUBLE, STRING). No manual type inference code is needed - the importer
+handles this intelligently based on the actual data values.
 
-The schema is created automatically during import (schema-on-write), eliminating the need for explicit schema definition before import.
+The schema is created automatically during import (schema-on-write), eliminating the
+need for explicit schema definition before import.
 
 ### Step 3: Import CSV Files Directly
 
@@ -174,6 +184,7 @@ if null_genres > 0:
 ```
 
 **Performance results (small dataset):**
+
 - Movies: 105,891 records/sec
 - Ratings: 484,788 records/sec (largest file, highly optimized)
 - Links: 374,692 records/sec
@@ -181,6 +192,7 @@ if null_genres > 0:
 - **Total: 356,330 records/sec average**
 
 **Performance results (large dataset):**
+
 - Movies: 288,457 records/sec
 - Ratings: 908,832 records/sec (largest file, highly optimized)
 - Links: 697,879 records/sec
@@ -217,14 +229,14 @@ for query_name, query in test_queries:
 ### Step 9: Create Indexes (AFTER Import)
 
 ```python
-with db.transaction():
-    db.command("sql", "CREATE INDEX ON Movie (movieId) UNIQUE")
-    db.command("sql", "CREATE INDEX ON Rating (userId, movieId) NOTUNIQUE")  # Composite!
-    db.command("sql", "CREATE INDEX ON Link (movieId) UNIQUE")
-    db.command("sql", "CREATE INDEX ON Tag (movieId) NOTUNIQUE")
+db.schema.create_index("Movie", ["movieId"], unique=True)
+db.schema.create_index("Rating", ["userId", "movieId"], unique=False)  # Composite!
+db.schema.create_index("Link", ["movieId"], unique=True)
+db.schema.create_index("Tag", ["movieId"], unique=False)
 ```
 
 **Why create indexes AFTER import?**
+
 - 2-3x faster total time
 - Indexes built in one pass
 - Fully compacted from start
@@ -259,10 +271,10 @@ Count ALL Action movies        58.7±8.4        65.1±18.0       0.9x
 ```
 
 **Key findings:**
+
 - ✅ Composite indexes show **massive gains** (up to 19,604x speedup!)
 - ✅ Single column lookups are **very fast** (58.1x speedup)
 - ✅ Standard deviation shows **query stability**
-- ⚠️ FULL_TEXT index on genres shows slight regression with LIKE queries (see Known Issue)
 
 ## NULL Value Handling
 
@@ -330,6 +342,7 @@ LSMTreeIndex
 ```
 
 **Key advantages:**
+
 - **Write-optimized**: Sequential writes to memory buffer (perfect for bulk imports)
 - **Type-agnostic**: Same structure for all types, type-aware comparison during lookups
 - **Auto-compaction**: Background merging keeps data sorted and compact
@@ -352,9 +365,11 @@ LSMTreeIndex
 | DECIMAL | Variable | 🐌 Slowest | Exact precision (e.g., money) |
 
 **Index space example** (100K records):
+
 - BYTE: 100KB | SHORT: 200KB | **INTEGER: 400KB** (best balance) | LONG: 800KB | STRING(20): 2MB+
 
 **Why this matters:**
+
 - Smaller types = more keys per page = better cache performance
 - Fixed-size types = faster comparison = better query speed
 - Choose INTEGER for most IDs (handles 2 billion values, compact, fast)
@@ -429,35 +444,41 @@ LIMIT 10
 ## Best Practices Demonstrated
 
 ### ✅ Type Inference by Java
+
 - Java CSV importer automatically analyzes data and selects optimal types
 - Handles LONG, DOUBLE, STRING intelligently based on actual values
 - No manual type inference code needed
 - Schema-on-write simplifies development
 
 ### ✅ Schema Definition
+
 - Define schema BEFORE import (validation + optimization)
 - Use explicit property types (no guessing)
 - Choose appropriate types for data ranges
 
 ### ✅ Import Optimization
+
 - Use `commit_every` parameter for batching
 - Larger batches = faster imports (balance with memory)
 - Movies: commit_every=1000 (smaller batches)
 - Ratings: commit_every=5000 (larger dataset, bigger batches)
 
 ### ✅ Index Strategy
+
 - **CREATE INDEXES AFTER IMPORT** (2-3x faster total time)
 - Use composite indexes for multi-column queries
 - Order matters: most selective column first
 - Index creation timing: ~0.2 seconds for 124K records
 
 ### ✅ Performance Measurement
+
 - Run queries 10 times for statistical reliability
 - Calculate average, standard deviation, min, max
 - Compare before/after index performance
 - Measure speedup percentages
 
 ### ✅ NULL Handling
+
 - Empty CSV cells → SQL NULL automatically
 - Check NULL counts after import
 - NULL values appear in aggregations (as 'None' string)
@@ -482,10 +503,12 @@ ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python 04_csv_import_documents.py --size large
 ```
 
 **Command-line options:**
+
 - `--size {small,large}` - Dataset size to use (default: large)
 - The script automatically downloads the dataset if it doesn't exist
 
 **Expected output:**
+
 - Automatic dataset download if needed
 - Step-by-step import progress
 - NULL value detection for all 4 files
@@ -494,6 +517,7 @@ ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python 04_csv_import_documents.py --size large
 - Total time: ~2-3 minutes (movielens-large) or ~5 seconds (movielens-small)
 
 **Database location:**
+
 - Small dataset: `./my_test_databases/movielens_small_db/`
 - Large dataset: `./my_test_databases/movielens_large_db/`
 
@@ -511,158 +535,6 @@ The database is preserved for inspection after the example completes.
 - Internal data structures for document storage
 - WAL (Write-Ahead Log) files for durability
 
-## Expected Output
-
-```text
-======================================================================
-🎬 ArcadeDB Python - Example 04: CSV Import - Documents
-======================================================================
-
-📊 Dataset size: large
-
-Step 0: Checking for MovieLens dataset...
-✅ Large dataset found!
-   Location: .../data/movielens-large
-
-# Or if dataset doesn't exist, you'll see:
-# ❌ Large dataset not found at: .../data/movielens-large
-# 📥 Downloading large dataset...
-# ✅ Dataset downloaded successfully!
-
-Step 1: Creating database...
-   ✅ Database created at: ./my_test_databases/movielens_large_db
-   ⏱️  Time: 0.597s
-
-Step 2: Inspecting CSV files and inferring types...
-   📋 Movie (movies.csv):
-      • movieId: INTEGER
-      • title: STRING
-      • genres: STRING
-   ⏱️  Time: 0.019s
-
-Step 3: Creating schema with explicit property types...
-   ✅ Created Movie document type
-   ✅ Created Rating document type
-   ✅ Created Link document type
-   ✅ Created Tag document type
-   ⏱️  Time: 0.051s
-
-Step 4: Importing movies.csv → Movie documents...
-   ✅ Imported 86,537 movies
-   🔍 NULL values detected:
-      • genres: 2,584 NULL values (3.0%)
-
-Step 5: Importing ratings.csv → Rating documents...
-   ✅ Imported 33,832,162 ratings
-   🔍 NULL values detected:
-      • timestamp: 675,782 NULL values (2.0%)
-
-Step 6: Importing links.csv → Link documents...
-   ✅ Imported 86,537 links
-   🔍 NULL values detected:
-      • imdbId: 8,628 NULL values (10.0%)
-      • tmdbId: 13,026 NULL values (15.1%)
-
-Step 7: Importing tags.csv → Tag documents...
-   ✅ Imported 2,328,315 tags
-   🔍 NULL values detected:
-      • tag: 116,644 NULL values (5.0%)
-
-Step 8: Testing query performance WITHOUT indexes...
-   📊 Find movie by ID: 8.67ms ± 5.67ms
-
-Step 9: Creating indexes for query performance...
-   ✅ Created indexes on key columns
-   ⏱️  Time: 0.238s
-
-Step 10: Testing query performance WITH indexes...
-   📊 Find movie by ID: 0.51ms ± 1.41ms
-
-   🚀 Performance Improvement Summary:
-   Find movie by ID: 17.0x speedup (94.1% time saved)
-   Find user's ratings: 49.4x speedup (98.0% time saved)
-
-Step 11: Verifying schema and property definitions...
-   📋 Movie schema (formally defined):
-      • movieId: INTEGER
-      • title: STRING
-      • genres: STRING
-
-Step 12: Querying and analyzing imported data...
-   📊 Total records imported: 124,003
-   ⭐ Rating statistics: 100,836 ratings, avg 3.50
-   🎭 Top genres: Drama (1,022), Comedy (922)
-   👥 Most active user: User 414 (2,698 ratings)
-
-✅ Data Import Example Complete!
-```
-
-## ⚠️ Known Issue: FULL_TEXT Index Performance with LIKE Queries
-
-### Issue Summary
-
-The example creates a `FULL_TEXT` index on the `Movie.genres` field, but testing reveals that **FULL_TEXT indexes do NOT improve performance for `LIKE '%term%'` pattern matching queries**, and may actually cause performance regression.
-
-### Performance Results (movielens-large dataset with 86,537 movies)
-
-**Query: `SELECT count(*) FROM Movie WHERE genres LIKE '%Action%'`**
-
-- **Without FULL_TEXT index**: 58.7ms ± 8.4ms
-- **With FULL_TEXT index**: 65.1ms ± 18.0ms
-- **Result**: 0.9x speedup **(10.8% SLOWER)**
-
-**Query: `SELECT FROM Movie WHERE genres LIKE '%Action%' LIMIT 10`**
-
-- **Without index**: 1.0ms ± 1.0ms
-- **With FULL_TEXT index**: 0.8ms ± 0.3ms
-- **Result**: 1.3x speedup (marginal improvement)
-
-### Why This Happens
-
-1. **Tokenization Mismatch**: FULL_TEXT indexes tokenize text (e.g., `"Action|Comedy|Sci-Fi"` → `["Action", "Comedy", "Sci-Fi"]`)
-2. **Pattern Matching**: `LIKE '%Action%'` is substring search, not token search
-3. **Index Overhead**: The query planner may attempt to use the index inefficiently, adding overhead without benefit
-
-### Comparison with Working Indexes
-
-For comparison, LSM_TREE indexes on the same dataset show massive improvements:
-
-- `Rating(userId)`: **14,836x speedup** ✅
-- `Rating(movieId)`: **107.9x speedup** ✅
-- `Movie(movieId)`: **58.1x speedup** ✅
-
-### Current Status
-
-**Reported to ArcadeDB team**: [Issue #2703](https://github.com/ArcadeData/arcadedb/issues/2703)
-
-Awaiting clarification on:
-
-1. Whether `LIKE` queries should use FULL_TEXT indexes
-2. Alternative syntax (e.g., `SEARCH()` function) for proper full-text search
-3. Whether this is a query optimizer issue
-
-### Recommendation
-
-**For now**: The example keeps the FULL_TEXT index for demonstration purposes, but be aware:
-
-- ✅ LSM_TREE indexes (on movieId, userId) work excellently
-- ⚠️ FULL_TEXT index on genres provides minimal/negative benefit with LIKE
-- 🔍 Future ArcadeDB releases may improve this behavior
-
-**Alternative**: If you need text search, consider:
-
-- Using separate tokens in dedicated fields
-- Implementing application-level text filtering after retrieval
-- Waiting for ArcadeDB team guidance on proper full-text search syntax
-
-### Documentation Note
-
-This limitation is documented here for future reference. The example code includes:
-
-- Performance validation that detects the issue
-- Detailed comments explaining FULL_TEXT index behavior
-- Result consistency validation (shows queries return identical data regardless of indexes)
-
 ## Key Takeaways
 
 1. ✅ **Automatic type inference** by Java provides intelligent LONG/DOUBLE/STRING selection
@@ -673,9 +545,8 @@ This limitation is documented here for future reference. The example code includ
 6. ✅ **LSM_TREE indexes** provide massive performance gains (up to 14,836x speedup!)
 7. ✅ **Statistical validation** (10 runs) ensures reliable performance measurements
 8. ✅ **Result validation** compares actual data values, not just row counts
-9. ⚠️ **FULL_TEXT indexes** don't help `LIKE` queries (known issue, reported)
-10. ✅ **Multi-bucket architecture** creates 15 buckets per type, 1 index file per bucket per property
-11. ✅ **Database persistence** - reopen and query immediately, no rebuild needed!
+9. ✅ **Multi-bucket architecture** creates 15 buckets per type, 1 index file per bucket per property
+10. ✅ **Database persistence** - reopen and query immediately, no rebuild needed!
 
 ## Next Steps
 
@@ -693,4 +564,7 @@ This limitation is documented here for future reference. The example code includ
 
 ---
 
-**Dataset License**: MovieLens data is provided by GroupLens Research and is free to use for educational purposes. See [https://grouplens.org/datasets/movielens/](https://grouplens.org/datasets/movielens/) for details.
+**Dataset License**: MovieLens data is provided by GroupLens Research and is free to use
+for educational purposes. See
+[https://grouplens.org/datasets/movielens/](https://grouplens.org/datasets/movielens/)
+for details.

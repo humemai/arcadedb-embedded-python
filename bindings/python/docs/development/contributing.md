@@ -430,7 +430,7 @@ class VectorIndex:
 def create_database(path: str) -> Database:
     pass
 
-def get_importer(self) -> Importer:
+def import_data(self, path: str) -> None:
     pass
 
 # Constants: UPPER_SNAKE_CASE
