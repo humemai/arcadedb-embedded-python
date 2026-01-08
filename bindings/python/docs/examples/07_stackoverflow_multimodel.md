@@ -2,12 +2,14 @@
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/07_stackoverflow_multimodel.py){ .md-button }
 
-This example demonstrates a complete **multi-model workflow** using the Stack Overflow data dump. It combines **Documents**, **Graph**, and **Vectors** into a single cohesive system, showcasing ArcadeDB's true multi-model capabilities.
+This example demonstrates a complete **multi-model workflow** using the Stack Overflow
+data dump. It combines **Documents**, **Graph**, and **Vectors** into a single cohesive
+system, showcasing ArcadeDB's true multi-model capabilities.
 
 ## 🎯 Goals
 
 1.  **Phase 1: Document Import**: Import XML data (Posts, Users, Tags, Comments, Votes) into ArcadeDB documents.
-2.  **Phase 2: Graph Creation**: Build a graph by creating edges between documents (e.g., `User -[ASKED]-> Post`, `Post -[HAS_TAG]-> Tag`).
+2.  **Phase 2: Graph Creation**: Build a graph by creating edges between documents.
 3.  **Phase 3: Vector Embeddings**: Generate embeddings for Posts and Tags to enable semantic search.
 4.  **Phase 4: Analytics**: Perform complex analytics using SQL, Gremlin, and Vector Search.
 
@@ -43,6 +45,7 @@ python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phases 1
 We use `lxml` for streaming XML parsing to handle large files efficiently.
 
 **Schema:**
+
 - **Post**: `Id`, `Title`, `Body`, `Score`, `ViewCount`, `CreationDate`, ...
 - **User**: `Id`, `DisplayName`, `Reputation`, `AboutMe`, ...
 - **Tag**: `Id`, `TagName`, `Count`, ...
@@ -50,6 +53,7 @@ We use `lxml` for streaming XML parsing to handle large files efficiently.
 - **Vote**: `Id`, `PostId`, `UserId`, `VoteTypeId`, ...
 
 **Key Techniques:**
+
 - **Streaming Parse**: Processes XML elements one by one to keep memory usage low.
 - **Batch Insert**: Uses `BatchContext` for high-performance insertion.
 - **Type Conversion**: Handles nullable fields and type mismatches (e.g., `Integer` vs `String`).
@@ -59,6 +63,7 @@ We use `lxml` for streaming XML parsing to handle large files efficiently.
 We transform the document store into a graph by creating relationships.
 
 **Edges:**
+
 - `User -[ASKED]-> Post` (Question)
 - `User -[ANSWERED]-> Post` (Answer)
 - `Post -[ANSWER_TO]-> Post` (Answer links to Question)
@@ -67,6 +72,7 @@ We transform the document store into a graph by creating relationships.
 - `User -[VOTED]-> Post`
 
 **Key Techniques:**
+
 - **RID-Based Pagination**: Efficiently iterates through millions of records using `@rid > last_rid`.
 - **Index-Based Lookups**: Uses `lookupByKey` (O(1)) instead of SQL `IN` (O(N)) for massive speedups in vertex resolution.
 - **Nested Queries**: Prevents data loss during pagination by decoupling the scan (RID-based) from the filter (SQL-based).
@@ -76,10 +82,12 @@ We transform the document store into a graph by creating relationships.
 We add a semantic layer by generating embeddings for text content.
 
 **Embeddings:**
+
 - **Post**: `Title` + `Body` → 384-dimensional vector.
 - **Tag**: `TagName` → 384-dimensional vector.
 
 **Key Techniques:**
+
 - **JVector**: Uses state-of-the-art graph-based indexing (HNSW + DiskANN/Vamana) for fast approximate nearest neighbor search.
 - **Sentence Transformers**: Uses `all-MiniLM-L6-v2` (or similar) to generate high-quality embeddings.
 
@@ -88,6 +96,7 @@ We add a semantic layer by generating embeddings for text content.
 We demonstrate the power of combining all three models.
 
 **Example Queries:**
+
 1.  **Graph**: "Find the top 10 users who answered questions about 'python'."
 2.  **Vector**: "Find questions semantically similar to 'How to parse XML in Python?'"
 3.  **Hybrid**: "Find similar questions (Vector) that have a score > 10 (Document) and were asked by high-reputation users (Graph)."
