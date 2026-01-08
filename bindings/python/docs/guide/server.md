@@ -67,9 +67,9 @@ server = arcadedb.create_server(
 |--------|---------|-------------|
 | `root_path` | `"./databases"` | Directory for database storage |
 | `root_password` | None | Root user password (recommended) |
-| `http_port` | 2480 | HTTP API/Studio port |
-| `host` | `"0.0.0.0"` | Host to bind to |
-| `mode` | `"development"` | Server mode (`development` or `production`) |
+| `http_port` | 2480 | HTTP API/Studio port (binding pins to a single port; Java default is the 2480-2489 range) |
+| `host` | "0.0.0.0" | Host to bind to |
+| `mode` | "development" | Server mode (`development` or `production`) |
 
 ## Multi-Process Access {#multi-process-access}
 
@@ -77,8 +77,9 @@ ArcadeDB's embedded mode uses file-based locking, which prevents multiple proces
 
 ### Why Use Server Mode for Multi-Process?
 
+#### ❌ Embedded mode - Only ONE process can access the database
+
 ```python
-# ❌ Embedded mode - Only ONE process can access the database
 import arcadedb_embedded as arcadedb
 
 # Process 1
@@ -88,8 +89,9 @@ db1 = arcadedb.create_database("./mydb")  # Gets file lock
 db2 = arcadedb.create_database("./mydb")  # ❌ ERROR: Lock conflict!
 ```
 
+#### ✅ Server mode - Multiple processes/apps can access
+
 ```python
-# ✅ Server mode - Multiple processes/apps can access
 import arcadedb_embedded as arcadedb
 
 # Start server once (Process 1)
@@ -117,12 +119,12 @@ with arcadedb.create_server("./databases") as server:
 
 | Use Case | Mode | Reason |
 |----------|------|--------|
-| Single script/notebook | Embedded | Simpler, no server needed |
-| Web application | Server | Multiple requests need access |
-| Microservices | Server | Each service connects via HTTP |
-| Data pipeline with workers | Server | Workers run in parallel |
-| Development/exploration | Embedded | Quick and easy |
-| Production deployment | Server | Scalable and secure |
+| Single script/notebook | Embedded | Zero setup; keep everything in-process |
+| Agent/AI workloads in one process | Embedded | Fast, low-latency, no network hop |
+| Multi-process on one machine | Server | One shared endpoint avoids file locks |
+| Web app / API clients | Server | Network access for many clients |
+| Distributed workers / pipelines | Server | Parallel workers connect concurrently |
+| Production deployment | Server | Central auth, HTTP, remote access |
 
 ### Multi-Threaded Access
 
