@@ -1,6 +1,7 @@
 # Data Import Guide
 
-This guide covers strategies, best practices, and patterns for importing data into ArcadeDB efficiently and reliably.
+This guide covers strategies, best practices, and patterns for importing data into
+ArcadeDB efficiently and reliably.
 
 ## Overview
 
@@ -23,19 +24,25 @@ ArcadeDB's Importer supports multiple data formats:
 
 ```python
 import arcadedb_embedded as arcadedb
+from arcadedb_embedded import Importer
 
 with arcadedb.create_database("./mydb") as db:
-    importer = db.get_importer()
+    db.schema.create_vertex_type("Product")
 
-    # Import CSV file
-    importer.import_csv(
+    importer = Importer(db)
+    stats = importer.import_file(
         file_path="products.csv",
-        vertex_type="Product",
-        delimiter=",",
-        header=True
+        format_type="csv",
+        import_type="vertices",   # create vertices
+        type_name="Product",
+        typeIdProperty="id",      # REQUIRED for vertices/edges
+        commitEvery=5000,         # batch size (default ~5000)
     )
 
-    print("Import complete!")
+    print("Import complete!", stats)
+
+# Convenience helper (same importer under the hood, tested in bindings):
+# arcadedb.import_csv(db, "products.csv", "Product", import_type="vertices", typeIdProperty="id")
 ```
 
 ### ArcadeDB JSONL Import (full database)
@@ -50,23 +57,27 @@ db.command("sql", "IMPORT DATABASE file:///exports/mydb.jsonl.tgz WITH commitEve
 ### CSV - Tabular Data
 
 **Best For:**
+
 - Spreadsheet data
 - Relational database exports
 - Time-series data
 - Simple structured data
 
 **Advantages:**
+
 - Simple format
 - Excel/LibreOffice compatible
 - Wide tool support
 - Human readable
 
 **Disadvantages:**
+
 - No nested structures
 - Limited type information
 - Relationships require separate files
 
 **Example:**
+
 ```csv
 id,name,email,age
 1,Alice,alice@example.com,30
@@ -78,16 +89,19 @@ id,name,email,age
 ### ArcadeDB JSONL - Full Database Restore
 
 **Best For:**
+
 - Re-importing ArcadeDB `EXPORT DATABASE` outputs
 - Moving databases between environments
 - Backups and restores with schema + data
 
 **Advantages:**
+
 - Preserves full database (schema, indexes, data)
 - Single command: `IMPORT DATABASE file://...`
 - Works with compressed `.jsonl.tgz` exports
 
 **Disadvantages:**
+
 - Full-database scope (not selective)
 - Requires access to ArcadeDB server or embedded instance
 
@@ -98,23 +112,28 @@ id,name,email,age
 **Recommended:** Define schema before importing for better control and validation.
 
 ```python
-with db.transaction():
-    # Define vertex types
-    db.command("sql", "CREATE VERTEX TYPE User")
-    db.command("sql", "CREATE PROPERTY User.id STRING")
-    db.command("sql", "CREATE PROPERTY User.name STRING")
-    db.command("sql", "CREATE PROPERTY User.email STRING")
-    db.command("sql", "CREATE PROPERTY User.age INTEGER")
+with arcadedb.create_database("./mydb") as db:
+    # Define schema using Python API (auto-transactions under the hood)
+    db.schema.create_vertex_type("User")
+    db.schema.create_property("User", "id", "STRING")
+    db.schema.create_property("User", "name", "STRING")
+    db.schema.create_property("User", "email", "STRING")
+    db.schema.create_property("User", "age", "INTEGER")
+    db.schema.create_index("User", ["id"], unique=True)
+    db.schema.create_index("User", ["email"], unique=True)
 
-    # Create indexes
-    db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
-    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
-
-# Then import
-importer.import_csv("users.csv", "User")
+    importer = Importer(db)
+    importer.import_file(
+        file_path="users.csv",
+        format_type="csv",
+        import_type="vertices",
+        type_name="User",
+        typeIdProperty="id",
+    )
 ```
 
 **Benefits:**
+
 - Type safety
 - Validation
 - Better performance
@@ -128,15 +147,26 @@ importer.import_csv("users.csv", "User")
 
 ```python
 # No schema definition needed
-importer.import_csv("users.csv", "User")
+from arcadedb_embedded import Importer
+
+with arcadedb.create_database("./mydb") as db:
+    importer = Importer(db)
+    importer.import_file(
+        file_path="users.csv",
+        import_type="vertices",
+        type_name="User",
+        typeIdProperty="id",
+    )
 ```
 
 **Auto-inference:**
+
 - Creates vertex type if missing
 - Infers property types from data
 - Creates properties as needed
 
 **Trade-offs:**
+
 - Quick to start
 - Less control
 - Types may be wrong
@@ -149,36 +179,55 @@ importer.import_csv("users.csv", "User")
 **Best of Both:** Define critical fields, allow others to be inferred.
 
 ```python
-with db.transaction():
-    # Define critical fields only
-    db.command("sql", "CREATE VERTEX TYPE User")
-    db.command("sql", "CREATE PROPERTY User.id STRING")
-    db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
+with arcadedb.create_database("./mydb") as db:
+    # Define only the critical parts; importer will add the rest
+    db.schema.create_vertex_type("User")
+    db.schema.create_property("User", "id", "STRING")
+    db.schema.create_index("User", ["id"], unique=True)
 
-    # Let importer add other properties
-
-# Import with partial schema
-importer.import_csv("users.csv", "User")
+    importer = Importer(db)
+    importer.import_file(
+        file_path="users.csv",
+        format_type="csv",
+        import_type="vertices",
+        type_name="User",
+        typeIdProperty="id",
+    )
 ```
 
 ## Performance Optimization
 
-### Batch Size
+### Batch Size (`commitEvery`)
 
-Control transaction batch size for memory vs. speed trade-off:
+Control transaction batch size for memory vs. speed trade-off via the `commitEvery` option:
 
 ```python
-# Small batches: Lower memory, more transactions
-importer.batch_size = 1000
+from arcadedb_embedded import Importer
+importer = Importer(db)
 
-# Medium batches: Balanced (default)
-importer.batch_size = 10000
+# Small batches: lower memory, more transactions
+importer.import_file(
+    file_path="large_file.csv",
+    import_type="documents",
+    type_name="Data",
+    commitEvery=1000,
+)
 
-# Large batches: Higher memory, fewer transactions
-importer.batch_size = 100000
+# Medium batches: balanced (default ~5000)
+importer.import_file(
+    file_path="large_file.csv",
+    import_type="documents",
+    type_name="Data",
+    commitEvery=10000,
+)
 
-# Apply
-importer.import_csv("large_file.csv", "Data")
+# Large batches: higher memory, fewer transactions
+importer.import_file(
+    file_path="large_file.csv",
+    import_type="documents",
+    type_name="Data",
+    commitEvery=100000,
+)
 ```
 
 **Guidelines:**
@@ -190,6 +239,7 @@ importer.import_csv("large_file.csv", "Data")
 | > 1M rows    | 50,000 - 100,000      |
 
 **Consider:**
+
 - Available memory
 - Record size
 - Concurrent operations
@@ -270,12 +320,18 @@ def split_csv(input_file, chunk_size=100000):
 
     return chunks
 
-def import_chunk(db_path, chunk_file, vertex_type):
-    """Import single chunk."""
+def import_chunk(db_path, chunk_file, vertex_type, type_id_property="id"):
+    """Import single chunk as vertices."""
+    from arcadedb_embedded import Importer
     with arcadedb.open_database(db_path) as db:
-        importer = db.get_importer()
-        importer.batch_size = 10000
-        importer.import_csv(chunk_file, vertex_type)
+        importer = Importer(db)
+        importer.import_file(
+            file_path=chunk_file,
+            import_type="vertices",
+            type_name=vertex_type,
+            typeIdProperty=type_id_property,
+            commitEvery=10000,
+        )
     os.remove(chunk_file)
 
 # Split file
@@ -284,7 +340,7 @@ chunks = split_csv("large_data.csv", chunk_size=100000)
 # Import in parallel
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
     futures = [
-        executor.submit(import_chunk, "./mydb", chunk, "Data")
+        executor.submit(import_chunk, "./mydb", chunk, "Data", "id")
         for chunk in chunks
     ]
 
@@ -301,56 +357,27 @@ print(f"Imported {len(chunks)} chunks")
 For massive imports, temporarily disable indexes:
 
 ```python
-# 1. Drop indexes
-with db.transaction():
-    db.command("sql", "DROP INDEX User.email")
-    db.command("sql", "DROP INDEX User.id")
+# 1. Drop indexes (use schema API)
+db.schema.drop_index("User[email]")
+db.schema.drop_index("User[id]")
 
-# 2. Import data
-importer.batch_size = 100000
-importer.import_csv("huge_file.csv", "User")
+# 2. Import data (vertices)
+stats = importer.import_file(
+    file_path="huge_file.csv",
+    import_type="vertices",
+    type_name="User",
+    typeIdProperty="id",
+    commitEvery=100000,
+)
 
 # 3. Recreate indexes
-with db.transaction():
-    db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
-    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+db.schema.create_index("User", ["id"], unique=True)
+db.schema.create_index("User", ["email"], unique=True)
 ```
 
 **Speed Improvement:** 2-5x faster for large imports
 
 ---
-
-### Memory Management
-
-Monitor and control memory usage:
-
-```python
-import psutil
-import gc
-
-def import_with_memory_monitoring(importer, file_path, vertex_type):
-    """Import with memory monitoring."""
-    process = psutil.Process()
-
-    # Configure for memory efficiency
-    importer.batch_size = 5000  # Smaller batches
-
-    initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-    print(f"Initial memory: {initial_memory:.1f} MB")
-
-    # Import
-    importer.import_csv(file_path, vertex_type)
-
-    # Force garbage collection
-    gc.collect()
-
-    final_memory = process.memory_info().rss / 1024 / 1024
-    print(f"Final memory: {final_memory:.1f} MB")
-    print(f"Memory increase: {final_memory - initial_memory:.1f} MB")
-
-# Usage
-import_with_memory_monitoring(importer, "data.csv", "Data")
-```
 
 ## Error Handling
 
@@ -397,7 +424,13 @@ def validate_csv(file_path, required_columns):
 # Validate before import
 valid, errors = validate_csv("users.csv", ["id", "name", "email"])
 if valid:
-    importer.import_csv("users.csv", "User")
+    stats = importer.import_file(
+        file_path="users.csv",
+        import_type="vertices",
+        type_name="User",
+        typeIdProperty="id",
+    )
+    print("Imported:", stats)
 else:
     print("Validation errors:")
     for error in errors:
@@ -405,123 +438,6 @@ else:
 ```
 
 ---
-
-### Try-Catch with Logging
-
-```python
-import logging
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-def safe_import(importer, file_path, vertex_type):
-    """Import with error handling."""
-    try:
-        logger.info(f"Starting import: {file_path} -> {vertex_type}")
-
-        importer.import_csv(file_path, vertex_type, header=True)
-
-        logger.info(f"Import successful: {file_path}")
-        return True
-
-    except arcadedb.ArcadeDBError as e:
-        logger.error(f"Import failed: {e}")
-
-        # Try to recover
-        if "duplicate" in str(e).lower():
-            logger.warning("Duplicate key error - trying without unique constraint")
-            # Could drop index and retry
-
-        return False
-
-    except FileNotFoundError:
-        logger.error(f"File not found: {file_path}")
-        return False
-
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        return False
-
-# Usage
-success = safe_import(importer, "data.csv", "Data")
-```
-
----
-
-### Partial Import Recovery
-
-```python
-def import_with_recovery(db, file_path, vertex_type, checkpoint_interval=10000):
-    """Import with periodic checkpoints."""
-    importer = db.get_importer()
-
-    # Track progress
-    checkpoint_file = f"{file_path}.checkpoint"
-    start_line = 0
-
-    # Load checkpoint
-    if os.path.exists(checkpoint_file):
-        with open(checkpoint_file, 'r') as f:
-            start_line = int(f.read())
-        logger.info(f"Resuming from line {start_line}")
-
-    # Import with checkpoints
-    try:
-        imported = 0
-        with open(file_path, 'r') as f:
-            reader = csv.DictReader(f)
-
-            # Skip to start line
-            for _ in range(start_line):
-                next(reader)
-
-            # Import in batches
-            batch = []
-            for i, row in enumerate(reader, start=start_line):
-                batch.append(row)
-
-                if len(batch) >= checkpoint_interval:
-                    # Import batch
-                    with db.transaction():
-                        for record in batch:
-                            vertex = db.new_vertex(vertex_type)
-                            for key, value in record.items():
-                                vertex.set(key, value)
-                            vertex.save()
-
-                    imported += len(batch)
-                    batch = []
-
-                    # Save checkpoint
-                    with open(checkpoint_file, 'w') as cf:
-                        cf.write(str(i + 1))
-
-                    logger.info(f"Checkpoint: {i + 1} lines imported")
-
-            # Import remaining
-            if batch:
-                with db.transaction():
-                    for record in batch:
-                        vertex = db.new_vertex(vertex_type)
-                        for key, value in record.items():
-                            vertex.set(key, value)
-                        vertex.save()
-                imported += len(batch)
-
-        # Remove checkpoint file on success
-        if os.path.exists(checkpoint_file):
-            os.remove(checkpoint_file)
-
-        logger.info(f"Import complete: {imported} records")
-        return True
-
-    except Exception as e:
-        logger.error(f"Import failed at checkpoint: {e}")
-        return False
-
-# Usage - can resume if interrupted
-import_with_recovery(db, "large_file.csv", "Data")
-```
 
 ## Relationship Mapping
 
@@ -531,10 +447,20 @@ Import entities and relationships from separate CSV files:
 
 ```python
 # Step 1: Import users
-importer.import_csv("users.csv", "User")
+stats = importer.import_file(
+    file_path="users.csv",
+    import_type="vertices",
+    type_name="User",
+    typeIdProperty="id",
+)
 
 # Step 2: Import products
-importer.import_csv("products.csv", "Product")
+stats = importer.import_file(
+    file_path="products.csv",
+    import_type="vertices",
+    type_name="Product",
+    typeIdProperty="id",
+)
 
 # Step 3: Import relationships from CSV
 # purchases.csv:
@@ -622,261 +548,6 @@ with db.transaction():
                 contains_edge = order_vertex.new_edge("Contains", product)
                 contains_edge.set("quantity", item['qty'])
                 contains_edge.save()
-```
-
-## Production Patterns
-
-### Configuration File
-
-```python
-import yaml
-from dataclasses import dataclass
-
-@dataclass
-class ImportConfig:
-    file_path: str
-    vertex_type: str
-    batch_size: int = 10000
-    delimiter: str = ","
-    header: bool = True
-    validate: bool = True
-
-def load_import_config(config_file):
-    """Load import configuration from YAML."""
-    with open(config_file, 'r') as f:
-        config_data = yaml.safe_load(f)
-
-    return ImportConfig(**config_data)
-
-# config.yml:
-# file_path: "data/users.csv"
-# vertex_type: "User"
-# batch_size: 10000
-# delimiter: ","
-# header: true
-# validate: true
-
-# Usage
-config = load_import_config("import_config.yml")
-importer.batch_size = config.batch_size
-importer.import_csv(
-    config.file_path,
-    config.vertex_type,
-    delimiter=config.delimiter,
-    header=config.header
-)
-```
-
----
-
-### Import Pipeline
-
-```python
-class ImportPipeline:
-    def __init__(self, db):
-        self.db = db
-        self.importer = db.get_importer()
-        self.stats = {
-            'files_processed': 0,
-            'records_imported': 0,
-            'errors': []
-        }
-
-    def add_csv_step(self, file_path, vertex_type, **kwargs):
-        """Add CSV import step."""
-        try:
-            self.importer.import_csv(file_path, vertex_type, **kwargs)
-            self.stats['files_processed'] += 1
-            logger.info(f"Imported {file_path}")
-        except Exception as e:
-            self.stats['errors'].append(f"{file_path}: {e}")
-            logger.error(f"Failed to import {file_path}: {e}")
-
-    def run(self):
-        """Execute pipeline."""
-        logger.info("Starting import pipeline")
-        # Steps added via add_*_step methods
-        logger.info(f"Pipeline complete: {self.stats}")
-        return self.stats
-
-# Usage
-pipeline = ImportPipeline(db)
-pipeline.add_csv_step("users.csv", "User", batch_size=10000)
-pipeline.add_csv_step("products.csv", "Product", batch_size=10000)
-pipeline.add_json_step("orders.json", "Order")
-stats = pipeline.run()
-```
-
----
-
-### Monitoring and Progress
-
-```python
-import time
-from tqdm import tqdm
-
-def import_with_progress(file_path, vertex_type, db):
-    """Import with progress bar."""
-    # Count lines
-    with open(file_path, 'r') as f:
-        total_lines = sum(1 for _ in f) - 1  # Exclude header
-
-    importer = db.get_importer()
-
-    # Import with progress tracking
-    start_time = time.time()
-
-    with tqdm(total=total_lines, desc=f"Importing {vertex_type}") as pbar:
-        # Monkey-patch to update progress
-        original_import = importer.import_csv
-
-        def import_with_callback(*args, **kwargs):
-            result = original_import(*args, **kwargs)
-            pbar.update(total_lines)
-            return result
-
-        importer.import_csv = import_with_callback
-        importer.import_csv(file_path, vertex_type, header=True)
-
-    elapsed = time.time() - start_time
-    rate = total_lines / elapsed if elapsed > 0 else 0
-
-    print(f"Imported {total_lines} records in {elapsed:.1f}s ({rate:.0f} records/sec)")
-
-# Usage
-import_with_progress("data.csv", "Data", db)
-```
-
-## Common Use Cases
-
-### Migrate from Relational Database
-
-```python
-import sqlite3
-import arcadedb_embedded as arcadedb
-
-# Export from SQLite
-conn = sqlite3.connect('old_database.db')
-cursor = conn.cursor()
-
-# Create ArcadeDB
-db = arcadedb.create_database("./new_db")
-
-# Migrate users table
-cursor.execute("SELECT id, name, email, created_at FROM users")
-users = cursor.fetchall()
-
-with db.transaction():
-    for user_id, name, email, created_at in users:
-        vertex = db.new_vertex("User")
-        vertex.set("id", str(user_id))
-        vertex.set("name", name)
-        vertex.set("email", email)
-        vertex.set("created_at", created_at)
-        vertex.save()
-
-# Migrate relationships
-cursor.execute("""
-    SELECT user_id, friend_id
-    FROM friendships
-""")
-
-with db.transaction():
-    for user_id, friend_id in cursor.fetchall():
-        user = db.query("sql", f"SELECT FROM User WHERE id = '{user_id}'").next()
-        friend = db.query("sql", f"SELECT FROM User WHERE id = '{friend_id}'").next()
-
-        edge = user.new_edge("FriendOf", friend)
-        edge.save()
-
-conn.close()
-print("Migration complete")
-```
-
----
-
-### Import from API
-
-```python
-import requests
-
-def import_from_api(db, api_url, vertex_type):
-    """Import data from REST API."""
-    response = requests.get(api_url)
-    response.raise_for_status()
-
-    data = response.json()
-
-    with db.transaction():
-        for item in data:
-            vertex = db.new_vertex(vertex_type)
-            for key, value in item.items():
-                vertex.set(key, value)
-            vertex.save()
-
-    print(f"Imported {len(data)} records from API")
-
-# Usage
-import_from_api(
-    db,
-    "https://api.example.com/users",
-    "User"
-)
-```
-
----
-
-### Incremental Updates
-
-```python
-from datetime import datetime
-
-def incremental_import(db, file_path, vertex_type, id_field):
-    """Import only new records based on timestamp."""
-    # Get last import time
-    last_import_key = f"last_import_{vertex_type}"
-    last_import = db.get_metadata(last_import_key) or "1970-01-01"
-
-    importer = db.get_importer()
-
-    # Import with filter
-    import csv
-    new_records = 0
-
-    with open(file_path, 'r') as f:
-        reader = csv.DictReader(f)
-
-        with db.transaction():
-            for row in reader:
-                # Check if record is new
-                if row.get('updated_at', '') > last_import:
-                    # Check if exists
-                    result = db.query("sql",
-                        f"SELECT FROM {vertex_type} WHERE {id_field} = '{row[id_field]}'")
-
-                    if result.has_next():
-                        # Update existing
-                        vertex = result.next()
-                        for key, value in row.items():
-                            vertex.set(key, value)
-                        vertex.save()
-                    else:
-                        # Create new
-                        vertex = db.new_vertex(vertex_type)
-                        for key, value in row.items():
-                            vertex.set(key, value)
-                        vertex.save()
-
-                    new_records += 1
-
-    # Update last import time
-    current_time = datetime.now().isoformat()
-    db.set_metadata(last_import_key, current_time)
-
-    print(f"Imported/updated {new_records} records")
-
-# Usage
-incremental_import(db, "users.csv", "User", "id")
 ```
 
 ## See Also

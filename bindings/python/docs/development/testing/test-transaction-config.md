@@ -1,30 +1,24 @@
 # Transaction Configuration Tests
 
-The `test_transaction_config.py` file contains **9 tests** covering transaction configuration options and behaviors.
-
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_transaction_config.py){ .md-button }
 
-## Overview
+These notes mirror the Python tests in [test_transaction_config.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_transaction_config.py). There are 9 tests covering transaction isolation levels, WAL configuration, retry logic, timeouts, read-only transactions, nesting, and rollback scenarios. See [test_transaction_config.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_transaction_config.py) for all implementations.
 
-Transaction configuration tests cover:
+## Key Config Options
 
-- ✅ **Isolation Levels** - READ_COMMITTED, REPEATABLE_READ
-- ✅ **WAL Configuration** - Write-Ahead Log settings
-- ✅ **Retry Logic** - Automatic retry on conflicts
-- ✅ **Timeout Configuration** - Transaction timeout settings
-- ✅ **Read-Only Transactions** - Optimized read transactions
-- ✅ **Nested Transactions** - Transaction nesting behavior
-- ✅ **Rollback Handling** - Transaction rollback scenarios
+- Isolation: READ_COMMITTED, REPEATABLE_READ
+- WAL: Write-Ahead Log settings
+- Retry: Automatic retry on conflicts
+- Timeout: Transaction timeout configuration
+- Read-only: Optimized read transactions
 
-## Test Coverage
-
-### test_transaction_isolation_levels
-Tests different isolation level configurations.
+### test_transaction_isolation_level
+Tests transaction isolation levels.
 
 **What it tests:**
-- READ_COMMITTED isolation
-- REPEATABLE_READ isolation
-- Isolation level effects on concurrent access
+- READ_COMMITTED: Other changes visible
+- REPEATABLE_READ: Consistent snapshot
+- Isolation level enforcement
 
 **Pattern:**
 ```python

@@ -45,6 +45,7 @@ Once started, the **ArcadeDB Studio** is available at:
 `http://localhost:2480`
 
 You can log in with:
+
 - **User**: `root`
 - **Password**: `playwithdata`
 - **Database**: `stackoverflow_small_db_graph`
@@ -68,6 +69,7 @@ def demonstrate_concurrency(db_name, num_clients=6):
 The workload consists of a mix of **SQL** and **Gremlin** queries to demonstrate the server's ability to handle different query languages concurrently.
 
 **SQL Example:**
+
 ```sql
 SELECT DisplayName, out('EARNED').size() as badge_count
 FROM User
@@ -75,6 +77,7 @@ ORDER BY badge_count DESC LIMIT 1
 ```
 
 **Gremlin Example:**
+
 ```groovy
 g.V().hasLabel('User')
  .where(__.out('ASKED').in('HAS_ANSWER').in('ANSWERED'))
@@ -86,43 +89,6 @@ g.V().hasLabel('User')
 ```bash
 cd bindings/python/examples
 python 08_server_mode_rest_api.py
-```
-
-**Expected Output:**
-
-```text
-================================================================================
- Example 08: Server Mode (Database: stackoverflow_small_db_graph)
-================================================================================
-
-Starting ArcadeDB Server...
-✅ Server running on port 2480
-
-================================================================================
- Demonstrating Concurrent HTTP Clients (Mixed Workload)
-================================================================================
-Simulating 6 concurrent clients executing 33 SQL and Gremlin queries...
-
-Client 4 [Count Tag vertices]: Success (Count=668) in 0.371s
-Client 1 [Count ASKED edges]: Success (Count=47121) in 0.130s
-Client 2 [Count Question vertices]: Success (Count=48390) in 0.550s
-...
-Client 6 [Find users who answered their own questions]: Success (1 rows) in 2.267s
-
-================================================================================
- Interactive Studio Session
-================================================================================
-The server is running. Open your browser to:
-  👉 http://localhost:2480/
-
-Credentials:
-  Database: stackoverflow_small_db_graph
-  User:     root
-  Password: playwithdata
-
-For more information, visit: https://docs.arcadedb.com/
-
-[Press Ctrl+C to stop the server]
 ```
 
 ## When to Use Server Mode?
@@ -146,5 +112,3 @@ This concludes the example series! You have learned:
 4.  **Import**: CSV, Batching, ETL
 5.  **Advanced**: Multi-model, Hybrid Search
 6.  **Server**: HTTP API, Studio, Concurrency
-
-Explore the [User Guide](../guide/core/database.md) for more in-depth topics.

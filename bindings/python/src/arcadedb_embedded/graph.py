@@ -6,6 +6,8 @@ Wrappers for Document, Vertex, and Edge objects to provide a Pythonic API.
 
 from typing import Any, Dict, List, Optional, Union
 
+import jpype
+
 from .exceptions import ArcadeDBError
 from .type_conversion import convert_java_to_python, convert_python_to_java
 
@@ -142,8 +144,33 @@ class Vertex(Document):
 
     def get_out_edges(self, *labels: str) -> List["Edge"]:
         """Get outgoing edges."""
-        # TODO: Implement using getEdges(Direction.OUT, labels)
-        pass
+        direction = jpype.JClass("com.arcadedb.graph.Vertex$DIRECTION").OUT
+        java_edges = (
+            self._java_document.getEdges(direction, *labels)
+            if labels
+            else self._java_document.getEdges(direction)
+        )
+        return [Edge(edge) for edge in java_edges]
+
+    def get_in_edges(self, *labels: str) -> List["Edge"]:
+        """Get incoming edges."""
+        direction = jpype.JClass("com.arcadedb.graph.Vertex$DIRECTION").IN
+        java_edges = (
+            self._java_document.getEdges(direction, *labels)
+            if labels
+            else self._java_document.getEdges(direction)
+        )
+        return [Edge(edge) for edge in java_edges]
+
+    def get_both_edges(self, *labels: str) -> List["Edge"]:
+        """Get both incoming and outgoing edges."""
+        direction = jpype.JClass("com.arcadedb.graph.Vertex$DIRECTION").BOTH
+        java_edges = (
+            self._java_document.getEdges(direction, *labels)
+            if labels
+            else self._java_document.getEdges(direction)
+        )
+        return [Edge(edge) for edge in java_edges]
 
 
 class Edge(Document):
@@ -155,8 +182,8 @@ class Edge(Document):
 
     def get_in(self) -> Vertex:
         """Get incoming vertex."""
-        return Vertex(self._java_document.getIn())
+        return Vertex(self._java_document.getInVertex())
 
     def get_out(self) -> Vertex:
         """Get outgoing vertex."""
-        return Vertex(self._java_document.getOut())
+        return Vertex(self._java_document.getOutVertex())

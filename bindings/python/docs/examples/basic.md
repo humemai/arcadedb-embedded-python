@@ -5,6 +5,7 @@ This page provides quick links to basic ArcadeDB examples to get you started.
 ## Getting Started Examples
 
 ### Document Store
+
 Start with the simplest use case - storing and querying documents:
 
 **[Example 01 - Simple Document Store](01_simple_document_store.md)**
@@ -16,11 +17,13 @@ Learn how to:
 - Handle NULL values
 
 ### Graph Database
+
 Build your first graph database with vertices and edges:
 
 **[Example 02 - Social Network Graph](02_social_network_graph.md)**
 
 Learn how to:
+
 - Create vertices and edges
 - Use Gremlin queries for high-performance graph traversal
 - Traverse graph relationships efficiently

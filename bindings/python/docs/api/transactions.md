@@ -443,11 +443,10 @@ with db.transaction():
 ### Consistency Example
 
 ```python
-# Schema constraints enforced in transactions
-with db.transaction():
-    db.command("sql", "CREATE DOCUMENT TYPE User")
-    db.command("sql", "CREATE PROPERTY User.email STRING (mandatory true)")
-    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+# Schema constraints enforced in transactions (Schema API preferred for embedded)
+db.schema.create_document_type("User")
+db.schema.create_property("User", "email", "STRING")
+db.schema.create_index("User", ["email"], unique=True)
 
 # This will fail - email is mandatory
 try:
