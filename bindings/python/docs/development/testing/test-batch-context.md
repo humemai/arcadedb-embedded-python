@@ -6,258 +6,67 @@ The `test_batch_context.py` file contains **13 tests** covering high-level batch
 
 ## Overview
 
-BatchContext provides a high-level API for bulk operations with:
+BatchContext tests cover:
 
-- ✅ **Context Manager** - Automatic resource management
-- ✅ **Progress Bar** - Built-in tqdm progress tracking
-- ✅ **Error Collection** - Automatic error handling
-- ✅ **Parallel Processing** - Configurable worker threads
-- ✅ **Auto-Commit** - Batch size configuration
+- ✅ **Context manager lifecycle** – create/update/delete within `with db.batch_context(...)`
+- ✅ **Parallel + batch sizing** – tested with batch sizes 10–5000 and parallel up to 8
+- ✅ **Callbacks and success counts** – per-record callbacks, `get_success_count()`
+- ✅ **Mixed operations** – create/update/delete in one batch
+- ✅ **Performance smoke checks** – prints throughput vs synchronous (informational)
 
 ## Test Coverage
 
-### Basic Operations Tests
+### Key Tests (matched to code)
 
-#### test_batch_context_basic
-Tests basic vertex creation with batch context.
+- `test_batch_context_basic`: 500 vertices via `batch_context(batch_size=100, parallel=2)`; count checked via SQL.
+- `test_batch_context_with_documents`: 200 documents with `batch_size=50, parallel=4`; count checked via SQL.
+- `test_batch_context_with_edges`: vertices created in a transaction; edges created inside `with db.transaction(): with db.batch_context(batch_size=10)`; count==3.
+- `test_batch_context_with_callbacks`: per-record callback collects 100 Item IDs; count==100.
+- `test_batch_context_success_count`: `batch.get_success_count()` returns 250 after `batch.wait_completion()`.
+- `test_batch_context_create_record`: creates 150 pre-built Vertex records via `create_record`.
+- `test_batch_context_is_pending`: queues 5000 ops (batch_size=1000, parallel=2); `is_pending()` may be True in-flight, False after exit.
+- `test_batch_context_wait_completion`: 2000 events (batch_size=500, parallel=4); `wait_completion()` then `not is_pending()`.
+- `test_batch_context_performance`: 10k vertices (batch_size=5000, parallel=8); prints throughput vs sync (no assertion on speedup).
+- `test_batch_context_different_batch_sizes`: 50 records with batch_size=10 and 50 with 5000; total 100.
+- `test_batch_context_update_record`: updates 100 counters via `modify()` and `update_record`; sum==9900.
+- `test_batch_context_delete_record`: deletes half the records with `delete_record`; count==100.
+- `test_batch_context_mixed_operations`: create 50 new, update 25, delete 25; final counts: total 75, updated 25, new 50.
 
-**What it tests:**
-- Creating 500 vertices with batch_size=100, parallel=2
-- Context manager automatically handles lifecycle
-- All records created successfully
-
-**Pattern:**
+### Example Snippet (mirrors `test_batch_context_basic`)
 ```python
 with db.batch_context(batch_size=100, parallel=2) as batch:
     for i in range(500):
         batch.create_vertex("User", userId=i, name=f"User{i}")
 
-# Verify count
-count = db.query("sql", "SELECT count(*) as count FROM User").first().get("count")
+count = next(db.query("sql", "SELECT count(*) as count FROM User")).get("count")
 assert count == 500
 ```
 
----
-
-#### test_batch_context_with_documents
-Tests document creation via batch context.
-
-**What it tests:**
-- Creating 200 documents with batch_size=50, parallel=4
-- Document properties set via kwargs
-- All documents persisted
-
-**Pattern:**
+### Edge Creation (from `test_batch_context_with_edges`)
 ```python
-with db.batch_context(batch_size=50, parallel=4) as batch:
-    for i in range(200):
-        batch.create_document(
-            "LogEntry",
-            level="INFO",
-            message=f"Log message {i}",
-            sequence=i
-        )
-
-count = db.count_type("LogEntry")
-assert count == 200
-```
-
----
-
-#### test_batch_context_with_edges
-Tests edge creation between vertices.
-
-**What it tests:**
-- Creating vertices first
-- Creating edges with `create_edge(from_rid, to_rid, type, **props)`
-- Edge properties set correctly
-
-**Pattern:**
-```python
-# Create vertices
-users = []
-with db.batch_context() as batch:
-    for i in range(10):
-        user = batch.create_vertex("User", userId=i)
-        users.append(user)
-
-# Create edges
-with db.batch_context() as batch:
-    for i in range(9):
-        batch.create_edge(
-            users[i],
-            users[i + 1],
-            "Follows",
-            since="2024-01-01"
-        )
-
-edge_count = db.query("sql", "SELECT count(*) FROM Follows").first().get("count")
-assert edge_count == 9
-```
-
-### Configuration Tests
-
-#### test_batch_context_custom_batch_size
-Tests custom batch size configuration.
-
-**What it tests:**
-- Setting batch_size=25
-- Creating 100 records (triggers 4 batches)
-- All records created
-
-**Pattern:**
-```python
-with db.batch_context(batch_size=25) as batch:
-    for i in range(100):
-        batch.create_vertex("Item", itemId=i)
-
-assert db.count_type("Item") == 100
-```
-
----
-
-#### test_batch_context_parallel_level
-Tests parallel worker configuration.
-
-**What it tests:**
-- Setting parallel=8 for 8 worker threads
-- Creating 1000 records with parallel execution
-- Verifies speedup from parallelism
-
-**Pattern:**
-```python
-with db.batch_context(batch_size=100, parallel=8) as batch:
-    for i in range(1000):
-        batch.create_vertex("Product", productId=i)
-
-assert db.count_type("Product") == 1000
-```
-
----
-
-#### test_batch_context_with_progress
-Tests progress bar display.
-
-**What it tests:**
-- `set_total(500)` sets expected record count
-- Progress bar updates during creation
-- Progress reaches 100%
-
-**Pattern:**
-```python
-with db.batch_context(batch_size=100) as batch:
-    batch.set_total(500)  # Set expected count
-
-    for i in range(500):
-        batch.create_vertex("Order", orderId=i)
-    # Progress bar automatically updates
-```
-
-### Error Handling Tests
-
-#### test_batch_context_error_collection
-Tests automatic error collection.
-
-**What it tests:**
-- Creating some invalid records (missing required field)
-- Errors collected in `batch.get_errors()`
-- Valid records still created
-- Success count via `batch.get_success_count()`
-
-**Pattern:**
-```python
-with db.batch_context() as batch:
-    for i in range(100):
-        if i % 10 == 0:
-            # Invalid: missing required field
-            batch.create_vertex("User")  # Error
-        else:
-            # Valid
-            batch.create_vertex("User", userId=i)
-
-errors = batch.get_errors()
-success_count = batch.get_success_count()
-
-assert len(errors) == 10  # 10 errors
-assert success_count == 90  # 90 successful
-```
-
----
-
-#### test_batch_context_with_validation
-Tests validation before creation.
-
-**What it tests:**
-- Custom validation logic
-- Skip invalid records
-- Only valid records created
-
-**Pattern:**
-```python
-def is_valid(data):
-    return data.get("age", 0) >= 18
-
-with db.batch_context() as batch:
-    for i in range(100):
-        age = i
-        if is_valid({"age": age}):
-            batch.create_vertex("User", userId=i, age=age)
-
-# Only users with age >= 18 created
-count = db.count_type("User")
-assert count == 82  # 100 - 18 = 82
-```
-
-### Performance Tests
-
-#### test_batch_context_performance
-Tests bulk operation performance.
-
-**What it tests:**
-- Creating 10K records
-- Measuring throughput (records/sec)
-- Typical: 50K-100K records/sec
-
-**Pattern:**
-```python
-import time
-
-start = time.time()
-
-with db.batch_context(batch_size=1000, parallel=8) as batch:
-    batch.set_total(10000)
-    for i in range(10000):
-        batch.create_vertex("Event", eventId=i)
-
-elapsed = time.time() - start
-throughput = 10000 / elapsed
-
-print(f"Throughput: {throughput:,.0f} records/sec")
-assert throughput > 10000  # Should be fast
-```
-
----
-
-#### test_batch_vs_transaction_performance
-Compares batch vs single transaction performance.
-
-**What it tests:**
-- Single transaction with 1000 saves
-- Batch context with 1000 creates
-- Batch is typically 3-5x faster
-
-**Pattern:**
-```python
-# Single transaction
-start = time.time()
 with db.transaction():
-    for i in range(1000):
-        vertex = db.new_vertex("User")
-        vertex.set("userId", i)
-        vertex.save()
-txn_time = time.time() - start
+    a = db.new_vertex("Person"); a.set("name", "Alice"); a.save()
+    b = db.new_vertex("Person"); b.set("name", "Bob"); b.save()
+    c = db.new_vertex("Person"); c.set("name", "Charlie"); c.save()
 
-# Batch context
+people = list(db.query("sql", "SELECT FROM Person"))
+with db.transaction():
+    with db.batch_context(batch_size=10) as batch:
+        batch.create_edge(people[0].get_vertex(), people[1].get_vertex(), "KNOWS", since=2020)
+        batch.create_edge(people[1].get_vertex(), people[2].get_vertex(), "KNOWS", since=2021)
+        batch.create_edge(people[2].get_vertex(), people[0].get_vertex(), "KNOWS", since=2022)
+
+edge_count = next(db.query("sql", "SELECT count(*) as count FROM KNOWS")).get("count")
+assert edge_count == 3
+```
+
+### Performance (informational)
+```python
+with db.batch_context(batch_size=5000, parallel=8) as batch:
+    for i in range(10000):
+        batch.create_vertex("Benchmark", value=i)
+
+# Synchronous comparison runs separately; prints rec/sec but no speedup assertion
 start = time.time()
 with db.batch_context() as batch:
     for i in range(1000):

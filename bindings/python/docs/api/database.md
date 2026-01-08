@@ -29,13 +29,10 @@ Create a new database at the specified path.
 ```python
 import arcadedb_embedded as arcadedb
 
-db = arcadedb.create_database("./mydb")
-try:
+with arcadedb.create_database("./mydb") as db:
     # Schema operations are auto-transactional
     db.schema.create_document_type("Person")
     db.schema.create_property("Person", "name", "STRING")
-finally:
-    db.close()
 ```
 
 !!! tip "Use Context Manager"
@@ -219,7 +216,7 @@ with db.transaction():
     doc.save()
 
     # Delete data
-    db.delete(doc)
+    doc.delete()
 ```
 
 !!! warning "Transaction Required"
@@ -418,6 +415,162 @@ if record:
 
 ---
 
+### lookup_by_key
+
+```python
+db.lookup_by_key(type_name: str, keys: List[str], values: List[Any]) -> Optional[Record]
+```
+
+Lookup a record by an indexed key (O(1) index-based lookup).
+
+**Parameters:**
+
+- `type_name` (str): Type name
+- `keys` (List[str]): Indexed property names
+- `values` (List[Any]): Values for the indexed properties
+
+**Returns:**
+
+- `Record` (Vertex/Document/Edge) or `None` if not found
+
+**Example:**
+
+```python
+db.schema.create_vertex_type("User")
+db.schema.create_property("User", "email", "STRING")
+db.schema.create_index("User", ["email"], unique=True)
+
+with db.transaction():
+    db.new_vertex("User").set("email", "alice@example.com").save()
+
+found = db.lookup_by_key("User", ["email"], ["alice@example.com"])
+if found:
+    print(found.get("email"))
+```
+
+---
+
+### count_type
+
+```python
+db.count_type(type_name: str) -> int
+```
+
+Count records of a specific type (polymorphic). Returns 0 if the type is missing.
+
+---
+
+### drop
+
+```python
+db.drop()
+```
+
+Drop the entire database (irreversible).
+
+---
+
+### is_transaction_active
+
+```python
+db.is_transaction_active() -> bool
+```
+
+Check if a transaction is currently active.
+
+---
+
+### set_wal_flush
+
+```python
+db.set_wal_flush(mode: str)
+```
+
+Configure WAL flush strategy. Modes: `"no"`, `"yes_nometadata"`, `"yes_full"`.
+
+---
+
+### set_read_your_writes
+
+```python
+db.set_read_your_writes(enabled: bool)
+```
+
+Toggle read-your-writes consistency for the current connection.
+
+---
+
+### set_auto_transaction
+
+```python
+db.set_auto_transaction(enabled: bool)
+```
+
+Enable or disable automatic transaction management.
+
+---
+
+### async_executor
+
+```python
+db.async_executor() -> AsyncExecutor
+```
+
+---
+
+### batch_context
+
+```python
+db.batch_context(
+    batch_size: int = 5000,
+    parallel: int = 4,
+    use_wal: bool = True,
+    back_pressure: int = 50,
+    progress: bool = False,
+    progress_desc: str = "Processing",
+)
+```
+
+Convenience context for bulk ingestion built on the async executor (auto-commit, back-pressure, optional progress).
+
+**Example:**
+
+```python
+with db.batch_context(batch_size=5000, parallel=8, progress=True) as batch:
+    batch.set_total(len(users))
+    for user in users:
+        batch.create_vertex("User", **user)
+```
+
+---
+
+### export_database
+
+```python
+db.export_database(
+    file_path: str,
+    format: str = "jsonl",
+    overwrite: bool = False,
+    include_types: Optional[List[str]] = None,
+    exclude_types: Optional[List[str]] = None,
+    verbose: int = 1,
+) -> dict
+```
+
+Export the database to JSONL (backup/restore), GraphML, or GraphSON.
+
+---
+
+### export_to_csv
+
+```python
+db.export_to_csv(query: str, file_path: str, language: str = "sql", fieldnames: Optional[List[str]] = None)
+```
+
+Run a query and write results to CSV.
+
+---
+
 ### create_vector_index
 
 ```python
@@ -431,9 +584,7 @@ db.create_vector_index(
 ) -> VectorIndex
 ```
 
-Create a vector index for similarity search (default HNSW (JVector) implementation).
-
-**Note:** The index is built lazily. Construction happens upon the first query, not at creation time.
+Create a vector index for similarity search (JVector implementation). Existing records are indexed automatically when the index is created.
 
 **Parameters:**`
 
@@ -453,11 +604,10 @@ Create a vector index for similarity search (default HNSW (JVector) implementati
 ```python
 import numpy as np
 
-# Create schema
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE Document")
-    db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
-    db.command("sql", "CREATE PROPERTY Document.id STRING")
+# Create schema (auto-transactional)
+db.schema.create_vertex_type("Document")
+db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
+db.schema.create_property("Document", "id", "STRING")
 
 # Create vector index
 index = db.create_vector_index("Document", "embedding", dimensions=384)
@@ -658,44 +808,6 @@ db.query("gremlin", """
         .out('Knows')
         .values('name')
 """)
-```
-
-### MongoDB
-
-MongoDB query syntax:
-
-```python
-db.query("mongo", """{
-    find: 'Person',
-    filter: { age: { $gt: 25 } }
-}""")
-```
-
----
-
-## Error Handling
-
-All database operations can raise `ArcadeDBError`:
-
-```python
-from arcadedb_embedded import ArcadeDBError
-
-try:
-    with arcadedb.create_database("./mydb") as db:
-        # Schema operations are auto-transactional
-        db.schema.create_document_type("User")
-        db.schema.create_property("User", "email", "STRING")
-        db.schema.create_index("User", ["email"], unique=True)
-
-        # Data operations require an explicit transaction
-        with db.transaction():
-            doc = db.new_document("User")
-            doc.set("email", "alice@example.com").save()
-
-            dup = db.new_document("User")
-            dup.set("email", "alice@example.com").save()
-except ArcadeDBError as e:
-    print(f"Error: {e}")
 ```
 
 ---
