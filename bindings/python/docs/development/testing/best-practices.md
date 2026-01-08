@@ -15,9 +15,9 @@ with arcadedb.create_database("./mydb") as db:
 
 ```python
 # Also good for servers
-with arcadedb.create_server(root_path="./databases") as server:
+with arcadedb.create_server("./databases") as server:
     server.start()
-    # "mydb" will be created at ./databases/mydb
+    # "mydb" will be created at ./databases/databases/mydb
     db = server.create_database("mydb")
     # ... work ...
 # Server automatically stopped
@@ -100,9 +100,9 @@ db2 = arcadedb.open_database("./mydb")    # ❌ LockException!
 
 ```python
 # Recommended: Start server first
-server = arcadedb.create_server(root_path="./databases")
+server = arcadedb.create_server("./databases")
 server.start()
-# "mydb" will be created at ./databases/mydb
+# "mydb" will be created at ./databases/databases/mydb
 db = server.create_database("mydb")
 
 # Use embedded access (fast!)
@@ -138,10 +138,11 @@ arcadedb.import_csv(
 ### ✅ Define Schema Before Import
 
 ```python
-# Good: Schema first for better performance
-db.command("sql", "CREATE DOCUMENT TYPE Person")
-db.command("sql", "CREATE PROPERTY Person.age INTEGER")
-db.command("sql", "CREATE INDEX ON Person(name)")
+# Good: Schema first for better performance (Schema API preferred for embedded)
+db.schema.create_document_type("Person")
+db.schema.create_property("Person", "age", "INTEGER")
+db.schema.create_property("Person", "name", "STRING")
+db.schema.create_index("Person", ["name"])
 
 # Then import
 arcadedb.import_csv(db, "people.csv", type_name="Person")
@@ -260,9 +261,9 @@ for i in range(1000):
 
 ```python
 # Fast: No HTTP overhead, direct JVM call
-server = arcadedb.create_server(root_path="./databases")
+server = arcadedb.create_server("./databases")
 server.start()
-# "mydb" will be created at ./databases/mydb
+# "mydb" will be created at ./databases/databases/mydb
 db = server.create_database("mydb")
 
 # This is as fast as standalone embedded!

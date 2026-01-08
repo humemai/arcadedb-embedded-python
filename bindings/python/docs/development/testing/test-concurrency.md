@@ -1,8 +1,37 @@
 # Concurrency Tests
 
-The `test_concurrency.py` file contains **4 tests** that explain ArcadeDB's concurrency model and file locking behavior.
-
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_concurrency.py){ .md-button }
+
+These notes mirror the Python tests in [test_concurrency.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_concurrency.py). There are 4 tests demonstrating file locking, thread safety, sequential access, and concurrent limitation.
+
+## Key Insight
+
+- ❌ Multiple **processes** cannot access same database (file lock prevents)
+- ✅ Multiple **threads** can (thread-safe within same process)
+- ✅ Use **server mode** for true multi-process access
+
+## Test Cases
+
+### 1) file lock mechanism
+
+Opens database, checks for `database.lck` file, closes, verifies lock is released. See [test_concurrency.py#L23-L47](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_concurrency.py#L23-L47).
+
+### 2) thread safety
+
+Creates database with 20 Person records, spawns 4 threads querying disjoint id ranges (0–4, 5–9, 10–14, 15–19) concurrently, asserts all threads complete and find correct counts. See [test_concurrency.py#L50-L93](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_concurrency.py#L50-L93).
+
+### 3) sequential access
+
+Sequence: create+insert → close → reopen+query (1 record) → close → reopen+insert+query (2 records). Verifies data persists and each step works. See [test_concurrency.py#L96-L143](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_concurrency.py#L96-L143).
+
+### 4) concurrent access limitation
+
+Attempts concurrent access from same process; documents that a second handle to locked DB raises `ArcadeDBError`. See [test_concurrency.py#L146-L165](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_concurrency.py#L146-L165).
+
+## Architecture
+
+- **Single-process (embedded)**: Thread-safe; file lock prevents other processes
+- **Multi-process**: Requires server mode (HTTP API); embedded access remains file-locked
 
 ## Overview
 
@@ -321,11 +350,11 @@ Process 2 (subprocess): db2 = open("./mydb")  ❌ LockException!
 # Main process: Start server
 import arcadedb_embedded as arcadedb
 
-server = arcadedb.create_server(root_path="./databases")
+server = arcadedb.create_server("./databases")
 server.start()
 
 # Create database through server
-# "mydb" will be created at ./databases/mydb
+# "mydb" will be created at ./databases/databases/mydb
 db = server.create_database("mydb")
 
 # Now you have TWO ways to access:
@@ -405,9 +434,9 @@ db.close()
 
 ```python
 # Process 1: Start server
-server = arcadedb.create_server(root_path="./databases")
+server = arcadedb.create_server("./databases")
 server.start()
-# "mydb" will be created at ./databases/mydb
+# "mydb" will be created at ./databases/databases/mydb
 db = server.create_database("mydb")
 
 # Process 2+: Use HTTP API

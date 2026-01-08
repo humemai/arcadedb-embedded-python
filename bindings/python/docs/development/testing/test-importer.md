@@ -1,135 +1,58 @@
 # Data Import Tests
 
-The `test_importer.py` file contains **16 tests** covering CSV data import.
-
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_importer.py){ .md-button }
 
-## Overview
+These notes mirror the Python tests in [test_importer.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_importer.py). There are 16 tests focused on CSV import (documents, vertices), delimiter handling, type inference nuances, NULL/empty values, stats, error cases, batch commits, Unicode, and a small performance smoke.
 
-ArcadeDB Python bindings provide built-in importers for:
+## Quick Start
 
-- ✅ **CSV** - Import as documents, vertices, or edges with batch transactions
-- ✅ **ArcadeDB JSONL** - Full database import via `IMPORT DATABASE` SQL command
-
-All importers support:
-
-- Batch transaction commits (default: 1000 records)
-- Type inference (CSV: string → int/float/bool/None)
-- Error handling and statistics
-
-## Import Capabilities Matrix
-
-| Format | Documents | Vertices | Edges | Type Inference |
-|--------|-----------|----------|-------|----------------|
-| CSV | ✅ | ✅ | ✅ | ✅ |
-| ArcadeDB JSONL | ✅ | ✅ | ✅ | ✅ (preserved from export) |
-
-## Quick Start Examples
-
-### CSV Import
+### CSV Import (documents)
 
 ```python
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./mydb") as db:
-    # Create schema first (matches tested flow)
     db.schema.create_document_type("Person")
 
-    stats = arcadedb.import_csv(
-        db,
-        "data.csv",
-        type_name="Person",
-    )
+    stats = arcadedb.import_csv(db, "data.csv", type_name="Person")
     print(stats)
 ```
 
-### ArcadeDB JSONL Import
+### CSV Import (vertices)
 
 ```python
-# Import full database from JSONL export
-with arcadedb.create_database("./restored_db") as db:
-    db.command("sql", "IMPORT DATABASE file:///exports/mydb.jsonl.tgz WITH commitEvery = 50000")
+with arcadedb.create_database("./mydb") as db:
+    db.schema.create_vertex_type("Product")
+
+    stats = arcadedb.import_csv(
+        db,
+        "products.csv",
+        type_name="Product",
+        import_type="vertices",
+        typeIdProperty="id",
+    )
 ```
 
 ## Test Cases
 
-### CSV Import Tests (16 tests)
+### 1) CSV as documents
 
-#### 1. CSV as Documents
+Creates a `Person` document type and imports three rows; asserts stats `documents == 3`, `errors == 0`, and verifies properties for `Alice/New York`. See [test_importer.py#L26-L57](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_importer.py#L26-L57).
 
-```python
-# Create CSV file
-csv_content = """name,age,city
-Alice,30,New York
-Bob,25,Los Angeles
-Charlie,35,Chicago"""
+### 2) CSV as vertices
 
-# Import
-stats = arcadedb.import_csv(
-    db,
-    "people.csv",
-    type_name="Person"
-)
+Creates a `Product` vertex type and imports three rows as vertices using `typeIdProperty="id"`; asserts `vertices == 3`, `documents == 0`, and checks `name/category` values. See [test_importer.py#L60-L93](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_importer.py#L60-L93).
 
-# Verify
-result = db.query("sql", "SELECT FROM Person")
-assert len(list(result)) == 3
-```
-
-#### 2. CSV as Vertices
-
-```python
-csv_content = """id,name,age
-1,Alice,30
-2,Bob,25"""
-
-stats = arcadedb.import_csv(
-    db,
-    "people.csv",
-    type_name="Person",
-    import_type="vertices",
-    typeIdProperty="id"
-)
-
-# Verify vertices created
-result = db.query("sql", "SELECT FROM Person")
-for person in result:
-    assert hasattr(person, 'out')  # Vertices have out() method
-```
-
-#### 3. CSV as Edges
-
-```python
-# Requires pre-existing vertices with RIDs
-csv_content = """from_rid,to_rid,since
-#1:0,#1:1,2020
-#1:1,#1:2,2021"""
-
-stats = arcadedb.import_csv(
-    db,
-    "relationships.csv",
-    type_name="Knows",
-    import_type="edges",
-    from_property="from_rid",
-    to_property="to_rid"
-)
-```
-
-#### 4. CSV with Custom Delimiter
+### 3) Custom delimiter (TSV)
 
 ```python
 csv_content = """name|age|city
 Alice|30|NYC"""
 
-stats = arcadedb.import_csv(
-    db,
-    "data.csv",
-    type_name="Person",
-    delimiter="|"
-)
+stats = arcadedb.import_csv(db, "data.tsv", type_name="Item", delimiter="\t")
 ```
 
-#### 5. CSV Type Inference
+### 4) CSV type inference
 
 ```python
 csv_content = """name,age,active,score,notes
@@ -141,32 +64,28 @@ stats = arcadedb.import_csv(db, "data.csv", type_name="Person")
 result = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
 alice = list(result)[0]
 
-# Types are inferred
-assert isinstance(alice.get("age"), int)
-assert isinstance(alice.get("active"), bool)
-assert isinstance(alice.get("score"), float)
-assert alice.get("notes") is None
+assert isinstance(record.get("count"), int)
+assert isinstance(record.get("price"), float)
+# Booleans are strings with the Java importer
+assert isinstance(record.get("active"), str)
 ```
 
-**Type inference rules:**
+Type inference observations from tests:
 
-- `"123"` → `int`
-- `"3.14"` → `float`
-- `"true"/"false"` → `bool`
-- `""` (empty) → `None`
-- Everything else → `str`
+- Numeric strings map to int/float
+- Empty strings may be `None` or empty string, depending on importer/schema
+- Boolean strings are imported as strings (e.g., "true", "false")
 
 ## Import Options
 
-### Common Options (All Importers)
+### Common Options
 
 ```python
 stats = arcadedb.import_csv(
     db,
     file_path,
     type_name="MyType",
-    commitEvery=1000,  # Commit every N records (default: 1000)
-    **options
+    commitEvery=1000,
 )
 ```
 
@@ -177,35 +96,28 @@ stats = arcadedb.import_csv(
     db,
     "data.csv",
     type_name="Person",
-    import_type="documents",  # "documents", "vertices", or "edges"
-    delimiter=",",            # Field delimiter (default: ",")
-    quote_char='"',           # Quote character (default: '"')
-    header=True,              # Has header row (default: True)
+    import_type="documents",  # "documents" or "vertices" (edges not covered in tests)
+    delimiter=",",            # Field delimiter
     commitEvery=1000
 )
 ```
 
-### ArcadeDB JSONL Options
-
-```python
-# Full database import via SQL
-with arcadedb.create_database("./restored_db") as db:
-    db.command("sql", "IMPORT DATABASE file:///exports/mydb.jsonl.tgz WITH commitEvery = 50000")
-```
+Note: JSON/JSONL import via `IMPORT DATABASE` is not exercised in this test file.
 
 ## Import Statistics
 
-All importers return statistics:
+Importer returns statistics:
 
 ```python
 stats = arcadedb.import_csv(db, "data.csv", type_name="Person")
 
 print(stats)
 # {
-#     'records_imported': 1000,
-#     'duration_seconds': 1.23,
-#     'records_per_second': 813.0,
-#     'errors': 0
+#     'documents': 3,
+#     'vertices': 0,
+#     'edges': 0,
+#     'errors': 0,
+#     'duration_ms': 123
 # }
 ```
 
@@ -221,39 +133,25 @@ pytest tests/test_importer.py -v -s
 
 ## Best Practices
 
-### ✅ DO: Use Appropriate Batch Size
+### ✅ Use appropriate batch size
 
 ```python
 # Large files: increase batch size
-arcadedb.import_csv(
-    db,
-    "huge_file.csv",
-    type_name="Data",
-    commitEvery=10000  # Fewer, larger transactions
-)
+arcadedb.import_csv(db, "huge_file.csv", type_name="Data", commitEvery=100)
 
 # Small files: default is fine
-arcadedb.import_csv(
-    db,
-    "small_file.csv",
-    type_name="Data"
-    # commitEvery=1000 (default)
-)
+arcadedb.import_csv(db, "small_file.csv", type_name="Data")
 ```
 
-### ✅ DO: Create Types Before Importing
+### ✅ Create types before importing
 
 ```python
 # Define schema first for better performance
-db.command("sql", "CREATE DOCUMENT TYPE Person")
-db.command("sql", "CREATE PROPERTY Person.age INTEGER")
-db.command("sql", "CREATE INDEX ON Person(name) UNIQUE")
-
-# Then import
+db.schema.create_document_type("Person")
 arcadedb.import_csv(db, "people.csv", type_name="Person")
 ```
 
-### ✅ DO: Handle Import Errors
+### ✅ Handle import errors
 
 ```python
 try:

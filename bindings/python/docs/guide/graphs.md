@@ -1,6 +1,8 @@
 # Graph Operations
 
-ArcadeDB is a native multi-model database with first-class support for property graphs. This guide covers working with vertices, edges, and graph traversals using the Python bindings.
+ArcadeDB is a native multi-model database with first-class support for property graphs.
+This guide covers working with vertices, edges, and graph traversals using the Python
+bindings.
 
 ## Overview
 
@@ -73,11 +75,13 @@ with db.transaction():
 
 !!! tip "When to Use Each Approach"
     - **API (default)**: Programmatic control, safer than string-building
-    - **SQL**: Quick ad-hoc inserts or when porting existing scripts
+    - **SQL**: When you’re talking to a remote/server instance (HTTP/Binary)
 
 ## Creating Edges
 
-**Important**: In ArcadeDB, edges are created **from vertices**, not from the database directly. This is the proper graph model - edges represent connections between existing vertices.
+**Important**: In ArcadeDB, edges are created **from vertices**, not from the database
+directly. This is the proper graph model - edges represent connections between existing
+vertices.
 
 ### Why No `db.new_edge()` Method?
 
@@ -158,7 +162,25 @@ if result_alice.has_next() and result_bob.has_next():
     IllegalArgumentException: Current vertex is not persistent. Call save() first
     ```
 
-### Creating Edges with Gremlin (Recommended)
+### Listing Edges from a Vertex
+
+The graph wrappers provide directional helpers with optional label filters:
+
+```python
+# Outgoing edges (optionally filter by label)
+out_edges = alice.get_out_edges()           # all labels
+knows_out = alice.get_out_edges("Knows")    # only Knows edges
+
+# Incoming edges
+in_edges = alice.get_in_edges()
+
+# Both directions
+both_edges = alice.get_both_edges()
+```
+
+Each item is an `Edge` wrapper; use edge.get_out() / edge.get_in() to reach the connected vertices.
+
+### Creating Edges with Gremlin
 
 Gremlin provides excellent performance for creating edges:
 
@@ -290,9 +312,8 @@ vertex = db.new_vertex("Person")  # Error: No transaction!
 ### 2. Create Indexes for Frequent Lookups
 
 ```python
-# Index properties used in WHERE clauses
-db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
-db.command("sql", "CREATE INDEX ON Person (email) UNIQUE")
+# Index properties used in WHERE clauses (Python schema API)
+db.schema.create_index("Person", ["name", "email"], unique=False)
 ```
 
 ### 3. Use Gremlin for Graph Queries
@@ -300,7 +321,6 @@ db.command("sql", "CREATE INDEX ON Person (email) UNIQUE")
 Gremlin is more performant (63× faster than Cypher) and the recommended approach for graph operations.
 
 ```python
-# ✅ Recommended: Gremlin for graph queries
 result = db.query("gremlin", """
     g.V().hasLabel('Person')
         .has('name', 'Alice')
@@ -328,7 +348,8 @@ with db.transaction():
 
 ## Deleting Records
 
-Deleting vertices, edges, and documents requires understanding cascade behavior and the different deletion approaches available.
+Deleting vertices, edges, and documents requires understanding cascade behavior and the
+different deletion approaches available.
 
 ### Deletion Approaches
 
@@ -349,6 +370,7 @@ with db.transaction():
 ```
 
 **Advantages:**
+
 - ✅ Works reliably in all situations
 - ✅ Supports complex WHERE clauses
 - ✅ Batch delete multiple records
@@ -372,6 +394,7 @@ with db.transaction():
 ```
 
 **⚠️ Important Limitation:**
+
 - ❌ Does NOT work on query results
 - ✅ Works on fresh lookups via `lookup_by_rid()`
 - ✅ Works on newly created objects
@@ -470,25 +493,21 @@ with arcadedb.create_database("./graph_db") as db:
     db.schema.create_vertex_type("Person")
     db.schema.create_edge_type("Knows")
 
-    # Insert data with Gremlin
+    # Insert data with Python API (tested pattern) and query via Gremlin
     with db.transaction():
-        db.command("gremlin", """
-            g.addV('Person').property('name', 'Alice').property('age', 30)
-             .as('alice')
-             .addV('Person').property('name', 'Bob').property('age', 25)
-             .as('bob')
-             .addE('Knows').from('alice').to('bob')
-        """)
-         .iterate()
+        alice = db.new_vertex("Person").set("name", "Alice").set("age", 30)
+        bob = db.new_vertex("Person").set("name", "Bob").set("age", 25)
+        alice.save()
+        bob.save()
+        alice.new_edge("Knows", bob).save()
+
+    # Query with Gremlin
+    results = db.query("gremlin", """
+        g.V().hasLabel('Person').has('age', gt(25)).values('name')
     """)
 
-# Query with Gremlin
-results = db.query("gremlin", """
-    g.V().hasLabel('Person').has('age', gt(25)).values('name')
-""")
-
-for record in results:
-    print(record)  # Outputs: Alice
+    for record in results:
+        print(record)  # Outputs: Alice
 ```
 
 ### Gremlin vs Cypher vs SQL

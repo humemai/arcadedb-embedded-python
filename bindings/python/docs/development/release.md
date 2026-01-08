@@ -65,7 +65,7 @@ Instead of pushing tags manually, create a GitHub Release which automatically cr
 
    ## Test Results
 
-   - All tests passed: 221 passed
+   - All tests passed: 222 passed
    ```
 
 6. Click **Publish release** (or **Save as draft** to test first)
@@ -104,7 +104,7 @@ https://humemai.github.io/arcadedb-embedded-python/
 
 ## Test Results
 
-- 221 passed
+- 222 passed
 
 **What happens automatically:**
 
@@ -395,17 +395,6 @@ mike set-default 25.9.0 --push
 - Run specific test: `pytest tests/test_core.py::test_name -v`
 - Check logs in `bindings/python/log/`
 - Verify Java JDK 21+ is available
-
-## Automation Improvements
-
-**Future enhancements:**
-
-- [ ] Automated changelog generation from commits
-- [ ] Automated version bump on merge
-- [ ] Integration tests before PyPI upload
-- [ ] Automated link checking in docs
-- [ ] Release notes template
-- [ ] Slack/Discord notifications on release
 
 ## See Also
 

@@ -7,7 +7,7 @@ Comprehensive test suite for the ArcadeDB Python embedded bindings.
 
 ## Quick Stats
 
-- **221 tests** across 6 test files
+- **222 tests** across 6 test files
 - ✅ **Current package**: 221 passed, 0 skipped
 - Package includes all ArcadeDB features (SQL, Cypher, Gremlin, Studio)
 
@@ -74,9 +74,9 @@ for t in threads: t.join()
 # Multiple processes CANNOT access same database file
 # Solution: Use server mode
 
-server = arcadedb.create_server(root_path="./databases")
+server = arcadedb.create_server("./databases")
 server.start()
-# "mydb" will be created at ./databases/mydb
+# "mydb" will be created at ./databases/databases/mydb
 db = server.create_database("mydb")
 
 # Now HTTP clients from other processes can connect!
@@ -85,9 +85,9 @@ db = server.create_database("mydb")
 ### Server Best Practice ⭐
 ```python
 # Pattern 2: Start server first (recommended)
-server = arcadedb.create_server(root_path="./databases")
+server = arcadedb.create_server("./databases")
 server.start()
-# "mydb" will be created at ./databases/mydb
+# "mydb" will be created at ./databases/databases/mydb
 db = server.create_database("mydb")
 
 # Both embedded + HTTP work immediately
