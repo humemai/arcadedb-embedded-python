@@ -1,802 +1,328 @@
 # Query Languages Guide
 
-ArcadeDB supports multiple query languages, each with different strengths. This guide helps you choose the right language and write effective queries.
+ArcadeDB Python bindings support two approaches:
 
-## Overview
+1. **Pythonic API (Recommended)**: Use the Java embedded API directly -
+   `db.new_document()`, `vertex.set()`, `vertex.save()`
+2. **SQL/Gremlin**: Traditional query languages for complex queries and analytics
 
-Supported Query Languages:
+## Best Practice: Use Pythonic API for CRUD
 
-- **SQL**: Primary language, full-featured, best for most use cases
-- **Gremlin**: Apache TinkerPop for high-performance graph traversals (Recommended)
-- **Cypher**: ⚠️ NOT RECOMMENDED - Use Gremlin instead
-- **MongoDB**: MongoDB-compatible syntax (requires mongodbw plugin)
-- **GraphQL**: GraphQL queries (requires graphql plugin)
+For creating, updating, and managing data, use the embedded API methods instead of SQL:
 
-## Quick Reference
-
-| Language | Best For | Learning Curve | Status |
-|----------|----------|----------------|--------|
-| SQL      | General queries, analytics | Easy | ✅ Recommended |
-| Gremlin  | Graph traversals, algorithms | Medium | ✅ Recommended |
-| Cypher   | ❌ NOT RECOMMENDED | Medium | ⚠️ Unmaintained transpiler |
-| MongoDB  | Document queries | Easy | Optional |
-| GraphQL  | API queries | Medium | Optional |
-
-## SQL
-
-### Why SQL?
-
-**Primary language** for ArcadeDB with the most complete feature set.
-
-**Strengths:**
-- Full CRUD operations
-- Schema management
-- Indexes and constraints
-- Aggregations
-- Graph traversal extensions
-- Best performance
-
-**Use SQL when:**
-- You need full control
-- Building schema or indexes
-- Doing analytics
-- Writing production queries
-
----
-
-### Basic SELECT
+### Creating Documents
 
 ```python
-# Simple select
-result = db.query("sql", "SELECT FROM User")
-for vertex in result:
-    print(vertex.get("name"))
+# Create schema
+db.schema.create_document_type("Task")
+db.schema.create_property("Task", "title", "STRING")
+db.schema.create_property("Task", "completed", "BOOLEAN")
 
-# With WHERE clause
-result = db.query("sql", "SELECT FROM User WHERE age > 25")
-
-# Projection
-result = db.query("sql", "SELECT name, email FROM User")
-
-# LIMIT and SKIP
-result = db.query("sql", "SELECT FROM User LIMIT 10 SKIP 20")
-
-# ORDER BY
-result = db.query("sql", "SELECT FROM User ORDER BY name ASC")
-```
-
----
-
-### Graph Traversal
-
-```python
-# Outgoing edges
-result = db.query("sql", """
-    SELECT expand(out('Follows'))
-    FROM User
-    WHERE name = 'Alice'
-""")
-
-# Incoming edges
-result = db.query("sql", """
-    SELECT expand(in('Purchased'))
-    FROM Product
-    WHERE id = 'PROD123'
-""")
-
-# Both directions
-result = db.query("sql", """
-    SELECT expand(both('FriendOf'))
-    FROM User
-    WHERE name = 'Bob'
-""")
-
-# Multi-hop traversal
-result = db.query("sql", """
-    SELECT expand(out('Follows').out('Follows'))
-    FROM User
-    WHERE name = 'Alice'
-""")
-# Friends of friends
-
-# Filtered traversal
-result = db.query("sql", """
-    SELECT expand(out('Purchased')[price > 100])
-    FROM User
-    WHERE name = 'Alice'
-""")
-```
-
----
-
-### Aggregations
-
-```python
-# COUNT
-result = db.query("sql", "SELECT count(*) as total FROM User")
-total = result.next().get("total")
-
-# AVG, SUM, MIN, MAX
-result = db.query("sql", """
-    SELECT
-        avg(age) as avg_age,
-        min(age) as min_age,
-        max(age) as max_age
-    FROM User
-""")
-
-# GROUP BY
-result = db.query("sql", """
-    SELECT category, count(*) as count
-    FROM Product
-    GROUP BY category
-    ORDER BY count DESC
-""")
-```
-
----
-
-### JOINs and Subqueries
-
-```python
-# Implicit JOIN via edges
-result = db.query("sql", """
-    SELECT
-        User.name,
-        out('Purchased').name as products
-    FROM User
-    WHERE User.name = 'Alice'
-""")
-
-# Subquery in WHERE
-result = db.query("sql", """
-    SELECT FROM Product
-    WHERE @rid IN (
-        SELECT out('Purchased')
-        FROM User
-        WHERE name = 'Alice'
-    )
-""")
-
-# WITH clause (CTE)
-result = db.query("sql", """
-    WITH $active_users = (SELECT FROM User WHERE last_login > sysdate() - 7)
-    SELECT FROM $active_users
-    WHERE age > 25
-""")
-```
-
----
-
-### Full-Text Search
-
-```python
-# Create full-text index
+# Insert using Pythonic API (RECOMMENDED)
 with db.transaction():
-    db.command("sql", """
-        CREATE INDEX Product.description_idx
-        ON Product (description) FULLTEXT ENGINE LUCENE
-    """)
+    task = db.new_document("Task")
+    task.set("title", "Buy groceries")
+    task.set("completed", False)
+    task.set("tags", ["shopping", "urgent"])
+    task.save()
 ```
 
----
-
-### Parameters
+### Creating Vertices
 
 ```python
-# Named parameters (RECOMMENDED)
-result = db.query("sql",
-    "SELECT FROM User WHERE name = :name AND age > :min_age",
-    {
-        "name": "Alice",
-        "min_age": 25
-    }
-)
+# Create schema
+db.schema.create_vertex_type("Person")
+db.schema.create_edge_type("Knows")
 
-# Positional parameters
-result = db.query("sql",
-    "SELECT FROM User WHERE name = ? AND age > ?",
-    ["Alice", 25]
-)
+# Insert using Pythonic API (RECOMMENDED)
+with db.transaction():
+    alice = db.new_vertex("Person")
+    alice.set("name", "Alice")
+    alice.set("age", 30)
+    alice.save()
+
+    bob = db.new_vertex("Person")
+    bob.set("name", "Bob")
+    bob.save()
 ```
 
-**Always use parameters** to prevent SQL injection!
-
----
-
-### Advanced SQL
+### Bulk Inserts with BatchContext
 
 ```python
-# MATCH (graph pattern)
-result = db.query("sql", """
-    MATCH {type: User, as: u}
-        -[:Follows]->
-        {as: f}
-        -[:Purchased]->
-        {type: Product, as: p}
-    WHERE u.name = 'Alice'
-    RETURN f.name, p.name
-""")
+# Efficient bulk insertion
+from jpype import JClass
+LocalDate = JClass("java.time.LocalDate")
 
-# TRAVERSE
-result = db.query("sql", """
-    TRAVERSE out('Knows')
-    FROM (SELECT FROM User WHERE name = 'Alice')
-    MAXDEPTH 3
-""")
-
-# LET (variables)
-result = db.query("sql", """
-    SELECT name, $friends_count
-    FROM User
-    LET $friends_count = out('Knows').size()
-    WHERE $friends_count > 10
-""")
+with db.batch_context(batch_size=100, parallel=2) as batch:
+    for name, age, city in people_data:
+        batch.create_vertex("Person",
+            name=name,
+            age=age,
+            city=city,
+            joined_date=LocalDate.parse("2024-01-15")
+        )
+# Automatically waits for completion
 ```
 
-## ⚠️ Cypher: NOT RECOMMENDED
+## SQL for Queries
 
-**Do not use Cypher** - it is based on an unmaintained transpiler. Use Gremlin instead.
-
-### Why Not Cypher?
-
-1. **Unmaintained Transpiler**
-   - Based on Cypher For Gremlin (no longer maintained)
-   - Bugs cannot be fixed
-   - No active development
-   - Known limitations cannot be resolved
-
-2. **Performance Penalty**
-   - **63× slower** than Gremlin
-   - Runtime Cypher → Gremlin transpilation
-   - Not suitable for production
-
-3. **Type Conversion Issues**
-   - Cypher's strict typing conflicts with ArcadeDB's flexible typing
-   - May cause unexpected failures
-
-### What to Use Instead
-
-**For Graph Queries → Use Gremlin:**
-```python
-# ✅ RECOMMENDED: Gremlin
-result = db.query("gremlin", """
-    g.V().hasLabel('User').has('name', 'Alice')
-        .out('FOLLOWS')
-        .values('name')
-""")
-```
-
-**For SQL Developers → Use SQL MATCH:**
-```python
-# ✅ ALTERNATIVE: SQL MATCH (2.7× faster than Cypher)
-result = db.query("sql", """
-    MATCH (u:User {name: 'Alice'})-[:FOLLOWS]->(f)
-    RETURN f.name
-""")
-```
-
-### Migration Guide
-
-If you have existing Cypher code, migrate to Gremlin:
-
-**Old (Cypher - ❌ DON'T USE):**
-```python
-result = db.query("cypher", """
-    MATCH (u:User {name: 'Alice'})-[:FOLLOWS]->(f:User)
-    WHERE f.age > 25
-    RETURN f.name, f.age
-""")
-```
-
-**New (Gremlin - ✅ USE THIS):**
-```python
-result = db.query("gremlin", """
-    g.V().hasLabel('User').has('name', 'Alice')
-        .out('FOLLOWS')
-        .has('age', gt(25))
-        .project('name', 'age')
-        .by('name')
-        .by('age')
-""")
-```
-
----
-
-## Gremlin
-
-### Why Gremlin?
-
-**High-performance graph traversal** language from Apache TinkerPop - the recommended approach for graph queries in ArcadeDB.
-
-**Strengths:**
-- **63× faster** than Cypher
-- Industry standard (Apache TinkerPop)
-- Actively maintained and supported
-- Used by AWS Neptune, Azure Cosmos DB
-- Excellent for graph algorithms
-- Imperative control over optimization
-- Rich community and documentation
-
-**Use Gremlin when:**
-- Querying graphs (primary use case)
-- Need best performance
-- Complex graph algorithms
-- Any new graph application
-
----
-
-### Basic Traversals
-
-```python
-# Get all vertices
-result = db.query("gremlin", "g.V()")
-
-# Filter by label
-result = db.query("gremlin", "g.V().hasLabel('User')")
-
-# Filter by property
-result = db.query("gremlin", "g.V().has('User', 'name', 'Alice')")
-
-# Range filter
-result = db.query("gremlin", "g.V().has('User', 'age', gt(25))")
-```
-
----
-
-### Graph Traversals
-
-```python
-# Outgoing edges
-result = db.query("gremlin", """
-    g.V().has('User', 'name', 'Alice').out('Follows')
-""")
-
-# Incoming edges
-result = db.query("gremlin", """
-    g.V().has('Product', 'id', 'PROD123').in('Purchased')
-""")
-
-# Multi-hop
-result = db.query("gremlin", """
-    g.V().has('User', 'name', 'Alice')
-        .out('Follows')
-        .out('Follows')
-""")
-
-# Repeat
-result = db.query("gremlin", """
-    g.V().has('User', 'name', 'Alice')
-        .repeat(out('Knows'))
-        .times(3)
-""")
-```
-
----
-
-### Aggregations
-
-```python
-# Count
-result = db.query("gremlin", "g.V().hasLabel('User').count()")
-
-# Group by
-result = db.query("gremlin", """
-    g.V().hasLabel('Product')
-        .group()
-        .by('category')
-        .by(count())
-""")
-
-# Statistics
-result = db.query("gremlin", """
-    g.V().hasLabel('User')
-        .values('age')
-        .mean()
-""")
-```
-
----
-
-### Path Queries
-
-```python
-# Find paths
-result = db.query("gremlin", """
-    g.V().has('User', 'name', 'Alice')
-        .repeat(out('Knows'))
-        .until(has('name', 'Bob'))
-        .path()
-""")
-
-# Shortest path
-result = db.query("gremlin", """
-    g.V().has('User', 'name', 'Alice')
-        .repeat(out('Knows').simplePath())
-        .until(has('name', 'Bob'))
-        .path()
-        .limit(1)
-""")
-```
-
----
-
-### Why MongoDB?
-
-**Document-oriented** query syntax for document databases.
-
-**Requirements:**
-- mongodbw plugin
-
-**Strengths:**
-- Familiar to MongoDB users
-- Good for documents
-- JSON-like syntax
-
-**Use MongoDB syntax when:**
-- Migrating from MongoDB
-- Team knows MongoDB
-- Primarily document operations
-
----
+Use SQL for reading and complex analytics:
+graph traversal extensions.
 
 ### Basic Queries
 
 ```python
-# Find all
-result = db.query("mongodb", """
-    db.User.find()
-""")
+# Count using efficient method (RECOMMENDED)
+count = db.count_type("Person")
 
-# Find with filter
-result = db.query("mongodb", """
-    db.User.find({name: 'Alice'})
-""")
+# Query all with ordering
+result = db.query("sql", "SELECT FROM Person ORDER BY name")
+for person in result:
+    print(person.get("name"))
 
-# Find with operators
-result = db.query("mongodb", """
-    db.User.find({age: {$gt: 25}})
-""")
+# Query with WHERE
+result = db.query("sql", "SELECT FROM Task WHERE priority = 'high' AND completed = false")
+tasks = result.to_list()
+for task in tasks:
+    title = task["title"]
+    tags = task["tags"]  # Automatically Python list
+    print(f"{title}: {', '.join(tags)}")
 
-# Projection
-result = db.query("mongodb", """
-    db.User.find({}, {name: 1, email: 1})
-""")
-```
-
----
-
-### Aggregation Pipeline
-
-```python
-# Group and count
-result = db.query("mongodb", """
-    db.Product.aggregate([
-        {$group: {
-            _id: '$category',
-            count: {$sum: 1}
-        }}
-    ])
-""")
-
-# Match, group, sort
-result = db.query("mongodb", """
-    db.User.aggregate([
-        {$match: {age: {$gt: 25}}},
-        {$group: {
-            _id: '$city',
-            avg_age: {$avg: '$age'}
-        }},
-        {$sort: {avg_age: -1}}
-    ])
-""")
-```
-
-## Language Comparison
-
-### Finding Users
-
-**SQL:**
-```python
-db.query("sql", "SELECT FROM User WHERE age > 25")
-```
-
-**Cypher:**
-```python
-db.query("cypher", "MATCH (u:User) WHERE u.age > 25 RETURN u")
-```
-
-**Gremlin:**
-```python
-db.query("gremlin", "g.V().hasLabel('User').has('age', gt(25))")
-```
-
-**MongoDB:**
-```python
-db.query("mongodb", "db.User.find({age: {$gt: 25}})")
-```
-
----
-
-### Following Relationships
-
-**SQL:**
-```python
-db.query("sql", """
-    SELECT expand(out('Follows'))
-    FROM User
-    WHERE name = 'Alice'
-""")
-```
-
-**Cypher:**
-```python
-db.query("cypher", """
-    MATCH (u:User {name: 'Alice'})-[:FOLLOWS]->(f)
-    RETURN f
-""")
-```
-
-**Gremlin:**
-```python
-db.query("gremlin", """
-    g.V().has('User', 'name', 'Alice').out('Follows')
-""")
-```
-
----
-
-### Aggregation
-
-**SQL:**
-```python
-db.query("sql", """
-    SELECT category, count(*) as count
-    FROM Product
-    GROUP BY category
-""")
-```
-
-**Cypher:**
-```python
-db.query("cypher", """
-    MATCH (p:Product)
-    RETURN p.category, count(p) as count
-""")
-```
-
-**Gremlin:**
-```python
-db.query("gremlin", """
-    g.V().hasLabel('Product')
-        .group()
-        .by('category')
-        .by(count())
-""")
-```
-
-**MongoDB:**
-```python
-db.query("mongodb", """
-    db.Product.aggregate([
-        {$group: {_id: '$category', count: {$sum: 1}}}
-    ])
-""")
-```
-
-## Query Optimization
-
-### Use Indexes
-
-```python
-# Create index first
-with db.transaction():
-    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
-    db.command("sql", "CREATE INDEX ON Product (category) NOTUNIQUE")
-
-# Query with indexed fields
-result = db.query("sql", """
-    SELECT FROM User
-    WHERE email = 'alice@example.com'
-""")
-# Uses index - fast!
-
-result = db.query("sql", """
-    SELECT FROM Product
-    WHERE category = 'Electronics'
-""")
-# Uses index - fast!
-```
-
----
-
-### EXPLAIN Plans
-
-```python
-# Analyze query execution
-result = db.query("sql", """
-    EXPLAIN
-    SELECT FROM User
-    WHERE email = 'alice@example.com'
-""")
-
-for row in result:
-    print(row.to_dict())
-# Shows: index usage, estimated cost, execution plan
-```
-
----
-
-### Limit Results
-
-```python
-# Bad: Load everything
-result = db.query("sql", "SELECT FROM User")
-# Could be millions of rows!
-
-# Good: Use LIMIT
-result = db.query("sql", "SELECT FROM User LIMIT 100")
-
-# Pagination
-result = db.query("sql", "SELECT FROM User LIMIT 100 SKIP 200")
-```
-
----
-
-### Projection (Select Specific Fields)
-
-```python
-# Bad: Load all properties
-result = db.query("sql", "SELECT FROM User")
-# Loads everything!
-
-# Good: Project only needed fields
-result = db.query("sql", "SELECT name, email FROM User")
-# Much faster!
-```
-
----
-
-### Batch Operations
-
-```python
-# Bad: Many small queries
-for user_id in user_ids:
-    result = db.query("sql", f"SELECT FROM User WHERE id = '{user_id}'")
-    # 100 round trips!
-
-# Good: Single query with IN
-ids_str = "', '".join(user_ids)
-result = db.query("sql", f"SELECT FROM User WHERE id IN ['{ids_str}']")
-# 1 round trip!
-
-# Better: Use parameters
-result = db.query("sql",
-    "SELECT FROM User WHERE id IN :ids",
-    {"ids": user_ids}
+# NULL checks
+result = db.query(
+    "sql",
+    "SELECT name, phone, verified FROM Person WHERE email IS NULL"
 )
 ```
 
----
-
-### Transaction Size
-
-```python
-# Bad: Huge transaction
-with db.transaction():
-    for i in range(1000000):
-        # Memory exhaustion!
-        pass
-
-# Good: Batch transactions
-batch_size = 10000
-for i in range(0, 1000000, batch_size):
-    with db.transaction():
-        for j in range(i, min(i + batch_size, 1000000)):
-            # Process batch
-            pass
-```
-
-## Best Practices
-
-1. **Use SQL for Most Queries**: Most complete, best performance
-2. **Use Cypher for Graph Patterns**: More readable for relationships
-3. **Always Use Parameters**: Prevent SQL injection
-4. **Create Indexes**: For frequently queried fields
-5. **Use EXPLAIN**: Analyze slow queries
-6. **Limit Results**: Always use LIMIT in production
-7. **Project Fields**: Don't select * unless you need everything
-8. **Batch Operations**: Reduce round trips
-9. **Right-Size Transactions**: Not too big, not too small
-10. **Test Performance**: Profile with realistic data
-
-## Common Patterns
-
 ### Pagination
 
-```python
-def paginate(db, page, page_size=20):
-    """Paginate query results."""
-    skip = page * page_size
-    result = db.query("sql",
-        f"SELECT FROM User ORDER BY name LIMIT {page_size} SKIP {skip}")
-    return list(result)
-
-# Usage
-page_1 = paginate(db, 0)
-page_2 = paginate(db, 1)
-```
-
----
-
-### Search with Filters
+**Use @rid-based pagination for best performance:**
 
 ```python
-def search_users(db, name_filter=None, min_age=None, max_age=None):
-    """Flexible search with optional filters."""
-    conditions = []
-    params = {}
+# RECOMMENDED: @rid-based pagination (fastest method)
+last_rid = "#-1:-1"  # Start from beginning
+batch_size = 1000
 
-    if name_filter:
-        conditions.append("name LIKE :name")
-        params["name"] = f"%{name_filter}%"
+while True:
+    # Query with @rid > last_rid for efficient pagination
+    query = f"""
+        SELECT *, @rid as rid FROM User
+        WHERE @rid > {last_rid}
+        LIMIT {batch_size}
+    """
+    chunk = list(db.query("sql", query))
 
-    if min_age:
-        conditions.append("age >= :min_age")
-        params["min_age"] = min_age
+    if not chunk:
+        break  # No more records
 
-    if max_age:
-        conditions.append("age <= :max_age")
-        params["max_age"] = max_age
+    # Process batch
+    for user in chunk:
+        user_id = user.get("Id")
+        name = user.get("DisplayName")
+        # Process user...
 
-    where_clause = " AND ".join(conditions) if conditions else "1=1"
-    query = f"SELECT FROM User WHERE {where_clause}"
+    # Update cursor to last record's @rid
+    last_rid = chunk[-1].get("rid")
 
-    return db.query("sql", query, params)
-
-# Usage
-results = search_users(db, name_filter="Ali", min_age=25, max_age=35)
+# Alternative: OFFSET-based pagination (slower, not recommended for large datasets)
+page = 0
+page_size = 100
+result = db.query("sql", f"SELECT FROM User LIMIT {page_size} SKIP {page * page_size}")
 ```
 
----
+### Parameters
 
-### Graph Recommendations
+Always use parameters to prevent SQL injection:
 
 ```python
-def recommend_products(db, user_name, k=5):
-    """Recommend products based on friends' purchases."""
-    result = db.query("sql", """
-        SELECT
-            product.name,
-            count(*) as friend_purchases
-        FROM (
-            SELECT expand(out('Follows'))
-            FROM User
-            WHERE name = :name
-        ) as friends
-        LET product = friends.out('Purchased')
-        WHERE product NOT IN (
-            SELECT out('Purchased')
-            FROM User
-            WHERE name = :name
-        )
-        GROUP BY product
-        ORDER BY friend_purchases DESC
-        LIMIT :k
-    """, {"name": user_name, "k": k})
+# Named parameters (recommended)
+result = db.query(
+    "sql",
+    "SELECT FROM Person WHERE name = :name AND age > :min_age",
+    {"name": "Alice", "min_age": 25}
+)
 
-    return [(row.get("name"), row.get("friend_purchases"))
-            for row in result]
-
-# Usage
-recommendations = recommend_products(db, "Alice", k=5)
-for product, count in recommendations:
-    print(f"{product} ({count} friends bought this)")
+# Positional parameters
+result = db.query(
+    "sql",
+    "SELECT FROM Person WHERE name = ? AND age > ?",
+    ["Alice", 25]
+)
 ```
 
-## See Also
+### Updating Data
 
-- [Database API Reference](../../api/database.md) - query() and command() methods
-- [Results API Reference](../../api/results.md) - Working with query results
-- [Transactions](../../api/transactions.md) - Transaction management
-- [ArcadeDB SQL Reference](https://docs.arcadedb.com/#SQL) - Official SQL documentation
+**Prefer Pythonic API for updates:**
+
+```python
+# RECOMMENDED: Update using Pythonic API with .modify()
+result = db.query("sql", "SELECT FROM Movie WHERE movieId = '1'")
+with db.transaction():
+    for movie_result in result:
+        movie = movie_result.get_vertex()  # or .get_document()
+        mutable_vertex = movie.modify()  # Get mutable version
+        mutable_vertex.set("embedding", java_embedding)
+        mutable_vertex.set("vector_id", "movie_1")
+        mutable_vertex.save()
+
+# Alternative: SQL UPDATE (for bulk operations)
+with db.transaction():
+    db.command("sql", """
+        UPDATE Task SET completed = true, cost = 127.50
+        WHERE title = 'Buy groceries'
+    """)
+```
+
+### Graph Traversal
+
+```python
+# Find friends using MATCH
+result = db.query(
+    "sql",
+    """
+    MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
+          -FRIEND_OF->
+          {type: Person, as: friend}
+    RETURN friend.name as name, friend.city as city
+    ORDER BY friend.name
+""",
+)
+
+friends = result.to_list()
+for friend in friends:
+    print(f"{friend['name']} from {friend['city']}")
+
+# Friends of friends (2 degrees)
+result = db.query(
+    "sql",
+    """
+    MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
+          -FRIEND_OF->
+          {type: Person, as: friend}
+          -FRIEND_OF->
+          {type: Person, as: friend_of_friend, where: (name <> 'Alice Johnson')}
+    RETURN DISTINCT friend_of_friend.name as name, friend.name as through_friend
+    ORDER BY friend_of_friend.name
+""",
+)
+
+for row in result:
+    name = row.get("name")
+    through = row.get("through_friend")
+    print(f"{name} (through {through})")
+```
+
+### Aggregations
+
+```python
+# Count with first()
+result = db.query("sql", "SELECT count(*) as count FROM Test")
+count = result.first().get("count")
+
+# Group by with statistics
+result = db.query(
+    "sql",
+    """
+    SELECT city, COUNT(*) as person_count,
+           AVG(age) as avg_age
+    FROM Person
+    GROUP BY city
+    ORDER BY person_count DESC, city
+""",
+)
+
+for row in result:
+    city = row.get("city")  # Python str
+    count = row.get("person_count")  # Python int
+    avg_age = row.get("avg_age")  # Python float
+    print(f"{city}: {count} people, avg age {avg_age:.1f}")
+```
+
+### ResultSet Methods
+
+```python
+# first() - get first result
+result = db.query("sql", "SELECT FROM Person ORDER BY name")
+first_person = result.first()
+assert first_person.get("name") == "Alice"
+
+# to_list() - convert all to list
+result2 = db.query("sql", "SELECT FROM Person ORDER BY name")
+people_list = result2.to_list()
+assert len(people_list) == 2
+assert people_list[1]["name"] == "Bob"
+
+# first() to check if results exist
+result = db.query("sql", "SELECT FROM Person WHERE name = 'Unknown'")
+first_mutual = result.first()
+if first_mutual:
+    print(f"Found: {first_mutual.get('name')}")
+else:
+    print("No results found")
+```
+
+## Gremlin
+
+Apache TinkerPop graph traversal language for high-performance graph queries.
+
+### Basic Traversals
+
+```python
+# Get vertex property values
+result = db.query("gremlin", "g.V().hasLabel('Person').values('name')")
+names = [record.get("result") for record in result]
+assert "Alice" in names or "Bob" in names
+
+# Note: Gremlin returns values in "result" key
+result = db.query("gremlin", "g.V().hasLabel('Person').count()")
+results = list(result)
+count = results[0].get("result") if results else 0
+```
+
+### Graph Traversals
+
+```python
+# Complex projection with aggregation
+query = """
+    g.V().hasLabel('Question')
+        .project('title', 'answer_count', 'score')
+        .by('Title')
+        .by(out('HAS_ANSWER').count())
+        .by('Score')
+        .order().by(select('answer_count'), desc)
+        .limit(5)
+"""
+
+results = list(db.query("gremlin", query))
+
+for i, result in enumerate(results, 1):
+    title = result.get("title") or "Unknown"
+    answer_count = result.get("answer_count") or 0
+    score = result.get("score") or 0
+    print(f"[{i}] Answers: {answer_count}, Score: {score}")
+    print(f"    {title[:70]}...")
+```
+
+### Processing Results
+
+```python
+# Simple value extraction
+result = db.query("gremlin", "g.V().hasLabel('Person').values('name')")
+names = [record.get("result") for record in result]
+# Gremlin puts single values in "result" key
+
+# Project returns named keys directly
+query = """
+    g.V().hasLabel('Question')
+        .project('title', 'score')
+        .by('Title')
+        .by('Score')
+        .limit(5)
+"""
+results = list(db.query("gremlin", query))
+for result in results:
+    # Access projected keys directly
+    title = result.get("title")
+    score = result.get("score")
+```

@@ -447,6 +447,11 @@ def run_benchmark():
         default="100",
         help="Vector index mutationsBeforeRebuild (default: 100)",
     )
+    parser.add_argument(
+        "--keep-db",
+        action="store_true",
+        help="Keep database directories after benchmark (skip deletion)",
+    )
     args = parser.parse_args()
 
     # Configure JVM before importing arcadedb
@@ -541,6 +546,7 @@ def run_benchmark():
                 )
 
                 if os.path.exists(db_path):
+                    # Always start from a clean state for reproducible builds
                     shutil.rmtree(db_path)
 
                 # 1. Setup & Build inside managed lifecycle
@@ -626,7 +632,8 @@ def run_benchmark():
                                 f"      -> k={k}, oq={oq}: Recall={row['recall_after']:.4f}, Latency={row['latency_after']:.2f}ms"
                             )
 
-                if os.path.exists(db_path):
+                # Optionally keep database directory after run
+                if os.path.exists(db_path) and not args.keep_db:
                     shutil.rmtree(db_path)
 
     print(f"\nBenchmark complete. Results saved to {md_file}")

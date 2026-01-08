@@ -1,33 +1,25 @@
 # NumPy Support Tests
 
-The `test_numpy_support.py` file contains **3 tests** covering NumPy array integration with ArcadeDB vectors.
-
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_numpy_support.py){ .md-button }
 
-## Overview
+These notes mirror the Python tests in [test_numpy_support.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_numpy_support.py). There are 3 tests covering NumPy array storage, retrieval, and vector search integration. See [test_numpy_support.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_numpy_support.py) for implementations.
 
-NumPy support tests cover:
+## Coverage
 
-- ✅ **Array Storage** - Storing NumPy arrays as vectors
-- ✅ **Array Retrieval** - Reading vectors as NumPy arrays
-- ✅ **Vector Search** - HNSW (JVector) similarity search with NumPy
-- ✅ **Type Conversion** - float32/float64 handling
+- Array storage (float32, float64) as vector properties
+- Array retrieval and conversion to NumPy
+- HNSW similarity search with NumPy vectors
 
-## Test Coverage
-
-### test_numpy_array_storage
-Tests storing NumPy arrays in ArcadeDB.
+### test_store_and_retrieve_numpy_array
+Tests storing and retrieving NumPy arrays.
 
 **What it tests:**
-- Creating NumPy arrays (float32, float64)
-- Storing as vector properties
-- Converting to Java float arrays
-- Retrieving and verifying values
+- Storing NumPy array as vector property
+- Array type preservation
+- Round-trip conversion
 
 **Pattern:**
 ```python
-import numpy as np
-
 # Create NumPy array
 embedding = np.array([0.1, 0.2, 0.3], dtype=np.float32)
 
