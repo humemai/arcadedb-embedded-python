@@ -18,7 +18,7 @@ What the tests cover:
 - ✅ **Overquery factor** tuning (`overquery_factor`)
 - ✅ **Distance functions** (cosine default, euclidean variants)
 - ✅ **Persistence & size checks** (index files survive reopen)
-- ✅ **Distance sanity checks** for orthogonal, parallel, opposite, and 45° vectors
+- ✅ **Batch inserts** through `BatchContext`
 
 ## Test Coverage (high level)
 
@@ -31,66 +31,81 @@ What the tests cover:
 - `test_lsm_index_size` – asserts index file presence/size
 - `test_lsm_persistence` – reopen DB and reuse the index
 - Distance suites – cosine/euclidean correctness for orthogonal/parallel/opposite/high-dim vectors
+- `test_lsm_vector_search_comprehensive` – end-to-end search path
 
 ## SQL Vector Functions Tests
 
 SQL vector operations are tested separately in `test_vector_sql.py`, including vector math functions, distance calculations, aggregations, quantization (with known limitations), and SQL-based index creation and search.
 
-## Common Pattern (mirrors `test_lsm_vector_search`)
+## Common Patterns
 
+### Create JVector (LSM-backed) index
 ```python
-import arcadedb_embedded as arcadedb
+with arcadedb.create_database("./test_db") as db:
+    # Schema operations are auto-transactional
+    db.schema.create_vertex_type("Doc")
+    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
 
+    index = db.create_vector_index(
+        "Doc",
+        "embedding",
+        dimensions=384,
+        distance_function="cosine",   # default
+        max_connections=32,            # graph degree
+        beam_width=256                 # search/construction beam
+    )
+```
+
+### Search with filters and overquery factor
+```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("Doc")
     db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
 
-    index = db.create_vector_index("Doc", "embedding", dimensions=3)
+    index = db.create_vector_index(
+        "Doc",
+        "embedding",
+        dimensions=3,
+    )
 
+    # Insert test vertices with embeddings
     with db.transaction():
-        v = db.new_vertex("Doc")
-        v.set("embedding", arcadedb.to_java_float_array([1.0, 0.0, 0.0]))
-        v.save()
+        doc1 = db.new_vertex("Doc", docId=1, embedding=[1.0, 0.0, 0.0])
+        doc1.save()
+        doc2 = db.new_vertex("Doc", docId=2, embedding=[0.0, 1.0, 0.0])
+        doc2.save()
 
-    results = index.find_nearest([0.9, 0.1, 0.0], k=1)
-    vertex, distance = results[0]
-    emb = arcadedb.to_python_array(vertex.get("embedding"))
-    assert abs(emb[0] - 1.0) < 0.001
+    # Search with filters
+    query = [1.0, 0.0, 0.0]
+    results = index.find_nearest(
+        query,
+        k=2,
+        allowed_rids=[doc1.get_rid(), doc2.get_rid()],
+        overquery_factor=16,
+    )
 ```
 
-### Filtering with `allowed_rids` (from `test_lsm_vector_search_with_filter`)
+### Batch insert vectors
 ```python
-allowed = [str(v.get_identity()) for v in inserted_vertices]
-results = index.find_nearest([1.0, 0.0, 0.0], k=2, allowed_rids=allowed)
-```
-
-### Overquery factor (from `test_lsm_vector_search_overquery`)
-```python
-results = index.find_nearest(query, k=2, overquery_factor=2)
-```
-
-### Persistence check (from `test_lsm_persistence`)
-```python
-with arcadedb.create_database(path) as db:
+with arcadedb.create_database("./test_db") as db:
+    # Schema operations are auto-transactional
     db.schema.create_vertex_type("Doc")
+    db.schema.create_property("Doc", "docId", "INTEGER")
     db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
-    db.create_vector_index("Doc", "embedding", dimensions=3)
-    with db.transaction():
-        v = db.new_vertex("Doc")
-        v.set("embedding", arcadedb.to_java_float_array([1.0, 0.0, 0.0]))
-        v.save()
 
-with arcadedb.open_database(path) as db:
-    index = db.schema.get_vector_index("Doc", "embedding")
-    assert index.get_size() == 1
+    # Batch insert (auto-transactional)
+    vectors = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    with db.batch_context(batch_size=1000, parallel=4) as batch:
+        for i, vec in enumerate(vectors):
+            batch.create_vertex("Doc", docId=i, embedding=vec)
 ```
 
 ## Key Takeaways
 
-1. Tests exercise JVector/LSM indexes end-to-end via the Python bindings (no hnswlib path).
-2. `find_nearest` returns `(vertex, score)`; cosine distance follows JVector's `(1 - cosθ)/2` convention.
-3. `allowed_rids` and `overquery_factor` are covered for filtering and recall tuning.
-4. Persistence and size checks verify indexes survive reopen and report counts correctly.
+1. JVector is fully Java-native and LSM-backed; no legacy hnswlib path remains.
+2. Use `allowed_rids` for pre-filtered searches and `overquery_factor` for recall/speed trade-offs.
+3. `max_connections` and `beam_width` map to JVector graph degree and search beam; tune per workload.
+4. All tests run through the Python bindings to ensure parity with the Java engine.
 
 ## See Also
 
