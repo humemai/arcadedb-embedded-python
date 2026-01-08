@@ -46,6 +46,7 @@ python 05_csv_import_graph.py --size small --import-jsonl ./exports/movielens_gr
 ```
 
 **Two dataset sizes available:**
+
 - **movielens-small**: 9,742 movies, ~100K ratings - Quick testing (9 min total)
 - **movielens-large**: 86,537 movies, ~33M ratings - Production testing (51 min total)
 
@@ -79,12 +80,14 @@ python 06_vector_search_recommendations.py --help
 ```
 
 **Key options:**
+
 - `--source-db SOURCE_DB` - Source graph database path (required)
 - `--db-path DB_PATH` - Working database path for vectors (required)
 - `--import-jsonl IMPORT_JSONL` - Import from JSONL file (optional)
 - `--force-embed` - Force re-generation of embeddings (optional)
 
 **Recommendations:**
+
 - **Setup:** Use fresh copy or import from JSONL to avoid conflicts
 - **Memory:** 8GB JVM heap for large dataset (`ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"`)
 - **Embeddings:** Cached automatically, use `--force-embed` to regenerate
@@ -93,6 +96,7 @@ python 06_vector_search_recommendations.py --help
 ## Vector Embedding Models
 
 ### Model 1: all-MiniLM-L6-v2
+
 - **Dimensions:** 384
 - **Best for:** General-purpose semantic similarity
 - **Performance (small):** 72 movies/sec encoding, 135.6s total
@@ -101,6 +105,7 @@ python 06_vector_search_recommendations.py --help
 - **Index creation (large):** 1,050.8s for 86,537 movies
 
 ### Model 2: paraphrase-MiniLM-L6-v2
+
 - **Dimensions:** 384
 - **Best for:** Paraphrase detection and semantic similarity
 - **Performance (small):** ~800 movies/sec encoding, ~90s total
@@ -115,81 +120,97 @@ python 06_vector_search_recommendations.py --help
 ### 1. Graph-Based Full (Collaborative Filtering - Comprehensive)
 
 **How it works:**
+
 - Finds users who rated the query movie highly (≥4.0 stars)
 - Analyzes ALL movies those users also rated highly
 - Aggregates ratings and recommends top movies
 
 **Performance:**
+
 - **Small dataset:** 0.119-0.307s per query
 - **Large dataset:** 37.6-62.2s per query
 - **Best for:** Offline batch recommendations
 
 **Pros:**
+
 - Most thorough analysis
 - High-quality recommendations based on user behavior
 
 **Cons:**
+
 - Slow on large datasets (processes 100K+ intermediate results)
 - Cold start problem (new movies without ratings)
 
 ### 2. Graph-Based Fast (Collaborative Filtering - Sampled)
 
 **How it works:**
+
 - Same as full mode, but limits intermediate results to 25K
 - Samples ~50 users' worth of ratings
 - Uses nested SELECT with LIMIT before GROUP BY aggregation
 
 **Performance:**
+
 - **Small dataset:** 0.149-0.243s per query
 - **Large dataset:** 0.206-0.242s per query
 - **Speedup:** 150-300× faster than full mode
 
 **Pros:**
+
 - Real-time recommendation speed
 - Still produces high-quality results
 - No cold start problem for existing movies
 
 **Cons:**
+
 - Slightly less comprehensive than full mode
 - Still requires some ratings history
 
 ### 3. Vector (all-MiniLM-L6-v2)
 
 **How it works:**
+
 - Encodes movie titles and genres into 384-dimensional vectors
 - Uses HNSW (JVector) index for fast approximate nearest neighbor search
 - Finds movies with similar semantic meaning
 
 **Performance:**
+
 - **Small dataset:** 0.012-0.145s per query
 - **Large dataset:** 0.024-0.041s per query
 
 **Pros:**
+
 - Very fast (~0.02-0.04s)
 - No cold start problem (works for new movies)
 - Finds semantically similar content
 
 **Cons:**
+
 - Different recommendations than collaborative filtering
 - Requires embedding generation and indexing
 
 ### 4. Vector (paraphrase-MiniLM-L6-v2)
 
 **How it works:**
+
 - Same as Vector method 1, but with different embedding model
 - Optimized for paraphrase detection
 
 **Performance:**
+
 - **Small dataset:** 0.009-0.023s per query
 - **Large dataset:** 0.016-0.038s per query
 - **Fastest method:** Often 2-3× faster than other models
 
 **Pros:**
+
 - Extremely fast (0.01-0.03s)
 - Different semantic characteristics than Model 1
 - Best for real-time search
 
 **Cons:**
+
 - May find different movies than collaborative filtering
 - Embedding quality depends on model training
 
@@ -198,6 +219,7 @@ python 06_vector_search_recommendations.py --help
 ### Query: "Toy Story (1995)"
 
 #### Small Dataset
+
 ```
 Graph-Based Full:
 1. Five Easy Pieces (1970) (4.9★, 5 users)
@@ -221,6 +243,7 @@ Vector (paraphrase-MiniLM-L6-v2):
 ```
 
 #### Large Dataset
+
 ```
 Graph-Based Full:
 1. O Pátio das Cantigas (1942) (5.0★, 11 users)
@@ -257,6 +280,7 @@ Vector (paraphrase-MiniLM-L6-v2):
 | **Total** | **~548s (9.1 min)** | End-to-end |
 
 **Query Performance:**
+
 - Graph Full: 0.119-0.307s
 - Graph Fast: 0.149-0.243s (1.3-1.8× speedup)
 - Vector Model 1: 0.012-0.145s
@@ -274,12 +298,14 @@ Vector (paraphrase-MiniLM-L6-v2):
 | **Total** | **~3,075s (51.3 min)** | End-to-end |
 
 **Query Performance:**
+
 - Graph Full: 37.6-62.2s (comprehensive but slow)
 - Graph Fast: 0.206-0.242s (150-300× speedup!)
 - Vector Model 1: 0.024-0.041s
 - Vector Model 2: 0.016-0.038s (fastest, 1,500-2,000× vs full graph)
 
 **Memory usage:**
+
 - Small: ~7.2 GB RSS
 - Large: ~11.2 GB RSS
 
@@ -295,45 +321,11 @@ index = db.create_vector_index(
 ```
 
 **Key parameters:**
+
 - **vertex_type:** The vertex type to index (e.g., "Movie")
 - **vector_property:** Property containing the embedding vectors
 - **dimensions:** Vector dimensionality (384 for sentence-transformers models)
 - **distance_function:** "cosine" for normalized similarity (0-1 range)
-
-## Known Issues and Workarounds
-
-### 1. NOTUNIQUE Index Breaks String Equality (ArcadeDB Bug)
-
-**Problem:** Creating a NOTUNIQUE index on `Movie.title` after loading 86K+ records causes the `=` operator to return 0 results for exact string matches, while `LIKE` continues to work.
-
-**Workaround:** This script does NOT create a NOTUNIQUE index on `Movie.title`. We use the `=` operator for exact title matching (works without index) and rely on the `Movie[movieId]` UNIQUE index for fast MATCH traversals.
-
-### 2. FULL_TEXT Index Wrong Semantics
-
-**Problem:** FULL_TEXT index changes the `=` operator to perform tokenized word search instead of exact matching, returning semantically incorrect results.
-
-**Example:** `WHERE title = 'Toy Story (1995)'` returns 1,686 results (any movie with "Toy", "Story", or "1995" in title).
-
-**Conclusion:** FULL_TEXT is NOT suitable for exact title matching.
-
-### 3. JVector Metadata Persistence
-
-**Problem:** Once embeddings and indexes are created, they cannot be completely removed and recreated on the same vertices. The JVector graph metadata (edges, `vectorMaxLevel` property) persists even after dropping the index.
-
-**Workaround:** Use SEPARATE properties and edge types for each model:
-- `embedding_v1` / `embedding_v2` (properties)
-- `Movie_v1` / `Movie_v2` (edge types)
-
-### 4. JSONL Export/Import Broken for Vectors
-
-**Problem:** Float arrays are NOT properly preserved during JSONL export/import:
-- Embeddings exported as Java `toString()` strings: `"[F@113ee1ce"`
-- Original vector data (384 floats) is completely lost
-- JVector index edges are not exported at all
-
-**Impact:** Cannot backup/restore vector databases using JSONL format. After import, embeddings must be regenerated and indexes rebuilt.
-
-**Current workaround:** This script always starts fresh (copies database or imports from JSONL), then generates embeddings and indexes.
 
 ## Output
 
@@ -348,6 +340,7 @@ The script outputs:
 7. **Overall timing** - Total execution time
 
 **Total execution time:**
+
 - Small dataset: ~548s (9.1 min)
 - Large dataset: ~3,075s (51.3 min)
 
@@ -357,7 +350,3 @@ The script outputs:
 - [Example 05: CSV Import - Graph](05_csv_import_graph.md) - Graph database creation
 - [sentence-transformers documentation](https://www.sbert.net/) - Embedding models
 - [JVector GitHub](https://github.com/datastax/jvector) - Vector index implementation
-
-## Source Code
-
-[`06_vector_search_recommendations.py`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/06_vector_search_recommendations.py)

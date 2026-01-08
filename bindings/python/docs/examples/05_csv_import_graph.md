@@ -6,7 +6,9 @@
 
 ## Overview
 
-This example demonstrates creating a graph database from the MovieLens dataset, transforming documents into vertices and edges. You'll learn production-ready patterns for:
+This example demonstrates creating a graph database from the MovieLens dataset,
+transforming documents into vertices and edges. You'll learn production-ready patterns
+for:
 
 - **Graph modeling** - Users and Movies as vertices, ratings and tags as edges
 - **Java API vs SQL** - Compare both approaches for bulk graph creation
@@ -37,9 +39,11 @@ pip install arcadedb-embedded
 
 **2. Dataset download (automatic):**
 
-The example automatically downloads the dataset if it doesn't exist. You can also use a pre-existing document database from Example 04.
+The example automatically downloads the dataset if it doesn't exist. You can also use a
+pre-existing document database from Example 04.
 
 **Two dataset sizes available:**
+
 - **movielens-large**: ~330K users, ~86K movies, ~33M edges (~971 MB CSV) - Realistic performance testing
 - **movielens-small**: ~610 users, ~9,700 movies, ~100K edges (~3.2 MB CSV) - Quick testing
 
@@ -63,6 +67,7 @@ python 05_csv_import_graph.py --help
 ```
 
 **Key options:**
+
 - `--size {small,large}` - Dataset size (default: small)
 - `--method {java,sql}` - Creation method: 'java' (recommended) or 'sql'
 - `--no-async` - Use synchronous transactions (FASTER for embedded mode)
@@ -74,6 +79,7 @@ python 05_csv_import_graph.py --help
 - `--import-jsonl IMPORT_JSONL` - Import from JSONL export instead of CSV
 
 **Recommendations:**
+
 - **Method:** Use `java` (faster than SQL for bulk operations)
 - **Async:** Use `--no-async` for best performance (2.5× faster in embedded mode)
 - **Indexes:** Keep enabled (2-3× speedup for edge creation)
@@ -85,20 +91,24 @@ python 05_csv_import_graph.py --help
 ### Vertex Types
 
 **User**
+
 - Properties: `userId` (LONG, indexed), `name` (STRING)
 - Count: 610 (small) / 330,000 (large)
 
 **Movie**
+
 - Properties: `movieId` (LONG, indexed), `title` (STRING), `genres` (STRING), `imdbId` (STRING), `tmdbId` (STRING)
 - Count: 9,742 (small) / 86,537 (large)
 
 ### Edge Types
 
 **RATED** (User → Movie)
+
 - Properties: `rating` (FLOAT), `timestamp` (LONG)
 - Count: 98,734 (small) / 33,155,309 (large)
 
 **TAGGED** (User → Movie)
+
 - Properties: `tag` (STRING), `timestamp` (LONG)
 - Count: 3,494 (small) / 2,212,213 (large)
 
@@ -172,12 +182,14 @@ Vertex Creation:
 ### 4. 🎯 **Java API vs SQL: Use Case Matters**
 
 **Use Java API For:**
+
 - ✅ **Bulk edge/vertex creation** (java_noasync: 5,071 edges/sec vs sql: 3,789 edges/sec)
 - ✅ Simple CRUD operations (cleaner, type-safe)
 - ✅ Batch operations via transactions
 - ✅ When raw performance matters most
 
 **Use SQL For:**
+
 - ✅ **Complex graph queries** (MATCH patterns, multi-hop traversals)
 - ✅ Aggregations (GROUP BY, COUNT, AVG)
 - ✅ Ad-hoc analysis and prototyping
@@ -194,7 +206,9 @@ JVM Heap (-Xmx):           8.0 GB           ← Just the heap portion
 Total = Heap + Non-Heap (metaspace, page cache, thread stacks, direct buffers)
 ```
 
-**Insight:** JVM heap setting (`-Xmx`) only limits heap memory. Total process memory includes metaspace, page cache, thread stacks, and direct buffers. Plan for 1.5-2× your heap size in actual RAM.
+**Insight:** JVM heap setting (`-Xmx`) only limits heap memory. Total process memory
+includes metaspace, page cache, thread stacks, and direct buffers. Plan for 1.5-2× your
+heap size in actual RAM.
 
 ## Export & Roundtrip Validation
 
@@ -228,6 +242,7 @@ Total Roundtrip (Export + Import):
 The example includes 10 comprehensive graph queries (8 SQL + 2 Gremlin):
 
 ### Query 1: Count Vertices by Type
+
 ```sql
 SELECT labels()[0] as type, count(*) as count
 FROM V
@@ -236,6 +251,7 @@ ORDER BY count DESC
 ```
 
 ### Query 2: Count Edges by Type
+
 ```sql
 SELECT labels()[0] as type, count(*) as count
 FROM E
@@ -244,6 +260,7 @@ ORDER BY count DESC
 ```
 
 ### Query 3: Sample User Ratings
+
 ```sql
 MATCH {type: User, where: (userId = 1)}-RATED->{type: Movie}
 RETURN $patternPathEdges
@@ -251,6 +268,7 @@ LIMIT 5
 ```
 
 ### Query 4: Sample User Tags
+
 ```sql
 MATCH {type: User, where: (userId = 2)}-TAGGED->{type: Movie}
 RETURN $patternPathEdges
@@ -258,6 +276,7 @@ LIMIT 5
 ```
 
 ### Query 5: High-Rated Movies
+
 ```sql
 MATCH {type: User}-RATED->{type: Movie, as: m}
 RETURN m.title, m.movieId, m.genres
@@ -266,6 +285,7 @@ LIMIT 10
 ```
 
 ### Query 6: Collaborative Filtering (Most Complex)
+
 ```sql
 MATCH {type: User, where: (userId = 1)}-RATED->{type: Movie}<-RATED-{type: User, as: otherUser}
 RETURN otherUser.userId, count(*) as shared_movies
@@ -274,13 +294,13 @@ ORDER BY shared_movies DESC
 LIMIT 10
 ```
 
-**⚠️ Known Issue:** Query 6 has an off-by-one result in `java_noindex_noasync` mode after roundtrip validation (1,806,983 vs 1,806,984). This is a query ordering artifact, not data loss. All edge counts are correct.
-
 ### Query 7-8: Additional SQL Patterns
+
 - Query 7: Users with similar taste (SQL MATCH + aggregation)
 - Query 8: Rating distribution (SQL aggregation, filters NULL ratings)
 
 ### Query 9-10: Gremlin Patterns
+
 - Query 9: User's top-rated movies (Gremlin traversal with filtering)
 - Query 10: Collaborative filtering (Gremlin group/count aggregation)
 
@@ -291,23 +311,27 @@ LIMIT 10
 ### Step 1: Create Graph Schema
 
 ```python
-# Create vertex types
-db.command("sql", "CREATE VERTEX TYPE User IF NOT EXISTS")
-db.command("sql", "CREATE PROPERTY User.userId LONG IF NOT EXISTS")
-db.command("sql", "CREATE INDEX ON User (userId) UNIQUE")
+# Create vertex types (Schema API preferred for embedded)
+db.schema.get_or_create_vertex_type("User")
+db.schema.get_or_create_property("User", "userId", "LONG")
+db.schema.get_or_create_property("User", "name", "STRING")
+db.schema.get_or_create_index("User", ["userId"], unique=True)
 
-db.command("sql", "CREATE VERTEX TYPE Movie IF NOT EXISTS")
-db.command("sql", "CREATE PROPERTY Movie.movieId LONG IF NOT EXISTS")
-db.command("sql", "CREATE INDEX ON Movie (movieId) UNIQUE")
+db.schema.get_or_create_vertex_type("Movie")
+db.schema.get_or_create_property("Movie", "movieId", "LONG")
+db.schema.get_or_create_property("Movie", "title", "STRING")
+db.schema.get_or_create_index("Movie", ["movieId"], unique=True)
 
 # Create edge types
-db.command("sql", "CREATE EDGE TYPE RATED IF NOT EXISTS")
-db.command("sql", "CREATE PROPERTY RATED.rating FLOAT IF NOT EXISTS")
-db.command("sql", "CREATE PROPERTY RATED.timestamp LONG IF NOT EXISTS")
+db.schema.get_or_create_edge_type("RATED")
+db.schema.get_or_create_property("RATED", "rating", "FLOAT")
+db.schema.get_or_create_property("RATED", "timestamp", "LONG")
 
-db.command("sql", "CREATE EDGE TYPE TAGGED IF NOT EXISTS")
-db.command("sql", "CREATE PROPERTY TAGGED.tag STRING IF NOT EXISTS")
-db.command("sql", "CREATE PROPERTY TAGGED.timestamp LONG IF NOT EXISTS")
+db.schema.get_or_create_edge_type("TAGGED")
+db.schema.get_or_create_property("TAGGED", "tag", "STRING")
+db.schema.get_or_create_property("TAGGED", "timestamp", "LONG")
+
+# SQL DDL remains available (e.g., for remote servers), but the Schema API above is recommended for embedded runs.
 ```
 
 ### Step 2: Create Vertices (Java API - Recommended)
@@ -418,6 +442,7 @@ python 05_csv_import_graph.py --size small --method java --no-async --export
 ```
 
 **6 Configurations:**
+
 1. `java` - Java API with async and indexes
 2. `java_noasync` - Java API synchronous with indexes ⚡ **FASTEST**
 3. `java_noindex` - Java API with async, no indexes
@@ -435,6 +460,7 @@ export ARCADEDB_JVM_ARGS="-Xms8g"
 ```
 
 **Memory Planning:**
+
 - Heap size: 8 GB (`-Xmx8g`)
 - Total process memory: 15-19 GB (heap + non-heap)
 - Plan for 2× heap size in actual RAM
@@ -466,13 +492,3 @@ Semantic similarity search with MovieLens data:
 - Find similar movies using cosine distance
 - Combine vector similarity with rating data
 - Query: "Movies similar to X that users also liked"
-
-## Support
-
-- [GitHub Issues](https://github.com/humemai/arcadedb-embedded-python/issues)
-- [Documentation](https://docs.arcadedb.com/)
-- [Community Forum](https://github.com/humemai/arcadedb-embedded-python/discussions)
-
----
-
-*Ready for graph databases? View the [complete source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/05_csv_import_graph.py)!*
