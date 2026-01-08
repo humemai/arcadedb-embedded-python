@@ -61,7 +61,7 @@ Get a property value.
 ```python
 name = doc.get("name")
 age = doc.get("age")
-email = doc.get("email")  # Returns None if not found
+email = doc.get("email")               # Returns None if not found
 email = doc.get("email") or "unknown"  # Use default pattern
 ```
 
@@ -127,12 +127,15 @@ with db.transaction():
 
 #### `to_dict() -> dict`
 
-Convert the document to a Python dictionary.
+Convert the document to a Python dictionary of its properties (metadata like RID/type
+is not included). Use `get_rid()` for the record ID if needed.
 
 ```python
 doc_dict = doc.to_dict()
 print(doc_dict)
-# Output: {'name': 'Alice', 'age': 30, 'active': True, '@rid': '#1:0', '@type': 'Note'}
+# Output: {'name': 'Alice', 'age': 30, 'active': True}
+
+rid = doc.get_rid()
 ```
 
 #### `get_identity() -> str`
@@ -158,9 +161,9 @@ print(type_name)  # Output: Note
 Get a mutable version of the document. Useful for immutable query results.
 
 ```python
-# Query results are often immutable
+# Query results are iterators and often immutable
 results = db.query("sql", "SELECT FROM Note LIMIT 1")
-immutable_doc = results[0]
+immutable_doc = next(iter(results))
 
 # Get mutable version for modification
 with db.transaction():
@@ -217,15 +220,45 @@ with db.transaction():
     edge.save()
 ```
 
-#### `get_out_edges() -> List[Edge]`
+#### `get_out_edges(*labels) -> List[Edge]`
 
-Get all outgoing edges from this vertex.
+Get outgoing edges from this vertex, optionally filtered by label.
 
 ```python
+# All outgoing edges
 outgoing = alice.get_out_edges()
 for edge in outgoing:
-    target = edge.get_out()
+    target = edge.get_in()
     print(f"Alice -> {target.get('name')}")
+
+# Filter by edge type
+knows = alice.get_out_edges("Knows")
+assert all(e.get_in().get("name") in {"Bob", "Carol"} for e in knows)
+```
+
+#### `get_in_edges(*labels) -> List[Edge]`
+
+Get incoming edges to this vertex, optionally filtered by label.
+
+```python
+incoming = alice.get_in_edges()
+for edge in incoming:
+    source = edge.get_out()
+    print(f"{source.get('name')} -> Alice")
+
+# Filter by edge type
+knows_in = alice.get_in_edges("Knows")
+```
+
+#### `get_both_edges(*labels) -> List[Edge]`
+
+Get both incoming and outgoing edges, optionally filtered by label.
+
+```python
+all_edges = alice.get_both_edges()
+print(f"Degree: {len(all_edges)}")
+
+knows_edges = alice.get_both_edges("Knows")
 ```
 
 ## Edge Wrapper
@@ -250,7 +283,7 @@ edge.get_property_names()  # ['since', 'strength']
 
 #### `get_in() -> Vertex`
 
-Get the source (in) vertex of the edge.
+Get the incoming (destination) vertex of the edge.
 
 ```python
 source = edge.get_in()
@@ -259,7 +292,7 @@ print(f"Source: {source.get('name')}")
 
 #### `get_out() -> Vertex`
 
-Get the target (out) vertex of the edge.
+Get the outgoing (source) vertex of the edge.
 
 ```python
 target = edge.get_out()
@@ -282,28 +315,35 @@ with db.transaction():
     doc.save()
 ```
 
-### 2. Use Fresh Lookups for Delete
+### 2. Use Fresh Lookups for Delete (Python-first)
 
 ```python
-# ❌ Don't delete query results
+# ❌ Don't delete query results directly
 results = db.query("sql", "SELECT FROM Note")
 for doc in results:
-    doc.delete()  # Doesn't work!
+    doc.delete()  # No-op
 
-# ✅ Use fresh lookup
+# ✅ Pythonic single-record delete by RID
 with db.transaction():
     doc = db.lookup_by_rid("#1:0")
     doc.delete()
 
-# ✅ Or use SQL
+# ✅ Convert query results to RIDs, then delete via lookup
 with db.transaction():
-    db.command("sql", "DELETE FROM Note WHERE @rid = #1:0")
+    rids = [doc.get_rid() for doc in db.query("sql", "SELECT FROM Note WHERE flagged = true")]
+    for rid in rids:
+        db.lookup_by_rid(rid).delete()
+
+# ✅ Set-based delete (when you really want bulk SQL)
+with db.transaction():
+    db.command("sql", "DELETE FROM Note WHERE flagged = true")
 ```
 
 ### 3. Create Indexes for Frequent Lookups
 
 ```python
-db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
+db.schema.create_index("Person", ["name"], unique=False)
+# SQL DDL is also supported, but the Schema API is preferred in embedded mode.
 ```
 
 ### 4. Chain Methods for Brevity
@@ -315,27 +355,4 @@ with db.transaction():
         .set("title", "My Note") \
         .set("content", "Content") \
         .save()
-```
-
-## Deletion
-
-See the [Graphs](../guide/graphs.md#deleting-records) guide for comprehensive deletion
-documentation, including cascade behavior and best practices.
-
-**Quick Reference:**
-
-| Method | Works On | Best For |
-|--------|----------|----------|
-| `.delete()` | Fresh lookups, new objects | Interactive deletion |
-| `SQL DELETE` | All situations | Reliable deletion |
-
-```python
-# SQL DELETE (recommended)
-with db.transaction():
-    db.command("sql", "DELETE FROM Note WHERE @rid = #1:0")
-
-# Wrapper delete (on fresh lookup only)
-with db.transaction():
-    doc = db.lookup_by_rid("#1:0")
-    doc.delete()
 ```

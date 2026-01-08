@@ -173,7 +173,3 @@ A: Convert via string first: `float(str(decimal_value))`. Direct conversion from
 
 **Q: Can I mix data types?**
 A: Yes! ArcadeDB is schema-flexible. You can add properties dynamically while benefiting from typed properties where defined.
-
----
-
-*Need help? Check our [troubleshooting guide](../development/troubleshooting.md) or [open an issue](https://github.com/humemai/arcadedb-embedded-python/issues).*
