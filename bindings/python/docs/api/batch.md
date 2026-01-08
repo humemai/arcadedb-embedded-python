@@ -52,8 +52,10 @@ import arcadedb_embedded as arcadedb
 db = arcadedb.create_database("./mydb")
 
 # Create schema
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE User")
+db.schema.create_vertex_type("User")
+db.schema.create_property("User", "userId", "LONG")
+db.schema.create_property("User", "name", "STRING")
+db.schema.create_index("User", ["userId"], unique=True)
 
 # Batch create vertices
 with db.batch_context(batch_size=10000, parallel=8) as batch:
@@ -361,9 +363,11 @@ import time
 db = arcadedb.create_database("./bulk_db")
 
 # Create schema
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE Product")
-    db.command("sql", "CREATE INDEX ON Product(productId) UNIQUE")
+db.schema.create_vertex_type("Product")
+db.schema.create_property("Product", "productId", "LONG")
+db.schema.create_property("Product", "name", "STRING")
+db.schema.create_property("Product", "price", "DECIMAL")
+db.schema.create_index("Product", ["productId"], unique=True)
 
 # Generate sample data
 products = [
@@ -416,9 +420,9 @@ db.close()
 
 ```python
 # ✅ Good: Schema defined before batch
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE User")
-    db.command("sql", "CREATE INDEX ON User(userId) UNIQUE")
+db.schema.create_vertex_type("User")
+db.schema.create_property("User", "userId", "LONG")
+db.schema.create_index("User", ["userId"], unique=True)
 
 with db.batch_context() as batch:
     # Batch operations
