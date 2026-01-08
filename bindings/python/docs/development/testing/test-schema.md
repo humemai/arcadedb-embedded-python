@@ -2,26 +2,50 @@
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_schema.py){ .md-button }
 
-These notes mirror the Python tests in [test_schema.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_schema.py). The file has multiple test classes covering type creation (document, vertex, edge), properties (simple and complex types), indexes (unique, composite, full-text, HNSW), and error handling. See [test_schema.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_schema.py) for comprehensive schema API validation.
+## Overview
 
-## Key Methods Tested
+Schema tests cover:
 
-- `schema.create_document_type()`, `create_vertex_type()`, `create_edge_type()`
-- `schema.create_property()`, `create_property_with_type()`
-- `schema.create_index()`, `create_unique_index()`, `create_hnsw_index()`, `create_fulltext_index()`
-- `schema.exists_type()`, `get_type()`, `list_types()`
-- `schema.drop_type()`, `drop_property()`, `drop_index()`
+- ✅ **Type Creation** - Vertex, edge, and document types
+- ✅ **Type Queries** - Getting types and checking existence
+- ✅ **Type Deletion** - Removing types from schema
+- ✅ **Property Creation** - Adding properties to types
+- ✅ **Property Deletion** - Removing properties
+- ✅ **Index Creation** - LSM_TREE, HNSW, FULL_TEXT indexes
+- ✅ **Index Queries** - Getting and listing indexes
+- ✅ **Index Deletion** - Removing indexes
+- ✅ **Property Types** - All ArcadeDB property types
+- ✅ **Vector Indexes** - HNSW (JVector) configuration and operations
 
-## Patterns
+## Test Classes
 
+### TestTypeCreation
+Tests creating vertex, edge, and document types.
+
+**Tests:**
+- `test_create_vertex_type()` - Basic vertex type creation
+- `test_create_edge_type()` - Basic edge type creation
+- `test_create_document_type()` - Basic document type creation
+- `test_create_type_with_buckets()` - Custom bucket count
+
+**Pattern:**
 ```python
-db.schema.create_vertex_type("User")
-db.schema.create_property("User", "name", "STRING")
-db.schema.create_unique_index("User", ["userId"])
+with arcadedb.create_database("./test_db") as db:
+    # Basic type
+    db.schema.create_vertex_type("User")
 
-db.schema.exists_type("User")  # True
-db.schema.get_type("User")     # Type object
+    # With buckets
+    db.schema.create_vertex_type("Product", buckets=10)
 ```
+
+---
+
+### TestTypeQueries
+Tests querying schema for types.
+
+**Tests:**
+- `test_get_type()` - Get type by name
+- `test_exists_type()` - Check if type exists
 - `test_get_types()` - List all types
 - `test_get_type_properties()` - List type properties
 
