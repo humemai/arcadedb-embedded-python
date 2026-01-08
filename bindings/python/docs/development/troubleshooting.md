@@ -4,35 +4,6 @@ Common issues, solutions, and debugging techniques for ArcadeDB Python bindings.
 
 ## Installation Issues
 
-### Java Not Found
-
-**Symptom:**
-```
-Error: Java Runtime Environment (JRE) not found
-```
-
-**Solution:**
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get update
-sudo apt-get install default-jre-headless
-```
-
-**macOS:**
-```bash
-brew install openjdk
-```
-
-**Windows:**
-Download and install from [java.com](https://java.com)
-
-**Verify:**
-```bash
-java -version
-```
----
-
 ### Package Import Errors
 
 **Problem**: Can't import arcadedb_embedded module
@@ -51,86 +22,21 @@ java -version
    pip install arcadedb-embedded
    ```
 
-3. **Check Python Path**:
-   ```python
-   import sys
-   print(sys.path)
-   ```
+3. **Reinstall if wheel looks corrupted**:
+    Wheels bundle the ArcadeDB JRE and JARs. If imports fail, reinstall the wheel
+    (no external Java install is needed):
+    ```bash
+    pip uninstall -y arcadedb-embedded
+    pip install --no-cache-dir arcadedb-embedded
+    ```
+4. **Check Python Path**:
+    ```python
+    import sys
+    print(sys.path)
+    ```
 ---
-
-### JPype Installation Fails
-
-**Symptom:**
-```
-ERROR: Failed building wheel for JPype1
-```
-
-**Solution:**
-
-Install build dependencies first:
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install python3-dev build-essential
-pip install JPype1
-```
-
-**macOS:**
-```bash
-xcode-select --install
-pip install JPype1
-```
-
-**Windows:**
-Install Visual Studio Build Tools, then:
-```bash
-pip install JPype1
-```
 
 ## Runtime Errors
-
-### JVM Already Started
-
-**Symptom:**
-```python
-jpype._core.JVMNotRunning: Unable to start JVM - already started
-```
-
-**Cause:**
-Attempting to configure JVM after it's already started.
-
-**Solution:**
-
-Configure JVM options **before** first import:
-```python
-import jpype
-
-# Configure BEFORE importing arcadedb_embedded
-jpype.addClassPath("/path/to/extra.jar")
-
-# Now import
-import arcadedb_embedded as arcadedb
-```
-
-**Alternative:**
-Use separate processes for different JVM configurations:
-```python
-import multiprocessing as mp
-
-def with_custom_jvm(jar_path):
-    import jpype
-    jpype.addClassPath(jar_path)
-
-    import arcadedb_embedded as arcadedb
-    # Use arcadedb here
-
-if __name__ == "__main__":
-    p = mp.Process(target=with_custom_jvm, args=("/path/to/jar",))
-    p.start()
-    p.join()
-```
-
----
 
 ### Database Connection Issues
 
@@ -174,6 +80,7 @@ arcadedb.create_database("./mydb")
 **Solution:**
 
 Use `open_database()` instead:
+
 ```python
 import os
 import arcadedb_embedded as arcadedb
@@ -185,6 +92,7 @@ else:
 ```
 
 Or delete existing database:
+
 ```python
 import shutil
 
@@ -200,13 +108,9 @@ db = arcadedb.create_database("./mydb")
 
 ### Database Locked
 
-**Symptom:**
-```
-ArcadeDBError: Database is locked by another process
-```
+**Symptom:** `ArcadeDBError: Database is locked by another process`
 
-**Cause:**
-Another process has the database open.
+**Cause:** Another process has the database open.
 
 **Solution:**
 
@@ -414,6 +318,7 @@ ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
 ### Transaction Already Active
 
 **Symptom:**
+
 ```python
 with db.transaction():
     with db.transaction():  # Nested!
@@ -421,8 +326,7 @@ with db.transaction():
 # ArcadeDBError: Transaction already active
 ```
 
-**Cause:**
-Nested transactions not supported.
+**Cause:** Nested transactions not supported.
 
 **Solution:**
 
@@ -461,8 +365,7 @@ db.query("sql", "SELECT * FROM User WHERE name = Alice")
 # ArcadeDBError: Syntax error near 'Alice'
 ```
 
-**Cause:**
-String not properly quoted.
+**Cause:** String not properly quoted.
 
 **Solution:**
 
@@ -539,8 +442,7 @@ vertex.set("embedding", numpy_array)
 # TypeError: Cannot convert numpy.ndarray to Java type
 ```
 
-**Cause:**
-NumPy arrays need explicit conversion.
+**Cause:** NumPy arrays need explicit conversion.
 
 **Solution:**
 
@@ -573,8 +475,8 @@ for row in result:
 
 1. **Create indexes:**
 ```python
-with db.transaction():
-    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+# Schema API is auto-transactional (preferred for embedded use)
+db.schema.create_index("User", ["email"], unique=True)
 ```
 
 2. **Use LIMIT:**
@@ -604,24 +506,34 @@ Importing data is very slow.
 
 **Solutions:**
 
-1. **Increase batch size:**
+1. **Increase batch size (commitEvery):**
 ```python
-importer = db.get_importer()
-importer.batch_size = 10000  # Default is 1000
+from arcadedb_embedded import Importer
+importer = Importer(db)
+stats = importer.import_file(
+    file_path="users.csv",
+    import_type="vertices",
+    type_name="User",
+    typeIdProperty="id",
+    commitEvery=10000,  # Default is 5000
+)
 ```
 
 2. **Drop indexes during import:**
 ```python
-# Drop indexes
-with db.transaction():
-    db.command("sql", "DROP INDEX User.email")
+# Drop indexes (Schema API preferred for embedded)
+db.schema.drop_index("User[email]", force=True)
 
-# Import data
-importer.import_csv("users.csv", "User")
+# Import data (vertices)
+stats = importer.import_file(
+    file_path="users.csv",
+    import_type="vertices",
+    type_name="User",
+    typeIdProperty="id",
+)
 
 # Recreate indexes
-with db.transaction():
-    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+db.schema.create_index("User", ["email"], unique=True)
 ```
 
 3. **Use transactions efficiently:**
@@ -1038,9 +950,8 @@ name = vertex.get("name") or "Unknown"
 
 **Solution:**
 ```python
-# Create type first
-with db.transaction():
-    db.command("sql", "CREATE VERTEX TYPE User")
+# Create type first (Schema API is auto-transactional)
+db.schema.get_or_create_vertex_type("User")
 
 # Then create vertex
 with db.transaction():
@@ -1056,14 +967,13 @@ with db.transaction():
 **Solution:**
 ```python
 # Drop existing index
-with db.transaction():
-    try:
-        db.command("sql", "DROP INDEX User.email")
-    except:
-        pass  # Index doesn't exist
+try:
+    db.schema.drop_index("User[email]", force=True)
+except Exception:
+    pass  # Index doesn't exist
 
-    # Create new index
-    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+# Create new index
+db.schema.create_index("User", ["email"], unique=True)
 ```
 
 ---
@@ -1102,11 +1012,7 @@ else:
    - [GitHub Issues](https://github.com/humemai/arcadedb-embedded-python/issues)
    - [ArcadeDB Documentation](https://docs.arcadedb.com/)
 
-3. **Ask Community:**
-   - [Discord](https://discord.gg/arcadedb)
-   - [GitHub Discussions](https://github.com/humemai/arcadedb-embedded-python/discussions)
-
-4. **Report Bug:**
+3. **Report Bug:**
    Include:
    - Python version (`python --version`)
    - Package version (`pip show arcadedb-embedded`)

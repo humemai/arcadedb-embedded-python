@@ -15,96 +15,137 @@ The ArcadeDB Python bindings are a **thin wrapper** around the ArcadeDB Java lib
 
 ```
 arcadedb_embedded/
-├── __init__.py          # Package initialization, JPype startup
-├── core.py              # Database, DatabaseFactory, Vertex, Edge, Document
-├── server.py            # ArcadeDBServer, HTTP API
-├── importer.py          # Importer, data import utilities
-├── vector.py            # VectorIndex, embedding utilities
+├── __init__.py          # Package exports and version
+├── jvm.py               # JVM startup (bundled JRE, JAR discovery)
+├── core.py              # Database, DatabaseFactory, convenience helpers
+├── graph.py             # Document, Vertex, Edge wrappers
+├── schema.py            # Schema/Index/Property helpers
+├── type_conversion.py   # Java ↔ Python value conversion
+├── async_executor.py    # Async bulk executor wrapper
+├── batch.py             # BatchContext (async-powered bulk helper)
+├── importer.py          # Importer (CSV/XML)
+├── exporter.py          # Export (JSONL/GraphML/GraphSON/CSV)
+├── vector.py            # VectorIndex + array helpers
 ├── results.py           # ResultSet, Result (query results)
-├── transactions.py      # TransactionContext (ACID transactions)
+├── transactions.py      # TransactionContext (ACID guard)
+├── server.py            # ArcadeDBServer (HTTP/Studio)
 └── exceptions.py        # ArcadeDBError (unified exceptions)
 ```
 
 ### Module Responsibilities
 
 **`__init__.py`**
-- JVM startup and configuration
-- Package-level exports
-- Version management
+
+- Central export surface (Database, AsyncExecutor, BatchContext, Schema, Importer, Exporter, VectorIndex, converters)
+- Version metadata
+
+**`jvm.py`**
+
+- Starts JVM using bundled JRE and packaged JARs
+- Honors `ARCADEDB_JVM_ARGS` / `ARCADEDB_JVM_ERROR_FILE`
+- Refuses to start twice in a process
 
 **`core.py`**
-- `DatabaseFactory`: Database creation/opening
-- `Database`: Main database interface (query, command, transactions)
-- `Vertex`, `Edge`, `Document`: Record types
-- Schema management (types, properties, indexes)
 
-**`server.py`**
-- `ArcadeDBServer`: HTTP server lifecycle
-- Studio UI access
-- Multi-database support
-- Server configuration
+- `DatabaseFactory`: create/open databases
+- `Database`: queries/commands, transactions, lookups, vector index builder
+- Convenience: `async_executor()`, `batch_context()`, `schema`, export helpers
+
+**`graph.py`**
+
+- Record wrappers: `Document`, `Vertex`, `Edge`
+- Property helpers, `new_edge()`, type-aware wrapping from Java records
+
+**`schema.py`**
+
+- `Schema`: type/property/index management
+- `IndexType`, `PropertyType` enums
+
+**`type_conversion.py`**
+
+- `convert_java_to_python` / `convert_python_to_java`
+- Datetime/Decimal/collection handling
+
+**`async_executor.py`**
+
+- `AsyncExecutor`: parallel record creation, commitEvery, WAL tuning
+
+**`batch.py`**
+
+- `BatchContext`: high-level bulk helper on top of `AsyncExecutor`
 
 **`importer.py`**
-- `Importer`: Data import orchestration
-- Format handlers (CSV, ArcadeDB JSONL)
-- Batch processing
-- Type inference
+
+- `Importer`: CSV/XML imports (documents/vertices/edges), FK resolution, commitEvery
+- `import_csv` / `import_xml` convenience wrappers
+
+**`exporter.py`**
+
+- `export_database`: JSONL/GraphML/GraphSON
+- `export_to_csv`: serialize ResultSet/list to CSV
 
 **`vector.py`**
-- `VectorIndex`: HNSW (JVector) based Vector indexing
-- NumPy ↔ Java array conversion
-- Nearest neighbor search
-- Distance metrics
+
+- `VectorIndex`: JVector-based ANN search
+- `to_java_float_array` / `to_python_array`
 
 **`results.py`**
-- `ResultSet`: Query result iteration
-- `Result`: Single record wrapper
-- Type conversion (Java → Python)
-- JSON serialization
+
+- `ResultSet`: iterator, chunking, DataFrame export
+- `Result`: property access with conversion
 
 **`transactions.py`**
-- `TransactionContext`: Transaction management
-- Context manager protocol
-- ACID guarantees
-- Auto-rollback on exception
+
+- `TransactionContext`: context-managed begin/commit/rollback
+
+**`server.py`**
+
+- `ArcadeDBServer`: HTTP/Studio server lifecycle, db management
 
 **`exceptions.py`**
-- `ArcadeDBError`: Base exception
-- Java exception wrapping
-- Error categorization
+
+- `ArcadeDBError`: unified exception wrapper
 
 ## JPype Integration
 
 ### JVM Lifecycle
 
 ```python
-# Simplified from __init__.py
-
-def _start_jvm():
-    """Initialize JVM with ArcadeDB JARs."""
+def start_jvm():
     if jpype.isJVMStarted():
         return
 
-    # Find JAR files
-    jar_path = find_package_jars()
+    # Locate bundled JRE + packaged JARs
+    jvm_path = get_bundled_jre_lib_path()
+    jar_files = glob.glob(os.path.join(get_jar_path(), "*.jar"))
 
-    # Start JVM
-    jpype.startJVM(
-        classpath=[jar_path],
-        convertStrings=False  # Manual string conversion for safety
-    )
+    # Memory/flags can be overridden via ARCADEDB_JVM_ARGS
+    jvm_args = os.environ.get("ARCADEDB_JVM_ARGS")
+    if jvm_args:
+        args = jvm_args.split()
+    else:
+        args = ["-Xmx4g", "-Djava.awt.headless=true"]
+
+    # Crash log location (default ./log/hs_err_pid%p.log)
+    error_file = os.environ.get("ARCADEDB_JVM_ERROR_FILE", "./log/hs_err_pid%p.log")
+    args.append(f"-XX:ErrorFile={error_file}")
+
+    # Single-shot startup per process
+    jpype.startJVM(jvm_path, *args, classpath=os.pathsep.join(jar_files))
 ```
 
 **JVM Startup:**
-1. Package installation places JARs in site-packages
-2. First import triggers JVM startup
-3. JVM remains active for process lifetime
-4. Cannot restart JVM in same process
+
+1. Uses the bundled JRE inside the wheel (no system JVM required)
+2. Loads packaged ArcadeDB JARs from `arcadedb_embedded/jars`
+3. Configurable via env vars before first import (`ARCADEDB_JVM_ARGS`, `ARCADEDB_JVM_ERROR_FILE`)
+4. JVM stays live for the process lifetime and cannot be restarted
 
 **Implications:**
-- JVM settings must be configured before first import
-- Server mode requires careful JVM configuration
-- Testing requires separate processes for isolation
+
+- Set memory/GC flags _before_ importing `arcadedb_embedded`
+- Tests that need different JVM args must run in separate processes
+- Server and embedded modes share the same in-process JVM
 
 ---
 
@@ -165,6 +206,7 @@ numpy_array = to_python_array(java_array)
 ### Memory Management
 
 **Garbage Collection:**
+
 - Python GC: Manages Python objects
 - Java GC: Manages Java objects
 - JPype: Bridges both, uses Java GC for wrapped objects
@@ -194,6 +236,7 @@ for batch in large_dataset:
 ```
 
 **Memory Leaks:**
+
 - Holding references to Java objects prevents GC
 - Large ResultSets should be consumed and released
 - Server mode: Monitor JVM heap usage
@@ -202,41 +245,49 @@ for batch in large_dataset:
 
 ```
 DatabaseFactory (core.py)
-    ├─ create_database() → Database
-    └─ open_database() → Database
+    ├─ create_database() / open_database() / database_exists()
+    └─ returns Database
 
 Database (core.py)
-    ├─ query() → ResultSet
-    ├─ command() → None
-    ├─ transaction() → TransactionContext
-    ├─ new_vertex() → Vertex
-    ├─ new_document() → Document
-    ├─ get_importer() → Importer
-    └─ create_vector_index() → VectorIndex
+    ├─ query()/command() → ResultSet | None
+    ├─ begin()/commit()/rollback()/transaction() → TransactionContext
+    ├─ new_vertex()/new_document() → Vertex | Document
+    ├─ lookup_by_key()/lookup_by_rid()
+    ├─ create_vector_index() → VectorIndex
+    ├─ async_executor() → AsyncExecutor (async_executor.py)
+    ├─ batch_context() → BatchContext (batch.py)
+    ├─ schema → Schema (schema.py)
+    ├─ export_database()/export_to_csv()
+    └─ close()/is_open()
 
-Record (Java: MutableDocument)
-    ├─ Vertex
-    │   ├─ new_edge() → Edge
-    │   ├─ get_edges() → Iterator[Edge]
-    │   └─ get_vertices() → Iterator[Vertex]
-    ├─ Edge
-    │   ├─ get_out() → Vertex
-    │   └─ get_in() → Vertex
-    └─ Document
-        ├─ get() → Any
-        ├─ set() → None
-        └─ save() → None
+Schema (schema.py)
+    ├─ create_document_type()/create_vertex_type()/create_edge_type()
+    ├─ get_or_create_* helpers
+    └─ create_property()/create_index()
+
+AsyncExecutor (async_executor.py)
+    ├─ set_parallel_level()/set_commit_every()/set_back_pressure()
+    ├─ create_record()/update_record()/delete_record()/create_edge_between()
+    └─ wait_completion()/close()
+
+BatchContext (batch.py)
+    ├─ create_vertex()/create_document()/create_edge()
+    ├─ set_total()/get_errors()
+    └─ context-managed wait/cleanup
+
+Record wrappers (graph.py)
+    ├─ Vertex → new_edge(), modify(), get_out_edges() (todo), property helpers
+    ├─ Edge → get_out(), get_in(), modify()
+    └─ Document → get()/set()/save()/delete()/modify(), to_dict(), get_rid()
 
 ResultSet (results.py)
-    ├─ __iter__() → Iterator[Result]
-    ├─ has_next() → bool
-    └─ next() → Result
+    ├─ iterator protocol
+    ├─ to_list()/to_dataframe()/iter_chunks()/count()/first()/one()
+    └─ wraps Result objects
 
 Result (results.py)
-    ├─ get() → Any
-    ├─ get() → Any
-    ├─ to_dict() → dict
-    └─ to_json() → str
+    ├─ has_property()/get()
+    └─ to_dict()/to_json()
 ```
 
 ## Threading Model
@@ -244,9 +295,15 @@ Result (results.py)
 ### Thread Safety
 
 **Database:**
+
 - `Database` instances are **NOT thread-safe**
 - Each thread needs its own `Database` instance
 - Transactions are thread-local
+
+**Async executor & batch:**
+
+- `AsyncExecutor` is thread-safe; it runs callbacks on Java worker threads
+- `BatchContext` wraps a single `Database` + `AsyncExecutor`, so do not share it across threads
 
 **Example:**
 
@@ -278,6 +335,7 @@ for t in threads:
 ```
 
 **Server Mode:**
+
 - `ArcadeDBServer` is thread-safe
 - HTTP requests handled by internal thread pool
 - Each request gets isolated transaction
@@ -287,6 +345,7 @@ for t in threads:
 ### Multiprocessing
 
 **Safe:**
+
 - Separate processes with separate JVMs
 - No shared state
 - Ideal for parallel imports
@@ -324,19 +383,17 @@ if __name__ == "__main__":
 ### Bottlenecks
 
 1. **JVM Boundary Crossing**
-   - Cost: ~1-10 μs per Java method call
-   - Impact: High-frequency calls (loops)
-   - Solution: Batch operations, use Java bulk APIs
-
+    - Cost: ~1-10 μs per Java method call
+    - Impact: High-frequency calls (loops)
+    - Solution: Batch operations, use Java bulk APIs
 2. **Type Conversion**
-   - Cost: Varies by type (arrays expensive)
-   - Impact: Large data transfers
-   - Solution: Minimize conversions, use efficient formats
-
+    - Cost: Varies by type (arrays expensive)
+    - Impact: Large data transfers
+    - Solution: Minimize conversions, use efficient formats
 3. **Transaction Overhead**
-   - Cost: ~100 μs per transaction
-   - Impact: Many small transactions
-   - Solution: Batch into larger transactions
+    - Cost: ~100 μs per transaction
+    - Impact: Many small transactions
+    - Solution: Batch into larger transactions
 
 ---
 
@@ -441,6 +498,7 @@ jpype.startJVM(
 The Python binding is distributed as a **single, self-contained package** (`arcadedb-embedded`).
 
 **Features:**
+
 - **Bundled JRE**: Includes a minimal Java 21 Runtime Environment (JRE) via the `arcadedb-embedded-jre` package.
 - **Full Feature Set**: Includes all ArcadeDB engines (SQL, Cypher, Gremlin, GraphQL, MongoDB).
 - **Zero Configuration**: No external Java installation required.

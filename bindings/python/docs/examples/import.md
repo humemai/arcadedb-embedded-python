@@ -9,6 +9,7 @@ This page covers examples for importing data into ArcadeDB from various sources.
 **[Example 04 - CSV Import: Documents](04_csv_import_documents.md)**
 
 Learn how to import CSV files as documents:
+
 - Using the Importer API
 - Defining schema mappings
 - Handling data transformations
@@ -19,6 +20,7 @@ Learn how to import CSV files as documents:
 **[Example 05 - CSV Import: Graph Database](05_csv_import_graph.md)**
 
 Learn how to import CSV files as graph vertices and edges:
+
 - Creating vertices from CSV
 - Creating edges from relationships
 - Bulk import optimization
@@ -32,62 +34,59 @@ The ArcadeDB Python bindings provide a powerful `Importer` class for efficient d
 
 ```python
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded import Importer
+from arcadedb_embedded import import_csv
 
-with arcadedb.create_database("import_demo") as db:
-    # Create importer and import CSV to documents
-    importer = Importer(db)
-
-    importer.import_csv(
+with arcadedb.create_database("./import_demo") as db:
+    # Convenience helper: auto-detect CSV, create schema on-the-fly
+    stats = import_csv(
+        db,
         file_path="data.csv",
         type_name="MyType",
-        mapping={
-            "id": "id",
-            "name": "name",
-            "value": "amount"
-        }
+        commitEvery=5000,
     )
+    print(stats)
 ```
 
-### Import with Type Conversion
+### Import with Schema Types
 
 ```python
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded import Importer
+from arcadedb_embedded import import_csv
 
-with arcadedb.create_database("import_demo") as db:
-    importer = Importer(db)
+with arcadedb.create_database("./import_demo") as db:
+    # Define schema up front so imports get typed correctly
+    with db.transaction():
+        db.schema.create_document_type("Product")
+        db.schema.create_property("Product", "id", arcadedb.PropertyType.INTEGER)
+        db.schema.create_property("Product", "name", arcadedb.PropertyType.STRING)
+        db.schema.create_property("Product", "price", arcadedb.PropertyType.FLOAT)
+        db.schema.create_property("Product", "inStock", arcadedb.PropertyType.BOOLEAN)
 
-    # Import with data type specification
-    importer.import_csv(
+    stats = import_csv(
+        db,
         file_path="products.csv",
         type_name="Product",
-        mapping={
-            "product_id": ("id", int),
-            "name": ("name", str),
-            "price": ("price", float),
-            "in_stock": ("inStock", bool)
-        }
+        commitEvery=5000,
     )
+    print(stats)
 ```
 
 ### Bulk Import for Performance
 
 ```python
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded import Importer
+from arcadedb_embedded import import_csv
 
-with arcadedb.create_database("import_demo") as db:
-    # Use batch processing for large files
-    importer = Importer(db)
-
-    # Import in batches (importer handles transactions internally)
-    importer.import_csv(
+with arcadedb.create_database("./import_demo") as db:
+    # Import in batches (import_csv handles commitEvery internally)
+    stats = import_csv(
+        db,
         file_path="large_dataset.csv",
         type_name="LargeType",
-        batch_size=10000,  # Commit every 10k records
-        mapping={"col1": "field1", "col2": "field2"}
+        commitEvery=10000,  # Commit every 10k records
+        parallel=4,  # Optional: parallel importer threads
     )
+    print(stats)
 ```
 
 ## Import Graph Data
@@ -96,41 +95,38 @@ with arcadedb.create_database("import_demo") as db:
 
 ```python
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded import Importer
 
-with arcadedb.create_database("graph_import_demo") as db:
-    importer = Importer(db)
-
-    # Import nodes
-    importer.import_csv(
+with arcadedb.create_database("./graph_import_demo") as db:
+    # Import vertices (CSV columns become properties)
+    stats = arcadedb.import_csv(
+        db,
         file_path="users.csv",
         type_name="User",
-        mapping={
-            "user_id": "userId",
-            "username": "name"
-        },
-        type_kind="VERTEX"
+        import_type="vertices",
+        typeIdProperty="userId",
+        commitEvery=5000,
     )
+    print(stats)
 ```
 
 ### Create Edges from CSV
 
 ```python
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded import Importer
 
 with arcadedb.open_database("./graph_import_demo") as db:
-    importer = Importer(db)
-
-    # Import relationships
-    importer.import_csv_edges(
+    # Import edges (FK resolution using typeIdProperty)
+    stats = arcadedb.import_csv(
+        db,
         file_path="follows.csv",
-        edge_type="Follows",
-        from_vertex_type="User",
-        to_vertex_type="User",
-        from_field="follower_id",
-        to_field="following_id"
+        type_name="Follows",
+        import_type="edges",
+        edgeFromField="follower_id",
+        edgeToField="following_id",
+        typeIdProperty="userId",
+        commitEvery=5000,
     )
+    print(stats)
 ```
 
 ## Multi-Model Import
@@ -140,6 +136,7 @@ Combine different import strategies for multi-model databases:
 **[Example 07 - StackOverflow Multi-Model](07_stackoverflow_multimodel.md)**
 
 See a complete example that combines:
+
 - Document storage for questions/answers
 - Graph relationships for user connections
 - Vector embeddings for semantic search
@@ -151,47 +148,39 @@ See a complete example that combines:
 1. **Use Transactions**: Batch multiple inserts in one transaction
 2. **Disable Indexes**: Temporarily disable indexes during bulk import
 3. **Use Parallel Processing**: Split large files and import in parallel
-4. **Tune Batch Size**: Experiment with batch sizes (1000-10000 typical)
+4. **Tune commitEvery**: Adjust commitEvery (e.g., 1000-10000) for performance vs. transaction size
 
 ```python
 import arcadedb_embedded as arcadedb
 from arcadedb_embedded import Importer
 
-with arcadedb.create_database("import_demo") as db:
+with arcadedb.create_database("./import_demo") as db:
     # Example: Optimized bulk import
     # Drop heavy indexes before bulk insert (replace with your index names)
-    db.command("sql", "DROP INDEX MyType.id")
+    db.schema.drop_index("MyType[id]")
 
     importer = Importer(db)
 
     # Bulk import (importer handles transactions internally)
-    importer.import_csv(
+    importer.import_file(
         file_path="huge_file.csv",
         type_name="MyType",
-        batch_size=5000
+        commitEvery=5000
     )
 
     # Recreate indexes after import (schema ops are auto-transactional)
     db.schema.create_index("MyType", ["id"], unique=True)
-    db.command("sql", "REBUILD INDEX MyType.id")
 ```
-
-## Database Migration
-
-For migrating from other databases, see:
-- **[Example 05](05_csv_import_graph.md)** - Neo4j to ArcadeDB migration pattern
-- **[Importer API Reference](../api/importer.md)** - Full API documentation
 
 ## Additional Resources
 
 - **[Importer API Documentation](../api/importer.md)** - Complete API reference
 - **[Import Guide](../guide/import.md)** - In-depth import strategies
-- **[Example 04: CSV Documents](04_csv_import_documents.md)** - Document import walkthrough
-- **[Example 05: CSV Graph](05_csv_import_graph.md)** - Graph import walkthrough
 - **[Performance Guide](../guide/operations.md)** - Optimization techniques
 
 ## Source Code
 
 View the complete import example source code:
+
 - [`examples/04_csv_import_documents.py`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/04_csv_import_documents.py)
 - [`examples/05_csv_import_graph.py`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/05_csv_import_graph.py)
