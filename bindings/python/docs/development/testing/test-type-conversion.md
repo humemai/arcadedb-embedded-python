@@ -1,33 +1,16 @@
 # Type Conversion Tests
 
-The `test_type_conversion.py` file contains **10 tests** covering Python ↔ Java type conversion for all ArcadeDB data types.
-
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_type_conversion.py){ .md-button }
 
-## Overview
+These notes mirror the Python tests in [test_type_conversion.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_type_conversion.py). There are 10 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), datetime types, Decimal, collections (list, set, dict), binary, and round-trip verification. See [test_type_conversion.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_type_conversion.py) for all test implementations.
 
-Type conversion tests cover:
+## Key Types
 
-- ✅ **Primitive Types** - int, float, str, bool
-- ✅ **Date/Time Types** - datetime, date, time
-- ✅ **Numeric Types** - Decimal for precision
-- ✅ **Collection Types** - list, set, dict
-- ✅ **Binary Data** - bytes handling
-- ✅ **None/Null** - Null value conversion
-- ✅ **Nested Structures** - Recursive conversion
-- ✅ **Round-Trip** - Python → Java → Python preservation
-
-## Test Coverage
-
-### test_primitive_type_conversion
-Tests basic primitive type conversion.
-
-**What it tests:**
-- int → Integer/Long
-- float → Double
-- str → String
-- bool → Boolean
-- None → null
+- Primitives: `int` ↔ Integer/Long, `float` ↔ Double, `str` ↔ String, `bool` ↔ Boolean, `None` ↔ null
+- Date/Time: `datetime`, `date`, `time`
+- Numeric: `Decimal` for precision
+- Collections: `list`, `set`, `dict`
+- Binary: `bytes`
 
 **Pattern:**
 ```python
