@@ -22,41 +22,41 @@ echo ""
 # Define all sweep configurations: HEAP|LOCATION_CACHE|GRAPH_BUILD_CACHE|DATASET_SIZE
 CONFIGS=()
 
-# ---------------------------------------------------------------------
-# 1. Tiny (1,000 vectors)
-# ---------------------------------------------------------------------
-# Heap: 2g
-# Location cache: underfit (~10%), fit (100%), unlimited
-# Graph build cache: small / medium / full (tiny is cheap anyway)
-DS="tiny"
-H="2g"
-LOCS=("100" "1000" "-1")
-GRAPHS=("200" "500" "1000")
-for L in "${LOCS[@]}"; do for G in "${GRAPHS[@]}"; do CONFIGS+=("$H|$L|$G|$DS"); done; done
+# # ---------------------------------------------------------------------
+# # 1. Tiny (1,000 vectors)
+# # ---------------------------------------------------------------------
+# # Heap: 2g
+# # Location cache: underfit (~10%), fit (100%), unlimited
+# # Graph build cache: small / medium / full (tiny is cheap anyway)
+# DS="tiny"
+# H="2g"
+# LOCS=("100" "1000" "-1")
+# GRAPHS=("200" "500" "1000")
+# for L in "${LOCS[@]}"; do for G in "${GRAPHS[@]}"; do CONFIGS+=("$H|$L|$G|$DS"); done; done
 
-# ---------------------------------------------------------------------
-# 2. Small (10,000 vectors)
-# ---------------------------------------------------------------------
-# Heap: 4g
-# Location cache: underfit (~20%), fit (100%), unlimited
-# Graph build cache: small (~10%), medium (~30%), large (~80%)
-DS="small"
-H="4g"
-LOCS=("2000" "10000" "-1")
-GRAPHS=("1000" "3000" "8000")
-for L in "${LOCS[@]}"; do for G in "${GRAPHS[@]}"; do CONFIGS+=("$H|$L|$G|$DS"); done; done
+# # ---------------------------------------------------------------------
+# # 2. Small (10,000 vectors)
+# # ---------------------------------------------------------------------
+# # Heap: 4g
+# # Location cache: underfit (~20%), fit (100%), unlimited
+# # Graph build cache: small (~10%), medium (~30%), large (~80%)
+# DS="small"
+# H="4g"
+# LOCS=("2000" "10000" "-1")
+# GRAPHS=("1000" "3000" "8000")
+# for L in "${LOCS[@]}"; do for G in "${GRAPHS[@]}"; do CONFIGS+=("$H|$L|$G|$DS"); done; done
 
-# ---------------------------------------------------------------------
-# 3. Medium (100,000 vectors)
-# ---------------------------------------------------------------------
-# Heap: 8g
-# Location cache: underfit (~20%), fit (100%), unlimited
-# Graph build cache: small (~2%), medium (~10%), large (~50%)
-DS="medium"
-H="8g"
-LOCS=("20000" "100000" "-1")
-GRAPHS=("2000" "10000" "50000")
-for L in "${LOCS[@]}"; do for G in "${GRAPHS[@]}"; do CONFIGS+=("$H|$L|$G|$DS"); done; done
+# # ---------------------------------------------------------------------
+# # 3. Medium (100,000 vectors)
+# # ---------------------------------------------------------------------
+# # Heap: 8g
+# # Location cache: underfit (~20%), fit (100%), unlimited
+# # Graph build cache: small (~2%), medium (~10%), large (~50%)
+# DS="medium"
+# H="8g"
+# LOCS=("20000" "100000" "-1")
+# GRAPHS=("2000" "10000" "50000")
+# for L in "${LOCS[@]}"; do for G in "${GRAPHS[@]}"; do CONFIGS+=("$H|$L|$G|$DS"); done; done
 
 # ---------------------------------------------------------------------
 # 4. Full (1,000,000 vectors)
@@ -65,14 +65,17 @@ for L in "${LOCS[@]}"; do for G in "${GRAPHS[@]}"; do CONFIGS+=("$H|$L|$G|$DS");
 # Location cache: underfit (~20%), high-cap (~50%), unlimited
 # Graph build cache: small (~0.5%), medium (~5%), large (~20%)
 DS="full"
-H="16g"
+H="4g"
 LOCS=("200000" "500000" "-1")
 GRAPHS=("5000" "50000" "200000")
 for L in "${LOCS[@]}"; do for G in "${GRAPHS[@]}"; do CONFIGS+=("$H|$L|$G|$DS"); done; done
 
 TOTAL=${#CONFIGS[@]}
 CURRENT=0
-MAX_WORKERS=2
+MAX_WORKERS=3
+
+# Optional: Set KEEP_DB=1 to retain DB directories after runs
+KEEP_DB_FLAG="--keep-db"
 
 # Function to run a single benchmark
 run_benchmark() {
@@ -105,7 +108,8 @@ run_benchmark() {
     --xms ${HEAP} \
     --max-direct-memory ${HEAP} \
     --location-cache-size ${LOCATION_CACHE} \
-    --graph-build-cache-size ${GRAPH_BUILD_CACHE}"
+    --graph-build-cache-size ${GRAPH_BUILD_CACHE} \
+    ${KEEP_DB_FLAG}"
 
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))

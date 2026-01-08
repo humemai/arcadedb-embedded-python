@@ -38,10 +38,10 @@ This example includes comprehensive performance benchmarking of all three query 
 
 ### Key Findings:
 
-✅ **Gremlin is the fastest** - 63× faster than unmaintained Cypher transpiler
-✅ **SQL MATCH is viable** - for SQL developers, 2.7× faster than Cypher
-✅ **Gremlin is industry standard** - used by AWS Neptune, Azure Cosmos DB, and enterprise applications
-✅ **Gremlin is actively maintained** - Apache TinkerPop has ongoing development and community support
+- ✅ **Gremlin is the fastest** - 63× faster than unmaintained Cypher transpiler
+- ✅ **SQL MATCH is viable** - for SQL developers, 2.7× faster than Cypher
+- ✅ **Gremlin is industry standard** - used by AWS Neptune, Azure Cosmos DB, and enterprise applications
+- ✅ **Gremlin is actively maintained** - Apache TinkerPop has ongoing development and community support
 
 ### Recommended Approach: Use Gremlin
 
@@ -187,28 +187,27 @@ ORDER BY mutual.name
 ```
 
 ```sql
--- 4. Find close friendships (SQL MATCH)
-MATCH {type: Person, as: p1}
-      -FRIEND_OF{closeness: 'close'}->
-      {type: Person, as: p2}
-RETURN p1.name as person1, p2.name as person2, FRIEND_OF.since as since
+-- 4. Friendship statistics by city (SQL aggregation)
+SELECT city, COUNT(*) as person_count,
+       AVG(age) as avg_age
+FROM Person
+GROUP BY city
+ORDER BY person_count DESC, city
 ```
 
 ```sql
--- 5. Count friends per person (SQL aggregation)
-SELECT name, COUNT(*) as friend_count
-FROM (MATCH {type: Person, as: p} -FRIEND_OF-> {type: Person})
-GROUP BY name
-ORDER BY friend_count DESC, name
+-- 5. Find people without email (SQL NULL check)
+SELECT name, phone, verified
+FROM Person
+WHERE email IS NULL
 ```
 
 ```sql
--- 6. Find variable-length paths (SQL MATCH)
-MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
-      -FRIEND_OF*1..3-
-      {type: Person, as: connected, where: (name <> 'Alice Johnson')}
-RETURN DISTINCT connected.name as name, connected.city as city
-ORDER BY connected.name
+-- 6. Verified people with reputation (exclude NULLs)
+SELECT name, reputation, city
+FROM Person
+WHERE verified = true AND reputation IS NOT NULL
+ORDER BY reputation DESC
 ```
 
 ### Cypher Queries (for comparison)
@@ -265,7 +264,7 @@ ORDER BY connected.name
 
 ### Gremlin Queries (Recommended)
 
-```gremlin
+```groovy
 // 1. Find all friends of Alice
 g.V().hasLabel('Person').has('name', 'Alice Johnson')
     .out('FRIEND_OF')
@@ -275,7 +274,7 @@ g.V().hasLabel('Person').has('name', 'Alice Johnson')
     .order().by(select('name'))
 ```
 
-```gremlin
+```groovy
 // 2. Find friends of friends of Alice
 g.V().hasLabel('Person').has('name', 'Alice Johnson')
     .out('FRIEND_OF').as('friend')
@@ -287,7 +286,7 @@ g.V().hasLabel('Person').has('name', 'Alice Johnson')
     .order().by(select('fof'))
 ```
 
-```gremlin
+```groovy
 // 3. Find mutual friends between Alice and Bob
 g.V().hasLabel('Person').has('name', 'Alice Johnson')
     .out('FRIEND_OF').as('mutual')
@@ -297,7 +296,7 @@ g.V().hasLabel('Person').has('name', 'Alice Johnson')
     .order()
 ```
 
-```gremlin
+```groovy
 // 4. Find close friendships (Gremlin)
 g.V().hasLabel('Person').as('p1')
     .outE('FRIEND_OF').has('closeness', 'close').as('edge')
@@ -309,7 +308,7 @@ g.V().hasLabel('Person').as('p1')
     .order().by(select('edge'))
 ```
 
-```gremlin
+```groovy
 // 5. Count friends per person (Gremlin aggregation)
 g.V().hasLabel('Person')
     .project('name', 'friend_count')
@@ -320,7 +319,7 @@ g.V().hasLabel('Person')
     .by(select('name'))
 ```
 
-```gremlin
+```groovy
 // 6. Find connections within 3 steps from Alice (Gremlin)
 g.V().hasLabel('Person').has('name', 'Alice Johnson')
     .repeat(out('FRIEND_OF').simplePath())
@@ -405,77 +404,6 @@ with arcadedb.open_database("./social_network_db") as db:
             # Transaction automatically commits at end of 'with' block
 ```
 
-## Expected Output
-
-When you run the example, you'll see comprehensive output showing all graph operations:
-
-```
-🌐 ArcadeDB Python - Social Network Graph Example
-=======================================================
-🔌 Creating/connecting to database...
-✅ Database created at: ./my_test_databases/social_network_db
-💡 Using embedded mode - no server needed!
-
-📊 Creating social network schema...
-  ✓ Created Person vertex type
-  ✓ Created Person properties
-  ✓ Created FRIEND_OF edge type
-  ✓ Created FRIEND_OF properties
-  ✓ Created index on Person.name
-
-👥 Creating sample social network data...
-  📝 Creating people...
-    ✓ Created person: Alice Johnson (28, New York)
-    ✓ Created person: Bob Smith (32, San Francisco)
-    ✓ Created person: Carol Davis (26, Chicago)
-    ... (8 people total)
-  🤝 Creating friendships...
-    ✓ Connected Alice Johnson ↔ Bob Smith (close)
-    ✓ Connected Alice Johnson ↔ Carol Davis (casual)
-    ... (12 bidirectional friendships = 24 edges)
-  ✅ Created 8 people and 24 friendship connections
-
-🔍 Demonstrating graph queries...
-
-  📊 SQL MATCH Queries:
-    1️⃣ Find all friends of Alice (SQL MATCH):
-      👥 Bob Smith from San Francisco
-      👥 Carol Davis from Chicago
-      👥 Eve Brown from Seattle
-
-    2️⃣ Find friends of friends of Alice (SQL MATCH):
-      🔗 David Wilson (through Bob Smith)
-      🔗 Frank Miller (through Bob Smith)
-      🔗 Grace Lee (through Carol Davis)
-      ... (7 results showing network expansion)
-
-  🎯 Cypher Queries:
-    1️⃣ Find all friends of Alice (Cypher):
-      👥 Bob Smith from San Francisco
-      👥 Carol Davis from Chicago
-      👥 Eve Brown from Seattle
-
-    4️⃣ Find close friendships (Cypher):
-      💙 Alice Johnson → Bob Smith (since 2020-05-15)
-      💙 Carol Davis → Eve Brown (since 2021-09-12)
-      ... (8 close relationships)
-
-    5️⃣ Find connections within 3 steps from Alice (Cypher):
-      🌐 Bob Smith from San Francisco
-      🌐 Carol Davis from Chicago
-      🌐 David Wilson from Boston
-      ... (7 people reachable within 3 hops)
-
-  🆚 SQL vs Cypher Comparison:
-    ✅ Cypher query returned 3 results
-    💡 SQL and Cypher would yield equivalent results
-    🎯 Key Differences: SQL uses subqueries, Cypher uses pattern matching
-
-✅ Social network graph example completed successfully!
-✅ Database connection closed
-💡 Database files preserved at: ./my_test_databases/social_network_db
-```
-
 ## Try It Yourself
 
 1. **Run the example:**
@@ -546,7 +474,3 @@ db.command("sql", """
 - Explore [CSV Import (Graph)](05_csv_import_graph.md) for importing graph data from files
 - See [Multi-Model Stack Overflow](07_stackoverflow_multimodel.md) for combining graph with documents and vectors
 - Check out [Server Mode & HTTP API](08_server_mode_rest_api.md) for production deployment
-
----
-
-*This example demonstrates core graph database concepts that apply across many domains. The patterns shown here scale from small applications to enterprise social platforms.*
