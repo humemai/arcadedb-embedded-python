@@ -122,7 +122,23 @@ fi
 
 # Step 2: Build minimal JRE with jlink
 echo -e "${CYAN}🔨 Building minimal JRE with jlink...${NC}"
-REQUIRED_MODULES="java.base,java.compiler,java.desktop,java.logging,java.management,java.naming,java.prefs,java.rmi,java.scripting,java.security.jgss,java.security.sasl,java.sql,java.transaction.xa,java.xml,jdk.incubator.vector,jdk.internal.vm.ci,jdk.jfr,jdk.management,jdk.sctp,jdk.unsupported,jdk.zipfs"
+
+echo -e "${CYAN}🔍 Analyzing JARs to determine required modules (jdeps)...${NC}"
+# Use jdeps to find dependencies
+# --print-module-deps: output comma-separated list of modules
+# --ignore-missing-deps: ignore missing dependencies (we only care about what we have)
+# --multi-release 21: treat multi-release JARs as Java 21
+# Note: Filter out jboss/wildfly jars which often have broken module descriptors
+# Note: Do NOT use --class-path or --recursive to avoid resolving bad modules
+DETECTED_MODULES=$(find "$JARS_DIR" -name "*.jar" | grep -v "jboss" | grep -v "wildfly" | grep -v "smallrye" | xargs jdeps --print-module-deps --ignore-missing-deps --multi-release 21 | grep -v "Warning" | tr ',' '\n' | grep -v "Warning" | grep -v ":" | grep -v "/" | sort -u | paste -sd "," -)
+
+# Manual overrides:
+# jdk.zipfs: Required for JPype to load classes from JARs
+# jdk.unsupported: Often required for Unsafe access in libraries
+REQUIRED_MODULES="${DETECTED_MODULES},jdk.zipfs,jdk.unsupported"
+
+echo -e "${CYAN}📦 Detected modules: ${YELLOW}${DETECTED_MODULES}${NC}"
+echo -e "${CYAN}📦 Final modules list: ${YELLOW}${REQUIRED_MODULES}${NC}"
 
 rm -rf "$SCRIPT_DIR/temp_jre"
 jlink \
