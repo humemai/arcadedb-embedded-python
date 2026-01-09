@@ -38,15 +38,15 @@ echo -e "${CYAN}📌 ArcadeDB tag: ${YELLOW}${ARCADEDB_TAG}${NC}"
 # Check for Java (needed for jlink and JPype build)
 if ! command -v java &> /dev/null; then
     echo -e "${RED}❌ Java not found${NC}"
-    echo -e "${YELLOW}💡 Please install Java 21 or later${NC}"
+    echo -e "${YELLOW}💡 Please install Java 25 or later${NC}"
     exit 1
 fi
 
 JAVA_VERSION=$(java -version 2>&1 | head -n 1 | cut -d'"' -f2 | cut -d'.' -f1)
 echo -e "${CYAN}☕ Java version: ${YELLOW}${JAVA_VERSION}${NC}"
 
-if [[ "$JAVA_VERSION" -lt 21 ]]; then
-    echo -e "${RED}❌ Java 21 or later is required (found: ${JAVA_VERSION})${NC}"
+if [[ "$JAVA_VERSION" -lt 25 ]]; then
+    echo -e "${RED}❌ Java 25 or later is required (found: ${JAVA_VERSION})${NC}"
     exit 1
 fi
 
@@ -127,10 +127,10 @@ echo -e "${CYAN}🔍 Analyzing JARs to determine required modules (jdeps)...${NC
 # Use jdeps to find dependencies
 # --print-module-deps: output comma-separated list of modules
 # --ignore-missing-deps: ignore missing dependencies (we only care about what we have)
-# --multi-release 21: treat multi-release JARs as Java 21
+# --multi-release 25: treat multi-release JARs as Java 25
 # Note: Filter out jboss/wildfly jars which often have broken module descriptors
 # Note: Do NOT use --class-path or --recursive to avoid resolving bad modules
-DETECTED_MODULES=$(find "$JARS_DIR" -name "*.jar" | grep -v "jboss" | grep -v "wildfly" | grep -v "smallrye" | xargs jdeps --print-module-deps --ignore-missing-deps --multi-release 21 | grep -v "Warning" | tr ',' '\n' | grep -v "Warning" | grep -v ":" | grep -v "/" | sort -u | paste -sd "," -)
+DETECTED_MODULES=$(find "$JARS_DIR" -name "*.jar" | grep -v "jboss" | grep -v "wildfly" | grep -v "smallrye" | xargs jdeps --print-module-deps --ignore-missing-deps --multi-release 25 | grep -v "Warning" | tr ',' '\n' | grep -v "Warning" | grep -v ":" | grep -v "/" | sort -u | paste -sd "," -)
 
 # Manual overrides:
 # jdk.zipfs: Required for JPype to load classes from JARs

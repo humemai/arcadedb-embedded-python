@@ -148,12 +148,12 @@ else
     # Native build - check for Java (needed to BUILD the bundled JRE)
     if ! command -v java &> /dev/null; then
         echo -e "${RED}❌ Java is not installed${NC}"
-        echo -e "${YELLOW}💡 Please install Java 21+ JDK to BUILD the package (creates bundled JRE)${NC}"
+        echo -e "${YELLOW}💡 Please install Java 25+ JDK to BUILD the package (creates bundled JRE)${NC}"
         exit 1
     fi
     if ! command -v jlink &> /dev/null; then
         echo -e "${RED}❌ jlink not found${NC}"
-        echo -e "${YELLOW}💡 Please install a full JDK (jlink creates the bundled JRE)${NC}"
+        echo -e "${YELLOW}💡 Please install a full JDK 25+ (jlink creates the bundled JRE)${NC}"
         exit 1
     fi
 fi
