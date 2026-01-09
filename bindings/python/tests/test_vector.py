@@ -188,9 +188,10 @@ class TestLSMVectorIndex:
                 rids.append(str(v.get_identity()))
 
         # Create index now (Bulk load)
-        # We enable store_vectors_in_graph to improve stability (avoid reading mutable pages during search)
+        # We disable store_vectors_in_graph to avoid "Invalid position" errors when checking mutable pages
+        # during graph build/updates which caused data loss in some environments.
         index = test_db.create_vector_index(
-            "Doc", "embedding", dimensions=dims, store_vectors_in_graph=True
+            "Doc", "embedding", dimensions=dims, store_vectors_in_graph=False
         )
 
         # Delete every 10th vector (indices 0, 10, 20, ...)
