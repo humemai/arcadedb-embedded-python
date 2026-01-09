@@ -11,6 +11,7 @@ def test_defaults_no_env_vars():
         assert "-Xmx4g" in args
         assert "-Djava.awt.headless=true" in args
         assert "--add-modules=jdk.incubator.vector" in args
+        assert "--enable-native-access=ALL-UNNAMED" in args
         # Should have default error log
         assert any("hs_err_pid" in arg for arg in args)
 
@@ -27,11 +28,20 @@ def test_custom_jvm_args_merging():
         # Mandatory args injected
         assert "-Djava.awt.headless=true" in args
         assert "--add-modules=jdk.incubator.vector" in args
+        assert "--enable-native-access=ALL-UNNAMED" in args
+
+
+def test_custom_jvm_args_injects_heap_default_when_missing():
+    """Ensure we add a heap default if user omits -Xmx."""
+    with patch.dict(os.environ, {"ARCADEDB_JVM_ARGS": "-Dfoo=bar"}, clear=True):
+        args = _build_jvm_args()
+        assert "-Xmx4g" in args
+        assert "-Dfoo=bar" in args
 
 
 def test_custom_jvm_args_no_duplicates():
     """Test that we don't duplicate flags if user provides them."""
-    custom_args = "-Xmx2g -Djava.awt.headless=false --add-modules=jdk.incubator.vector"
+    custom_args = "-Xmx2g -Djava.awt.headless=false --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED"
     with patch.dict(os.environ, {"ARCADEDB_JVM_ARGS": custom_args}, clear=True):
         args = _build_jvm_args()
 
@@ -39,9 +49,11 @@ def test_custom_jvm_args_no_duplicates():
         # Count occurrences
         modules_count = sum(1 for a in args if "jdk.incubator.vector" in a)
         headless_count = sum(1 for a in args if "headless" in a)
+        native_count = sum(1 for a in args if "enable-native-access" in a)
 
         assert modules_count == 1
         assert headless_count == 1
+        assert native_count == 1
 
         # Verify user's explicit choice is respected (e.g., they might want headless=false for some reason)
         # Note: Our logic just checks key presence, it doesn't force overwrite if key exists with different value.

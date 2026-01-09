@@ -151,11 +151,20 @@ def _build_jvm_args() -> list[str]:
         # 2. Headless mode if not set (Critical for server environments)
         if not any(arg.startswith("-Djava.awt.headless=") for arg in jvm_args):
             jvm_args.append("-Djava.awt.headless=true")
+
+        # 3. Default heap if user did not set one
+        if not any(arg.startswith("-Xmx") for arg in jvm_args):
+            jvm_args.append("-Xmx4g")
+
+        # 4. Allow native access for JPype (required by newer JDKs)
+        if not any(arg.startswith("--enable-native-access") for arg in jvm_args):
+            jvm_args.append("--enable-native-access=ALL-UNNAMED")
     else:
         # Default: 4GB heap, headless mode, SIMD vector support
         jvm_args = [
             "-Xmx4g",
             "-Djava.awt.headless=true",
+            "--enable-native-access=ALL-UNNAMED",
             "--add-modules=jdk.incubator.vector",
         ]
 
