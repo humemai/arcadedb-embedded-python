@@ -152,7 +152,7 @@ jobs:
         uses: actions/setup-java@f2beeb24e141e01a676f977032f5a29d81c9e27e # v5.1.0
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '25'
 
       - name: Set up Docker Buildx (Linux only)
         if: matrix.platform == 'linux/amd64' || matrix.platform == 'linux/arm64'
