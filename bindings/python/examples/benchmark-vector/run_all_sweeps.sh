@@ -96,7 +96,7 @@ done
 
 TOTAL=${#CONFIGS[@]}
 CURRENT=0
-MAX_WORKERS=2
+MAX_WORKERS=4
 
 # Optional: Set KEEP_DB=1 to retain DB directories after runs
 KEEP_DB_FLAG="--keep-db"
@@ -136,8 +136,6 @@ run_benchmark() {
     --dataset ${DATASET} \
     --dataset-size ${DATASET_SIZE} \
     --xmx ${HEAP} \
-    --xms ${HEAP} \
-    --max-direct-memory ${HEAP} \
     --location-cache-size ${LOCATION_CACHE} \
     --graph-build-cache-size ${GRAPH_BUILD_CACHE} \
     ${FLAGS} \

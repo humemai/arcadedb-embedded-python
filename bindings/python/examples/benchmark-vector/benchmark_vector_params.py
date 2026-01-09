@@ -427,18 +427,6 @@ def run_benchmark():
         help="JVM max heap size (e.g., 16g, 32g)",
     )
     parser.add_argument(
-        "--xms",
-        type=str,
-        default="16g",
-        help="JVM initial heap size (e.g., 16g, 32g)",
-    )
-    parser.add_argument(
-        "--max-direct-memory",
-        type=str,
-        default="16g",
-        help="JVM MaxDirectMemorySize (e.g., 16g, 32g)",
-    )
-    parser.add_argument(
         "--location-cache-size",
         type=str,
         default="500000",
@@ -476,8 +464,7 @@ def run_benchmark():
 
     # Configure JVM before importing arcadedb
     jvm_args = (
-        f"-Xmx{args.xmx} -Xms{args.xms} "
-        f"-XX:MaxDirectMemorySize={args.max_direct_memory} "
+        f"-Xmx{args.xmx} "
         f"-Darcadedb.vectorIndex.locationCacheSize={args.location_cache_size} "
         f"-Darcadedb.vectorIndex.graphBuildCacheSize={args.graph_build_cache_size} "
         f"-Darcadedb.vectorIndex.mutationsBeforeRebuild={args.mutations_before_rebuild}"
@@ -525,8 +512,7 @@ def run_benchmark():
         "Source": DATASETS[args.dataset],
         "Metric": metric.capitalize(),
         "K Values": str(k_values),
-        "JVM Heap": f"-Xmx{args.xmx} -Xms{args.xms}",
-        "JVM Direct Memory": f"-XX:MaxDirectMemorySize={args.max_direct_memory}",
+        "JVM Heap": f"-Xmx{args.xmx}",
         "Location Cache Size": args.location_cache_size,
         "Graph Build Cache Size": args.graph_build_cache_size,
         "Mutations Before Rebuild": args.mutations_before_rebuild,
