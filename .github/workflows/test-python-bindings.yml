@@ -129,17 +129,6 @@ jobs:
             runs-on: windows-2025
           - platform: windows/arm64
             runs-on: windows-11-arm
-        exclude:
-          # Windows ARM64: no 3.10 or 3.14 available on hosted runners
-          - platform: windows/arm64
-            python-version: '3.10'
-          - platform: windows/arm64
-            python-version: '3.14'
-          # macOS x86_64: torch wheels not available yet for 3.13/3.14
-          - platform: darwin/amd64
-            python-version: '3.13'
-          - platform: darwin/amd64
-            python-version: '3.14'
 
     steps:
       - name: Checkout code
