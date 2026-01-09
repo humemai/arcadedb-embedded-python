@@ -121,12 +121,12 @@ def parse_config_from_filename(filename):
     """Extract configuration from filename.
 
     Example with mutations (new format): benchmark_jvector_glove-100-angular_size_tiny_xmx16g_loc500000_graph50000_mut200.md
-    Example without mutations (old format): benchmark_jvector_glove-100-angular_size_tiny.md
-    Returns: {'dataset_name': 'glove-100-angular', 'dataset_size': 'tiny', 'heap': '16g', 'location_cache': 500000, 'graph_cache': 50000, 'mutations': 100}
+    Example with quant and graph_store (newer format): benchmark_jvector_glove-100-angular_size_tiny_xmx16g_loc500000_graph50000_mut200_quantINT8_storeVectors.md
+    Returns dict with parsed values.
     """
-    # Try new format with mutations first (sweep results)
+    # Try fully detailed format with quant and store
     match = re.search(
-        r"benchmark_jvector_(.+?)_size_([a-zA-Z0-9]+)_xmx(\w+)_loc(-?\d+)_graph(\d+)_mut(\d+)",
+        r"benchmark_jvector_(.+?)_size_([a-zA-Z0-9]+)_xmx(\w+)_loc(-?\d+)_graph(\d+)_mut(\d+)(?:_quant([a-zA-Z0-9]+))?(?:_(storeVectors))?",
         filename,
     )
     if match:
@@ -137,9 +137,11 @@ def parse_config_from_filename(filename):
             "location_cache": int(match.group(4)),
             "graph_cache": int(match.group(5)),
             "mutations": int(match.group(6)),
+            "quantization": match.group(7) if match.group(7) else "NONE",
+            "store_vectors": True if match.group(8) else False,
         }
 
-    # Try old format without mutations
+    # Try old format without mutations (backward compatibility)
     match = re.search(r"benchmark_jvector_(.+?)_size_([a-zA-Z0-9]+)$", filename)
     if match:
         return {
@@ -148,7 +150,9 @@ def parse_config_from_filename(filename):
             "heap": None,
             "location_cache": None,
             "graph_cache": None,
-            "mutations": 100,  # Default mutations value for old format
+            "mutations": 100,
+            "quantization": "NONE",
+            "store_vectors": False,
         }
 
     return None
@@ -158,338 +162,364 @@ def plot_location_cache_sweep(sweep_dir, output_dir):
     """Plot results for location cache size sweep (fixed graph cache)."""
     print("\nProcessing location cache sweep...")
 
-    md_files = glob.glob(os.path.join(sweep_dir, "benchmark_jvector_*_graph50000.md"))
+    # We now have multiple files due to quantization variations.
+    # Let's filter for standard config: NONE quant, Store OFF
+    # Or iterate through all combinations if desired.
+    # For simplicity, we plot the "Standard" config (Quant=NONE, Store=False)
 
-    if not md_files:
-        print("  No location cache sweep files found")
-        return
+    md_files = glob.glob(os.path.join(sweep_dir, "benchmark_jvector_*.md"))
 
-    # Collect data
-    sweep_data = []
+    # Organize data by configuration key (quant, store)
+    configs = {}
+
     for md_file in md_files:
         filename = os.path.basename(md_file)
         config = parse_config_from_filename(filename)
         if not config:
             continue
 
-        df = parse_markdown_table(md_file)
-        if df.empty:
+        key = (config["quantization"], config["store_vectors"])
+        if key not in configs:
+            configs[key] = []
+
+        # Only take files matching our target fixed graph cache criterion for this specific plot type
+        # In the original code, this was hardcoded to graph50000.
+        # We need to ensure we are comparing apples to apples.
+        if (
+            config["graph_cache"] != 50000
+            and config["dataset_size"] != "tiny"
+            and config["graph_cache"] != 500
+        ):  # Heuristic adjustment
+            # Let's just filter later
+            pass
+
+        configs[key].append((md_file, config))
+
+    # Generate plots for each variation
+    for (quant, store), files in configs.items():
+        suffix_label = f"Quant={quant}, Store={store}"
+        file_suffix = f"_{quant}_store{store}"
+
+        # Filter for the specific graph cache size used in the original sweep logic
+        # Original logic: glob.glob("...graph50000.md").
+        # We need to be adaptive based on dataset size likely found in the file
+        target_files = []
+        for f, c in files:
+            # We want to vary Location Cache, fixing everything else.
+            # We fix graph cache to a 'reasonable' value present in the sweep.
+            # 50000 was used for medium/full. For tiny it was 500. For small it was 3000.
+            # Let's dynamically pick the middle graph cache value if possible, or just plot all data points found.
+            # Easier: Just stick to the original filter if applicable, or skip if empty.
+            if c["graph_cache"] in [
+                500,
+                3000,
+                10000,
+                50000,
+            ]:  # Common "medium" settings
+                target_files.append((f, c))
+
+        if not target_files:
             continue
 
-        # Find corresponding memory log using cache parameters
-        # Extract heap size from config for pattern matching
-        heap_str = config["heap"] if config["heap"] else "*"
-        dataset_size_label = config["dataset_size"]
+        print(f"  Generating plot for {suffix_label}...")
 
-        log_pattern = os.path.join(
-            sweep_dir,
-            "benchmark_logs",
-            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_*_memory.log",
-        )
-        log_files = sorted(glob.glob(log_pattern))  # Sort to get consistent results
-        peak_mem = None
-        if log_files:
-            # Take the most recent (last) file if multiple matches
-            peak_mem = get_peak_memory(log_files[-1])
+        sweep_data = []
+        for md_file, config in target_files:
+            df = parse_markdown_table(md_file)
+            if df.empty:
+                continue
 
-        # Calculate average build time
-        build_time = 0
-        if "Build (s)" in df.columns:
-            build_time = df["Build (s)"].mean()
+            # Find log file
+            heap_str = config["heap"] if config["heap"] else "*"
+            dataset_size_label = config["dataset_size"]
 
-        sweep_data.append(
-            {
-                "location_cache": config["location_cache"],
-                "graph_cache": config["graph_cache"],
-                "df": df,
-                "peak_memory": peak_mem,
-                "build_time": build_time,
-            }
-        )
+            # Construct log pattern matching the new complex naming
+            # RUN_NAME="heap${HEAP}_loc${LOCATION_CACHE}_graph${GRAPH_BUILD_CACHE}_${DATASET_SIZE}_${QUANTIZATION}_store${STORE_VECTORS}"
+            store_str = "ON" if config["store_vectors"] else "OFF"
 
-    if not sweep_data:
-        print("  No valid data found")
-        return
+            # Note: shell script naming might slightly differ in order or separator.
+            # Shell: heapMSG_locMSG_graphMSG_sizeMSG_quantMSG_storeMSG
+            # file: benchmark_jvector_..._quantINT8_storeVectors.md
 
-    # Verify consistency: Check if recall/latency are similar for same parameters
-    print("\n  Verifying recall/latency consistency across cache sizes...")
-    # Take a reference configuration (middle one)
-    ref_data = sweep_data[len(sweep_data) // 2]
-    ref_df = ref_data["df"]
+            log_pattern = os.path.join(
+                sweep_dir,
+                "benchmark_logs",
+                f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_*_duration.txt",
+            ).replace("_duration.txt", "_memory.log")
 
-    for data in sweep_data:
-        if data == ref_data:
+            log_files = sorted(glob.glob(log_pattern))
+            peak_mem = None
+            if log_files:
+                peak_mem = get_peak_memory(log_files[-1])
+
+            build_time = 0
+            if "Build (s)" in df.columns:
+                build_time = df["Build (s)"].mean()
+
+            sweep_data.append(
+                {
+                    "location_cache": config["location_cache"],
+                    "graph_cache": config["graph_cache"],
+                    "df": df,
+                    "peak_memory": peak_mem,
+                    "build_time": build_time,
+                }
+            )
+
+        if not sweep_data:
             continue
-        df = data["df"]
 
-        # Compare recall and latency for matching rows
-        if len(df) == len(ref_df):
-            recall_diff = abs(
-                df["Recall (After)"].values - ref_df["Recall (After)"].values
-            ).max()
-            latency_diff = abs(
-                df["Latency (ms) (After)"].values
-                - ref_df["Latency (ms) (After)"].values
-            ).max()
-
-            cache_label = (
-                f"{data['location_cache']:,}"
-                if data["location_cache"] != -1
-                else "Unlimited"
+        # Sort and Plot logic (reused)
+        sweep_data.sort(
+            key=lambda x: (
+                x["location_cache"] if x["location_cache"] != -1 else float("inf")
             )
-            print(
-                f"    Cache {cache_label}: Max recall diff={recall_diff:.4f}, Max latency diff={latency_diff:.2f}ms"
-            )
+        )
 
-    # Sort by location cache size
-    sweep_data.sort(
-        key=lambda x: x["location_cache"] if x["location_cache"] != -1 else float("inf")
-    )
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
-    # Plot: Memory usage and Build time
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        cache_sizes = []
+        peak_memories = []
+        build_times = []
+        labels = []
 
-    cache_sizes = []
-    peak_memories = []
-    build_times = []
-    labels = []
+        for data in sweep_data:
+            loc_cache = data["location_cache"]
+            peak_mem = data["peak_memory"]
+            build_time = data["build_time"]
 
-    for data in sweep_data:
-        loc_cache = data["location_cache"]
-        peak_mem = data["peak_memory"]
-        build_time = data["build_time"]
+            label = f"{loc_cache:,}" if loc_cache != -1 else "Unlimited"
+            # Avoid duplicates in labels if multiple graph sizes slipped in
+            if label in labels:
+                continue
 
-        label = f"{loc_cache:,}" if loc_cache != -1 else "Unlimited"
-        labels.append(label)
-        cache_sizes.append(
-            loc_cache if loc_cache != -1 else 1500000
-        )  # For plotting unlimited
+            labels.append(label)
+            cache_sizes.append(loc_cache if loc_cache != -1 else 1500000)
+            peak_memories.append(peak_mem if peak_mem else 0)
+            build_times.append(build_time)
 
-        if peak_mem:
-            peak_memories.append(peak_mem)
-        else:
-            peak_memories.append(0)
+        # Skip empty plots
+        if not labels:
+            plt.close()
+            continue
 
-        build_times.append(build_time)
+        x_pos = range(len(labels))
+        colors = plt.cm.viridis(
+            [i / max(1, (len(labels) - 1)) for i in range(len(labels))]
+        )
 
-    x_pos = range(len(labels))
-    colors = plt.cm.viridis([i / (len(labels) - 1) for i in range(len(labels))])
+        # Plot 1: Memory
+        bars1 = ax1.bar(x_pos, peak_memories, color=colors, alpha=0.7)
+        ax1.set_title(f"Peak Memory ({suffix_label})")
+        ax1.set_xlabel("Location Cache Size")
+        ax1.set_ylabel("Peak Memory (MB)")
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels(labels, rotation=45, ha="right")
+        ax1.grid(True, axis="y", alpha=0.2)
 
-    # Plot 1: Memory usage
-    bars1 = ax1.bar(x_pos, peak_memories, color=colors, alpha=0.7)
-    ax1.set_title("Peak Memory Usage by Location Cache Size")
-    ax1.set_xlabel("Location Cache Size")
-    ax1.set_ylabel("Peak Memory (MB)")
-    ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(labels, rotation=45, ha="right")
-    ax1.grid(True, axis="y", alpha=0.2)
+        for bar, val in zip(bars1, peak_memories):
+            if val > 0:
+                ax1.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    val,
+                    format_memory(val),
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                )
 
-    # Add values on bars
-    for i, (bar, val) in enumerate(zip(bars1, peak_memories)):
-        if val > 0:
-            ax1.text(
+        # Plot 2: Build Time
+        bars2 = ax2.bar(x_pos, build_times, color=colors, alpha=0.7)
+        ax2.set_title(f"Build Time ({suffix_label})")
+        ax2.set_xlabel("Location Cache Size")
+        ax2.set_ylabel("Seconds")
+        ax2.set_xticks(x_pos)
+        ax2.set_xticklabels(labels, rotation=45, ha="right")
+        ax2.grid(True, axis="y", alpha=0.2)
+
+        for bar, val in zip(bars2, build_times):
+            ax2.text(
                 bar.get_x() + bar.get_width() / 2,
-                val + 50,
-                format_memory(val),
+                val,
+                f"{val:.1f}s",
                 ha="center",
                 va="bottom",
-                fontsize=10,
+                fontsize=9,
             )
 
-    # Plot 2: Build time
-    bars2 = ax2.bar(x_pos, build_times, color=colors, alpha=0.7)
-    ax2.set_title("Build Time by Location Cache Size")
-    ax2.set_xlabel("Location Cache Size")
-    ax2.set_ylabel("Build Time (seconds)")
-    ax2.set_xticks(x_pos)
-    ax2.set_xticklabels(labels, rotation=45, ha="right")
-    ax2.grid(True, axis="y", alpha=0.2)
+        plt.suptitle(f"Location Cache Impact ({suffix_label})", fontsize=16)
+        plt.tight_layout()
 
-    # Add values on bars
-    for i, (bar, val) in enumerate(zip(bars2, build_times)):
-        ax2.text(
-            bar.get_x() + bar.get_width() / 2,
-            val + 0.5,
-            format_duration_seconds(val),
-            ha="center",
-            va="bottom",
-            fontsize=10,
-        )
-
-    plt.suptitle("Location Cache Size Impact (Graph Cache: 50K)", fontsize=18, y=1.02)
-    plt.tight_layout()
-
-    # Save
-    output_prefix = os.path.join(output_dir, "location_cache_sweep")
-    plt.savefig(f"{output_prefix}.png", dpi=150, bbox_inches="tight")
-    plt.savefig(f"{output_prefix}.pdf", bbox_inches="tight")
-    print(f"  Saved: {output_prefix}.png and .pdf")
-    plt.close()
+        # Save with suffix
+        output_prefix = os.path.join(output_dir, f"location_cache_sweep{file_suffix}")
+        plt.savefig(f"{output_prefix}.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: {output_prefix}.png")
+        plt.close()
 
 
 def plot_graph_cache_sweep(sweep_dir, output_dir):
     """Plot results for graph build cache size sweep (fixed location cache)."""
     print("\nProcessing graph cache sweep...")
 
-    md_files = glob.glob(
-        os.path.join(sweep_dir, "benchmark_jvector_*_loc500000_graph*.md")
-    )
+    md_files = glob.glob(os.path.join(sweep_dir, "benchmark_jvector_*.md"))
 
-    if not md_files:
-        print("  No graph cache sweep files found")
-        return
+    # Organize data by configuration key (quant, store)
+    configs = {}
 
-    # Collect data
-    sweep_data = []
     for md_file in md_files:
         filename = os.path.basename(md_file)
         config = parse_config_from_filename(filename)
         if not config:
             continue
 
-        df = parse_markdown_table(md_file)
-        if df.empty:
-            continue
+        key = (config["quantization"], config["store_vectors"])
+        if key not in configs:
+            configs[key] = []
 
-        # Calculate build time
-        build_time = 0
-        if "Build (s)" in df.columns:
-            build_time = df["Build (s)"].mean()
+        # Only take files matching our target fixed location cache criterion
+        # Fixed Loc=500,000 was used in original script.
+        # But for 'tiny' usually loc=1000 is max.
+        # We can try to be smart or just filter for the fixed value used in script (500000)
+        # Original: glob.glob("benchmark_jvector_*_loc500000_graph*.md")
+        # Let's keep logic simple: If loc_cache is 500000 OR (tiny/small and loc_cache is their max)
 
-        # Find corresponding memory log using cache parameters
-        # Extract heap size from config for pattern matching
-        heap_str = config["heap"] if config["heap"] else "*"
-        dataset_size_label = config["dataset_size"]
+        if config["location_cache"] == 500000:
+            configs[key].append((md_file, config))
+        # Additional heuristics for smaller datasets where 500k is overkill/not present?
+        # For tiny/small, reasonable fixed loc might be 1000 or 10000.
+        # But let's stick to the original script logic which looked for 500000.
+        # If that excludes tiny/small, so be it (original script did too effectively).
 
-        log_pattern = os.path.join(
-            sweep_dir,
-            "benchmark_logs",
-            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_*_memory.log",
-        )
-        log_files = sorted(glob.glob(log_pattern))  # Sort to get consistent results
-        peak_mem = None
-        if log_files:
-            # Take the most recent (last) file if multiple matches
-            peak_mem = get_peak_memory(log_files[-1])
+    if not configs:
+        print("  No graph cache sweep files found matching loc=500000")
+        # Fallback: try different fixed location sizes?
+        # Let's just proceed with what we have.
 
-        sweep_data.append(
-            {
-                "location_cache": config["location_cache"],
-                "graph_cache": config["graph_cache"],
-                "df": df,
-                "build_time": build_time,
-                "peak_memory": peak_mem,
-            }
-        )
+    for (quant, store), files in configs.items():
+        suffix_label = f"Quant={quant}, Store={store}"
+        file_suffix = f"_{quant}_store{store}"
 
-    if not sweep_data:
-        print("  No valid data found")
-        return
+        print(f"  Generating graph cache plot for {suffix_label}...")
 
-    # Verify consistency: Check if recall/latency are similar for same parameters
-    print("\n  Verifying recall/latency consistency across graph cache sizes...")
-    # Take a reference configuration (middle one)
-    ref_data = sweep_data[len(sweep_data) // 2]
-    ref_df = ref_data["df"]
+        sweep_data = []
+        for md_file, config in files:
+            df = parse_markdown_table(md_file)
+            if df.empty:
+                continue
 
-    for data in sweep_data:
-        if data == ref_data:
-            continue
-        df = data["df"]
+            build_time = 0
+            if "Build (s)" in df.columns:
+                build_time = df["Build (s)"].mean()
 
-        # Compare recall and latency for matching rows
-        if len(df) == len(ref_df):
-            recall_diff = abs(
-                df["Recall (After)"].values - ref_df["Recall (After)"].values
-            ).max()
-            latency_diff = abs(
-                df["Latency (ms) (After)"].values
-                - ref_df["Latency (ms) (After)"].values
-            ).max()
+            heap_str = config["heap"] if config["heap"] else "*"
+            dataset_size_label = config["dataset_size"]
+            store_str = "ON" if config["store_vectors"] else "OFF"
 
-            print(
-                f"    Graph Cache {data['graph_cache']:,}: Max recall diff={recall_diff:.4f}, Max latency diff={latency_diff:.2f}ms"
+            log_pattern = os.path.join(
+                sweep_dir,
+                "benchmark_logs",
+                f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_*_memory.log",
+            )
+            log_files = sorted(glob.glob(log_pattern))
+            peak_mem = None
+            if log_files:
+                peak_mem = get_peak_memory(log_files[-1])
+
+            sweep_data.append(
+                {
+                    "location_cache": config["location_cache"],
+                    "graph_cache": config["graph_cache"],
+                    "df": df,
+                    "build_time": build_time,
+                    "peak_memory": peak_mem,
+                }
             )
 
-    # Sort by graph cache size
-    sweep_data.sort(key=lambda x: x["graph_cache"])
+        if not sweep_data:
+            continue
 
-    # Plot: Build time and Memory usage
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        # Sort by graph cache size
+        sweep_data.sort(key=lambda x: x["graph_cache"])
 
-    graph_cache_sizes = []
-    build_times = []
-    peak_memories = []
-    labels = []
+        # Plot: Build time and Memory usage
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
-    for data in sweep_data:
-        graph_cache = data["graph_cache"]
-        build_time = data["build_time"]
-        peak_mem = data["peak_memory"]
+        graph_cache_sizes = []
+        build_times = []
+        peak_memories = []
+        labels = []
 
-        label = f"{graph_cache:,}"
-        labels.append(label)
-        graph_cache_sizes.append(graph_cache)
-        build_times.append(build_time)
+        for data in sweep_data:
+            graph_cache = data["graph_cache"]
+            build_time = data["build_time"]
+            peak_mem = data["peak_memory"]
 
-        if peak_mem:
-            peak_memories.append(peak_mem)
-        else:
-            peak_memories.append(0)
+            label = f"{graph_cache:,}"
+            # Deduplicate labels
+            if label in labels:
+                continue
 
-    x_pos = range(len(labels))
-    colors = plt.cm.plasma([i / (len(labels) - 1) for i in range(len(labels))])
+            labels.append(label)
+            graph_cache_sizes.append(graph_cache)
+            build_times.append(build_time)
+            peak_memories.append(peak_mem if peak_mem else 0)
 
-    # Plot 1: Build time
-    bars1 = ax1.bar(x_pos, build_times, color=colors, alpha=0.7)
-    ax1.set_title("Build Time by Graph Cache Size")
-    ax1.set_xlabel("Graph Cache Size")
-    ax1.set_ylabel("Build Time (seconds)")
-    ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(labels, rotation=45, ha="right")
-    ax1.grid(True, axis="y", alpha=0.2)
+        if not labels:
+            plt.close()
+            continue
 
-    # Add values on bars
-    for i, (bar, val) in enumerate(zip(bars1, build_times)):
-        ax1.text(
-            bar.get_x() + bar.get_width() / 2,
-            val + 0.5,
-            format_duration_seconds(val),
-            ha="center",
-            va="bottom",
-            fontsize=10,
+        x_pos = range(len(labels))
+        colors = plt.cm.plasma(
+            [i / max(1, (len(labels) - 1)) for i in range(len(labels))]
         )
 
-    # Plot 2: Memory usage
-    bars2 = ax2.bar(x_pos, peak_memories, color=colors, alpha=0.7)
-    ax2.set_title("Peak Memory Usage by Graph Cache Size")
-    ax2.set_xlabel("Graph Cache Size")
-    ax2.set_ylabel("Peak Memory (MB)")
-    ax2.set_xticks(x_pos)
-    ax2.set_xticklabels(labels, rotation=45, ha="right")
-    ax2.grid(True, axis="y", alpha=0.2)
+        # Plot 1: Build time
+        bars1 = ax1.bar(x_pos, build_times, color=colors, alpha=0.7)
+        ax1.set_title(f"Build Time ({suffix_label})")
+        ax1.set_xlabel("Graph Cache Size")
+        ax1.set_ylabel("Seconds")
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels(labels, rotation=45, ha="right")
+        ax1.grid(True, axis="y", alpha=0.2)
 
-    # Add values on bars
-    for i, (bar, val) in enumerate(zip(bars2, peak_memories)):
-        if val > 0:
-            ax2.text(
+        for bar, val in zip(bars1, build_times):
+            ax1.text(
                 bar.get_x() + bar.get_width() / 2,
-                val + 50,
-                format_memory(val),
+                val,
+                f"{val:.1f}s",
                 ha="center",
                 va="bottom",
-                fontsize=10,
+                fontsize=9,
             )
 
-    plt.suptitle("Graph Cache Size Impact (Location Cache: 500K)", fontsize=18, y=1.02)
-    plt.tight_layout()
+        # Plot 2: Memory usage
+        bars2 = ax2.bar(x_pos, peak_memories, color=colors, alpha=0.7)
+        ax2.set_title(f"Peak Memory ({suffix_label})")
+        ax2.set_xlabel("Graph Cache Size")
+        ax2.set_ylabel("MB")
+        ax2.set_xticks(x_pos)
+        ax2.set_xticklabels(labels, rotation=45, ha="right")
+        ax2.grid(True, axis="y", alpha=0.2)
 
-    # Save
-    output_prefix = os.path.join(output_dir, "graph_cache_sweep")
-    plt.savefig(f"{output_prefix}.png", dpi=150, bbox_inches="tight")
-    plt.savefig(f"{output_prefix}.pdf", bbox_inches="tight")
-    print(f"  Saved: {output_prefix}.png and .pdf")
-    plt.close()
+        for bar, val in zip(bars2, peak_memories):
+            if val > 0:
+                ax2.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    val,
+                    format_memory(val),
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                )
+
+        plt.suptitle(f"Graph Cache Impact (Loc: 500K) - {suffix_label}", fontsize=16)
+        plt.tight_layout()
+
+        # Save
+        output_prefix = os.path.join(output_dir, f"graph_cache_sweep{file_suffix}")
+        plt.savefig(f"{output_prefix}.png", dpi=150, bbox_inches="tight")
+        print(f"  Saved: {output_prefix}.png")
+        plt.close()
 
 
 def verify_consistency(sweep_dir):
@@ -604,6 +634,8 @@ def plot_memory_summary(sweep_dir, output_dir):
 
     data_points = []
 
+    # We will gather all data, then group by (dataset_size, quant, store)
+
     for md_file in md_files:
         filename = os.path.basename(md_file)
         config = parse_config_from_filename(filename)
@@ -637,13 +669,34 @@ def plot_memory_summary(sweep_dir, output_dir):
         # Extract heap size from config for pattern matching
         heap_str = config["heap"] if config["heap"] else "*"
         dataset_size_label = config["dataset_size"]
+        store_str = "ON" if config["store_vectors"] else "OFF"
 
+        # Consistent with earlier patterns:
         log_pattern = os.path.join(
             sweep_dir,
             "benchmark_logs",
-            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_*_memory.log",
+            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_*_memory.log",
         )
-        log_files = sorted(glob.glob(log_pattern))  # Sort to get consistent results
+        # Fallback for old filename styles if needed? The parse_config handles defaults so let's try strict matching first.
+        # Actually parse_config defaults quant=NONE, store=False.
+        # Old files won't have _NONE_storeOFF in filename.
+        # So we check if file exists, if not, try simpler pattern.
+
+        log_files = sorted(glob.glob(log_pattern))
+
+        # Fallback logic for legacy file naming
+        if (
+            not log_files
+            and config["quantization"] == "NONE"
+            and not config["store_vectors"]
+        ):
+            log_pattern = os.path.join(
+                sweep_dir,
+                "benchmark_logs",
+                f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_*_memory.log",
+            )
+            log_files = sorted(glob.glob(log_pattern))
+
         if not log_files:
             continue
 
@@ -653,11 +706,14 @@ def plot_memory_summary(sweep_dir, output_dir):
 
         duration = None
         # Try to find duration log with same parameters
+        # Note: Duration files do NOT have the extra timestamp suffix `_*` that memory logs often have.
+        # We construct strict pattern first.
         duration_pattern = os.path.join(
             sweep_dir,
             "benchmark_logs",
-            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_*duration.txt",
+            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_duration.txt",
         )
+
         duration_files = sorted(glob.glob(duration_pattern))
         if duration_files:
             try:
@@ -665,6 +721,25 @@ def plot_memory_summary(sweep_dir, output_dir):
                     duration = int(f.read().strip())
             except (ValueError, IOError):
                 pass
+
+        # Fallback for duration if using legacy naming
+        if (
+            duration is None
+            and config["quantization"] == "NONE"
+            and not config["store_vectors"]
+        ):
+            legacy_duration = os.path.join(
+                sweep_dir,
+                "benchmark_logs",
+                f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_duration.txt",
+            )
+            duration_files = sorted(glob.glob(legacy_duration))
+            if duration_files:
+                try:
+                    with open(duration_files[-1], "r") as f:
+                        duration = int(f.read().strip())
+                except (ValueError, IOError):
+                    pass
 
         data_points.append(
             {
@@ -678,6 +753,8 @@ def plot_memory_summary(sweep_dir, output_dir):
                 "recall_after": avg_recall_after,
                 "latency_before": avg_latency_before,
                 "latency_after": avg_latency_after,
+                "quantization": config.get("quantization", "NONE"),
+                "store_vectors": config.get("store_vectors", False),
             }
         )
 
@@ -688,16 +765,26 @@ def plot_memory_summary(sweep_dir, output_dir):
     # Prepare data for plotting
     df_all = pd.DataFrame(data_points)
 
-    # Filter out old-format results (which have None for loc/graph)
+    # Filter out old-format results (which have None for loc/graph) if any slipped through
     df_all = df_all.dropna(subset=["loc", "graph"])
 
-    if not data_points:
-        print("  No data points found")
-        return
+    # Use fillna for grouping cols just in case
+    if "quantization" not in df_all.columns:
+        df_all["quantization"] = "NONE"
+    if "store_vectors" not in df_all.columns:
+        df_all["store_vectors"] = False
 
-    # Group by dataset_size and plot for each
-    for ds_size, df in df_all.groupby("dataset_size"):
-        print(f"  Generating plot for dataset size: {ds_size}")
+    # Group by dataset_size AND config (quant, store)
+    # This ensures we generate separate plots for INT8 vs NONE, etc.
+    grouped = df_all.groupby(["dataset_size", "quantization", "store_vectors"])
+
+    for (ds_size, quant, store), df in grouped:
+        print(
+            f"  Generating plot for dataset size: {ds_size}, Quant: {quant}, Store: {store}"
+        )
+
+        if df.empty:
+            continue
 
         # Create 6-row subplot
         fig, axes = plt.subplots(6, 1, figsize=(14, 48))
@@ -720,236 +807,107 @@ def plot_memory_summary(sweep_dir, output_dir):
 
         tick_labels_y = [f"{x:,}" for x in unique_graphs]
 
-        # Plot 1: Peak Memory Usage
-        ax = axes[0]
-        sc1 = ax.scatter(
-            df["plot_x"],
-            df["plot_y"],
-            c=df["mem"],
-            s=4000,
-            cmap="RdYlGn_r",
-            alpha=0.9,
-            edgecolors="black",
-            linewidth=1,
-        )
-        cbar1 = plt.colorbar(sc1, ax=ax)
-        cbar1.set_label("Peak Memory (MB)", fontsize=16)
-        ax.set_title("Peak Memory Usage", fontsize=20)
-        ax.set_ylabel("Graph Build Cache Size", fontsize=18)
+        # Helper for common scatter plot logic
+        def draw_scatter(ax, column, cmap, label_fmt, title, cbar_label, data_df):
+            if column not in data_df.columns or data_df[column].isna().all():
+                return
 
-        # Annotations
-        for _, row in df.iterrows():
-            if pd.notna(row["mem"]):
-                mem_str = format_memory(row["mem"])
-                ax.annotate(
-                    mem_str,
-                    (row["plot_x"], row["plot_y"]),
-                    xytext=(0, 0),
-                    textcoords="offset points",
-                    ha="center",
-                    va="center",
-                    fontsize=12,
-                    fontweight="bold",
-                    color="white",
-                    path_effects=[
-                        matplotlib.patheffects.withStroke(
-                            linewidth=2, foreground="black"
-                        )
-                    ],
-                )
+            sc = ax.scatter(
+                data_df["plot_x"],
+                data_df["plot_y"],
+                c=data_df[column],
+                s=4000,
+                cmap=cmap,
+                alpha=0.9,
+                edgecolors="black",
+                linewidth=1,
+            )
+            cbar = plt.colorbar(sc, ax=ax)
+            cbar.set_label(cbar_label, fontsize=16)
+            ax.set_title(title, fontsize=20)
+            ax.set_ylabel("Graph Build Cache Size", fontsize=18)
+
+            for _, row in data_df.iterrows():
+                if pd.notna(row[column]):
+                    val_str = label_fmt(row[column])
+                    ax.annotate(
+                        val_str,
+                        (row["plot_x"], row["plot_y"]),
+                        xytext=(0, 0),
+                        textcoords="offset points",
+                        ha="center",
+                        va="center",
+                        fontsize=12,
+                        fontweight="bold",
+                        color="white",
+                        path_effects=[
+                            matplotlib.patheffects.withStroke(
+                                linewidth=2, foreground="black"
+                            )
+                        ],
+                    )
+
+        # Plot 1: Peak Memory
+        draw_scatter(
+            axes[0], "mem", "RdYlGn_r", format_memory, "Peak Memory Usage", "MB", df
+        )
 
         # Plot 2: Duration
-        ax = axes[1]
-        sc2 = ax.scatter(
-            df["plot_x"],
-            df["plot_y"],
-            c=df["duration"],
-            s=4000,
-            cmap="RdYlGn_r",
-            alpha=0.9,
-            edgecolors="black",
-            linewidth=1,
+        draw_scatter(
+            axes[1],
+            "duration",
+            "RdYlGn_r",
+            format_duration_seconds,
+            "Benchmark Duration",
+            "Seconds",
+            df,
         )
-        cbar2 = plt.colorbar(sc2, ax=ax)
-        cbar2.set_label("Duration (s)", fontsize=16)
-        ax.set_title("Benchmark Duration", fontsize=20)
-        ax.set_ylabel("Graph Build Cache Size", fontsize=18)
 
-        # Annotations
-        for _, row in df.iterrows():
-            if pd.notna(row["duration"]):
-                dur_str = format_duration_seconds(row["duration"])
-                ax.annotate(
-                    dur_str,
-                    (row["plot_x"], row["plot_y"]),
-                    xytext=(0, 0),
-                    textcoords="offset points",
-                    ha="center",
-                    va="center",
-                    fontsize=12,
-                    fontweight="bold",
-                    color="white",
-                    path_effects=[
-                        matplotlib.patheffects.withStroke(
-                            linewidth=2, foreground="black"
-                        )
-                    ],
-                )
-
-        # Plot 3: Latency (Before)
-        ax = axes[2]
-        sc3 = ax.scatter(
-            df["plot_x"],
-            df["plot_y"],
-            c=df["latency_before"],
-            s=4000,
-            cmap="RdYlGn_r",
-            alpha=0.9,
-            edgecolors="black",
-            linewidth=1,
+        # Plot 3: Latency Before
+        draw_scatter(
+            axes[2],
+            "latency_before",
+            "RdYlGn_r",
+            format_duration_ms,
+            "Search Latency (Before Close)",
+            "ms",
+            df,
         )
-        cbar3 = plt.colorbar(sc3, ax=ax)
-        cbar3.set_label("Latency (ms)", fontsize=16)
-        ax.set_title("Search Latency Before Close", fontsize=20)
-        ax.set_ylabel("Graph Build Cache Size", fontsize=18)
 
-        # Annotations
-        for _, row in df.iterrows():
-            if pd.notna(row["latency_before"]):
-                lat_str = format_duration_ms(row["latency_before"])
-                ax.annotate(
-                    lat_str,
-                    (row["plot_x"], row["plot_y"]),
-                    xytext=(0, 0),
-                    textcoords="offset points",
-                    ha="center",
-                    va="center",
-                    fontsize=12,
-                    fontweight="bold",
-                    color="white",
-                    path_effects=[
-                        matplotlib.patheffects.withStroke(
-                            linewidth=2, foreground="black"
-                        )
-                    ],
-                )
-
-        # Plot 4: Latency (After)
-        ax = axes[3]
-        sc4 = ax.scatter(
-            df["plot_x"],
-            df["plot_y"],
-            c=df["latency_after"],
-            s=4000,
-            cmap="RdYlGn_r",
-            alpha=0.9,
-            edgecolors="black",
-            linewidth=1,
+        # Plot 4: Latency After
+        draw_scatter(
+            axes[3],
+            "latency_after",
+            "RdYlGn_r",
+            format_duration_ms,
+            "Search Latency (After Reload)",
+            "ms",
+            df,
         )
-        cbar4 = plt.colorbar(sc4, ax=ax)
-        cbar4.set_label("Latency (ms)", fontsize=16)
-        ax.set_title("Search Latency After Close/Reopen", fontsize=20)
-        ax.set_ylabel("Graph Build Cache Size", fontsize=18)
 
-        # Annotations
-        for _, row in df.iterrows():
-            if pd.notna(row["latency_after"]):
-                lat_str = format_duration_ms(row["latency_after"])
-                ax.annotate(
-                    lat_str,
-                    (row["plot_x"], row["plot_y"]),
-                    xytext=(0, 0),
-                    textcoords="offset points",
-                    ha="center",
-                    va="center",
-                    fontsize=12,
-                    fontweight="bold",
-                    color="white",
-                    path_effects=[
-                        matplotlib.patheffects.withStroke(
-                            linewidth=2, foreground="black"
-                        )
-                    ],
-                )
-
-        # Plot 5: Recall (Before)
-        ax = axes[4]
-        sc5 = ax.scatter(
-            df["plot_x"],
-            df["plot_y"],
-            c=df["recall_before"],
-            s=4000,
-            cmap="RdYlGn",
-            alpha=0.9,
-            edgecolors="black",
-            linewidth=1,
+        # Plot 5: Recall Before
+        draw_scatter(
+            axes[4],
+            "recall_before",
+            "RdYlGn",
+            lambda x: f"{x:.4f}",
+            "Recall (Before Close)",
+            "Recall",
+            df,
         )
-        cbar5 = plt.colorbar(sc5, ax=ax)
-        cbar5.set_label("Recall", fontsize=16)
-        ax.set_title("Search Recall Before Close", fontsize=20)
-        ax.set_ylabel("Graph Build Cache Size", fontsize=18)
 
-        # Annotations
-        for _, row in df.iterrows():
-            if pd.notna(row["recall_before"]):
-                recall_str = f"{row['recall_before']:.4f}"
-                ax.annotate(
-                    recall_str,
-                    (row["plot_x"], row["plot_y"]),
-                    xytext=(0, 0),
-                    textcoords="offset points",
-                    ha="center",
-                    va="center",
-                    fontsize=12,
-                    fontweight="bold",
-                    color="white",
-                    path_effects=[
-                        matplotlib.patheffects.withStroke(
-                            linewidth=2, foreground="black"
-                        )
-                    ],
-                )
-
-        # Plot 6: Recall (After)
-        ax = axes[5]
-        sc6 = ax.scatter(
-            df["plot_x"],
-            df["plot_y"],
-            c=df["recall_after"],
-            s=4000,
-            cmap="RdYlGn",
-            alpha=0.9,
-            edgecolors="black",
-            linewidth=1,
+        # Plot 6: Recall After
+        draw_scatter(
+            axes[5],
+            "recall_after",
+            "RdYlGn",
+            lambda x: f"{x:.4f}",
+            "Recall (After Reload)",
+            "Recall",
+            df,
         )
-        cbar6 = plt.colorbar(sc6, ax=ax)
-        cbar6.set_label("Recall", fontsize=16)
-        ax.set_title("Search Recall After Close/Reopen", fontsize=20)
-        ax.set_xlabel("Location Cache Size", fontsize=18)
-        ax.set_ylabel("Graph Build Cache Size", fontsize=18)
 
-        # Annotations
-        for _, row in df.iterrows():
-            if pd.notna(row["recall_after"]):
-                recall_str = f"{row['recall_after']:.4f}"
-                ax.annotate(
-                    recall_str,
-                    (row["plot_x"], row["plot_y"]),
-                    xytext=(0, 0),
-                    textcoords="offset points",
-                    ha="center",
-                    va="center",
-                    fontsize=12,
-                    fontweight="bold",
-                    color="white",
-                    path_effects=[
-                        matplotlib.patheffects.withStroke(
-                            linewidth=2, foreground="black"
-                        )
-                    ],
-                )
-
-        # Common formatting for all axes
+        # Common formatting
         for row_idx in range(6):
             ax = axes[row_idx]
             ax.set_xticks(range(len(unique_locs)))
@@ -960,20 +918,25 @@ def plot_memory_summary(sweep_dir, output_dir):
             ax.set_ylim(-0.5, len(unique_graphs) - 0.5)
             ax.grid(True, linestyle="--", alpha=0.3)
 
-        dataset_name = df_all["dataset_name"].iloc[0]
+        dataset_name = df["dataset_name"].iloc[0]
         count_label = DATASET_COUNTS.get(ds_size, ds_size)
+        store_lbl = "ON" if store else "OFF"
+
         plt.suptitle(
-            f"{dataset_name} ({ds_size.upper()} - {count_label} Vectors)\nGreen = Good  |  Red = Bad",
+            f"{dataset_name} ({ds_size.upper()} - {count_label})\nQuant: {quant} | StoreVectors: {store_lbl}\nGreen = Good  |  Red = Bad",
             fontsize=28,
             y=0.995,
         )
         plt.tight_layout()
 
-        # Save
-        output_path = os.path.join(output_dir, f"comprehensive_metrics_{ds_size}")
+        # Save with detailed filename
+        output_path = os.path.join(
+            output_dir, f"comprehensive_metrics_{ds_size}_{quant}_store{store_lbl}"
+        )
         plt.savefig(f"{output_path}.png", dpi=150, bbox_inches="tight")
-        plt.savefig(f"{output_path}.pdf", bbox_inches="tight")
-        print(f"  Saved: {output_path}.png and .pdf")
+        # PDF saving can sometimes be slow for very complex plots, but safe to keep
+        # plt.savefig(f"{output_path}.pdf", bbox_inches="tight")
+        print(f"  Saved: {output_path}.png")
         plt.close()
 
 

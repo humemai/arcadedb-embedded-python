@@ -253,11 +253,16 @@ def create_vector_index(db, property_suffix=""):
     start_time = time.time()
 
     # Using new defaults: max_connections=32, beam_width=256
+    # New options available:
+    # - quantization="INT8" or "BINARY"
+    # - store_vectors_in_graph=True
     index = db.create_vector_index(
         vertex_type="Movie",
         vector_property=embedding_prop,
         dimensions=384,
         distance_function="cosine",
+        # quantization="INT8",            # Optional: Use INT8 quantization
+        # store_vectors_in_graph=True,    # Optional: Faster search at cost of disk space
     )
 
     elapsed = time.time() - start_time

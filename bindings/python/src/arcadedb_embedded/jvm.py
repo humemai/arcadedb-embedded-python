@@ -121,13 +121,43 @@ def start_jvm():
     # Get bundled JRE's JVM library path
     jvm_path = get_bundled_jre_lib_path()
 
+    jvm_args = _build_jvm_args()
+
+    try:
+        # Always use bundled JRE
+        jpype.startJVM(jvm_path, *jvm_args, classpath=classpath)
+    except Exception as e:
+        raise ArcadeDBError(f"Failed to start JVM: {e}") from e
+
+
+def _build_jvm_args() -> list[str]:
+    """Helper to construct JVM arguments from env vars and defaults."""
     # JVM arguments: use env or defaults
     jvm_args_str = os.environ.get("ARCADEDB_JVM_ARGS")
     if jvm_args_str:
         jvm_args = jvm_args_str.split()
+
+        # Merge mandatory defaults if missing from user arguments
+
+        # 1. Enable vector module if not present (Critical for performance)
+        # Check for --add-modules flag containing jdk.incubator.vector
+        has_vector_module = any(
+            arg.startswith("--add-modules") and "jdk.incubator.vector" in arg
+            for arg in jvm_args
+        )
+        if not has_vector_module:
+            jvm_args.append("--add-modules=jdk.incubator.vector")
+
+        # 2. Headless mode if not set (Critical for server environments)
+        if not any(arg.startswith("-Djava.awt.headless=") for arg in jvm_args):
+            jvm_args.append("-Djava.awt.headless=true")
     else:
-        # Default: 4GB heap, headless mode
-        jvm_args = ["-Xmx4g", "-Djava.awt.headless=true"]
+        # Default: 4GB heap, headless mode, SIMD vector support
+        jvm_args = [
+            "-Xmx4g",
+            "-Djava.awt.headless=true",
+            "--add-modules=jdk.incubator.vector",
+        ]
 
     # Configure JVM crash log location (hs_err_pid*.log files)
     error_file = os.environ.get("ARCADEDB_JVM_ERROR_FILE")
@@ -136,11 +166,7 @@ def start_jvm():
     else:
         jvm_args.append("-XX:ErrorFile=./log/hs_err_pid%p.log")
 
-    try:
-        # Always use bundled JRE
-        jpype.startJVM(jvm_path, *jvm_args, classpath=classpath)
-    except Exception as e:
-        raise ArcadeDBError(f"Failed to start JVM: {e}") from e
+    return jvm_args
 
 
 def shutdown_jvm():

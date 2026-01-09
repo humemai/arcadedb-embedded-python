@@ -214,11 +214,16 @@ with arcadedb.create_database(db_path) as db:
 
     # Create vector index (JVector implementation - recommended)
     # Using new defaults: max_connections=32, beam_width=256
+    # New options available:
+    # - quantization: "INT8" or "BINARY" (reduces memory usage)
+    # - store_vectors_in_graph: True (faster search, higher disk usage)
     index = db.create_vector_index(
         vertex_type="Article",
         vector_property="embedding",
         dimensions=EMBEDDING_DIM,
         distance_function="cosine",
+        # quantization="INT8",            # Uncomment to use 8-bit quantization
+        # store_vectors_in_graph=True,    # Uncomment to store vectors in graph for faster search
     )
 
     print("   ✅ Created JVector vector index")
