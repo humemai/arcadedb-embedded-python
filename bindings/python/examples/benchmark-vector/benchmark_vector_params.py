@@ -232,9 +232,17 @@ def setup_database(db, data):
     return setup_time
 
 
-def build_index(db, dim, metric, max_connections, beam_width, quantization="NONE"):
+def build_index(
+    db,
+    dim,
+    metric,
+    max_connections,
+    beam_width,
+    quantization="NONE",
+    store_vectors_in_graph=False,
+):
     print(
-        f"    Creating Index (max_connections={max_connections}, beam={beam_width}, quant={quantization})..."
+        f"    Creating Index (max_connections={max_connections}, beam={beam_width}, quant={quantization}, graph_store={store_vectors_in_graph})..."
     )
     start_build = time.perf_counter()
 
@@ -246,11 +254,12 @@ def build_index(db, dim, metric, max_connections, beam_width, quantization="NONE
         max_connections=max_connections,
         beam_width=beam_width,
         quantization=quantization if quantization != "NONE" else None,
+        store_vectors_in_graph=store_vectors_in_graph,
     )
 
     build_time = time.perf_counter() - start_build
     print(f"    Index created in {build_time:.4f}s")
-    return index, build_time
+    return build_time
 
 
 def evaluate_index(
@@ -448,6 +457,17 @@ def run_benchmark():
         help="Vector index mutationsBeforeRebuild (default: 100)",
     )
     parser.add_argument(
+        "--store-vectors-in-graph",
+        action="store_true",
+        help="Enable storeVectorsInGraph for faster search (uses more disk space)",
+    )
+    parser.add_argument(
+        "--quantization",
+        choices=["NONE", "INT8", "BINARY"],
+        default="NONE",
+        help="Vector quantization type (default: NONE)",
+    )
+    parser.add_argument(
         "--keep-db",
         action="store_true",
         help="Keep database directories after benchmark (skip deletion)",
@@ -462,6 +482,9 @@ def run_benchmark():
         f"-Darcadedb.vectorIndex.graphBuildCacheSize={args.graph_build_cache_size} "
         f"-Darcadedb.vectorIndex.mutationsBeforeRebuild={args.mutations_before_rebuild}"
     )
+    # Note: We rely on jvm.py to inject defaults like --add-modules=jdk.incubator.vector
+    # if they are missing from ARCADEDB_JVM_ARGS.
+
     os.environ["ARCADEDB_JVM_ARGS"] = jvm_args
     print(f"JVM Configuration: {jvm_args}\n")
 
@@ -471,6 +494,10 @@ def run_benchmark():
 
     # Create config suffix for naming
     config_suffix = f"xmx{args.xmx}_loc{args.location_cache_size}_graph{args.graph_build_cache_size}_mut{args.mutations_before_rebuild}"
+    if args.quantization != "NONE":
+        config_suffix += f"_quant{args.quantization}"
+    if args.store_vectors_in_graph:
+        config_suffix += "_storeVectors"
 
     db_base_path = f"./jvector_{args.dataset}_size_{args.dataset_size}_{config_suffix}"
     k_values = [10]
@@ -503,6 +530,8 @@ def run_benchmark():
         "Location Cache Size": args.location_cache_size,
         "Graph Build Cache Size": args.graph_build_cache_size,
         "Mutations Before Rebuild": args.mutations_before_rebuild,
+        "Quantization": args.quantization,
+        "Store Vectors In Graph": str(args.store_vectors_in_graph),
     }
 
     print("Starting Benchmark...")
@@ -536,13 +565,17 @@ def run_benchmark():
         for max_connections in BUILD_PARAMS["max_connections"]:
             for ef_c in BUILD_PARAMS["ef_construction_factors"]:
                 beam_width = ef_c * max_connections
-                quantization = "NONE"  # Fixed for now
+                # quantization passed via args now
 
                 # Unique DB path for this build config
                 db_path = f"{db_base_path}_{max_connections}_{beam_width}"
+                if args.quantization != "NONE":
+                    db_path += f"_{args.quantization}"
+                if args.store_vectors_in_graph:
+                    db_path += "_graphstore"
 
                 print(
-                    f"\n  [Build Config] max_connections={max_connections}, beam={beam_width}"
+                    f"\n  [Build Config] max_connections={max_connections}, beam={beam_width}, quant={args.quantization}, graph_store={args.store_vectors_in_graph}"
                 )
 
                 if os.path.exists(db_path):
@@ -560,9 +593,18 @@ def run_benchmark():
                 with arcadedb.create_database(db_path) as db:
                     setup_time = setup_database(db, data)
 
-                    index, build_time = build_index(
-                        db, dim, metric, max_connections, beam_width, quantization
+                    build_time = build_index(
+                        db,
+                        dim,
+                        metric,
+                        max_connections,
+                        beam_width,
+                        quantization=args.quantization,
+                        store_vectors_in_graph=args.store_vectors_in_graph,
                     )
+
+                    # Get the index object
+                    index = db.schema.get_vector_index("VectorData", "vector")
 
                     # 2. Warmup
                     print("    Warming up...")
