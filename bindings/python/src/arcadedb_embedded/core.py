@@ -272,9 +272,10 @@ class Database:
                           Options: "INT8", "BINARY".
                           Reduces memory usage and speeds up search at the cost of
                           some precision.
-            store_vectors_in_graph: Whether to store vectors inline in the graph structure (default: False).
-                                    If True, increases disk usage but significantly speeds up search
-                                    for large datasets by avoiding document lookups.
+            store_vectors_in_graph: Whether to store vectors inline in the graph
+                structure (default: False). If True, increases disk usage but
+                significantly speeds up search for large datasets by avoiding document
+                lookups.
 
         Returns:
             VectorIndex object
