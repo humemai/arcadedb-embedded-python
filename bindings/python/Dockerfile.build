@@ -49,13 +49,19 @@ RUN echo "🗑️  Removing excluded JARs..." && \
     done < /build/jar_exclusions.txt && \
     echo "📋 JAR count after exclusion: $(ls -1 /build/jars/*.jar | wc -l)"
 
-# Build minimal JRE with jlink (21 modules)
-# Based on analysis of ArcadeDB dependencies
-# Note: jdk.zipfs is required for JPype JAR filesystem support
-RUN echo "🔨 Building minimal JRE for platform: ${TARGET_PLATFORM}" && \
-    REQUIRED_MODULES="java.base,java.compiler,java.desktop,java.logging,java.management,java.naming,java.prefs,java.rmi,java.scripting,java.security.jgss,java.security.sasl,java.sql,java.transaction.xa,java.xml,jdk.incubator.vector,jdk.internal.vm.ci,jdk.jfr,jdk.management,jdk.sctp,jdk.unsupported,jdk.zipfs" && \
-    echo "📦 Required modules (21):" && \
+# Build minimal JRE with jlink
+# Automatically detect modules with jdeps, plus ensure jdk.zipfs (for JPype) and jdk.unsupported are included
+# We exclude jboss/wildfly JARs because they have broken module descriptors that fail analysis.
+# We also do NOT provide a classpath, forcing jdeps to ignore all missing dependencies (intra-jar or external).
+RUN echo "🔍 Analyzing JARs with jdeps..." && \
+    DETECTED_MODULES=$(find /build/jars -name "*.jar" | grep -v "jboss" | grep -v "wildfly" | grep -v "smallrye" | xargs jdeps --print-module-deps --ignore-missing-deps --multi-release 21 | grep -v "Warning" | tr ',' '\n' | grep -v "Warning" | grep -v ":" | grep -v "/" | sort -u | paste -sd "," -) && \
+    REQUIRED_MODULES="${DETECTED_MODULES},jdk.zipfs,jdk.unsupported" && \
+    echo "🔨 Building minimal JRE for platform: ${TARGET_PLATFORM}" && \
+    echo "📦 Detected modules: ${DETECTED_MODULES}" && \
+    echo "📦 Final modules list: ${REQUIRED_MODULES}" && \
+    echo "📦 Required modules:" && \
     echo "$REQUIRED_MODULES" | tr ',' '\n' | sed 's/^/   - /' && \
+    if [ ! -d "${JAVA_HOME}/jmods" ]; then echo "❌ ERROR: jmods directory not found at ${JAVA_HOME}/jmods"; ls -la ${JAVA_HOME}; exit 1; fi && \
     echo "" && \
     echo "🔨 Running jlink..." && \
     jlink \
