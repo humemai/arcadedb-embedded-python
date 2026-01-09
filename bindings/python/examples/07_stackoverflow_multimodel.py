@@ -4920,6 +4920,8 @@ class Phase3VectorEmbeddings:
 
         # Create index - automatically indexes all records
         print("  Creating vector index (auto-indexing all records)...")
+        # Note: You can use quantization="INT8" and store_vectors_in_graph=True
+        # for better performance on large datasets.
         index = db.create_vector_index(
             vertex_type="Question",
             vector_property="embedding",
