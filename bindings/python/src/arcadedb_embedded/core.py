@@ -243,6 +243,7 @@ class Database:
         max_connections: int = 32,
         beam_width: int = 256,
         quantization: str = None,
+        store_vectors_in_graph: bool = False,
     ) -> "VectorIndex":
         """
         Create a vector index for similarity search (JVector implementation).
@@ -271,6 +272,9 @@ class Database:
                           Options: "INT8", "BINARY".
                           Reduces memory usage and speeds up search at the cost of
                           some precision.
+            store_vectors_in_graph: Whether to store vectors inline in the graph structure (default: False).
+                                    If True, increases disk usage but significantly speeds up search
+                                    for large datasets by avoiding document lookups.
 
         Returns:
             VectorIndex object
@@ -302,6 +306,13 @@ class Database:
 
             if quantization:
                 builder.withQuantization(quantization)
+
+            if store_vectors_in_graph:
+                # Use JSON configuration as the builder method might not be available in all versions
+                JSONObject = jpype.JPackage("com").arcadedb.serializer.json.JSONObject
+                # Initialize with JSON string to avoid ambiguous put() overloads
+                json_cfg = JSONObject('{ "storeVectorsInGraph": true }')
+                builder.withMetadata(json_cfg)
 
             # Create
             java_index = builder.create()
