@@ -9,9 +9,10 @@ from arcadedb_embedded import create_database
 
 # Configuration
 DB_PATH = "./my_test_databases/bench_quantization_accuracy_db"
-DIMENSIONS_LIST = [4, 8, 16, 32]
-NUM_VECTORS = 1000
-NUM_QUERIES = 20
+# BINARY quantization requires higher dimensions to be effective
+DIMENSIONS_LIST = [64, 128, 256, 768]
+NUM_VECTORS = 2000
+NUM_QUERIES = 50
 K = 10
 
 
