@@ -479,19 +479,17 @@ def run_benchmark():
     global arcadedb
     import arcadedb_embedded as arcadedb
 
-    # Create config suffix for naming
-    config_suffix = f"xmx{args.xmx}_loc{args.location_cache_size}_graph{args.graph_build_cache_size}_mut{args.mutations_before_rebuild}"
-    if args.quantization != "NONE":
-        config_suffix += f"_quant{args.quantization}"
-    if args.store_vectors_in_graph:
-        config_suffix += "_storeVectors"
+    # Create config suffix for naming with explicit key=value format
+    config_suffix = f"xmx={args.xmx}_loccache={args.location_cache_size}_graphcache={args.graph_build_cache_size}_mutations={args.mutations_before_rebuild}_quant={args.quantization}_store={'ON' if args.store_vectors_in_graph else 'OFF'}"
 
-    db_base_path = f"./jvector_{args.dataset}_size_{args.dataset_size}_{config_suffix}"
+    db_base_path = (
+        f"./jvector_dataset={args.dataset}_size={args.dataset_size}_{config_suffix}"
+    )
     k_values = [10]
 
-    # Output file
+    # Output file with explicit key=value naming
     md_file = (
-        f"benchmark_jvector_{args.dataset}_size_{args.dataset_size}_{config_suffix}.md"
+        f"benchmark_dataset={args.dataset}_size={args.dataset_size}_{config_suffix}.md"
     )
 
     all_dataset_sizes = {
@@ -554,11 +552,7 @@ def run_benchmark():
                 # quantization passed via args now
 
                 # Unique DB path for this build config
-                db_path = f"{db_base_path}_{max_connections}_{beam_width}"
-                if args.quantization != "NONE":
-                    db_path += f"_{args.quantization}"
-                if args.store_vectors_in_graph:
-                    db_path += "_graphstore"
+                db_path = f"{db_base_path}_maxconn={max_connections}_beam={beam_width}"
 
                 print(
                     f"\n  [Build Config] max_connections={max_connections}, beam={beam_width}, quant={args.quantization}, graph_store={args.store_vectors_in_graph}"
