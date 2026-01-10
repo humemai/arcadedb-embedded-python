@@ -120,11 +120,28 @@ def get_peak_memory(log_file):
 def parse_config_from_filename(filename):
     """Extract configuration from filename.
 
-    Example with mutations (new format): benchmark_jvector_glove-100-angular_size_tiny_xmx16g_loc500000_graph50000_mut200.md
-    Example with quant and graph_store (newer format): benchmark_jvector_glove-100-angular_size_tiny_xmx16g_loc500000_graph50000_mut200_quantINT8_storeVectors.md
+    Example with explicit key=value format: benchmark_dataset=glove-100-angular_size=tiny_xmx=16g_loccache=500000_graphcache=50000_mutations=200_quant=NONE_store=OFF.md
+    Also supports old formats for backward compatibility.
     Returns dict with parsed values.
     """
-    # Try fully detailed format with quant and store
+    # Try new explicit key=value format
+    match = re.search(
+        r"benchmark_dataset=(.+?)_size=([a-zA-Z0-9]+)_xmx=(\w+)_loccache=(-?\d+)_graphcache=(\d+)_mutations=(\d+)_quant=([a-zA-Z0-9]+)_store=(ON|OFF)",
+        filename,
+    )
+    if match:
+        return {
+            "dataset_name": match.group(1),
+            "dataset_size": match.group(2),
+            "heap": match.group(3),
+            "location_cache": int(match.group(4)),
+            "graph_cache": int(match.group(5)),
+            "mutations": int(match.group(6)),
+            "quantization": match.group(7),
+            "store_vectors": match.group(8) == "ON",
+        }
+
+    # Try fully detailed old format with quant and store
     match = re.search(
         r"benchmark_jvector_(.+?)_size_([a-zA-Z0-9]+)_xmx(\w+)_loc(-?\d+)_graph(\d+)_mut(\d+)(?:_quant([a-zA-Z0-9]+))?(?:_(storeVectors))?",
         filename,
@@ -167,7 +184,9 @@ def plot_location_cache_sweep(sweep_dir, output_dir):
     # Or iterate through all combinations if desired.
     # For simplicity, we plot the "Standard" config (Quant=NONE, Store=False)
 
+    # Support both old (benchmark_jvector_*) and new (benchmark_dataset=*) naming formats
     md_files = glob.glob(os.path.join(sweep_dir, "benchmark_jvector_*.md"))
+    md_files += glob.glob(os.path.join(sweep_dir, "benchmark_dataset=*.md"))
 
     # Organize data by configuration key (quant, store)
     configs = {}
@@ -178,7 +197,12 @@ def plot_location_cache_sweep(sweep_dir, output_dir):
         if not config:
             continue
 
-        key = (config["quantization"], config["store_vectors"])
+        key = (
+            config["quantization"],
+            config["store_vectors"],
+            config["dataset_name"],
+            config["dataset_size"],
+        )
         if key not in configs:
             configs[key] = []
 
@@ -196,9 +220,10 @@ def plot_location_cache_sweep(sweep_dir, output_dir):
         configs[key].append((md_file, config))
 
     # Generate plots for each variation
-    for (quant, store), files in configs.items():
-        suffix_label = f"Quant={quant}, Store={store}"
-        file_suffix = f"_{quant}_store{store}"
+    for (quant, store, dataset_name, dataset_size), files in configs.items():
+        store_lbl = "ON" if store else "OFF"
+        suffix_label = f"Dataset={dataset_name}, Size={dataset_size}, Quant={quant}, Store={store_lbl}"
+        file_suffix = f"_dataset={dataset_name}_size={dataset_size}_quant={quant}_store={store_lbl}"
 
         # Filter for the specific graph cache size used in the original sweep logic
         # Original logic: glob.glob("...graph50000.md").
@@ -234,20 +259,28 @@ def plot_location_cache_sweep(sweep_dir, output_dir):
             dataset_size_label = config["dataset_size"]
 
             # Construct log pattern matching the new complex naming
-            # RUN_NAME="heap${HEAP}_loc${LOCATION_CACHE}_graph${GRAPH_BUILD_CACHE}_${DATASET_SIZE}_${QUANTIZATION}_store${STORE_VECTORS}"
+            # RUN_NAME="dataset=${DATASET}_size=${DATASET_SIZE}_heap=${HEAP}_loccache=${LOCATION_CACHE}_graphcache=${GRAPH_BUILD_CACHE}_quant=${QUANTIZATION}_store=${STORE_VECTORS}"
             store_str = "ON" if config["store_vectors"] else "OFF"
 
-            # Note: shell script naming might slightly differ in order or separator.
-            # Shell: heapMSG_locMSG_graphMSG_sizeMSG_quantMSG_storeMSG
-            # file: benchmark_jvector_..._quantINT8_storeVectors.md
+            # Use * for dataset part as config doesn't have it explicitly as a key sometimes (parsed from filename),
+            # but we can assume we match the one we are processing.
 
             log_pattern = os.path.join(
                 sweep_dir,
                 "benchmark_logs",
-                f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_*_duration.txt",
-            ).replace("_duration.txt", "_memory.log")
+                f"jvector-dataset=*{dataset_name}*_size={dataset_size_label}_heap={heap_str}_loccache={config['location_cache']}_graphcache={config['graph_cache']}_quant={config['quantization']}_store={store_str}_*_memory.log",
+            )
 
             log_files = sorted(glob.glob(log_pattern))
+
+            # Fallback to old patterns if needed
+            if not log_files:
+                log_pattern = os.path.join(
+                    sweep_dir,
+                    "benchmark_logs",
+                    f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_*_duration.txt",
+                ).replace("_duration.txt", "_memory.log")
+                log_files = sorted(glob.glob(log_pattern))
             peak_mem = None
             if log_files:
                 peak_mem = get_peak_memory(log_files[-1])
@@ -351,9 +384,9 @@ def plot_location_cache_sweep(sweep_dir, output_dir):
         plt.tight_layout()
 
         # Save with suffix
-        output_prefix = os.path.join(output_dir, f"location_cache_sweep{file_suffix}")
-        plt.savefig(f"{output_prefix}.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: {output_prefix}.png")
+        output_prefix = os.path.join(output_dir, f"plot_sweep_loccache{file_suffix}")
+        plt.savefig(f"{output_prefix}.pdf", bbox_inches="tight")
+        print(f"  Saved: {output_prefix}.pdf")
         plt.close()
 
 
@@ -361,7 +394,9 @@ def plot_graph_cache_sweep(sweep_dir, output_dir):
     """Plot results for graph build cache size sweep (fixed location cache)."""
     print("\nProcessing graph cache sweep...")
 
+    # Support both old (benchmark_jvector_*) and new (benchmark_dataset=*) naming formats
     md_files = glob.glob(os.path.join(sweep_dir, "benchmark_jvector_*.md"))
+    md_files += glob.glob(os.path.join(sweep_dir, "benchmark_dataset=*.md"))
 
     # Organize data by configuration key (quant, store)
     configs = {}
@@ -372,7 +407,12 @@ def plot_graph_cache_sweep(sweep_dir, output_dir):
         if not config:
             continue
 
-        key = (config["quantization"], config["store_vectors"])
+        key = (
+            config["quantization"],
+            config["store_vectors"],
+            config["dataset_name"],
+            config["dataset_size"],
+        )
         if key not in configs:
             configs[key] = []
 
@@ -395,9 +435,10 @@ def plot_graph_cache_sweep(sweep_dir, output_dir):
         # Fallback: try different fixed location sizes?
         # Let's just proceed with what we have.
 
-    for (quant, store), files in configs.items():
-        suffix_label = f"Quant={quant}, Store={store}"
-        file_suffix = f"_{quant}_store{store}"
+    for (quant, store, dataset_name, dataset_size), files in configs.items():
+        store_lbl = "ON" if store else "OFF"
+        suffix_label = f"Dataset={dataset_name}, Size={dataset_size}, Quant={quant}, Store={store_lbl}"
+        file_suffix = f"_dataset={dataset_name}_size={dataset_size}_quant={quant}_store={store_lbl}"
 
         print(f"  Generating graph cache plot for {suffix_label}...")
 
@@ -418,10 +459,17 @@ def plot_graph_cache_sweep(sweep_dir, output_dir):
             log_pattern = os.path.join(
                 sweep_dir,
                 "benchmark_logs",
-                f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_*_memory.log",
+                f"jvector-dataset=*{dataset_name}*_size={dataset_size_label}_heap={heap_str}_loccache={config['location_cache']}_graphcache={config['graph_cache']}_quant={config['quantization']}_store={store_str}_*_memory.log",
             )
             log_files = sorted(glob.glob(log_pattern))
-            peak_mem = None
+
+            if not log_files:
+                log_pattern = os.path.join(
+                    sweep_dir,
+                    "benchmark_logs",
+                    f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_*_memory.log",
+                )
+                log_files = sorted(glob.glob(log_pattern))
             if log_files:
                 peak_mem = get_peak_memory(log_files[-1])
 
@@ -516,9 +564,9 @@ def plot_graph_cache_sweep(sweep_dir, output_dir):
         plt.tight_layout()
 
         # Save
-        output_prefix = os.path.join(output_dir, f"graph_cache_sweep{file_suffix}")
-        plt.savefig(f"{output_prefix}.png", dpi=150, bbox_inches="tight")
-        print(f"  Saved: {output_prefix}.png")
+        output_prefix = os.path.join(output_dir, f"plot_sweep_graphcache{file_suffix}")
+        plt.savefig(f"{output_prefix}.pdf", bbox_inches="tight")
+        print(f"  Saved: {output_prefix}.pdf")
         plt.close()
 
 
@@ -530,7 +578,11 @@ def verify_consistency(sweep_dir):
 
     # Location cache sweep verification
     print("\n1. Location Cache Sweep (fixed graph cache = 50K):")
+    # Support both old and new naming formats
     md_files = glob.glob(os.path.join(sweep_dir, "benchmark_jvector_*_graph50000.md"))
+    md_files += glob.glob(
+        os.path.join(sweep_dir, "benchmark_dataset=*_graphcache=50000*.md")
+    )
 
     if md_files:
         sweep_data = []
@@ -576,8 +628,12 @@ def verify_consistency(sweep_dir):
 
     # Graph cache sweep verification
     print("\n2. Graph Cache Sweep (fixed location cache = 500K):")
+    # Support both old and new naming formats
     md_files = glob.glob(
         os.path.join(sweep_dir, "benchmark_jvector_*_loc500000_graph*.md")
+    )
+    md_files += glob.glob(
+        os.path.join(sweep_dir, "benchmark_dataset=*_loccache=500000_graphcache=*.md")
     )
 
     if md_files:
@@ -627,7 +683,9 @@ def plot_memory_summary(sweep_dir, output_dir):
         "full": "~1.2M",
     }
 
+    # Support both old (benchmark_jvector_*) and new (benchmark_dataset=*) naming formats
     md_files = glob.glob(os.path.join(sweep_dir, "benchmark_jvector_*.md"))
+    md_files += glob.glob(os.path.join(sweep_dir, "benchmark_dataset=*.md"))
     if not md_files:
         print("  No benchmark files found")
         return
@@ -671,20 +729,45 @@ def plot_memory_summary(sweep_dir, output_dir):
         dataset_size_label = config["dataset_size"]
         store_str = "ON" if config["store_vectors"] else "OFF"
 
-        # Consistent with earlier patterns:
+        # Try new naming format first: jvector-dataset=..._size=...
+        # Must match run_all_sweeps.sh RUN_NAME structure which now uses xmx= and includes mutations=
+        mutations_str = str(config.get("mutations", 100))
+
         log_pattern = os.path.join(
             sweep_dir,
             "benchmark_logs",
-            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_*_memory.log",
+            f"jvector-dataset=*{config['dataset_name']}*_size={dataset_size_label}_xmx={heap_str}_loccache={config['location_cache']}_graphcache={config['graph_cache']}_mutations={mutations_str}_quant={config['quantization']}_store={store_str}_*_memory.log",
         )
-        # Fallback for old filename styles if needed? The parse_config handles defaults so let's try strict matching first.
-        # Actually parse_config defaults quant=NONE, store=False.
-        # Old files won't have _NONE_storeOFF in filename.
-        # So we check if file exists, if not, try simpler pattern.
-
         log_files = sorted(glob.glob(log_pattern))
 
-        # Fallback logic for legacy file naming
+        if not log_files:
+            # Try without mutations (older runs) but with xmx (if changed recently) or heap
+            log_pattern = os.path.join(
+                sweep_dir,
+                "benchmark_logs",
+                f"jvector-dataset=*{config['dataset_name']}*_size={dataset_size_label}_heap={heap_str}_loccache={config['location_cache']}_graphcache={config['graph_cache']}_quant={config['quantization']}_store={store_str}_*_memory.log",
+            )
+            log_files = sorted(glob.glob(log_pattern))
+
+        if not log_files:
+            # Fallback to older new format: jvector-heap=1g_loccache=100_graphcache=200_size=tiny_quant=NONE_store=OFF_*_memory.log
+            log_pattern = os.path.join(
+                sweep_dir,
+                "benchmark_logs",
+                f"jvector-heap={heap_str}_loccache={config['location_cache']}_graphcache={config['graph_cache']}_size={dataset_size_label}_quant={config['quantization']}_store={store_str}_*_memory.log",
+            )
+            log_files = sorted(glob.glob(log_pattern))
+
+        # Fallback to old naming format: *heap{heap}_loc{location}_graph{graph}_{dataset_size}_{quant}_store{store}_*_memory.log
+        if not log_files:
+            log_pattern = os.path.join(
+                sweep_dir,
+                "benchmark_logs",
+                f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_*_memory.log",
+            )
+            log_files = sorted(glob.glob(log_pattern))
+
+        # Fallback logic for legacy file naming (without quant/store in filename)
         if (
             not log_files
             and config["quantization"] == "NONE"
@@ -706,15 +789,43 @@ def plot_memory_summary(sweep_dir, output_dir):
 
         duration = None
         # Try to find duration log with same parameters
-        # Note: Duration files do NOT have the extra timestamp suffix `_*` that memory logs often have.
-        # We construct strict pattern first.
+        # Try newest naming format first: jvector-dataset=... with xmx and mutations
+        mutations_str = str(config.get("mutations", 100))
+
         duration_pattern = os.path.join(
             sweep_dir,
             "benchmark_logs",
-            f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_duration.txt",
+            f"jvector-dataset={config['dataset_name']}_size={dataset_size_label}_xmx={heap_str}_loccache={config['location_cache']}_graphcache={config['graph_cache']}_mutations={mutations_str}_quant={config['quantization']}_store={store_str}_duration.txt",
         )
-
         duration_files = sorted(glob.glob(duration_pattern))
+
+        if not duration_files:
+            # Try without mutations and with heap=
+            duration_pattern = os.path.join(
+                sweep_dir,
+                "benchmark_logs",
+                f"jvector-dataset={config['dataset_name']}_size={dataset_size_label}_heap={heap_str}_loccache={config['location_cache']}_graphcache={config['graph_cache']}_quant={config['quantization']}_store={store_str}_duration.txt",
+            )
+            duration_files = sorted(glob.glob(duration_pattern))
+
+        if not duration_files:
+            # Try intermediate naming format: jvector-heap=...
+            duration_pattern = os.path.join(
+                sweep_dir,
+                "benchmark_logs",
+                f"jvector-heap={heap_str}_loccache={config['location_cache']}_graphcache={config['graph_cache']}_size={dataset_size_label}_quant={config['quantization']}_store={store_str}_duration.txt",
+            )
+            duration_files = sorted(glob.glob(duration_pattern))
+
+        # Fallback to old naming format
+        if not duration_files:
+            duration_pattern = os.path.join(
+                sweep_dir,
+                "benchmark_logs",
+                f"*heap{heap_str}_loc{config['location_cache']}_graph{config['graph_cache']}_{dataset_size_label}_{config['quantization']}_store{store_str}_duration.txt",
+            )
+            duration_files = sorted(glob.glob(duration_pattern))
+
         if duration_files:
             try:
                 with open(duration_files[-1], "r") as f:
@@ -776,11 +887,13 @@ def plot_memory_summary(sweep_dir, output_dir):
 
     # Group by dataset_size AND config (quant, store)
     # This ensures we generate separate plots for INT8 vs NONE, etc.
-    grouped = df_all.groupby(["dataset_size", "quantization", "store_vectors"])
+    grouped = df_all.groupby(
+        ["dataset_name", "dataset_size", "quantization", "store_vectors"]
+    )
 
-    for (ds_size, quant, store), df in grouped:
+    for (ds_name, ds_size, quant, store), df in grouped:
         print(
-            f"  Generating plot for dataset size: {ds_size}, Quant: {quant}, Store: {store}"
+            f"  Generating plot for dataset: {ds_name}, size: {ds_size}, Quant: {quant}, Store: {store}"
         )
 
         if df.empty:
@@ -931,12 +1044,11 @@ def plot_memory_summary(sweep_dir, output_dir):
 
         # Save with detailed filename
         output_path = os.path.join(
-            output_dir, f"comprehensive_metrics_{ds_size}_{quant}_store{store_lbl}"
+            output_dir,
+            f"comprehensive_metrics_dataset={ds_name}_size={ds_size}_quant={quant}_store={store_lbl}",
         )
-        plt.savefig(f"{output_path}.png", dpi=150, bbox_inches="tight")
-        # PDF saving can sometimes be slow for very complex plots, but safe to keep
-        # plt.savefig(f"{output_path}.pdf", bbox_inches="tight")
-        print(f"  Saved: {output_path}.png")
+        plt.savefig(f"{output_path}.pdf", bbox_inches="tight")
+        print(f"  Saved: {output_path}.pdf")
         plt.close()
 
 
