@@ -110,12 +110,21 @@ def plot_dataset(dataset_key, dataset_name):
         if "jvector" in filename:
             algo_name = "JVector"
             is_jvector = True
-            log_pattern = f"jvector-*-full_*_memory.log"  # Simplified pattern matching
-            # Need to be more specific to match dataset
-            if "euclidean" in dataset_key:
-                log_pattern = "jvector-euclidean-full_*_memory.log"
-            else:
-                log_pattern = "jvector-angular-full_*_memory.log"
+
+            # Try matching new explicit key=value format log files
+            # Pattern: jvector-dataset={dataset_key}_size=full_..._memory.log
+            # We use glob with wildcards for other params
+            # Note: Now uses xmx= instead of heap= and includes mutations=
+            log_pattern = f"jvector-dataset=*{dataset_key}*_size=full_*_memory.log"
+
+            # Fallback for older formats if not found later
+            if not glob.glob(os.path.join(LOGS_DIR, log_pattern)):
+                log_pattern = f"jvector-*-full_*_memory.log"
+                # Need to be more specific to match dataset
+                if "euclidean" in dataset_key:
+                    log_pattern = "jvector-euclidean-full_*_memory.log"
+                else:
+                    log_pattern = "jvector-angular-full_*_memory.log"
 
         elif "faiss" in filename:
             dataset_type = "euclidean" if "euclidean" in dataset_key else "angular"
@@ -231,11 +240,9 @@ def plot_dataset(dataset_key, dataset_name):
     plt.xlim(0.0, 1.025)
 
     # Save plot
-    output_png = os.path.join(FIGURES_DIR, f"plot_{dataset_key}.png")
-    output_pdf = os.path.join(FIGURES_DIR, f"plot_{dataset_key}.pdf")
-    plt.savefig(output_png)
+    output_pdf = os.path.join(FIGURES_DIR, f"plot_dataset={dataset_key}.pdf")
     plt.savefig(output_pdf)
-    print(f"Saved plots to {output_png} and {output_pdf}")
+    print(f"Saved plot to {output_pdf}")
 
 
 def main():

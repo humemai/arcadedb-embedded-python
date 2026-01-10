@@ -109,8 +109,11 @@ run_benchmark() {
 
     IFS='|' read -r HEAP LOCATION_CACHE GRAPH_BUILD_CACHE DATASET_SIZE QUANTIZATION STORE_VECTORS <<< "$CONFIG"
 
-    # Construct comprehensive run name
-    RUN_NAME="heap${HEAP}_loc${LOCATION_CACHE}_graph${GRAPH_BUILD_CACHE}_${DATASET_SIZE}_${QUANTIZATION}_store${STORE_VECTORS}"
+    # Default mutations value used in benchmark_vector_params.py
+    MUTATIONS="100"
+
+    # Construct comprehensive run name with explicit key=value format matching benchmark_vector_params.py
+    RUN_NAME="dataset=${DATASET}_size=${DATASET_SIZE}_xmx=${HEAP}_loccache=${LOCATION_CACHE}_graphcache=${GRAPH_BUILD_CACHE}_mutations=${MUTATIONS}_quant=${QUANTIZATION}_store=${STORE_VECTORS}"
 
     echo ""
     echo "========================================================================"
