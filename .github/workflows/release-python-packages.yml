@@ -83,13 +83,18 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        # Temporarily limit to three platforms (skip macOS x86_64 and all Windows)
+        # platform:
+        #   - linux-amd64
+        #   - linux-arm64
+        #   - darwin-amd64
+        #   - darwin-arm64
+        #   - windows-amd64
+        #   - windows-arm64
         platform:
           - linux-amd64
           - linux-arm64
-          - darwin-amd64
           - darwin-arm64
-          - windows-amd64
-          - windows-arm64
 
     steps:
       - name: Download wheel from test job
@@ -137,16 +142,13 @@ jobs:
         run: |
           mkdir -p dist
 
-          # Only copy wheels for the 3 most common platforms (~90% of developers)
-          # Skipped platforms (available via GitHub Releases):
-          #   - darwin-amd64 (~3-5%): Intel Macs can use darwin-arm64 via Rosetta 2
-          #   - linux-arm64 (~5-8%): Raspberry Pi, AWS Graviton
-          #   - windows-arm64 (~1-2%): Surface Pro X
+          # Only copy wheels for the 3 platforms we currently ship on PyPI
+          # Previous set (commented for future reference): linux-amd64 darwin-arm64 windows-amd64 linux-arm64 darwin-amd64 windows-arm64
 
-          echo "📦 Collecting wheels for PyPI (main platforms only)..."
+          echo "📦 Collecting wheels for PyPI (current platforms)..."
 
           # Copy main platform wheels
-          for platform in linux-amd64 darwin-arm64 windows-amd64; do
+          for platform in linux-amd64 darwin-arm64 linux-arm64; do
             if [ -d "wheels-temp/wheel-$platform" ]; then
               cp wheels-temp/wheel-$platform/*.whl dist/ 2>/dev/null || true
               echo "  ✅ $platform"
@@ -162,20 +164,20 @@ jobs:
       - name: Verify wheels
         run: |
           ls -lh dist/
-          echo "📦 Wheels for PyPI (3 main platforms):"
+          echo "📦 Wheels for PyPI (current platforms):"
           ls dist/*.whl
 
-          # Count wheels (should be 3: linux-amd64, darwin-arm64, windows-amd64)
+          # Count wheels (should be 3: linux-amd64, linux-arm64, darwin-arm64)
           WHEEL_COUNT=$(ls dist/*.whl | wc -l)
           echo "📊 Wheel count: $WHEEL_COUNT (expected: 3)"
 
           echo ""
           echo "ℹ️  Platforms not on PyPI (available via GitHub Releases):"
-          echo "   - darwin-amd64 (~3-5%): Intel Macs can use darwin-arm64 via Rosetta 2"
-          echo "   - linux-arm64 (~5-8%): Raspberry Pi, AWS Graviton"
+          echo "   - darwin-amd64 (~3-5%): Intel Macs can use darwin-arm64 via Rosetta 2"  # formerly on PyPI
+          echo "   - windows-amd64 (~85-90% of Windows)"                                 # formerly on PyPI
           echo "   - windows-arm64 (~1-2%): Surface Pro X"
           echo ""
-          echo "   Coverage: ~90% of developers with these 3 platforms"
+          echo "   Current PyPI coverage: linux x86_64, linux arm64, macOS Apple Silicon"
 
           if [ "$WHEEL_COUNT" -ne 3 ]; then
             echo "❌ Expected 3 wheels (3 main platforms), got $WHEEL_COUNT"
@@ -202,12 +204,14 @@ jobs:
             # Extract platform from filename
             if [[ "$WHEEL_NAME" == *"manylinux"*"x86_64"* ]]; then
               PLATFORM="linux/amd64"
-            elif [[ "$WHEEL_NAME" == *"macosx"*"x86_64"* ]]; then
-              PLATFORM="darwin/amd64"
+            elif [[ "$WHEEL_NAME" == *"manylinux"*"aarch64"* ]]; then
+              PLATFORM="linux/arm64"
             elif [[ "$WHEEL_NAME" == *"macosx"*"arm64"* ]]; then
               PLATFORM="darwin/arm64"
-            elif [[ "$WHEEL_NAME" == *"win_amd64"* ]]; then
-              PLATFORM="windows/amd64"
+            # elif [[ "$WHEEL_NAME" == *"macosx"*"x86_64"* ]]; then
+            #   PLATFORM="darwin/amd64"
+            # elif [[ "$WHEEL_NAME" == *"win_amd64"* ]]; then
+            #   PLATFORM="windows/amd64"
             else
               PLATFORM="unknown"
             fi
@@ -266,13 +270,13 @@ jobs:
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
 
   github-release:
-    name: Create GitHub Release (All 6 platforms)
+    name: Create GitHub Release (All enabled platforms)
     needs: [validate-version, prepare-wheels]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download all wheels (all 6 platforms)
+      - name: Download all wheels (all enabled platforms)
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           pattern: wheel-*

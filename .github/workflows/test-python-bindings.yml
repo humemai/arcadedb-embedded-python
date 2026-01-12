@@ -115,20 +115,23 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
-        platform: ['linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64']
+        # Temporarily limit to three platforms (skip macOS x86_64 and all Windows)
+        # platform: ['linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64']
+        platform: ['linux/amd64', 'linux/arm64', 'darwin/arm64']
         include:
           - platform: linux/amd64
             runs-on: ubuntu-24.04
           - platform: linux/arm64
             runs-on: ubuntu-24.04-arm
-          - platform: darwin/amd64
-            runs-on: macos-15-intel
           - platform: darwin/arm64
             runs-on: macos-15
-          - platform: windows/amd64
-            runs-on: windows-2025
-          - platform: windows/arm64
-            runs-on: windows-11-arm
+          # - platform: darwin/amd64
+          #   runs-on: macos-15-intel
+          # - platform: windows/amd64
+          #   runs-on: windows-2025
+          # - platform: windows/arm64
+          #   runs-on: windows-11-arm
+          # macOS x86_64 and all Windows temporarily disabled
 
     steps:
       - name: Checkout code
@@ -165,15 +168,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install build wheel setuptools
 
-      - name: Create python3 symlink (Windows only)
-        if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
-        shell: bash
-        run: |
-          # On Windows, setup-python doesn't create python3 symlink
-          # Create it so build scripts work
-          PYTHON_DIR=$(dirname "$(which python)")
-          ln -s "$PYTHON_DIR/python.exe" "$PYTHON_DIR/python3.exe" || true
-          python3 --version
+      # Windows currently disabled, no symlink needed
+      # - name: Create python3 symlink (Windows only)
+      #   if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
+      #   shell: bash
+      #   run: |
+      #     PYTHON_DIR=$(dirname "$(which python)")
+      #     ln -s "$PYTHON_DIR/python.exe" "$PYTHON_DIR/python3.exe" || true
+      #     python3 --version
 
       - name: Build and test arcadedb-embedded (${{ matrix.platform }})
         shell: bash
