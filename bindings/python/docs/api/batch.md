@@ -12,6 +12,11 @@ The `BatchContext` class simplifies bulk data operations by:
 - **Context Manager**: Automatic cleanup and completion waiting
 - **High Performance**: 50,000-200,000 records/sec throughput
 
+> **Embedded note:** For embedded workloads, explicit chunked transactions (`with
+> db.transaction():` in fixed-size slices) currently outperform `batch_context`. Use
+> `batch_context` primarily for API demonstrations or tests until performance parity is
+> improved.
+
 ## Class: BatchContext
 
 High-level batch processing context manager.
