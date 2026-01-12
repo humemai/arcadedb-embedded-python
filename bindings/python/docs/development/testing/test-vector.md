@@ -18,7 +18,7 @@ What the tests cover:
 - ✅ **Overquery factor** tuning (`overquery_factor`)
 - ✅ **Distance functions** (cosine default, euclidean variants)
 - ✅ **Persistence & size checks** (index files survive reopen)
-- ✅ **Batch inserts** through `BatchContext`
+- ✅ **Chunked inserts** via explicit transactions (preferred for embedded)
 
 ## Test Coverage (high level)
 
@@ -85,7 +85,7 @@ with arcadedb.create_database("./test_db") as db:
     )
 ```
 
-### Batch insert vectors
+### Chunked insert vectors (preferred)
 ```python
 with arcadedb.create_database("./test_db") as db:
     # Schema operations are auto-transactional
@@ -93,11 +93,16 @@ with arcadedb.create_database("./test_db") as db:
     db.schema.create_property("Doc", "docId", "INTEGER")
     db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
 
-    # Batch insert (auto-transactional)
+    # Prefer chunked transactions for embedded (avoids batch_context overhead)
     vectors = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-    with db.batch_context(batch_size=1000, parallel=4) as batch:
-        for i, vec in enumerate(vectors):
-            batch.create_vertex("Doc", docId=i, embedding=vec)
+    chunk_size = 100
+    for start in range(0, len(vectors), chunk_size):
+        with db.transaction():
+            for idx, vec in enumerate(vectors[start : start + chunk_size]):
+                doc = db.new_vertex("Doc")
+                doc.set("docId", start + idx)
+                doc.set("embedding", vec)
+                doc.save()
 ```
 
 ## Key Takeaways
@@ -105,7 +110,7 @@ with arcadedb.create_database("./test_db") as db:
 1. JVector is fully Java-native and LSM-backed; no legacy hnswlib path remains.
 2. Use `allowed_rids` for pre-filtered searches and `overquery_factor` for recall/speed trade-offs.
 3. `max_connections` and `beam_width` map to JVector graph degree and search beam; tune per workload.
-4. All tests run through the Python bindings to ensure parity with the Java engine.
+4. Prefer chunked `db.transaction()` inserts for embedded workloads; reserve `batch_context` for legacy/tests that explicitly need it.
 
 ## See Also
 
