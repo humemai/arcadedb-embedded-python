@@ -606,7 +606,7 @@ def verify_consistency(sweep_dir):
             ref_df = ref_data["df"]
 
             for data in sweep_data:
-                if data == ref_data:
+                if data is ref_data:
                     continue
                 df = data["df"]
                 if len(df) == len(ref_df):
@@ -654,7 +654,7 @@ def verify_consistency(sweep_dir):
             ref_df = ref_data["df"]
 
             for data in sweep_data:
-                if data == ref_data:
+                if data is ref_data:
                     continue
                 df = data["df"]
                 if len(df) == len(ref_df):
@@ -921,6 +921,8 @@ def plot_memory_summary(sweep_dir, output_dir):
         tick_labels_y = [f"{x:,}" for x in unique_graphs]
 
         # Helper for common scatter plot logic
+        AXIS_COLOR = "#b45f4d"  # warm terracotta for axis label text
+
         def draw_scatter(ax, column, cmap, label_fmt, title, cbar_label, data_df):
             if column not in data_df.columns or data_df[column].isna().all():
                 return
@@ -937,8 +939,8 @@ def plot_memory_summary(sweep_dir, output_dir):
             )
             cbar = plt.colorbar(sc, ax=ax)
             cbar.set_label(cbar_label, fontsize=16)
-            ax.set_title(title, fontsize=20)
-            ax.set_ylabel("Graph Build Cache Size", fontsize=18)
+            ax.set_title(title, fontsize=20, pad=14)
+            ax.set_ylabel("Graph Build Cache Size", fontsize=18, color=AXIS_COLOR)
 
             for _, row in data_df.iterrows():
                 if pd.notna(row[column]):
@@ -1027,6 +1029,9 @@ def plot_memory_summary(sweep_dir, output_dir):
             ax.set_xticklabels(tick_labels_x, rotation=45, fontsize=14, ha="right")
             ax.set_yticks(range(len(unique_graphs)))
             ax.set_yticklabels(tick_labels_y, fontsize=14)
+            ax.set_xlabel(
+                "Location Cache Size", fontsize=18, color=AXIS_COLOR, labelpad=10
+            )
             ax.set_xlim(-0.5, len(unique_locs) - 0.5)
             ax.set_ylim(-0.5, len(unique_graphs) - 0.5)
             ax.grid(True, linestyle="--", alpha=0.3)
