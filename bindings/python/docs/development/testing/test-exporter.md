@@ -2,7 +2,7 @@
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py){ .md-button }
 
-These notes mirror the Python tests in [test_exporter.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py). There are 5 test classes with 12+ tests covering JSONL (with type/edge filters), GraphML/GraphSON (skipped if Gremlin unavailable), CSV, round-trip (export→import), batch-context integration, and all data types.
+These notes mirror the Python tests in [test_exporter.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py). There are 5 test classes with 12+ tests covering JSONL (with type/edge filters), GraphML/GraphSON (skipped if Gremlin unavailable), CSV, round-trip (export→import), bulk insert (chunked transactions), and all data types.
 
 ## Test Classes & Cases
 
@@ -42,9 +42,9 @@ Fixture `sample_db` creates 20 users, 15 movies, 10 actors, 50 Rated edges, 30 A
 
 - **jsonl_export_import_roundtrip**: Exports sample_db to JSONL, closes original, creates new DB, imports via `IMPORT DATABASE file://...`, then verifies counts (User 20, Movie 15, Actor 10, LogEntry 10, Config 5) and data integrity (first user name is "User0"). See [test_exporter.py#L508-L567](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py#L508-L567).
 
-### TestExportWithBatchContext
+### TestExportWithBulkInsert
 
-- **export_after_batch_insert**: Uses `batch_context(batch_size=100, parallel=2)` to create 500 Product vertices, exports to JSONL, asserts `vertices == 500`. See [test_exporter.py#L570-L593](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py#L570-L593).
+- **export_after_chunked_insert**: Uses chunked transactions (no `batch_context`) to create 500 Product vertices, exports to JSONL, asserts `vertices == 500`. See [test_exporter.py#L567-L605](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py#L567-L605).
 
 ### TestAllDataTypes
 
