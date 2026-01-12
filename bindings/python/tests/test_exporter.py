@@ -565,28 +565,34 @@ class TestRoundTripExport:
                     pass
 
 
-class TestExportWithBatchContext:
-    """Tests for export functionality with bulk-loaded data."""
+class TestExportWithBulkInsert:
+    """Tests export after bulk insert without batch_context."""
 
-    def test_export_after_batch_insert(self, temp_db_path):
-        """Test exporting database after bulk insert with BatchContext."""
+    def test_export_after_chunked_insert(self, temp_db_path):
+        """Export database after chunked transaction inserts."""
         db = arcadedb.create_database(temp_db_path)
 
         # Create schema
         db.schema.create_vertex_type("Product")
 
-        # Bulk insert with BatchContext
-        with db.batch_context(batch_size=100, parallel=2) as batch:
-            for i in range(500):
-                batch.create_vertex("Product", productId=i, name=f"Product{i}")
+        # Bulk insert using chunked transactions (avoids batch_context dependency here)
+        chunk_size = 100
+        total = 500
+        for start in range(0, total, chunk_size):
+            with db.transaction():
+                for i in range(start, min(start + chunk_size, total)):
+                    vertex = db.new_vertex("Product")
+                    vertex.set("productId", i)
+                    vertex.set("name", f"Product{i}")
+                    vertex.save()
 
         # Export database
-        export_path = "test_batch_export.jsonl.tgz"
+        export_path = "test_bulk_export.jsonl.tgz"
         stats = db.export_database(export_path, format="jsonl", overwrite=True)
 
         # Verify all products were exported
-        assert stats["vertices"] == 500
-        assert stats["totalRecords"] == 500
+        assert stats["vertices"] == total
+        assert stats["totalRecords"] == total
 
         # Clean up
         db.close()

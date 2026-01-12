@@ -62,7 +62,7 @@ monitor_memory() {
         TIMESTAMP=$(date +%s)
         echo "$TIMESTAMP,$RSS_MB,$VSZ_MB,$CPU" >> "$MEM_LOG"
 
-        sleep 2
+        sleep 1
     done
 }
 

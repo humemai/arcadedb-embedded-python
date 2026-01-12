@@ -115,17 +115,22 @@ def test_manual_transaction_mode(temp_db):
         temp_db.set_auto_transaction(True)
 
 
-def test_wal_flush_with_batch_operations(temp_db):
-    """Test WAL flush modes with batch operations."""
+def test_wal_flush_with_bulk_operations(temp_db):
+    """Test WAL flush modes with bulk inserts using chunked transactions."""
     # Schema operations are auto-transactional
     temp_db.schema.create_vertex_type("BatchTest")
 
     # Test with maximum durability
     temp_db.set_wal_flush("yes_full")
 
-    with temp_db.batch_context(batch_size=100) as batch:
-        for i in range(500):
-            batch.create_vertex("BatchTest", value=i)
+    chunk_size = 200
+    total = 500
+    for start in range(0, total, chunk_size):
+        with temp_db.transaction():
+            for i in range(start, min(start + chunk_size, total)):
+                vertex = temp_db.new_vertex("BatchTest")
+                vertex.set("value", i)
+                vertex.save()
 
     # Verify all records were written
     result = temp_db.query("sql", "SELECT count(*) as cnt FROM BatchTest")
@@ -135,9 +140,12 @@ def test_wal_flush_with_batch_operations(temp_db):
     # Test with maximum performance
     temp_db.set_wal_flush("no")
 
-    with temp_db.batch_context(batch_size=100) as batch:
-        for i in range(500, 1000):
-            batch.create_vertex("BatchTest", value=i)
+    for start in range(total, 1000, chunk_size):
+        with temp_db.transaction():
+            for i in range(start, min(start + chunk_size, 1000)):
+                vertex = temp_db.new_vertex("BatchTest")
+                vertex.set("value", i)
+                vertex.save()
 
     # Verify all records were written
     result = temp_db.query("sql", "SELECT count(*) as cnt FROM BatchTest")

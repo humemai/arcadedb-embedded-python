@@ -257,57 +257,64 @@ def create_sample_data(db):
         ]
 
         print("  📝 Creating people...")
-        print("  💡 Using BatchContext for efficient bulk insertion")
+        print("  💡 Using chunked transactions for efficient bulk insertion")
 
         # Parse date strings to Java dates once (for reuse)
         from jpype import JClass
 
         LocalDate = JClass("java.time.LocalDate")
 
-        # Create people using BatchContext for cleaner, more efficient code
-        with db.batch_context(batch_size=100, parallel=2) as batch:
-            for person in people_data:
-                name, age, city, joined_date, email, phone, verified, reputation = (
-                    person
-                )
+        # Create people using chunked transactions (more stable for embedded)
+        chunk_size = 100
+        for start in range(0, len(people_data), chunk_size):
+            end = start + chunk_size
+            with db.transaction():
+                for person in people_data[start:end]:
+                    (
+                        name,
+                        age,
+                        city,
+                        joined_date,
+                        email,
+                        phone,
+                        verified,
+                        reputation,
+                    ) = person
 
-                # Parse date string to Java date
-                date_obj = LocalDate.parse(joined_date)
+                    date_obj = LocalDate.parse(joined_date)
 
-                # Create vertex properties dict
-                # (BatchContext handles None/NULL automatically)
-                properties = {
-                    "name": name,
-                    "age": age,
-                    "city": city,
-                    "joined_date": date_obj,
-                    "verified": verified,
-                }
+                    properties = {
+                        "name": name,
+                        "age": age,
+                        "city": city,
+                        "joined_date": date_obj,
+                        "verified": verified,
+                    }
 
-                # Add optional fields only if present
-                if email:
-                    properties["email"] = email
-                if phone:
-                    properties["phone"] = phone
-                if reputation is not None:
-                    properties["reputation"] = reputation
+                    if email:
+                        properties["email"] = email
+                    if phone:
+                        properties["phone"] = phone
+                    if reputation is not None:
+                        properties["reputation"] = reputation
 
-                # Create vertex using batch context
-                # (automatically queued for async insertion)
-                batch.create_vertex("Person", **properties)
+                    v = db.new_vertex("Person")
+                    for k, vval in properties.items():
+                        v.set(k, vval)
+                    v.save()
 
-                # Show which fields are NULL
-                null_fields = []
-                if not email:
-                    null_fields.append("email")
-                if not phone:
-                    null_fields.append("phone")
-                if reputation is None:
-                    null_fields.append("reputation")
+                    null_fields = []
+                    if not email:
+                        null_fields.append("email")
+                    if not phone:
+                        null_fields.append("phone")
+                    if reputation is None:
+                        null_fields.append("reputation")
 
-                null_str = f" (NULL: {', '.join(null_fields)})" if null_fields else ""
-                print(f"    ✓ Queued person: {name} ({age}, {city}){null_str}")
-        # BatchContext automatically waits for completion on exit
+                    null_str = (
+                        f" (NULL: {', '.join(null_fields)})" if null_fields else ""
+                    )
+                    print(f"    ✓ Inserted person: {name} ({age}, {city}){null_str}")
 
         print("  ✅ All people created successfully")
 

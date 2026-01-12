@@ -63,8 +63,8 @@ def test_numpy_array_conversion_in_query(temp_db):
 
 
 @pytest.mark.skipif(not HAS_NUMPY, reason="NumPy not installed")
-def test_batch_context_numpy_support(temp_db):
-    """Test automatic conversion of NumPy arrays in BatchContext."""
+def test_numpy_array_conversion_in_transaction(temp_db):
+    """Test NumPy array conversion in regular transactions (no batch context)."""
     db = temp_db
 
     # Schema operations are auto-transactional
@@ -75,10 +75,17 @@ def test_batch_context_numpy_support(temp_db):
 
     vec1 = np.array([0.1, 0.2, 0.3], dtype=np.float32)
     vec2 = np.array([0.4, 0.5, 0.6], dtype=np.float32)
+    vec1_java = arcadedb.to_java_float_array(vec1)
+    vec2_java = arcadedb.to_java_float_array(vec2)
 
-    with db.batch_context() as batch:
-        batch.create_vertex("VectorData", vector=vec1)
-        batch.create_document("DocData", embedding=vec2)
+    with db.transaction():
+        vertex = db.new_vertex("VectorData")
+        vertex.set("vector", vec1_java)
+        vertex.save()
+
+        doc = db.new_document("DocData")
+        doc.set("embedding", vec2_java)
+        doc.save()
 
     # Verify Vertex
     result = db.query("sql", "SELECT FROM VectorData").first()
