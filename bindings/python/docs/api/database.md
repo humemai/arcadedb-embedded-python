@@ -518,32 +518,6 @@ db.async_executor() -> AsyncExecutor
 
 ---
 
-### batch_context
-
-```python
-db.batch_context(
-    batch_size: int = 5000,
-    parallel: int = 4,
-    use_wal: bool = True,
-    back_pressure: int = 50,
-    progress: bool = False,
-    progress_desc: str = "Processing",
-)
-```
-
-Convenience context for bulk ingestion built on the async executor (auto-commit, back-pressure, optional progress).
-
-**Example:**
-
-```python
-with db.batch_context(batch_size=5000, parallel=8, progress=True) as batch:
-    batch.set_total(len(users))
-    for user in users:
-        batch.create_vertex("User", **user)
-```
-
----
-
 ### export_database
 
 ```python

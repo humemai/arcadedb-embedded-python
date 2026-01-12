@@ -46,22 +46,23 @@ with db.transaction():
     bob.save()
 ```
 
-### Bulk Inserts with BatchContext
+### Bulk Inserts (preferred: chunked transactions)
 
 ```python
-# Efficient bulk insertion
-from jpype import JClass
-LocalDate = JClass("java.time.LocalDate")
+# Efficient bulk insertion (embedded-friendly): use chunked transactions
+chunk_size = 500
+for start in range(0, len(people_data), chunk_size):
+    with db.transaction():
+        for name, age, city in people_data[start : start + chunk_size]:
+            person = db.new_vertex("Person")
+            person.set("name", name)
+            person.set("age", age)
+            person.set("city", city)
+            person.save()
 
-with db.batch_context(batch_size=100, parallel=2) as batch:
-    for name, age, city in people_data:
-        batch.create_vertex("Person",
-            name=name,
-            age=age,
-            city=city,
-            joined_date=LocalDate.parse("2024-01-15")
-        )
-# Automatically waits for completion
+# If you specifically need the Java batching API (e.g., remote/server workflows),
+# you can still use db.batch_context(...), but embedded users should prefer
+# explicit chunked transactions to avoid batch_context overhead.
 ```
 
 ## SQL for Queries

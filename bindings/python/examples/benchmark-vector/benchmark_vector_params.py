@@ -222,9 +222,17 @@ def setup_database(db, data):
     db.schema.create_property("VectorData", "id", "INTEGER")
     db.schema.create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
 
-    with db.batch_context(batch_size=10000) as batch:
-        for i, vec in enumerate(data):
-            batch.create_vertex("VectorData", id=i, vector=vec)
+    # Use explicit chunked transactions for ingest (faster than batch_context in
+    # embedded mode)
+    chunk_size = 10000
+    for start in range(0, len(data), chunk_size):
+        end = start + chunk_size
+        with db.transaction():
+            for i, vec in enumerate(data[start:end], start=start):
+                v = db.new_vertex("VectorData")
+                v.set("id", i)
+                v.set("vector", vec)
+                v.save()
 
     setup_time = time.perf_counter() - start_setup
     print(f"  Database setup completed in {setup_time:.4f}s")
