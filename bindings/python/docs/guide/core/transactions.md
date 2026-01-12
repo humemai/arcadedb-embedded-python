@@ -1,8 +1,12 @@
 # Transactions
 
-Prefer the Pythonic wrappers (`new_vertex`, `new_document`, `new_edge`, `modify`,
-`batch_context`) over raw SQL. When you see `temp_db_path`, substitute your own path if
-you are not in the test harness.
+Prefer the Pythonic wrappers (`new_vertex`, `new_document`, `new_edge`, `modify`) over
+raw SQL. When you see `temp_db_path`, substitute your own path if you are not in the
+test harness.
+
+> **Embedded note:** For bulk ingest in embedded mode, explicit chunked transactions are
+> currently faster and more stable. Use `with db.transaction():` in fixed-size slices for
+> production ingest.
 
 ## Basic commit and rollback
 
@@ -111,30 +115,6 @@ with arcadedb.create_database(temp_db_path) as db:
 
     updated = list(db.query("sql", "SELECT FROM City WHERE name = 'New York'"))[0]
     assert updated.get("country") == "USA"
-```
-
-## Batch context: edge creation must be inside a transaction
-
-```python
-with db.transaction():
-    with db.batch_context(batch_size=10) as batch:
-        batch.create_edge(alice, bob, "KNOWS", since=2020)
-        batch.create_edge(bob, charlie, "KNOWS", since=2021)
-        batch.create_edge(charlie, alice, "KNOWS", since=2022)
-```
-
-## Batch updates with `modify()` + `batch_context`
-
-```python
-counters = list(db.query("sql", "SELECT FROM Counter"))
-
-with db.transaction():
-    with db.batch_context(batch_size=50) as batch:
-        for counter in counters:
-            vertex = counter.get_vertex()
-            mutable_vertex = vertex.modify()
-            mutable_vertex.set("value", counter.get("value") * 2)
-            batch.update_record(mutable_vertex._java_document)
 ```
 
 ## Chunked bulk inserts with manual commit/renew
