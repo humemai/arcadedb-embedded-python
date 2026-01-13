@@ -14,7 +14,5 @@ data/
 benchmark_logs/
 benchmark_work/
 
-glove-100-angular.hdf5
-sift-128-euclidean.hdf5
-
+datasets/
 benchmark-vector/sweep_results*
