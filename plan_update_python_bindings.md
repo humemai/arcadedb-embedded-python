@@ -51,3 +51,10 @@ The vector benchmark scripts and other examples have been updated.
 4.  [x] Modify `bindings/python/examples/benchmark-vector/benchmark_vector_params.py`.
 5.  [x] Modify other examples (`03`, `06`, `07`).
 6.  [x] Update `bindings/python/README.md` and docstrings.
+
+
+
+## TOODs
+
+- [x] `addHierarchy` has been added to the vector java code base. expose this to python
+- [ ] fix the WAL issue for vector building
