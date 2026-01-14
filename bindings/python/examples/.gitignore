@@ -10,6 +10,3 @@ data/
 # Benchmark logs
 benchmark_logs/
 benchmark_work/
-
-datasets/
-benchmark-vector/sweep_results*

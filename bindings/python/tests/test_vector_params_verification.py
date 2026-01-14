@@ -90,6 +90,30 @@ class TestVectorParams:
         else:
             assert val is True
 
+    def test_add_hierarchy_param(self, test_db):
+        """Test sending add_hierarchy parameter."""
+        test_db.schema.create_vertex_type("HierDoc")
+        test_db.schema.create_property("HierDoc", "embedding", "ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "HierDoc", "embedding", dimensions=3, add_hierarchy=True
+        )
+
+        java_index = index._java_index
+        idx_to_check = java_index
+        if "TypeIndex" in java_index.getClass().getName():
+            idx_to_check = java_index.getSubIndexes().get(0)
+
+        metadata = idx_to_check.getMetadata()
+
+        try:
+            assert metadata.addHierarchy is True
+        except AttributeError:
+            assert (
+                "addHierarchy" in metadata.toString()
+                or "addHierarchy=true" in metadata.toString()
+            )
+
     def test_params_persistence(self, tmp_path):
         """Verify parameters persist after reload."""
         db_path = str(tmp_path / "test_vector_params_persist")
@@ -105,6 +129,7 @@ class TestVectorParams:
                 dimensions=3,
                 quantization="INT8",
                 store_vectors_in_graph=True,
+                add_hierarchy=True,
             )
 
         # 2. Reopen and Check
@@ -132,6 +157,14 @@ class TestVectorParams:
                 assert (
                     "storeVectorsInGraph=true" in metadata.toString()
                     or "storeVectorsInGraph: true" in metadata.toString()
+                )
+
+            try:
+                assert metadata.addHierarchy is True
+            except AttributeError:
+                assert (
+                    "addHierarchy=true" in metadata.toString()
+                    or "addHierarchy: true" in metadata.toString()
                 )
 
     def test_quantization_none(self, test_db):
