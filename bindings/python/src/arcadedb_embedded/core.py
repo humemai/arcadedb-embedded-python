@@ -244,6 +244,7 @@ class Database:
         beam_width: int = 256,
         quantization: str = None,
         store_vectors_in_graph: bool = False,
+        add_hierarchy: Optional[bool] = None,
     ) -> "VectorIndex":
         """
         Create a vector index for similarity search (JVector implementation).
@@ -276,6 +277,9 @@ class Database:
                 structure (default: False). If True, increases disk usage but
                 significantly speeds up search for large datasets by avoiding document
                 lookups.
+            add_hierarchy: Whether to build hierarchical layers in the HNSW graph.
+                If None, uses the engine default. Set explicitly to True/False to
+                force the behavior.
 
         Returns:
             VectorIndex object
@@ -308,11 +312,18 @@ class Database:
             if quantization:
                 builder.withQuantization(quantization)
 
+            metadata_cfg = {}
             if store_vectors_in_graph:
-                # Use JSON configuration as the builder method might not be available in all versions
+                metadata_cfg["storeVectorsInGraph"] = True
+            if add_hierarchy is not None:
+                metadata_cfg["addHierarchy"] = bool(add_hierarchy)
+
+            if metadata_cfg:
+                # Use JSON configuration to avoid JPype overload ambiguity on put()
+                import json
+
                 JSONObject = jpype.JPackage("com").arcadedb.serializer.json.JSONObject
-                # Initialize with JSON string to avoid ambiguous put() overloads
-                json_cfg = JSONObject('{ "storeVectorsInGraph": true }')
+                json_cfg = JSONObject(json.dumps(metadata_cfg))
                 builder.withMetadata(json_cfg)
 
             # Create

@@ -13,6 +13,9 @@ ARG PACKAGE_NAME=arcadedb-embedded
 ARG PACKAGE_DESCRIPTION="ArcadeDB embedded multi-model database with bundled JRE - no Java installation required"
 ARG ARCADEDB_TAG
 ARG TARGET_PLATFORM=linux-x64
+# When set to 1, prefer jars provided in bindings/python/local-jars/lib from the build context.
+# If no local jars are present, the build fails fast to avoid silently falling back.
+ARG USE_LOCAL_JARS=0
 
 # Stage 1: Use prebuilt ArcadeDB image to obtain compiled JARs
 # JARs are filtered based on jar_exclusions.txt in later stages
@@ -24,12 +27,27 @@ FROM arcadedata/arcadedb:${ARCADEDB_TAG} AS java-builder
 FROM eclipse-temurin:25-jdk-jammy AS jre-builder
 
 ARG TARGET_PLATFORM
+ARG USE_LOCAL_JARS
 
 WORKDIR /build
 
-# Copy JARs from ArcadeDB image
-RUN mkdir -p /build/jars
-COPY --from=java-builder /home/arcadedb/lib /build/jars/
+# Stash upstream jars from the ArcadeDB image
+RUN mkdir -p /build/upstream-jars /build/jars /build/local-jars
+COPY --from=java-builder /home/arcadedb/lib /build/upstream-jars/
+
+# Optionally bring in locally built jars from the repo (bindings/python/local-jars/lib)
+COPY bindings/python/local-jars/lib/ /build/local-jars/
+
+# Select jar source: local when requested and available; otherwise fall back to upstream image
+RUN if [ "$USE_LOCAL_JARS" = "1" ]; then \
+            if [ -d /build/local-jars ] && [ "$(ls -1 /build/local-jars | wc -l)" -gt 0 ]; then \
+                echo "📦 Using local jars from build context" && cp /build/local-jars/* /build/jars/; \
+            else \
+                echo "❌ USE_LOCAL_JARS=1 but no jars found in bindings/python/local-jars/lib" && exit 1; \
+            fi; \
+        else \
+            echo "📦 Using ArcadeDB image jars" && cp /build/upstream-jars/* /build/jars/; \
+        fi
 
 # Copy JAR exclusion list
 COPY bindings/python/jar_exclusions.txt /build/jar_exclusions.txt

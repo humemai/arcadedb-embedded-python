@@ -1,6 +1,15 @@
 #!/bin/bash
 # ArcadeDB Python Package Build Script
-# Builds arcadedb-embedded package with bundled JRE (no Java installation required)
+# Builds arcadedb-embedded with a bundled JRE (no Java install needed).
+# JAR sourcing is explicit: provide a JAR directory to embed those artifacts;
+# otherwise JARs are pulled from the arcadedata/arcadedb image.
+#
+# Quick local-jar workflow (no host Java install required):
+#   1) Build ArcadeDB JARs in Docker:
+#        docker run --rm -v "$PWD":/src -w /src maven:3.9-eclipse-temurin-25 \
+#          sh -c "git config --global --add safe.directory /src && ./mvnw -DskipTests -pl package -am package"
+#   2) Point the build at your JAR directory:
+#        cd bindings/python && ./build.sh linux/amd64 3.12 package/target/arcadedb-*/lib
 
 set -euo pipefail
 
@@ -15,6 +24,7 @@ NC='\033[0m' # No Color
 # Parse command line arguments
 PLATFORM="${1:-}"
 PYTHON_VERSION="${2:-3.12}"
+JAR_LIB_DIR="${3:-}"
 
 print_header() {
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
@@ -24,7 +34,7 @@ print_header() {
 }
 
 print_usage() {
-    echo "Usage: $0 [PLATFORM] [PYTHON_VERSION]"
+    echo "Usage: $0 [PLATFORM] [PYTHON_VERSION] [JAR_LIB_DIR]"
     echo ""
     echo "Builds arcadedb-embedded package with bundled JRE"
     echo "No external Java installation required!"
@@ -42,15 +52,20 @@ print_usage() {
     echo "  Python version for wheel (default: 3.12)"
     echo "  Examples: 3.10, 3.11, 3.12, 3.13, 3.14"
     echo ""
+    echo "JAR_LIB_DIR (optional):"
+    echo "  Directory containing ArcadeDB JARs to embed"
+    echo "  If omitted, JARs are pulled from arcadedata/arcadedb:<version>"
+    echo ""
     echo "Build Methods:"
     echo "  Native: macOS and Windows build natively on their platforms"
     echo "  Docker: Linux uses Docker for manylinux compliance"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Build for current platform with Python 3.12"
-    echo "  $0 linux/amd64        # Build for Linux x86_64 with Python 3.12 (via Docker)"
-    echo "  $0 linux/amd64 3.11   # Build for Linux x86_64 with Python 3.11 (via Docker)"
-    echo "  $0 darwin/arm64 3.12  # Build for macOS ARM64 with Python 3.12 (native)"
+    echo "  $0                                    # Build for current platform with Python 3.12"
+    echo "  $0 linux/amd64                        # Build for Linux x86_64 with Python 3.12 (Docker)"
+    echo "  $0 linux/amd64 3.11                   # Build for Linux x86_64 with Python 3.11 (Docker)"
+    echo "  $0 linux/amd64 3.12 /path/to/jars     # Build using JARs from /path/to/jars"
+    echo "  $0 darwin/arm64 3.12                  # Build for macOS ARM64 with Python 3.12 (native)"
     echo ""
     echo "Package features:"
     echo "  ✅ Bundled platform-specific JRE (no Java required)"
@@ -116,6 +131,42 @@ DOCKER_TAG=$(python3 "$SCRIPT_DIR/extract_version.py" --format=docker)
 echo -e "${CYAN}📌 Docker tag: ${YELLOW}${DOCKER_TAG}${NC}"
 echo ""
 
+# Select jar source: explicit directory when provided; otherwise pull from ArcadeDB image
+LOCAL_JARS_DIR="$SCRIPT_DIR/local-jars/lib"
+USE_LOCAL_JARS_ARG=""
+JAR_SOURCE_DESC="ArcadeDB image"
+mkdir -p "$LOCAL_JARS_DIR"
+
+if [[ -n "$JAR_LIB_DIR" ]]; then
+    if [[ ! -d "$JAR_LIB_DIR" ]]; then
+        echo -e "${RED}❌ JAR_LIB_DIR not found: ${JAR_LIB_DIR}${NC}"
+        exit 1
+    fi
+
+    if ! find "$JAR_LIB_DIR" -maxdepth 1 -name "*.jar" -print -quit | grep -q .; then
+        echo -e "${RED}❌ No JAR files found in: ${JAR_LIB_DIR}${NC}"
+        exit 1
+    fi
+
+    JAR_LIB_DIR_REAL=$(realpath "$JAR_LIB_DIR")
+    LOCAL_JARS_REAL=$(realpath "$LOCAL_JARS_DIR")
+
+    if [[ "$JAR_LIB_DIR_REAL" == "$LOCAL_JARS_REAL" ]]; then
+        echo -e "${CYAN}📦 Using pre-staged JARs in: ${YELLOW}${JAR_LIB_DIR}${NC}"
+        JAR_SOURCE_DESC="${JAR_LIB_DIR} (pre-staged)"
+    else
+        echo -e "${CYAN}📦 Using provided JAR directory: ${YELLOW}${JAR_LIB_DIR}${NC}"
+        rm -rf "$LOCAL_JARS_DIR"
+        mkdir -p "$LOCAL_JARS_DIR"
+        cp -a "$JAR_LIB_DIR"/*.jar "$LOCAL_JARS_DIR"/
+        JAR_SOURCE_DESC="${JAR_LIB_DIR} (staged into local-jars)"
+    fi
+
+    USE_LOCAL_JARS_ARG="--build-arg USE_LOCAL_JARS=1"
+else
+    echo -e "${CYAN}📦 Using JARs from ArcadeDB image (no JAR_LIB_DIR provided)${NC}"
+fi
+
 # Determine build method: native or Docker
 # Use native build if we're already on the target platform
 CURRENT_OS="$(uname -s)"
@@ -162,6 +213,7 @@ echo -e "${CYAN}📋 Build Configuration:${NC}"
 echo -e "   Package: ${YELLOW}arcadedb-embedded${NC}"
 echo -e "   Platform: ${YELLOW}${PLATFORM}${NC}"
 echo -e "   Python Version: ${YELLOW}${PYTHON_VERSION}${NC}"
+echo -e "   JAR Source: ${YELLOW}${JAR_SOURCE_DESC}${NC}"
 echo -e "   JRE: ${YELLOW}Bundled (end users need no Java)${NC}"
 echo -e "   Build Method: ${YELLOW}${BUILD_METHOD}${NC}"
 echo ""
@@ -219,6 +271,7 @@ else
         --build-arg PACKAGE_DESCRIPTION="$DESCRIPTION" \
         --build-arg ARCADEDB_TAG="$DOCKER_TAG" \
         --build-arg TARGET_PLATFORM="$TARGET_PLATFORM" \
+        $USE_LOCAL_JARS_ARG \
         $BUILD_VERSION_ARG \
         --target export \
         -t arcadedb-python-package-export \
@@ -234,6 +287,7 @@ else
         --build-arg PACKAGE_DESCRIPTION="$DESCRIPTION" \
         --build-arg ARCADEDB_TAG="$DOCKER_TAG" \
         --build-arg TARGET_PLATFORM="$TARGET_PLATFORM" \
+        $USE_LOCAL_JARS_ARG \
         $BUILD_VERSION_ARG \
         --target tester \
         -t arcadedb-python-package \

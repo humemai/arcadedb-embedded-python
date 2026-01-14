@@ -87,6 +87,8 @@ def start_jvm():
                 Max vectors cached during HNSW graph build
             -Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>
                 Mutations threshold before rebuilding HNSW graph
+            -Djava.util.concurrent.ForkJoinPool.common.parallelism=<count>
+                Limit threads for JVector graph construction (default: all cores)
 
         Examples:
             # Production with 8GB heap and bounded vector caches
