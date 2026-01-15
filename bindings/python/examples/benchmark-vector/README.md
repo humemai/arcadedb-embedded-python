@@ -7,6 +7,8 @@
 
 ### Commit/Date: main @ d8098d7 (Wed Jan 14 15:20:25 2026 -0500)
 
+**Hardware:** AMD Ryzen 9 7950X (16 cores), 128GB DDR5 (4x32GB), Samsung SSD 970 EVO Plus 2TB.
+
 #### MSMARCO-1M (1000 queries, Recall@50)
 
 | quantization | store_vectors_in_graph | add_hierarchy | ingest_s | ingest_rss_mb | warmup_s | warmup_rss_mb | search_s | search_rss_mb | recall@50_before_close | open_db_s | warmup_after_reopen_s | search_after_reopen_s | recall@50_after_reopen | peak_rss_mb | db_size_mb | total_duration |
