@@ -11,6 +11,102 @@
 - Take the duration with a grain of salt, since there are other processes running on the machine. RSS and DB size are more stable. 4 threads were allocated per task, but there aren't always the same number of tasks runing in parallel, so effective CPU usage may vary.
 - If not mentioned, `MAX_CONNECTIONS` is fixed as 12, `BEAM_WIDTHS` as 64, and `OVERQUERY_FACTORS` as 1
 
+### Commit/Date: main @ 6ef8858 (Thu Jan 15 16:40:51 2026 -0500)
+
+- This commit adds Product Quantization (PQ) support to JVector index.
+- The below four tasks vary quantization mode (`NONE`, `INT8`, `PRODUCT`, `BINARY`).
+- `store_vectors_in_graph=False`, `add_hierarchy=True`, `max_connections=12`, `beam_width=64`, `overquery_factor=1`, `batch_size=10000` for all four runs.
+- This time every task was allocated with one thread.
+- As for PQ, there are four params we can tune, and we just used the defaults in ArcadeDB:
+  - `pq_subspaces`
+  - `pq_clusters`
+  - `pq_center_globally`
+  - `pq_training_limit`
+
+#### MSMARCO-1M (1000 queries, Recall@50)
+
+| quantization | ingest_s | ingest_rss_mb | create_index_s | create_index_rss_mb | build_graph_now_s | build_graph_now_rss_mb | search_s | search_rss_mb | recall@50_before_close | open_db_s | open_db_rss_mb | warmup_after_reopen_s | warmup_after_reopen_rss_mb | search_after_reopen_s | search_after_reopen_rss_mb | recall@50_after_reopen | peak_rss_mb | db_size_mb | total_duration |
+| :----------- | -------: | ------------: | -------------: | ------------------: | ----------------: | ---------------------: | -------: | ------------: | ---------------------: | --------: | -------------: | --------------------: | -------------------------: | --------------------: | -------------------------: | ---------------------: | ----------: | ---------: | :------------- |
+| NONE         |   60.599 |       7518.07 |         13.073 |             552.203 |            4859.9 |                313.852 |   11.132 |         6.773 |                 0.9099 |     4.066 |          5.902 |                 8.522 |                      0.125 |                 7.676 |                      4.117 |                 0.9099 |     8816.13 |    5750.44 | 1h 22m         |
+| INT8         |   60.978 |       7405.65 |         18.888 |              877.16 |           3099.27 |                124.875 |   18.011 |        16.293 |                 0.9051 |    11.855 |         13.812 |                 4.302 |                      0.488 |                15.587 |                      7.176 |                 0.9039 |     8855.47 |    6738.94 | 53m            |
+| PRODUCT      |   61.418 |       7978.64 |         13.127 |             211.594 |           5024.72 |                241.484 |    2.571 |         8.305 |                 0.8524 |     2.645 |          4.219 |                 7.266 |                      0.113 |                 1.401 |                      8.926 |                 0.8525 |     8862.87 |    5996.45 | 1h 25m         |
+| BINARY       |   60.754 |       7734.86 |         25.235 |             452.316 |           3841.34 |                197.668 |   11.857 |        20.723 |                 0.2861 |     5.973 |          14.68 |                 4.298 |                      1.539 |                 5.865 |                      5.824 |                 0.2861 |     8837.07 |    5879.94 | 1h 5m          |
+
+#### Disk Usage Breakdown
+
+##### `quantization=none`
+
+```bash
+5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=10000_seed=42/VectorData_0.1.65536.v0.bucket
+10M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748779662794320.4.262144.v0.lsmvecidx
+59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748779662794320_vecgraph.5.262144.v0.vecgraph
+```
+
+##### `quantization=int8`
+
+```bash
+5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=10000_seed=42/VectorData_0.1.65536.v0.bucket
+999M    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748780028226180.4.262144.v0.lsmvecidx
+59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748780028226180_vecgraph.5.262144.v0.vecgraph
+```
+
+
+
+##### `quantization=PQ`
+
+```bash
+5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=product_store=off_hier=on_batch=10000_seed=42/VectorData_0.1.65536.v0.bucket
+11M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=product_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748780503246723.4.262144.v0.lsmvecidx
+247M    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=product_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748780503246723.4.262144.v0.lsmvecidx.vecpq
+59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=product_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748780503246723_vecgraph.5.262144.v0.vecgraph
+```
+
+##### `quantization=binary`
+
+```bash
+5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=binary_store=off_hier=on_batch=10000_seed=42/VectorData_0.1.65536.v0.bucket
+140M    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=binary_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748779801023527.4.262144.v0.lsmvecidx
+59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=binary_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748779801023527_vecgraph.5.262144.v0.vecgraph
+```
+
+#### Findings
+
+- **Recall:** `NONE` and `INT8` stay high (~0.91). `PRODUCT` drops (~0.85) under these PQ defaults (M/K not tuned). `BINARY` is much worse (~0.29).
+- **Search speed:** PQ is fastest in-query (≈2.6s vs 7–18s) once built, but recall loss is noticeable. `NONE` and `INT8` are slower than PQ but similar to each other.
+- **Index/graph build:** `INT8` builds the graph much faster (~3.1k s) than `NONE`/`PRODUCT` (~5k s). PQ build adds PQ codebook/encoding time but was still slower overall than `INT8`.
+- **Memory (RSS):** Peaks are all high (~8.8 GB) and similar across modes; quantization didn’t reduce peak RSS in this run.
+- **Disk usage:**
+  - Bucket (f32) stays ~5.6 GB for all modes.
+  - `NONE` index is tiny (~10–11 MB).
+  - `INT8` index is large (~999 MB).
+  - `PQ` adds a `.vecpq` file (~247 MB) plus small index (~11 MB).
+  - `BINARY` index is moderate (~140 MB).
+- **Reopen:** Recall and timings after reopen track pre-close numbers; PQ remains lower recall, `NONE`/`INT8` remain high.
+- **Recommendation:** For quality, prefer `NONE` or `INT8`; use PQ only if you need the lowest query latency and can accept lower recall, and consider tuning PQ (M/K) to recover recall. Avoid `BINARY` here given the large recall drop.
+- All four of them saved the vectors in the db like `db.schema.get_or_create_property("VectorData", "vector", "ARRAY_OF_FLOATS")`. Maybe we should do this differently when quantization is enabled?
+
+### Commit/Date: main @ 91a86e3 (Thu Jan 15 10:32:50 2026 -0500)
+
+- Now we have `build_graph_now`, with which we can build the graph index without warmup. This is cleaner than relying on the first search to trigger the build.
+- `store_vectors_in_graph` is set to False for all four below tasks. Also `add_hierarchy` is set to True for all four tasks.
+- We also varied `batch_size`, which adds vectors in chunks to the database.
+
+#### MSMARCO-1M (1000 queries, Recall@50)
+
+| quantization | batch_size | load_corpus_s | load_corpus_rss_mb | ingest_rss_mb | create_index_s | create_index_rss_mb | build_graph_now_s | build_graph_now_rss_mb | warmup_s | warmup_rss_mb | search_s | search_rss_mb | recall@50_before_close | open_db_s | open_db_rss_mb | warmup_after_reopen_s | warmup_after_reopen_rss_mb | search_after_reopen_s | search_after_reopen_rss_mb | recall@50_after_reopen | peak_rss_mb | db_size_mb | total_duration |
+| :----------- | ---------: | ------------: | -----------------: | ------------: | -------------: | ------------------: | ----------------: | ---------------------: | -------: | ------------: | -------: | ------------: | ---------------------: | --------: | -------------: | --------------------: | -------------------------: | --------------------: | -------------------------: | ---------------------: | ----------: | ---------: | :------------- |
+| NONE         |     100000 |             0 |                  0 |       8617.99 |         16.339 |                  22 |           4833.32 |                182.383 |    0.045 |         0.605 |   12.037 |        12.238 |                 0.9117 |     3.466 |         13.805 |                10.615 |                      0.145 |                 8.177 |                      8.902 |                 0.9117 |     9335.16 |    5750.44 | 1h 22m         |
+| NONE         |      10000 |             0 |                  0 |       7476.79 |         16.505 |             553.051 |           4861.65 |                293.746 |     0.04 |         0.766 |    9.038 |         8.281 |                 0.9076 |     2.305 |          6.645 |                 7.153 |                      2.512 |                 6.775 |                     18.473 |                 0.9076 |     8839.89 |    5750.44 | 1h 22m         |
+| INT8         |     100000 |             0 |                  0 |       8583.21 |         21.401 |              74.676 |           2665.78 |                 85.578 |    0.111 |         3.875 |   18.321 |        19.668 |                 0.9015 |    11.946 |         -0.152 |                 4.002 |                      4.363 |                15.725 |                      3.137 |                 0.9015 |     9252.09 |    6738.94 | 46m            |
+| INT8         |      10000 |             0 |                  0 |       7554.18 |         22.836 |             138.258 |           2756.29 |                528.305 |     0.17 |         1.504 |   16.344 |        16.941 |                  0.914 |    11.713 |         21.402 |                 4.134 |                       2.91 |                 7.601 |                     11.586 |                 0.9125 |     8763.66 |    6738.94 | 48m            |
+
+#### Findings
+
+- Recall: NONE vs INT8 are within noise (~0.90–0.91), so quantization didn’t change quality much.
+- Memory (RSS): Peak RSS tracks batch size (100k lower than 10k); switching NONE↔INT8 didn’t materially reduce peak RSS.
+- Disk: INT8 still inflates DB size (e.g., ~6.7GB vs ~5.7GB for NONE; graph/index structures add ~1GB).
+- Performance: INT8 builds the graph much faster (minutes vs ~1h+), but costs more on search/open (higher warmup/search times after build/reopen).
+
 ### Commit/Date: main @ da5e70d (Thu Jan 15 09:44:44 2026 -0500)
 
 - This commit fixes the store_vectors_in_graph issue.
