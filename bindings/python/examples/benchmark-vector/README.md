@@ -5,9 +5,75 @@
 - Data prepared with [convert-msmacro-parquet-to-shards.py](./convert-msmacro-parquet-to-shards.py). [Download Cohere MSMARCO v2.1](https://huggingface.co/datasets/Cohere/msmarco-v2.1-embed-english-v3) parquet shards, normalize to float32, write flat f32 shards, and build exact GT for 1K queries (top-50).
 - Benchmarks here use the 1M subset. For production/RAG we should target 10M+ vectors; GT and shards are already computed—ask if you want the bundle to rerun.
 
-### Commit/Date: main @ d8098d7 (Wed Jan 14 15:20:25 2026 -0500)
+## Benchmark Setup
 
-**Hardware:** AMD Ryzen 9 7950X (16 cores), 128GB DDR5 (4x32GB), Samsung SSD 970 EVO Plus 2TB.
+- **Hardware:** AMD Ryzen 9 7950X (16 cores), 128GB DDR5 (4x32GB), Samsung SSD 970 EVO Plus 2TB.
+- Take the duration with a grain of salt, since there are other processes running on the machine. RSS and DB size are more stable. 4 threads were allocated per task, but there aren't always the same number of tasks runing in parallel, so effective CPU usage may vary.
+- If not mentioned, `MAX_CONNECTIONS` is fixed as 12, `BEAM_WIDTHS` as 64, and `OVERQUERY_FACTORS` as 1
+
+### Commit/Date: main @ da5e70d (Thu Jan 15 09:44:44 2026 -0500)
+
+- This commit fixes the store_vectors_in_graph issue.
+- The below two runs were run with `add_hierarchy=True`
+
+#### MSMARCO-1M (1000 queries, Recall@50)
+
+| quantization | store_vectors_in_graph | ingest_rss_mb | build_rss_mb | warmup_s | warmup_rss_mb | search_s | search_rss_mb | recall@50_before_close | warmup_after_reopen_s | search_after_reopen_s | search_after_reopen_rss_mb | recall@50_after_reopen | peak_rss_mb | db_size_mb | total_duration |
+| :----------- | :--------------------- | ------------: | -----------: | -------: | ------------: | -------: | ------------: | ---------------------: | --------------------: | --------------------: | -------------------------: | ---------------------: | ----------: | ---------: | :------------- |
+| NONE         | True                   |       8608.92 |       77.746 |  6001.45 |        157.16 |     6.26 |        13.098 |                 0.9198 |                  6.91 |                20.835 |                     11.656 |                 0.9197 |     9348.51 |    9650.44 | 1h 41m         |
+| NONE         | False                  |       8650.15 |       40.016 |  5974.64 |        139.84 |    9.871 |         4.977 |                  0.916 |                 7.873 |                 6.724 |                     11.609 |                 0.9157 |     9329.95 |    5750.44 | 1h 41m         |
+| INT8         | True                   |       8392.88 |      420.625 |  3416.91 |        95.156 |   13.134 |        10.457 |                 0.9149 |                 4.313 |                  67.3 |                     10.047 |                 0.9072 |     9408.62 |    10638.9 | 59m            |
+| INT8         | False                  |       8284.59 |      518.801 |  3404.88 |       112.254 |    9.147 |        13.809 |                 0.9146 |                 4.457 |                 9.165 |                     31.578 |                 0.9146 |     9437.81 |    6738.94 | 58m            |
+
+#### Disk Usage Breakdown
+
+##### store_vectors_in_graph=False and quantization=INT8
+
+```bash
+du -sh arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=100000_seed=42/* | sort -h
+320K    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=100000_seed=42/dictionary.0.327680.v0.dict
+59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=100000_seed=42/VectorData_0_2689535159251959_vecgraph.5.262144.v0.vecgraph
+999M    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=100000_seed=42/VectorData_0_2689535159251959.4.262144.v0.lsmvecidx
+5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=100000_seed=42/VectorData_0.1.65536.v0.bucket
+```
+
+##### store_vectors_in_graph=True and quantization=INT8
+
+```bash
+du -sh arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=on_hier=on_batch=100000_seed=42/* | sort -h
+320K    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=on_hier=on_batch=100000_seed=42/dictionary.0.327680.v0.dict
+999M    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=on_hier=on_batch=100000_seed=42/VectorData_0_2689534677234566.4.262144.v0.lsmvecidx
+3.9G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=on_hier=on_batch=100000_seed=42/VectorData_0_2689534677234566_vecgraph.5.262144.v0.vecgraph
+5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=on_hier=on_batch=100000_seed=42/VectorData_0.1.65536.v0.bucket
+```
+
+##### store_vectors_in_graph=False and quantization=None
+
+```bash
+du -sh arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=100000_seed=42/* | sort -h
+320K    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=100000_seed=42/dictionary.0.327680.v0.dict
+11M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=100000_seed=42/VectorData_0_2689535353426837.4.262144.v0.lsmvecidx
+59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=100000_seed=42/VectorData_0_2689535353426837_vecgraph.5.262144.v0.vecgraph
+5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=100000_seed=42/VectorData_0.1.65536.v0.bucket
+```
+
+##### store_vectors_in_graph=True and quantization=None
+
+```bash
+du -sh arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=on_hier=on_batch=100000_seed=42/* | sort -h
+320K    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=on_hier=on_batch=100000_seed=42/dictionary.0.327680.v0.dict
+11M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=on_hier=on_batch=100000_seed=42/VectorData_0_2689535105029551.4.262144.v0.lsmvecidx
+3.9G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=on_hier=on_batch=100000_seed=42/VectorData_0_2689535105029551_vecgraph.5.262144.v0.vecgraph
+5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=on_hier=on_batch=100000_seed=42/VectorData_0_1.65536.v0.bucket
+```
+
+#### Findings
+
+- **Disk Usage:** With `storeVectorsInGraph=False`, the vector graph file (`*.vecgraph`) size drops drastically from ~3.9GB to ~59MB. The total DB size is reduced by ~40% (6.7-5.7GB vs 10.6-9.6GB) by avoiding vector duplication. Note that in INT8 mode (`quant=int8`), there is an additional ~1GB overhead from the `*.lsmvecidx` file compared to `quant=none` (~11MB) because the quantized index structure itself consumes space, even though the bucket size (~5.6GB) remains constant across all runs (since it stores original f32 vectors).
+- **Search Performance:** While initial search times are comparable, using `storeVectorsInGraph=True` results in significantly worse search performance after reopening the database.
+- **Conclusion:** `storeVectorsInGraph=True` adds no tangible benefits; it increases disk usage and degrades search performance after a restart. Keeping it disabled (`False`) is recommended.
+
+### Commit/Date: main @ d8098d7 (Wed Jan 14 15:20:25 2026 -0500)
 
 #### MSMARCO-1M (1000 queries, Recall@50)
 
@@ -18,7 +84,7 @@
 | NONE         | True                   | False         |       67 |          8699 |  6561.28 |           147 |       16 |            10 |                 0.9085 |         4 |                    13 |                    58 |                 0.9049 |        9352 |       9645 | 1h 52m         |
 | NONE         | False                  | False         |       66 |          8707 |  6590.55 |           171 |       13 |            16 |                 0.8994 |         3 |                    13 |                    23 |                 0.8994 |        9380 |       9645 | 1h 51m         |
 
-##### Findings
+#### Findings
 
 - Memory: JVM heap capped at 8GB, yet RSS (Resident Set Size) peaks 9.3–9.5GB in all runs; forcing 4GB causes OOM. Even a 1M dataset pushes outside heap, suggesting off-heap/native graph build and mmap traffic dominate.
 - Storage: Each run writes ~1.0GB `*.lsmvecidx` + ~5.6GB bucket + ~3.9GB `*.vecgraph`; vectors are effectively stored twice (bucket + graph) because `store_vectors_in_graph=False` is ignored—LSMVectorIndexGraphFile still serializes inline vectors. This doubles disk and keeps RSS high when mapping the graph file.
