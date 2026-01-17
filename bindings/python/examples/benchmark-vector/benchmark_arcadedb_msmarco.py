@@ -3,16 +3,17 @@
 ArcadeDB (JVector/LSM) benchmark on MSMARCO shards with phase timings and RSS snapshots.
 
 Steps measured (time + RSS):
-- load_corpus: mmap shards into float32 array
+- load_corpus: placeholder timing for streaming ingest path
 - load_queries: materialize 1,000 query vectors from shards
 - create_db: create new ArcadeDB database
-- ingest: insert vectors as vertices with id + vector
-- build_index: create vector index (cosine) with given params
-- warmup: single query to trigger lazy build
+- ingest: insert vectors as vertices with id + vector (streamed in batches)
+- create_index: create vector index (cosine) with given params
+- build_graph_now: eagerly build the graph so warmup/search exclude lazy build
+- warmup: single query to warm cache (no graph build expected)
 - search: run 1,000 queries (k=50) with ground-truth recall
 - close_db: close database after first search
 - open_db: reopen existing database
-- warmup_after_reopen: single query to warm cache
+- warmup_after_reopen: single query to warm cache (no graph build expected)
 - search_after_reopen: run same 1,000 queries again
 - close_db_final: final close
 
@@ -232,6 +233,22 @@ def dir_size_mb(path: Path) -> float:
     return total / (1024 * 1024)
 
 
+def prune_vecgraph_files(db_path: Path) -> None:
+    """Keep only the newest vecgraph file if multiple exist to avoid reopen conflicts."""
+
+    candidates = sorted(db_path.glob("*_vecgraph.*.vecgraph"))
+    if len(candidates) <= 1:
+        return
+    keep = max(candidates, key=lambda p: p.stat().st_mtime)
+    for p in candidates:
+        if p == keep:
+            continue
+        try:
+            p.unlink()
+        except Exception:
+            pass
+
+
 # -------------------------
 # ArcadeDB helpers
 # -------------------------
@@ -274,7 +291,7 @@ def ingest_vectors_streaming(
     return ingested
 
 
-def build_index(
+def create_index(
     db,
     dim: int,
     max_connections: int,
@@ -297,10 +314,17 @@ def build_index(
     )
 
 
-def warmup(index, queries: np.ndarray, overquery_factor: int, k: int) -> dict:
+def warmup(
+    index, queries: np.ndarray, overquery_factor: int, k: int, quantization: str
+) -> dict:
     if len(queries) == 0:
         return {"warmup_queries": 0}
-    _ = index.find_nearest(queries[0], k=k, overquery_factor=overquery_factor)
+    if quantization.upper() == "PRODUCT":
+        _ = index.find_nearest_approximate(
+            queries[0], k=k, overquery_factor=overquery_factor
+        )
+    else:
+        _ = index.find_nearest(queries[0], k=k, overquery_factor=overquery_factor)
     return {"warmup_queries": 1}
 
 
@@ -311,13 +335,19 @@ def search_index(
     gt_full: dict[int, List[int]],
     k: int,
     overquery_factor: int,
+    quantization: str,
 ) -> dict:
     latencies_ms: List[float] = []
     recalls: List[float] = []
     for qi, qid in enumerate(qids):
         qvec = queries[qi]
         t0 = time.perf_counter()
-        results = index.find_nearest(qvec, k=k, overquery_factor=overquery_factor)
+        if quantization.upper() == "PRODUCT":
+            results = index.find_nearest_approximate(
+                qvec, k=k, overquery_factor=overquery_factor
+            )
+        else:
+            results = index.find_nearest(qvec, k=k, overquery_factor=overquery_factor)
         latencies_ms.append((time.perf_counter() - t0) * 1000)
 
         result_ids = []
@@ -372,7 +402,7 @@ def main():
     )
     ap.add_argument(
         "--quantization",
-        choices=["NONE", "INT8"],
+        choices=["NONE", "INT8", "BINARY", "PRODUCT"],
         default="NONE",
         help="Quantization mode for index",
     )
@@ -495,32 +525,6 @@ def main():
         )
         record("ingest_initial", {"rows": ingested_first, "offset": 0}, dur, r0, r1)
 
-        (index, dur, r0, r1) = timed_section(
-            "build_index",
-            lambda: build_index(
-                db,
-                dim=dim,
-                max_connections=args.max_connections,
-                beam_width=args.beam_width,
-                quantization=args.quantization,
-                store_vectors_in_graph=args.store_vectors_in_graph,
-                add_hierarchy=args.add_hierarchy,
-            ),
-        )
-        record(
-            "build_index",
-            {
-                "max_connections": args.max_connections,
-                "beam_width": args.beam_width,
-                "quantization": args.quantization,
-                "store_vectors_in_graph": args.store_vectors_in_graph,
-                "add_hierarchy": args.add_hierarchy,
-            },
-            dur,
-            r0,
-            r1,
-        )
-
         remaining_rows = count - ingested_first
         if remaining_rows > 0:
             (ingested_rest, dur, r0, r1) = timed_section(
@@ -563,10 +567,44 @@ def main():
             "batch_size": batch_size,
         }
 
+        (index, dur, r0, r1) = timed_section(
+            "create_index",
+            lambda: create_index(
+                db,
+                dim=dim,
+                max_connections=args.max_connections,
+                beam_width=args.beam_width,
+                quantization=args.quantization,
+                store_vectors_in_graph=args.store_vectors_in_graph,
+                add_hierarchy=args.add_hierarchy,
+            ),
+        )
+        record(
+            "create_index",
+            {
+                "max_connections": args.max_connections,
+                "beam_width": args.beam_width,
+                "quantization": args.quantization,
+                "store_vectors_in_graph": args.store_vectors_in_graph,
+                "add_hierarchy": args.add_hierarchy,
+            },
+            dur,
+            r0,
+            r1,
+        )
+
+        # Eagerly build the graph after all ingestion so warmup/query timings exclude lazy build cost.
+        (_, dur, r0, r1) = timed_section(
+            "build_graph_now", lambda: index.build_graph_now()
+        )
+        record("build_graph_now", {}, dur, r0, r1)
+
         # Warmup (single query)
         (warm_info, dur, r0, r1) = timed_section(
             "warmup",
-            lambda: warmup(index, queries, args.overquery_factor, eval_k),
+            lambda: warmup(
+                index, queries, args.overquery_factor, eval_k, args.quantization
+            ),
         )
         record("warmup", warm_info, dur, r0, r1)
 
@@ -580,9 +618,13 @@ def main():
                 gt_full,
                 k=eval_k,
                 overquery_factor=args.overquery_factor,
+                quantization=args.quantization,
             ),
         )
         record("search", search_stats, dur, r0, r1)
+
+        # Drop stale vecgraph files so reopen does not see duplicate slots when rebuild produced multiple files.
+        prune_vecgraph_files(db_path)
 
         # Close DB
         (_, dur, r0, r1) = timed_section("close_db", lambda: db.close())
@@ -597,9 +639,12 @@ def main():
 
         # Warmup after reopen
         index = db.schema.get_vector_index("VectorData", "vector")
+
         (warm_info2, dur, r0, r1) = timed_section(
             "warmup_after_reopen",
-            lambda: warmup(index, queries, args.overquery_factor, eval_k),
+            lambda: warmup(
+                index, queries, args.overquery_factor, eval_k, args.quantization
+            ),
         )
         record("warmup_after_reopen", warm_info2, dur, r0, r1)
 
@@ -613,6 +658,7 @@ def main():
                 gt_full,
                 k=eval_k,
                 overquery_factor=args.overquery_factor,
+                quantization=args.quantization,
             ),
         )
         record("search_after_reopen", search_stats2, dur, r0, r1)
@@ -709,7 +755,27 @@ def main():
         "## Phases (time sec / RSS MB)",
     ]
 
-    for name in phases:
+    phase_order = [
+        "load_queries",
+        "create_db",
+        "load_corpus",
+        "ingest_initial",
+        "ingest_remaining",
+        "ingest",
+        "create_index",
+        "build_graph_now",
+        "warmup",
+        "search",
+        "close_db",
+        "open_db",
+        "warmup_after_reopen",
+        "search_after_reopen",
+        "close_db_final",
+    ]
+
+    for name in phase_order:
+        if name not in phases:
+            continue
         p = phases[name]
         line = (
             f"- {name}: time={p['time_sec']:.3f}s, rss_before={p['rss_before_mb']:.1f} MB, "

@@ -5,6 +5,7 @@ Vector index and array conversion utilities for similarity search.
 """
 
 import jpype.types as jtypes
+
 from .exceptions import ArcadeDBError
 
 
@@ -131,7 +132,7 @@ class VectorIndex:
         self,
         query_vector,
         k=10,
-        overquery_factor=16,
+        overquery_factor=1,
         allowed_rids=None,
     ):
         """
@@ -141,7 +142,7 @@ class VectorIndex:
             query_vector: Query vector as Python list, NumPy array, or array-like
             k: Number of nearest neighbors to return (final k)
             overquery_factor: Multiplier for search-time over-querying (implicit efSearch).
-                              Default is 16, chosen based on benchmarks to ensure decent recall.
+                              Default is 1, chosen based on benchmarks to ensure decent recall.
             allowed_rids: Optional list of RID strings (e.g. ["#1:0", "#2:5"]) to restrict search
 
         Returns:
@@ -236,6 +237,94 @@ class VectorIndex:
         except Exception as e:
             raise ArcadeDBError(f"Failed to get index size: {e}") from e
 
+    def find_nearest_approximate(
+        self,
+        query_vector,
+        k=10,
+        overquery_factor=1,
+        allowed_rids=None,
+    ):
+        """
+        Find k nearest neighbors using Product Quantization (PQ) approximate search.
+
+        Args:
+            query_vector: Query vector as Python list, NumPy array, or array-like
+            k: Number of nearest neighbors to return (final k)
+            overquery_factor: Multiplier for over-querying before truncation (approx efSearch analogue).
+            allowed_rids: Optional list of RID strings (e.g. ["#1:0", "#2:5"]) to restrict search
+
+        Returns:
+            List of tuples: [(record, score), ...]
+        """
+        try:
+            quantization = self.get_quantization()
+            if quantization != "PRODUCT":
+                raise ArcadeDBError(
+                    "Approximate search requires quantization=PRODUCT (PQ)"
+                )
+
+            java_vector = to_java_float_array(query_vector)
+            search_k = k * max(1, int(overquery_factor))
+
+            from com.arcadedb.database import RID
+            from java.util import HashSet
+
+            from .graph import Document
+
+            allowed_rids_set = None
+            if allowed_rids:
+                allowed_rids_set = HashSet()
+                for rid_str in allowed_rids:
+                    allowed_rids_set.add(RID(self._database._java_db, rid_str))
+
+            all_results = []
+
+            def process_index(idx):
+                if "LSMVectorIndex" in idx.getClass().getName():
+                    if allowed_rids_set:
+                        pairs = idx.findNeighborsFromVectorApproximate(
+                            java_vector, search_k, allowed_rids_set
+                        )
+                    else:
+                        pairs = idx.findNeighborsFromVectorApproximate(
+                            java_vector, search_k
+                        )
+
+                    for pair in pairs:
+                        rid = pair.getFirst()
+                        score = pair.getSecond()
+                        record = self._database._java_db.lookupByRID(rid, True)
+                        wrapped_record = Document.wrap(record)
+                        all_results.append((wrapped_record, float(score)))
+
+            if "TypeIndex" in self._java_index.getClass().getName():
+                for sub in self._java_index.getSubIndexes():
+                    process_index(sub)
+            else:
+                process_index(self._java_index)
+
+            reverse_sort = False
+            try:
+                idx_to_check = None
+                if "LSMVectorIndex" in self._java_index.getClass().getName():
+                    idx_to_check = self._java_index
+                elif "TypeIndex" in self._java_index.getClass().getName():
+                    subs = self._java_index.getSubIndexes()
+                    if not subs.isEmpty():
+                        idx_to_check = subs[0]
+
+                if idx_to_check:
+                    if str(idx_to_check.getSimilarityFunction()) == "EUCLIDEAN":
+                        reverse_sort = True
+            except Exception:
+                pass
+
+            all_results.sort(key=lambda x: x[1], reverse=reverse_sort)
+            return all_results[:k]
+
+        except Exception as e:
+            raise ArcadeDBError(f"Approximate search failed: {e}") from e
+
     def get_quantization(self):
         """
         Get the quantization type of the index.
@@ -257,3 +346,29 @@ class VectorIndex:
             return "NONE"
         except Exception:
             return "NONE"
+
+    def build_graph_now(self):
+        """
+        Trigger an immediate rebuild of the underlying vector graph.
+
+        Useful after bulk inserts/updates to avoid waiting for a search-triggered lazy build.
+        For TypeIndex wrappers, rebuilds all underlying LSMVectorIndex instances.
+        """
+        try:
+            if "LSMVectorIndex" in self._java_index.getClass().getName():
+                self._java_index.buildVectorGraphNow()
+                return
+
+            if "TypeIndex" in self._java_index.getClass().getName():
+                sub_indexes = self._java_index.getSubIndexes()
+                if sub_indexes and not sub_indexes.isEmpty():
+                    for sub in sub_indexes:
+                        if "LSMVectorIndex" in sub.getClass().getName():
+                            sub.buildVectorGraphNow()
+                return
+
+            raise ArcadeDBError(
+                "Underlying index does not support vector graph rebuild"
+            )
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to rebuild vector graph: {e}") from e
