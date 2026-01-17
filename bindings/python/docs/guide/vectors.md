@@ -27,6 +27,11 @@ with arcadedb.create_database("./vector_demo") as db:
         distance_function="cosine",  # default: cosine
         max_connections=32,          # Corresponds to M in HNSW
         beam_width=256               # Corresponds to efConstruction in HNSW
+        # quantization="PRODUCT",   # enable PQ
+        # pq_subspaces=2,            # M
+        # pq_clusters=256,           # K
+        # pq_center_globally=True,
+        # pq_training_limit=128_000,
     )
 
     with db.transaction():
@@ -45,7 +50,7 @@ with arcadedb.create_database("./vector_demo") as db:
 ## API Essentials
 
 - Vector property type must be `ARRAY_OF_FLOATS`.
-- `create_vector_index(vertex_type, vector_property, dimensions, distance_function="cosine", max_connections=32, beam_width=256, quantization=None)`
+- `create_vector_index(vertex_type, vector_property, dimensions, distance_function="cosine", max_connections=32, beam_width=256, quantization=None, store_vectors_in_graph=False, add_hierarchy=None, pq_subspaces=None, pq_clusters=None, pq_center_globally=None, pq_training_limit=None)`
 - `find_nearest(query_vector, k=10, overquery_factor=16, allowed_rids=None)`
   - `overquery_factor` multiplies `k` during search to improve recall.
   - `allowed_rids` filters candidates server-side (useful for metadata-prefilter).
@@ -122,8 +127,9 @@ results = index.find_nearest(query_vec, k=5, allowed_rids=rids)
 
 ## Quantization (Experimental)
 
-- `quantization` accepts `"INT8"` or `"BINARY"`.
-- Current ArcadeDB builds have instability with INT8/BINARY on larger inserts (see tests); keep the default (`None`) unless benchmarking small datasets.
+- `quantization` accepts `"INT8"`, `"BINARY"`, or `"PRODUCT"` (PQ).
+- PQ tunables (require `quantization="PRODUCT"`): `pq_subspaces` (M), `pq_clusters` (K), `pq_center_globally`, `pq_training_limit`.
+- INT8/BINARY have shown instability on larger inserts; PQ is the recommended quantization path for recall/latency trade-offs.
 
 ## SQL Helpers (Optional)
 
