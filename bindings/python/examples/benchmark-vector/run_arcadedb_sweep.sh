@@ -26,9 +26,10 @@ fi
 # Choose heap based on dataset size if ARCADEDB_JVM_ARGS not already set
 if [[ -z "${ARCADEDB_JVM_ARGS:-}" ]]; then
     case "$(basename "$DATASET_DIR")" in
-        *MSMARCO-1M*) XMX="4g" ;;
-        *MSMARCO-10M*) XMX="16g" ;;
-        *MSMARCO-100M*) XMX="64g" ;;
+        *MSMARCO-1M*) XMX="4g" ;;    # 4G works for 1M
+        *MSMARCO-10M*) XMX="16g" ;;  # 16G testing ...
+        *MSMARCO-20M*) XMX="32g" ;;  # 32G testing ...
+        *MSMARCO-100M*) XMX="64g" ;; # Not sure if I'll ever test this. It's humongous.
     esac
     if [[ -n "${XMX:-}" ]]; then
         JVM_ARGS="-Xmx${XMX} -Xms${XMX}"
@@ -54,8 +55,8 @@ cmds=()
 # Parameter sweeps (cosine only):
 # max_connections x beam_width x overquery_factor x quantization x store_vectors_in_graph x add_hierarchy
 # Expanded for real runs; still bounded to avoid explosion
-MAX_CONNECTIONS=(12)
-BEAM_WIDTHS=(64)
+MAX_CONNECTIONS=(16)
+BEAM_WIDTHS=(100)
 OVERQUERY_FACTORS=(1)
 QUANTIZATIONS=(INT8)
 STORE_GRAPH_FLAGS=(false)
