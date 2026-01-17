@@ -243,6 +243,9 @@ class Database:
         max_connections: int = 32,
         beam_width: int = 256,
         quantization: str = None,
+        location_cache_size: Optional[int] = None,
+        graph_build_cache_size: Optional[int] = None,
+        mutations_before_rebuild: Optional[int] = None,
         store_vectors_in_graph: bool = False,
         add_hierarchy: Optional[bool] = None,
         pq_subspaces: Optional[int] = None,
@@ -278,6 +281,27 @@ class Database:
                           Reduces memory usage and speeds up search at the cost of
                           some precision. "PRODUCT" enables PQ data for
                           approximate search (zero-disk-I/O path).
+            location_cache_size: Per-index override for vector location cache size
+                (maps to Java metadata key "locationCacheSize"; uses
+                GlobalConfiguration default if None). Typical ranges by corpus size
+                (vectors):
+                - ~100K: 50k–100k
+                - ~1M: 100k–200k
+                - ~10M: 300k–500k
+                - ~100M: 500k–800k (scale with heap)
+            graph_build_cache_size: Per-index override for graph build cache size
+                (maps to Java metadata key "graphBuildCacheSize"; uses
+                GlobalConfiguration default if None). Typical ranges (higher = faster
+                build, more RAM):
+                - ~100K: 10k–30k
+                - ~1M: 30k–75k
+                - ~10M: 75k–150k
+                - ~100M: 150k–250k (only if heap allows)
+            mutations_before_rebuild: Per-index override for mutations threshold
+                before triggering a graph rebuild (maps to Java metadata key
+                "mutationsBeforeRebuild"; uses GlobalConfiguration default if None).
+                Typical ranges: 100–300 for freshness-heavy workloads; 300–800 for
+                write-heavy workloads and larger graphs.
             pq_subspaces: Number of PQ subspaces (M). Requires quantization="PRODUCT".
             pq_clusters: Clusters per subspace (K). Requires quantization="PRODUCT".
             pq_center_globally: Whether to globally center vectors before PQ.
@@ -349,6 +373,12 @@ class Database:
                 metadata_cfg["storeVectorsInGraph"] = True
             if add_hierarchy is not None:
                 metadata_cfg["addHierarchy"] = bool(add_hierarchy)
+            if location_cache_size is not None:
+                metadata_cfg["locationCacheSize"] = int(location_cache_size)
+            if graph_build_cache_size is not None:
+                metadata_cfg["graphBuildCacheSize"] = int(graph_build_cache_size)
+            if mutations_before_rebuild is not None:
+                metadata_cfg["mutationsBeforeRebuild"] = int(mutations_before_rebuild)
 
             if metadata_cfg:
                 # Use JSON configuration to avoid JPype overload ambiguity on put()
