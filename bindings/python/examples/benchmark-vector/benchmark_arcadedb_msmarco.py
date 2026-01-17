@@ -388,7 +388,7 @@ def main():
     ap.add_argument(
         "--count",
         type=int,
-        help="Override corpus count; default = dataset size (1M/10M/100M)",
+        help="Override corpus count; default = dataset size (1M/10M/20M/100M)",
     )
     ap.add_argument(
         "--max-connections", type=int, default=32, help="JVector max_connections"

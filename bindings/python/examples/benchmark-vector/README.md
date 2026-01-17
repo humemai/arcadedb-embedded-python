@@ -11,6 +11,25 @@
 - Take the duration with a grain of salt, since there are other processes running on the machine. RSS and DB size are more stable. 4 threads were allocated per task, but there aren't always the same number of tasks runing in parallel, so effective CPU usage may vary.
 - If not mentioned, `MAX_CONNECTIONS` is fixed as 12, `BEAM_WIDTHS` as 64, and `OVERQUERY_FACTORS` as 1
 
+### 17 January 2026 Update
+
+- Ran the experiments with varying `overquery_factor` again to see how it affects recall and latency. Increasing `overquery_factor` should improve recall at the cost of latency. as it increases the number of candidates considered during search (more efforts on search)
+
+#### MSMARCO-1M (1000 queries, Recall@50)
+
+`quantization=INT8`, `store_vectors_in_graph=False`, `add_hierarchy=True`, `max_connections=16`,`beam_width=100` , `batch_size=10000`, 4 threads
+
+| overquery_factor | search_s | recall@50_before_close | peak_rss_mb | db_size_mb | total_duration |
+| ---------------: | -------: | ---------------------: | ----------: | ---------: | :------------- |
+|               16 |  280.916 |                 0.9919 |     4531.02 |    6753.95 | 4m 59s         |
+|                8 |  155.385 |                 0.9902 |     4495.21 |    6753.95 | 2m 54s         |
+|                4 |   96.178 |                 0.9835 |     4477.92 |    6753.95 | 1m 53s         |
+|                2 |   56.095 |                 0.9758 |     4465.29 |    6753.95 | 1m 15s         |
+|                1 |   39.802 |                 0.9486 |     4409.59 |    6753.95 | 1m 8s          |
+
+- As for this dataset, increasing `overquery_factor` improves recall but increases search latency. The peak RSS and DB size remain relatively stable across different `overquery_factor` settings. Even increasing from 1 to 2 helps a lot.
+- A "good" overquery factor will heavily depend on the nature of the dataset. We'll try 10M and even possibly 20M vectors next to see how it behaves.
+
 ### Commit/Date: main @ 6ef8858 (Thu Jan 15 16:40:51 2026 -0500)
 
 - This commit adds Product Quantization (PQ) support to JVector index.
