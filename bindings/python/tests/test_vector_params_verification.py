@@ -165,6 +165,47 @@ class TestVectorParams:
                     or "addHierarchy: true" in metadata.toString()
                 )
 
+    def test_per_index_cache_params(self, test_db):
+        """Test per-index cache and rebuild overrides."""
+        test_db.schema.create_vertex_type("CacheDoc")
+        test_db.schema.create_property("CacheDoc", "embedding", "ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "CacheDoc",
+            "embedding",
+            dimensions=4,
+            location_cache_size=123,
+            graph_build_cache_size=456,
+            mutations_before_rebuild=789,
+        )
+
+        java_index = index._java_index
+        idx_to_check = java_index
+        if "TypeIndex" in java_index.getClass().getName():
+            idx_to_check = java_index.getSubIndexes().get(0)
+
+        metadata = idx_to_check.getMetadata()
+
+        # Direct field access is available on LSMVectorIndexMetadata; fall back to string inspection if not.
+        try:
+            assert metadata.locationCacheSize == 123
+            assert metadata.graphBuildCacheSize == 456
+            assert metadata.mutationsBeforeRebuild == 789
+        except AttributeError:
+            meta_str = metadata.toString()
+            assert (
+                "locationCacheSize=123" in meta_str
+                or "locationCacheSize: 123" in meta_str
+            )
+            assert (
+                "graphBuildCacheSize=456" in meta_str
+                or "graphBuildCacheSize: 456" in meta_str
+            )
+            assert (
+                "mutationsBeforeRebuild=789" in meta_str
+                or "mutationsBeforeRebuild: 789" in meta_str
+            )
+
     def test_quantization_none(self, test_db):
         """Test sending quantization parameter NONE."""
         test_db.schema.create_vertex_type("QuantNoneDoc")

@@ -71,31 +71,18 @@ def start_jvm():
     JVM Memory Configuration (via environment variables):
     -----------------------------------------------------
     ARCADEDB_JVM_ARGS (optional)
-        JVM arguments for memory and advanced configuration (space-separated).
-        If not specified, defaults to: "-Xmx4g -Djava.awt.headless=true"
+        JVM arguments for memory and JVM-wide options (space-separated).
+        If not specified, defaults to: "-Xmx4g -Djava.awt.headless=true".
 
-        Common memory-related options:
-            -Xmx<size>
-                Maximum heap memory (e.g., "-Xmx8g")
-            -Xms<size>
-                Initial heap size (recommended: same as -Xmx)
-            -XX:MaxDirectMemorySize=<size>
-                Limit off-heap direct buffer memory
-            -Darcadedb.vectorIndex.locationCacheSize=<count>
-                Max vector locations to cache (controls LSM vector memory)
-            -Darcadedb.vectorIndex.graphBuildCacheSize=<count>
-                Max vectors cached during HNSW graph build
-            -Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>
-                Mutations threshold before rebuilding HNSW graph
-            -Djava.util.concurrent.ForkJoinPool.common.parallelism=<count>
-                Limit threads for JVector graph construction (default: all cores)
+        Common options to set here (JVM-wide only):
+            -Xmx<size> / -Xms<size>   Heap sizing (must be set before JVM start)
+            -XX:MaxDirectMemorySize=<size>   Direct buffer cap
+            -Djava.util.concurrent.ForkJoinPool.common.parallelism=<count>   Limit
+                common pool threads if you want fewer threads for graph builds
 
         Examples:
-            # Production with 8GB heap and bounded vector caches
-            export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
-              -Darcadedb.vectorIndex.locationCacheSize=100000 \
-              -Darcadedb.vectorIndex.graphBuildCacheSize=3000 \
-              -Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
+            # Production with 8GB heap
+            export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g"
 
             # Development/testing (smaller memory)
             export ARCADEDB_JVM_ARGS="-Xmx2g -Xms2g"

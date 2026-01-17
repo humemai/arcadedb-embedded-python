@@ -7,14 +7,12 @@ We have updated the Python bindings to support the new features introduced in th
 ### `bindings/python/src/arcadedb_embedded/jvm.py` (DONE)
 -   Added `--add-modules=jdk.incubator.vector` to the default JVM arguments to enable SIMD optimizations.
 -   **Note**: Correct syntax for the module flag was verified.
+-   JVM args now focus on JVM-wide concerns only (heap, headless, native access, vector module); per-index vector params moved to `core.py`.
 
 ### `bindings/python/src/arcadedb_embedded/core.py` (DONE)
--   Updated `create_vector_index` signature to accept `quantization` and `store_vectors_in_graph`.
--   **Implementation Detail**: Used `JSONObject` metadata to pass `storeVectorsInGraph` to avoid JPype ambiguity with `TypeLSMVectorIndexBuilder`.
-    ```python
-    json_cfg = JSONObject('{ "storeVectorsInGraph": true }')
-    builder.withMetadata(json_cfg)
-    ```
+-   Updated `create_vector_index` signature to accept `quantization`, `store_vectors_in_graph`, PQ knobs, and per-index vector cache/rebuild overrides (`location_cache_size`, `graph_build_cache_size`, `mutations_before_rebuild`).
+-   Per-index overrides are passed via metadata (e.g., `locationCacheSize`, `graphBuildCacheSize`, `mutationsBeforeRebuild`), making configuration Pythonic instead of JVM-wide.
+-   **Implementation Detail**: Used `JSONObject` metadata to avoid JPype overload ambiguity with `TypeLSMVectorIndexBuilder`.
 
 ## 2. Update Tests (`tests`) (DONE)
 
@@ -68,5 +66,6 @@ The vector benchmark scripts and other examples have been updated.
         pq_center_globally: Optional[bool] = None,
         pq_training_limit: Optional[int] = None,
 - [x] Tests: add PQ/approx search coverage (params pass-through, k results, overquery handling, persistence after reopen, invalid PQ config errors).
+- [ ] Run 10M and 20M MSMARCO vector build and search.
 - [ ] Benchmarks/examples: extend vector examples and MSMARCO bench scripts to include PQ/approx runs and note recall trade-offs for random vs real embeddings.
 - [ ] Docs: update Python examples and mkdocs, once all the vector stuff is done.
