@@ -57,4 +57,24 @@ The vector benchmark scripts and other examples have been updated.
 ## TOODs
 
 - [x] `addHierarchy` has been added to the vector java code base. expose this to python
-- [ ] fix the WAL issue for vector building
+- [x] fix the WAL issue for vector building
+- [x] Engine: `storeVectorsInGraph=false` ignored (vecgraph still inlines vectors) — fix to avoid duplicate storage and high RSS/disk.
+- [ ] Engine: INT8 quantization footprint regression — db size grows vs FP32 and RSS stays high; re-evaluate after graph duplication fix.
+- [x] Engine: Expose a public “build vector graph now” API (no search trigger), e.g., `buildVectorGraphNow()` on `LSMVectorIndex`. this is easier than I thought. I should also make changes to the examples to include this. it's cleaner this way.
+- [x] Python: expose PQ/approximate search (wrap `findNeighborsFromVectorApproximate`) in `VectorIndex`, and surface PQ knobs in `create_vector_index` metadata without JPype ambiguity.
+- [x] Python: expose the four parameters used for PQ
+        pq_subspaces: Optional[int] = None,
+        pq_clusters: Optional[int] = None,
+        pq_center_globally: Optional[bool] = None,
+        pq_training_limit: Optional[int] = None,
+- [x] Tests: add PQ/approx search coverage (params pass-through, k results, overquery handling, persistence after reopen, invalid PQ config errors).
+- [ ] Benchmarks/examples: extend vector examples and MSMARCO bench scripts to include PQ/approx runs and note recall trade-offs for random vs real embeddings.
+- [ ] Docs: update Python examples and mkdocs, once all the vector stuff is done.
+
+## **Plan: Issue #3162 (codes-first / drop floats)**
+
+- **Goal:** shrink disk/RSS when quantization is on.
+- **Step 1 (drop floats opt-in):**
+    - Add `storeRawVectors` (default true). If false and quantization != NONE, do not store float payloads in the bucket; keep only RID→index-id. `lsmvecidx` (and `.vecpq` for PQ) remains the source of quantized vectors.
+    - Persist `payloadType` (FLOATS vs codes) so reopen/search know what’s stored; reject rebuild/retune that needs floats when payloadType is codes.
+    - Guardrails: refuse `storeRawVectors=false` if quantization=NONE; clear error messaging for rebuild attempts without floats.
