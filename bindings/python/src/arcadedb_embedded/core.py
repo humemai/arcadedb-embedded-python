@@ -245,6 +245,10 @@ class Database:
         quantization: str = None,
         store_vectors_in_graph: bool = False,
         add_hierarchy: Optional[bool] = None,
+        pq_subspaces: Optional[int] = None,
+        pq_clusters: Optional[int] = None,
+        pq_center_globally: Optional[bool] = None,
+        pq_training_limit: Optional[int] = None,
     ) -> "VectorIndex":
         """
         Create a vector index for similarity search (JVector implementation).
@@ -270,9 +274,16 @@ class Database:
             beam_width: Beam width for search/construction (default: 256).
                         Maps to `beamWidth` in JVector.
             quantization: Vector quantization type (default: None).
-                          Options: "INT8", "BINARY".
+                          Options: "INT8", "BINARY", "PRODUCT" (PQ).
                           Reduces memory usage and speeds up search at the cost of
-                          some precision.
+                          some precision. "PRODUCT" enables PQ data for
+                          approximate search (zero-disk-I/O path).
+            pq_subspaces: Number of PQ subspaces (M). Requires quantization="PRODUCT".
+            pq_clusters: Clusters per subspace (K). Requires quantization="PRODUCT".
+            pq_center_globally: Whether to globally center vectors before PQ.
+                Requires quantization="PRODUCT".
+            pq_training_limit: Max vectors to use for PQ training. Requires
+                quantization="PRODUCT".
             store_vectors_in_graph: Whether to store vectors inline in the graph
                 structure (default: False). If True, increases disk usage but
                 significantly speeds up search for large datasets by avoiding document
@@ -290,6 +301,18 @@ class Database:
         # Create the index using the Java Builder API directly to pass configuration
         try:
             import jpype
+
+            if any(
+                val is not None
+                for val in (
+                    pq_subspaces,
+                    pq_clusters,
+                    pq_center_globally,
+                    pq_training_limit,
+                )
+            ):
+                if not quantization or quantization.upper() != "PRODUCT":
+                    raise ValueError("PQ parameters require quantization='PRODUCT'")
 
             java_schema = self.schema._java_schema
 
@@ -311,6 +334,15 @@ class Database:
 
             if quantization:
                 builder.withQuantization(quantization)
+
+            if pq_subspaces is not None:
+                builder.withPQSubspaces(int(pq_subspaces))
+            if pq_clusters is not None:
+                builder.withPQClusters(int(pq_clusters))
+            if pq_center_globally is not None:
+                builder.withPQCenterGlobally(bool(pq_center_globally))
+            if pq_training_limit is not None:
+                builder.withPQTrainingLimit(int(pq_training_limit))
 
             metadata_cfg = {}
             if store_vectors_in_graph:

@@ -1,12 +1,12 @@
+import arcadedb_embedded as arcadedb
 import pytest
-from arcadedb_embedded import ArcadeDBError, create_database
 
 
 @pytest.fixture
 def test_db(tmp_path):
     """Create a temporary test database."""
     db_path = str(tmp_path / "test_vector_params_db")
-    db = create_database(db_path)
+    db = arcadedb.create_database(db_path)
     yield db
     db.drop()
 
@@ -119,7 +119,7 @@ class TestVectorParams:
         db_path = str(tmp_path / "test_vector_params_persist")
 
         # 1. Create and Configure
-        with create_database(db_path) as db:
+        with arcadedb.create_database(db_path) as db:
             db.schema.create_vertex_type("Doc")
             db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
 
@@ -133,9 +133,7 @@ class TestVectorParams:
             )
 
         # 2. Reopen and Check
-        from arcadedb_embedded import open_database
-
-        with open_database(db_path) as db:
+        with arcadedb.open_database(db_path) as db:
             index = db.schema.get_vector_index("Doc", "embedding")
 
             # Check Quantization
@@ -202,6 +200,26 @@ class TestVectorParams:
             idx_to_check = java_index.getSubIndexes().get(0)
 
         assert str(idx_to_check.getMetadata().quantizationType) == "BINARY"
+
+    def test_quantization_product(self, test_db):
+        """Test sending quantization parameter PRODUCT (PQ)."""
+        test_db.schema.create_vertex_type("QuantProductDoc")
+        test_db.schema.create_property(
+            "QuantProductDoc", "embedding", "ARRAY_OF_FLOATS"
+        )
+
+        index = test_db.create_vector_index(
+            "QuantProductDoc", "embedding", dimensions=64, quantization="PRODUCT"
+        )
+
+        assert index.get_quantization() == "PRODUCT"
+
+        java_index = index._java_index
+        idx_to_check = java_index
+        if "TypeIndex" in java_index.getClass().getName():
+            idx_to_check = java_index.getSubIndexes().get(0)
+
+        assert str(idx_to_check.getMetadata().quantizationType) == "PRODUCT"
 
     def test_jvm_heap_check(self):
         """Verify JVM memory settings from Java level."""

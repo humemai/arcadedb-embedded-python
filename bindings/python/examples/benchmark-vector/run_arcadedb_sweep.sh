@@ -26,8 +26,8 @@ fi
 # Choose heap based on dataset size if ARCADEDB_JVM_ARGS not already set
 if [[ -z "${ARCADEDB_JVM_ARGS:-}" ]]; then
     case "$(basename "$DATASET_DIR")" in
-        *MSMARCO-1M*) XMX="8g" ;;
-        *MSMARCO-10M*) XMX="32g" ;;
+        *MSMARCO-1M*) XMX="4g" ;;
+        *MSMARCO-10M*) XMX="16g" ;;
         *MSMARCO-100M*) XMX="64g" ;;
     esac
     if [[ -n "${XMX:-}" ]]; then
@@ -57,9 +57,10 @@ cmds=()
 MAX_CONNECTIONS=(12)
 BEAM_WIDTHS=(64)
 OVERQUERY_FACTORS=(1)
-QUANTIZATIONS=(NONE)
+QUANTIZATIONS=(INT8)
 STORE_GRAPH_FLAGS=(false)
 ADD_HIERARCHY_FLAGS=(true)
+BATCH_SIZES=(10000)
 
 # MAX_CONNECTIONS=(12 16 24)
 # BEAM_WIDTHS=(64 100 150)
@@ -81,7 +82,9 @@ for MC in "${MAX_CONNECTIONS[@]}"; do
                         if [[ "$HIER" == "true" ]]; then
                             FLAGS+=("--add-hierarchy")
                         fi
-                        cmds+=("${BASE} --max-connections ${MC} --beam-width ${BW} --overquery-factor ${OQ} --quantization ${Q} ${FLAGS[*]}")
+                        for BATCH in "${BATCH_SIZES[@]}"; do
+                            cmds+=("${BASE} --max-connections ${MC} --beam-width ${BW} --overquery-factor ${OQ} --quantization ${Q} --batch-size ${BATCH} ${FLAGS[*]}")
+                        done
                     done
                 done
             done

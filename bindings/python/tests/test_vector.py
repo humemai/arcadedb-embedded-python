@@ -8,14 +8,13 @@ Tests cover:
 
 import arcadedb_embedded as arcadedb
 import pytest
-from arcadedb_embedded import create_database
 
 
 @pytest.fixture
 def test_db(tmp_path):
     """Create a temporary test database."""
     db_path = str(tmp_path / "test_lsm_vector_db")
-    db = create_database(db_path)
+    db = arcadedb.create_database(db_path)
     yield db
     db.drop()
 
@@ -53,6 +52,33 @@ class TestLSMVectorIndex:
         except Exception as e:
             pytest.fail(f"Failed to create LSM vector index: {e}")
 
+    def test_create_vector_index_with_pq_params(self, test_db):
+        """PQ params should propagate to metadata when quantization=PRODUCT."""
+
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "Doc",
+            "embedding",
+            dimensions=8,
+            quantization="PRODUCT",
+            pq_subspaces=4,
+            pq_clusters=128,
+            pq_center_globally=False,
+            pq_training_limit=5000,
+        )
+
+        java_idx = index._java_index
+        if "TypeIndex" in java_idx.getClass().getName():
+            java_idx = java_idx.getSubIndexes().get(0)
+
+        meta = java_idx.getMetadata()
+        assert meta.pqSubspaces == 4
+        assert meta.pqClusters == 128
+        assert meta.pqCenterGlobally is False
+        assert meta.pqTrainingLimit == 5000
+
     def test_lsm_vector_search(self, test_db):
         """Test searching in vector index (JVector implementation)."""
         # Create schema and index
@@ -87,6 +113,208 @@ class TestLSMVectorIndex:
         # For Euclidean, distance is small
 
         # Verify the embedding of the result
+        res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
+        assert abs(res_embedding[0] - 1.0) < 0.001
+
+    def test_lsm_vector_search_approximate_product(self, test_db):
+        """Test PQ approximate search path (PRODUCT quantization)."""
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "Doc", "embedding", dimensions=3, quantization="PRODUCT"
+        )
+
+        assert "TypeIndex" in index._java_index.getClass().getName()
+
+        vectors = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+
+        with test_db.transaction():
+            for vec in vectors:
+                v = test_db.new_vertex("Doc")
+                v.set("embedding", arcadedb.to_java_float_array(vec))
+                v.save()
+
+        # Force PQ data to be built and available
+        index.build_graph_now()
+
+        results = index.find_nearest_approximate(
+            [0.9, 0.1, 0.0], k=1, overquery_factor=2
+        )
+
+        assert len(results) == 1
+        vertex, _ = results[0]
+        res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
+        assert abs(res_embedding[0] - 1.0) < 0.001
+
+    def test_lsm_vector_search_approximate_typeindex(self, test_db):
+        """Ensure TypeIndex wrapper path works for approximate search."""
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "Doc", "embedding", dimensions=3, quantization="PRODUCT"
+        )
+
+        if "TypeIndex" not in index._java_index.getClass().getName():
+            pytest.skip("TypeIndex wrapper not returned by this build")
+
+        vectors = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]
+
+        with test_db.transaction():
+            for vec in vectors:
+                v = test_db.new_vertex("Doc")
+                v.set("embedding", arcadedb.to_java_float_array(vec))
+                v.save()
+
+        index.build_graph_now()
+
+        results = index.find_nearest_approximate(
+            [0.9, 0.1, 0.0], k=1, overquery_factor=3
+        )
+        assert len(results) == 1
+        vertex, _ = results[0]
+        res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
+        assert abs(res_embedding[0] - 1.0) < 0.001
+
+    def test_lsm_vector_search_approximate_fallback(self, test_db):
+        """Approximate search should gracefully fall back when PQ is unavailable."""
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index("Doc", "embedding", dimensions=3)
+
+        vectors = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+
+        with test_db.transaction():
+            for vec in vectors:
+                v = test_db.new_vertex("Doc")
+                v.set("embedding", arcadedb.to_java_float_array(vec))
+                v.save()
+
+        index.build_graph_now()
+
+        with pytest.raises(arcadedb.ArcadeDBError):
+            index.find_nearest_approximate([0.9, 0.1, 0.0], k=1, overquery_factor=2)
+
+    def test_lsm_vector_search_approximate_overquery(self, test_db):
+        """Approximate search should over-query then truncate to k."""
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "Doc", "embedding", dimensions=3, quantization="PRODUCT"
+        )
+
+        vectors = [
+            [1.0, 0.0, 0.0],
+            [0.9, 0.1, 0.0],
+            [0.8, 0.2, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+
+        # Add enough filler vectors so PQ (K=256) has sufficient points and does not fail
+        for i in range(260):
+            a = (i % 3) / 10.0
+            b = ((i + 1) % 3) / 10.0
+            c = ((i + 2) % 3) / 10.0
+            vectors.append([a, b, c])
+
+        with test_db.transaction():
+            for vec in vectors:
+                v = test_db.new_vertex("Doc")
+                v.set("embedding", arcadedb.to_java_float_array(vec))
+                v.save()
+
+        index.build_graph_now()
+
+        query = [0.9, 0.1, 0.0]
+        k = 2
+        overquery_factor = 3
+
+        results = index.find_nearest_approximate(
+            query, k=k, overquery_factor=overquery_factor
+        )
+
+        assert len(results) == k
+        vertex, _ = results[0]
+        res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
+
+        # Top result should be the closest along the first axis
+        assert res_embedding[0] >= 0.9
+        assert res_embedding[0] >= res_embedding[1]
+        assert res_embedding[0] >= res_embedding[2]
+
+    def test_lsm_vector_search_approximate_persistence(self, tmp_path):
+        """PQ approximate search works after reopen (PQ state persisted)."""
+        db_path = str(tmp_path / "pq_persist_db")
+
+        with arcadedb.create_database(db_path) as db:
+            db.schema.create_vertex_type("Doc")
+            db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+            index = db.create_vector_index(
+                "Doc", "embedding", dimensions=3, quantization="PRODUCT"
+            )
+
+            with db.transaction():
+                v = db.new_vertex("Doc")
+                v.set("embedding", arcadedb.to_java_float_array([1.0, 0.0, 0.0]))
+                v.save()
+
+            index.build_graph_now()
+
+        with arcadedb.open_database(db_path) as db:
+            index = db.schema.get_vector_index("Doc", "embedding")
+            assert index is not None
+
+            results = index.find_nearest_approximate(
+                [1.0, 0.0, 0.0], k=1, overquery_factor=2
+            )
+            assert len(results) == 1
+            vertex, _ = results[0]
+            res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
+            assert abs(res_embedding[0] - 1.0) < 0.001
+
+    def test_lsm_vector_build_graph_now(self, test_db):
+        """Ensure build_graph_now triggers eager graph rebuild without search."""
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index("Doc", "embedding", dimensions=3)
+
+        # Add a few vectors
+        vectors = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+
+        with test_db.transaction():
+            for vec in vectors:
+                v = test_db.new_vertex("Doc")
+                v.set("embedding", arcadedb.to_java_float_array(vec))
+                v.save()
+
+        # Force graph build immediately (should not require a search trigger)
+        index.build_graph_now()
+
+        # Query should work and return the closest vector
+        results = index.find_nearest([0.9, 0.1, 0.0], k=1)
+        assert len(results) == 1
+        vertex, _ = results[0]
         res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
         assert abs(res_embedding[0] - 1.0) < 0.001
 

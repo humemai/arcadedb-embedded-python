@@ -303,7 +303,9 @@ def test_batch_context_delete_record(temp_db):
             temp.save()
 
     # Query records to delete (delete even IDs)
-    to_delete = list(db.query("sql", "SELECT FROM Temporary WHERE tempId % 2 = 0"))
+    # NOTE: ArcadeDB SQL parser currently rejects modulo in WHERE for embedded queries, so filter client-side.
+    all_recs = db.query("sql", "SELECT FROM Temporary")
+    to_delete = [r for r in all_recs if r.get("tempId") % 2 == 0]
 
     # Delete in batch
     with db.batch_context(batch_size=50) as batch:
