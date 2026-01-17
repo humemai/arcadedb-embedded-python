@@ -53,6 +53,8 @@ def parse_record(path: Path) -> Dict:
     recall = data.get("recall", {})
     latency = data.get("latency_ms", {})
 
+    create_phase = phases.get("create_index") or phases.get("build_index") or {}
+
     # dataset tag from dir name
     run_dir_name = path.parent.name
     dataset_tag = run_dir_name.split("_")[0].replace("dataset=", "")
@@ -71,21 +73,26 @@ def parse_record(path: Path) -> Dict:
     total_duration = sum(
         v
         for v in [
+            phases.get("load_queries", {}).get("time_sec"),
+            phases.get("create_db", {}).get("time_sec"),
             phases.get("load_corpus", {}).get("time_sec"),
             phases.get("ingest", {}).get("time_sec"),
-            phases.get("build_index", {}).get("time_sec"),
+            create_phase.get("time_sec"),
+            phases.get("build_graph_now", {}).get("time_sec"),
             phases.get("warmup", {}).get("time_sec"),
             phases.get("search", {}).get("time_sec"),
             phases.get("close_db", {}).get("time_sec"),
             phases.get("open_db", {}).get("time_sec"),
             phases.get("warmup_after_reopen", {}).get("time_sec"),
             phases.get("search_after_reopen", {}).get("time_sec"),
+            phases.get("close_db_final", {}).get("time_sec"),
         ]
         if v is not None
     )
 
     return {
         "dataset": dataset_tag,
+        "batch_size": cfg.get("batch_size"),
         "quantization": cfg.get("quantization"),
         "store_vectors_in_graph": cfg.get("store_vectors_in_graph"),
         "add_hierarchy": cfg.get("add_hierarchy"),
@@ -96,10 +103,12 @@ def parse_record(path: Path) -> Dict:
         "load_corpus_rss_mb": phases.get("load_corpus", {}).get("rss_delta_mb"),
         "ingest_s": phases.get("ingest", {}).get("time_sec"),
         "ingest_rss_mb": phases.get("ingest", {}).get("rss_delta_mb"),
-        "build_s": phases.get("build_index", {}).get("time_sec"),
-        "build_rss_mb": phases.get("build_index", {}).get("rss_delta_mb"),
+        "create_index_s": create_phase.get("time_sec"),
+        "create_index_rss_mb": create_phase.get("rss_delta_mb"),
         "warmup_s": phases.get("warmup", {}).get("time_sec"),
         "warmup_rss_mb": phases.get("warmup", {}).get("rss_delta_mb"),
+        "build_graph_now_s": phases.get("build_graph_now", {}).get("time_sec"),
+        "build_graph_now_rss_mb": phases.get("build_graph_now", {}).get("rss_delta_mb"),
         "search_s": phases.get("search", {}).get("time_sec"),
         "search_rss_mb": phases.get("search", {}).get("rss_delta_mb"),
         "close_db_s": phases.get("close_db", {}).get("time_sec"),
@@ -138,12 +147,15 @@ def load_dataframe(root: Path) -> pd.DataFrame:
         "max_connections",
         "beam_width",
         "overquery_factor",
+        "batch_size",
         "load_corpus_s",
         "load_corpus_rss_mb",
         "ingest_s",
         "ingest_rss_mb",
-        "build_s",
-        "build_rss_mb",
+        "create_index_s",
+        "create_index_rss_mb",
+        "build_graph_now_s",
+        "build_graph_now_rss_mb",
         "warmup_s",
         "warmup_rss_mb",
         "search_s",
@@ -178,12 +190,15 @@ def df_to_markdown(df: pd.DataFrame) -> str:
         "max_connections",
         "beam_width",
         "overquery_factor",
+        "batch_size",
         "load_corpus_s",
         "load_corpus_rss_mb",
         "ingest_s",
         "ingest_rss_mb",
-        "build_s",
-        "build_rss_mb",
+        "create_index_s",
+        "create_index_rss_mb",
+        "build_graph_now_s",
+        "build_graph_now_rss_mb",
         "warmup_s",
         "warmup_rss_mb",
         "search_s",
