@@ -554,7 +554,14 @@ db.create_vector_index(
     dimensions: int,
     distance_function: str = "cosine",
     max_connections: int = 32,
-    beam_width: int = 256
+    beam_width: int = 256,
+    quantization: str | None = None,
+    store_vectors_in_graph: bool = False,
+    add_hierarchy: bool | None = None,
+    pq_subspaces: int | None = None,
+    pq_clusters: int | None = None,
+    pq_center_globally: bool | None = None,
+    pq_training_limit: int | None = None,
 ) -> VectorIndex
 ```
 
@@ -568,6 +575,13 @@ Create a vector index for similarity search (JVector implementation). Existing r
 - `distance_function` (str): `"cosine"`, `"euclidean"`, or `"inner_product"`
 - `max_connections` (int): Max connections per node (default: 32). Maps to `maxConnections` in HNSW (JVector).
 - `beam_width` (int): Beam width for search/construction (default: 256). Maps to `beamWidth` in HNSW (JVector).
+- `quantization` (str | None): `"INT8"`, `"BINARY"`, or `"PRODUCT"` for PQ (default: None).
+- `store_vectors_in_graph` (bool): Persist vectors inline in graph file (faster reopen/search, larger graph).
+- `add_hierarchy` (bool | None): Force enabling/disabling HNSW hierarchy; None uses engine default.
+- `pq_subspaces` (int | None): PQ subspaces (M). Requires `quantization="PRODUCT"`.
+- `pq_clusters` (int | None): PQ clusters per subspace (K). Requires `quantization="PRODUCT"`.
+- `pq_center_globally` (bool | None): PQ global centering flag. Requires `quantization="PRODUCT"`.
+- `pq_training_limit` (int | None): PQ training sample cap. Requires `quantization="PRODUCT"`.
 
 **Returns:**
 

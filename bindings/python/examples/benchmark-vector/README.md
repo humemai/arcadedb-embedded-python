@@ -37,36 +37,34 @@
 ##### `quantization=none`
 
 ```bash
-5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=10000_seed=42/VectorData_0.1.65536.v0.bucket
-10M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748779662794320.4.262144.v0.lsmvecidx
-59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748779662794320_vecgraph.5.262144.v0.vecgraph
+5.6G    VectorData_0.1.65536.v0.bucket
+10M     VectorData_0_2748779662794320.4.262144.v0.lsmvecidx
+59M     VectorData_0_2748779662794320_vecgraph.5.262144.v0.vecgraph
 ```
 
 ##### `quantization=int8`
 
 ```bash
-5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=10000_seed=42/VectorData_0.1.65536.v0.bucket
-999M    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748780028226180.4.262144.v0.lsmvecidx
-59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748780028226180_vecgraph.5.262144.v0.vecgraph
+5.6G    VectorData_0.1.65536.v0.bucket
+999M    VectorData_0_2748780028226180.4.262144.v0.lsmvecidx
+59M     VectorData_0_2748780028226180_vecgraph.5.262144.v0.vecgraph
 ```
-
-
 
 ##### `quantization=PQ`
 
 ```bash
-5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=product_store=off_hier=on_batch=10000_seed=42/VectorData_0.1.65536.v0.bucket
-11M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=product_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748780503246723.4.262144.v0.lsmvecidx
-247M    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=product_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748780503246723.4.262144.v0.lsmvecidx.vecpq
-59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=product_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748780503246723_vecgraph.5.262144.v0.vecgraph
+5.6G    VectorData_0.1.65536.v0.bucket
+11M     VectorData_0_2748780503246723.4.262144.v0.lsmvecidx
+247M    VectorData_0_2748780503246723.4.262144.v0.lsmvecidx.vecpq
+59M     VectorData_0_2748780503246723_vecgraph.5.262144.v0.vecgraph
 ```
 
 ##### `quantization=binary`
 
 ```bash
-5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=binary_store=off_hier=on_batch=10000_seed=42/VectorData_0.1.65536.v0.bucket
-140M    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=binary_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748779801023527.4.262144.v0.lsmvecidx
-59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=binary_store=off_hier=on_batch=10000_seed=42/VectorData_0_2748779801023527_vecgraph.5.262144.v0.vecgraph
+5.6G    VectorData_0.1.65536.v0.bucket
+140M    VectorData_0_2748779801023527.4.262144.v0.lsmvecidx
+59M     VectorData_0_2748779801023527_vecgraph.5.262144.v0.vecgraph
 ```
 
 #### Findings
@@ -83,7 +81,19 @@
   - `BINARY` index is moderate (~140 MB).
 - **Reopen:** Recall and timings after reopen track pre-close numbers; PQ remains lower recall, `NONE`/`INT8` remain high.
 - **Recommendation:** For quality, prefer `NONE` or `INT8`; use PQ only if you need the lowest query latency and can accept lower recall, and consider tuning PQ (M/K) to recover recall. Avoid `BINARY` here given the large recall drop.
-- All four of them saved the vectors in the db like `db.schema.get_or_create_property("VectorData", "vector", "ARRAY_OF_FLOATS")`. Maybe we should do this differently when quantization is enabled?
+- All four of them saved the vectors in the db like `db.schema.get_or_create_property("VectorData", "vector", "ARRAY_OF_FLOATS")`.
+- Maybe we should do this differently when quantization is enabled?
+
+#### MSMARCO-1M (1000 queries, Recall@50) with heap size capped at 4GB
+
+- For 1M dataset, I've been doing 8GB heap so far. This time I capped it at 4GB to see how it affects performance.
+
+| quantization | ingest_s | ingest_rss_mb | create_index_s | create_index_rss_mb | build_graph_now_s | build_graph_now_rss_mb | search_s | recall@50_before_close | search_after_reopen_s | search_after_reopen_rss_mb | recall@50_after_reopen | peak_rss_mb | db_size_mb | total_duration |
+| :----------- | -------: | ------------: | -------------: | ------------------: | ----------------: | ---------------------: | -------: | ---------------------: | --------------------: | -------------------------: | ---------------------: | ----------: | ---------: | :------------- |
+| NONE         |   62.175 |       4004.79 |          16.29 |             122.816 |           6773.81 |                153.227 |   10.238 |                 0.9013 |                  9.87 |                      3.176 |                 0.9013 |     4701.89 |    5750.44 | 1h 54m         |
+| INT8         |   62.319 |       3974.97 |         21.722 |              95.438 |            3313.5 |                108.125 |   35.718 |                 0.9083 |                33.318 |                      3.188 |                 0.9066 |     4603.35 |    6738.94 | 58m            |
+| PRODUCT      |   61.694 |       3974.34 |         16.053 |             116.758 |           6923.63 |                199.758 |    1.657 |                 0.8608 |                 1.383 |                      5.992 |                 0.8612 |     4723.02 |    5996.45 | 1h 56m         |
+| BINARY       |   62.904 |       4014.12 |          27.06 |              87.609 |           4267.63 |                 89.707 |   21.314 |                 0.2923 |                14.683 |                     14.125 |                 0.2923 |     4619.88 |    5879.94 | 1h 13m         |
 
 ### Commit/Date: main @ 91a86e3 (Thu Jan 15 10:32:50 2026 -0500)
 
@@ -126,41 +136,37 @@
 ##### store_vectors_in_graph=False and quantization=INT8
 
 ```bash
-du -sh arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=100000_seed=42/* | sort -h
-320K    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=100000_seed=42/dictionary.0.327680.v0.dict
-59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=100000_seed=42/VectorData_0_2689535159251959_vecgraph.5.262144.v0.vecgraph
-999M    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=100000_seed=42/VectorData_0_2689535159251959.4.262144.v0.lsmvecidx
-5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=off_hier=on_batch=100000_seed=42/VectorData_0.1.65536.v0.bucket
+320K    dictionary.0.327680.v0.dict
+59M     VectorData_0_2689535159251959_vecgraph.5.262144.v0.vecgraph
+999M    VectorData_0_2689535159251959.4.262144.v0.lsmvecidx
+5.6G    VectorData_0.1.65536.v0.bucket
 ```
 
 ##### store_vectors_in_graph=True and quantization=INT8
 
 ```bash
-du -sh arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=on_hier=on_batch=100000_seed=42/* | sort -h
-320K    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=on_hier=on_batch=100000_seed=42/dictionary.0.327680.v0.dict
-999M    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=on_hier=on_batch=100000_seed=42/VectorData_0_2689534677234566.4.262144.v0.lsmvecidx
-3.9G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=on_hier=on_batch=100000_seed=42/VectorData_0_2689534677234566_vecgraph.5.262144.v0.vecgraph
-5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=int8_store=on_hier=on_batch=100000_seed=42/VectorData_0.1.65536.v0.bucket
+320K    dictionary.0.327680.v0.dict
+999M    VectorData_0_2689534677234566.4.262144.v0.lsmvecidx
+3.9G    VectorData_0_2689534677234566_vecgraph.5.262144.v0.vecgraph
+5.6G    VectorData_0.1.65536.v0.bucket
 ```
 
 ##### store_vectors_in_graph=False and quantization=None
 
 ```bash
-du -sh arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=100000_seed=42/* | sort -h
-320K    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=100000_seed=42/dictionary.0.327680.v0.dict
-11M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=100000_seed=42/VectorData_0_2689535353426837.4.262144.v0.lsmvecidx
-59M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=100000_seed=42/VectorData_0_2689535353426837_vecgraph.5.262144.v0.vecgraph
-5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=off_hier=on_batch=100000_seed=42/VectorData_0.1.65536.v0.bucket
+320K    dictionary.0.327680.v0.dict
+11M     VectorData_0_2689535353426837.4.262144.v0.lsmvecidx
+59M     VectorData_0_2689535353426837_vecgraph.5.262144.v0.vecgraph
+5.6G    VectorData_0.1.65536.v0.bucket
 ```
 
 ##### store_vectors_in_graph=True and quantization=None
 
 ```bash
-du -sh arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=on_hier=on_batch=100000_seed=42/* | sort -h
-320K    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=on_hier=on_batch=100000_seed=42/dictionary.0.327680.v0.dict
-11M     arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=on_hier=on_batch=100000_seed=42/VectorData_0_2689535105029551.4.262144.v0.lsmvecidx
-3.9G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=on_hier=on_batch=100000_seed=42/VectorData_0_2689535105029551_vecgraph.5.262144.v0.vecgraph
-5.6G    arcadedb_runs/dataset=MSMARCO-1M_label=1000000_maxconn=12_beam=64_oq=1_quant=none_store=on_hier=on_batch=100000_seed=42/VectorData_0_1.65536.v0.bucket
+320K    dictionary.0.327680.v0.dict
+11M     VectorData_0_2689535105029551.4.262144.v0.lsmvecidx
+3.9G    VectorData_0_2689535105029551_vecgraph.5.262144.v0.vecgraph
+5.6G    VectorData_0_1.65536.v0.bucket
 ```
 
 #### Findings
