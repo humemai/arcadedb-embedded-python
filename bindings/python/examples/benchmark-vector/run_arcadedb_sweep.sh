@@ -45,8 +45,9 @@ fi
 THREAD_ENV=""
 if [[ -n "$THREADS_PER_TASK" ]]; then
     THREAD_ENV="OMP_NUM_THREADS=${THREADS_PER_TASK} MKL_NUM_THREADS=${THREADS_PER_TASK} OPENBLAS_NUM_THREADS=${THREADS_PER_TASK} VECLIB_MAXIMUM_THREADS=${THREADS_PER_TASK} BLIS_NUM_THREADS=${THREADS_PER_TASK} NUMEXPR_NUM_THREADS=${THREADS_PER_TASK}"
-    # Restrict JVM ForkJoinPool for JVector parallelism
-    export ARCADEDB_JVM_ARGS="${ARCADEDB_JVM_ARGS:-} -Djava.util.concurrent.ForkJoinPool.common.parallelism=${THREADS_PER_TASK}"
+    # Restrict JVM pools for JVector: common pool, physical core count, and reported processors
+    JVM_THREAD_FLAGS="-Djava.util.concurrent.ForkJoinPool.common.parallelism=${THREADS_PER_TASK} -Djvector.physical_core_count=${THREADS_PER_TASK} -XX:ActiveProcessorCount=${THREADS_PER_TASK}"
+    export ARCADEDB_JVM_ARGS="${ARCADEDB_JVM_ARGS:-} ${JVM_THREAD_FLAGS}"
 fi
 
 BASE="${THREAD_ENV} python \"${BENCH_PY}\" --dataset-dir \"${DATASET_DIR}\" --db-root \"${DB_ROOT}\""
