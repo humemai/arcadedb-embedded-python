@@ -27,6 +27,7 @@ import argparse
 import json
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -64,6 +65,27 @@ def timed_section(name: str, fn):
         f"[phase] {name:<18} time={dur:8.3f}s | rss_before={start_rss:8.1f} MB | rss_after={end_rss:8.1f} MB | delta={end_rss - start_rss:8.1f} MB"
     )
     return result, dur, start_rss, end_rss
+
+
+def start_cpu_logger(interval_sec: int = 2):
+    """Log process CPU% and RSS periodically without blocking main work."""
+
+    if not psutil:
+        return None
+
+    proc = psutil.Process()
+    proc.cpu_percent(None)  # prime
+    stop_event = threading.Event()
+
+    def _loop():
+        while not stop_event.wait(interval_sec):
+            cpu = proc.cpu_percent(None)
+            rss = proc.memory_info().rss / (1024 * 1024)
+            print(f"[cpu] {cpu:5.1f}% | rss={rss:8.1f} MB")
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    return stop_event
 
 
 # -------------------------
@@ -435,6 +457,8 @@ def main():
     )
     args = ap.parse_args()
 
+    stop_cpu = start_cpu_logger(2)
+
     np.random.seed(args.seed)
     eval_k = 50
 
@@ -670,6 +694,8 @@ def main():
                 record("close_db_final", {}, dur, r0, r1)
             except Exception:
                 pass
+        if stop_cpu:
+            stop_cpu.set()
 
     db_size = dir_size_mb(db_path)
     rss_after_vals = [
