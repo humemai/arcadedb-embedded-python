@@ -1,3 +1,4 @@
 datasets/
 benchmark-vector/sweep_results*
 arcadedb_runs/
+arcadedb_runs_search/
