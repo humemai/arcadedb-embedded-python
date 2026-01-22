@@ -65,7 +65,7 @@ Instead of pushing tags manually, create a GitHub Release which automatically cr
 
    ## Test Results
 
-   - All tests passed: 222 passed
+   - All tests passed: 252 passed
    ```
 
 6. Click **Publish release** (or **Save as draft** to test first)
@@ -104,7 +104,7 @@ https://humemai.github.io/arcadedb-embedded-python/
 
 ## Test Results
 
-- 222 passed
+- 252 passed
 
 **What happens automatically:**
 
