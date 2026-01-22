@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
 """
-Run search-only sweeps on an existing ArcadeDB MSMARCO database to compare
-different `overquery_factor` values without rebuilding the index.
+Run search-only sweeps on an existing ArcadeDB MSMARCO database.
 
-For each factor, we:
-- load the 1,000 query vectors and ground-truth labels
-- open the existing DB
-- warm up once
-- run a full search pass (recall + latency)
-- write results.json / results.md under an output directory that the
-  existing summarizer can consume.
-
-Place the outputs under `arcadedb_runs/*/results.json` (default) so
-`summarize_arcadedb_msmarco.py` will include them in its markdown tables.
+Loads a DB from arcadedb_runs (or any path), then runs search for
+multiple overquery_factor values and writes results for a separate
+search study.
 """
 from __future__ import annotations
 
@@ -21,8 +13,6 @@ import json
 from pathlib import Path
 from typing import Dict, List
 
-import arcadedb_embedded as arcadedb
-import numpy as np
 from benchmark_arcadedb_msmarco import (
     dir_size_mb,
     load_ground_truth,
@@ -52,6 +42,14 @@ def parse_overqueries(raw: str) -> List[int]:
     if not vals:
         raise SystemExit("No overquery values provided")
     return vals
+
+
+def run_dir_value(run_dir_name: str, key: str) -> str | None:
+    prefix = f"{key}="
+    for part in run_dir_name.split("_"):
+        if part.startswith(prefix):
+            return part[len(prefix) :]
+    return None
 
 
 def load_existing_config(db_path: Path) -> Dict:
@@ -90,9 +88,11 @@ def run_single(
     k: int,
     quantization: str,
     output_root: Path,
-    tag: str | None,
     base_config: Dict,
+    heap_tag: str | None,
 ) -> Path:
+    import arcadedb_embedded as arcadedb
+
     sources, gt_path, dim, label = resolve_dataset(dataset_dir)
     total_rows = sum(s["count"] for s in sources)
     gt_full = load_ground_truth(gt_path)
@@ -175,10 +175,12 @@ def run_single(
 
     config_info = {
         **{k: v for k, v in base_config.items() if v is not None},
+        "study": "search",
         "overquery_factor": overquery,
         "quantization": quantization,
         "queries": len(qids),
         "k": k,
+        "heap": heap_tag,
     }
 
     results = {
@@ -194,11 +196,11 @@ def run_single(
     run_dir_name_parts = [
         f"dataset={dataset_dir.name}",
         f"label={label or 'dataset'}",
+        f"heap={heap_tag or 'default'}",
         f"oq={overquery}",
         f"reuse={db_path.name}",
+        "study=search",
     ]
-    if tag:
-        run_dir_name_parts.append(f"tag={tag}")
     run_dir = output_root / "_".join(run_dir_name_parts)
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -206,9 +208,10 @@ def run_single(
     results_json.write_text(json.dumps(results, indent=2))
 
     md_lines = [
-        f"# ArcadeDB overquery sweep ({dataset_info['label']})",
+        f"# ArcadeDB search study ({dataset_info['label']})",
         "",
         "## Config",
+        f"- heap: {heap_tag or 'default'}",
         f"- overquery_factor: {overquery}",
         f"- quantization: {quantization}",
         f"- k: {k}",
@@ -266,27 +269,25 @@ def run_single(
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Run overquery sweeps against an existing ArcadeDB MSMARCO DB"
+        description="Run search study sweeps against an existing ArcadeDB MSMARCO DB"
     )
     ap.add_argument("--db-path", required=True, help="Path to existing ArcadeDB DB")
     ap.add_argument("--dataset-dir", required=True, help="Path to MSMARCO dataset dir")
     ap.add_argument(
         "--overquery-factors",
-        required=True,
-        help="Comma-separated overquery values (e.g., 1,2,4,8,16)",
+        default="1,2,4,8,16",
+        help="Comma-separated overquery values (default: 1,2,4,8,16)",
     )
     ap.add_argument(
         "--output-root",
-        default="arcadedb_runs",
-        help="Where to place per-factor results (default: arcadedb_runs)",
+        default="arcadedb_runs_search",
+        help="Where to place per-factor results (default: arcadedb_runs_search)",
     )
     ap.add_argument("--k", type=int, default=50, help="Top-K for recall/latency")
     ap.add_argument(
-        "--quantization",
-        choices=["NONE", "INT8", "BINARY", "PRODUCT"],
-        help="Override quantization (default: from existing results.json or NONE)",
+        "--heap-tag",
+        help="Heap tag to record in outputs (e.g., 8g). Defaults to heap from db path.",
     )
-    ap.add_argument("--tag", help="Optional tag appended to output directory name")
 
     args = ap.parse_args()
 
@@ -299,7 +300,10 @@ def main() -> None:
         raise SystemExit(f"DB path not found: {db_path}")
 
     base_config = load_existing_config(db_path)
-    quant = (args.quantization or base_config.get("quantization") or "NONE").upper()
+    quant = (base_config.get("quantization") or "NONE").upper()
+
+    fallback_heap = run_dir_value(db_path.name, "heap")
+    heap_tag = args.heap_tag or fallback_heap
 
     created: List[Path] = []
     for oq in overqueries:
@@ -311,8 +315,8 @@ def main() -> None:
                 k=args.k,
                 quantization=quant,
                 output_root=output_root,
-                tag=args.tag,
                 base_config=base_config,
+                heap_tag=heap_tag,
             )
         )
 
