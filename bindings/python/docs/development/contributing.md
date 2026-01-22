@@ -115,7 +115,7 @@ arcadedb/bindings/python/
 │   ├── test_exporter.py           # Exporter tests
 │   ├── test_vector.py             # Vector search tests
 │   ├── test_vector_sql.py         # Vector SQL tests
-│   ├── test_gremlin.py            # Gremlin tests
+│   ├── test_cypher.py             # OpenCypher tests
 │   ├── test_batch_context.py      # Batch operations tests
 │   ├── test_async_executor.py     # Async execution tests
 │   ├── test_type_conversion.py    # Type conversion tests
@@ -224,8 +224,8 @@ pytest tests/test_server.py
 # Importer
 pytest tests/test_importer.py
 
-# Gremlin tests
-pytest tests/test_gremlin.py -m gremlin
+# OpenCypher tests
+pytest tests/test_cypher.py -k cypher
 ```
 
 ### Test Markers
@@ -234,11 +234,8 @@ pytest tests/test_gremlin.py -m gremlin
 # Skip server tests
 pytest -m "not server"
 
-# Only Gremlin tests
-pytest -m gremlin
-
-# Skip Gremlin tests
-pytest -m "not gremlin"
+# Only OpenCypher tests
+pytest -k cypher
 ```
 
 ### Writing Tests
@@ -513,7 +510,7 @@ class Database:
         Execute a query and return results.
 
         Args:
-            language: Query language (sql, cypher, gremlin, etc.)
+            language: Query language (sql, opencypher, mongo, graphql, etc.)
             command: Query command string
             params: Optional query parameters
 
@@ -543,7 +540,7 @@ Execute a query and return results.
 
 **Parameters:**
 
-- `language` (str): Query language (sql, cypher, gremlin, mongodb, graphql)
+- `language` (str): Query language (sql, opencypher, mongodb, graphql)
 - `command` (str): Query command string
 - `params` (Optional[dict]): Query parameters for parameterized queries
 

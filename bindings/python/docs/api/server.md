@@ -10,7 +10,7 @@ The server provides:
 - **Studio Web UI**: Visual database exploration and query editor
 - **Multi-database Management**: Create and access multiple databases
 - **Remote Access**: Access from other applications via HTTP
-- **GraphQL/Gremlin Support**: Extended query languages
+- **GraphQL/OpenCypher Support**: Extended query languages
 
 **When to Use Server Mode:**
 
@@ -18,7 +18,7 @@ The server provides:
 - Web applications needing HTTP API
 - Visual data exploration via Studio
 - Remote database access
-- GraphQL or Gremlin queries
+- GraphQL or OpenCypher queries
 
 **When to Use Embedded Mode:**
 
