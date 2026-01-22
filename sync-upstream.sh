@@ -23,7 +23,9 @@ show_help() {
     cat << EOF
 ${BLUE}🔄 Upstream Sync Script${NC}
 
-Syncs this fork with upstream ArcadeData/arcadedb while preserving fork-specific files.
+Syncs this fork with upstream ArcadeData/arcadedb while keeping:
+    - upstream-main: clean mirror of upstream/main
+    - main: fork changes rebased on top of upstream-main
 
 ${YELLOW}Usage:${NC}
   ./sync-upstream.sh            Sync with upstream (interactive)
@@ -41,9 +43,9 @@ ${YELLOW}After Sync:${NC}
   2. Push: git push --force-with-lease origin main
 
 ${YELLOW}Troubleshooting:${NC}
-  Abort rebase:     git rebase --abort
-  View changes:     git log HEAD..upstream/main --oneline
-  Check divergence: git log origin/main..HEAD --oneline
+    Abort rebase:     git rebase --abort
+    View changes:     git log main..upstream-main --oneline
+    Check divergence: git log upstream-main..main --oneline
 
 ${YELLOW}Conflict Resolution:${NC}
   For README.md conflicts (common):
@@ -63,10 +65,16 @@ check_status() {
 
     git fetch upstream --no-tags --quiet
 
-    AHEAD=$(git rev-list --count upstream/main..HEAD)
-    BEHIND=$(git rev-list --count HEAD..upstream/main)
+    if ! git show-ref --verify --quiet refs/heads/upstream-main; then
+        echo -e "${YELLOW}⚠️  upstream-main branch not found. Run './sync-upstream.sh' to create it.${NC}"
+        exit 0
+    fi
 
-    echo -e "${YELLOW}Branch:${NC} main"
+    AHEAD=$(git rev-list --count upstream-main..main 2>/dev/null || echo 0)
+    BEHIND=$(git rev-list --count main..upstream-main 2>/dev/null || echo 0)
+
+    echo -e "${YELLOW}Branch:${NC} main (fork)"
+    echo -e "${YELLOW}Upstream mirror:${NC} upstream-main"
     echo -e "${YELLOW}Remote:${NC} origin (humemai/arcadedb-embedded-python)"
     echo -e "${YELLOW}Upstream:${NC} upstream (ArcadeData/arcadedb)"
     echo ""
@@ -77,7 +85,7 @@ check_status() {
         echo -e "${YELLOW}⚠️  Behind upstream by $BEHIND commit(s)${NC}"
         echo ""
         echo -e "${CYAN}Recent upstream changes:${NC}"
-        git log HEAD..upstream/main --oneline --max-count=5
+        git log main..upstream-main --oneline --max-count=5
         echo ""
         echo -e "${BLUE}💡 Run './sync-upstream.sh' to sync${NC}"
     fi
@@ -121,11 +129,7 @@ git fetch upstream --no-tags
 # 2. Check current status
 echo -e "${YELLOW}📊 Checking current branch...${NC}"
 CURRENT_BRANCH=$(git branch --show-current)
-if [ "$CURRENT_BRANCH" != "main" ]; then
-    echo -e "${RED}❌ Not on main branch (currently on: $CURRENT_BRANCH)${NC}"
-    echo -e "${YELLOW}💡 Please checkout main first: git checkout main${NC}"
-    exit 1
-fi
+START_BRANCH="$CURRENT_BRANCH"
 
 # 3. Check for uncommitted changes
 if ! git diff-index --quiet HEAD --; then
@@ -135,18 +139,23 @@ if ! git diff-index --quiet HEAD --; then
     exit 1
 fi
 
-# 4. Show what will be synced
-echo ""
-UPSTREAM_COMMITS=$(git rev-list --count HEAD..upstream/main)
-if [ "$UPSTREAM_COMMITS" -eq 0 ]; then
-    echo -e "${GREEN}✅ Already up to date with upstream!${NC}"
-    exit 0
+# 4. Ensure upstream-main exists
+if ! git show-ref --verify --quiet refs/heads/upstream-main; then
+    echo -e "${YELLOW}➕ Creating upstream-main from upstream/main${NC}"
+    git branch upstream-main upstream/main
 fi
 
-echo -e "${BLUE}📋 Changes in upstream/main ($UPSTREAM_COMMITS new commit(s)):${NC}"
-git log HEAD..upstream/main --oneline --max-count=10
+# 5. Show what will be synced
+echo ""
+UPSTREAM_COMMITS=$(git rev-list --count upstream-main..upstream/main)
+if [ "$UPSTREAM_COMMITS" -eq 0 ]; then
+    echo -e "${GREEN}✅ Already up to date with upstream!${NC}"
+else
+    echo -e "${BLUE}📋 Changes in upstream/main ($UPSTREAM_COMMITS new commit(s)):${NC}"
+    git log upstream-main..upstream/main --oneline --max-count=10
+fi
 
-# 5. Dry run mode
+# 6. Dry run mode
 if [ "$DRY_RUN" = true ]; then
     echo ""
     echo -e "${CYAN}🔍 Dry run mode - no changes will be made${NC}"
@@ -154,7 +163,7 @@ if [ "$DRY_RUN" = true ]; then
     exit 0
 fi
 
-# 6. Ask for confirmation
+# 7. Ask for confirmation
 echo ""
 read -p "$(echo -e ${YELLOW}Continue with rebase? [y/N]: ${NC})" -n 1 -r
 echo
@@ -163,10 +172,16 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 1
 fi
 
-# 7. Rebase onto upstream/main
+# 8. Update upstream-main mirror
 echo ""
-echo -e "${YELLOW}🔄 Rebasing onto upstream/main...${NC}"
-if git rebase upstream/main; then
+echo -e "${YELLOW}🔄 Updating upstream-main...${NC}"
+git checkout upstream-main
+git reset --hard upstream/main
+
+# 9. Rebase fork main onto upstream-main
+echo -e "${YELLOW}🔄 Rebasing main onto upstream-main...${NC}"
+git checkout main
+if git rebase upstream-main; then
     echo -e "${GREEN}✅ Rebase successful!${NC}"
 else
     echo -e "${RED}❌ Rebase failed with conflicts${NC}"
@@ -184,7 +199,12 @@ else
     exit 1
 fi
 
-# 8. Show summary
+# 10. Return to original branch if needed
+if [ "$START_BRANCH" != "main" ] && [ "$START_BRANCH" != "upstream-main" ]; then
+    git checkout "$START_BRANCH" >/dev/null 2>&1 || true
+fi
+
+# 11. Show summary
 echo ""
 echo -e "${GREEN}🎉 Sync complete!${NC}"
 echo ""
