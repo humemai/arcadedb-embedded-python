@@ -6,6 +6,7 @@
 # Format: One pattern per line, comments start with #
 # Empty lines are ignored
 
+# arcadedb-gremlin-*.jar
 arcadedb-grpcw-*.jar
 js-language-*.jar
 icu4j-*.jar

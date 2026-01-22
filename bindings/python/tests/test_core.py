@@ -1,6 +1,6 @@
 """
 Core functionality tests for ArcadeDB Python bindings.
-These tests work with our base package (includes SQL, Cypher, Gremlin, Studio).
+These tests work with our base package (includes SQL, OpenCypher, Studio).
 """
 
 import arcadedb_embedded as arcadedb
@@ -338,22 +338,23 @@ def test_result_methods(temp_db_path):
         assert "test" in json_str
 
 
-def test_cypher_queries(temp_db_path):
-    """Test Cypher query language support."""
+def test_opencypher_queries(temp_db_path):
+    """Test OpenCypher query language support."""
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph schema
         db.schema.create_vertex_type("Person")
         db.schema.create_edge_type("FRIEND_OF")
 
-        # Insert data using Cypher (if available)
+        # Insert data using OpenCypher (if available)
         try:
             with db.transaction():
-                db.command("cypher", "CREATE (p:Person {name: 'Alice', age: 30})")
-                db.command("cypher", "CREATE (p:Person {name: 'Bob', age: 25})")
+                db.command("opencypher", "CREATE (p:Person {name: 'Alice', age: 30})")
+                db.command("opencypher", "CREATE (p:Person {name: 'Bob', age: 25})")
 
-            # Query using Cypher
+            # Query using OpenCypher
             result = db.query(
-                "cypher", "MATCH (p:Person) WHERE p.age > 20 RETURN p.name as name"
+                "opencypher",
+                "MATCH (p:Person) WHERE p.age > 20 RETURN p.name as name",
             )
             names = [record.get("name") for record in result]
 
@@ -361,8 +362,8 @@ def test_cypher_queries(temp_db_path):
             assert "Alice" in names
             assert "Bob" in names
         except arcadedb.ArcadeDBError as e:
-            if "Query engine 'cypher' was not found" in str(e):
-                pytest.skip("Cypher not available (unexpected in base package)")
+            if "Query engine 'opencypher' was not found" in str(e):
+                pytest.skip("OpenCypher not available (unexpected in base package)")
             raise
 
 

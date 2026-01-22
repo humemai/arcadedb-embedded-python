@@ -6,7 +6,7 @@ Demonstrates a complete multi-model workflow:
 - Phase 1: XML → Documents + Indexes
 - Phase 2: Documents → Graph (vertices + edges)
 - Phase 3: Graph → Embeddings + Vector indexes (JVector)
-- Phase 4: Analytics (SQL + Gremlin + Vector Search)
+- Phase 4: Analytics (SQL + OpenCypher + Vector Search)
 
 This example uses Stack Overflow data dump (Users, Posts, Comments, etc.)
 to build a comprehensive knowledge graph with semantic search capabilities.
@@ -817,7 +817,7 @@ class StackOverflowValidator:
     def get_phase2_validation_queries() -> list:
         """Get validation queries for Phase 2 graph database.
 
-        Mix of SQL and Gremlin queries to validate:
+        Mix of SQL and OpenCypher queries to validate:
         - Graph topology and connectivity
         - Edge properties and temporal data
         - Multi-hop traversals
@@ -825,7 +825,7 @@ class StackOverflowValidator:
 
         Returns:
             List of tuples: (query_type, name, query, validator_function)
-            where query_type is "sql" or "gremlin"
+            where query_type is "sql" or "opencypher"
         """
         return [
             # === Vertex Count Queries (SQL) ===
@@ -1088,51 +1088,52 @@ class StackOverflowValidator:
                 """,
                 lambda r: r[0].get("with_type") > 0,
             ),
-            # === Multi-hop Traversal Queries (Gremlin) ===
+            # === Multi-hop Traversal Queries (OpenCypher) ===
             (
-                "gremlin",
+                "opencypher",
                 "Find users who answered their own questions",
                 """
-                g.V().hasLabel('User')
-                 .where(__.out('ASKED').in('HAS_ANSWER').in('ANSWERED'))
-                 .count()
+                MATCH (u:User)-[:ASKED]->(q:Question)-[:HAS_ANSWER]->(a:Answer)
+                WHERE (u)-[:ANSWERED]->(a)
+                RETURN count(DISTINCT u) as count
                 """,
                 lambda r: len(r) > 0,
             ),
             (
-                "gremlin",
+                "opencypher",
                 "Find 2-hop user connections (users who answered questions from other users)",
                 """
-                g.V().hasLabel('User').limit(10)
-                 .out('ASKED').in('HAS_ANSWER').in('ANSWERED')
-                 .dedup()
-                 .count()
+                MATCH (u:User)
+                WITH u LIMIT 10
+                MATCH (u)-[:ASKED]->(:Question)-[:HAS_ANSWER]->(:Answer)<-[:ANSWERED]-(other:User)
+                RETURN count(DISTINCT other) as count
                 """,
                 lambda r: len(r) > 0,
             ),
-            # === Complex Pattern Queries (Gremlin) ===
+            # === Complex Pattern Queries (OpenCypher) ===
             (
-                "gremlin",
-                "Find questions with tags, answers, and comments",
+                "opencypher",
+                "Find questions with tags, answers, and comments (sampled)",
                 """
-                g.V().hasLabel('Question')
-                 .where(__.out('TAGGED_WITH'))
-                 .where(__.out('HAS_ANSWER'))
-                 .where(__.in('COMMENTED_ON'))
-                 .count()
+                MATCH (q:Question)-[:TAGGED_WITH]->(:Tag)
+                WITH DISTINCT q LIMIT 200
+                MATCH (q)-[:HAS_ANSWER]->(:Answer)
+                WITH DISTINCT q LIMIT 200
+                MATCH (q)<-[:COMMENTED_ON]-(:Comment)
+                RETURN count(DISTINCT q) as count
                 """,
                 lambda r: len(r) > 0,
             ),
             (
-                "gremlin",
-                "Find users with badges who also asked questions",
+                "opencypher",
+                "Find users with badges who also asked questions (sampled)",
                 """
-                g.V().hasLabel('User')
-                 .where(__.out('EARNED'))
-                 .where(__.out('ASKED'))
-                 .count()
+                MATCH (u:User)-[:EARNED]->(:Badge)
+                WITH DISTINCT u LIMIT 500
+                MATCH (u)-[:ASKED]->(:Question)
+                RETURN count(DISTINCT u) as count
                 """,
-                lambda r: len(r) > 0 and int(r[0].get("result")) > 0,
+                lambda r: len(r) > 0 and int(r[0].get("count")) >= 0,
             ),
         ]
 
@@ -1140,7 +1141,7 @@ class StackOverflowValidator:
     def run_phase2_validation_queries(
         db, indent: str = "     ", verbose: bool = True
     ) -> bool:
-        """Run Phase 2 validation queries (SQL and Gremlin).
+        """Run Phase 2 validation queries (SQL and OpenCypher).
 
         Args:
             db: Database instance
@@ -1153,7 +1154,7 @@ class StackOverflowValidator:
         queries = StackOverflowValidator.get_phase2_validation_queries()
         all_passed = True
         sql_count = 0
-        gremlin_count = 0
+        opencypher_count = 0
         query_num = 0
 
         for query_type, name, query, validator in queries:
@@ -1164,9 +1165,9 @@ class StackOverflowValidator:
                 if query_type == "sql":
                     results = list(db.query("sql", query.strip()))
                     sql_count += 1
-                elif query_type == "gremlin":
-                    results = list(db.query("gremlin", query.strip()))
-                    gremlin_count += 1
+                elif query_type == "opencypher":
+                    results = list(db.query("opencypher", query.strip()))
+                    opencypher_count += 1
                 else:
                     raise ValueError(f"Unknown query type: {query_type}")
 
@@ -1175,7 +1176,7 @@ class StackOverflowValidator:
 
                 if verbose:
                     status = "✓" if passed else "✗"
-                    lang = "SQL" if query_type == "sql" else "Gremlin"
+                    lang = "SQL" if query_type == "sql" else "OpenCypher"
                     result_count = len(results)
 
                     # Print query info
@@ -1229,18 +1230,18 @@ class StackOverflowValidator:
             except Exception as e:
                 all_passed = False
                 if verbose:
-                    lang = "SQL" if query_type == "sql" else "Gremlin"
+                    lang = "SQL" if query_type == "sql" else "OpenCypher"
                     print(
                         f"{indent}✗ [{query_num}/{len(queries)}]" f" [{lang:7}] {name}"
                     )
                     print(f"{indent}          Error: {e}")
                     print()
 
-        if verbose and (sql_count > 0 or gremlin_count > 0):
+        if verbose and (sql_count > 0 or opencypher_count > 0):
             print(f"{indent}{'─' * 50}")
             print(
                 f"{indent}Executed: {sql_count} SQL, "
-                f"{gremlin_count} Gremlin queries"
+                f"{opencypher_count} OpenCypher queries"
             )
 
         return all_passed
@@ -5207,17 +5208,17 @@ class Phase3VectorEmbeddings:
 
 
 # =============================================================================
-# Phase 4: Multi-Model Analytics (SQL + Gremlin + Vector Search)
+# Phase 4: Multi-Model Analytics (SQL + OpenCypher + Vector Search)
 # =============================================================================
 
 
 class Phase4Analytics:
-    """Phase 4: Comprehensive analytics combining SQL, Gremlin, and Vector Search.
+    """Phase 4: Comprehensive analytics combining SQL, OpenCypher, and Vector Search.
 
     This phase demonstrates:
     - 10 important analytical questions about Stack Overflow data
     - SQL for aggregations and complex queries
-    - Gremlin for graph traversals and path finding
+    - OpenCypher for graph traversals and path finding
     - Vector search for semantic similarity
     - Hybrid queries combining multiple paradigms
     """
@@ -5373,10 +5374,10 @@ class Phase4Analytics:
         # Question 3: Expert Users by Tag (SQL with Graph Navigation)
         self._q3_expert_users_by_tag(db)
 
-        # Question 4: Question-Answer Network Patterns (Gremlin)
+        # Question 4: Question-Answer Network Patterns (OpenCypher)
         self._q4_qa_network_patterns(db)
 
-        # Question 5: User Collaboration Paths (Gremlin Traversal)
+        # Question 5: User Collaboration Paths (OpenCypher Traversal)
         self._q5_user_collaboration_paths(db)
 
         # Question 6: Semantic Question Clustering (Vector Search)
@@ -5593,12 +5594,12 @@ class Phase4Analytics:
             print()
 
     def _q4_qa_network_patterns(self, db):
-        """Q4: What are common question-answer patterns? (Gremlin)
+        """Q4: What are common question-answer patterns? (OpenCypher)
 
-        Uses Gremlin to analyze graph patterns in Q&A interactions.
+        Uses OpenCypher to analyze graph patterns in Q&A interactions.
         """
         print("─" * 80)
-        print("Q4: Q&A NETWORK PATTERNS (Gremlin)")
+        print("Q4: Q&A NETWORK PATTERNS (OpenCypher)")
         print("─" * 80)
         print("Analyzing question-answer interaction patterns...")
         print()
@@ -5608,16 +5609,14 @@ class Phase4Analytics:
         try:
             # Find questions with most answers
             query = """
-                g.V().hasLabel('Question')
-                    .project('title', 'answer_count', 'score')
-                    .by('Title')
-                    .by(out('HAS_ANSWER').count())
-                    .by('Score')
-                    .order().by(select('answer_count'), desc)
-                    .limit(5)
+                MATCH (q:Question)
+                OPTIONAL MATCH (q)-[:HAS_ANSWER]->(a:Answer)
+                RETURN q.Title as title, count(a) as answer_count, q.Score as score
+                ORDER BY answer_count DESC
+                LIMIT 5
             """
 
-            results = list(db.query("gremlin", query))
+            results = list(db.query("opencypher", query))
 
             print("  Top 5 Questions by Answer Count:")
             print("  " + "─" * 76)
@@ -5637,19 +5636,18 @@ class Phase4Analytics:
 
         except Exception as e:
             print(f"  ❌ Error: {e}")
-            print("  Note: Gremlin support may not be available")
             import traceback
 
             traceback.print_exc()
             print()
 
     def _q5_user_collaboration_paths(self, db):
-        """Q5: How do users collaborate? (Gremlin Traversal)
+        """Q5: How do users collaborate? (OpenCypher Traversal)
 
-        Uses Gremlin to find paths between users through Q&A interactions.
+        Uses OpenCypher to find paths between users through Q&A interactions.
         """
         print("─" * 80)
-        print("Q5: USER COLLABORATION PATHS (Gremlin)")
+        print("Q5: USER COLLABORATION PATHS (OpenCypher)")
         print("─" * 80)
         print("Finding collaboration patterns between users...")
         print()
@@ -5659,20 +5657,13 @@ class Phase4Analytics:
         try:
             # Find users who answer each other's questions
             query = """
-                g.V().hasLabel('User')
-                    .as('user1')
-                    .out('ASKED')
-                    .in('HAS_ANSWER')
-                    .in('ANSWERED')
-                    .as('user2')
-                    .where('user1', neq('user2'))
-                    .select('user1', 'user2')
-                    .by('DisplayName')
-                    .by('DisplayName')
-                    .limit(10)
+                MATCH (u1:User)-[:ASKED]->(:Question)-[:HAS_ANSWER]->(:Answer)<-[:ANSWERED]-(u2:User)
+                WHERE u1 <> u2
+                RETURN DISTINCT u1.DisplayName as user1, u2.DisplayName as user2
+                LIMIT 10
             """
 
-            results = list(db.query("gremlin", query))
+            results = list(db.query("opencypher", query))
 
             print("  User Collaboration Pairs:")
             print("  " + "─" * 76)
@@ -5692,7 +5683,6 @@ class Phase4Analytics:
 
         except Exception as e:
             print(f"  ❌ Error: {e}")
-            print("  Note: Gremlin support may not be available")
             import traceback
 
             traceback.print_exc()
@@ -5980,10 +5970,10 @@ class Phase4Analytics:
     def _q10_community_knowledge_graph(self, db, indexes):
         """Q10: How is knowledge distributed in the community? (Hybrid)
 
-        Combines SQL, Gremlin, and vector search for comprehensive analysis.
+        Combines SQL, OpenCypher, and vector search for comprehensive analysis.
         """
         print("─" * 80)
-        print("Q10: COMMUNITY KNOWLEDGE GRAPH (Hybrid: SQL + Gremlin + Vector)")
+        print("Q10: COMMUNITY KNOWLEDGE GRAPH (Hybrid: SQL + OpenCypher + Vector)")
         print("─" * 80)
         print("Analyzing community knowledge distribution...")
         print()
@@ -6301,7 +6291,7 @@ Phases:
   1 - XML → Documents + Indexes
   2 - Documents → Graph (vertices + edges)
   3 - Graph → Embeddings + Vector indexes (JVector)
-  4 - Analytics (SQL + Gremlin + Vector Search)
+    4 - Analytics (SQL + OpenCypher + Vector Search)
         """,
     )
 

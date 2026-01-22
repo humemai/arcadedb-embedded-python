@@ -239,7 +239,7 @@ Total Roundtrip (Export + Import):
 
 ## Graph Queries
 
-The example includes 10 comprehensive graph queries (8 SQL + 2 Gremlin):
+The example includes 10 comprehensive graph queries (8 SQL + 2 OpenCypher):
 
 ### Query 1: Count Vertices by Type
 
@@ -299,12 +299,12 @@ LIMIT 10
 - Query 7: Users with similar taste (SQL MATCH + aggregation)
 - Query 8: Rating distribution (SQL aggregation, filters NULL ratings)
 
-### Query 9-10: Gremlin Patterns
+### Query 9-10: OpenCypher Patterns
 
-- Query 9: User's top-rated movies (Gremlin traversal with filtering)
-- Query 10: Collaborative filtering (Gremlin group/count aggregation)
+- Query 9: User's top-rated movies (OpenCypher traversal with filtering)
+- Query 10: Collaborative filtering (OpenCypher aggregation)
 
-**Note:** Gremlin provides superior performance compared to Cypher (63× faster in benchmarks). These queries demonstrate Apache TinkerPop traversal patterns as an alternative to SQL MATCH syntax.
+**Note:** These queries use OpenCypher patterns as an alternative to SQL MATCH syntax.
 
 ## Code Walkthrough
 

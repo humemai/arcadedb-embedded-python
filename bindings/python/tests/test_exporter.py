@@ -4,14 +4,13 @@ Tests JSONL, GraphML, GraphSON, and CSV export capabilities.
 """
 
 import csv
-import gzip
 import os
-import tarfile
 import tempfile
 from pathlib import Path
 
 import arcadedb_embedded as arcadedb
 import pytest
+from tests.conftest import has_graph_export_support
 
 
 @pytest.fixture
@@ -296,8 +295,12 @@ class TestDatabaseExport:
             or "format" in str(exc_info.value).lower()
         )
 
+    @pytest.mark.graph_export
+    @pytest.mark.skipif(
+        not has_graph_export_support(), reason="Requires GraphML/GraphSON support"
+    )
     def test_export_graphml(self, sample_db, temp_db_path):
-        """Test GraphML export (requires Gremlin module)."""
+        """Test GraphML export (requires GraphML/GraphSON support)."""
         export_path = "test_export.graphml.tgz"
 
         try:
@@ -317,13 +320,17 @@ class TestDatabaseExport:
             export_file.unlink()
 
         except arcadedb.ArcadeDBError as e:
-            if "requires additional modules" in str(e) or "Gremlin" in str(e):
-                pytest.skip("GraphML export requires Gremlin module")
+            if "requires additional modules" in str(e):
+                pytest.skip("GraphML export requires GraphML/GraphSON support")
             else:
                 raise
 
+    @pytest.mark.graph_export
+    @pytest.mark.skipif(
+        not has_graph_export_support(), reason="Requires GraphML/GraphSON support"
+    )
     def test_export_graphson(self, sample_db, temp_db_path):
-        """Test GraphSON export (requires Gremlin module)."""
+        """Test GraphSON export (requires GraphML/GraphSON support)."""
         export_path = "test_export.graphson.tgz"
 
         try:
@@ -343,8 +350,8 @@ class TestDatabaseExport:
             export_file.unlink()
 
         except arcadedb.ArcadeDBError as e:
-            if "requires additional modules" in str(e) or "Gremlin" in str(e):
-                pytest.skip("GraphSON export requires Gremlin module")
+            if "requires additional modules" in str(e):
+                pytest.skip("GraphSON export requires GraphML/GraphSON support")
             else:
                 raise
 

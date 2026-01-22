@@ -8,40 +8,34 @@ a social network with people and friendships. It showcases:
 1. Creating vertex and edge types (schema definition)
 2. Creating vertices (people) with properties
 3. Creating edges (friendships) between vertices
-4. Querying the graph using SQL MATCH, Cypher, and Gremlin dialects
+4. Querying the graph using SQL MATCH and OpenCypher dialects
 5. Finding friends, friends of friends, and mutual connections
-6. Comparing SQL vs Cypher vs Gremlin syntax and performance
+6. Comparing SQL vs OpenCypher syntax and performance
 
 Key Concepts:
 - Vertices represent entities (Person)
 - Edges represent relationships (FRIEND_OF)
 - Properties store data on both vertices and edges
 - Graph traversal allows complex relationship queries
-- SQL MATCH, Cypher, and Gremlin provide different graph querying capabilities
+- SQL MATCH and OpenCypher provide different graph querying capabilities
 
 ArcadeDB Query Languages:
 - SQL MATCH: ArcadeDB's extended SQL syntax for graph traversal
-- Cypher: Neo4j-compatible query language for intuitive graph operations
-- Gremlin: Apache TinkerPop traversal language for imperative graph navigation
+- OpenCypher: openCypher query language for declarative graph patterns
 
 ⚡ Performance Findings (This Example):
-- Gremlin: 0.017s total (63× faster than Cypher) 🏆
-- SQL MATCH: 0.046s total (2.7× faster than Cypher)
-- Cypher: 1.075s total (slowest due to transpiler overhead)
+- SQL MATCH and OpenCypher performance varies by dataset and runtime configuration
 
-Note: Gremlin has 100% feature parity with Cypher but significantly better
-performance in ArcadeDB. Cypher is based on an unmaintained transpiler
-(Cypher For Gremlin) which adds overhead and has known limitations.
+Note: OpenCypher support may vary by ArcadeDB version and can have limitations
+depending on the underlying engine.
 
-⚠️ Cypher Limitations in ArcadeDB:
-- Based on unmaintained Cypher For Gremlin transpiler
-- Performance overhead from translation layer
-- Type conversion issues (strict typing vs ArcadeDB's flexibility)
-- Consider using Gremlin or SQL MATCH for production workloads
+⚠️ OpenCypher Limitations in ArcadeDB:
+- Support may vary by engine and version
+- Performance can differ from SQL MATCH depending on workload
 
 Requirements:
 - Python embedded ArcadeDB (arcadedb_embedded package)
-- Gremlin support requires full ArcadeDB distribution
+- OpenCypher support requires the OpenCypher engine in your ArcadeDB build
 
 Usage:
 - Run this example from the examples/ directory:
@@ -384,17 +378,14 @@ def create_sample_data(db):
 
 
 def demonstrate_graph_queries(db):
-    """Demonstrate various graph queries using SQL, Cypher, and Gremlin"""
+    """Demonstrate various graph queries using SQL and OpenCypher"""
     print("\n🔍 Demonstrating graph queries...")
 
     # SQL-based queries
     demonstrate_sql_queries(db)
 
-    # Cypher-based queries
-    demonstrate_cypher_queries(db)
-
-    # Gremlin-based queries
-    demonstrate_gremlin_queries(db)
+    # OpenCypher-based queries
+    demonstrate_opencypher_queries(db)
 
 
 def demonstrate_sql_queries(db):
@@ -546,61 +537,61 @@ def demonstrate_sql_queries(db):
         traceback.print_exc()
 
 
-def demonstrate_cypher_queries(db):
-    """Demonstrate graph queries using Cypher dialect"""
-    print("\n  🎯 Cypher Queries:")
+def demonstrate_opencypher_queries(db):
+    """Demonstrate graph queries using OpenCypher"""
+    print("\n  🎯 OpenCypher Queries (matching Cypher functionality):")
 
     section_start = time.time()
 
     try:
-        # 1. Find all friends of Alice using Cypher
-        print("\n    1️⃣ Find all friends of Alice (Cypher):")
+        # 1. Find all friends of Alice using OpenCypher
+        print("\n    1️⃣ Find all friends of Alice (OpenCypher):")
         query_start = time.time()
         result = db.query(
-            "cypher",
+            "opencypher",
             """
             MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF]->(friend:Person)
             RETURN friend.name as name, friend.city as city
-            ORDER BY friend.name
-        """,
-        )
-
-        for row in result:
-            print(f"      👥 {row.get('name')} from {row.get('city')}")
-        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
-
-        # 2. Find friends of friends using Cypher
-        print("\n    2️⃣ Find friends of friends of Alice (Cypher):")
-        query_start = time.time()
-        result = db.query(
-            "cypher",
-            """
-            MATCH (alice:Person {name: 'Alice Johnson'})
-                  -[:FRIEND_OF]->(friend:Person)
-                  -[:FRIEND_OF]->(fof:Person)
-            WHERE fof.name <> 'Alice Johnson'
-            RETURN DISTINCT fof.name as name, friend.name as through_friend
-            ORDER BY fof.name
+            ORDER BY name
         """,
         )
 
         for row in result:
             name = row.get("name")
-            through_friend = row.get("through_friend")
-            print(f"      🔗 {name} (through {through_friend})")
+            city = row.get("city")
+            print(f"      👥 {name} from {city}")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
-        # 3. Find mutual friends using Cypher
-        print("\n    3️⃣ Find mutual friends between Alice and Bob (Cypher):")
+        # 2. Find friends of friends using OpenCypher
+        print("\n    2️⃣ Find friends of friends of Alice (OpenCypher):")
         query_start = time.time()
         result = db.query(
-            "cypher",
+            "opencypher",
             """
-            MATCH (alice:Person {name: 'Alice Johnson'})
-                  -[:FRIEND_OF]->(mutual:Person)
+            MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF]->(friend:Person)
+                  -[:FRIEND_OF]->(fof:Person)
+            WHERE fof.name <> 'Alice Johnson'
+            RETURN DISTINCT fof.name as name, friend.name as through_friend
+            ORDER BY name
+        """,
+        )
+
+        for row in result:
+            name = row.get("name")
+            through = row.get("through_friend")
+            print(f"      🔗 {name} (through {through})")
+        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
+
+        # 3. Find mutual friends using OpenCypher
+        print("\n    3️⃣ Find mutual friends between Alice and Bob (OpenCypher):")
+        query_start = time.time()
+        result = db.query(
+            "opencypher",
+            """
+            MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF]->(mutual:Person)
                   <-[:FRIEND_OF]-(bob:Person {name: 'Bob Smith'})
             RETURN mutual.name as mutual_friend
-            ORDER BY mutual.name
+            ORDER BY mutual_friend
         """,
         )
 
@@ -612,15 +603,15 @@ def demonstrate_cypher_queries(db):
             print("      ℹ️  No mutual friends found")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
-        # 4. Find people by friendship closeness using Cypher
-        print("\n    4️⃣ Find close friendships (Cypher):")
+        # 4. Find close friendships using OpenCypher
+        print("\n    4️⃣ Find close friendships (OpenCypher):")
         query_start = time.time()
         result = db.query(
-            "cypher",
+            "opencypher",
             """
             MATCH (p1:Person)-[f:FRIEND_OF {closeness: 'close'}]->(p2:Person)
             RETURN p1.name as person1, p2.name as person2, f.since as since
-            ORDER BY f.since
+            ORDER BY since
         """,
         )
 
@@ -631,15 +622,15 @@ def demonstrate_cypher_queries(db):
             print(f"      💙 {person1} → {person2} (since {since})")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
-        # 5. Count friends per person using Cypher
-        print("\n    5️⃣ Count friends per person (Cypher aggregation):")
+        # 5. Count friends per person using OpenCypher
+        print("\n    5️⃣ Count friends per person (OpenCypher aggregation):")
         query_start = time.time()
         result = db.query(
-            "cypher",
+            "opencypher",
             """
             MATCH (p:Person)
             OPTIONAL MATCH (p)-[:FRIEND_OF]->(friend:Person)
-            RETURN p.name as name, COUNT(friend) as friend_count
+            RETURN p.name as name, count(friend) as friend_count
             ORDER BY friend_count DESC, name
         """,
         )
@@ -650,168 +641,16 @@ def demonstrate_cypher_queries(db):
             print(f"      • {name}: {count} friends")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
-        # 6. Find variable length paths using Cypher
-        print("\n    6️⃣ Find connections within 3 steps from Alice (Cypher):")
+        # 6. Find variable length paths using OpenCypher
+        print("\n    6️⃣ Find connections within 3 steps from Alice (OpenCypher):")
         query_start = time.time()
         result = db.query(
-            "cypher",
+            "opencypher",
             """
-            MATCH (alice:Person {name: 'Alice Johnson'})
-                  -[:FRIEND_OF*1..3]-(connected:Person)
+            MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF*1..3]-(connected:Person)
             WHERE connected.name <> 'Alice Johnson'
             RETURN DISTINCT connected.name as name, connected.city as city
-            ORDER BY connected.name
-        """,
-        )
-
-        for row in result:
-            print(f"      🌐 {row.get('name')} from " f"{row.get('city')}")
-        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
-
-        print(f"  ⏱️  Cypher section: {time.time() - section_start:.3f}s")
-
-    except Exception as e:
-        print(f"    ❌ Error in Cypher queries: {e}")
-        import traceback
-
-        traceback.print_exc()
-
-
-def demonstrate_gremlin_queries(db):
-    """Demonstrate graph queries using Gremlin traversal language"""
-    print("\n  🎯 Gremlin Queries (matching Cypher functionality):")
-
-    section_start = time.time()
-
-    try:
-        # 1. Find all friends of Alice using Gremlin
-        print("\n    1️⃣ Find all friends of Alice (Gremlin):")
-        query_start = time.time()
-        result = db.query(
-            "gremlin",
-            """
-            g.V().hasLabel('Person').has('name', 'Alice Johnson')
-                .out('FRIEND_OF')
-                .project('name', 'city')
-                .by('name')
-                .by('city')
-                .order().by(select('name'))
-        """,
-        )
-
-        for row in result:
-            name = row.get("name")
-            city = row.get("city")
-            print(f"      👥 {name} from {city}")
-        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
-
-        # 2. Find friends of friends using Gremlin
-        print("\n    2️⃣ Find friends of friends of Alice (Gremlin):")
-        query_start = time.time()
-        result = db.query(
-            "gremlin",
-            """
-            g.V().hasLabel('Person').has('name', 'Alice Johnson')
-                .out('FRIEND_OF').as('friend')
-                .out('FRIEND_OF').as('fof')
-                .where(values('name').is(neq('Alice Johnson')))
-                .select('fof', 'friend')
-                .by('name')
-                .by('name')
-                .order().by(select('fof'))
-        """,
-        )
-
-        for row in result:
-            name = row.get("fof")
-            through = row.get("friend")
-            print(f"      🔗 {name} (through {through})")
-        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
-
-        # 3. Find mutual friends using Gremlin
-        print("\n    3️⃣ Find mutual friends between Alice and Bob (Gremlin):")
-        query_start = time.time()
-        result = db.query(
-            "gremlin",
-            """
-            g.V().hasLabel('Person').has('name', 'Alice Johnson')
-                .out('FRIEND_OF').as('mutual')
-                .in('FRIEND_OF').has('name', 'Bob Smith')
-                .select('mutual')
-                .values('name')
-                .order()
-        """,
-        )
-
-        mutual_friends = list(result)
-        if mutual_friends:
-            for row in mutual_friends:
-                print(f"      🤝 {row.get('result')}")
-        else:
-            print("      ℹ️  No mutual friends found")
-        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
-
-        # 4. Find close friendships using Gremlin
-        print("\n    4️⃣ Find close friendships (Gremlin):")
-        query_start = time.time()
-        result = db.query(
-            "gremlin",
-            """
-            g.V().hasLabel('Person').as('p1')
-                .outE('FRIEND_OF').has('closeness', 'close').as('edge')
-                .inV().as('p2')
-                .select('p1', 'p2', 'edge')
-                .by('name')
-                .by('name')
-                .by('since')
-                .order().by(select('edge'))
-        """,
-        )
-
-        for row in result:
-            person1 = row.get("p1")
-            person2 = row.get("p2")
-            since = row.get("edge")
-            print(f"      💙 {person1} → {person2} (since {since})")
-        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
-
-        # 5. Count friends per person using Gremlin
-        print("\n    5️⃣ Count friends per person (Gremlin aggregation):")
-        query_start = time.time()
-        result = db.query(
-            "gremlin",
-            """
-            g.V().hasLabel('Person')
-                .project('name', 'friend_count')
-                .by('name')
-                .by(out('FRIEND_OF').count())
-                .order()
-                .by(select('friend_count'), desc)
-                .by(select('name'))
-        """,
-        )
-
-        for row in result:
-            name = row.get("name")
-            count = row.get("friend_count")
-            print(f"      • {name}: {count} friends")
-        print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
-
-        # 6. Find variable length paths using Gremlin
-        print("\n    6️⃣ Find connections within 3 steps from Alice (Gremlin):")
-        query_start = time.time()
-        result = db.query(
-            "gremlin",
-            """
-            g.V().hasLabel('Person').has('name', 'Alice Johnson')
-                .repeat(out('FRIEND_OF').simplePath())
-                .times(3).emit()
-                .where(values('name').is(neq('Alice Johnson')))
-                .dedup()
-                .project('name', 'city')
-                .by('name')
-                .by('city')
-                .order().by(select('name'))
+            ORDER BY name
         """,
         )
 
@@ -821,27 +660,26 @@ def demonstrate_gremlin_queries(db):
             print(f"      🌐 {name} from {city}")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
-        print(f"  ⏱️  Gremlin section: {time.time() - section_start:.3f}s")
-        print("\n  💡 Gremlin features demonstrated:")
-        print("      • Traversal-based graph navigation (out, in, outE, inV)")
-        print("      • Filtering with has() and where()")
-        print("      • Deduplication with dedup()")
-        print("      • Aggregations with project() and count()")
-        print("      • Variable-length paths with repeat() and emit()")
-        print("      • Sorting with order() - same results as Cypher")
-        print("      • ✅ 100% feature parity with Cypher queries!")
+        print(f"  ⏱️  OpenCypher section: {time.time() - section_start:.3f}s")
+        print("\n  💡 OpenCypher features demonstrated:")
+        print("      • Pattern matching with MATCH")
+        print("      • Filtering with WHERE")
+        print("      • DISTINCT for deduplication")
+        print("      • Aggregations with count()")
+        print("      • Variable-length paths with *1..3")
+        print("      • Sorting with ORDER BY")
 
     except Exception as e:
-        print(f"    ❌ Error in Gremlin queries: {e}")
-        print("    💡 Note: Gremlin support requires full ArcadeDB distribution")
+        print(f"    ❌ Error in OpenCypher queries: {e}")
+        print("    💡 Note: OpenCypher support depends on your ArcadeDB build")
         import traceback
 
         traceback.print_exc()
 
 
 def compare_query_languages(db):
-    """Compare SQL MATCH vs Cypher vs Gremlin for the same queries"""
-    print("\n  🆚 SQL MATCH vs Cypher vs Gremlin Comparison:")
+    """Compare SQL MATCH vs OpenCypher for the same queries"""
+    print("\n  🆚 SQL MATCH vs OpenCypher Comparison:")
 
     section_start = time.time()
 
@@ -893,87 +731,42 @@ def compare_query_languages(db):
             sql_count = 0
             sql_time = 0
 
-        # Cypher Version
-        print("\n    🟢 Cypher syntax:")
+        # OpenCypher Version
+        print("\n    🟣 OpenCypher syntax:")
         print(
             """      MATCH (alice:Person {name: 'Alice Johnson'})
             -[edge:FRIEND_OF]->(friend:Person)
       RETURN friend.name, friend.city, edge.closeness, edge.since"""
         )
 
-        cypher_time_start = time.time()
-        result_cypher = db.query(
-            "cypher",
-            """
-            MATCH (alice:Person {name: 'Alice Johnson'})
-                  -[edge:FRIEND_OF]->(friend:Person)
-            RETURN friend.name as name, friend.city as city,
-                   edge.closeness as closeness, edge.since as since
-            ORDER BY friend.name
-        """,
-        )
-
-        cypher_results = list(result_cypher)
-        for row in cypher_results:
-            name = row.get("name")
-            city = row.get("city")
-            closeness = row.get("closeness")
-            since = row.get("since")
-            print(f"      👥 {name} ({city}) - {closeness} since {since}")
-        cypher_time = time.time() - cypher_time_start
-        print(f"      ⏱️  Cypher Time: {cypher_time:.4f}s")
-
-        # Gremlin Version
-        print("\n    🟣 Gremlin syntax:")
-        print(
-            """      g.V().hasLabel('Person').has('name', 'Alice Johnson')
-        .outE('FRIEND_OF').as('edge')
-        .inV().as('friend')
-        .select('friend', 'edge')
-        .by(valueMap('name', 'city'))
-        .by(valueMap('closeness', 'since'))"""
-        )
-
-        gremlin_time_start = time.time()
+        opencypher_time_start = time.time()
         try:
-            result_gremlin = db.query(
-                "gremlin",
+            result_opencypher = db.query(
+                "opencypher",
                 """
-                g.V().hasLabel('Person').has('name', 'Alice Johnson')
-                    .outE('FRIEND_OF').as('edge')
-                    .inV().as('friend')
-                    .select('friend', 'edge')
-                    .by(valueMap('name', 'city'))
-                    .by(valueMap('closeness', 'since'))
+                MATCH (alice:Person {name: 'Alice Johnson'})
+                      -[edge:FRIEND_OF]->(friend:Person)
+                RETURN friend.name as name, friend.city as city,
+                       edge.closeness as closeness, edge.since as since
+                ORDER BY friend.name
             """,
             )
 
-            gremlin_results = list(result_gremlin)
-            for row in gremlin_results:
-                friend = row.get("friend")
-                edge = row.get("edge")
-                # Gremlin valueMap returns lists, so extract first value
-                name_val = friend.get("name")
-                name = name_val[0] if isinstance(name_val, list) else name_val
-                city_val = friend.get("city")
-                city = city_val[0] if isinstance(city_val, list) else city_val
-                closeness_val = edge.get("closeness")
-                closeness = (
-                    closeness_val[0]
-                    if isinstance(closeness_val, list)
-                    else closeness_val
-                )
-                since_val = edge.get("since")
-                since = since_val[0] if isinstance(since_val, list) else since_val
+            opencypher_results = list(result_opencypher)
+            for row in opencypher_results:
+                name = row.get("name")
+                city = row.get("city")
+                closeness = row.get("closeness")
+                since = row.get("since")
                 print(f"      👥 {name} ({city}) - {closeness} since {since}")
-            gremlin_count = len(gremlin_results)
-            gremlin_time = time.time() - gremlin_time_start
-            print(f"      ⏱️  Gremlin Time: {gremlin_time:.4f}s")
+            opencypher_count = len(opencypher_results)
+            opencypher_time = time.time() - opencypher_time_start
+            print(f"      ⏱️  OpenCypher Time: {opencypher_time:.4f}s")
         except Exception as e:
-            print(f"      ❌ Gremlin query failed: {e}")
-            print("      💡 Note: Gremlin requires full ArcadeDB distribution")
-            gremlin_count = 0
-            gremlin_time = 0
+            print(f"      ❌ OpenCypher query failed: {e}")
+            print("      💡 Note: OpenCypher support depends on your ArcadeDB build")
+            opencypher_count = 0
+            opencypher_time = 0
 
         # Performance comparison
         print("\n    ⚡ Performance Comparison:")
@@ -981,10 +774,8 @@ def compare_query_languages(db):
         times = []
         if sql_time > 0:
             times.append(("SQL", sql_time, sql_count))
-        if cypher_time > 0:
-            times.append(("Cypher", cypher_time, len(cypher_results)))
-        if gremlin_time > 0:
-            times.append(("Gremlin", gremlin_time, gremlin_count))
+        if opencypher_time > 0:
+            times.append(("OpenCypher", opencypher_time, opencypher_count))
 
         if times:
             times.sort(key=lambda x: x[1])
@@ -998,17 +789,13 @@ def compare_query_languages(db):
                     print(f"    • {lang}: {time_str} ({slowdown_str} vs fastest)")
 
         # Compare results if SQL worked
-        if sql_count > 0 and len(cypher_results) > 0:
-            if sql_count == len(cypher_results):
-                print(f"\n    ✅ SQL and Cypher returned {sql_count} identical results")
-
-        if gremlin_count > 0:
-            expected = len(cypher_results) if cypher_results else sql_count
-            if gremlin_count == expected:
-                print(f"    ✅ Gremlin returned {gremlin_count} matching results")
+        if opencypher_count > 0:
+            expected = sql_count
+            if opencypher_count == expected:
+                print(f"    ✅ OpenCypher returned {opencypher_count} matching results")
             else:
                 print(
-                    f"    ⚠️  Result count differs: Gremlin={gremlin_count}, "
+                    f"    ⚠️  Result count differs: OpenCypher={opencypher_count}, "
                     f"Expected={expected}"
                 )
 
@@ -1021,24 +808,17 @@ def compare_query_languages(db):
         print("      • Conditions: where: (property = 'value')")
         print("      • More verbose but explicit about types")
         print()
-        print("    Cypher:")
-        print("      • Nodes: (alias:Label {property: 'value'})")
-        print("      • Edges: -[alias:TYPE]-> or -[:TYPE]-")
-        print("      • Conditions: WHERE property = 'value'")
-        print("      • More concise and intuitive for graph patterns")
-        print()
-        print("    Gremlin:")
-        print("      • Imperative traversal style: g.V().hasLabel('Person')")
-        print("      • Navigation: out(), in(), outE(), inV()")
-        print("      • Filters: has(), where(), dedup()")
-        print("      • Functional programming approach")
+        print("    OpenCypher:")
+        print("      • Pattern matching with MATCH and relationships")
+        print("      • Filters: WHERE clauses")
+        print("      • Aggregations: count(), distinct")
+        print("      • Declarative graph patterns")
 
         print("\n    💡 When to use each:")
         print("    " + "-" * 30)
         print("    • SQL MATCH: Mixing graph and relational queries")
-        print("    • Cypher: Pure graph operations, declarative style")
-        print("    • Gremlin: Complex traversals, imperative control")
-        print("    • All support the same underlying graph operations")
+        print("    • OpenCypher: Declarative graph patterns")
+        print("    • Both support the same underlying graph operations")
 
         print(f"  ⏱️  Comparison section: {time.time() - section_start:.3f}s")
 

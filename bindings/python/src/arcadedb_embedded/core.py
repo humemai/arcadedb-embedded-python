@@ -240,14 +240,14 @@ class Database:
         vector_property: str,
         dimensions: int,
         distance_function: str = "cosine",
-        max_connections: int = 32,
-        beam_width: int = 256,
-        quantization: str = None,
+        max_connections: int = 16,
+        beam_width: int = 100,
+        quantization: str = "INT8",
         location_cache_size: Optional[int] = None,
         graph_build_cache_size: Optional[int] = None,
         mutations_before_rebuild: Optional[int] = None,
         store_vectors_in_graph: bool = False,
-        add_hierarchy: Optional[bool] = None,
+        add_hierarchy: Optional[bool] = True,
         pq_subspaces: Optional[int] = None,
         pq_clusters: Optional[int] = None,
         pq_center_globally: Optional[bool] = None,
@@ -263,20 +263,16 @@ class Database:
         - Automatic indexing of existing records
         - Concurrent construction support
 
-        Default parameters (max_connections=32, beam_width=256) were chosen based on
-        benchmarks on the GloVe-100-Angular dataset to achieve at least 0.85 recall
-        with decent build and search time.
-
         Args:
             vertex_type: Name of the vertex type
             vector_property: Name of the property containing vectors
             dimensions: Vector dimensionality (e.g., 768 for BERT)
             distance_function: "cosine", "euclidean", or "inner_product"
-            max_connections: Max connections per node (default: 32).
+            max_connections: Max connections per node (default: 16).
                              Maps to `maxConnections` in JVector.
-            beam_width: Beam width for search/construction (default: 256).
+            beam_width: Beam width for search/construction (default: 100).
                         Maps to `beamWidth` in JVector.
-            quantization: Vector quantization type (default: None).
+            quantization: Vector quantization type (default: INT8).
                           Options: "INT8", "BINARY", "PRODUCT" (PQ).
                           Reduces memory usage and speeds up search at the cost of
                           some precision. "PRODUCT" enables PQ data for
@@ -312,9 +308,9 @@ class Database:
                 structure (default: False). If True, increases disk usage but
                 significantly speeds up search for large datasets by avoiding document
                 lookups.
-            add_hierarchy: Whether to build hierarchical layers in the HNSW graph.
-                If None, uses the engine default. Set explicitly to True/False to
-                force the behavior.
+            add_hierarchy: Whether to build hierarchical layers in the HNSW graph
+                (Default is True). If None, uses the engine default. Set explicitly to
+                True/False to force the behavior.
 
         Returns:
             VectorIndex object

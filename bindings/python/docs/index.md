@@ -88,7 +88,7 @@ Both APIs can be used **simultaneously** on the same server instance.
 
 ## Additional Features
 
-- **Multiple Query Languages**: SQL, Cypher, Gremlin, MongoDB syntax
+- **Multiple Query Languages**: SQL, OpenCypher, MongoDB syntax
 - **ACID Transactions**: Full transactional guarantees
 - **Type Safety**: Pythonic API with proper error handling
 
@@ -101,7 +101,7 @@ Both APIs can be used **simultaneously** on the same server instance.
     - 🌐 **Server Mode** - Optional HTTP server with Studio UI
     - 📦 **Self-contained** - All JARs and JRE bundled
     - 🔄 **Multi-model** - Graph, Document, Key/Value, Vector
-    - 🔍 **Multiple languages** - SQL, Cypher, Gremlin, MongoDB
+    - 🔍 **Multiple languages** - SQL, OpenCypher, MongoDB
 
 !!! success "Advanced Features"
     - ⚡ **High performance** - Direct JVM integration via JPype
@@ -153,8 +153,7 @@ features most relevant to Python developers:
 | Vector Search | ✅ 100% | HNSW (JVector) indexing, similarity search |
 | Data Import | ⚠️ 70% | CSV and ArcadeDB JSONL (XML support limited, not recommended) |
 | Data Export | ✅ 100% | JSONL, GraphML, GraphSON, CSV |
-| Graph API | ✅ 85% | Full support via SQL, Cypher, Gremlin |
-| Gremlin | ✅ 100% | Full query execution |
+| Graph API | ✅ 85% | Full support via SQL and OpenCypher |
 
 See [Java API Coverage](java-api-coverage.md) for detailed comparison.
 
@@ -164,7 +163,7 @@ We provide a **single, self-contained package** that works on all major platform
 
 | Platform | Package Name | Size | What's Included |
 |----------|-------------|------|-----------------|
-| **All Platforms** | `arcadedb-embedded` | ~209-215MB | Full ArcadeDB + Bundled JRE + Studio UI + Gremlin |
+| **All Platforms** | `arcadedb-embedded` | ~209-215MB | Full ArcadeDB + Bundled JRE + Studio UI |
 
 The package uses the standard import:
 

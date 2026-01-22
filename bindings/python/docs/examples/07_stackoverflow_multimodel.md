@@ -11,7 +11,7 @@ system, showcasing ArcadeDB's true multi-model capabilities.
 1.  **Phase 1: Document Import**: Import XML data (Posts, Users, Tags, Comments, Votes) into ArcadeDB documents.
 2.  **Phase 2: Graph Creation**: Build a graph by creating edges between documents.
 3.  **Phase 3: Vector Embeddings**: Generate embeddings for Posts and Tags to enable semantic search.
-4.  **Phase 4: Analytics**: Perform complex analytics using SQL, Gremlin, and Vector Search.
+4.  **Phase 4: Analytics**: Perform complex analytics using SQL, OpenCypher, and Vector Search.
 
 ## 📊 Dataset
 

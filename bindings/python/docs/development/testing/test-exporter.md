@@ -2,7 +2,7 @@
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py){ .md-button }
 
-These notes mirror the Python tests in [test_exporter.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py). There are 5 test classes with 12+ tests covering JSONL (with type/edge filters), GraphML/GraphSON (skipped if Gremlin unavailable), CSV, round-trip (export→import), bulk insert (chunked transactions), and all data types.
+These notes mirror the Python tests in [test_exporter.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py). There are 5 test classes with 12+ tests covering JSONL (with type/edge filters), GraphML/GraphSON (skipped if GraphSON support is unavailable), CSV, round-trip (export→import), bulk insert (chunked transactions), and all data types.
 
 ## Test Classes & Cases
 
@@ -20,7 +20,7 @@ Fixture `sample_db` creates 20 users, 15 movies, 10 actors, 50 Rated edges, 30 A
 
 - **export_invalid_format**: Passes `format="invalid_format"`; asserts raises `ArcadeDBError` with "invalid" or "format". See [test_exporter.py#L306-L312](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py#L306-L312).
 
-- **export_graphml/export_graphson**: Both attempt export; if Gremlin module missing, skip with `pytest.skip(...)` and "Gremlin" message. See [test_exporter.py#L314-L357](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py#L314-L357).
+- **export_graphml/export_graphson**: Both attempt export; if GraphSON support is missing, skip with `pytest.skip(...)`. See [test_exporter.py#L314-L357](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py#L314-L357).
 
 - **export_verbose_levels**: Tests `verbose` parameter (0, 1, 2); asserts `"totalRecords"` in stats for each. See [test_exporter.py#L359-L373](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_exporter.py#L359-L373).
 
@@ -75,6 +75,6 @@ db.command("sql", "IMPORT DATABASE file:///path/to/export.jsonl.tgz")
 
 - Export paths use `exports/` subdirectory relative to cwd
 - Stats keys: `totalRecords`, `vertices`, `edges`, `documents`, `elapsedInSecs`, some include `"_rev"` metadata
-- GraphML/GraphSON skip gracefully if Gremlin unavailable; others raise on bad format
+- GraphML/GraphSON skip gracefully if GraphSON support is unavailable; others raise on bad format
 - CSV export supports custom fieldnames and header row
 - Round-trip: file path must use `file://` URL format and forward slashes (Windows compat)

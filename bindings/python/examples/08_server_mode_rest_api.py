@@ -7,7 +7,7 @@ This example demonstrates ArcadeDB's dual nature:
     *(Note: While this library is primarily for embedded use, it can also act as a server host)*
 2.  **Interactive Studio**: Provides a web-based UI (http://localhost:2480) for exploration.
 3.  **HTTP API**: Allows external clients (like Python's `requests`) to interact with the DB.
-4.  **Concurrency**: Shows how the server handles parallel requests (SQL & Gremlin) from multiple clients.
+4.  **Concurrency**: Shows how the server handles parallel requests (SQL & OpenCypher) from multiple clients.
 
 Prerequisites:
     Run example 07 first to generate the 'stackoverflow_small_db_graph' dataset.
@@ -130,27 +130,48 @@ WORKLOAD_QUERIES = [
         "Verify LINKED_TO edges have LinkTypeId",
         "SELECT count(*) as with_type, (SELECT count(*) FROM LINKED_TO) as total FROM LINKED_TO WHERE LinkTypeId IS NOT NULL",
     ),
-    # === Multi-hop Traversal Queries (Gremlin) ===
+    # === Multi-hop Traversal Queries (OpenCypher) ===
     (
-        "gremlin",
+        "opencypher",
         "Find users who answered their own questions",
-        "g.V().hasLabel('User').where(__.out('ASKED').in('HAS_ANSWER').in('ANSWERED')).count()",
+        """
+        MATCH (u:User)-[:ASKED]->(q:Question)-[:HAS_ANSWER]->(a:Answer)
+        WHERE (u)-[:ANSWERED]->(a)
+        RETURN count(DISTINCT u) as count
+        """,
     ),
     (
-        "gremlin",
+        "opencypher",
         "Find 2-hop user connections",
-        "g.V().hasLabel('User').limit(10).out('ASKED').in('HAS_ANSWER').in('ANSWERED').dedup().count()",
+        """
+        MATCH (u:User)
+        WITH u LIMIT 10
+        MATCH (u)-[:ASKED]->(:Question)-[:HAS_ANSWER]->(:Answer)<-[:ANSWERED]-(other:User)
+        RETURN count(DISTINCT other) as count
+        """,
     ),
-    # === Complex Pattern Queries (Gremlin) ===
+    # === Complex Pattern Queries (OpenCypher) ===
     (
-        "gremlin",
+        "opencypher",
         "Find questions with tags, answers, and comments",
-        "g.V().hasLabel('Question').where(__.out('TAGGED_WITH')).where(__.out('HAS_ANSWER')).where(__.in('COMMENTED_ON')).count()",
+        """
+        MATCH (q:Question)-[:TAGGED_WITH]->(:Tag)
+        WITH DISTINCT q LIMIT 200
+        MATCH (q)-[:HAS_ANSWER]->(:Answer)
+        WITH DISTINCT q LIMIT 200
+        MATCH (q)<-[:COMMENTED_ON]-(:Comment)
+        RETURN count(DISTINCT q) as count
+        """,
     ),
     (
-        "gremlin",
+        "opencypher",
         "Find users with badges who also asked questions",
-        "g.V().hasLabel('User').where(__.out('EARNED')).where(__.out('ASKED')).count()",
+        """
+        MATCH (u:User)-[:EARNED]->(:Badge)
+        WITH DISTINCT u LIMIT 500
+        MATCH (u)-[:ASKED]->(:Question)
+        RETURN count(DISTINCT u) as count
+        """,
     ),
 ]
 
@@ -212,7 +233,7 @@ def run_client_query(client_id, db_name, query_def):
 def demonstrate_concurrency(db_name, num_clients=6):
     print_header("Demonstrating Concurrent HTTP Clients (Mixed Workload)")
     print(
-        f"Simulating {num_clients} concurrent clients executing {len(WORKLOAD_QUERIES)} SQL and Gremlin queries..."
+        f"Simulating {num_clients} concurrent clients executing {len(WORKLOAD_QUERIES)} SQL and OpenCypher queries..."
     )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_clients) as executor:

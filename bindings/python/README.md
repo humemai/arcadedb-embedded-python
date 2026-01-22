@@ -77,7 +77,7 @@ with arcadedb.create_database("./mydb") as db:
 - 🌐 **Server Mode**: Optional HTTP server with Studio web interface
 - 📦 **Self-contained**: All dependencies bundled (~209-215MB wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
-- 🔍 **Multiple query languages**: SQL, Cypher, Gremlin, MongoDB
+- 🔍 **Multiple query languages**: SQL, OpenCypher, MongoDB
 - ⚡ **High performance**: Direct JVM integration via JPype
 - 🔒 **ACID transactions**: Full transaction support
 - 🎯 **Vector storage**: Store and query vector embeddings with HNSW (JVector) indexing

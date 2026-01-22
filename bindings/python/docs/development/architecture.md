@@ -500,7 +500,7 @@ The Python binding is distributed as a **single, self-contained package** (`arca
 **Features:**
 
 - **Bundled JRE**: Includes a minimal Java 21 Runtime Environment (JRE) via the `arcadedb-embedded-jre` package.
-- **Full Feature Set**: Includes all ArcadeDB engines (SQL, Cypher, Gremlin, GraphQL, MongoDB).
+- **Full Feature Set**: Includes all ArcadeDB engines (SQL, OpenCypher, GraphQL, MongoDB).
 - **Zero Configuration**: No external Java installation required.
 
 ```python
@@ -509,8 +509,7 @@ import arcadedb_embedded as arcadedb
 
 db = arcadedb.create_database("./mydb")
 db.query("sql", "SELECT FROM User")              # ✓
-db.query("cypher", "MATCH (n) RETURN n")         # ✓
-db.query("gremlin", "g.V()")                     # ✓
+db.query("opencypher", "MATCH (n) RETURN n")     # ✓
 db.query("graphql", "{users{name}}")             # ✓
 db.query("mongodb", "db.User.find()")            # ✓
 ```
@@ -673,7 +672,7 @@ def download_arcadedb_jars(version):
     jar_url = f"{base_url}arcadedb/{version}/arcadedb-{version}.jar"
     download_jar(jar_url, f"arcadedb-{version}.jar")
 
-    # Download all dependencies (Gremlin, GraphQL, etc.)
+    # Download all dependencies (GraphQL, etc.)
     pass
 
 # Called during package build

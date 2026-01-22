@@ -180,22 +180,17 @@ both_edges = alice.get_both_edges()
 
 Each item is an `Edge` wrapper; use edge.get_out() / edge.get_in() to reach the connected vertices.
 
-### Creating Edges with Gremlin
+### Creating Edges with OpenCypher
 
-Gremlin provides excellent performance for creating edges:
+OpenCypher provides clear graph patterns for creating edges:
 
 ```python
 with db.transaction():
-    # Create vertices and edge using Gremlin
-    db.command("gremlin", """
-        alice = g.addV('Person')
-            .property('name', 'Alice')
-            .property('age', 30).next()
-        bob = g.addV('Person')
-            .property('name', 'Bob')
-            .property('age', 25).next()
-        g.addE('Knows').from(alice).to(bob)
-            .property('since', 2020).next()
+    # Create vertices and edge using OpenCypher
+    db.command("opencypher", """
+        CREATE (alice:Person {name: 'Alice', age: 30})
+        CREATE (bob:Person {name: 'Bob', age: 25})
+        CREATE (alice)-[:Knows {since: 2020}]->(bob)
     """)
 ```
 
@@ -203,11 +198,9 @@ Or connect existing vertices:
 
 ```python
 with db.transaction():
-    db.command("gremlin", """
-        alice = g.V().hasLabel('Person').has('name', 'Alice').next()
-        bob = g.V().hasLabel('Person').has('name', 'Bob').next()
-        g.addE('Knows').from(alice).to(bob)
-            .property('since', 2020).next()
+    db.command("opencypher", """
+        MATCH (alice:Person {name: 'Alice'}), (bob:Person {name: 'Bob'})
+        CREATE (alice)-[:Knows {since: 2020}]->(bob)
     """)
 ```
 
@@ -262,14 +255,12 @@ def create_social_network():
 
         print("✅ Graph created\n")
 
-        # 3. Query the graph with Gremlin (recommended)
+        # 3. Query the graph with OpenCypher
         print("Finding Alice's friends:")
-        result = db.query("gremlin", """
-            g.V().hasLabel('Person').has('name', 'Alice')
-                .out('Knows')
-                .project('name', 'age')
-                .by('name')
-                .by('age')
+        result = db.query("opencypher", """
+            MATCH (p:Person {name: 'Alice'})-[:Knows]->(friend:Person)
+            RETURN friend.name as name, friend.age as age
+            ORDER BY name
         """)
 
         for record in result:
@@ -278,17 +269,15 @@ def create_social_network():
             print(f"  - {name}, age {age}")
 
         print("\nFinding friends of friends:")
-        result = db.query("gremlin", """
-            g.V().hasLabel('Person').has('name', 'Alice')
-                .out('Knows')
-                .out('Knows')
-                .dedup()
-                .has('name', neq('Alice'))
-                .values('name')
+        result = db.query("opencypher", """
+            MATCH (p:Person {name: 'Alice'})-[:Knows]->(:Person)-[:Knows]->(fof:Person)
+            WHERE fof.name <> 'Alice'
+            RETURN DISTINCT fof.name as name
+            ORDER BY name
         """)
 
         for record in result:
-            print(f"  - {record}")
+            print(f"  - {record.get('name')}")
 
 if __name__ == "__main__":
     create_social_network()
@@ -316,16 +305,15 @@ vertex = db.new_vertex("Person")  # Error: No transaction!
 db.schema.create_index("Person", ["name", "email"], unique=False)
 ```
 
-### 3. Use Gremlin for Graph Queries
+### 3. Use OpenCypher for Graph Queries
 
-Gremlin is more performant (63× faster than Cypher) and the recommended approach for graph operations.
+OpenCypher provides expressive graph patterns and path queries.
 
 ```python
-result = db.query("gremlin", """
-    g.V().hasLabel('Person')
-        .has('name', 'Alice')
-        .out('Knows')
-        .values('name')
+result = db.query("opencypher", """
+    MATCH (p:Person {name: 'Alice'})-[:Knows]->(friend:Person)
+    RETURN friend.name as name
+    ORDER BY name
 """)
 ```
 
@@ -479,11 +467,11 @@ print(f"Edges: {len(edges)}")        # Output: 0
 
 **Summary: Use SQL DELETE by default**, except for immediate interactive deletion where you need to delete an object you just fetched.
 
-## Gremlin Queries {#gremlin-queries}
+## OpenCypher Queries {#opencypher-queries}
 
-ArcadeDB supports [Apache Gremlin](https://tinkerpop.apache.org/gremlin.html), the graph traversal language from Apache TinkerPop. Gremlin provides powerful functional-style graph operations.
+ArcadeDB supports OpenCypher for declarative graph pattern matching.
 
-### Using Gremlin
+### Using OpenCypher
 
 ```python
 import arcadedb_embedded as arcadedb
@@ -493,7 +481,7 @@ with arcadedb.create_database("./graph_db") as db:
     db.schema.create_vertex_type("Person")
     db.schema.create_edge_type("Knows")
 
-    # Insert data with Python API (tested pattern) and query via Gremlin
+    # Insert data with Python API and query via OpenCypher
     with db.transaction():
         alice = db.new_vertex("Person").set("name", "Alice").set("age", 30)
         bob = db.new_vertex("Person").set("name", "Bob").set("age", 25)
@@ -501,62 +489,59 @@ with arcadedb.create_database("./graph_db") as db:
         bob.save()
         alice.new_edge("Knows", bob).save()
 
-    # Query with Gremlin
-    results = db.query("gremlin", """
-        g.V().hasLabel('Person').has('age', gt(25)).values('name')
+    # Query with OpenCypher
+    results = db.query("opencypher", """
+        MATCH (p:Person)
+        WHERE p.age > 25
+        RETURN p.name as name
     """)
 
     for record in results:
-        print(record)  # Outputs: Alice
+        print(record.get("name"))  # Outputs: Alice
 ```
 
-### Gremlin vs Cypher vs SQL
+### OpenCypher vs SQL
 
-| Feature | Gremlin | Cypher | SQL |
-|---------|---------|--------|-----|
-| **Style** | Functional/Imperative | Declarative | Declarative |
-| **Graph Traversal** | ✅ Excellent | ✅ Excellent | ⚠️ Limited |
-| **Readability** | Medium | High | High |
-| **Standards Body** | Apache TinkerPop | openCypher | ANSI SQL |
-| **Best For** | Complex traversals | Pattern matching | Relational queries |
+| Feature | OpenCypher | SQL |
+|---------|-----------|-----|
+| **Style** | Declarative graph patterns | Declarative |
+| **Graph Traversal** | ✅ Excellent | ⚠️ Limited |
+| **Readability** | High | High |
+| **Standards Body** | openCypher | ANSI SQL |
+| **Best For** | Graph patterns and paths | Relational queries |
 
-### Common Gremlin Patterns
+### Common OpenCypher Patterns
 
 ```python
 # Find all vertices
-results = db.query("gremlin", "g.V()")
-
+results = db.query("opencypher", "MATCH (n) RETURN n")
+```
 # Find vertices by label
-results = db.query("gremlin", "g.V().hasLabel('Person')")
+results = db.query("opencypher", "MATCH (p:Person) RETURN p")
 
 # Find vertices by property
-results = db.query("gremlin", "g.V().has('name', 'Alice')")
+results = db.query("opencypher", "MATCH (p:Person {name: 'Alice'}) RETURN p")
 
 # Traverse outgoing edges
-results = db.query("gremlin", """
-    g.V().has('name', 'Alice')
-     .out('Knows')
-     .values('name')
+results = db.query("opencypher", """
+    MATCH (p:Person {name: 'Alice'})-[:Knows]->(friend:Person)
+    RETURN friend.name as name
 """)
 
-# Complex graph algorithms
-results = db.query("gremlin", """
-    g.V().has('name', 'Alice')
-     .repeat(out('Knows'))
-     .times(2)
-     .dedup()
-     .values('name')
+# Multi-hop traversal
+results = db.query("opencypher", """
+    MATCH (p:Person {name: 'Alice'})-[:Knows*2]->(fof:Person)
+    RETURN DISTINCT fof.name as name
 """)
 ```
 
-### When to Use Gremlin
+### When to Use OpenCypher
 
-- **Complex multi-hop traversals**: Following paths through the graph
-- **Graph algorithms**: PageRank, shortest path, community detection
-- **Imperative logic**: Need programmatic control over traversal
-- **Apache TinkerPop ecosystem**: Using TinkerPop-compatible tools
+- **Pattern matching**: Express graph structures declaratively
+- **Multi-hop traversals**: Variable-length paths
+- **Readable queries**: Clear syntax for graph relationships
 
-For more details, see [Gremlin Tests](../development/testing/test-gremlin.md).
+For more details, see [OpenCypher Tests](../development/testing/test-opencypher.md).
 
 ## Next Steps
 

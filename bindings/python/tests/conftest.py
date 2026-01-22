@@ -120,17 +120,19 @@ def has_server_support():
         return False
 
 
-def has_gremlin_support():
-    """Check if Gremlin support is available (available in our base package)."""
+def has_graph_export_support():
+    """Check if GraphML/GraphSON export support is available."""
     try:
-        # Try to find Gremlin-related classes
+        # Detect graph export-related modules in bundled JARs
         import os
 
         import arcadedb_embedded
 
         jar_dir = os.path.join(os.path.dirname(arcadedb_embedded.__file__), "jars")
         jar_files = os.listdir(jar_dir) if os.path.exists(jar_dir) else []
-        return any("gremlin" in jar.lower() for jar in jar_files)
+        return any(
+            "graphson" in jar.lower() or "graphml" in jar.lower() for jar in jar_files
+        )
     except Exception:
         return False
 
@@ -144,7 +146,7 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "gremlin: tests that require Gremlin support (available in base package)",
+        "graph_export: tests that require GraphML/GraphSON support",
     )
 
 

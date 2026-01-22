@@ -9,7 +9,7 @@ Comprehensive test suite for the ArcadeDB Python embedded bindings.
 
 - **222 tests** across 6 test files
 - ✅ **Current package**: 221 passed, 0 skipped
-- Package includes all ArcadeDB features (SQL, Cypher, Gremlin, Studio)
+- Package includes all ArcadeDB features (SQL, OpenCypher, Studio)
 
 ## Running Tests
 
@@ -39,7 +39,7 @@ pytest -k "transaction" -v
 | `test_concurrency.py` | 4 | File locking, thread safety, multi-process |
 | `test_server_patterns.py` | 6 | Embedded, server-managed, HTTP performance |
 | `test_importer.py` | 13 | CSV, JSON, JSONL, Neo4j import |
-| `test_gremlin.py` | 1 | Gremlin query language |
+| `test_cypher.py` | 1 | OpenCypher query language |
 
 ## Documentation Links
 
@@ -49,7 +49,7 @@ pytest -k "transaction" -v
 - **[Concurrency Tests](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-concurrency/)** - Multi-process, threads
 - **[Server Patterns](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-server-patterns/)** - Best practices
 - **[Data Import Tests](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-importer/)** - CSV, JSON import
-- **[Gremlin Tests](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-gremlin/)** - Graph queries
+- **[OpenCypher Tests](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-opencypher/)** - Graph queries
 - **[Best Practices](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/best-practices/)** - Summary checklist
 
 ## Common Patterns
