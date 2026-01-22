@@ -16,9 +16,14 @@ with arcadedb.create_database("./opencypher_test_db") as db:
     db.schema.create_edge_type("Knows")
 
     with db.transaction():
-        db.command("sql", "CREATE VERTEX Person SET name='Alice'")
-        db.command("sql", "CREATE VERTEX Person SET name='Bob'")
-        db.command("sql", "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name='Alice') TO (SELECT FROM Person WHERE name='Bob')")
+        alice = db.new_vertex("Person")
+        alice.set("name", "Alice").save()
+
+        bob = db.new_vertex("Person")
+        bob.set("name", "Bob").save()
+
+        edge = alice.new_edge("Knows", bob)
+        edge.save()
 
     result = db.query("opencypher", """
         MATCH (p:Person)-[:Knows]->(friend:Person)

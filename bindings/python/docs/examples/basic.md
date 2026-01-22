@@ -25,7 +25,7 @@ Build your first graph database with vertices and edges:
 Learn how to:
 
 - Create vertices and edges
-- Use Gremlin queries for high-performance graph traversal
+- Use OpenCypher queries for graph traversal
 - Traverse graph relationships efficiently
 - Implement social network patterns
 
@@ -90,14 +90,14 @@ with arcadedb.create_database("./mydb") as db:
         edge.save()
 
     # Traverse graph (reads don't need transaction)
-    results = db.query("gremlin", """
-        g.V().hasLabel('Person')
-         .out('Knows')
-         .values('name')
+    results = db.query("opencypher", """
+        MATCH (p:Person)-[:Knows]->(other:Person)
+        RETURN other.name as name
+        ORDER BY name
     """)
 
     for record in results:
-        print(record)
+        print(record.get("name"))
 ```
 
 ## More Examples
