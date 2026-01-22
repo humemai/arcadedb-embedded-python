@@ -7,7 +7,7 @@ Comprehensive test suite for the ArcadeDB Python embedded bindings.
 
 ## Quick Stats
 
-- **222 tests** across 6 test files
+- **252 tests** across 6 test files
 - ✅ **Current package**: 221 passed, 0 skipped
 - Package includes all ArcadeDB features (SQL, OpenCypher, Studio)
 

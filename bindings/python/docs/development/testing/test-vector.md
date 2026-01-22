@@ -51,8 +51,8 @@ with arcadedb.create_database("./test_db") as db:
         "embedding",
         dimensions=384,
         distance_function="cosine",   # default
-        max_connections=32,            # graph degree
-        beam_width=256                 # search/construction beam
+        max_connections=16,            # graph degree (default)
+        beam_width=100                 # search/construction beam (default)
     )
 ```
 
@@ -81,7 +81,7 @@ with arcadedb.create_database("./test_db") as db:
         query,
         k=2,
         allowed_rids=[doc1.get_rid(), doc2.get_rid()],
-        overquery_factor=16,
+        overquery_factor=4,
     )
 ```
 

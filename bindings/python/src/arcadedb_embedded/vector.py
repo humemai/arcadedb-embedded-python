@@ -132,7 +132,7 @@ class VectorIndex:
         self,
         query_vector,
         k=10,
-        overquery_factor=1,
+        overquery_factor=4,
         allowed_rids=None,
     ):
         """
@@ -140,9 +140,9 @@ class VectorIndex:
 
         Args:
             query_vector: Query vector as Python list, NumPy array, or array-like
-            k: Number of nearest neighbors to return (final k)
+            k: Number of nearest neighbors to return (final k). Default is 10.
             overquery_factor: Multiplier for search-time over-querying (implicit efSearch).
-                              Default is 1, chosen based on benchmarks to ensure decent recall.
+                              Default is 4, chosen based on benchmarks to balance recall and speed.
             allowed_rids: Optional list of RID strings (e.g. ["#1:0", "#2:5"]) to restrict search
 
         Returns:

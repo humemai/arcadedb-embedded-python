@@ -791,8 +791,8 @@ index = db.create_vector_index(
     vertex_type="Doc",
     vector_property="embedding",
     dimensions=384,
-    max_connections=32,  # More connections
-    beam_width=256       # Larger search candidates
+    max_connections=32,  # Default: 16
+    beam_width=200       # Default: 100
 )
 ```
 
