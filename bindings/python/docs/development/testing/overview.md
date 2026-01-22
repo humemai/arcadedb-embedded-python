@@ -6,7 +6,7 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 
 !!! success "Test Results"
     - **Current package**: ✅ 222 passed, 0 skipped
-    - All features available (SQL, Cypher, Gremlin, Studio UI, Vector search)
+    - All features available (SQL, OpenCypher, Studio UI, Vector search)
 
     **Total: 222 tests + 7 examples** across all platforms, 100% passing
 
@@ -18,7 +18,7 @@ The test suite covers:
 - ✅ **Server mode** - HTTP API, multi-client access
 - ✅ **Concurrency patterns** - File locking, thread safety, multi-process
 - ✅ **Graph operations** - Vertices, edges, traversals
-- ✅ **Query languages** - SQL, Cypher, Gremlin
+- ✅ **Query languages** - SQL, OpenCypher
 - ✅ **Vector search** - HNSW (JVector) based Vector indexes, similarity search
 - ✅ **Data import** - CSV with batch commits and type inference
 - ✅ **Unicode support** - International characters, emoji
@@ -74,7 +74,7 @@ pytest -v -s
 | [`test_concurrency.py`](test-concurrency.md) | 4 | File locking, thread safety, multi-process behavior |
 | [`test_server_patterns.py`](test-server-patterns.md) | 4 | Best practices for embedded + server mode |
 | [`test_importer.py`](test-importer.md) | 16 | CSV import with type inference |
-| [`test_gremlin.py`](test-gremlin.md) | 1 | Gremlin query language (if available) |
+| [`test_cypher.py`](test-opencypher.md) | 1 | OpenCypher query language |
 
 ## Common Testing Workflows
 
@@ -115,8 +115,8 @@ Tests are organized with pytest markers:
 # Run only server tests
 pytest -m server
 
-# Run only Gremlin tests
-pytest -m gremlin
+# Run only OpenCypher tests
+pytest -k cypher
 
 # Run all except slow tests
 pytest -m "not slow"
@@ -138,7 +138,7 @@ When all tests pass, you should see:
 - **Using server mode?** See [Server Tests](test-server.md) and [Server Patterns](test-server-patterns.md)
 - **Confused about concurrency?** Read [Concurrency Tests](test-concurrency.md)
 - **Importing data?** Check [Data Import Tests](test-importer.md)
-- **Using Gremlin?** See [Gremlin Tests](test-gremlin.md)
+- **Using OpenCypher?** See [OpenCypher Tests](test-opencypher.md)
 
 ## Related Documentation
 

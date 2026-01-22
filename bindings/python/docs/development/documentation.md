@@ -222,7 +222,7 @@ db.close()
 | Feature | Current Package | Notes |
 |---------|----------------|--------|
 | SQL | ✅ Yes | All SQL features |
-| Gremlin | ✅ Yes | Graph queries |
+| OpenCypher | ✅ Yes | Graph queries |
 | Studio UI | ✅ Yes | Web interface |
 ```
 
