@@ -93,12 +93,17 @@ The vector benchmark scripts and other examples have been updated.
   )
   ```
 
-  also we've learned that memory consumption is quite big. For example, for 1024 dimensional vectors with INT8 quantization, we need at least:
+  also we've learned that memory consumption is quite big. For example, for 1024 dimensional vectors with INT8 quantization, for vector index building we need at least:
   - 1M vectors need at least 4G heap
   - 2M vectors need at least 8G heap
   - 4M vectors need at least 16G heap
   - 8M vectors need at least 32G heap
-  - 16M vectors need at least 64G heap
+
+  and for vector search we need:
+  - 1M: 1g works, at least 1g recommended
+  - 2M: 1g works, at least 2g recommended
+  - 4M: 1g works, at least 2g recommended
+  - 8M: 1g doesn't work (OoM), 2g works, at least 4g recommended
 
   ofc, we can reduce the heap requirements potentailly by reducing the vector dimensions and other `create_vector_index` parameters. we advise people to build the vector index in a bigger and more powerful machine, which has more RAM, and then move the database files & indexes to the production machine.
 
