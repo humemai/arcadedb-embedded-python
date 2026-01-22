@@ -4,7 +4,7 @@ ArcadeDB Python bindings support two approaches:
 
 1. **Pythonic API (Recommended)**: Use the Java embedded API directly -
    `db.new_document()`, `vertex.set()`, `vertex.save()`
-2. **SQL/Gremlin**: Traditional query languages for complex queries and analytics
+2. **SQL/OpenCypher**: Traditional query languages for complex queries and analytics
 
 ## Best Practice: Use Pythonic API for CRUD
 
@@ -263,22 +263,22 @@ else:
     print("No results found")
 ```
 
-## Gremlin
+## OpenCypher
 
-Apache TinkerPop graph traversal language for high-performance graph queries.
+OpenCypher provides expressive graph pattern matching.
 
 ### Basic Traversals
 
 ```python
 # Get vertex property values
-result = db.query("gremlin", "g.V().hasLabel('Person').values('name')")
-names = [record.get("result") for record in result]
+result = db.query("opencypher", "MATCH (p:Person) RETURN p.name as name")
+names = [record.get("name") for record in result]
 assert "Alice" in names or "Bob" in names
 
-# Note: Gremlin returns values in "result" key
-result = db.query("gremlin", "g.V().hasLabel('Person').count()")
+# Count vertices
+result = db.query("opencypher", "MATCH (p:Person) RETURN count(p) as count")
 results = list(result)
-count = results[0].get("result") if results else 0
+count = results[0].get("count") if results else 0
 ```
 
 ### Graph Traversals
@@ -286,16 +286,14 @@ count = results[0].get("result") if results else 0
 ```python
 # Complex projection with aggregation
 query = """
-    g.V().hasLabel('Question')
-        .project('title', 'answer_count', 'score')
-        .by('Title')
-        .by(out('HAS_ANSWER').count())
-        .by('Score')
-        .order().by(select('answer_count'), desc)
-        .limit(5)
+    MATCH (q:Question)
+    OPTIONAL MATCH (q)-[:HAS_ANSWER]->(a:Answer)
+    RETURN q.Title as title, count(a) as answer_count, q.Score as score
+    ORDER BY answer_count DESC
+    LIMIT 5
 """
 
-results = list(db.query("gremlin", query))
+results = list(db.query("opencypher", query))
 
 for i, result in enumerate(results, 1):
     title = result.get("title") or "Unknown"
@@ -309,21 +307,17 @@ for i, result in enumerate(results, 1):
 
 ```python
 # Simple value extraction
-result = db.query("gremlin", "g.V().hasLabel('Person').values('name')")
-names = [record.get("result") for record in result]
-# Gremlin puts single values in "result" key
+result = db.query("opencypher", "MATCH (p:Person) RETURN p.name as name")
+names = [record.get("name") for record in result]
 
 # Project returns named keys directly
 query = """
-    g.V().hasLabel('Question')
-        .project('title', 'score')
-        .by('Title')
-        .by('Score')
-        .limit(5)
+    MATCH (q:Question)
+    RETURN q.Title as title, q.Score as score
+    LIMIT 5
 """
-results = list(db.query("gremlin", query))
+results = list(db.query("opencypher", query))
 for result in results:
-    # Access projected keys directly
     title = result.get("title")
     score = result.get("score")
 ```
