@@ -12,71 +12,23 @@ This example demonstrates how to use ArcadeDB as a graph database to model and q
 - Modeling entities (Person) and relationships (FRIEND_OF) with properties
 - NULL value handling for optional vertex properties (email, phone, reputation)
 - Graph traversal patterns (friends, friends-of-friends, mutual connections)
-- **Comparing SQL MATCH vs Cypher vs Gremlin query languages**
+- **Comparing SQL MATCH vs OpenCypher query languages**
 - **Performance characteristics of each query language**
-- Variable-length path queries (`*1..3` syntax in Cypher, `repeat().times(3)` in Gremlin)
+- Variable-length path queries (`*1..3` syntax in OpenCypher)
 - Working with relationship properties and bidirectional edges
 - Filtering by NULL values (finding people without email/phone)
 - Proper transaction handling and property access patterns
 - Real-world graph database implementation techniques
 
-## ⚡ Performance Comparison: SQL vs Cypher vs Gremlin
+## ⚡ SQL MATCH vs OpenCypher
 
-This example includes comprehensive performance benchmarking of all three query languages:
+This example compares SQL MATCH and OpenCypher for expressing the same graph traversals.
 
-### Query-by-Query Results (8 people, 24 edges):
+### Guidance
 
-| Query | Cypher | Gremlin | Speedup |
-|-------|--------|---------|---------|
-| Find friends | 0.876s | 0.008s | **109× faster** |
-| Friends of friends | 0.056s | 0.003s | **18× faster** |
-| Mutual friends | 0.018s | 0.001s | **18× faster** |
-| Close friendships | 0.022s | 0.002s | **11× faster** |
-| Count aggregation | 0.059s | 0.001s | **59× faster** |
-| Variable-length paths | 0.044s | 0.002s | **22× faster** |
-| **Total Time** | **1.075s** | **0.017s** | **63× faster** |
-
-### Key Findings:
-
-- ✅ **Gremlin is the fastest** - 63× faster than unmaintained Cypher transpiler
-- ✅ **SQL MATCH is viable** - for SQL developers, 2.7× faster than Cypher
-- ✅ **Gremlin is industry standard** - used by AWS Neptune, Azure Cosmos DB, and enterprise applications
-- ✅ **Gremlin is actively maintained** - Apache TinkerPop has ongoing development and community support
-
-### Recommended Approach: Use Gremlin
-
-**Gremlin (Primary Recommendation):**
-
-- ⚡ Best performance - 63× faster than Cypher
-- 🎯 100% feature parity - can express any graph pattern
-- 🔧 Fine-grained control over traversal optimization
-- 📊 Perfect for complex graph algorithms
-- ✅ Actively maintained by Apache TinkerPop community
-- 🌍 Industry standard used by AWS Neptune and Azure Cosmos DB
-- 📚 Extensive documentation and community resources
-
-**SQL MATCH (Alternative for SQL Developers):**
-
-- 🔄 Allows mixing graph and relational queries
-- 📈 Good performance (2.7× faster than Cypher)
-- 🛠️ Familiar SQL syntax for SQL developers
-- 📊 Excellent for aggregations and reporting
-- ⚠️ Less intuitive for pure graph operations
-
-**⚠️ Cypher: Not Recommended**
-
-- Based on unmaintained, outdated transpiler
-- 63× slower than Gremlin
-- Type conversion issues with ArcadeDB's flexible typing
-- Known bugs in transpiler that cannot be fixed
-- Use Gremlin instead - it's faster and better supported
-
-### Recommendation
-**Use Gremlin for all new applications.** If you're comfortable with SQL syntax, use SQL MATCH.
-
-The Python example also demonstrates Cypher queries for comparison and educational
-purposes, showing why it's not recommended - Cypher is 63× slower due to its reliance on
-an unmaintained transpiler.
+- **SQL MATCH** is a good choice for SQL developers and reporting-style queries.
+- **OpenCypher** is expressive for path-based traversals and graph patterns.
+- Choose the language that best matches your team's familiarity and your query style.
 
 ## Real-World Use Case
 
@@ -210,7 +162,7 @@ WHERE verified = true AND reputation IS NOT NULL
 ORDER BY reputation DESC
 ```
 
-### Cypher Queries (for comparison)
+### OpenCypher Queries
 
 ```cypher
 -- 1. Find all friends of Alice
@@ -260,76 +212,6 @@ MATCH (alice:Person {name: 'Alice Johnson'})
 WHERE connected.name <> 'Alice Johnson'
 RETURN DISTINCT connected.name as name, connected.city as city
 ORDER BY connected.name
-```
-
-### Gremlin Queries (Recommended)
-
-```groovy
-// 1. Find all friends of Alice
-g.V().hasLabel('Person').has('name', 'Alice Johnson')
-    .out('FRIEND_OF')
-    .project('name', 'city')
-    .by('name')
-    .by('city')
-    .order().by(select('name'))
-```
-
-```groovy
-// 2. Find friends of friends of Alice
-g.V().hasLabel('Person').has('name', 'Alice Johnson')
-    .out('FRIEND_OF').as('friend')
-    .out('FRIEND_OF').as('fof')
-    .where(values('name').is(neq('Alice Johnson')))
-    .select('fof', 'friend')
-    .by('name')
-    .by('name')
-    .order().by(select('fof'))
-```
-
-```groovy
-// 3. Find mutual friends between Alice and Bob
-g.V().hasLabel('Person').has('name', 'Alice Johnson')
-    .out('FRIEND_OF').as('mutual')
-    .in('FRIEND_OF').has('name', 'Bob Smith')
-    .select('mutual')
-    .values('name')
-    .order()
-```
-
-```groovy
-// 4. Find close friendships (Gremlin)
-g.V().hasLabel('Person').as('p1')
-    .outE('FRIEND_OF').has('closeness', 'close').as('edge')
-    .inV().as('p2')
-    .select('p1', 'p2', 'edge')
-    .by('name')
-    .by('name')
-    .by('since')
-    .order().by(select('edge'))
-```
-
-```groovy
-// 5. Count friends per person (Gremlin aggregation)
-g.V().hasLabel('Person')
-    .project('name', 'friend_count')
-    .by('name')
-    .by(out('FRIEND_OF').count())
-    .order()
-    .by(select('friend_count'), desc)
-    .by(select('name'))
-```
-
-```groovy
-// 6. Find connections within 3 steps from Alice (Gremlin)
-g.V().hasLabel('Person').has('name', 'Alice Johnson')
-    .repeat(out('FRIEND_OF').simplePath())
-    .times(3).emit()
-    .where(values('name').is(neq('Alice Johnson')))
-    .dedup()
-    .project('name', 'city')
-    .by('name')
-    .by('city')
-    .order().by(select('name'))
 ```
 
 ## NULL Value Handling in Graphs
