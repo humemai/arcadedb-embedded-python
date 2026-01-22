@@ -205,18 +205,18 @@ with arcadedb.create_database("./vector_demo") as db:
     # Create index with JVector parameters (schema operations are auto-transactional)
     db.create_vector_index("Product", "embedding",
                           dimensions=384,         # Match Example 03 defaults
-                          max_connections=32,     # Connections per node (default: 32)
-                          beam_width=256)         # Search beam width (default: 256)
+                          max_connections=16,     # Connections per node (default: 16)
+                          beam_width=100)         # Search beam width (default: 100)
 ```
 
 **Index Configuration Parameters:**
 
-- **max_connections**: 8-64 (higher = better accuracy, more memory/slower build)
-- **beam_width**: 128-512 (higher = better search accuracy, slower queries)
-    - 128: Fast search, lower accuracy
-    - 256: Balanced (default)
-    - 512: High accuracy, slower search
-- **overquery_factor**: Search-time tuning (default: 16)
+- **max_connections**: 8-32 (higher = better accuracy, more memory/slower build)
+- **beam_width**: 64-200 (higher = better search accuracy, slower queries)
+    - 64: Fast search, lower accuracy
+    - 100: Balanced (default)
+    - 200: High accuracy, slower search
+- **overquery_factor**: Search-time tuning (default: 4)
     - Multiplies k internally; 16 means searches ~160 candidates for k=10
     - Smaller (4-8) = faster, lower recall
     - Larger (32-64) = slower, better recall
