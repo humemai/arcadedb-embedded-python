@@ -6,7 +6,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 
 | Package | Wheel Size | Installed Size | Java Required | Studio UI | Query Languages |
 |---------|-----------|----------------|---------------|-----------|----------------|
-| **arcadedb-embedded** | ~209-215MB | ~274-289MB | ❌ No | ✅ | SQL, Cypher, Gremlin, MongoDB |
+| **arcadedb-embedded** | ~209-215MB | ~274-289MB | ❌ No | ✅ | SQL, OpenCypher, MongoDB |
 
 **Installation:**
 
@@ -53,7 +53,7 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 
 - ✅ **No Java Installation Required**: Platform-specific JRE bundled (~47-63MB)
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
-- ✅ **Query Languages**: SQL, Cypher, Gremlin, MongoDB (all included)
+- ✅ **Query Languages**: SQL, OpenCypher, MongoDB (all included)
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
 - ✅ **Vector Search**: Graph-based indexing for embeddings
@@ -69,7 +69,7 @@ Pre-built **platform-specific** wheels are available for **6 platforms**:
 **222 out of 222 tests pass** on all platforms (100% success rate):
 
 - ✅ All core database operations
-- ✅ SQL, Cypher, and Gremlin queries
+- ✅ SQL and OpenCypher queries
 - ✅ HTTP server and Studio UI
 - ✅ Vector search and import operations
 - ✅ All platforms validated
@@ -84,7 +84,7 @@ Perfect for:
 - Docker containers
 - Desktop applications
 - Multi-model database needs (Graph, Document, Vector, Time Series)
-- Any scenario requiring SQL, Cypher, or Gremlin queries
+- Any scenario requiring SQL or OpenCypher queries
 
 ## Accessing Studio UI
 
@@ -180,4 +180,4 @@ print(f"Python: {platform.python_version()}")
 - [Quick Start](quickstart.md) - Get started in 5 minutes
 - [Build Architecture](../development/build-architecture.md) - How platform-specific wheels are built
 - [Server Mode](../guide/server.md) - Using the HTTP server with Studio UI
-- [Query Languages](../guide/core/queries.md) - SQL, Cypher, and Gremlin examples
+- [Query Languages](../guide/core/queries.md) - SQL and OpenCypher examples

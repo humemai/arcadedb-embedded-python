@@ -47,25 +47,15 @@ Complete social network modeling with graph database:
 - NULL filtering (IS NULL queries for missing contact info)
 - Relationship property queries (closeness filtering)
 
-**Learn:** Graph schema design, relationship modeling, multi-language querying, performance optimization, NULL handling in graphs
+**Learn:** Graph schema design, relationship modeling, multi-language querying, NULL handling in graphs
 
-**Status:** ✅ Fully functional - 8 people, 24 bidirectional edges, comprehensive queries with performance analysis
+**Status:** ✅ Fully functional - 8 people, 24 bidirectional edges, comprehensive queries
 
----
 
 ### 🔍 [03_vector_search.py](./03_vector_search.py) ✅ **COMPLETE**
 **Vector Embeddings | HNSW (JVector) Index | Semantic Search | Performance Analysis**
 
 Semantic similarity search with AI/ML:
-- Vector storage with 384D embeddings (mimicking sentence-transformers)
-- HNSW (JVector) indexing for nearest-neighbor search
-- Cosine distance similarity queries
-- Index population strategies (batch vs incremental)
-- Filtering approaches (oversampling, multiple indexes, hybrid)
-- Performance characteristics and best practices
-
-**Learn:** Vector databases, HNSW (JVector) algorithm, semantic search patterns, index architecture
-
 **Status:** ✅ Fully functional - Demonstrates vector search capabilities
 
 ---
@@ -83,7 +73,6 @@ High-performance CSV import for document data:
 **Learn:** ETL patterns, bulk import, schema management, performance tuning
 
 **Status:** ✅ Fully functional - Imports 100K+ records efficiently
-
 ---
 
 ### 🕸️ [05_csv_import_graph.py](./05_csv_import_graph.py) ✅ **COMPLETE**
@@ -141,12 +130,12 @@ Comprehensive Stack Overflow dataset analysis:
 Running ArcadeDB as a server with concurrent client simulation:
 - Starting the embedded server programmatically
 - **Concurrent Load Testing:** Simulating multiple HTTP clients using `ThreadPoolExecutor`
-- **Polyglot Workload:** Executing mixed SQL and Gremlin queries in parallel
+- **Polyglot Workload:** Executing mixed SQL and OpenCypher queries in parallel
 - Accessing the **Studio Web UI** for visual exploration
 - Using the **HTTP REST API** (via `requests`) for remote interaction
 - Validating complex graph patterns and aggregations under load
 
-**Learn:** Server management, concurrency patterns, HTTP API integration, mixed SQL/Gremlin workloads
+**Learn:** Server management, concurrency patterns, HTTP API integration, mixed SQL/OpenCypher workloads
 
 **Status:** ✅ Fully functional - Simulates 6 concurrent clients executing 30+ diverse queries
 
