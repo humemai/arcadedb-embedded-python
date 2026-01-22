@@ -183,13 +183,17 @@ echo -e "${YELLOW}🔄 Rebasing main onto upstream-main...${NC}"
 git checkout main
 BAD_COMMIT_SUBJECT="Add comprehensive Python bindings for ArcadeDB"
 BAD_COMMIT_HASH=$(git log --format="%H:%s" upstream-main..main | awk -F: -v subj="$BAD_COMMIT_SUBJECT" '$2==subj {print $1; exit}')
+BAD_COMMIT_SHORT=""
+if [ -n "$BAD_COMMIT_HASH" ]; then
+    BAD_COMMIT_SHORT=$(git rev-parse --short "$BAD_COMMIT_HASH")
+fi
 
 if [ -n "$BAD_COMMIT_HASH" ]; then
     echo -e "${YELLOW}⚠️  Dropping known conflicting commit: ${BAD_COMMIT_HASH} (${BAD_COMMIT_SUBJECT})${NC}"
     TMP_EDITOR=$(mktemp)
     cat > "$TMP_EDITOR" << EOF
 #!/bin/sh
-sed -i -e "s/^pick ${BAD_COMMIT_HASH} /drop ${BAD_COMMIT_HASH} /" "\$1"
+sed -i -e "s/^pick ${BAD_COMMIT_SHORT} /drop ${BAD_COMMIT_SHORT} /" "\$1"
 EOF
     chmod +x "$TMP_EDITOR"
     if GIT_SEQUENCE_EDITOR="$TMP_EDITOR" git rebase -i upstream-main; then
