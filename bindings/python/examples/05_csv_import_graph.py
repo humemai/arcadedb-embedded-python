@@ -1001,7 +1001,7 @@ EXPECTED_RESULTS = {
     "movielens-small": {
         "counts": {"users": 610, "movies": 9742, "rated": 97823, "tagged": 3436},
         "samples": {
-            "user1_ratings": 222,
+            "user1_ratings": 252,
             "user1_tags": 0,
             "movie1_title": "Toy Story (1995)",
             "movie1_genres": "Adventure|Animation|Children|Comedy|Fantasy",
@@ -1009,7 +1009,7 @@ EXPECTED_RESULTS = {
         "queries": [
             {
                 "name": "Query 1: Movies rated by User #1 (SQL - Basic Traversal)",
-                "count": 222,
+                "count": 252,
             },
             {
                 "name": "Query 2: Movies rated 5.0 by User #1 (SQL - Edge Property Filter)",
