@@ -37,6 +37,14 @@ def find_results(root: Path) -> List[Path]:
     return sorted(root.glob("*/results.json"))
 
 
+def _run_dir_value(run_dir_name: str, key: str) -> str | None:
+    prefix = f"{key}="
+    for part in run_dir_name.split("_"):
+        if part.startswith(prefix):
+            return part[len(prefix) :]
+    return None
+
+
 def _peak_rss(phases: Dict[str, dict]) -> float | None:
     vals = [
         v.get("rss_after_mb")
@@ -57,7 +65,8 @@ def parse_record(path: Path) -> Dict:
 
     # dataset tag from dir name
     run_dir_name = path.parent.name
-    dataset_tag = run_dir_name.split("_")[0].replace("dataset=", "")
+    dataset_tag = _run_dir_value(run_dir_name, "dataset") or run_dir_name
+    heap_tag = _run_dir_value(run_dir_name, "heap")
 
     recall_after = recall.get("search_after_reopen", {}) or {}
     recall_before = recall.get("search", {}) or {}
@@ -93,6 +102,7 @@ def parse_record(path: Path) -> Dict:
     return {
         "dataset": dataset_tag,
         "batch_size": cfg.get("batch_size"),
+        "heap": heap_tag,
         "quantization": cfg.get("quantization"),
         "store_vectors_in_graph": cfg.get("store_vectors_in_graph"),
         "add_hierarchy": cfg.get("add_hierarchy"),
@@ -184,6 +194,7 @@ def load_dataframe(root: Path) -> pd.DataFrame:
 
 def df_to_markdown(df: pd.DataFrame) -> str:
     cols = [
+        "heap",
         "quantization",
         "store_vectors_in_graph",
         "add_hierarchy",
@@ -221,7 +232,7 @@ def df_to_markdown(df: pd.DataFrame) -> str:
     for c in cols:
         if c not in df.columns:
             continue
-        if c in ("quantization", "store_vectors_in_graph", "add_hierarchy"):
+        if c in ("quantization", "store_vectors_in_graph", "add_hierarchy", "heap"):
             continue
         if c in ("recall@50_before_close", "recall@50_after_reopen"):
             df[c] = df[c].round(4)
