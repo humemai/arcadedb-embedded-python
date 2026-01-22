@@ -1,6 +1,6 @@
 # Example 08: Server Mode, Studio & Concurrent HTTP Clients
 
-This example demonstrates how to run ArcadeDB in **Server Mode**, which enables the HTTP REST API and the Studio Web UI while maintaining embedded Python access. It also showcases **concurrent load testing** and **polyglot querying** (SQL + Gremlin).
+This example demonstrates how to run ArcadeDB in **Server Mode**, which enables the HTTP REST API and the Studio Web UI while maintaining embedded Python access. It also showcases **concurrent load testing** and **polyglot querying** (SQL + OpenCypher).
 
 [View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/08_server_mode_rest_api.py){ .md-button }
 
@@ -66,7 +66,7 @@ def demonstrate_concurrency(db_name, num_clients=6):
 
 ### 4. Polyglot Workload
 
-The workload consists of a mix of **SQL** and **Gremlin** queries to demonstrate the server's ability to handle different query languages concurrently.
+The workload consists of a mix of **SQL** and **OpenCypher** queries to demonstrate the server's ability to handle different query languages concurrently.
 
 **SQL Example:**
 
@@ -76,12 +76,12 @@ FROM User
 ORDER BY badge_count DESC LIMIT 1
 ```
 
-**Gremlin Example:**
+**OpenCypher Example:**
 
-```groovy
-g.V().hasLabel('User')
- .where(__.out('ASKED').in('HAS_ANSWER').in('ANSWERED'))
- .count()
+```cypher
+MATCH (u:User)-[:ASKED]->(q:Question)-[:HAS_ANSWER]->(a:Answer)
+WHERE (u)-[:ANSWERED]->(a)
+RETURN count(DISTINCT u) as count
 ```
 
 ## Running the Example

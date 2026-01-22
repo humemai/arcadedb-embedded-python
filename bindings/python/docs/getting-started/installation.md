@@ -39,7 +39,7 @@ The `arcadedb-embedded` package (~209-215MB wheel, ~274-289MB installed) include
 
 - ✅ **No Java Installation Required**: Bundled platform-specific JRE
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
-- ✅ **Query Languages**: SQL, Cypher, Gremlin, MongoDB
+- ✅ **Query Languages**: SQL, OpenCypher, MongoDB
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
 - ✅ **Vector Search**: Graph-based indexing for embeddings

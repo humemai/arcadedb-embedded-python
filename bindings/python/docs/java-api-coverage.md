@@ -54,8 +54,7 @@ The Python bindings provide **excellent coverage for real-world use** (~87% of c
 All query languages fully supported:
 
 - ✅ SQL
-- ✅ Cypher
-- ✅ Gremlin
+- ✅ OpenCypher
 - ✅ MongoDB query syntax
 - ✅ GraphQL
 
@@ -81,8 +80,7 @@ All query languages fully supported:
 **Graph Traversals & Queries:**
 
 - ✅ SQL traversal: `SELECT * FROM User WHERE out('Follows').name = 'Alice'`
-- ✅ Cypher patterns: `MATCH (a:User)-[:FOLLOWS]->(b) RETURN b`
-- ✅ Gremlin: Full traversal support `g.V().has('name','Alice').out('follows')`
+- ✅ OpenCypher patterns: `MATCH (a:User)-[:FOLLOWS]->(b) RETURN b`
 - ✅ Path finding, shortest paths, pattern matching
 
 **What's Not Exposed:**
@@ -178,7 +176,7 @@ JSONL export/import) cover most real-world data migration scenarios.
 
 - ✅ JSONL export - Full database backup format
 - ✅ GraphML export - For visualization tools (Gephi, Cytoscape)
-- ✅ GraphSON export - Gremlin-compatible format
+- ✅ GraphSON export - Graph JSON format
 - ✅ CSV export - Tabular data export
 - ✅ Type filtering - Include/exclude specific types
 - ✅ Compression support - Automatic .tgz compression
@@ -237,7 +235,7 @@ index = index_builder.withUnique(true).create()
 | ------------------------------------- | ---------------- | ------------------------------------ |
 | Embedded database in Python app       | ✅ Perfect       | Core use case                        |
 | Graph analytics with Cypher           | ✅ Excellent     | All query languages work             |
-| Graph traversals & pattern matching   | ✅ Excellent     | SQL, Cypher, Gremlin fully supported |
+| Graph traversals & pattern matching   | ✅ Excellent     | SQL and OpenCypher fully supported |
 | Document store                        | ✅ Excellent     | Full SQL support                     |
 | Vector similarity search              | ✅ Excellent     | Native NumPy integration             |
 | Development with Studio UI            | ✅ Excellent     | Server mode included                 |
@@ -253,7 +251,7 @@ everything needed for:
 
 - Embedded multi-model database
 - Graph, document, vector, and time-series data
-- SQL, Cypher, and Gremlin queries
+- SQL and OpenCypher queries
 - Development and production deployment
 
 **Not suitable for:**

@@ -29,7 +29,7 @@ Production-ready vector embeddings and HNSW (JVector) indexing for semantic movi
 Documents (questions/answers), graph (user relationships, tags), and vectors (duplicate detection) in one comprehensive system. Demonstrates all three models working together with rich Stack Exchange dataset. Features RID-based pagination patterns and index-based vertex lookups for high performance.
 
 **[08 - Server Mode & HTTP API](08_server_mode_rest_api.md)**
-Embedded server with Studio UI and REST API. Demonstrates hybrid access pattern (embedded Python + HTTP API), concurrent load testing with multiple clients, polyglot querying (SQL + Gremlin), and visual database exploration using ArcadeDB Studio.
+Embedded server with Studio UI and REST API. Demonstrates hybrid access pattern (embedded Python + HTTP API), concurrent load testing with multiple clients, polyglot querying (SQL + OpenCypher), and visual database exploration using ArcadeDB Studio.
 
 ## Quick Start
 

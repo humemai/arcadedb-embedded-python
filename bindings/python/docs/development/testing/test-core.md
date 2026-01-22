@@ -14,7 +14,7 @@ Tests validate:
 - Graph operations (vertex/edge creation and traversal)
 - Query result handling and iteration
 - Error handling
-- Cypher queries (when available)
+- OpenCypher queries (when available)
 - Vector search with HNSW indexes
 - Unicode/international character support
 - Schema introspection and metadata
@@ -46,9 +46,8 @@ Tests validate:
 
 ### Query Languages
 
-- **cypher_queries**: Tests Cypher CREATE statements, MATCH queries, property access (when Cypher available)
+- **cypher_queries**: Tests OpenCypher CREATE statements, MATCH queries, property access (when OpenCypher available)
 - **sql_queries**: Tests SQL queries, aggregation, filtering, joins
-- **gremlin_queries**: Tests Gremlin traversal queries (when available)
 
 ### Advanced Features
 
