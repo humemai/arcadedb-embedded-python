@@ -67,7 +67,7 @@ except ArcadeDBError as e:
     # Query error: ... syntax error near 'SELCT'
 ```
 
-**Solution:** Check query syntax, use proper SQL/Cypher/Gremlin.
+**Solution:** Check query syntax, use proper SQL/OpenCypher.
 
 ---
 

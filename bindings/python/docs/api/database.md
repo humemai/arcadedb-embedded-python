@@ -131,7 +131,7 @@ Execute a query and return results. Queries are read-only and don't require a tr
 
 **Parameters:**
 
-- `language` (str): Query language - `"sql"`, `"cypher"`, `"gremlin"`, `"mongo"`, `"graphql"`
+- `language` (str): Query language - `"sql"`, `"opencypher"`, `"mongo"`, `"graphql"`
 - `command` (str): Query string
 - `*args`: Optional parameters to bind to the query
 
@@ -154,8 +154,8 @@ for record in result:
 # Parameterized query
 result = db.query("sql", "SELECT FROM Person WHERE age > ?", 25)
 
-# Cypher query
-result = db.query("cypher", """
+# OpenCypher query
+result = db.query("opencypher", """
     MATCH (p:Person)-[:Knows]->(friend)
     WHERE p.age > $min_age
     RETURN friend.name
@@ -167,9 +167,8 @@ result = db.query("cypher", """
 | Language | Notes |
 |----------|-------|
 | `sql` | ArcadeDB SQL |
-| `cypher` | OpenCypher graph query language |
+| `opencypher` | OpenCypher graph query language |
 | `mongo` | MongoDB query syntax |
-| `gremlin` | Apache TinkerPop traversal |
 | `graphql` | GraphQL queries |
 
 ---
@@ -184,7 +183,7 @@ Execute a command (write operation). Commands modify data and **require a transa
 
 **Parameters:**
 
-- `language` (str): Command language (usually `"sql"` or `"cypher"`)
+- `language` (str): Command language (usually `"sql"` or `"opencypher"`)
 - `command` (str): Command string
 - `*args`: Optional parameters
 
@@ -774,27 +773,15 @@ db.query("sql", "SELECT expand(out('Knows')) FROM Person WHERE name = 'Alice'")
 db.query("sql", "SELECT count(*) as total, avg(age) as avg_age FROM Person")
 ```
 
-### Cypher
+### OpenCypher
 
 OpenCypher graph query language:
 
 ```python
-db.query("cypher", """
+db.query("opencypher", """
     MATCH (person:Person)-[:Knows]->(friend)
     WHERE person.age > 25
     RETURN friend.name, friend.age
-""")
-```
-
-### Gremlin
-
-Apache TinkerPop graph traversals:
-
-```python
-db.query("gremlin", """
-    g.V().has('Person', 'name', 'Alice')
-        .out('Knows')
-        .values('name')
 """)
 ```
 
