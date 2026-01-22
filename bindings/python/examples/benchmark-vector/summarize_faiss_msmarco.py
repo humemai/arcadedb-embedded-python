@@ -38,6 +38,14 @@ def find_results(root: Path) -> List[Path]:
     return sorted(root.glob("*/results.json"))
 
 
+def _run_dir_value(run_dir_name: str, key: str) -> str | None:
+    prefix = f"{key}="
+    for part in run_dir_name.split("_"):
+        if part.startswith(prefix):
+            return part[len(prefix) :]
+    return None
+
+
 def parse_record(path: Path, eval_k: int) -> Dict:
     data = json.loads(path.read_text())
     cfg = data.get("config", {})
@@ -46,7 +54,8 @@ def parse_record(path: Path, eval_k: int) -> Dict:
     r_entry = recall.get(str(eval_k)) or recall.get(eval_k) or {}
 
     run_dir_name = path.parent.name
-    dataset_tag = run_dir_name.split("_", 1)[0].replace("dataset=", "")
+    dataset_tag = _run_dir_value(run_dir_name, "dataset") or run_dir_name
+    heap_tag = _run_dir_value(run_dir_name, "heap")
 
     # approximate peak RSS: max of rss_after across phases (if present)
     rss_afters = [
@@ -78,6 +87,7 @@ def parse_record(path: Path, eval_k: int) -> Dict:
     return {
         "dataset": dataset_tag,
         "index": cfg.get("index"),
+        "heap": heap_tag,
         "nlist": cfg.get("nlist"),
         "nprobe": cfg.get("nprobe"),
         "pq_m": cfg.get("pq_m"),
@@ -159,6 +169,7 @@ def load_dataframe(root: Path) -> pd.DataFrame:
 
 def df_to_markdown(df: pd.DataFrame) -> str:
     cols = [
+        "heap",
         "index",
         "nlist",
         "nprobe",

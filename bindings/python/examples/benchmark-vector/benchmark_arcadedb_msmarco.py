@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import threading
@@ -86,6 +87,16 @@ def start_cpu_logger(interval_sec: int = 2):
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
     return stop_event
+
+
+def heap_tag_from_env() -> str:
+    """Return heap tag derived from ARCADEDB_JVM_ARGS (-Xmx), or 'default'."""
+
+    jvm_args = os.environ.get("ARCADEDB_JVM_ARGS", "")
+    m = re.search(r"-Xmx(\S+)", jvm_args)
+    if not m:
+        return "default"
+    return m.group(1)
 
 
 # -------------------------
@@ -410,7 +421,7 @@ def main():
     ap.add_argument(
         "--count",
         type=int,
-        help="Override corpus count; default = dataset size (1M/10M/20M/100M)",
+        help="Override corpus count; default = dataset size (1M/2M/4M/8M/16M/32M)",
     )
     ap.add_argument(
         "--max-connections", type=int, default=32, help="JVector max_connections"
@@ -502,10 +513,12 @@ def main():
     record("load_queries", {"queries": len(queries)}, dur, r0, r1)
 
     # Prepare DB path
+    heap_tag = heap_tag_from_env()
     param_dir = "_".join(
         [
             f"dataset={Path(args.dataset_dir).name}",
             f"label={label or 'dataset'}",
+            f"heap={heap_tag}",
             f"maxconn={args.max_connections}",
             f"beam={args.beam_width}",
             f"oq={args.overquery_factor}",
