@@ -255,10 +255,10 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 
 **Vector (JVector) Parameters:**
 
-- **max_connections**: Max connections per node (default: 32; typical 16-64). Maps to JVector `maxConnections`.
-- **beam_width**: Beam width for build/search (default: 256; typical 128-400). Maps to JVector `beamWidth`.
+- **max_connections**: Max connections per node (default: 16; typical 8-32). Maps to JVector `maxConnections`.
+- **beam_width**: Beam width for build/search (default: 100; typical 64-200). Maps to JVector `beamWidth`.
 - **dimensions**: Vector size (must match your embeddings).
-- **overquery_factor**: Search-time candidate multiplier (default: 16; typical 8-32). Higher improves recall with slower search.
+- **overquery_factor**: Search-time candidate multiplier (default: 4; typical 2-8). Higher improves recall with slower search.
 
 ## Type Inspection
 

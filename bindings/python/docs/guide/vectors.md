@@ -25,13 +25,8 @@ with arcadedb.create_database("./vector_demo") as db:
         vector_property="embedding",
         dimensions=3,                # must match your embedding size
         distance_function="cosine",  # default: cosine
-        max_connections=32,          # Corresponds to M in HNSW
-        beam_width=256               # Corresponds to efConstruction in HNSW
-        # quantization="PRODUCT",   # enable PQ
-        # pq_subspaces=2,            # M
-        # pq_clusters=256,           # K
-        # pq_center_globally=True,
-        # pq_training_limit=128_000,
+        max_connections=16,          # Corresponds to M in HNSW (default)
+        beam_width=100               # Corresponds to efConstruction in HNSW (default)
     )
 
     with db.transaction():
@@ -50,8 +45,8 @@ with arcadedb.create_database("./vector_demo") as db:
 ## API Essentials
 
 - Vector property type must be `ARRAY_OF_FLOATS`.
-- `create_vector_index(vertex_type, vector_property, dimensions, distance_function="cosine", max_connections=32, beam_width=256, quantization=None, store_vectors_in_graph=False, add_hierarchy=None, pq_subspaces=None, pq_clusters=None, pq_center_globally=None, pq_training_limit=None)`
-- `find_nearest(query_vector, k=10, overquery_factor=16, allowed_rids=None)`
+- `create_vector_index(vertex_type, vector_property, dimensions, distance_function="cosine", max_connections=16, beam_width=100, quantization="INT8", location_cache_size=None, graph_build_cache_size=None, mutations_before_rebuild=None, store_vectors_in_graph=False, add_hierarchy=True, pq_subspaces=None, pq_clusters=None, pq_center_globally=None, pq_training_limit=None)`
+- `find_nearest(query_vector, k=10, overquery_factor=4, allowed_rids=None)`
   - `overquery_factor` multiplies `k` during search to improve recall.
   - `allowed_rids` filters candidates server-side (useful for metadata-prefilter).
 
@@ -64,17 +59,37 @@ with arcadedb.create_database("./vector_demo") as db:
 ## Tuning Knobs
 
 - `dimensions`: must match your embedding length.
-- `max_connections` (HNSW M): higher → better recall, more memory/slow build.
-- `beam_width` (ef/efConstruction): higher → better recall, slower search/build.
+- `max_connections` (HNSW M): higher → better recall, more memory/slow build (default: 16).
+- `beam_width` (ef/efConstruction): higher → better recall, slower search/build (default: 100).
 - `overquery_factor` (runtime only): higher → better recall, slower search.
     - Note: JVector doesn’t expose HNSW’s `efSearch`; `overquery_factor` is the Python-side
         oversampling knob we added to compensate—set it higher when you need recall.
 
-Suggested presets from tests/examples:
+Suggested presets from tests/examples (k=10):
 
-- Fast/dev: `max_connections=16`, `beam_width=128`, `overquery_factor=8`.
-- Balanced default: `max_connections=32`, `beam_width=256`, `overquery_factor=16`.
-- High recall: `max_connections=64`, `beam_width=512`, `overquery_factor=32`.
+- Min: `max_connections=12`, `beam_width=64`, `overquery_factor=2`.
+- Normal (default): `max_connections=16`, `beam_width=100`, `overquery_factor=4`.
+- Max: `max_connections=32`, `beam_width=200`, `overquery_factor=8`.
+
+## Memory & Heap Requirements (1024-dim vectors)
+
+Vector index build is the most memory-hungry step. For 1024-dimensional vectors:
+
+**Build (heap):**
+
+- 1M vectors: at least 4G
+- 2M vectors: at least 8G
+- 4M vectors: at least 16G
+- 8M vectors: at least 32G
+
+**Search (heap):**
+
+- 1M vectors: 1G works, at least 1G recommended
+- 2M vectors: 1G works, at least 2G recommended
+- 4M vectors: 1G works, at least 2G recommended
+- 8M vectors: 1G OOM, 2G works, at least 4G recommended
+
+If you reduce vector dimensions (e.g., 384-dim), you can substantially lower heap requirements.
 
 ## Generating Embeddings (example)
 
@@ -127,7 +142,8 @@ results = index.find_nearest(query_vec, k=5, allowed_rids=rids)
 
 ## Quantization (Experimental)
 
-- `quantization` accepts `"INT8"`, `"BINARY"`, or `"PRODUCT"` (PQ).
+- `quantization` accepts `"INT8"`, `"BINARY"`, `"PRODUCT"` (PQ), or `None` (full precision).
+- Default is `"INT8"`; set `quantization=None` for full-precision vectors.
 - PQ tunables (require `quantization="PRODUCT"`): `pq_subspaces` (M), `pq_clusters` (K), `pq_center_globally`, `pq_training_limit`.
 - INT8/BINARY have shown instability on larger inserts; PQ is the recommended quantization path for recall/latency trade-offs.
 

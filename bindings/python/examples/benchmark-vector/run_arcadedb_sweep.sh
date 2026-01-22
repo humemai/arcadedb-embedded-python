@@ -30,10 +30,17 @@ HEAP_SIZES=()
 
 # I swept the below heap sizes and got these results (1024 dimensional vectors)
 # 1M: at least 4G
-# 2M: 4G impossible, 6G very slow, 8G ok
-# 4M: 16G works
-# 8M: ? 32G testing ...
-# 16M: ? 64G will be tested
+# 2M: at least 8G
+# 4M: at least 16G
+# 8M: at least 32G
+# 16M: 32G tesing ... I wish I can do 64G but not available right now.
+
+# ofc vector search doesn't need as much heap as building the vector index.
+# 1M: 1g works, at least 1g recommended
+# 2M: 1g works, at least 2g recommended
+# 4M: 1g works, at least 2g recommended
+# 8M: 1g doesn't work (OoM), 2g works, at least 4g recommended
+# 16M: testing
 
 if [[ -z "$PRESET_JVM_ARGS" ]]; then
     # Default heap sweep per dataset (override by setting HEAP_SIZES="8g,12g,16g")
@@ -42,8 +49,9 @@ if [[ -z "$PRESET_JVM_ARGS" ]]; then
         # *MSMARCO-1M*) HEAP_SIZES=("4g") ;;   # below 4g heap is already really slow. ran with 4 threads
         # *MSMARCO-2M*) HEAP_SIZES=("8g") ;;   # 4 threads
         # *MSMARCO-4M*) HEAP_SIZES=("16g") ;;  # 4 threads
-        *MSMARCO-8M*) HEAP_SIZES=("32g") ;; # 4 threads
-        # *MSMARCO-16M*) HEAP_SIZES=("64g") ;;  # 4 threads
+        # *MSMARCO-8M*) HEAP_SIZES=("32g") ;; # 4 threads
+        # *MSMARCO-16M*) HEAP_SIZES=("32g") ;;  # 4 threads
+        *MSMARCO-32M*) HEAP_SIZES=("32g") ;; # 4 threads
         *) HEAP_SIZES=("default") ;;
     esac
 

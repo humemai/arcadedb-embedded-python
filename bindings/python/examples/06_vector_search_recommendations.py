@@ -261,8 +261,6 @@ def create_vector_index(db, property_suffix=""):
         vector_property=embedding_prop,
         dimensions=384,
         distance_function="cosine",
-        # quantization="INT8",            # Optional: Use INT8 quantization
-        # store_vectors_in_graph=True,    # Optional: Faster search at cost of disk space
     )
 
     elapsed = time.time() - start_time

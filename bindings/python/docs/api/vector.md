@@ -115,8 +115,18 @@ db.create_vector_index(
     vector_property: str,
     dimensions: int,
     distance_function: str = "cosine",
-    max_connections: int = 32,
-    beam_width: int = 256
+    max_connections: int = 16,
+    beam_width: int = 100,
+    quantization: str = "INT8",
+    location_cache_size: int | None = None,
+    graph_build_cache_size: int | None = None,
+    mutations_before_rebuild: int | None = None,
+    store_vectors_in_graph: bool = False,
+    add_hierarchy: bool | None = True,
+    pq_subspaces: int | None = None,
+    pq_clusters: int | None = None,
+    pq_center_globally: bool | None = None,
+    pq_training_limit: int | None = None,
 ) -> VectorIndex
 ```
 
@@ -129,14 +139,15 @@ db.create_vector_index(
   - `"cosine"`: Cosine distance (1 - cosine similarity)
   - `"euclidean"`: Euclidean distance (L2 norm)
   - `"inner_product"`: Negative inner product
-- `max_connections` (int): Max connections per node (default: 32)
+- `max_connections` (int): Max connections per node (default: 16)
   - Maps to `maxConnections` in JVector
   - Higher = better recall, more memory
-  - Typical range: 128-256
-- `beam_width` (int): Beam width for search/construction (default: 256)
+    - Typical range: 8-64
+- `beam_width` (int): Beam width for search/construction (default: 100)
   - Maps to `beamWidth` in JVector
   - Higher = better recall, slower search
-  - Typical range: 100-400
+    - Typical range: 50-500
+- `quantization` (str | None): `"INT8"`, `"BINARY"`, `"PRODUCT"`, or `None` (default: `"INT8"`)
 
 **Returns:**
 
@@ -164,8 +175,8 @@ index = db.create_vector_index(
     vector_property="embedding",
     dimensions=384,  # Match your embedding model
     distance_function="cosine",
-    max_connections=32,
-    beam_width=256
+    max_connections=16,
+    beam_width=100
 )
 
 print(f"Created vector index: {index}")
@@ -173,7 +184,7 @@ print(f"Created vector index: {index}")
 
 ---
 
-### `VectorIndex.find_nearest(query_vector, k=10, overquery_factor=16, allowed_rids=None)`
+### `VectorIndex.find_nearest(query_vector, k=10, overquery_factor=4, allowed_rids=None)`
 
 Find k-nearest neighbors to the query vector.
 
@@ -188,7 +199,7 @@ been built yet. This "warm up" query may take longer than subsequent queries.
   - Any array-like iterable
 - `k` (int): Number of neighbors to return (default: 10)
 - `overquery_factor` (int): Multiplier for search-time over-querying (implicit efSearch)
-  (default: 16)
+    (default: 4)
 - `allowed_rids` (List[str]): Optional list of RID strings (e.g. `["#1:0", "#2:5"]`) to
   restrict search (default: `None`)
 
@@ -264,8 +275,8 @@ index = db.create_vector_index(
     vector_property="embedding",
     dimensions=384,
     distance_function="cosine",
-    max_connections=32,
-    beam_width=200  # Higher for better recall
+    max_connections=16,
+    beam_width=100  # Default beam width
 )
 
 # Sample documents
@@ -459,21 +470,21 @@ db.close()
 
 **max_connections (connections per node):**
 
-- **Lower (<32)**: Faster build, less memory, lower recall
-- **Medium (32)**: Balanced (recommended)
-- **Higher (>32)**: Better recall, more memory, slower build
+- **Lower (12)**: Faster build, less memory, lower recall
+- **Medium (16)**: Balanced (default)
+- **Higher (32)**: Better recall, more memory, slower build
 
 **overquery_factor (search size):**
 
-- **Lower (<16)**: Faster search, lower recall
-- **Medium (16)**: Balanced (recommended)
-- **Higher (>16)**: Better recall, slower search
+- **Lower (2)**: Faster search, lower recall
+- **Medium (4)**: Balanced (default)
+- **Higher (8)**: Better recall, slower search
 
 **beam_width:**
 
-- **Lower (<256)**: Faster build, lower quality
-- **Medium (256)**: Balanced
-- **Higher (>256)**: Better quality, slower build
+- **Lower (64)**: Faster build, lower quality
+- **Medium (100)**: Balanced (default)
+- **Higher (200)**: Better quality, slower build
 
 ### Distance Functions
 

@@ -552,11 +552,14 @@ db.create_vector_index(
     vector_property: str,
     dimensions: int,
     distance_function: str = "cosine",
-    max_connections: int = 32,
-    beam_width: int = 256,
-    quantization: str | None = None,
+    max_connections: int = 16,
+    beam_width: int = 100,
+    quantization: str = "INT8",
+    location_cache_size: int | None = None,
+    graph_build_cache_size: int | None = None,
+    mutations_before_rebuild: int | None = None,
     store_vectors_in_graph: bool = False,
-    add_hierarchy: bool | None = None,
+    add_hierarchy: bool | None = True,
     pq_subspaces: int | None = None,
     pq_clusters: int | None = None,
     pq_center_globally: bool | None = None,
@@ -572,11 +575,14 @@ Create a vector index for similarity search (JVector implementation). Existing r
 - `vector_property` (str): Property storing vector arrays
 - `dimensions` (int): Vector dimensionality
 - `distance_function` (str): `"cosine"`, `"euclidean"`, or `"inner_product"`
-- `max_connections` (int): Max connections per node (default: 32). Maps to `maxConnections` in HNSW (JVector).
-- `beam_width` (int): Beam width for search/construction (default: 256). Maps to `beamWidth` in HNSW (JVector).
-- `quantization` (str | None): `"INT8"`, `"BINARY"`, or `"PRODUCT"` for PQ (default: None).
+- `max_connections` (int): Max connections per node (default: 16). Maps to `maxConnections` in HNSW (JVector).
+- `beam_width` (int): Beam width for search/construction (default: 100). Maps to `beamWidth` in HNSW (JVector).
+- `quantization` (str | None): `"INT8"`, `"BINARY"`, `"PRODUCT"` for PQ, or `None` for full precision (default: `"INT8"`).
+- `location_cache_size` (int | None): Override location cache size (default: `None`, uses engine default).
+- `graph_build_cache_size` (int | None): Override graph build cache size (default: `None`, uses engine default).
+- `mutations_before_rebuild` (int | None): Override rebuild threshold (default: `None`, uses engine default).
 - `store_vectors_in_graph` (bool): Persist vectors inline in graph file (faster reopen/search, larger graph).
-- `add_hierarchy` (bool | None): Force enabling/disabling HNSW hierarchy; None uses engine default.
+- `add_hierarchy` (bool | None): Force enabling/disabling HNSW hierarchy (default: `True`).
 - `pq_subspaces` (int | None): PQ subspaces (M). Requires `quantization="PRODUCT"`.
 - `pq_clusters` (int | None): PQ clusters per subspace (K). Requires `quantization="PRODUCT"`.
 - `pq_center_globally` (bool | None): PQ global centering flag. Requires `quantization="PRODUCT"`.
