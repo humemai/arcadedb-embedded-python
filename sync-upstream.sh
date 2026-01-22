@@ -18,6 +18,31 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+PROTECTED_PATHS=(".github/workflows" "bindings/python" "README.md")
+
+try_auto_resolve() {
+    local conflicts resolved
+    conflicts=$(git status --porcelain | awk '$1 ~ /U/ {print $2}')
+    if [ -z "$conflicts" ]; then
+        return 1
+    fi
+    resolved=0
+    for path in $conflicts; do
+        for prefix in "${PROTECTED_PATHS[@]}"; do
+            if [[ "$path" == "$prefix"* ]]; then
+                git checkout --ours -- "$path"
+                git add "$path"
+                resolved=1
+                break
+            fi
+        done
+    done
+    if [ "$resolved" -eq 1 ]; then
+        return 0
+    fi
+    return 1
+}
+
 # Show help
 show_help() {
     cat << EOF
@@ -184,19 +209,27 @@ git checkout main
 if git rebase -X ours upstream-main; then
     echo -e "${GREEN}✅ Rebase successful!${NC}"
 else
-    echo -e "${RED}❌ Rebase failed with conflicts${NC}"
-    echo ""
-    echo -e "${YELLOW}🔧 Conflict resolution steps:${NC}"
-    echo -e "   1. Resolve conflicts in the listed files"
-    echo -e "   2. Stage resolved files: ${BLUE}git add <file>${NC}"
-    echo -e "   3. Continue rebase: ${BLUE}git rebase --continue${NC}"
-    echo -e "   4. Or abort: ${BLUE}git rebase --abort${NC}"
-    echo ""
-    echo -e "${YELLOW}💡 Common fixes:${NC}"
-    echo -e "   README.md conflict: ${BLUE}git checkout --ours README.md && git add README.md${NC}"
-    echo ""
-    echo -e "${CYAN}Run './sync-upstream.sh --help' for more troubleshooting tips${NC}"
-    exit 1
+    while try_auto_resolve; do
+        if git rebase --continue; then
+            echo -e "${GREEN}✅ Rebase successful!${NC}"
+            break
+        fi
+    done
+    if [ -d .git/rebase-apply ] || [ -d .git/rebase-merge ]; then
+        echo -e "${RED}❌ Rebase failed with conflicts${NC}"
+        echo ""
+        echo -e "${YELLOW}🔧 Conflict resolution steps:${NC}"
+        echo -e "   1. Resolve conflicts in the listed files"
+        echo -e "   2. Stage resolved files: ${BLUE}git add <file>${NC}"
+        echo -e "   3. Continue rebase: ${BLUE}git rebase --continue${NC}"
+        echo -e "   4. Or abort: ${BLUE}git rebase --abort${NC}"
+        echo ""
+        echo -e "${YELLOW}💡 Common fixes:${NC}"
+        echo -e "   README.md conflict: ${BLUE}git checkout --ours README.md && git add README.md${NC}"
+        echo ""
+        echo -e "${CYAN}Run './sync-upstream.sh --help' for more troubleshooting tips${NC}"
+        exit 1
+    fi
 fi
 
 # 10. Return to original branch if needed
