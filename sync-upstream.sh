@@ -189,7 +189,7 @@ if [ -n "$BAD_COMMIT_HASH" ]; then
     TMP_EDITOR=$(mktemp)
     cat > "$TMP_EDITOR" << EOF
 #!/bin/sh
-sed -i -e 's/^pick ${BAD_COMMIT_HASH} /drop ${BAD_COMMIT_HASH} /' "$1"
+sed -i -e "s/^pick ${BAD_COMMIT_HASH} /drop ${BAD_COMMIT_HASH} /" "\$1"
 EOF
     chmod +x "$TMP_EDITOR"
     if GIT_SEQUENCE_EDITOR="$TMP_EDITOR" git rebase -i upstream-main; then
