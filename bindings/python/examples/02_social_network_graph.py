@@ -985,19 +985,18 @@ def demonstrate_gremlin_queries(db):
             print(f"      🌐 {name} from {city}")
         print(f"      ⏱️  Time: {time.time() - query_start:.3f}s")
 
-        print(f"  ⏱️  Gremlin section: {time.time() - section_start:.3f}s")
-        print("\n  💡 Gremlin features demonstrated:")
-        print("      • Traversal-based graph navigation (out, in, outE, inV)")
-        print("      • Filtering with has() and where()")
-        print("      • Deduplication with dedup()")
-        print("      • Aggregations with project() and count()")
-        print("      • Variable-length paths with repeat() and emit()")
-        print("      • Sorting with order() - same results as Cypher")
-        print("      • ✅ 100% feature parity with Cypher queries!")
+        print(f"  ⏱️  OpenCypher section: {time.time() - section_start:.3f}s")
+        print("\n  💡 OpenCypher features demonstrated:")
+        print("      • Pattern matching with MATCH")
+        print("      • Filtering with WHERE")
+        print("      • DISTINCT for deduplication")
+        print("      • Aggregations with count()")
+        print("      • Variable-length paths with *1..3")
+        print("      • Sorting with ORDER BY")
 
     except Exception as e:
-        print(f"    ❌ Error in Gremlin queries: {e}")
-        print("    💡 Note: Gremlin support requires full ArcadeDB distribution")
+        print(f"    ❌ Error in OpenCypher queries: {e}")
+        print("    💡 Note: OpenCypher support depends on your ArcadeDB build")
         import traceback
 
         traceback.print_exc()
