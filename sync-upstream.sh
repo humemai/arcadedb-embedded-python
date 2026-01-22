@@ -181,7 +181,37 @@ git reset --hard upstream/main
 # 9. Rebase fork main onto upstream-main
 echo -e "${YELLOW}🔄 Rebasing main onto upstream-main...${NC}"
 git checkout main
-if git rebase upstream-main; then
+BAD_COMMIT_SUBJECT="Add comprehensive Python bindings for ArcadeDB"
+BAD_COMMIT_HASH=$(git log --format="%H:%s" upstream-main..main | awk -F: -v subj="$BAD_COMMIT_SUBJECT" '$2==subj {print $1; exit}')
+
+if [ -n "$BAD_COMMIT_HASH" ]; then
+    echo -e "${YELLOW}⚠️  Dropping known conflicting commit: ${BAD_COMMIT_HASH} (${BAD_COMMIT_SUBJECT})${NC}"
+    TMP_EDITOR=$(mktemp)
+    cat > "$TMP_EDITOR" << EOF
+#!/bin/sh
+sed -i -e 's/^pick ${BAD_COMMIT_HASH} /drop ${BAD_COMMIT_HASH} /' "$1"
+EOF
+    chmod +x "$TMP_EDITOR"
+    if GIT_SEQUENCE_EDITOR="$TMP_EDITOR" git rebase -i upstream-main; then
+        rm -f "$TMP_EDITOR"
+        echo -e "${GREEN}✅ Rebase successful!${NC}"
+    else
+        rm -f "$TMP_EDITOR"
+        echo -e "${RED}❌ Rebase failed with conflicts${NC}"
+        echo ""
+        echo -e "${YELLOW}🔧 Conflict resolution steps:${NC}"
+        echo -e "   1. Resolve conflicts in the listed files"
+        echo -e "   2. Stage resolved files: ${BLUE}git add <file>${NC}"
+        echo -e "   3. Continue rebase: ${BLUE}git rebase --continue${NC}"
+        echo -e "   4. Or abort: ${BLUE}git rebase --abort${NC}"
+        echo ""
+        echo -e "${YELLOW}💡 Common fixes:${NC}"
+        echo -e "   README.md conflict: ${BLUE}git checkout --ours README.md && git add README.md${NC}"
+        echo ""
+        echo -e "${CYAN}Run './sync-upstream.sh --help' for more troubleshooting tips${NC}"
+        exit 1
+    fi
+elif git rebase upstream-main; then
     echo -e "${GREEN}✅ Rebase successful!${NC}"
 else
     echo -e "${RED}❌ Rebase failed with conflicts${NC}"
