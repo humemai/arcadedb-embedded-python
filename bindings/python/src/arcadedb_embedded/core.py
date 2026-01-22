@@ -268,7 +268,7 @@ class Database:
             vector_property: Name of the property containing vectors
             dimensions: Vector dimensionality (e.g., 768 for BERT)
             distance_function: "cosine", "euclidean", or "inner_product"
-            max_connections: Max connections per node (default: 32).
+            max_connections: Max connections per node (default: 16).
                              Maps to `maxConnections` in JVector.
             beam_width: Beam width for search/construction (default: 100).
                         Maps to `beamWidth` in JVector.

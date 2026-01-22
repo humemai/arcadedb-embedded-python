@@ -6,7 +6,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
     **222 tests** across 6 test files, 100% passing
 
     - **Current package**: 222 passed, 0 skipped
-    - All ArcadeDB features working (SQL, Cypher, Gremlin, Studio)
+    - All ArcadeDB features working (SQL, OpenCypher, Studio)
 
 ## Quick Navigation
 
@@ -48,7 +48,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
     CSV import with type inference (16 tests)
 
--   :material-graph: **[Gremlin Tests](testing/test-gremlin.md)**
+-   :material-graph: **[OpenCypher Tests](testing/test-opencypher.md)**
 
     ---
 
@@ -94,7 +94,7 @@ pytest --cov=arcadedb_embedded --cov-report=html
 | **Concurrency** | File locking, thread safety, multi-process limitations |
 | **Server Patterns** | Embedded+HTTP combinations, lock management |
 | **Data Import** | CSV with type inference, batch commits |
-| **Query Languages** | SQL, Cypher, Gremlin |
+| **Query Languages** | SQL, OpenCypher |
 | **Advanced Features** | Unicode support, schema introspection, large datasets |
 
 ## Key Concepts
@@ -155,7 +155,7 @@ tests/
 ├── test_concurrency.py       # Concurrency (4 tests)
 ├── test_server_patterns.py   # Patterns (4 tests)
 ├── test_importer.py          # Import (13 tests)
-├── test_gremlin.py           # Gremlin (1 test)
+├── test_cypher.py            # OpenCypher (tests)
 └── conftest.py               # Shared fixtures
 ```
 
