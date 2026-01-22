@@ -32,15 +32,16 @@ HEAP_SIZES=()
 # 1M: at least 4G
 # 2M: 4G impossible, 6G very slow, 8G ok
 # 4M: 16G works
-# 8M
+# 8M: ? 32G testing ...
+# 16M: ? 64G will be tested
 
 if [[ -z "$PRESET_JVM_ARGS" ]]; then
     # Default heap sweep per dataset (override by setting HEAP_SIZES="8g,12g,16g")
     case "$(basename "$DATASET_DIR")" in
         # *MSMARCO-100K*) HEAP_SIZES=("1g" "2g") ;;  # 1g works fine. ran with 4 threads
         # *MSMARCO-1M*) HEAP_SIZES=("4g") ;;   # below 4g heap is already really slow. ran with 4 threads
-        # *MSMARCO-2M*) HEAP_SIZES=("8g" "16g") ;;   # 4 threads
-        # *MSMARCO-4M*) HEAP_SIZES=("16g" "32g") ;;  # 4 threads
+        # *MSMARCO-2M*) HEAP_SIZES=("8g") ;;   # 4 threads
+        # *MSMARCO-4M*) HEAP_SIZES=("16g") ;;  # 4 threads
         *MSMARCO-8M*) HEAP_SIZES=("32g") ;; # 4 threads
         # *MSMARCO-16M*) HEAP_SIZES=("64g") ;;  # 4 threads
         *) HEAP_SIZES=("default") ;;
