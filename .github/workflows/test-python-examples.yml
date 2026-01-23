@@ -256,7 +256,7 @@ jobs:
       - name: Download datasets
         shell: bash
         run: |
-          pip install tqdm py7zr lxml
+          uv pip install --system tqdm py7zr lxml
           cd bindings/python/examples
           echo "📥 Downloading MovieLens Small dataset..."
           python3 download_data.py movielens-small

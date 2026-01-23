@@ -72,28 +72,28 @@ You need to create one environment in GitHub repository settings:
 ### 3. First Release Steps
 
 1. **Register package on PyPI** (if not already registered):
-   ```bash
-   # Build a wheel locally first
-   cd bindings/python
-   ./build.sh
+    ```bash
+    # Build a wheel locally first
+    cd bindings/python
+    ./build.sh
 
-   # Upload manually to register the package
-   pip install twine
-   twine upload dist/arcadedb_embedded-*.whl
-   ```
+    # Upload manually to register the package
+    uv pip install twine
+    twine upload dist/arcadedb_embedded-*.whl
+    ```
 
 2. **Set up trusted publisher** on PyPI (see step 2 above)
 
 3. **Push a test tag**:
-   ```bash
-   git tag 25.10.1.dev0
-   git push origin 25.10.1.dev0
-   ```
+    ```bash
+    git tag 25.10.1.dev0
+    git push origin 25.10.1.dev0
+    ```
 
 4. **Monitor the workflow**:
-   - Go to Actions tab
-   - Watch `Build and Release Python Packages to PyPI`
-   - Check that 6 wheels are built and publish job succeeds
+    - Go to Actions tab
+    - Watch `Build and Release Python Packages to PyPI`
+    - Check that 6 wheels are built and publish job succeeds
 
 ## Validation
 
