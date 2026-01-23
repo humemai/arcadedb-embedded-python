@@ -126,8 +126,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for faster, deterministic installs
-ENV PATH="/root/.cargo/bin:${PATH}"
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:/root/.local/bin:${PATH}"
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && uv --version
 
 WORKDIR /build
 
@@ -206,8 +206,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for faster, deterministic installs
-ENV PATH="/root/.cargo/bin:${PATH}"
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:/root/.local/bin:${PATH}"
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && uv --version
 
 WORKDIR /test
 
