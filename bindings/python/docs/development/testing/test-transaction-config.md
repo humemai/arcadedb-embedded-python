@@ -1,8 +1,8 @@
 # Transaction Configuration Tests
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_transaction_config.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_transaction_config.py){ .md-button }
 
-These notes mirror the Python tests in [test_transaction_config.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_transaction_config.py). There are 9 tests covering transaction isolation levels, WAL configuration, retry logic, timeouts, read-only transactions, nesting, and rollback scenarios. See [test_transaction_config.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_transaction_config.py) for all implementations.
+These notes mirror the Python tests in [test_transaction_config.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_transaction_config.py). There are 9 tests covering transaction isolation levels, WAL configuration, retry logic, timeouts, read-only transactions, nesting, and rollback scenarios. See [test_transaction_config.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_transaction_config.py) for all implementations.
 
 ## Key Config Options
 

@@ -1,6 +1,6 @@
 # Example 04: CSV Import - Tables (Documents)
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/04_csv_import_documents.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/04_csv_import_documents.py){ .md-button }
 
 **Production-ready CSV import with automatic type inference, NULL handling, and index
 optimization**
