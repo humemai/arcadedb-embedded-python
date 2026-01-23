@@ -114,6 +114,7 @@ jobs:
           mike set-default \
             --deploy-prefix arcadedb \
             --branch ${{ env.DOCS_BRANCH }} \
+            --config-file ../bindings/python/mkdocs.yml \
             latest
 
       - name: Deploy with mike (not latest)
