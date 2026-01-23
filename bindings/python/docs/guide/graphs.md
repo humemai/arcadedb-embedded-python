@@ -467,7 +467,7 @@ print(f"Edges: {len(edges)}")        # Output: 0
 
 **Summary: Use SQL DELETE by default**, except for immediate interactive deletion where you need to delete an object you just fetched.
 
-## OpenCypher Queries {#opencypher-queries}
+## OpenCypher Queries
 
 ArcadeDB supports OpenCypher for declarative graph pattern matching.
 
