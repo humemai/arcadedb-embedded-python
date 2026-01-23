@@ -108,12 +108,14 @@ jobs:
           mike deploy --update-aliases \
             --deploy-prefix arcadedb \
             --branch ${{ env.DOCS_BRANCH }} \
+            --push \
             --config-file ../bindings/python/mkdocs.yml \
             ${{ steps.version.outputs.version }} latest \
             --title "${{ steps.version.outputs.version }}"
           mike set-default \
             --deploy-prefix arcadedb \
             --branch ${{ env.DOCS_BRANCH }} \
+            --push \
             --config-file ../bindings/python/mkdocs.yml \
             latest
 
@@ -126,18 +128,7 @@ jobs:
           mike deploy \
             --deploy-prefix arcadedb \
             --branch ${{ env.DOCS_BRANCH }} \
+            --push \
             --config-file ../bindings/python/mkdocs.yml \
             ${{ steps.version.outputs.version }} \
             --title "${{ steps.version.outputs.version }}"
-
-      - name: Commit and push docs
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-        working-directory: humemai-docs
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add arcadedb
-          git commit -m "Publish ArcadeDB docs ${VERSION}" || echo "No changes to commit"
-          git push
