@@ -1,8 +1,8 @@
 # Graph API Tests
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_graph_api.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_graph_api.py){ .md-button }
 
-These notes mirror the Python tests in [test_graph_api.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_graph_api.py). There are 18 tests covering Pythonic wrappers (Document, Vertex, Edge classes) and their methods.
+These notes mirror the Python tests in [test_graph_api.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_graph_api.py). There are 18 tests covering Pythonic wrappers (Document, Vertex, Edge classes) and their methods.
 
 ## Overview
 
