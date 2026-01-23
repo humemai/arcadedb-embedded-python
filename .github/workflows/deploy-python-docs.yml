@@ -58,7 +58,7 @@ jobs:
         working-directory: bindings/python
         run: |
           pip install --upgrade pip
-          pip install mkdocs-material mkdocs-git-revision-date-localized-plugin mike
+          pip install mkdocs-material mkdocs-git-revision-date-localized-plugin mkdocs-macros-plugin mike
 
       - name: Validate docs token
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
