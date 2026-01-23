@@ -76,7 +76,7 @@ with arcadedb.create_database("./mydb") as db:
 
 The `arcadedb-embedded` package is platform-specific and self-contained:
 
-**Package Contents (all platforms):**
+**Package Contents (all platforms, ballpark):**
 
 - **Wheel size (compressed)**: ~116MB
 - **ArcadeDB JARs (uncompressed)**: ~32MB
