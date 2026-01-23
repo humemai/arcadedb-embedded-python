@@ -54,7 +54,7 @@ Initially, we were creating `py3-none-any` wheels because:
 
 - `pyproject.toml` alone doesn't communicate platform-specificity to setuptools
 - Without `setup.py`, setuptools assumes "pure Python" package
-- Result: All platforms got same wheel name, pip couldn't select correct one
+- Result: All platforms got same wheel name, uv pip couldn't select correct one
 
 **The Solution - setup.py**:
 
@@ -76,7 +76,7 @@ setup(
 This simple class tells setuptools "this package has binary content" which:
 
 - Triggers platform-specific wheel naming
-- Makes pip download the correct wheel for each platform
+- Makes uv pip download the correct wheel for each platform
 - Enables platform tags like `macosx_11_0_arm64`, `manylinux_2_17_x86_64`, etc.
 
 **Without setup.py**: All platforms → `arcadedb_embedded-X.Y.Z-py3-none-any.whl` (wrong!)
@@ -412,7 +412,7 @@ docker build -f Dockerfile.build -t arcadedb-python-builder .
 
 ```bash
 # Install wheel
-pip install dist/arcadedb_embedded-*.whl
+uv pip install dist/arcadedb_embedded-*.whl
 
 # Run tests
 pytest tests/
