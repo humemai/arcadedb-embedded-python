@@ -1,6 +1,6 @@
 # Simple Document Store Example
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/01_simple_document_store.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/01_simple_document_store.py){ .md-button }
 
 This comprehensive example demonstrates ArcadeDB's document capabilities using a task management system. You'll learn about data types, NULL handling, SQL operations, and the differences between document and graph storage models.
 
