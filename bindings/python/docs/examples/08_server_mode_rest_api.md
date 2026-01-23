@@ -2,7 +2,7 @@
 
 This example demonstrates how to run ArcadeDB in **Server Mode**, which enables the HTTP REST API and the Studio Web UI while maintaining embedded Python access. It also showcases **concurrent load testing** and **polyglot querying** (SQL + OpenCypher).
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/08_server_mode_rest_api.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/08_server_mode_rest_api.py){ .md-button }
 
 ## Overview
 
