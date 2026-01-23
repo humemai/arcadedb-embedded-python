@@ -1,6 +1,6 @@
 # Social Network Graph Example
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/02_social_network_graph.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/02_social_network_graph.py){ .md-button }
 
 ## Overview
 

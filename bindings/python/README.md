@@ -71,11 +71,11 @@ with arcadedb.create_database("./mydb") as db:
 
 ## ✨ Features
 
-- ☕ **No Java Installation Required**: Bundled JRE (47-63MB per platform)
+- ☕ **No Java Installation Required**: Bundled JRE (~249MB uncompressed)
 - 🌍 **6 Platforms Supported**: Linux, macOS, Windows (x86_64 + ARM64)
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network)
 - 🌐 **Server Mode**: Optional HTTP server with Studio web interface
-- 📦 **Self-contained**: All dependencies bundled (~209-215MB wheel)
+- 📦 **Self-contained**: All dependencies bundled (~116MB wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
 - 🔍 **Multiple query languages**: SQL, OpenCypher, MongoDB
 - ⚡ **High performance**: Direct JVM integration via JPype
@@ -89,22 +89,12 @@ with arcadedb.create_database("./mydb") as db:
 
 The `arcadedb-embedded` package is platform-specific and self-contained:
 
-**Package Contents (all platforms):**
+**Package Contents (all platforms, ballpark):**
 
-- **ArcadeDB JARs**: 226.0MB (identical across all platforms)
-- **Bundled JRE**: 47-63MB (platform-specific Java 21 runtime via jlink)
-- **Total Size**: ~209-215MB compressed wheel, ~273-289MB installed
-
-**Platform Details:**
-
-| Platform      | Wheel Size | JRE Size | Installed Size | Tests         |
-| ------------- | ---------- | -------- | -------------- | ------------- |
-| Windows ARM64 | 209.4M     | 47.6M    | ~274M          | 252 passed ✅ |
-| macOS ARM64   | 210.8M     | 53.9M    | ~280M          | 252 passed ✅ |
-| macOS Intel   | 211.9M     | 55.3M    | ~281M          | 252 passed ✅ |
-| Windows x64   | 211.6M     | 51.6M    | ~278M          | 252 passed ✅ |
-| Linux ARM64   | 214.1M     | 61.8M    | ~288M          | 252 passed ✅ |
-| Linux x64     | 215.0M     | 62.7M    | ~289M          | 252 passed ✅ |
+- **Wheel size (compressed)**: ~116MB
+- **ArcadeDB JARs (uncompressed)**: ~32MB
+- **Bundled JRE (uncompressed)**: ~249MB (platform-specific Java 25 runtime via jlink)
+- **Total uncompressed size**: ~281MB
 
 **Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See `jar_exclusions.txt` for details.
 
@@ -133,7 +123,7 @@ See [tests/README.md](tests/README.md) for detailed test documentation.
 **Requirements vary by platform:**
 
 - **Linux**: Docker (handles all dependencies)
-- **macOS/Windows**: Java 21+ JDK with jlink (to build the bundled JRE)
+- **macOS/Windows**: Java 25+ JDK with jlink (to build the bundled JRE)
 
 ### Setup Virtual Environment
 

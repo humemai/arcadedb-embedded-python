@@ -48,7 +48,6 @@ Other:
 Requirements:
 - arcadedb-embedded
 - MovieLens dataset (downloaded via download_data.py)
-- JRE 21+
 - Sufficient JVM heap memory (8GB recommended for large dataset)
 
 Usage:

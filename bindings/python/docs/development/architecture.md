@@ -499,7 +499,7 @@ The Python binding is distributed as a **single, self-contained package** (`arca
 
 **Features:**
 
-- **Bundled JRE**: Includes a minimal Java 21 Runtime Environment (JRE) via the `arcadedb-embedded-jre` package.
+- **Bundled JRE**: Includes a minimal Java 25 Runtime Environment (JRE) via the `arcadedb-embedded-jre` package.
 - **Full Feature Set**: Includes all ArcadeDB engines (SQL, OpenCypher, GraphQL, MongoDB).
 - **Zero Configuration**: No external Java installation required.
 

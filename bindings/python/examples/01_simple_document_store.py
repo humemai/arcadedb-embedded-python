@@ -18,7 +18,6 @@ Record Types Used:
 
 Requirements:
 - arcadedb-embedded
-- JRE 21+
 
 Note: This example creates a database at ./my_test_databases/task_db/
       The database files are preserved so you can inspect them after running.
