@@ -20,9 +20,7 @@ on:
         default: true
 
 permissions:
-  contents: write  # Need write to push to gh-pages branch
-  pages: write
-  id-token: write
+  contents: read
 
 # Allow only one concurrent deployment
 concurrency:
@@ -35,6 +33,9 @@ jobs:
     environment:
       name: github-pages
       url: https://docs.humem.ai/arcadedb/
+    env:
+      DOCS_REPO: humemai/humemai-docs
+      DOCS_BRANCH: main
 
     steps:
       - name: Checkout repository
@@ -63,6 +64,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add humemai-docs "https://x-access-token:${{ secrets.HUMEMAI_DOCS_TOKEN }}@github.com/${{ env.DOCS_REPO }}.git"
 
       - name: Extract version from tag or input
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
@@ -87,9 +89,12 @@ jobs:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           mike deploy --push --update-aliases --prefix arcadedb \
+            --remote humemai-docs --branch ${{ env.DOCS_BRANCH }} \
             ${{ steps.version.outputs.version }} latest \
             --title "${{ steps.version.outputs.version }} (latest)"
-          mike set-default --push --prefix arcadedb latest
+          mike set-default --push --prefix arcadedb \
+            --remote humemai-docs --branch ${{ env.DOCS_BRANCH }} \
+            latest
 
       - name: Deploy with mike (not latest)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && steps.version.outputs.set_latest != 'true'
@@ -98,5 +103,6 @@ jobs:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           mike deploy --push --prefix arcadedb \
+            --remote humemai-docs --branch ${{ env.DOCS_BRANCH }} \
             ${{ steps.version.outputs.version }} \
             --title "${{ steps.version.outputs.version }}"
