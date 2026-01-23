@@ -77,11 +77,11 @@ done
 if [[ -z "$PYTHON_WITH_BUILD" ]]; then
     echo -e "${RED}❌ build module not found or broken in any Python installation${NC}"
     echo -e "${YELLOW}💡 Please ensure build module is properly installed:${NC}"
-    echo -e "${YELLOW}   1. If you have a venv, activate it and run: pip install build${NC}"
+    echo -e "${YELLOW}   1. If you have a venv, activate it and run: uv pip install build${NC}"
     echo -e "${YELLOW}   2. Otherwise, create a venv:${NC}"
     echo -e "${YELLOW}      python3 -m venv .build-env${NC}"
     echo -e "${YELLOW}      source .build-env/bin/activate${NC}"
-    echo -e "${YELLOW}      pip install build${NC}"
+    echo -e "${YELLOW}      uv pip install build${NC}"
     echo -e "${YELLOW}      ./build.sh${NC}"
     exit 1
 fi

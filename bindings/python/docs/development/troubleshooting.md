@@ -11,24 +11,25 @@ Common issues, solutions, and debugging techniques for ArcadeDB Python bindings.
 **Solutions**:
 
 1. **Verify Installation**:
-   ```bash
-   pip show arcadedb-embedded
-   pip list | grep arcadedb
-   ```
+    ```bash
+    uv pip show arcadedb-embedded
+    uv pip list | grep arcadedb
+    ```
 
 2. **Reinstall Package**:
-   ```bash
-   pip uninstall arcadedb-embedded
-   pip install arcadedb-embedded
-   ```
+    ```bash
+    uv pip uninstall arcadedb-embedded
+    uv pip install arcadedb-embedded
+    ```
 
 3. **Reinstall if wheel looks corrupted**:
     Wheels bundle the ArcadeDB JRE and JARs. If imports fail, reinstall the wheel
     (no external Java install is needed):
     ```bash
-    pip uninstall -y arcadedb-embedded
-    pip install --no-cache-dir arcadedb-embedded
+    uv pip uninstall -y arcadedb-embedded
+    uv pip install --no-cache-dir arcadedb-embedded
     ```
+
 4. **Check Python Path**:
     ```python
     import sys
@@ -1004,21 +1005,21 @@ else:
 ## Getting Help
 
 1. **Check Documentation:**
-   - [API Reference](../api/database.md)
-   - [Guides](../guide/import.md)
-   - [Examples](../examples/import.md)
+    - [API Reference](../api/database.md)
+    - [Guides](../guide/import.md)
+    - [Examples](../examples/import.md)
 
 2. **Search Issues:**
-   - [GitHub Issues](https://github.com/humemai/arcadedb-embedded-python/issues)
-   - [ArcadeDB Documentation](https://docs.arcadedb.com/)
+    - [GitHub Issues](https://github.com/humemai/arcadedb-embedded-python/issues)
+    - [ArcadeDB Documentation](https://docs.arcadedb.com/)
 
 3. **Report Bug:**
-   Include:
-   - Python version (`python --version`)
-   - Package version (`pip show arcadedb-embedded`)
-   - Minimal reproducible example
-   - Full error message with stack trace
-   - Operating system
+    Include:
+    - Python version (`python --version`)
+    - Package version (`uv pip show arcadedb-embedded`)
+    - Minimal reproducible example
+    - Full error message with stack trace
+    - Operating system
 
 ## See Also
 

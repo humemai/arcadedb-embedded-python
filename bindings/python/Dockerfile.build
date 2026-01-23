@@ -122,7 +122,12 @@ FROM python:${PYTHON_VERSION}-slim AS python-builder
 # Install minimal build tooling (no external JDK needed; we use bundled JRE)
 RUN apt-get update && apt-get install -y \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install uv for faster, deterministic installs
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 WORKDIR /build
 
@@ -148,7 +153,7 @@ COPY bindings/python/README.md ./
 COPY ../../pom.xml /arcadedb/pom.xml
 
 # Install Python build dependencies
-RUN pip install --no-cache-dir build wheel setuptools jpype1
+RUN uv pip install --system build wheel setuptools jpype1
 
 # Re-declare build args for this stage (required after FROM)
 ARG PACKAGE_NAME
@@ -197,7 +202,12 @@ FROM python:${PYTHON_VERSION}-slim AS tester
 # Keep build-essential in case pytest or wheels need compilation on some platforms
 RUN apt-get update && apt-get install -y \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install uv for faster, deterministic installs
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 WORKDIR /test
 
@@ -205,7 +215,7 @@ WORKDIR /test
 COPY --from=python-builder /build/dist/*.whl /tmp/
 
 # Install the wheel and test dependencies
-RUN pip install --no-cache-dir /tmp/*.whl pytest pytest-cov
+RUN uv pip install --system /tmp/*.whl pytest pytest-cov
 
 # Copy tests
 COPY --from=python-builder /build/tests ./tests/

@@ -7,7 +7,7 @@ consistent, pinned versions for reproducibility, and systematically
 injects NULL values for comprehensive testing.
 
 Features:
-- Progress bars for all long-running operations (requires tqdm: pip install tqdm)
+- Progress bars for all long-running operations (requires tqdm: uv pip install tqdm)
 - Timing measurements for performance monitoring
 - Memory-efficient streaming for large files
 - Smart sampling for fast verification (100K rows)
@@ -299,7 +299,7 @@ def download_stackoverflow(size="small"):
         import py7zr
     except ImportError:
         print("[ERROR] Missing dependency: py7zr")
-        print("   Install with: pip install py7zr")
+        print("   Install with: uv pip install py7zr")
         raise
 
     # Create data directory
@@ -724,7 +724,7 @@ Examples:
   python download_data.py stackoverflow-small --verify-only  # Verify existing
 
 Note: Stack Exchange datasets require py7zr library:
-  pip install py7zr
+    uv pip install py7zr
 
 NULL Handling:
   MovieLens (CSV): NULL injection enabled by default (use --no-nulls to skip)

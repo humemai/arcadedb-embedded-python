@@ -326,7 +326,7 @@ fi
 echo ""
 echo -e "${BLUE}💡 Next steps:${NC}"
 echo -e "   📦 Install the package:"
-echo -e "      ${YELLOW}pip install dist/arcadedb_embedded-*.whl${NC}"
+echo -e "      ${YELLOW}uv pip install dist/arcadedb_embedded-*.whl${NC}"
 echo ""
 echo -e "   🧪 Run tests:"
 echo -e "      ${YELLOW}pytest tests/${NC}"

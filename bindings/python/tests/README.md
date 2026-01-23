@@ -15,7 +15,7 @@ Comprehensive test suite for the ArcadeDB Python embedded bindings.
 
 ```bash
 # Install dependencies
-pip install pytest pytest-cov
+uv pip install pytest pytest-cov
 
 # Run all tests
 pytest

@@ -4414,7 +4414,7 @@ class Phase3VectorEmbeddings:
             print(f"  ✓ sentence-transformers {sentence_transformers.__version__}")
         except ImportError:
             print("  ❌ sentence-transformers not found")
-            print("     Install: pip install sentence-transformers")
+            print("     Install: uv pip install sentence-transformers")
             sys.exit(1)
 
         try:
@@ -4423,7 +4423,7 @@ class Phase3VectorEmbeddings:
             print(f"  ✓ numpy {numpy.__version__}")
         except ImportError:
             print("  ❌ numpy not found")
-            print("     Install: pip install numpy")
+            print("     Install: uv pip install numpy")
             sys.exit(1)
 
         print()
@@ -5307,7 +5307,7 @@ class Phase4Analytics:
             print(f"  ✓ sentence-transformers {sentence_transformers.__version__}")
         except ImportError:
             print("  ❌ sentence-transformers not found")
-            print("     Install: pip install sentence-transformers")
+            print("     Install: uv pip install sentence-transformers")
             sys.exit(1)
 
         try:
@@ -5316,7 +5316,7 @@ class Phase4Analytics:
             print(f"  ✓ numpy {numpy.__version__}")
         except ImportError:
             print("  ❌ numpy not found")
-            print("     Install: pip install numpy")
+            print("     Install: uv pip install numpy")
             sys.exit(1)
 
         print()

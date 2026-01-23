@@ -25,7 +25,7 @@ Quick links:
 ### Installation
 
 ```bash
-pip install arcadedb-embedded
+uv pip install arcadedb-embedded
 ```
 
 **Requirements:**
@@ -143,8 +143,8 @@ source .venv/bin/activate
 .venv\Scripts\activate
 
 # Install build and test dependencies
-pip install build
-pip install -e ".[test]"
+uv pip install build
+uv pip install -e ".[test]"
 ```
 
 ### Build the Package

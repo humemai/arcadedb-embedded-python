@@ -155,11 +155,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Setup UV package manager
+        shell: bash
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv --version
+
       - name: Install Python build dependencies
         shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install build wheel setuptools
+          uv pip install --system build wheel setuptools
 
       # Windows currently disabled, no symlink needed
       # - name: Create python3 symlink (Windows only)
@@ -183,7 +188,7 @@ jobs:
         shell: bash
         run: |
           cd bindings/python
-          pip install dist/*embed*.whl
+          uv pip install --system dist/*embed*.whl
 
       - name: Install example dependencies
         shell: bash
@@ -193,18 +198,18 @@ jobs:
           # For Python 3.13+, wheels might only be on PyTorch official index
           if [[ "$OSTYPE" == "darwin"* ]]; then
             # macOS: Install CPU-only PyTorch (supports MPS acceleration)
-            pip install torch --index-url https://download.pytorch.org/whl/cpu
-            pip install "numpy<2.0" requests sentence-transformers
+            uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
+            uv pip install --system "numpy<2.0" requests sentence-transformers
           else
             # Linux & Windows: Install CPU-only PyTorch to save space (avoid CUDA)
-            pip install torch --index-url https://download.pytorch.org/whl/cpu
-            pip install numpy requests sentence-transformers
+            uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
+            uv pip install --system numpy requests sentence-transformers
           fi
 
       - name: Download datasets
         shell: bash
         run: |
-          pip install tqdm py7zr lxml
+          uv pip install --system tqdm py7zr lxml
           cd bindings/python/examples
           echo "📥 Downloading MovieLens Small dataset..."
           python3 download_data.py movielens-small
