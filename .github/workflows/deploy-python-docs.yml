@@ -44,6 +44,7 @@ jobs:
         with:
           fetch-depth: 0  # Full history for mike versioning
           token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
       - name: Set up Python
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
@@ -64,7 +65,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add humemai-docs "https://x-access-token:${{ secrets.HUMEMAI_DOCS_TOKEN }}@github.com/${{ env.DOCS_REPO }}.git"
+          if [ -z "${{ secrets.HUMEMAI_DOCS_TOKEN }}" ]; then
+            echo "HUMEMAI_DOCS_TOKEN is missing"
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${{ secrets.HUMEMAI_DOCS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+          git remote add humemai-docs "https://github.com/${{ env.DOCS_REPO }}.git"
 
       - name: Extract version from tag or input
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
