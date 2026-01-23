@@ -182,5 +182,5 @@ with arcadedb.create_database("./import_demo") as db:
 
 View the complete import example source code:
 
-- [`examples/04_csv_import_documents.py`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/04_csv_import_documents.py)
-- [`examples/05_csv_import_graph.py`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/05_csv_import_graph.py)
+- [`examples/04_csv_import_documents.py`]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/04_csv_import_documents.py)
+- [`examples/05_csv_import_graph.py`]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/05_csv_import_graph.py)

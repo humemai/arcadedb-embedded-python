@@ -1,8 +1,8 @@
 # ResultSet Tests
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py){ .md-button }
 
-These notes mirror the Python tests in [test_resultset.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py). There are 12 tests that exercise list/DataFrame conversion, chunking, counting, first/one helpers, iteration, empty handling, reusability, and metadata access.
+These notes mirror the Python tests in [test_resultset.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py). There are 12 tests that exercise list/DataFrame conversion, chunking, counting, first/one helpers, iteration, empty handling, reusability, and metadata access.
 
 ## What the tests cover
 
@@ -16,40 +16,40 @@ These notes mirror the Python tests in [test_resultset.py](https://github.com/hu
 ## Test-by-test
 
 ### to_list
-Inserts Alice/Bob/Charlie, queries ordered by name, and calls `to_list(convert_types=True)` to get three dicts. Validates ordering and types. See [test_resultset.py#L6-L41](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L6-L41).
+Inserts Alice/Bob/Charlie, queries ordered by name, and calls `to_list(convert_types=True)` to get three dicts. Validates ordering and types. See [test_resultset.py#L6-L41]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L6-L41).
 
 ### to_dataframe
-Skips if pandas is absent. Inserts three `Product` rows, converts with `to_dataframe(convert_types=True)`, checks columns, length 3, and that the stock sum is 225. See [test_resultset.py#L44-L94](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L44-L94).
+Skips if pandas is absent. Inserts three `Product` rows, converts with `to_dataframe(convert_types=True)`, checks columns, length 3, and that the stock sum is 225. See [test_resultset.py#L44-L94]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L44-L94).
 
 ### iter_chunks
-Creates 250 `Item` docs, iterates with `iter_chunks(size=100)`, and asserts chunk sizes 100/100/50 plus boundary values (ids 0, 99, 200, 249). See [test_resultset.py#L97-L137](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L97-L137).
+Creates 250 `Item` docs, iterates with `iter_chunks(size=100)`, and asserts chunk sizes 100/100/50 plus boundary values (ids 0, 99, 200, 249). See [test_resultset.py#L97-L137]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L97-L137).
 
 ### count
-Inserts 50 `Counter` docs and calls `count()` (no list conversion). Expects 50. See [test_resultset.py#L140-L159](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L140-L159).
+Inserts 50 `Counter` docs and calls `count()` (no list conversion). Expects 50. See [test_resultset.py#L140-L159]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L140-L159).
 
 ### first
-Inserts three `FirstTest` values, orders ascending, and expects `first()` to return the row with `value == "first"`. Empty query returns `None`. See [test_resultset.py#L162-L187](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L162-L187).
+Inserts three `FirstTest` values, orders ascending, and expects `first()` to return the row with `value == "first"`. Empty query returns `None`. See [test_resultset.py#L162-L187]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L162-L187).
 
 ### one
-Inserts unique and duplicate `OneTest` rows. `one()` returns the unique row, raises `ValueError` on empty or multiple results (asserts message contains "no results" or "multiple"). See [test_resultset.py#L190-L227](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L190-L227).
+Inserts unique and duplicate `OneTest` rows. `one()` returns the unique row, raises `ValueError` on empty or multiple results (asserts message contains "no results" or "multiple"). See [test_resultset.py#L190-L227]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L190-L227).
 
 ### iteration patterns
-Inserts ten `IterTest` docs. Uses list comprehension over the ResultSet, confirms 0..9, converts to list again, and checks `first()` on a DESC query returns 9. See [test_resultset.py#L230-L255](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L230-L255).
+Inserts ten `IterTest` docs. Uses list comprehension over the ResultSet, confirms 0..9, converts to list again, and checks `first()` on a DESC query returns 9. See [test_resultset.py#L230-L255]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L230-L255).
 
 ### repr
-Inserts one `ReprTest` row and asserts `repr(result)` is a string containing "Result" and properties. See [test_resultset.py#L258-L280](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L258-L280).
+Inserts one `ReprTest` row and asserts `repr(result)` is a string containing "Result" and properties. See [test_resultset.py#L258-L280]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L258-L280).
 
 ### complex queries
-Creates 100 `Sales` rows with regions cycling North/South/East/West and decimal amounts. Aggregation query groups by region; each group count is 25. A filtered/ordered query for North returns the highest amount via `first()`. See [test_resultset.py#L283-L331](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L283-L331).
+Creates 100 `Sales` rows with regions cycling North/South/East/West and decimal amounts. Aggregation query groups by region; each group count is 25. A filtered/ordered query for North returns the highest amount via `first()`. See [test_resultset.py#L283-L331]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L283-L331).
 
 ### empty handling
-Runs `SELECT FROM EmptyTest` with no rows. `to_list()` returns `[]`, `count()` returns 0, `first()` returns `None`, and `iter_chunks(size=10)` yields no chunks. See [test_resultset.py#L334-L361](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L334-L361).
+Runs `SELECT FROM EmptyTest` with no rows. `to_list()` returns `[]`, `count()` returns 0, `first()` returns `None`, and `iter_chunks(size=10)` yields no chunks. See [test_resultset.py#L334-L361]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L334-L361).
 
 ### reusability
-Iterating a `ResultSet` consumes it: first iteration returns two `ReuseTest` rows; the second is empty. A fresh query yields two rows again. See [test_resultset.py#L364-L389](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L364-L389).
+Iterating a `ResultSet` consumes it: first iteration returns two `ReuseTest` rows; the second is empty. A fresh query yields two rows again. See [test_resultset.py#L364-L389]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L364-L389).
 
 ### get_rid and get_vertex
-For a `Person` vertex, `get_rid()` returns a string starting with `#`, and `get_vertex()` returns the underlying Java vertex with `name == 'Alice'`. See [test_resultset.py#L392-L419](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_resultset.py#L392-L419).
+For a `Person` vertex, `get_rid()` returns a string starting with `#`, and `get_vertex()` returns the underlying Java vertex with `name == 'Alice'`. See [test_resultset.py#L392-L419]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_resultset.py#L392-L419).
 
 ## Handy patterns from the tests
 
