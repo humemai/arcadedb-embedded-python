@@ -93,6 +93,12 @@ jobs:
           token: ${{ secrets.HUMEMAI_DOCS_TOKEN }}
           path: humemai-docs
 
+      - name: Configure Git (humemai-docs)
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+        run: |
+          git -C humemai-docs config user.name "github-actions[bot]"
+          git -C humemai-docs config user.email "github-actions[bot]@users.noreply.github.com"
+
       - name: Deploy with mike (set as latest)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && steps.version.outputs.set_latest == 'true'
         working-directory: humemai-docs
