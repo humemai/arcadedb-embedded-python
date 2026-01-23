@@ -2,7 +2,7 @@
 
 The `test_async_executor.py` file contains **8 tests** covering asynchronous operations and parallel execution.
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_async_executor.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_async_executor.py){ .md-button }
 
 ## Overview
 

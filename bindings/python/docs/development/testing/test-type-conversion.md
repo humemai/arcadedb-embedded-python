@@ -1,8 +1,8 @@
 # Type Conversion Tests
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_type_conversion.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py){ .md-button }
 
-These notes mirror the Python tests in [test_type_conversion.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_type_conversion.py). There are 10 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), datetime types, Decimal, collections (list, set, dict), binary, and round-trip verification. See [test_type_conversion.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_type_conversion.py) for all test implementations.
+These notes mirror the Python tests in [test_type_conversion.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py). There are 10 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), datetime types, Decimal, collections (list, set, dict), binary, and round-trip verification. See [test_type_conversion.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py) for all test implementations.
 
 ## Key Types
 
