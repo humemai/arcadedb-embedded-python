@@ -172,12 +172,7 @@ jobs:
           echo "📊 Wheel count: $WHEEL_COUNT (expected: 3)"
 
           echo ""
-          echo "ℹ️  Platforms not on PyPI (available via GitHub Releases):"
-          echo "   - darwin-amd64 (~3-5%): Intel Macs can use darwin-arm64 via Rosetta 2"  # formerly on PyPI
-          echo "   - windows-amd64 (~85-90% of Windows)"                                 # formerly on PyPI
-          echo "   - windows-arm64 (~1-2%): Surface Pro X"
-          echo ""
-          echo "   Current PyPI coverage: linux x86_64, linux arm64, macOS Apple Silicon"
+          echo "ℹ️  Current PyPI platforms: linux x86_64, linux arm64, macOS Apple Silicon"
 
           if [ "$WHEEL_COUNT" -ne 3 ]; then
             echo "❌ Expected 3 wheels (3 main platforms), got $WHEEL_COUNT"
@@ -295,28 +290,17 @@ jobs:
 
             ### 📦 Installation
 
-            **Recommended (PyPI - 3 main platforms):**
+            **Recommended (PyPI):**
             ```bash
             pip install arcadedb-embedded==${{ needs.validate-version.outputs.python-version }}
             ```
 
-            **Alternative (GitHub - all 6 platforms):**
-            ```bash
-            # For platforms not on PyPI (see below)
-            pip install https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/arcadedb_embedded-${{ needs.validate-version.outputs.python-version }}-py3-none-<platform>.whl
-            ```
-
             ### 🌍 Supported Platforms
 
-            **Available on PyPI** (~90% of developers):
+            **Available on PyPI**:
             - ✅ **Linux x86_64** (servers, CI/CD, Docker, cloud)
-            - ✅ **macOS Apple Silicon** (M1/M2/M3/M4, also works on Intel Macs via Rosetta 2)
-            - ✅ **Windows x64** (most Windows users)
-
-            **Available via GitHub Releases only** (~10% of developers):
-            - ⬇️ **macOS Intel** (2019-2020 Macs) - *Can use Apple Silicon wheel via Rosetta 2*
-            - ⬇️ **Linux ARM64** (Raspberry Pi, AWS Graviton)
-            - ⬇️ **Windows ARM64** (Surface Pro X)
+            - ✅ **Linux ARM64** (Raspberry Pi, AWS Graviton)
+            - ✅ **macOS Apple Silicon** (M1/M2/M3/M4)
 
             ### 📚 Links
             - [PyPI Package](https://pypi.org/project/arcadedb-embedded/${{ needs.validate-version.outputs.python-version }}/)
@@ -324,19 +308,16 @@ jobs:
             - [Examples](https://github.com/${{ github.repository }}/tree/main/bindings/python/examples)
 
             ### 🔽 Direct Downloads
-            All 6 platform-specific wheels are attached below. Most users should install via pip (auto-selects correct wheel).
+            All available wheels are attached below. Most users should install via pip (auto-selects correct wheel).
 
             ---
-            **Note**: PyPI distribution limited to 3 main platforms to reduce storage (~50% savings). All platforms available here.
-
-            **Intel Mac users**: Use the Apple Silicon wheel (works via Rosetta 2) or download the native Intel wheel below for maximum performance.
-
             **Based on ArcadeDB v${{ needs.validate-version.outputs.base-version }}**
 
   update-pypi-index:
     name: Update PyPI simple index on GitHub Pages (All 6 platforms)
     needs: [validate-version, github-release]
     runs-on: ubuntu-latest
+    if: false
     permissions:
       contents: write
     env:
