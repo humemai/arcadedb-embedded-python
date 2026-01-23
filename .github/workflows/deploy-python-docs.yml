@@ -99,18 +99,6 @@ jobs:
           git -C humemai-docs config user.name "github-actions[bot]"
           git -C humemai-docs config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Clean existing docs output
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-        working-directory: humemai-docs
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          SET_LATEST: ${{ steps.version.outputs.set_latest }}
-        run: |
-          rm -rf "arcadedb/${VERSION}"
-          if [ "$SET_LATEST" = "true" ]; then
-            rm -rf "arcadedb/latest"
-          fi
-
       - name: Deploy with mike (set as latest)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && steps.version.outputs.set_latest == 'true'
         working-directory: humemai-docs
