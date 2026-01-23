@@ -68,7 +68,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
 ```bash
 # Install test dependencies
-pip install pytest pytest-cov
+uv pip install pytest pytest-cov
 ```
 
 ### Running Tests
