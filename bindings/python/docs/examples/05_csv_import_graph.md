@@ -1,6 +1,6 @@
 # Example 05: CSV Import - Graph
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/05_csv_import_graph.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/05_csv_import_graph.py){ .md-button }
 
 **Production-ready graph creation from MovieLens dataset with comprehensive performance analysis**
 
