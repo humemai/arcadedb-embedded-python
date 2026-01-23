@@ -1,6 +1,6 @@
 # Example 07: Stack Overflow Multi-Model Database
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/07_stackoverflow_multimodel.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/07_stackoverflow_multimodel.py){ .md-button }
 
 This example demonstrates a complete **multi-model workflow** using the Stack Overflow
 data dump. It combines **Documents**, **Graph**, and **Vectors** into a single cohesive
