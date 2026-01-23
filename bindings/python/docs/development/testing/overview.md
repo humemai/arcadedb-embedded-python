@@ -31,7 +31,7 @@ The test suite covers:
 ### Install Test Dependencies
 
 ```bash
-pip install pytest pytest-cov
+uv pip install pytest pytest-cov
 ```
 
 ### Run All Tests
