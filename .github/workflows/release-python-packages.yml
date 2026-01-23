@@ -293,7 +293,7 @@ jobs:
 
             **Recommended (PyPI):**
             ```bash
-            pip install arcadedb-embedded==${{ needs.validate-version.outputs.python-version }}
+            uv pip install arcadedb-embedded==${{ needs.validate-version.outputs.python-version }}
             ```
 
             ### 🌍 Supported Platforms
@@ -309,7 +309,7 @@ jobs:
             - [Examples](https://github.com/${{ github.repository }}/tree/main/bindings/python/examples)
 
             ### 🔽 Direct Downloads
-            All available wheels are attached below. Most users should install via pip (auto-selects correct wheel).
+            All available wheels are attached below. Most users should install via uv (auto-selects correct wheel).
 
             ---
             **Based on ArcadeDB v${{ needs.validate-version.outputs.base-version }}**
@@ -349,7 +349,7 @@ jobs:
             <body>
               <h1>Links for arcadedb-embedded</h1>
               <p><strong>Alternative PyPI index with all 6 platforms</strong> (official PyPI only has 3 main platforms)</p>
-              <p>Usage: <code>pip install --extra-index-url https://humemai.github.io/arcadedb-embedded-python/simple arcadedb-embedded</code></p>
+              <p>Usage: <code>uv pip install --extra-index-url https://humemai.github.io/arcadedb-embedded-python/simple arcadedb-embedded</code></p>
               <p><em>Note: Intel Mac users can use the Apple Silicon wheel via Rosetta 2, or download the native Intel wheel for best performance.</em></p>
               <hr/>
           EOF

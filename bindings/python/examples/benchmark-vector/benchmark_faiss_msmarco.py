@@ -40,7 +40,7 @@ except Exception:  # pragma: no cover - fallback when psutil missing
 try:
     import faiss
 except ImportError as exc:  # pragma: no cover
-    raise SystemExit("faiss is required (pip install faiss-cpu)") from exc
+    raise SystemExit("faiss is required (uv pip install faiss-cpu)") from exc
 
 META_FILENAME_RE = re.compile(r"msmarco-passages-(.+?)\.meta\.json")
 GT_FILENAME_RE = re.compile(r"msmarco-passages-(.+?)\.gt")
