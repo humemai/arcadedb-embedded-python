@@ -13,7 +13,7 @@ cd arcadedb-embedded-python/bindings/python
 ./build.sh base
 
 # Install in development mode
-pip install -e .
+uv pip install -e .
 
 # Run tests
 pytest tests/
@@ -62,10 +62,10 @@ venv\Scripts\activate     # Windows
 
 ```bash
 # Install package in editable mode
-pip install -e ".[dev,vector]"
+uv pip install -e ".[dev,vector]"
 
 # Or manually install dependencies
-pip install pytest pytest-cov black isort mypy numpy
+uv pip install pytest pytest-cov black isort mypy numpy
 ```
 
 4. **Verify Setup**
@@ -184,14 +184,14 @@ python setup_jars.py
 python -m build
 
 # Install locally
-pip install dist/*.whl
+uv pip install dist/*.whl
 ```
 
 ### Development Install
 
 ```bash
 # Install in editable mode (no wheel needed)
-pip install -e .
+uv pip install -e .
 
 # Changes to Python code take effect immediately
 # No reinstall needed
@@ -449,7 +449,7 @@ class Database:
 
 ```bash
 # Install mkdocs
-pip install mkdocs mkdocs-material
+uv pip install mkdocs mkdocs-material
 
 # Serve locally (hot reload)
 mkdocs serve
@@ -722,7 +722,7 @@ ls -lh dist/
 
 ```bash
 # Test the wheel
-pip install dist/arcadedb_embed-*.whl
+uv pip install dist/arcadedb_embed-*.whl
 python -c "import arcadedb_embedded; print('✅ Package OK')"
 ```
 
@@ -730,13 +730,13 @@ python -c "import arcadedb_embedded; print('✅ Package OK')"
 
 ```bash
 # Install twine
-pip install twine
+uv pip install twine
 
 # Upload to Test PyPI first
 twine upload --repository testpypi dist/*
 
 # Test install from Test PyPI
-pip install --index-url https://test.pypi.org/simple/ arcadedb-embedded
+uv pip install --index-url https://test.pypi.org/simple/ arcadedb-embedded
 
 # Upload to production PyPI
 twine upload dist/*
@@ -772,10 +772,10 @@ twine upload dist/*
 
 ```bash
 # Update JPype
-pip install --upgrade jpype1
+uv pip install --upgrade jpype1
 
 # Update dev dependencies
-pip install --upgrade pytest black mypy
+uv pip install --upgrade pytest black mypy
 
 # Update in pyproject.toml
 [project]
