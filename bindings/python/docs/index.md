@@ -163,7 +163,7 @@ We provide a **single, self-contained package** that works on all major platform
 
 | Platform | Package Name | Size | What's Included |
 |----------|-------------|------|-----------------|
-| **All Platforms** | `arcadedb-embedded` | ~209-215MB | Full ArcadeDB + Bundled JRE + Studio UI |
+| **All Platforms** | `arcadedb-embedded` | ~116MB | Full ArcadeDB + Bundled JRE + Studio UI |
 
 The package uses the standard import:
 
@@ -172,7 +172,7 @@ import arcadedb_embedded as arcadedb
 ```
 
 !!! success "No Java Installation Required!"
-    The package includes a bundled Java 21 Runtime Environment (JRE) optimized for ArcadeDB.
+    The package includes a bundled Java 25 Runtime Environment (JRE) optimized for ArcadeDB.
     You do **not** need to install Java separately on your system.
 
 ## Getting Started
@@ -203,9 +203,13 @@ import arcadedb_embedded as arcadedb
 - **OS**: Linux, macOS, or Windows (x86_64 or ARM64)
 
 !!! note "Self-Contained"
-    Everything needed to run ArcadeDB is included in the wheel: **Bundled JRE**
-    (Platform-specific Java 21 runtime, ~63MB), **ArcadeDB JARs** (Core database engine,
-    ~226MB), **JPype** (Bridge between Python and the bundled JVM).
+    Everything needed to run ArcadeDB is included in the wheel (~116MB):
+
+    - **Bundled JRE**
+    (Platform-specific Java 25 runtime trimmed with jlink to only what's required for ArcadeDB, ~249MB uncompressed)
+    - **ArcadeDB JARs**
+    (~32MB uncompressed)
+    - **JPype** (Bridge between Python and the bundled JVM)
 
 ## Community & Support
 

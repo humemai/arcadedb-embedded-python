@@ -143,7 +143,7 @@ jobs:
 #### macOS/Windows Platforms (Native)
 1. Download pre-filtered JARs artifact
 2. Run `build-native.sh`:
-   - Uses system Java (GitHub runner provides Java 21)
+   - Uses system Java (GitHub runner provides Java 25)
    - Runs `jlink` natively → platform-specific JRE
    - Builds wheel with `python -m build`
 3. Run tests on native platform

@@ -1,8 +1,8 @@
 # Database Utilities Tests
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_database_utils.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_database_utils.py){ .md-button }
 
-These notes mirror the Python tests in [test_database_utils.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_database_utils.py). There are 5 tests covering database creation helpers, schema initialization, test data generation, cleanup utilities, and type counting. See [test_database_utils.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_database_utils.py) for details.
+These notes mirror the Python tests in [test_database_utils.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_database_utils.py). There are 5 tests covering database creation helpers, schema initialization, test data generation, cleanup utilities, and type counting. See [test_database_utils.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_database_utils.py) for details.
 
 ### test_create_test_database
 Tests database creation helper functions.
