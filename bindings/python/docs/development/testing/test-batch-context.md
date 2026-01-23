@@ -2,7 +2,7 @@
 
 The `test_batch_context.py` file contains **13 tests** covering high-level batch operations with progress tracking.
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_batch_context.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_batch_context.py){ .md-button }
 
 ## Overview
 
