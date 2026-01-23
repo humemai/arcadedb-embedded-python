@@ -27,7 +27,7 @@ cd bindings/python
 ./build.sh
 
 # Test distribution
-pip install dist/arcadedb_embedded-*.whl
+uv pip install dist/arcadedb_embedded-*.whl
 pytest
 ```
 
@@ -205,7 +205,7 @@ If you need to roll back a broken release:
 
 ```bash
 # Install twine
-pip install twine
+uv pip install twine
 
 # Yank the release (makes it unavailable for new installs)
 twine yank arcadedb-embedded 25.9.1
@@ -217,7 +217,7 @@ twine yank arcadedb-embedded 25.9.1
 cd bindings/python
 
 # Install mike
-pip install mike
+uv pip install mike
 
 # Delete version from docs
 mike delete 25.9.1 --push

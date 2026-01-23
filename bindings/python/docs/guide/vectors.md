@@ -6,7 +6,7 @@ Python bindings build and query vector indexes (JVector) in embedded mode.
 ## Quick Start (Embedded, Minimal)
 
 ```bash
-pip install arcadedb-embedded numpy
+uv pip install arcadedb-embedded numpy
 ```
 
 ```python

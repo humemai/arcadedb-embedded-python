@@ -323,7 +323,7 @@ mkdocs serve
 Install dependencies:
 
 ```bash
-pip install mkdocs-material mkdocs-git-revision-date-localized-plugin
+uv pip install mkdocs-material mkdocs-git-revision-date-localized-plugin
 ```
 
 ### Changes not appearing
