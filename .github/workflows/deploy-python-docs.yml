@@ -88,11 +88,11 @@ jobs:
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          mike deploy --push --update-aliases --prefix arcadedb \
+          mike deploy --push --update-aliases --deploy-prefix arcadedb \
             --remote humemai-docs --branch ${{ env.DOCS_BRANCH }} \
             ${{ steps.version.outputs.version }} latest \
             --title "${{ steps.version.outputs.version }} (latest)"
-          mike set-default --push --prefix arcadedb \
+          mike set-default --push --deploy-prefix arcadedb \
             --remote humemai-docs --branch ${{ env.DOCS_BRANCH }} \
             latest
 
@@ -102,7 +102,7 @@ jobs:
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          mike deploy --push --prefix arcadedb \
+          mike deploy --push --deploy-prefix arcadedb \
             --remote humemai-docs --branch ${{ env.DOCS_BRANCH }} \
             ${{ steps.version.outputs.version }} \
             --title "${{ steps.version.outputs.version }}"
