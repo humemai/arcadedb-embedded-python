@@ -71,7 +71,7 @@ server = arcadedb.create_server(
 | `host` | "0.0.0.0" | Host to bind to |
 | `mode` | "development" | Server mode (`development` or `production`) |
 
-## Multi-Process Access {#multi-process-access}
+## Multi-Process Access
 
 ArcadeDB's embedded mode uses file-based locking, which prevents multiple processes from accessing the same database simultaneously. **Server mode solves this problem** by providing a central HTTP endpoint that multiple processes (or applications) can connect to.
 
