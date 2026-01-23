@@ -1,8 +1,8 @@
 # NumPy Support Tests
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_numpy_support.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_numpy_support.py){ .md-button }
 
-These notes mirror the Python tests in [test_numpy_support.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_numpy_support.py). There are 3 tests covering NumPy array storage, retrieval, and vector search integration. See [test_numpy_support.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_numpy_support.py) for implementations.
+These notes mirror the Python tests in [test_numpy_support.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_numpy_support.py). There are 3 tests covering NumPy array storage, retrieval, and vector search integration. See [test_numpy_support.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_numpy_support.py) for implementations.
 
 ## Coverage
 
