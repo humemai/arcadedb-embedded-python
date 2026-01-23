@@ -58,7 +58,7 @@ jobs:
         working-directory: bindings/python
         run: |
           pip install --upgrade pip
-          pip install mkdocs-material mkdocs-git-revision-date-localized-plugin
+          pip install mkdocs-material mkdocs-git-revision-date-localized-plugin mike
 
       - name: Validate docs token
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
@@ -93,45 +93,42 @@ jobs:
           token: ${{ secrets.HUMEMAI_DOCS_TOKEN }}
           path: humemai-docs
 
-      - name: Build documentation
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-        working-directory: bindings/python
+      - name: Deploy with mike (set as latest)
+        if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && steps.version.outputs.set_latest == 'true'
+        working-directory: humemai-docs
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          mkdocs build -f mkdocs.yml -d /tmp/site
+          mike deploy --update-aliases \
+            --deploy-prefix arcadedb \
+            --branch ${{ env.DOCS_BRANCH }} \
+            --config-file ../bindings/python/mkdocs.yml \
+            ${{ steps.version.outputs.version }} latest \
+            --title "${{ steps.version.outputs.version }}"
+          mike set-default \
+            --deploy-prefix arcadedb \
+            --branch ${{ env.DOCS_BRANCH }} \
+            latest
 
-      - name: Publish docs to humemai-docs
+      - name: Deploy with mike (not latest)
+        if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && steps.version.outputs.set_latest != 'true'
+        working-directory: humemai-docs
+        env:
+          MIKE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mike deploy \
+            --deploy-prefix arcadedb \
+            --branch ${{ env.DOCS_BRANCH }} \
+            --config-file ../bindings/python/mkdocs.yml \
+            ${{ steps.version.outputs.version }} \
+            --title "${{ steps.version.outputs.version }}"
+
+      - name: Commit and push docs
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+        working-directory: humemai-docs
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          SET_LATEST: ${{ steps.version.outputs.set_latest }}
         run: |
-          set -e
-          DEST="humemai-docs/arcadedb/${VERSION}"
-          mkdir -p "$DEST"
-          rsync -a --delete /tmp/site/ "$DEST/"
-
-          if [ "$SET_LATEST" = "true" ]; then
-            mkdir -p humemai-docs/arcadedb/latest
-            rsync -a --delete /tmp/site/ humemai-docs/arcadedb/latest/
-            cat > humemai-docs/arcadedb/index.html <<'EOF'
-          <!doctype html>
-          <html lang="en">
-            <head>
-              <meta charset="utf-8" />
-              <meta http-equiv="refresh" content="0; url=/arcadedb/latest/" />
-              <meta name="robots" content="noindex" />
-              <title>Redirecting…</title>
-            </head>
-            <body>
-              <p>Redirecting to <a href="/arcadedb/latest/">/arcadedb/latest/</a></p>
-            </body>
-          </html>
-          EOF
-          fi
-
-          cd humemai-docs
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add arcadedb
