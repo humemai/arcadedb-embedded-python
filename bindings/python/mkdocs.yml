@@ -1,5 +1,5 @@
 site_name: ArcadeDB Python Bindings
-site_url: https://humemai.github.io/arcadedb-embedded-python
+site_url: https://docs.humem.ai/arcadedb
 site_description: Native Python bindings for ArcadeDB - the multi-model database
 site_author: humemai
 repo_url: https://github.com/humemai/arcadedb-embedded-python
