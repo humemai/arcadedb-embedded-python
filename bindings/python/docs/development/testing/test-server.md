@@ -1,12 +1,12 @@
 # Server Tests
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_server.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_server.py){ .md-button }
 
-These notes mirror the Python tests in [test_server.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_server.py). There are 4 tests covering server creation, database operations, custom config, and context managers. For advanced patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
+These notes mirror the Python tests in [test_server.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_server.py). There are 4 tests covering server creation, database operations, custom config, and context managers. For advanced patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
 
 ## Test Cases
 
-All 4 tests verify basic server workflows: starting server, creating/accessing databases, ensuring databases persist, and proper cleanup. See [test_server.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_server.py) for implementation.
+All 4 tests verify basic server workflows: starting server, creating/accessing databases, ensuring databases persist, and proper cleanup. See [test_server.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_server.py) for implementation.
 
 ## Quick Example
 
