@@ -1,6 +1,6 @@
 # Vector Search - Semantic Similarity
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/03_vector_search.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/03_vector_search.py){ .md-button }
 
 ## Overview
 
