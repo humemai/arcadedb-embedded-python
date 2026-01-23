@@ -1,6 +1,6 @@
 # Schema Tests
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_schema.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_schema.py){ .md-button }
 
 ## Overview
 
