@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: https://humemai.github.io/arcadedb-embedded-python/
+      url: https://docs.humem.ai/arcadedb/
 
     steps:
       - name: Checkout repository
@@ -86,10 +86,10 @@ jobs:
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          mike deploy --push --update-aliases \
+          mike deploy --push --update-aliases --prefix arcadedb \
             ${{ steps.version.outputs.version }} latest \
             --title "${{ steps.version.outputs.version }} (latest)"
-          mike set-default --push latest
+          mike set-default --push --prefix arcadedb latest
 
       - name: Deploy with mike (not latest)
         if: (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && steps.version.outputs.set_latest != 'true'
@@ -97,6 +97,6 @@ jobs:
         env:
           MIKE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          mike deploy --push \
+          mike deploy --push --prefix arcadedb \
             ${{ steps.version.outputs.version }} \
             --title "${{ steps.version.outputs.version }}"
