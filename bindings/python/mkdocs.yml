@@ -119,10 +119,7 @@ extra:
     link: https://github.com/humemai/arcadedb-embedded-python
   - icon: fontawesome/brands/python
     link: https://pypi.org/project/arcadedb-embedded-python/
-
-  version:
-    provider: mike
-    default: latest
+  version: !ENV [MIKE_VERSION, latest]
 
 extra_css:
 - stylesheets/extra.css

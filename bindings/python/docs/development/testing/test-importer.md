@@ -1,8 +1,8 @@
 # Data Import Tests
 
-[View source code](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_importer.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_importer.py){ .md-button }
 
-These notes mirror the Python tests in [test_importer.py](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_importer.py). There are 16 tests focused on CSV import (documents, vertices), delimiter handling, type inference nuances, NULL/empty values, stats, error cases, batch commits, Unicode, and a small performance smoke.
+These notes mirror the Python tests in [test_importer.py]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_importer.py). There are 16 tests focused on CSV import (documents, vertices), delimiter handling, type inference nuances, NULL/empty values, stats, error cases, batch commits, Unicode, and a small performance smoke.
 
 ## Quick Start
 
@@ -37,11 +37,11 @@ with arcadedb.create_database("./mydb") as db:
 
 ### 1) CSV as documents
 
-Creates a `Person` document type and imports three rows; asserts stats `documents == 3`, `errors == 0`, and verifies properties for `Alice/New York`. See [test_importer.py#L26-L57](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_importer.py#L26-L57).
+Creates a `Person` document type and imports three rows; asserts stats `documents == 3`, `errors == 0`, and verifies properties for `Alice/New York`. See [test_importer.py#L26-L57]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_importer.py#L26-L57).
 
 ### 2) CSV as vertices
 
-Creates a `Product` vertex type and imports three rows as vertices using `typeIdProperty="id"`; asserts `vertices == 3`, `documents == 0`, and checks `name/category` values. See [test_importer.py#L60-L93](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/tests/test_importer.py#L60-L93).
+Creates a `Product` vertex type and imports three rows as vertices using `typeIdProperty="id"`; asserts `vertices == 3`, `documents == 0`, and checks `name/category` values. See [test_importer.py#L60-L93]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/tests/test_importer.py#L60-L93).
 
 ### 3) Custom delimiter (TSV)
 

@@ -12,7 +12,7 @@ Complete workflow for releasing ArcadeDB Python bindings to PyPI with versioned 
 
 ### 1. Prepare Release
 
-On `python-embedded` branch:
+On `main` (or a `release/X.Y.Z` branch if you want main to keep moving):
 
 - [ ] Version is already set in `pom.xml` (e.g., `X.Y.Z-SNAPSHOT`)
 - [ ] Run full test suite
@@ -31,152 +31,39 @@ pip install dist/arcadedb_embedded-*.whl
 pytest
 ```
 
-**Note**: Version is automatically extracted from `pom.xml` by `extract_version.py` during build. The `-SNAPSHOT` suffix is converted to `.dev0` for PEP 440 compliance.
+### 2. Tag and Release (CLI)
 
-### 2. Create GitHub Release
-
-Instead of pushing tags manually, create a GitHub Release which automatically creates the tag and triggers deployments.
-
-**Option A: Using GitHub Web UI** (Recommended)
-
-1. Go to [Releases](https://github.com/humemai/arcadedb-embedded-python/releases)
-2. Click **Draft a new release**
-3. Click **Choose a tag** dropdown
-
-2. Click **Choose a tag** → Type `vX.Y.Z-python` → **Create new tag**
-3. Target: `python-embedded`
-4. Release title: `Python release vX.Y.Z`
-5. Description/Release notes:
-
-   ```markdown
-   ## What's New
-
-   - Feature: Description
-   - Fix: Description
-   - Docs: Description
-
-   ## Installation
-
-   pip install arcadedb-embedded
-
-   ## Documentation
-
-   https://humemai.github.io/arcadedb-embedded-python/
-
-   ## Test Results
-
-   - All tests passed: 252 passed
-   ```
-
-6. Click **Publish release** (or **Save as draft** to test first)
-
-**Option B: Using GitHub CLI**
+Tags are the source of truth. Pushing `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN` triggers PyPI + docs.
+If `main` keeps moving, create all `X.Y.Z.devN`, `X.Y.Z`, and `X.Y.Z.postN` tags from `release/X.Y.Z`.
 
 ```bash
-# Commit final changes
 git add .
-git commit -m "Release Python bindings vX.Y.Z"
-git push origin python-embedded
+git commit -m "Release Python bindings X.Y.Z"
+git push origin main
 
-# Create annotated tag
-git tag -a vX.Y.Z-python -m "Python release vX.Y.Z"
-git push origin vX.Y.Z-python
+git tag -a X.Y.Z -m "Python release X.Y.Z"
+git push origin X.Y.Z
 
-# Create release from tag
-gh release create vX.Y.Z-python \
-  --target python-embedded \
-  --title "Python release vX.Y.Z" \
-  --notes "## What's New
-
-- Feature: Description
-- Fix: Description
+gh release create X.Y.Z \
+  --target main \
+  --title "Python release X.Y.Z" \
+  --notes "Release X.Y.Z"
 ```
-
-## Installation
-
-```bash
-pip install arcadedb-embedded
-```
-
-## Documentation
-
-https://humemai.github.io/arcadedb-embedded-python/
-
-## Test Results
-
-- 252 passed
-
-**What happens automatically:**
-
-- ✅ Git tag `vX.Y.Z-python` is created (annotated tag)
-- ✅ PyPI workflow builds and uploads the distribution
-- ✅ Docs workflow deploys versioned documentation
 
 ### 3. Monitor GitHub Actions
 
-Two workflows trigger automatically when you publish the release:
+- Check the Actions tab for `release-python-packages` and `deploy-python-docs`.
+- Docs deploy uses the tag version; dev tags become `latest` unless you run the docs workflow with `set_latest=false`.
 
-**PyPI Deployment** (`.github/workflows/release-python-packages.yml`):
-
-1. Builds the distribution (using Docker)
-2. Publishes to PyPI:
-   - `arcadedb-embedded`
-
-**Documentation Deployment** (`.github/workflows/deploy-python-docs.yml`):
-
-1. Extracts version from release tag (e.g., `vX.Y.Z-python` → `X.Y.Z`)
-2. Builds documentation with MkDocs + mike
-3. Deploys to GitHub Pages with version number
-4. Sets as `latest` version
-5. Updates version selector dropdown
-
-**Check progress:**
-
-- Go to **GitHub** → **Actions** tab
-- Monitor both workflows
-- Check for any failures
-- Typical duration: 10-15 minutes total
-
-### 4. Verify Deployment
-
-**PyPI Packages:**
-
-```bash
-# Check packages are live (replace VERSION with your version)
-pip index versions arcadedb-embedded
-
-# Test installation
-pip install arcadedb-embedded
-python -c "import arcadedb_embedded as arcadedb; print(arcadedb.__version__)"
-```
-
-**Documentation:**
-
-Visit:
-- **Latest**: <https://humemai.github.io/arcadedb-embedded-python/>
-- **Versioned**: <https://humemai.github.io/arcadedb-embedded-python/VERSION/> (replace VERSION)
-
-Check:
-- [ ] Version selector shows your version as `(latest)`
-- [ ] All pages load correctly
-- [ ] Search works
-- [ ] Code examples render properly
-- [ ] Links work (internal and external)
-
-### 5. Post-Release
-
-**Update Development Version:**
+### 4. Post-Release
 
 ```bash
 # Bump version in pom.xml for next development cycle
-# e.g., X.Y.Z-SNAPSHOT → X.Y.Z+1-SNAPSHOT (or whatever next version is)
-
-# Edit pom.xml, change <version> in parent POM
 vim pom.xml
 
 git add pom.xml
 git commit -m "Bump version to next development version"
-git push origin python-embedded
+git push origin main
 ```
 
 **Announce Release:**
@@ -250,8 +137,8 @@ Python bindings follow the ArcadeDB main project version from `pom.xml`:
 
 - **Format**: `MAJOR.MINOR.PATCH[.devN|.postN]`
 - **POM version**: `X.Y.Z-SNAPSHOT` (development) or `X.Y.Z` (release)
-- **Git tag**: `vX.Y.Z-python` (follows git best practices with `v` prefix)
-- **Release tag**: `vX.Y.Z-python` (GitHub Release)
+- **Git tag**: `X.Y.Z` (or `X.Y.Z.devN` / `X.Y.Z.postN`)
+- **Release tag**: `X.Y.Z` (GitHub Release)
 - **PyPI version**: `X.Y.Z[.devN|.postN]` (extracted automatically, no `v` prefix)
 - **Docs version**: `X.Y.Z` (extracted from tag, no `v` prefix)
 
@@ -261,9 +148,9 @@ Python bindings follow the ArcadeDB main project version from `pom.xml`:
 2. `extract_version.py` converts based on mode:
    - Development: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0`
    - Release: `X.Y.Z` → `X.Y.Z` (or `X.Y.Z.postN` with --python-patch)
-3. Create annotated tag: `git tag -a vX.Y.Z-python -m "Python release vX.Y.Z"`
-4. GitHub Release tag: `vX.Y.Z-python` (with `v` prefix)
-5. Workflows extract: `vX.Y.Z-python` → `X.Y.Z` (strip prefix/suffix)
+3. Create annotated tag: `git tag -a X.Y.Z -m "Python release X.Y.Z"`
+4. GitHub Release tag: `X.Y.Z`
+5. Workflows use the tag version directly: `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN`
 6. Used everywhere: PyPI (`X.Y.Z[.devN|.postN]`), docs (`/X.Y.Z/`)
 
 **When to bump:**
@@ -281,7 +168,7 @@ For urgent bug fixes on a released version:
 
 ```bash
 # 1. Create hotfix branch from tag
-git checkout -b hotfix/X.Y.Z+1 vX.Y.Z-python
+git checkout -b hotfix/X.Y.Z+1 X.Y.Z
 
 # 2. Make fixes, update version in pom.xml
 vim pom.xml  # Change to X.Y.Z+1-SNAPSHOT
@@ -295,19 +182,19 @@ git commit -am "Hotfix: description"
 git push origin hotfix/X.Y.Z+1
 
 # 5. Create annotated tag
-git tag -a vX.Y.Z+1-python -m "Python hotfix release vX.Y.Z+1"
-git push origin vX.Y.Z+1-python
+git tag -a X.Y.Z+1 -m "Python hotfix release X.Y.Z+1"
+git push origin X.Y.Z+1
 
 # 6. Create GitHub Release
-gh release create vX.Y.Z+1-python \
+gh release create X.Y.Z+1 \
   --target hotfix/X.Y.Z+1 \
-  --title "Python hotfix release vX.Y.Z+1" \
+   --title "Python hotfix release X.Y.Z+1" \
   --notes "Hotfix for critical bug in X.Y.Z"
 
-# 7. Merge back to python-embedded
-git checkout python-embedded
+# 7. Merge back to main
+git checkout main
 git merge hotfix/X.Y.Z+1
-git push origin python-embedded
+git push origin main
 ```
 
 ## Rolling Back a Release
@@ -373,7 +260,7 @@ mike set-default 25.9.0 --push
 **Version not appearing:**
 
 - Check GitHub Actions logs
-- Verify tag format: `python-*`
+- Verify tag format: `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN`
 - Manually run: `mike list` to see deployed versions
 
 **Broken links:**
@@ -394,7 +281,7 @@ mike set-default 25.9.0 --push
 
 - Run specific test: `pytest tests/test_core.py::test_name -v`
 - Check logs in `bindings/python/log/`
-- Verify Java JDK 21+ is available
+- Verify Java JDK 25+ is available
 
 ## See Also
 
