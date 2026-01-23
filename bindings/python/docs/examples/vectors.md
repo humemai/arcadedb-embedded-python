@@ -310,5 +310,5 @@ See full implementations:
 
 View the complete vector search example source code:
 
-- [`examples/03_vector_search.py`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/03_vector_search.py)
-- [`examples/06_vector_search_recommendations.py`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/examples/06_vector_search_recommendations.py)
+- [`examples/03_vector_search.py`]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/03_vector_search.py)
+- [`examples/06_vector_search_recommendations.py`]({{ config.repo_url }}/blob/{{ config.extra.version }}/bindings/python/examples/06_vector_search_recommendations.py)
