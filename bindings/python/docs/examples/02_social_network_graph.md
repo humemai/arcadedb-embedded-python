@@ -289,28 +289,28 @@ with arcadedb.open_database("./social_network_db") as db:
 ## Try It Yourself
 
 1. **Run the example:**
-   ```bash
-   # Important: Navigate to examples directory first
-   cd bindings/python/examples
-   python 02_social_network_graph.py
-   ```
+    ```bash
+    # Important: Navigate to examples directory first
+    cd bindings/python/examples
+    python 02_social_network_graph.py
+    ```
 
 2. **Explore the database:**
-   - Database files are created in `./my_test_databases/social_network_db/`
-   - Inspect the console output to understand each operation
-   - Try modifying the sample data in the code
+    - Database files are created in `./my_test_databases/social_network_db/`
+    - Inspect the console output to understand each operation
+    - Try modifying the sample data in the code
 
 3. **Experiment with queries:**
-   - Modify the Cypher queries in `demonstrate_cypher_queries()`
-   - Add new relationship types (WORKS_WITH, LIVES_NEAR)
-   - Try different traversal patterns and depths
-   - Add relationship scoring (strength, trust level)
+    - Modify the Cypher queries in `demonstrate_cypher_queries()`
+    - Add new relationship types (WORKS_WITH, LIVES_NEAR)
+    - Try different traversal patterns and depths
+    - Add relationship scoring (strength, trust level)
 
 4. **Scale it up:**
-   - Import larger datasets from CSV files
-   - Add more vertex types (Company, Location, Interest)
-   - Implement recommendation algorithms
-   - Add temporal aspects (friendship start/end dates)
+    - Import larger datasets from CSV files
+    - Add more vertex types (Company, Location, Interest)
+    - Implement recommendation algorithms
+    - Add temporal aspects (friendship start/end dates)
 
 ## Key Implementation Notes
 
