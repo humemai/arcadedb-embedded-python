@@ -67,6 +67,8 @@ jobs:
     name: Run Example Tests
     needs: validate-version
     uses: ./.github/workflows/test-python-examples.yml
+    with:
+      build-version: ${{ needs.validate-version.outputs.python-version }}
     secrets: inherit
 
   # Run unit tests before building
@@ -74,6 +76,8 @@ jobs:
     name: Run Unit Tests
     needs: validate-version
     uses: ./.github/workflows/test-python-bindings.yml
+    with:
+      build-version: ${{ needs.validate-version.outputs.python-version }}
     secrets: inherit
 
   publish:
@@ -180,14 +184,7 @@ jobs:
       - name: Verify wheel versions
         run: |
           TAG_VERSION="${{ needs.validate-version.outputs.python-version }}"
-          BASE_VERSION="${{ needs.validate-version.outputs.base-version }}"
-
-          # If tag is a pre-release (dev/rc/a/b/post), accept wheels built with base version.
-          if [[ "$TAG_VERSION" =~ \.(dev|post|rc|a|b)[0-9]+$ ]]; then
-            EXPECTED_VERSION="$BASE_VERSION"
-          else
-            EXPECTED_VERSION="$TAG_VERSION"
-          fi
+          EXPECTED_VERSION="$TAG_VERSION"
 
           for WHEEL_FILE in dist/*.whl; do
             echo "📦 Checking: $WHEEL_FILE"
