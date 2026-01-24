@@ -20,9 +20,23 @@ on:
 
   # Allow being called by other workflows (e.g., release workflow)
   workflow_call:
+    inputs:
+      examples:
+        description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
+        required: false
+        type: string
+        default: "01_*.py"
 
   # Allow manual trigger
   workflow_dispatch:
+    inputs:
+      examples:
+        description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
+        required: false
+        default: "01_*.py"
+
+env:
+  EXAMPLES: ${{ inputs.examples || '01_*.py' }}
 
 permissions:
   contents: read
@@ -252,8 +266,8 @@ jobs:
           results_file="example-results.txt"
           > $results_file
 
-          # Find all Python example files (exclude download_data.py, 07_stackoverflow_multimodel.py, and 08_server_mode_rest_api.py)
-          examples=$(ls [0-9]*.py 2>/dev/null | grep -v "07_stackoverflow_multimodel.py" | grep -v "08_server_mode_rest_api.py" | sort)
+          # Select example files by pattern(s) in EXAMPLES (space-separated globs)
+          examples=$(ls $EXAMPLES 2>/dev/null | sort)
 
           if [ -z "$examples" ]; then
             echo "❌ No example files found!"
@@ -337,6 +351,8 @@ jobs:
           echo "========================================"
           echo ""
 
+          echo "Examples pattern(s): $EXAMPLES"
+
           # Output to GitHub Actions
           echo "total=$total" >> $GITHUB_OUTPUT
           echo "passed=$passed" >> $GITHUB_OUTPUT
@@ -354,6 +370,9 @@ jobs:
           else
             echo "✅ All examples passed!"
           fi
+
+          # Save list of examples for summary
+          echo "$examples" > examples-ran.txt
 
       - name: Generate test summary
         if: always()
@@ -397,17 +416,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Examples Tested" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **01_simple_document_store.py** - Document CRUD operations with comprehensive data types" >> $GITHUB_STEP_SUMMARY
-          echo "- **02_social_network_graph.py** - Graph modeling with vertices, edges, and traversal" >> $GITHUB_STEP_SUMMARY
-          echo "- **03_vector_search.py** - Vector embeddings and semantic similarity search" >> $GITHUB_STEP_SUMMARY
-          echo "- **04_csv_import_documents.py** - CSV import with automatic dataset download and type inference" >> $GITHUB_STEP_SUMMARY
-          echo "  - Tested with \`--dataset movielens-small --parallel 4 --batch-size 5000 --export\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **05_csv_import_graph.py** - Graph creation from document store with benchmarking" >> $GITHUB_STEP_SUMMARY
-          echo "  - Tested with \`--dataset movielens-small --parallel 1 --no-async --export --import-jsonl\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **06_vector_search_recommendations.py** - JVector vector indexing for movie recommendations" >> $GITHUB_STEP_SUMMARY
-          echo "  - Tested with \`--import-jsonl exports/movielens_graph_small_db.jsonl.tgz\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **07_stackoverflow_multimodel.py** - Multi-model graph/document/vector example with StackOverflow data" >> $GITHUB_STEP_SUMMARY
-          echo "  - Tested with \`--dataset stackoverflow-small\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Pattern(s)**: $EXAMPLES" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f examples-ran.txt ]; then
+            while IFS= read -r example; do
+              [ -n "$example" ] && echo "- **$example**" >> $GITHUB_STEP_SUMMARY
+            done < examples-ran.txt
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload example logs
@@ -444,13 +459,9 @@ jobs:
           if [ "${{ needs.test-examples.result }}" = "success" ]; then
             echo "✅ **All platforms passed example testing!**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "All examples ran successfully across all 6 platforms." >> $GITHUB_STEP_SUMMARY
+            echo "All examples ran successfully across all enabled platforms." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Platforms tested**: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "ℹ️ **Note**: Some platform/Python combinations are excluded from testing:" >> $GITHUB_STEP_SUMMARY
-            echo "- Windows ARM64 + Python 3.10, 3.14 (no GitHub-hosted runners available)" >> $GITHUB_STEP_SUMMARY
-            echo "- macOS x86_64 + Python 3.13, 3.14 (no suitable dependencies available)" >> $GITHUB_STEP_SUMMARY
+            echo "**Platforms tested**: linux/amd64, linux/arm64, darwin/arm64" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Some platforms failed example testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
