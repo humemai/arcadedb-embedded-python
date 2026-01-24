@@ -26,6 +26,10 @@ on:
         required: false
         type: string
         default: "01_*.py"
+      build-version:
+        description: "Override package version (PEP 440) for build.sh"
+        required: false
+        type: string
 
   # Allow manual trigger
   workflow_dispatch:
@@ -121,6 +125,8 @@ jobs:
     name: Test Python Examples (${{ matrix.platform }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.runs-on }}
     needs: download-jars
+    env:
+      BUILD_VERSION: ${{ inputs.build-version }}
     strategy:
       fail-fast: false
       matrix:

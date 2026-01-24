@@ -20,6 +20,11 @@ on:
 
   # Allow being called by other workflows (e.g., release workflow)
   workflow_call:
+    inputs:
+      build-version:
+        description: "Override package version (PEP 440) for build.sh"
+        required: false
+        type: string
 
   # Allow manual trigger
   workflow_dispatch:
@@ -110,6 +115,8 @@ jobs:
     name: Test arcadedb-embedded (${{ matrix.platform }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.runs-on }}
     needs: download-jars
+    env:
+      BUILD_VERSION: ${{ inputs.build-version }}
     strategy:
       # Don't cancel other matrix jobs if one fails
       fail-fast: false
