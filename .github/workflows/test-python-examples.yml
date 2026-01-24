@@ -252,8 +252,8 @@ jobs:
           results_file="example-results.txt"
           > $results_file
 
-          # Find all Python example files (exclude download_data.py and 08_server_mode_rest_api.py)
-          examples=$(ls [0-9]*.py 2>/dev/null | grep -v "08_server_mode_rest_api.py" | sort)
+          # Find all Python example files (exclude download_data.py, 07_stackoverflow_multimodel.py, and 08_server_mode_rest_api.py)
+          examples=$(ls [0-9]*.py 2>/dev/null | grep -v "07_stackoverflow_multimodel.py" | grep -v "08_server_mode_rest_api.py" | sort)
 
           if [ -z "$examples" ]; then
             echo "❌ No example files found!"
