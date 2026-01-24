@@ -225,10 +225,19 @@ jobs:
         run: |
           uv pip install --system tqdm py7zr lxml
           cd bindings/python/examples
-          echo "📥 Downloading MovieLens Small dataset..."
-          python3 download_data.py movielens-small
-          echo "📥 Downloading Stack Overflow Small dataset..."
-          python3 download_data.py stackoverflow-small
+
+          # Determine which examples are selected
+          examples=$(ls $EXAMPLES 2>/dev/null || true)
+
+          if echo "$examples" | grep -qE '(^|[[:space:]])(04_csv_import_documents|05_csv_import_graph|06_vector_search_recommendations)\.py([[:space:]]|$)'; then
+            echo "📥 Downloading MovieLens Small dataset..."
+            python3 download_data.py movielens-small
+          fi
+
+          if echo "$examples" | grep -qE '(^|[[:space:]])07_stackoverflow_multimodel\.py([[:space:]]|$)'; then
+            echo "📥 Downloading Stack Overflow Small dataset..."
+            python3 download_data.py stackoverflow-small
+          fi
 
       - name: Install timeout command (macOS only)
         if: matrix.platform == 'darwin/amd64' || matrix.platform == 'darwin/arm64'
