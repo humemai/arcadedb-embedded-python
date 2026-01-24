@@ -29,11 +29,17 @@ from .exceptions import ArcadeDBError
 # Import exporter classes
 from .exporter import export_database, export_to_csv
 
+# Import graph classes
+from .graph import Document, Edge, Vertex
+
 # Import importer classes
-from .importer import Importer, import_csv, import_json, import_neo4j
+from .importer import Importer, import_csv, import_xml
 
 # Import result classes
 from .results import Result, ResultSet
+
+# Import schema classes
+from .schema import IndexType, PropertyType, Schema
 
 # Import server classes
 from .server import ArcadeDBServer, create_server
@@ -63,6 +69,10 @@ __all__ = [
     # Result classes
     "ResultSet",
     "Result",
+    # Schema classes
+    "Schema",
+    "IndexType",
+    "PropertyType",
     # Transaction management
     "TransactionContext",
     # Async execution
@@ -81,7 +91,6 @@ __all__ = [
     "export_to_csv",
     # Data import
     "Importer",
-    "import_json",
     "import_csv",
-    "import_neo4j",
+    "import_xml",
 ]
