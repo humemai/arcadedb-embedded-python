@@ -25,7 +25,6 @@ import com.arcadedb.graph.MutableEdge;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.opencypher.ast.CreateClause;
-import com.arcadedb.query.opencypher.ast.Expression;
 import com.arcadedb.query.opencypher.ast.NodePattern;
 import com.arcadedb.query.opencypher.ast.PathPattern;
 import com.arcadedb.query.opencypher.ast.RelationshipPattern;
@@ -179,7 +178,7 @@ public class CreateStep extends AbstractExecutionStep {
     if (pathPattern.isSingleNode()) {
       // Simple node creation: CREATE (n:Person {name: 'Alice'})
       final NodePattern nodePattern = pathPattern.getFirstNode();
-      final Vertex vertex = createVertex(nodePattern, result);
+      final Vertex vertex = createVertex(nodePattern);
       final String variable = nodePattern.getVariable() != null ? nodePattern.getVariable() : "n";
       result.setProperty(variable, vertex);
     } else {
@@ -201,7 +200,7 @@ public class CreateStep extends AbstractExecutionStep {
 
         // Create vertex if not found
         if (vertex == null) {
-          vertex = createVertex(nodePattern, result);
+          vertex = createVertex(nodePattern);
           if (nodePattern.getVariable() != null) {
             result.setProperty(nodePattern.getVariable(), vertex);
           }
@@ -216,7 +215,7 @@ public class CreateStep extends AbstractExecutionStep {
         final Vertex fromVertex = vertices.get(i);
         final Vertex toVertex = vertices.get(i + 1);
 
-        final Edge edge = createEdge(fromVertex, toVertex, relPattern, result);
+        final Edge edge = createEdge(fromVertex, toVertex, relPattern);
         if (relPattern.getVariable() != null) {
           result.setProperty(relPattern.getVariable(), edge);
         }
@@ -227,7 +226,7 @@ public class CreateStep extends AbstractExecutionStep {
   /**
    * Creates a vertex from a node pattern.
    */
-  private Vertex createVertex(final NodePattern nodePattern, final Result currentResult) {
+  private Vertex createVertex(final NodePattern nodePattern) {
     final String label = nodePattern.hasLabels() ? nodePattern.getFirstLabel() : "Vertex";
 
     // Ensure vertex type exists (Cypher auto-creates types)
@@ -237,7 +236,7 @@ public class CreateStep extends AbstractExecutionStep {
 
     // Set properties from pattern
     if (nodePattern.hasProperties()) {
-      setProperties(vertex, nodePattern.getProperties(), currentResult);
+      setProperties(vertex, nodePattern.getProperties());
     }
 
     vertex.save();
@@ -247,7 +246,7 @@ public class CreateStep extends AbstractExecutionStep {
   /**
    * Creates an edge between two vertices.
    */
-  private Edge createEdge(final Vertex fromVertex, final Vertex toVertex, final RelationshipPattern relPattern, final Result currentResult) {
+  private Edge createEdge(final Vertex fromVertex, final Vertex toVertex, final RelationshipPattern relPattern) {
     final String type = relPattern.hasTypes() ? relPattern.getFirstType() : "EDGE";
 
     // Ensure edge type exists (Cypher auto-creates types)
@@ -257,7 +256,7 @@ public class CreateStep extends AbstractExecutionStep {
 
     // Set properties from pattern
     if (relPattern.hasProperties()) {
-      setPropertiesOnEdge(edge, relPattern.getProperties(), currentResult);
+      setPropertiesOnEdge(edge, relPattern.getProperties());
     }
 
     edge.save();
@@ -266,12 +265,11 @@ public class CreateStep extends AbstractExecutionStep {
 
   /**
    * Sets properties on a document from a property map.
-   * Property values can be:
-   * - Literal values (already evaluated)
-   * - ParameterReference objects (to be resolved from context parameters)
-   * - Expression objects (to be evaluated in the context of the current result)
+   * Property values are already processed by CypherASTBuilder.evaluateExpression:
+   * - String literals have quotes stripped and escape sequences decoded
+   * - Parameters are represented as ParameterReference objects
    */
-  private void setProperties(final MutableDocument document, final Map<String, Object> properties, final Result currentResult) {
+  private void setProperties(final MutableDocument document, final Map<String, Object> properties) {
     for (final Map.Entry<String, Object> entry : properties.entrySet()) {
       final String key = entry.getKey();
       Object value = entry.getValue();
@@ -280,13 +278,6 @@ public class CreateStep extends AbstractExecutionStep {
       if (value instanceof CypherASTBuilder.ParameterReference) {
         final String paramName = ((CypherASTBuilder.ParameterReference) value).getName();
         value = context.getInputParameters().get(paramName);
-      }
-      // Evaluate Expression objects (e.g., property access like BatchEntry.vector)
-      else if (value instanceof Expression) {
-        final Expression expr = (Expression) value;
-        // Evaluate the expression in the context of the current result
-        // This allows UNWIND variables to be accessed
-        value = expr.evaluate(currentResult, context);
       }
 
       document.set(key, value);
@@ -295,12 +286,9 @@ public class CreateStep extends AbstractExecutionStep {
 
   /**
    * Sets properties on an edge from a property map.
-   * Property values can be:
-   * - Literal values (already evaluated)
-   * - ParameterReference objects (to be resolved from context parameters)
-   * - Expression objects (to be evaluated in the context of the current result)
+   * Property values are already processed by CypherASTBuilder.evaluateExpression.
    */
-  private void setPropertiesOnEdge(final MutableEdge edge, final Map<String, Object> properties, final Result currentResult) {
+  private void setPropertiesOnEdge(final MutableEdge edge, final Map<String, Object> properties) {
     for (final Map.Entry<String, Object> entry : properties.entrySet()) {
       final String key = entry.getKey();
       Object value = entry.getValue();
@@ -309,13 +297,6 @@ public class CreateStep extends AbstractExecutionStep {
       if (value instanceof CypherASTBuilder.ParameterReference) {
         final String paramName = ((CypherASTBuilder.ParameterReference) value).getName();
         value = context.getInputParameters().get(paramName);
-      }
-      // Evaluate Expression objects (e.g., property access like BatchEntry.vector)
-      else if (value instanceof Expression) {
-        final Expression expr = (Expression) value;
-        // Evaluate the expression in the context of the current result
-        // This allows UNWIND variables to be accessed
-        value = expr.evaluate(currentResult, context);
       }
 
       edge.set(key, value);
