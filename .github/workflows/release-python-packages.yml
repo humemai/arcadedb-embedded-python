@@ -76,90 +76,21 @@ jobs:
     uses: ./.github/workflows/test-python-bindings.yml
     secrets: inherit
 
-  # Reuse wheels from test job (no need to rebuild!)
-  prepare-wheels:
-    needs: [validate-version, test, test-examples]
-    name: Prepare Wheels for Release (${{ matrix.platform }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        # Temporarily limit to three platforms (skip macOS x86_64 and all Windows)
-        # platform:
-        #   - linux-amd64
-        #   - linux-arm64
-        #   - darwin-amd64
-        #   - darwin-arm64
-        #   - windows-amd64
-        #   - windows-arm64
-        platform:
-          - linux-amd64
-          - linux-arm64
-          - darwin-arm64
-
-    steps:
-      - name: Download wheel from test job
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
-        with:
-          name: wheel-${{ matrix.platform }}-test
-          path: dist/
-
-      - name: Verify wheel was downloaded
-        shell: bash
-        run: |
-          echo "📦 Checking for wheel-${{ matrix.platform }}-test..."
-          ls -lh dist/
-          if [ ! -f dist/*.whl ]; then
-            echo "❌ No wheel found for ${{ matrix.platform }}!"
-            exit 1
-          fi
-          echo "✅ Wheel found for ${{ matrix.platform }}"
-
-      - name: Re-upload wheel for release
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: wheel-${{ matrix.platform }}
-          path: dist/*.whl
-          retention-days: 5
-
   publish:
     name: Publish arcadedb-embedded to PyPI (3 platforms)
-    needs: [validate-version, prepare-wheels]
+    needs: [validate-version, test, test-examples]
     runs-on: ubuntu-latest
     continue-on-error: true  # Don't block GitHub Release if PyPI upload fails (size limit)
     environment: pypi
     permissions:
       id-token: write
     steps:
-      - name: Download wheels for main platforms only
+      - name: Download wheels for all tested Python versions
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
-          pattern: wheel-*
-          path: wheels-temp/
-          merge-multiple: false  # Keep in separate directories
-
-      - name: Collect wheels for PyPI (3 main platforms)
-        shell: bash
-        run: |
-          mkdir -p dist
-
-          # Only copy wheels for the 3 platforms we currently ship on PyPI
-          # Previous set (commented for future reference): linux-amd64 darwin-arm64 windows-amd64 linux-arm64 darwin-amd64 windows-arm64
-
-          echo "📦 Collecting wheels for PyPI (current platforms)..."
-
-          # Copy main platform wheels
-          for platform in linux-amd64 darwin-arm64 linux-arm64; do
-            if [ -d "wheels-temp/wheel-$platform" ]; then
-              cp wheels-temp/wheel-$platform/*.whl dist/ 2>/dev/null || true
-              echo "  ✅ $platform"
-            else
-              echo "  ⚠️  $platform not found"
-            fi
-          done
-
-          echo ""
-          echo "📦 Wheels for PyPI:"
-          ls -lh dist/
+          pattern: wheel-*-py*
+          path: dist/
+          merge-multiple: true
 
       - name: Verify wheels
         run: |
@@ -167,15 +98,15 @@ jobs:
           echo "📦 Wheels for PyPI (current platforms):"
           ls dist/*.whl
 
-          # Count wheels (should be 3: linux-amd64, linux-arm64, darwin-arm64)
+          # Count wheels (should be 15: 3 platforms x 5 Python versions)
           WHEEL_COUNT=$(ls dist/*.whl | wc -l)
-          echo "📊 Wheel count: $WHEEL_COUNT (expected: 3)"
+          echo "📊 Wheel count: $WHEEL_COUNT (expected: 15)"
 
           echo ""
           echo "ℹ️  Current PyPI platforms: linux x86_64, linux arm64, macOS Apple Silicon"
 
-          if [ "$WHEEL_COUNT" -ne 3 ]; then
-            echo "❌ Expected 3 wheels (3 main platforms), got $WHEEL_COUNT"
+          if [ "$WHEEL_COUNT" -ne 15 ]; then
+            echo "❌ Expected 15 wheels (3 platforms x 5 Python versions), got $WHEEL_COUNT"
             exit 1
           fi
 
@@ -248,25 +179,36 @@ jobs:
 
       - name: Verify wheel versions
         run: |
+          TAG_VERSION="${{ needs.validate-version.outputs.python-version }}"
+          BASE_VERSION="${{ needs.validate-version.outputs.base-version }}"
+
+          # If tag is a pre-release (dev/rc/a/b/post), accept wheels built with base version.
+          if [[ "$TAG_VERSION" =~ \.(dev|post|rc|a|b)[0-9]+$ ]]; then
+            EXPECTED_VERSION="$BASE_VERSION"
+          else
+            EXPECTED_VERSION="$TAG_VERSION"
+          fi
+
           for WHEEL_FILE in dist/*.whl; do
             echo "📦 Checking: $WHEEL_FILE"
             # Extract version from wheel filename
             WHEEL_VERSION=$(echo "$WHEEL_FILE" | grep -oP '\d+\.\d+\.\d+(\.(dev|post|rc|a|b)\d+)?')
             echo "   Version: $WHEEL_VERSION"
 
-            if [ "$WHEEL_VERSION" != "${{ needs.validate-version.outputs.python-version }}" ]; then
+            if [ "$WHEEL_VERSION" != "$EXPECTED_VERSION" ]; then
               echo "❌ Wheel version mismatch in $WHEEL_FILE!"
+              echo "   Expected: $EXPECTED_VERSION"
               exit 1
             fi
           done
-          echo "✅ All wheel versions match tag version"
+          echo "✅ All wheel versions match expected version ($EXPECTED_VERSION)"
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
 
   github-release:
     name: Create GitHub Release (All enabled platforms)
-    needs: [validate-version, prepare-wheels]
+    needs: [validate-version, test, test-examples]
     runs-on: ubuntu-latest
     if: false
     permissions:
@@ -275,7 +217,7 @@ jobs:
       - name: Download all wheels (all enabled platforms)
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
-          pattern: wheel-*
+          pattern: wheel-*-py*
           path: dist/
           merge-multiple: true
 
