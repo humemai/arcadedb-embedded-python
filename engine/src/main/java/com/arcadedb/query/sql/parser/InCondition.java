@@ -34,13 +34,12 @@ import java.util.*;
 import java.util.stream.*;
 
 public class InCondition extends BooleanExpression {
-  public Expression            left;
-  public BinaryCompareOperator operator;
-  public SelectStatement       rightStatement;
-  public InputParameter        rightParam;
-  public MathExpression        rightMathExpression;
-  public Object                right;
-  public boolean               not;
+  protected Expression            left;
+  protected BinaryCompareOperator operator;
+  protected SelectStatement       rightStatement;
+  protected InputParameter        rightParam;
+  protected MathExpression        rightMathExpression;
+  protected Object                right;
 
   private static final Object UNSET           = new Object();
   private final        Object inputFinalValue = UNSET;
@@ -56,8 +55,7 @@ public class InCondition extends BooleanExpression {
     if (rightVal == null)
       return false;
 
-    final boolean result = evaluateExpression(leftVal, rightVal);
-    return not ? !result : result;
+    return evaluateExpression(leftVal, rightVal);
   }
 
   public Object evaluateRight(final Identifiable currentRecord, final CommandContext context) {
@@ -68,19 +66,6 @@ public class InCondition extends BooleanExpression {
       rightVal = rightParam.getValue(context.getInputParameters());
     else if (rightMathExpression != null)
       rightVal = rightMathExpression.execute(currentRecord, context);
-    else if (right instanceof List<?> list) {
-      // Handle IN (expr1, expr2, ...) - evaluate each expression
-      final List<Object> values = new ArrayList<>();
-      for (final Object item : list) {
-        if (item instanceof Expression expr) {
-          values.add(expr.execute(currentRecord, context));
-        } else {
-          values.add(item);
-        }
-      }
-      rightVal = values;
-    } else if (right != null)
-      rightVal = right;
 
     return rightVal;
   }
@@ -96,8 +81,7 @@ public class InCondition extends BooleanExpression {
     if (rightVal == null)
       return false;
 
-    final boolean result = evaluateExpression(leftVal, rightVal);
-    return not ? !result : result;
+    return evaluateExpression(leftVal, rightVal);
   }
 
   public Object evaluateRight(final Result currentRecord, final CommandContext context) {
@@ -108,19 +92,6 @@ public class InCondition extends BooleanExpression {
       rightVal = rightParam.getValue(context.getInputParameters());
     else if (rightMathExpression != null)
       rightVal = rightMathExpression.execute(currentRecord, context);
-    else if (right instanceof List<?> list) {
-      // Handle IN (expr1, expr2, ...) - evaluate each expression
-      final List<Object> values = new ArrayList<>();
-      for (final Object item : list) {
-        if (item instanceof Expression expr) {
-          values.add(expr.execute(currentRecord, context));
-        } else {
-          values.add(item);
-        }
-      }
-      rightVal = values;
-    } else if (right != null)
-      rightVal = right;
 
     return rightVal;
   }
@@ -202,7 +173,6 @@ public class InCondition extends BooleanExpression {
     result.rightStatement = rightStatement == null ? null : rightStatement.copy();
     result.rightParam = rightParam == null ? null : rightParam.copy();
     result.right = right;
-    result.not = not;
     return result;
   }
 

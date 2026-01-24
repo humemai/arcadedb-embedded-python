@@ -32,7 +32,7 @@ import java.util.stream.*;
 
 public class Json extends SimpleNode {
 
-  public List<JsonItem> items = new ArrayList<>();
+  protected List<JsonItem> items = new ArrayList<>();
 
   public Json(final int id) {
     super(id);
@@ -169,16 +169,5 @@ public class Json extends SimpleNode {
   public boolean refersToParent() {
     return false;
   }
-  @Override
-  public Map<String, Object> toJSON() {
-    final Map<String, Object> json = super.toJSON();
-
-    if (items != null) {
-      json.put("items", items);
-    }
-
-    return json;
-  }
-
 }
 /* JavaCC - OriginalChecksum=3beec9f6db486de944498588b51a505d (do not edit this line) */

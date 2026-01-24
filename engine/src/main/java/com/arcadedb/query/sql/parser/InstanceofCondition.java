@@ -31,9 +31,9 @@ import java.util.*;
 
 public class InstanceofCondition extends BooleanExpression {
 
-  public Expression left;
-  public Identifier right;
-  public String     rightString;
+  protected Expression left;
+  protected Identifier right;
+  protected String     rightString;
 
   public InstanceofCondition(final int id) {
     super(id);

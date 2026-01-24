@@ -24,7 +24,7 @@ import java.util.*;
 
 public class PInteger extends PNumber {
 
-  public Number value;
+  protected Number value;
 
   public PInteger(final int id) {
     super(id);

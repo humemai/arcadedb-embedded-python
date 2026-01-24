@@ -23,9 +23,8 @@ package com.arcadedb.query.sql.parser;
 import java.util.*;
 
 public class Bucket extends SimpleNode {
-  public String         bucketName;
-  public Integer        bucketNumber;
-  public InputParameter inputParam;
+  protected String  bucketName;
+  protected Integer bucketNumber;
 
   public Bucket(final String bucketName) {
     super(-1);
@@ -44,16 +43,9 @@ public class Bucket extends SimpleNode {
   public void toString(final Map<String, Object> params, final StringBuilder builder) {
     if (bucketName != null) {
       builder.append("bucket:" + bucketName);
-    } else if (bucketNumber != null) {
+    } else {
       builder.append("bucket:" + bucketNumber);
-    } else if (inputParam != null) {
-      builder.append("bucket:");
-      inputParam.toString(params, builder);
     }
-  }
-
-  public InputParameter getInputParam() {
-    return inputParam;
   }
 
   public String getBucketName() {
@@ -68,30 +60,12 @@ public class Bucket extends SimpleNode {
     final Bucket result = new Bucket(-1);
     result.bucketName = bucketName;
     result.bucketNumber = bucketNumber;
-    result.inputParam = inputParam != null ? inputParam.copy() : null;
     return result;
   }
 
   @Override
   protected Object[] getIdentityElements() {
-    return new Object[] { bucketName, bucketNumber, inputParam };
-  }
-
-  @Override
-  public Map<String, Object> toJSON() {
-    final Map<String, Object> json = super.toJSON();
-
-    if (bucketName != null) {
-      json.put("bucketName", bucketName);
-    }
-    if (bucketNumber != null) {
-      json.put("bucketNumber", bucketNumber);
-    }
-    if (inputParam != null) {
-      json.put("inputParam", inputParam.toJSON());
-    }
-
-    return json;
+    return new Object[] { bucketName, bucketNumber };
   }
 
 }

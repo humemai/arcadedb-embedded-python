@@ -30,7 +30,7 @@ import com.arcadedb.query.sql.executor.ResultSet;
 import java.util.*;
 
 public class BeginStatement extends SimpleExecStatement {
-  public Identifier isolation;
+  protected Identifier isolation;
 
   public BeginStatement(final int id) {
     super(id);

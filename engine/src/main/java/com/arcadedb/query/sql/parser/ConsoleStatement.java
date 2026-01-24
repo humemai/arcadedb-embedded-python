@@ -32,8 +32,8 @@ import java.util.*;
 import java.util.logging.*;
 
 public class ConsoleStatement extends SimpleExecStatement {
-  public Identifier logLevel;
-  public Expression message;
+  protected Identifier logLevel;
+  protected Expression message;
 
   public ConsoleStatement(final int id) {
     super(id);

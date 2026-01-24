@@ -29,7 +29,7 @@ import com.arcadedb.query.sql.executor.ResultSet;
 import java.util.*;
 
 public class SleepStatement extends SimpleExecStatement {
-  public Expression expression;
+  protected Expression expression;
 
   public SleepStatement(final int id) {
     super(id);

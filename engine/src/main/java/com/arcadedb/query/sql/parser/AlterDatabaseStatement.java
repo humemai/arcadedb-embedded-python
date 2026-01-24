@@ -39,8 +39,8 @@ import java.util.*;
 
 public class AlterDatabaseStatement extends DDLStatement {
 
-  public Identifier settingName;
-  public Expression settingValue;
+  Identifier settingName;
+  Expression settingValue;
 
   public AlterDatabaseStatement(final int id) {
     super(id);

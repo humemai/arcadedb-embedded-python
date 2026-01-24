@@ -27,9 +27,9 @@ import com.arcadedb.query.sql.executor.Result;
 import java.util.*;
 
 public class ArrayNumberSelector extends SimpleNode {
-  public InputParameter inputValue;
-  public MathExpression expressionValue;
-  public Integer        integer;
+  InputParameter inputValue;
+  MathExpression expressionValue;
+  Integer        integer;
 
   public ArrayNumberSelector(final int id) {
     super(id);
@@ -105,23 +105,6 @@ public class ArrayNumberSelector extends SimpleNode {
   @Override
   protected Object[] getIdentityElements() {
     return new Object[] { inputValue, expressionValue, integer };
-  }
-
-  @Override
-  public Map<String, Object> toJSON() {
-    final Map<String, Object> json = super.toJSON();
-
-    if (inputValue != null) {
-      json.put("inputValue", inputValue.toString());
-    }
-    if (expressionValue != null) {
-      json.put("expressionValue", expressionValue.toJSON());
-    }
-    if (integer != null) {
-      json.put("integer", integer);
-    }
-
-    return json;
   }
 
 }

@@ -32,7 +32,7 @@ import com.arcadedb.query.sql.executor.ResultInternal;
 import java.util.*;
 
 public class ParenthesisExpression extends MathExpression {
-  public    Expression            expression;
+  protected Expression            expression;
   protected Statement             statement;
   private   InternalExecutionPlan executionPlan;
 
@@ -149,10 +149,6 @@ public class ParenthesisExpression extends MathExpression {
 
   public void setStatement(final Statement statement) {
     this.statement = statement;
-  }
-
-  public Statement getStatement() {
-    return statement;
   }
 
   public void extractSubQueries(final SubQueryCollector collector) {

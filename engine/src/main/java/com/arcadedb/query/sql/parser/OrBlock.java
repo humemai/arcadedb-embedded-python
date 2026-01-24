@@ -30,7 +30,7 @@ import java.util.*;
 import java.util.stream.*;
 
 public class OrBlock extends BooleanExpression {
-  public List<BooleanExpression> subBlocks = new ArrayList<BooleanExpression>();
+  List<BooleanExpression> subBlocks = new ArrayList<BooleanExpression>();
 
   public OrBlock(final int id) {
     super(id);
@@ -42,17 +42,12 @@ public class OrBlock extends BooleanExpression {
       return true;
     }
 
-    Boolean hasNull = false;
     for (final BooleanExpression block : subBlocks) {
-      final Boolean result = block.evaluate(currentRecord, context);
-      if (result == null) {
-        hasNull = true;
-      } else if (result) {
+      if (block.evaluate(currentRecord, context)) {
         return true;
       }
     }
-    // If any operand was null and none were true, return null (SQL three-valued logic)
-    return hasNull ? null : false;
+    return false;
   }
 
   @Override
@@ -60,17 +55,14 @@ public class OrBlock extends BooleanExpression {
     if (getSubBlocks() == null)
       return true;
 
-    Boolean hasNull = false;
     for (final BooleanExpression block : subBlocks) {
       final Boolean result = block.evaluate(currentRecord, context);
-      if (result == null) {
-        hasNull = true;
-      } else if (result) {
+      if (result == null)
+        return null;
+      else if (result)
         return true;
-      }
     }
-    // If any operand was null and none were true, return null (SQL three-valued logic)
-    return hasNull ? null : false;
+    return false;
   }
 
   public Boolean evaluate(final Object currentRecord, final CommandContext context) {

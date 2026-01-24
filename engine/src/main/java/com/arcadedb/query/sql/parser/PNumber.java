@@ -28,7 +28,7 @@ public class PNumber extends SimpleNode {
   }
 
   public Number getValue() {
-    return (Number) value;
+    return null;
   }
 
   public void toString(final Map<String, Object> params, final StringBuilder builder) {

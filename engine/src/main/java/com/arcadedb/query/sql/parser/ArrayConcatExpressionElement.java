@@ -25,7 +25,7 @@ import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 
 public class ArrayConcatExpressionElement extends Expression {
-  public NestedProjection nestedProjection;
+  protected NestedProjection nestedProjection;
 
   public ArrayConcatExpressionElement(final int id) {
     super(id);

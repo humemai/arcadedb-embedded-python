@@ -27,8 +27,8 @@ import java.util.*;
 import java.util.stream.*;
 
 public class TruncateRecordStatement extends SimpleExecStatement {
-  public Rid       record;
-  public List<Rid> records;
+  protected Rid       record;
+  protected List<Rid> records;
 
   public TruncateRecordStatement(final int id) {
     super(id);

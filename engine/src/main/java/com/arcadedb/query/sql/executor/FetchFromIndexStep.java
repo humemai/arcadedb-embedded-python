@@ -306,15 +306,7 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
   private void processFlatIteration() {
     cursor = index.iterator(isOrderAsc());
 
-    // NOTE: Do NOT call fetchNullKeys() here.
-    // When NULL_STRATEGY is INDEX, NULL-keyed entries are already stored in the B-tree
-    // and will be returned by the cursor iterator. Calling fetchNullKeys() would cause
-    // duplicate entries to be returned since it creates a separate iterator for NULL keys.
-    // The cursor will naturally return NULL entries at their sorted position:
-    // - For ASC order: NULL entries appear first (NULL < all non-null values)
-    // - For DESC order: NULL entries appear last
-    nullKeyIterator = Collections.emptyIterator();
-
+    fetchNullKeys();
     if (cursor != null) {
       fetchNextEntry();
     }

@@ -40,9 +40,9 @@ import static com.arcadedb.schema.Property.RID_PROPERTY;
 
 public class Projection extends SimpleNode {
 
-  public boolean distinct = false;
+  protected boolean distinct = false;
 
-  public List<ProjectionItem> items;
+  List<ProjectionItem> items;
   // runtime
   private Set<String> excludes;
 
@@ -104,8 +104,7 @@ public class Projection extends SimpleNode {
       throw new IllegalStateException("This is an expand projection, it cannot be calculated as a single result" + this);
 
     if (items.size() == 1 &&
-        items.getFirst().getExpression() != null &&
-        items.getFirst().getExpression().toString().equals(Property.THIS_PROPERTY) &&
+        items.getFirst().getExpression().toString().equals("@this") &&
         items.getFirst().nestedProjection == null)
       return record;
 
@@ -250,17 +249,5 @@ public class Projection extends SimpleNode {
   protected SimpleNode[] getCacheableElements() {
     return items.toArray(new ProjectionItem[items.size()]);
   }
-  @Override
-  public Map<String, Object> toJSON() {
-    final Map<String, Object> json = super.toJSON();
-
-    json.put("distinct", distinct);
-    if (items != null) {
-      json.put("items", items);
-    }
-
-    return json;
-  }
-
 }
 /* JavaCC - OriginalChecksum=3a650307b53bae626dc063c4b35e62c3 (do not edit this line) */

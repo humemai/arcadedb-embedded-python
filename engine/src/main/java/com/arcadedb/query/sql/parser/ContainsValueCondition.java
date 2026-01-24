@@ -28,10 +28,10 @@ import com.arcadedb.query.sql.executor.Result;
 import java.util.*;
 
 public class ContainsValueCondition extends BooleanExpression {
-  public Expression            left;
+  protected Expression            left;
   protected ContainsValueOperator operator;
   protected OrBlock               condition;
-  public Expression            expression;
+  protected Expression            expression;
 
   public ContainsValueCondition(final int id) {
     super(id);

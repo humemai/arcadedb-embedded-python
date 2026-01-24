@@ -41,9 +41,9 @@ import static com.arcadedb.schema.Property.RID_PROPERTY;
 import static com.arcadedb.schema.Property.TYPE_PROPERTY;
 
 public class SuffixIdentifier extends SimpleNode {
-  public Identifier      identifier;
+  protected Identifier      identifier;
   protected RecordAttribute recordAttribute;
-  public boolean         star = false;
+  protected boolean         star = false;
 
   public SuffixIdentifier(final int id) {
     super(id);
@@ -368,20 +368,5 @@ public class SuffixIdentifier extends SimpleNode {
   public boolean isCacheable() {
     return true;
   }
-  @Override
-  public Map<String, Object> toJSON() {
-    final Map<String, Object> json = super.toJSON();
-
-    if (identifier != null) {
-      json.put("identifier", identifier.toJSON());
-    }
-    if (recordAttribute != null) {
-      json.put("recordAttribute", recordAttribute.toString());
-    }
-    json.put("star", star);
-
-    return json;
-  }
-
 }
 /* JavaCC - OriginalChecksum=5d9be0188c7d6e2b67d691fb88a518f8 (do not edit this line) */

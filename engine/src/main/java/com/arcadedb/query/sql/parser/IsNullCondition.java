@@ -29,7 +29,7 @@ import java.util.*;
 
 public class IsNullCondition extends BooleanExpression {
 
-  public Expression expression;
+  protected Expression expression;
 
   public IsNullCondition(final int id) {
     super(id);

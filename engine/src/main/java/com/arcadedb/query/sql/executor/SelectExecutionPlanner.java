@@ -138,19 +138,8 @@ public class SelectExecutionPlanner {
     final long planningStart = System.currentTimeMillis();
 
     init(context);
-
-    // Try to get the limit value for the execution plan
-    // If it depends on runtime context (e.g., LET variables), use 0 for now
-    int limitValue = 0;
-    try {
-      if (statement.getLimit() != null)
-        limitValue = statement.getLimit().getValue(context);
-    } catch (final Exception e) {
-      // Limit value depends on runtime context, use 0 for now
-      limitValue = 0;
-    }
-
-    final SelectExecutionPlan selectExecutionPlan = new SelectExecutionPlan(context, limitValue);
+    final SelectExecutionPlan selectExecutionPlan = new SelectExecutionPlan(context,
+        statement.getLimit() != null ? statement.getLimit().getValue(context) : 0);
 
     if (info.expand && info.distinct)
       throw new CommandExecutionException("Cannot execute a statement with DISTINCT expand(), please use a subquery");
@@ -164,18 +153,8 @@ public class SelectExecutionPlanner {
 
     info.buckets = calculateTargetBuckets(info, context);
 
-    // Try to get the limit value for the fetch execution plan
-    // If it depends on runtime context (e.g., LET variables), use 0 for now
-    int fetchLimitValue = 0;
-    try {
-      if (statement.getLimit() != null)
-        fetchLimitValue = statement.getLimit().getValue(context);
-    } catch (final Exception e) {
-      // Limit value depends on runtime context, use 0 for now
-      fetchLimitValue = 0;
-    }
-
-    info.fetchExecutionPlan = new SelectExecutionPlan(context, fetchLimitValue);
+    info.fetchExecutionPlan = new SelectExecutionPlan(context,
+        statement.getLimit() != null ? statement.getLimit().getValue(context) : 0);
 
     handleFetchFromTarget(selectExecutionPlan, info, context);
 
@@ -433,15 +412,9 @@ public class SelectExecutionPlanner {
       if (info.aggregateProjection != null) {
         long aggregationLimit = -1;
         if (info.orderBy == null && info.limit != null) {
-          try {
-            aggregationLimit = info.limit.getValue(context);
-            if (info.skip != null && info.skip.getValue(context) > 0) {
-              aggregationLimit += info.skip.getValue(context);
-            }
-          } catch (final Exception e) {
-            // Limit/skip value depends on runtime context (e.g., LET variables), use -1 for now
-            // The actual LIMIT/SKIP steps will handle it at execution time
-            aggregationLimit = -1;
+          aggregationLimit = info.limit.getValue(context);
+          if (info.skip != null && info.skip.getValue(context) > 0) {
+            aggregationLimit += info.skip.getValue(context);
           }
         }
 
@@ -889,89 +862,18 @@ public class SelectExecutionPlanner {
     } else if (target.getIdentifier() != null && target.getModifier() != null) {
 
       final List<RID> rids = new ArrayList<>();
-      final String targetStr = target.toString();
-      final Object variableValue = context.getVariablePath(targetStr);
-      if (variableValue != null) {
-        // Handle single Result object (e.g., from $parent.$current)
-        if (variableValue instanceof Result resultVal) {
-          if (resultVal.isElement()) {
-            rids.add(resultVal.toElement().getIdentity());
-          } else if (resultVal.getIdentity().isPresent()) {
-            rids.add(resultVal.getIdentity().get());
-          }
+      final Collection<Identifiable> records = (Collection<Identifiable>) context.getVariablePath(target.toString());
+      if (records != null && !records.isEmpty()) {
+        for (Object o : records) {
+          if (o instanceof Identifiable identifiable)
+            rids.add(identifiable.getIdentity());
+          else if (o instanceof Result result1 && result1.isElement())
+            rids.add(result1.toElement().getIdentity());
         }
-        // Handle single Identifiable object
-        else if (variableValue instanceof Identifiable identifiable) {
-          rids.add(identifiable.getIdentity());
-        }
-        // Handle single RID object
-        else if (variableValue instanceof RID rid) {
-          rids.add(rid);
-        }
-        // Handle collection of records
-        else if (variableValue instanceof Collection<?> records) {
-          for (Object o : records) {
-            if (o instanceof Identifiable identifiable)
-              rids.add(identifiable.getIdentity());
-            else if (o instanceof Result result1 && result1.isElement())
-              rids.add(result1.toElement().getIdentity());
-            else if (o instanceof RID rid)
-              rids.add(rid);
-          }
-        }
-      }
-      if (!rids.isEmpty()) {
         info.fetchExecutionPlan.chain(new FetchFromRidsStep(rids, context));
       } else
         result.chain(new EmptyStep(context));//nothing to return
     } else if (target.getIdentifier() != null) {
-      final String identifierValue = target.getIdentifier().getStringValue();
-
-      // Check if identifier is a variable reference
-      if (identifierValue.startsWith("$")) {
-        final Object variableValue = context.getVariable(identifierValue);
-        if (variableValue != null) {
-          // Handle variable containing a RID string (e.g., '#1:143')
-          if (variableValue instanceof String strValue && strValue.startsWith("#")) {
-            final RID rid = new RID(context.getDatabase(), strValue);
-            info.fetchExecutionPlan.chain(new FetchFromRidsStep(List.of(rid), context));
-            return;
-          }
-          // Handle variable containing a RID object directly
-          else if (variableValue instanceof RID rid) {
-            info.fetchExecutionPlan.chain(new FetchFromRidsStep(List.of(rid), context));
-            return;
-          }
-          // Handle variable containing an Identifiable
-          else if (variableValue instanceof Identifiable identifiable) {
-            info.fetchExecutionPlan.chain(new FetchFromRidsStep(List.of(identifiable.getIdentity()), context));
-            return;
-          }
-          // Handle variable containing a collection of RIDs or Identifiables
-          else if (variableValue instanceof Iterable<?> iterable) {
-            final List<RID> rids = new ArrayList<>();
-            for (final Object item : iterable) {
-              if (item instanceof RID rid)
-                rids.add(rid);
-              else if (item instanceof Identifiable identifiable)
-                rids.add(identifiable.getIdentity());
-              else if (item instanceof Result resultItem && resultItem.getIdentity().isPresent())
-                rids.add(resultItem.getIdentity().get());
-              else if (item instanceof String strItem && strItem.startsWith("#"))
-                rids.add(new RID(context.getDatabase(), strItem));
-            }
-            if (!rids.isEmpty()) {
-              info.fetchExecutionPlan.chain(new FetchFromRidsStep(rids, context));
-              return;
-            }
-          }
-          // Handle variable containing a type name string (no '#' prefix)
-          else if (variableValue instanceof String typeName) {
-            target.setIdentifier(new Identifier(typeName));
-          }
-        }
-      }
-
       Set<String> filterBuckets = info.buckets;
 
       final AndBlock ridRangeConditions = extractRidRanges(info.flattenedWhereClause, context);
@@ -1431,22 +1333,11 @@ public class SelectExecutionPlanner {
   }
 
   public static void handleOrderBy(final SelectExecutionPlan plan, final QueryPlanningInfo info, final CommandContext context) {
-    int skipSize = 0;
-    int limitSize = -1;
+    final int skipSize = info.skip == null ? 0 : info.skip.getValue(context);
+    if (skipSize < 0)
+      throw new CommandExecutionException("Cannot execute a query with a negative SKIP");
 
-    try {
-      skipSize = info.skip == null ? 0 : info.skip.getValue(context);
-      if (skipSize < 0)
-        throw new CommandExecutionException("Cannot execute a query with a negative SKIP");
-
-      limitSize = info.limit == null ? -1 : info.limit.getValue(context);
-    } catch (final Exception e) {
-      // Limit/skip value depends on runtime context (e.g., LET variables)
-      // Use default values for planning, actual values will be used at execution time
-      skipSize = 0;
-      limitSize = -1;
-    }
-
+    final int limitSize = info.limit == null ? -1 : info.limit.getValue(context);
     Integer maxResults = null;
     if (limitSize >= 0)
       maxResults = skipSize + limitSize;
@@ -1647,9 +1538,7 @@ public class SelectExecutionPlanner {
       return false;
 
     for (BooleanExpression exp : subBlocks) {
-      // Check if expression contains a variable reference (starts with or contains "$")
-      // An expression like "#X:Y IN $brain" doesn't start with "$" but contains a variable reference
-      if (exp.toString().contains("$"))
+      if (exp.toString().startsWith("$"))
         return true;
     }
     return false;
@@ -2498,12 +2387,12 @@ public class SelectExecutionPlanner {
     final Set<String> bucketNames = new HashSet<>();
 
     for (final Bucket parserBucket : buckets) {
-      String name = resolveBucketName(parserBucket, context);
+      String name = parserBucket.getBucketName();
       Integer bucketId = parserBucket.getBucketNumber();
       if (name == null && bucketId != null)
         name = db.getSchema().getBucketById(bucketId).getName();
 
-      if (bucketId == null && name != null) {
+      if (bucketId == null) {
         final com.arcadedb.engine.Bucket bucket = db.getSchema().getBucketByName(name);
         if (bucket != null)
           bucketId = bucket.getFileId();
@@ -2556,12 +2445,9 @@ public class SelectExecutionPlanner {
 
       Integer bucketId = parserBucket.getBucketNumber();
       if (bucketId == null) {
-        final String resolvedName = resolveBucketName(parserBucket, context);
-        if (resolvedName != null) {
-          final com.arcadedb.engine.Bucket bucket = db.getSchema().getBucketByName(resolvedName);
-          if (bucket != null)
-            bucketId = bucket.getFileId();
-        }
+        final com.arcadedb.engine.Bucket bucket = db.getSchema().getBucketByName(parserBucket.getBucketName());
+        if (bucket != null)
+          bucketId = bucket.getFileId();
       }
 
       if (bucketId == null)
@@ -2580,12 +2466,9 @@ public class SelectExecutionPlanner {
 
         Integer bucketId = parserBucket.getBucketNumber();
         if (bucketId == null) {
-          final String resolvedName = resolveBucketName(parserBucket, context);
-          if (resolvedName != null) {
-            final com.arcadedb.engine.Bucket bucket = db.getSchema().getBucketByName(resolvedName);
-            if (bucket != null)
-              bucketId = bucket.getFileId();
-          }
+          final com.arcadedb.engine.Bucket bucket = db.getSchema().getBucketByName(parserBucket.getBucketName());
+          if (bucket != null)
+            bucketId = bucket.getFileId();
         }
 
         if (bucketId == null) {
@@ -2596,31 +2479,6 @@ public class SelectExecutionPlanner {
       final FetchFromClustersExecutionStep step = new FetchFromClustersExecutionStep(bucketIds, context, orderByRidAsc);
       plan.chain(step);
     }
-  }
-
-  /**
-   * Resolves the bucket name from a Bucket object, handling parameterized bucket names.
-   * If the bucket has an inputParam, it resolves the parameter value from the context.
-   *
-   * @param parserBucket the bucket object to resolve
-   * @param context      the command context containing input parameters
-   * @return the resolved bucket name, or null if it cannot be resolved
-   */
-  private String resolveBucketName(final Bucket parserBucket, final CommandContext context) {
-    // First check for literal bucket name
-    if (parserBucket.getBucketName() != null) {
-      return parserBucket.getBucketName();
-    }
-
-    // Check for input parameter
-    if (parserBucket.getInputParam() != null) {
-      final Object paramValue = parserBucket.getInputParam().getValue(context.getInputParameters());
-      if (paramValue != null) {
-        return paramValue.toString();
-      }
-    }
-
-    return null;
   }
 
   private void handleSubqueryAsTarget(final SelectExecutionPlan plan, final Statement subQuery, final CommandContext context) {
@@ -2695,33 +2553,11 @@ public class SelectExecutionPlanner {
 
     if (item.getIdentifier() != null) {
       if (item.getIdentifier().getStringValue().startsWith("$")) {
-        // RESOLVE VARIABLE - use getVariablePath to support nested paths like $parent.$current.@rid
-        final Object value = context.getVariablePath(item.toString());
+        // RESOLVE VARIABLE
+        final Object value = context.getVariable(item.toString());
         if (value != null) {
-          // Handle RID string (e.g., '#1:143') - Issue #2350
-          if (value instanceof String strValue && strValue.startsWith("#")) {
-            final RID rid = new RID(db, strValue);
-            if (item.getRids() == null) {
-              item.setRids(new ArrayList<>());
-            }
-            item.getRids().add(new Rid(rid));
-            item.setIdentifier(null);
-          } else if (value instanceof RID rid) {
-            // Handle RID object directly
-            if (item.getRids() == null) {
-              item.setRids(new ArrayList<>());
-            }
-            item.getRids().add(new Rid(rid));
-            item.setIdentifier(null);
-          } else if (value instanceof Identifiable || value instanceof ResultSet) {
-            // Handle Identifiable or ResultSet through setValue
-            item.setValue(value);
-            item.setIdentifier(null);
-          } else if (value instanceof String typeName) {
-            // Handle type name string - resolve as type
-            item.setIdentifier(new Identifier(typeName));
-          }
-          // For other types, keep the identifier as-is and let handleFetchFromTarget deal with it
+          item.setValue(value);
+          item.setIdentifier(null);
         }
       }
     }
@@ -2740,12 +2576,8 @@ public class SelectExecutionPlanner {
     } else if (item.getInputParams() != null && item.getInputParams().size() > 0) {
       return null;
     } else if (item.getBucket() != null) {
-      // If bucket has an input parameter, defer resolution to runtime
-      if (item.getBucket().getInputParam() != null) {
-        return null;
-      }
       String name = item.getBucket().getBucketName();
-      if (name == null && item.getBucket().getBucketNumber() != null) {
+      if (name == null) {
         name = db.getSchema().getBucketById(item.getBucket().getBucketNumber()).getName();
       }
       if (name != null) {

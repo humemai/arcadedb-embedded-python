@@ -44,17 +44,17 @@ public abstract class CreateTypeAbstractStatement extends DDLStatement {
   /**
    * Direct superclasses for this class
    */
-  public List<Identifier> supertypes;
+  protected List<Identifier> supertypes;
 
   /**
    * Cluster IDs for this class
    */
-  public List<BucketIdentifier> buckets;
+  protected List<BucketIdentifier> buckets;
 
   /**
    * Total number clusters for this class
    */
-  public PInteger totalBucketNo;
+  protected PInteger totalBucketNo;
 
   public CreateTypeAbstractStatement(final int id) {
     super(id);

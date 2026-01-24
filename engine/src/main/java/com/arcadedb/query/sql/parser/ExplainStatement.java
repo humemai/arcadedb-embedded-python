@@ -31,7 +31,7 @@ import java.util.*;
 
 public class ExplainStatement extends Statement {
 
-  public Statement statement;
+  protected Statement statement;
 
   public ExplainStatement(final int id) {
     super(id);
@@ -51,7 +51,6 @@ public class ExplainStatement extends Statement {
     }
     context.setDatabase(db);
     context.setInputParameters(args);
-    context.setProfiling(true);
 
     final ExecutionPlan executionPlan = statement.createExecutionPlan(context);
 
@@ -67,7 +66,6 @@ public class ExplainStatement extends Statement {
     }
     context.setDatabase(db);
     context.setInputParameters(params);
-    context.setProfiling(true);
 
     final ExecutionPlan executionPlan = statement.createExecutionPlan(context);
 

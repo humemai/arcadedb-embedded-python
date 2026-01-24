@@ -31,8 +31,8 @@ import java.util.*;
 import java.util.stream.*;
 
 public class WhileBlock extends Statement {
-  public BooleanExpression condition;
-  public List<Statement>   statements = new ArrayList<>();
+  protected BooleanExpression condition;
+  protected List<Statement>   statements = new ArrayList<>();
 
   public WhileBlock(final int id) {
     super(id);

@@ -40,7 +40,6 @@ public class UpdateExecutionPlanner {
   private final   FromClause             target;
   public final    WhereClause            whereClause;
   protected final boolean                upsert;
-  protected final boolean                applyDefaults;
   protected final List<UpdateOperations> operations;
   protected final boolean                returnBefore;
   protected final boolean                returnAfter;
@@ -58,7 +57,6 @@ public class UpdateExecutionPlanner {
             null :
             oUpdateStatement.getOperations().stream().map(x -> x.copy()).collect(Collectors.toList());
     this.upsert = oUpdateStatement.isUpsert();
-    this.applyDefaults = oUpdateStatement.isApplyDefaults();
 
     this.returnBefore = oUpdateStatement.isReturnBefore();
     this.returnAfter = oUpdateStatement.isReturnAfter();
@@ -79,7 +77,6 @@ public class UpdateExecutionPlanner {
     handleLimit(result, context, this.limit);
     handleReturnBefore(result, context, this.returnBefore);
     handleOperations(result, context, this.operations);
-    handleApplyDefaults(result, context, this.applyDefaults);
     handleSave(result, target.getItem().getBucket(), context);
     handleResultForReturnBefore(result, context, this.returnBefore, returnProjection);
     handleResultForReturnAfter(result, context, this.returnAfter, returnProjection);
@@ -159,13 +156,6 @@ public class UpdateExecutionPlanner {
       final boolean upsert) {
     if (upsert) {
       plan.chain(new UpsertStep(target, where, context));
-    }
-  }
-
-  private void handleApplyDefaults(final UpdateExecutionPlan plan, final CommandContext context,
-      final boolean applyDefaults) {
-    if (applyDefaults) {
-      plan.chain(new ApplyDefaultsStep(context));
     }
   }
 

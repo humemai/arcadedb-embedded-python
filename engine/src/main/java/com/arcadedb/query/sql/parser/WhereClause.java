@@ -35,7 +35,7 @@ import java.util.*;
 import java.util.stream.*;
 
 public class WhereClause extends SimpleNode {
-  public BooleanExpression baseExpression;
+  protected BooleanExpression baseExpression;
   protected List<AndBlock>    flattened;
 
   public WhereClause(final int id) {
@@ -46,36 +46,10 @@ public class WhereClause extends SimpleNode {
     if (baseExpression == null)
       return true;
 
-    final Boolean result = baseExpression.evaluate(currentRecord, context);
-    // In WHERE clause filtering context, treat null as false
-    return result != null ? result : false;
-  }
-
-  public Boolean matchesFilters(final Result currentRecord, final CommandContext context) {
-    if (baseExpression == null)
-      return true;
-
-    final Boolean result = baseExpression.evaluate(currentRecord, context);
-    // In WHERE clause filtering context, treat null as false
-    return result != null ? result : false;
-  }
-
-  /**
-   * Evaluates the boolean expression and preserves null values (SQL three-valued logic).
-   * Use this method for expression evaluation in SELECT clauses.
-   */
-  public Boolean evaluateExpression(final Identifiable currentRecord, final CommandContext context) {
-    if (baseExpression == null)
-      return true;
-
     return baseExpression.evaluate(currentRecord, context);
   }
 
-  /**
-   * Evaluates the boolean expression and preserves null values (SQL three-valued logic).
-   * Use this method for expression evaluation in SELECT clauses.
-   */
-  public Boolean evaluateExpression(final Result currentRecord, final CommandContext context) {
+  public Boolean matchesFilters(final Result currentRecord, final CommandContext context) {
     if (baseExpression == null)
       return true;
 
@@ -237,22 +211,6 @@ public class WhereClause extends SimpleNode {
 
   public static Object convert(final Object o, final Type oType) {
     return Type.convert(null, o, oType.getDefaultJavaType());
-  }
-
-  /**
-   * Exports this WhereClause as a JSON-compatible Map for debugging and profiling.
-   *
-   * @return Map representing the AST structure in JSON format
-   */
-  public Map<String, Object> toJSON() {
-    final Map<String, Object> json = new LinkedHashMap<>();
-    json.put("@class", "WhereClause");
-
-    if (baseExpression != null) {
-      json.put("condition", baseExpression.toString());
-    }
-
-    return json;
   }
 }
 /* JavaCC - OriginalChecksum=e8015d01ce1ab2bc337062e9e3f2603e (do not edit this line) */

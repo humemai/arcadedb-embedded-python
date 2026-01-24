@@ -25,12 +25,11 @@ import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.query.sql.executor.AggregationContext;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
-import com.arcadedb.schema.Property;
 
 import java.util.*;
 
 public class LevelZeroIdentifier extends SimpleNode {
-  public FunctionCall functionCall;
+  protected FunctionCall functionCall;
   protected Boolean      self;
   protected PCollection  collection;
 
@@ -42,7 +41,7 @@ public class LevelZeroIdentifier extends SimpleNode {
     if (functionCall != null) {
       functionCall.toString(params, builder);
     } else if (Boolean.TRUE.equals(self)) {
-      builder.append(Property.THIS_PROPERTY);
+      builder.append("@this");
     } else if (collection != null) {
       collection.toString(params, builder);
     }
@@ -261,22 +260,5 @@ public class LevelZeroIdentifier extends SimpleNode {
   protected SimpleNode[] getCacheableElements() {
     return new SimpleNode[] { functionCall, collection };
   }
-  @Override
-  public Map<String, Object> toJSON() {
-    final Map<String, Object> json = super.toJSON();
-
-    if (functionCall != null) {
-      json.put("functionCall", functionCall.toString());
-    }
-    if (self != null) {
-      json.put("self", self);
-    }
-    if (collection != null) {
-      json.put("collection", collection.toString());
-    }
-
-    return json;
-  }
-
 }
 /* JavaCC - OriginalChecksum=0305fcf120ba9395b4c975f85cdade72 (do not edit this line) */

@@ -24,7 +24,7 @@ import java.util.*;
 
 public class PositionalParameter extends InputParameter {
 
-  public int paramNumber;
+  protected int paramNumber;
 
   public PositionalParameter(final int id) {
     super(id);

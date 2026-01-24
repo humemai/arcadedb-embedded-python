@@ -29,9 +29,9 @@ import java.util.*;
 
 public class CommitStatement extends SimpleExecStatement {
 
-  public PInteger        retry;
-  public List<Statement> elseStatements;
-  public Boolean         elseFail;
+  protected PInteger        retry;
+  protected List<Statement> elseStatements;
+  protected Boolean         elseFail;
 
   public CommitStatement(final int id) {
     super(id);

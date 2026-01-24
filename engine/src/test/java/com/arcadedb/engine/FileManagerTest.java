@@ -40,64 +40,65 @@ import static org.assertj.core.api.AssertionsForClassTypes.assertThatExceptionOf
  */
 @EnabledOnOs({OS.LINUX, OS.MAC})
 public class FileManagerTest {
-  public static final Set<String> FILE_EXT = Set.of(Dictionary.DICT_EXT,
-      LocalBucket.BUCKET_EXT, LSMTreeIndexMutable.NOTUNIQUE_INDEX_EXT, LSMTreeIndexMutable.UNIQUE_INDEX_EXT,
-      LSMTreeIndexCompacted.NOTUNIQUE_INDEX_EXT, LSMTreeIndexCompacted.UNIQUE_INDEX_EXT);
 
-  @Test
-  void construtor_failure_noPermissionsDirectory(@TempDir Path dir) throws Exception {
-    // arrange
+    public static final Set<String> FILE_EXT = Set.of(Dictionary.DICT_EXT,
+            LocalBucket.BUCKET_EXT, LSMTreeIndexMutable.NOTUNIQUE_INDEX_EXT, LSMTreeIndexMutable.UNIQUE_INDEX_EXT,
+            LSMTreeIndexCompacted.NOTUNIQUE_INDEX_EXT, LSMTreeIndexCompacted.UNIQUE_INDEX_EXT);
 
-    Set<PosixFilePermission> noPerms = EnumSet.noneOf(PosixFilePermission.class);
-    Files.setPosixFilePermissions(dir, noPerms);
+    @Test
+    void construtor_failure_noPermissionsDirectory(@TempDir Path dir) throws Exception {
+        // arrange
 
-    // act and assert
-    assertThatExceptionOfType(IllegalArgumentException.class).isThrownBy(() -> {
-      new FileManager(dir.toFile().getAbsolutePath(), ComponentFile.MODE.READ_WRITE, FILE_EXT);
-    });
+        Set<PosixFilePermission> noPerms = EnumSet.noneOf(PosixFilePermission.class);
+        Files.setPosixFilePermissions(dir, noPerms);
 
-    // reset permissions to allow cleanup
-    Set<PosixFilePermission> restorePerms = PosixFilePermissions.fromString("rwx------");
-    Files.setPosixFilePermissions(dir, restorePerms);
-  }
+      // act and assert
+      assertThatExceptionOfType(IllegalArgumentException.class).isThrownBy(() -> {
+        new FileManager(dir.toFile().getAbsolutePath(), ComponentFile.MODE.READ_WRITE, FILE_EXT);
+      });
 
-  @Test
-  void construtor_failure_parentDirectoryWithNoPermissions(@TempDir Path dir) throws Exception {
-    // arrange
-    Set<PosixFilePermission> noPerms = EnumSet.noneOf(PosixFilePermission.class);
-    Files.setPosixFilePermissions(dir, noPerms);
+        // reset permissions to allow cleanup
+        Set<PosixFilePermission> restorePerms = PosixFilePermissions.fromString("rwx------");
+        Files.setPosixFilePermissions(dir, restorePerms);
+    }
 
-    // act and assert
-    assertThatExceptionOfType(IllegalArgumentException.class).isThrownBy(() -> {
-      new FileManager(dir.toFile().getAbsolutePath() + "/child", ComponentFile.MODE.READ_WRITE, FILE_EXT);
-    });
+    @Test
+    void construtor_failure_parentDirectoryWithNoPermissions(@TempDir Path dir) throws Exception {
+        // arrange
+        Set<PosixFilePermission> noPerms = EnumSet.noneOf(PosixFilePermission.class);
+        Files.setPosixFilePermissions(dir, noPerms);
 
-    // cleanup
-    Set<PosixFilePermission> restorePerms = PosixFilePermissions.fromString("rwx------");
-    Files.setPosixFilePermissions(dir, restorePerms);
-  }
+      // act and assert
+      assertThatExceptionOfType(IllegalArgumentException.class).isThrownBy(() -> {
+        new FileManager(dir.toFile().getAbsolutePath() + "/child", ComponentFile.MODE.READ_WRITE, FILE_EXT);
+      });
 
-  @Test
-  void construtor_success_emptyDirectory(@TempDir Path dir) throws Exception {
-    // arrange
-    // act
-    FileManager fileManager = new FileManager(dir.toFile().getAbsolutePath(), ComponentFile.MODE.READ_WRITE, FILE_EXT);
+        // cleanup
+        Set<PosixFilePermission> restorePerms = PosixFilePermissions.fromString("rwx------");
+        Files.setPosixFilePermissions(dir, restorePerms);
+    }
 
-    // assert
-    assertThat(fileManager.getFiles().isEmpty()).isTrue();
-  }
+    @Test
+    void construtor_success_emptyDirectory(@TempDir Path dir) throws Exception {
+        // arrange
+        // act
+        FileManager fileManager = new FileManager(dir.toFile().getAbsolutePath(), ComponentFile.MODE.READ_WRITE, FILE_EXT);
 
-  @Test
-  void construtor_success_noDirectory() throws Exception {
-    // arrange
-    Path dir = Path.of(System.getProperty("java.io.tmpdir"), "nonExistentDir");
+      // assert
+      assertThat(fileManager.getFiles().isEmpty()).isTrue();
+    }
 
-    // act
-    FileManager fileManager = new FileManager(dir.toFile().getAbsolutePath(), ComponentFile.MODE.READ_WRITE, FILE_EXT);
+    @Test
+    void construtor_success_noDirectory() throws Exception {
+        // arrange
+        Path dir = Path.of(System.getProperty("java.io.tmpdir"), "nonExistentDir");
 
-    // assert
-    assertThat(fileManager.getFiles().isEmpty()).isTrue();
-    // cleanup
-    Files.deleteIfExists(dir);
-  }
+        // act
+        FileManager fileManager = new FileManager(dir.toFile().getAbsolutePath(), ComponentFile.MODE.READ_WRITE, FILE_EXT);
+
+      // assert
+      assertThat(fileManager.getFiles().isEmpty()).isTrue();
+        // cleanup
+        Files.deleteIfExists(dir);
+    }
 }
