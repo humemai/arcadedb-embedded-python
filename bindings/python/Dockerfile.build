@@ -123,6 +123,8 @@ FROM python:${PYTHON_VERSION}-slim AS python-builder
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
+    file \
+    patchelf \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for faster, deterministic installs
@@ -153,7 +155,7 @@ COPY bindings/python/README.md ./
 COPY ../../pom.xml /arcadedb/pom.xml
 
 # Install Python build dependencies
-RUN uv pip install --system build wheel setuptools jpype1
+RUN uv pip install --system build wheel setuptools jpype1 auditwheel
 
 # Re-declare build args for this stage (required after FROM)
 ARG PACKAGE_NAME
@@ -187,6 +189,23 @@ RUN if [ -n "${BUILD_VERSION}" ]; then \
     sed -i 's|^version = .*|version = "'"${ARCADEDB_VERSION}"'"|' pyproject.toml && \
     sed -i 's|^description = .*|description = "'"${PACKAGE_DESCRIPTION}"'"|' pyproject.toml && \
     python3 -m build --wheel && \
+    if echo "${TARGET_PLATFORM}" | grep -q '^linux-'; then \
+        if [ "${TARGET_PLATFORM}" = "linux-x64" ]; then \
+            AUDITWHEEL_PLAT="manylinux_2_35_x86_64"; \
+        elif [ "${TARGET_PLATFORM}" = "linux-arm64" ]; then \
+            AUDITWHEEL_PLAT="manylinux_2_35_aarch64"; \
+        else \
+            AUDITWHEEL_PLAT=""; \
+        fi; \
+        if [ -n "${AUDITWHEEL_PLAT}" ]; then \
+            echo "🔧 Repairing wheel for ${AUDITWHEEL_PLAT}..."; \
+            mkdir -p /build/dist-repaired; \
+            auditwheel repair /build/dist/*.whl --plat "${AUDITWHEEL_PLAT}" -w /build/dist-repaired; \
+            rm -f /build/dist/*.whl; \
+            mv /build/dist-repaired/*.whl /build/dist/; \
+            rmdir /build/dist-repaired; \
+        fi; \
+    fi && \
     echo "✅ Wheel built successfully!" && \
     ls -lh dist/
 
