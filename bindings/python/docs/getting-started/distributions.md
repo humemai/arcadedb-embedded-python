@@ -23,18 +23,18 @@ The package includes everything you need:
 - **ArcadeDB JARs** (~32MB, uncompressed): Core database with all features
 - **Bundled JRE** (~249MB, uncompressed): Platform-specific Java 25 runtime (via jlink)
 
-**Total:** ~116MB compressed wheel, ~281MB uncompressed installed size (ballpark)
+**Total:** ~116MB compressed wheel, ~281MB uncompressed installed size
 
 ## Platform Support
 
-Pre-built **platform-specific** wheels are available for **6 platforms**. Sizes vary slightly by platform, but the ballpark totals are consistent (see size breakdown below).
+Pre-built **platform-specific** wheels are available for **3 platforms**. Sizes vary slightly by platform, but the ballpark totals are consistent (see size breakdown below).
 
 **Key Features:**
 
 - ✅ All platforms use **platform-specific wheels** (not universal)
 - ✅ uv pip automatically selects the correct wheel for your system
 - ✅ Each platform has its own bundled JRE optimized for that architecture
-- ✅ All 6 platforms tested and verified (252/252 tests passing)
+- ✅ All supported platforms tested and verified (252/252 tests passing)
 - ✅ Built on native runners (no emulation) for optimal performance
 
 ## What's Included
@@ -141,7 +141,6 @@ uv pip automatically selects the correct platform-specific wheel:
 ```bash
 # On Linux x64, installs: arcadedb_embedded-X.Y.Z-py3-none-manylinux_2_17_x86_64.whl
 # On macOS ARM64, installs: arcadedb_embedded-X.Y.Z-py3-none-macosx_11_0_arm64.whl
-# On Windows x64, installs: arcadedb_embedded-X.Y.Z-py3-none-win_amd64.whl
 # etc.
 ```
 
