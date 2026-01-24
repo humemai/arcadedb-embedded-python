@@ -116,7 +116,7 @@ Browse all examples:
 
 ## Source Code
 
-All example source code is available in the [`examples/`](https://github.com/humemai/arcadedb-embedded-python/tree/main/bindings/python/examples) directory of the repository.
+All example source code is available in the [`examples/`]({{ config.repo_url }}/tree/{{ config.extra.version_tag }}/bindings/python/examples) directory of the repository.
 
 ## Additional Resources
 
