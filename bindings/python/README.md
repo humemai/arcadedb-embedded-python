@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 252 Passing | **Platforms**: 6 Supported
+**Status**: ✅ Production Ready | **Tests**: 252 Passing | **Platforms**: 3 Supported
 
 ---
 
@@ -31,10 +31,9 @@ uv pip install arcadedb-embedded
 **Requirements:**
 
 - **Python 3.10–3.14** (packaged/tested on CPython 3.12) - No Java installation required!
-- **Supported Platforms**: Prebuilt wheels for **6 platforms**
+- **Supported Platforms**: Prebuilt wheels for **3 platforms**
   - Linux: x86_64, ARM64
-  - macOS: Intel (x86_64), Apple Silicon (ARM64)
-  - Windows: x86_64, ARM64
+  - macOS: Apple Silicon (ARM64)
 - **Development version**: Use `--pre` flag to install `.devN` versions
 
 !!! tip "Development Releases"
@@ -72,7 +71,7 @@ with arcadedb.create_database("./mydb") as db:
 ## ✨ Features
 
 - ☕ **No Java Installation Required**: Bundled JRE (~249MB uncompressed)
-- 🌍 **6 Platforms Supported**: Linux, macOS, Windows (x86_64 + ARM64)
+- 🌍 **3 Platforms Supported**: Linux (x86_64, ARM64), macOS (ARM64)
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network)
 - 🌐 **Server Mode**: Optional HTTP server with Studio web interface
 - 📦 **Self-contained**: All dependencies bundled (~116MB wheel)
@@ -89,7 +88,7 @@ with arcadedb.create_database("./mydb") as db:
 
 The `arcadedb-embedded` package is platform-specific and self-contained:
 
-**Package Contents (all platforms, ballpark):**
+**Package Contents (all platforms):**
 
 - **Wheel size (compressed)**: ~116MB
 - **ArcadeDB JARs (uncompressed)**: ~32MB
@@ -104,7 +103,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 252 tests + 7 example scripts passing on all 6 platforms
+**Status**: 252 tests + example scripts passing on all 3 platforms
 
 ```bash
 # Run all tests
@@ -123,7 +122,7 @@ See [tests/README.md](tests/README.md) for detailed test documentation.
 **Requirements vary by platform:**
 
 - **Linux**: Docker (handles all dependencies)
-- **macOS/Windows**: Java 25+ JDK with jlink (to build the bundled JRE)
+- **macOS**: Java 25+ JDK with jlink (to build the bundled JRE)
 
 ### Setup Virtual Environment
 
@@ -156,7 +155,6 @@ uv pip install -e ".[test]"
 # Build for specific platform
 ./build.sh linux/amd64    # Requires Docker
 ./build.sh darwin/arm64   # Requires Java JDK (native build)
-./build.sh windows/arm64  # Requires Java JDK (native build)
 # etc.
 ```
 
@@ -181,7 +179,7 @@ Built wheels will be in `dist/`. **[Build instructions](https://humemai.github.i
 - `windows/amd64` (Native build on Windows x64)
 - `windows/arm64` (Native build on Windows ARM64)
 
-> **Developer Note:** See [docs/development/build-architecture.md](docs/development/build-architecture.md) for comprehensive documentation of the multi-platform build architecture, including how we achieve platform-specific JRE bundling across all 6 platforms on GitHub Actions.
+> **Developer Note:** See [docs/development/build-architecture.md](docs/development/build-architecture.md) for comprehensive documentation of the multi-platform build architecture, including how we achieve platform-specific JRE bundling across the supported platforms on GitHub Actions.
 
 ## Development
 

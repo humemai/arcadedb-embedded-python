@@ -98,4 +98,4 @@ db = server.create_database("mydb")
 
 - **Questions?** See the [Testing Guide](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/)
 - **Found a bug?** [Open an issue](https://github.com/humemai/arcadedb-embedded-python/issues)
-- **Contributing?** Read [Contributing Guide](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/CONTRIBUTING.md)
+- **Contributing?** Read [Contributing Guide](https://github.com/humemai/arcadedb-embedded-python/blob/main/CONTRIBUTING.md)

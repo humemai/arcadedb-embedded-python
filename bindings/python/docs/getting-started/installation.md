@@ -11,10 +11,9 @@ uv pip install arcadedb-embedded
 **Requirements:**
 
 - **Python 3.10–3.14** (packaged; primary testing on 3.12) - No Java installation required!
-- **Supported Platforms**: Prebuilt wheels for **6 platforms**
+- **Supported Platforms**: Prebuilt wheels for **3 platforms**
   - Linux: x86_64, ARM64
-  - macOS: Intel (x86_64), Apple Silicon (ARM64)
-  - Windows: x86_64, ARM64
+  - macOS: Apple Silicon (ARM64)
 
 ## What's Included
 
