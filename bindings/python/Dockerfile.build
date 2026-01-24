@@ -188,22 +188,28 @@ RUN if [ -n "${BUILD_VERSION}" ]; then \
     sed -i 's|^name = .*|name = "'"${PACKAGE_NAME}"'"|' pyproject.toml && \
     sed -i 's|^version = .*|version = "'"${ARCADEDB_VERSION}"'"|' pyproject.toml && \
     sed -i 's|^description = .*|description = "'"${PACKAGE_DESCRIPTION}"'"|' pyproject.toml && \
-    python3 -m build --wheel && \
     if echo "${TARGET_PLATFORM}" | grep -q '^linux-'; then \
         if [ "${TARGET_PLATFORM}" = "linux-x64" ]; then \
-            AUDITWHEEL_PLAT="manylinux_2_35_x86_64"; \
+            WHEEL_PLAT="manylinux_2_35_x86_64"; \
         elif [ "${TARGET_PLATFORM}" = "linux-arm64" ]; then \
-            AUDITWHEEL_PLAT="manylinux_2_35_aarch64"; \
+            WHEEL_PLAT="manylinux_2_35_aarch64"; \
         else \
-            AUDITWHEEL_PLAT=""; \
+            WHEEL_PLAT=""; \
         fi; \
-        if [ -n "${AUDITWHEEL_PLAT}" ]; then \
-            echo "🔧 Repairing wheel for ${AUDITWHEEL_PLAT}..."; \
-            mkdir -p /build/dist-repaired; \
-            auditwheel repair /build/dist/*.whl --plat "${AUDITWHEEL_PLAT}" -w /build/dist-repaired; \
-            rm -f /build/dist/*.whl; \
-            mv /build/dist-repaired/*.whl /build/dist/; \
-            rmdir /build/dist-repaired; \
+        if [ -n "${WHEEL_PLAT}" ]; then \
+            echo "🏷️  Building wheel with platform tag: ${WHEEL_PLAT}"; \
+            python3 -m build --wheel --config-setting=--build-option=--plat-name=${WHEEL_PLAT}; \
+        else \
+            python3 -m build --wheel; \
+        fi; \
+    else \
+        python3 -m build --wheel; \
+    fi && \
+    if echo "${TARGET_PLATFORM}" | grep -q '^linux-'; then \
+        if [ -n "${WHEEL_PLAT}" ] && ! ls /build/dist/*${WHEEL_PLAT}*.whl 1> /dev/null 2>&1; then \
+            echo "❌ Expected manylinux wheel (${WHEEL_PLAT}) not found"; \
+            ls -lh /build/dist; \
+            exit 1; \
         fi; \
     fi && \
     echo "✅ Wheel built successfully!" && \
