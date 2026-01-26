@@ -11,6 +11,7 @@ Start with the simplest use case - storing and querying documents:
 **[Example 01 - Simple Document Store](01_simple_document_store.md)**
 
 Learn how to:
+
 - Create a database and document types
 - Insert documents with various data types
 - Query using SQL

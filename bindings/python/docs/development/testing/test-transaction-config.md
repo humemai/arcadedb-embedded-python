@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_transaction_config.py){ .md-button }
 
-These notes mirror the Python tests in [test_transaction_config.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_transaction_config.py). There are 9 tests covering transaction isolation levels, WAL configuration, retry logic, timeouts, read-only transactions, nesting, and rollback scenarios. See [test_transaction_config.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_transaction_config.py) for all implementations.
+here are 9 tests covering transaction isolation levels, WAL configuration, retry logic, timeouts, read-only transactions, nesting, and rollback scenarios.
 
 ## Key Config Options
 
@@ -16,11 +16,13 @@ These notes mirror the Python tests in [test_transaction_config.py]({{ config.re
 Tests transaction isolation levels.
 
 **What it tests:**
+
 - READ_COMMITTED: Other changes visible
 - REPEATABLE_READ: Consistent snapshot
 - Isolation level enforcement
 
 **Pattern:**
+
 ```python
 # READ_COMMITTED
 with db.transaction(isolation_level="READ_COMMITTED"):
@@ -39,11 +41,13 @@ with db.transaction(isolation_level="REPEATABLE_READ"):
 Tests Write-Ahead Log settings.
 
 **What it tests:**
+
 - Enabling/disabling WAL
 - WAL performance impact
 - Durability vs speed tradeoff
 
 **Pattern:**
+
 ```python
 # With WAL (durable)
 with db.transaction(use_wal=True):
@@ -65,6 +69,7 @@ with db.transaction(use_wal=False):
 Tests automatic retry configuration.
 
 **What it tests:**
+
 - Retry on write conflicts
 - Max retry attempts
 - Exponential backoff
@@ -90,6 +95,7 @@ with db.transaction(retry_on_conflict=True, max_retries=3):
 Tests transaction timeout configuration.
 
 **What it tests:**
+
 - Setting timeout in seconds
 - Timeout exception raised
 - Cleanup after timeout
@@ -110,6 +116,7 @@ except TransactionTimeoutException:
 Tests read-only transaction optimization.
 
 **What it tests:**
+
 - Creating read-only transaction
 - Attempts to write raise error
 - Performance benefits
@@ -135,6 +142,7 @@ with db.transaction(read_only=True):
 Tests automatic rollback on exceptions.
 
 **What it tests:**
+
 - Exception triggers rollback
 - No changes persisted
 - Database state unchanged
@@ -166,6 +174,7 @@ assert db.count_type("User") == initial_count
 Tests explicit rollback call.
 
 **What it tests:**
+
 - Manual `db.rollback()` call
 - Changes discarded
 - Transaction can continue after rollback
@@ -194,6 +203,7 @@ with db.transaction():
 Tests nested transaction handling.
 
 **What it tests:**
+
 - Nested transactions not supported (or use savepoints)
 - Inner transaction behavior
 - Rollback scope
@@ -221,6 +231,7 @@ with db.transaction():
 Tests performance of different configurations.
 
 **What it tests:**
+
 - WAL enabled vs disabled speed
 - Batch size impact
 - Read-only performance

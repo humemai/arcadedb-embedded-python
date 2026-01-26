@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py){ .md-button }
 
-These notes mirror the Python tests in [test_type_conversion.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py). There are 10 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), datetime types, Decimal, collections (list, set, dict), binary, and round-trip verification. See [test_type_conversion.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py) for all test implementations.
+There are 10 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), datetime types, Decimal, collections (list, set, dict), binary, and round-trip verification.
 
 ## Key Types
 
@@ -39,6 +39,7 @@ assert result.get("none_val") is None
 Tests datetime type conversion.
 
 **What it tests:**
+
 - datetime → LocalDateTime
 - date → LocalDate
 - time → LocalTime
@@ -69,6 +70,7 @@ assert result.get("start_time") == time(14, 30, 0)
 Tests high-precision decimal conversion.
 
 **What it tests:**
+
 - Decimal → BigDecimal
 - Precision preservation
 - Financial calculations
@@ -100,6 +102,7 @@ assert tax == Decimal("1.60")
 Tests list type conversion.
 
 **What it tests:**
+
 - list → ArrayList
 - Order preservation
 - Nested lists
@@ -128,6 +131,7 @@ assert result.get("nested") == [[1, 2], [3, 4]]
 Tests set type conversion.
 
 **What it tests:**
+
 - set → HashSet
 - Uniqueness preserved
 - Order not guaranteed
@@ -155,6 +159,7 @@ assert "admin" in roles
 Tests dictionary type conversion.
 
 **What it tests:**
+
 - dict → HashMap
 - Nested dictionaries
 - Key/value preservation
@@ -190,6 +195,7 @@ assert profile["address"]["city"] == "New York"
 Tests binary data conversion.
 
 **What it tests:**
+
 - bytes → byte[]
 - Binary data preservation
 - Large binary data
@@ -217,6 +223,7 @@ assert retrieved == binary_data
 Tests None/null handling.
 
 **What it tests:**
+
 - None → null
 - null → None
 - Optional properties
@@ -241,6 +248,7 @@ assert result.get("middle_name") is None
 Tests large integer handling.
 
 **What it tests:**
+
 - Small int → Integer
 - Large int → Long
 - Int range handling
@@ -268,6 +276,7 @@ assert result.get("large") == 2 ** 40
 Tests full round-trip preservation.
 
 **What it tests:**
+
 - Python → Java → Python
 - All types preserved
 - No data loss

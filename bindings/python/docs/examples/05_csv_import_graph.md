@@ -487,6 +487,7 @@ export ARCADEDB_JVM_ARGS="-Xms8g"
 **[Example 06 - Vector Search: Movie Recommendations](06_vector_search_recommendations.md)**
 
 Semantic similarity search with MovieLens data:
+
 - Generate embeddings from movie titles/genres
 - Build HNSW (JVector) index for nearest-neighbor search
 - Find similar movies using cosine distance

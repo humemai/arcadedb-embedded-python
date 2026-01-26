@@ -1,8 +1,8 @@
 # BatchContext Tests
 
-The `test_batch_context.py` file contains **13 tests** covering high-level batch operations with progress tracking.
-
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_batch_context.py){ .md-button }
+
+The file contains **13 tests** covering high-level batch operations with progress tracking.
 
 ## Overview
 
@@ -82,6 +82,7 @@ print(f"Speedup: {txn_time / batch_time:.1f}x")
 Tests batch context with zero records.
 
 **What it tests:**
+
 - Creating batch context but not adding records
 - No errors thrown
 - Success count is 0
@@ -101,6 +102,7 @@ assert len(batch.get_errors()) == 0
 Tests batch context with single record.
 
 **What it tests:**
+
 - Creating just one record
 - Works correctly even with small count
 - Record created successfully
@@ -119,6 +121,7 @@ assert db.count_type("User") == 1
 Tests that nested batch contexts are not supported.
 
 **What it tests:**
+
 - Attempting to nest batch contexts
 - Should raise error or handle gracefully
 

@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_numpy_support.py){ .md-button }
 
-These notes mirror the Python tests in [test_numpy_support.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_numpy_support.py). There are 3 tests covering NumPy array storage, retrieval, and vector search integration. See [test_numpy_support.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_numpy_support.py) for implementations.
+There are 3 tests covering NumPy array storage, retrieval, and vector search integration.
 
 ## Coverage
 
@@ -14,6 +14,7 @@ These notes mirror the Python tests in [test_numpy_support.py]({{ config.repo_ur
 Tests storing and retrieving NumPy arrays.
 
 **What it tests:**
+
 - Storing NumPy array as vector property
 - Array type preservation
 - Round-trip conversion
@@ -42,6 +43,7 @@ np.testing.assert_array_almost_equal(embedding, stored_embedding)
 Tests vector similarity search with NumPy arrays.
 
 **What it tests:**
+
 - Creating HNSW (JVector) index on vector property
 - Inserting NumPy-generated embeddings
 - Performing similarity search
@@ -85,6 +87,7 @@ for result in results:
 Tests NumPy dtype handling.
 
 **What it tests:**
+
 - float32 → Java float[] conversion
 - float64 → Java double[] conversion
 - int32 → Java int[] conversion

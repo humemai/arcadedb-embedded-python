@@ -8,7 +8,7 @@ The CI/CD workflows now support building and releasing across **3 platforms** fo
 
 ### Single-Package Strategy
 
-- **arcadedb-embedded**: All platforms (~155-161MB) - JRE bundled, no external Java needed
+- **arcadedb-embedded**: All platforms (~63–115MB compressed) - JRE bundled, no external Java needed
 
 ### Platforms (All Native Runners)
 
@@ -26,9 +26,9 @@ The CI/CD workflows now support building and releasing across **3 platforms** fo
 
 - **Matrix**: `platform: [linux/amd64, linux/arm64, darwin/arm64]` and `python-version: [3.10, 3.11, 3.12, 3.13, 3.14]`
 - **Runners**: All native (no QEMU emulation)
-  - ubuntu-24.04 (Linux x64)
-  - ubuntu-24.04-arm (Linux ARM64)
-  - macos-15 (macOS Apple Silicon)
+    - ubuntu-24.04 (Linux x64)
+    - ubuntu-24.04-arm (Linux ARM64)
+    - macos-15 (macOS Apple Silicon)
 - **Jobs**: 15 total (3 platforms × 5 Python versions)
 - **Artifacts**: `wheel-{platform}-py{version}` (15 artifacts)
 
@@ -48,17 +48,17 @@ You need to create one environment in GitHub repository settings:
 
 - **PyPI Package**: `arcadedb-embedded`
 - **Trusted Publisher**:
-  - Repository: `humemai/arcadedb-embedded-python`
-  - Workflow: `release-python-packages.yml`
-  - Environment: `pypi`
+    - Repository: `humemai/arcadedb-embedded-python`
+    - Workflow: `release-python-packages.yml`
+    - Environment: `pypi`
 
 ### 2. Steps to Create Environment
 
 1. **Go to Repository Settings** → **Environments** → **New environment**
 2. **Create `pypi`** environment
 3. **Configure PyPI Trusted Publisher**:
-   - Go to https://pypi.org/manage/account/publishing/
-   - Add publisher for `arcadedb-embedded` (environment: `pypi`)
+    - Go to https://pypi.org/manage/account/publishing/
+    - Add publisher for `arcadedb-embedded` (environment: `pypi`)
 
 ### 3. First Release Steps
 
@@ -100,14 +100,14 @@ All 3 platforms passing 252 tests and example scripts:
 
 | Platform | Wheel Size | JRE Size | Tests |
 |----------|-----------|----------|-------|
-| linux/amd64 | 215.0M | 62.7M | 252 passed ✅ |
-| linux/arm64 | 214.1M | 61.8M | 252 passed ✅ |
-| darwin/arm64 | 210.8M | 53.9M | 252 passed ✅ |
+| linux/amd64 | 115.2M | 249.0M | 252 passed ✅ |
+| linux/arm64 | 114.1M | 249.6M | 252 passed ✅ |
+| darwin/arm64 | 63.1M | 55.1M | 252 passed ✅ |
 
 **All platforms include:**
 
-- 226.0M JARs (83 files, identical across platforms, gRPC excluded)
-- Platform-specific JRE (47-63MB depending on platform)
+- 31.7M JARs (83 files, identical across platforms, gRPC excluded)
+- Platform-specific JRE (55.1–249.6M uncompressed, depending on platform)
 - Native runners (no QEMU emulation anywhere)
 
 ## Cross-Platform Building
@@ -174,7 +174,6 @@ ls -1 dist/*.whl | wc -l  # Should output: 3
 
 All platforms now use platform-specific JVM library paths:
 
-- Windows: `bin/server/jvm.dll`
 - macOS: `lib/server/libjvm.dylib`
 - Linux: `lib/server/libjvm.so`
 

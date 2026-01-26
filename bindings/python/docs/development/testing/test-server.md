@@ -2,11 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_server.py){ .md-button }
 
-These notes mirror the Python tests in [test_server.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_server.py). There are 4 tests covering server creation, database operations, custom config, and context managers. For advanced patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
-
-## Test Cases
-
-All 4 tests verify basic server workflows: starting server, creating/accessing databases, ensuring databases persist, and proper cleanup. See [test_server.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_server.py) for implementation.
+There are 4 tests covering server creation, database operations, custom config, and context managers. For advanced patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
 
 ## Quick Example
 
