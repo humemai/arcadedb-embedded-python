@@ -1,8 +1,8 @@
 # AsyncExecutor Tests
 
-The `test_async_executor.py` file contains **8 tests** covering asynchronous operations and parallel execution.
-
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_async_executor.py){ .md-button }
+
+The file contains **8 tests** covering asynchronous operations and parallel execution.
 
 ## Overview
 
@@ -22,6 +22,7 @@ AsyncExecutor tests cover:
 Basic async record creation with 100 vertices (commit every 25).
 
 **What it tests:**
+
 - Getting async executor from database
 - Creating records asynchronously
 - `wait_completion()` blocks until done
@@ -47,6 +48,7 @@ async_exec.close()
 Automatic commit batching every 50 records; verifies 200 created.
 
 **What it tests:**
+
 - `set_commit_every(50)` commits every 50 records
 - Creating 200 records triggers 4 auto-commits
 - All records persisted after completion
@@ -71,6 +73,7 @@ async_exec.close()
 Uses 4 workers, 500 records; measures elapsed time (informational) and asserts count.
 
 **What it tests:**
+
 - `set_parallel_level(4)` sets 4 worker threads
 - Creates 500 records with parallel execution
 - Verifies all records created
@@ -96,6 +99,7 @@ async_exec.close()
 Chains `set_parallel_level(2)`, `set_commit_every(25)`, `set_back_pressure(75)`; asserts 100 created.
 
 **What it tests:**
+
 - Chaining `set_parallel_level()`, `set_commit_every()`, `set_back_pressure()`
 - All configurations applied correctly
 - Records created with chained settings

@@ -1,6 +1,6 @@
-# ![ArcadeDB](https://arcadedb.com/assets/images/arcadedb-logo.png)
+# ArcadeDB Embedded for Python
 
-<h2 align="center">Multi Model DBMS Built for Extreme Performance</h2>
+Native Python bindings for ArcadeDB (forked from the official Java project).
 
 <p align="center">
   <a href="https://github.com/ArcadeData/arcadedb/releases"><img src="https://img.shields.io/github/v/release/arcadedata/arcadedb?color=%23ff00a0&include_prereleases&label=version&sort=semver"></a>
@@ -42,9 +42,7 @@
   </a>
 </p>
 
-<p align="center">
-  <a href="https://discord.gg/w2Npx2B7hZ"><img width="208" height="97" src="https://arcadedb.com/assets/images/discord_button.png" alt="Join Discord"></a>
-</p>
+## ✨ What this repo provides
 
 <p align="center">
 	<a href="https://github.com/arcadedata/arcadedb"><img height="25" src="studio/src/main/resources/static/images/social/github.svg" alt="Github"></a>
@@ -71,10 +69,11 @@ some utility classes. It's written in LLJ: Low Level Java - still Java21+ but on
 mechanical sympathy techniques and reduce Garbage Collector pressure. Highly optimized for extreme performance, it runs
 from a Raspberry Pi to multiple servers on the cloud.
 
-ArcadeDB is fully transactional DBMS with support for ACID transactions, structured and unstructured data, native graph engine (no
-joins but links between records), full-text indexing, geospatial querying, and advanced security.
+## 🧱 What’s inside
 
-ArcadeDB supports the following models:
+- bindings/python: Python package source, build scripts, tests, and examples.
+- docs site: https://docs.humem.ai/arcadedb/
+- CI: Build/test workflows for bindings and examples (badges above).
 
 - [Graph Database](https://docs.arcadedb.com#graph-model) (compatible with Neo4j Cypher, Apache Tinkerpop Gremlin and OrientDB SQL)
 - [Document Database](https://docs.arcadedb.com#document-model) (compatible with the MongoDB driver + MongoDB queries and OrientDB
@@ -85,7 +84,9 @@ ArcadeDB supports the following models:
 - [Vector Embedding](https://docs.arcadedb.com/#vector-model)
 - [Geospatial](https://docs.arcadedb.com/#geospatial-model)
 
-ArcadeDB understands multiple languages:
+- Local embedded analytics without a separate server process.
+- Vector search and graph workloads from Python.
+- Running ArcadeDB in-process for testing or tooling.
 
 - [SQL](https://docs.arcadedb.com#sql) (from OrientDB SQL)
 - Neo4j [Cypher (Open Cypher)](https://docs.arcadedb.com#cypher)
@@ -114,7 +115,9 @@ ArcadeDB can be used as:
 - Remotely by using a [MongoDB driver](https://docs.arcadedb.com#mongodb-query-language) (only a subset of the operations are implemented)
 - By AI assistants via the built-in [MCP Server](https://docs.arcadedb.com/#mcp) (Model Context Protocol)
 
-For more information, see the [documentation](https://docs.arcadedb.com).
+- Lightweight Java 25 runtime (jlink) bundled per platform.
+- ArcadeDB JARs required for the embedded engine.
+- Python bindings and source modules.
 
 ### Use Cases
 
@@ -130,24 +133,26 @@ Explore real-world examples in the [arcadedb-usecases](https://github.com/Arcade
 
 ### Getting started in 5 minutes
 
-Start ArcadeDB Server with Docker:
+- Multi-model: Graph, Document, Key/Value, Vector, Time Series.
+- Query languages: SQL, OpenCypher, MongoDB.
+- ACID transactions and high performance.
 
-```
-docker run --rm -p 2480:2480 -p 2424:2424 \
-           -e JAVA_OPTS="-Darcadedb.server.rootPassword=playwithdata -Darcadedb.server.defaultDatabases=Imported[root]{import:https://github.com/ArcadeData/arcadedb-datasets/raw/main/orientdb/OpenBeer.gz}" \
-           arcadedata/arcadedb:latest
+## 🚀 Quick start (Python)
+
+```bash
+uv pip install arcadedb-embedded
 ```
 
 Now open your browser on http://localhost:2480 and play with [ArcadeDB Studio](https://docs.arcadedb.com/#studio) and the
 imported `OpenBeer` database to find your favorite beer.
 
-![ArcadeDB Studio](https://arcadedb.com/assets/images/openbeer-demo-graph.png)
+## 🔗 Quick Links
 
 ArcadeDB is cloud-ready with [Docker](https://docs.arcadedb.com/#docker) and [Kubernetes](https://docs.arcadedb.com/#kubernetes) support.
 
-You can also [download the latest release](https://github.com/ArcadeData/arcadedb/releases), unpack it on your local hard drive and start the server with `bin/server.sh` or `bin/server.bat` for Windows.
+## 🧭 Upstream ArcadeDB (Java)
 
-### Releases
+This repo is a fork of ArcadeDB Java. For the server, Java API, and core database docs:
 
 There are four variants of (about monthly) releases:
 
@@ -156,7 +161,8 @@ There are four variants of (about monthly) releases:
 - `headless` - this package excludes the `gremlin`, `redisw`, `mongodbw`, `graphql`, `studio` modules
 - `base` - core engine, server, and network only — excludes all optional modules (`console`, `gremlin`, `studio`, `redisw`, `mongodbw`, `postgresw`, `grpcw`, `graphql`, `metrics`)
 
-The nightly builds of the repository head can be found [here](https://central.sonatype.com/service/rest/repository/browse/maven-snapshots/com/arcadedb/arcadedb-package/).
+- Issues (Python bindings): https://github.com/humemai/arcadedb-embedded-python/issues
+- ArcadeDB Discord: https://discord.gg/w2Npx2B7hZ
 
 You can also build a **custom distribution** with only the modules you need using the [Custom Package Builder](https://docs.arcadedb.com/#custom-package-builder):
 
@@ -169,7 +175,7 @@ Available optional modules: `console`, `gremlin`, `studio`, `redisw`, `mongodbw`
 
 ### Java Versions
 
-Starting from ArcadeDB 24.4.1 code is compatible with Java 21.
+Both upstream ArcadeDB (Java) and this ArcadeDB Embedded Python project are licensed under Apache 2.0, which is fully open and free for everyone, including commercial use.
 
 Java 21 packages are available on [Maven central](https://repo.maven.apache.org/maven2/com/arcadedb/) and docker images on [Docker Hub](https://hub.docker.com/r/arcadedata/arcadedb).
 
