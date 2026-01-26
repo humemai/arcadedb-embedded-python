@@ -23,12 +23,14 @@ Schema tests cover:
 Tests creating vertex, edge, and document types.
 
 **Tests:**
+
 - `test_create_vertex_type()` - Basic vertex type creation
 - `test_create_edge_type()` - Basic edge type creation
 - `test_create_document_type()` - Basic document type creation
 - `test_create_type_with_buckets()` - Custom bucket count
 
 **Pattern:**
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     # Basic type
@@ -44,12 +46,14 @@ with arcadedb.create_database("./test_db") as db:
 Tests querying schema for types.
 
 **Tests:**
+
 - `test_get_type()` - Get type by name
 - `test_exists_type()` - Check if type exists
 - `test_get_types()` - List all types
 - `test_get_type_properties()` - List type properties
 
 **Pattern:**
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("User")
@@ -72,10 +76,12 @@ with arcadedb.create_database("./test_db") as db:
 Tests removing types from schema.
 
 **Tests:**
+
 - `test_delete_type()` - Remove type
 - `test_delete_type_with_data()` - Remove type with records
 
 **Pattern:**
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("Temp")
@@ -92,6 +98,7 @@ with arcadedb.create_database("./test_db") as db:
 Tests adding properties to types.
 
 **Tests:**
+
 - `test_create_property()` - Basic property
 - `test_create_property_with_type()` - Typed property
 - `test_create_list_property()` - List property
@@ -99,6 +106,7 @@ Tests adding properties to types.
 - `test_property_constraints()` - Mandatory, not null, defaults
 
 **Pattern:**
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("User")
@@ -123,10 +131,12 @@ with arcadedb.create_database("./test_db") as db:
 Tests removing properties from types.
 
 **Tests:**
+
 - `test_delete_property()` - Remove property
 - `test_delete_property_with_data()` - Remove property with data
 
 **Pattern:**
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("User")
@@ -151,12 +161,14 @@ with arcadedb.create_database("./test_db") as db:
 Tests creating indexes on types.
 
 **Tests:**
+
 - `test_create_lsm_index()` - LSM_TREE index
 - `test_create_unique_index()` - Unique index
 - `test_create_composite_index()` - Multi-property index
 - `test_create_fulltext_index()` - Full-text search index
 
 **Pattern:**
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("User")
@@ -187,11 +199,13 @@ with arcadedb.create_database("./test_db") as db:
 Tests querying indexes.
 
 **Tests:**
+
 - `test_get_indexes()` - List all indexes
 - `test_get_type_indexes()` - Get indexes for type
 - `test_get_index_properties()` - Get indexed properties
 
 **Pattern:**
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("User")
@@ -217,10 +231,12 @@ with arcadedb.create_database("./test_db") as db:
 Tests removing indexes.
 
 **Tests:**
+
 - `test_delete_index()` - Remove index
 - `test_delete_index_by_name()` - Remove by index name
 
 **Pattern:**
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("User")
@@ -246,6 +262,7 @@ with arcadedb.create_database("./test_db") as db:
 Tests all ArcadeDB property types.
 
 **Tests:**
+
 - `test_string_property()` - STRING type
 - `test_integer_property()` - INTEGER type
 - `test_long_property()` - LONG type
@@ -259,6 +276,7 @@ Tests all ArcadeDB property types.
 - `test_map_property()` - MAP type
 
 **Pattern:**
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     type_obj = db.schema.create_vertex_type("AllTypes")
@@ -280,11 +298,13 @@ with arcadedb.create_database("./test_db") as db:
 Tests complete schema workflows.
 
 **Tests:**
+
 - `test_complete_schema_setup()` - Full schema creation
 - `test_schema_migration()` - Evolving schema
 - `test_schema_export_import()` - Schema serialization
 
 **Pattern:**
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     # Complete schema setup
@@ -308,6 +328,7 @@ with arcadedb.create_database("./test_db") as db:
 ## Test Patterns
 
 ### Type Creation
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     # Schema operations are auto-transactional (no wrapper needed)
@@ -316,6 +337,7 @@ with arcadedb.create_database("./test_db") as db:
 ```
 
 ### Property Definition
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("User")
@@ -332,6 +354,7 @@ with arcadedb.create_database("./test_db") as db:
 ```
 
 ### Index Creation
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("User")
@@ -357,7 +380,7 @@ with arcadedb.create_database("./test_db") as db:
     assert user_type.get("name") is not None
 
     # Index exists (after creating one)
-    schema.create_index("User", ["name"])
+    db.schema.create_index("User", ["name"])
     indexes = user_type.get_indexes()
     assert len(indexes) > 0
 

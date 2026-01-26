@@ -152,7 +152,7 @@ features most relevant to Python developers:
 | Server Mode | ✅ 90% | HTTP server, Studio UI, database management |
 | Vector Search | ✅ 100% | HNSW (JVector) indexing, similarity search |
 | Data Import | ⚠️ 70% | CSV and ArcadeDB JSONL (XML support limited, not recommended) |
-| Data Export | ✅ 100% | JSONL, GraphML, GraphSON, CSV |
+| Data Export | ✅ 100% | JSONL, GraphML, GraphSON; CSV for query results |
 | Graph API | ✅ 85% | Full support via SQL and OpenCypher |
 
 See [Java API Coverage](java-api-coverage.md) for detailed comparison.
@@ -163,7 +163,9 @@ We provide a **single, self-contained package** that works on all major platform
 
 | Platform | Package Name | Size | What's Included |
 |----------|-------------|------|-----------------|
-| **All Platforms** | `arcadedb-embedded` | ~116MB | Full ArcadeDB + Bundled JRE + Studio UI |
+| **linux/amd64** | `arcadedb-embedded` | ~115MB | Full ArcadeDB + Bundled JRE + Studio UI |
+| **linux/arm64** | `arcadedb-embedded` | ~114MB | Full ArcadeDB + Bundled JRE + Studio UI |
+| **darwin/arm64** | `arcadedb-embedded` | ~63MB | Full ArcadeDB + Bundled JRE + Studio UI |
 
 The package uses the standard import:
 
@@ -200,10 +202,10 @@ import arcadedb_embedded as arcadedb
 ## Requirements
 
 - **Python**: 3.10–3.14 (packaged; primary testing on 3.12)
-- **OS**: Linux, macOS, or Windows (x86_64 or ARM64)
+- **OS**: Linux (x86_64, ARM64) or macOS (Apple Silicon)
 
 !!! note "Self-Contained"
-    Everything needed to run ArcadeDB is included in the wheel (~116MB):
+    Everything needed to run ArcadeDB is included in the wheel (~63–115MB):
 
     - **Bundled JRE**
     (Platform-specific Java 25 runtime trimmed with jlink to only what's required for ArcadeDB, ~249MB uncompressed)
@@ -219,5 +221,7 @@ import arcadedb_embedded as arcadedb
 - **ArcadeDB Docs**: [docs.arcadedb.com](https://docs.arcadedb.com)
 
 ## License
+
+Both upstream ArcadeDB (Java) and this ArcadeDB Embedded Python project are licensed under Apache 2.0, which is fully open and free for everyone, including commercial use.
 
 Apache License 2.0 - see [LICENSE](https://github.com/humemai/arcadedb-embedded-python/blob/main/LICENSE)
