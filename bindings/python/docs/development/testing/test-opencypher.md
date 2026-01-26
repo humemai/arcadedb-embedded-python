@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_cypher.py){ .md-button }
 
-These notes mirror the Python tests in [test_cypher.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_cypher.py). The tests validate OpenCypher query support and common graph patterns.
+The tests validate OpenCypher query support and common graph patterns.
 
 ## OpenCypher
 

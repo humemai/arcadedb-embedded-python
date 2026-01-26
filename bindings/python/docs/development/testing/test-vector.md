@@ -2,11 +2,9 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_vector.py){ .md-button }
 
-The `test_vector.py` suite exercises the current Java-native JVector + LSM vector index
+The test suite exercises the current Java-native JVector + LSM vector index
 used by ArcadeDB (no Python hnswlib dependency). All tests run through the Python
 bindings.
-
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_vector.py){ .md-button }
 
 ## Overview
 

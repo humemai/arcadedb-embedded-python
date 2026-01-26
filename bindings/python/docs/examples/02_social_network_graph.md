@@ -254,6 +254,7 @@ with arcadedb.open_database("./social_network_db") as db:
 ```
 
 This pattern is useful for:
+
 - Finding incomplete profiles
 - Identifying missing contact information
 - Filtering by data completeness
