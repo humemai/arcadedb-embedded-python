@@ -49,13 +49,11 @@ cd arcadedb-embedded-python/bindings/python
 2. **Create Virtual Environment**
 
 ```bash
-# Create venv
-python -m venv venv
+# Create venv with uv
+uv venv .venv
 
 # Activate
-source venv/bin/activate  # Linux/macOS
-# or
-venv\Scripts\activate     # Windows
+source .venv/bin/activate
 ```
 
 3. **Install Development Dependencies**
@@ -75,7 +73,7 @@ uv pip install pytest pytest-cov black isort mypy numpy
 python --version  # Should be within 3.10–3.14
 
 # Check Java
-java -version     # Should be 21+
+java -version     # Should be 25+
 
 # Run quick test
 python -c "import arcadedb_embedded; print('✅ Setup successful!')"
@@ -464,7 +462,7 @@ mkdocs build
 
 Documentation uses **Markdown** with **MkDocs Material** theme:
 
-```markdown
+````markdown
 # Page Title
 
 Brief introduction to the topic.
@@ -475,11 +473,11 @@ Content here with examples.
 
 ### Code Examples
 
-\```python
+```python
 import arcadedb_embedded as arcadedb
 
 db = arcadedb.create_database("./mydb")
-\```
+```
 
 ### Admonitions
 
@@ -496,7 +494,7 @@ db = arcadedb.create_database("./mydb")
 
 - [Internal link](../api/database.md)
 - [External link](https://arcadedb.com)
-```
+````
 
 ### API Documentation
 
@@ -532,9 +530,9 @@ Corresponding documentation in `docs/api/database.md`:
 ````markdown
 ### query
 
-\```python
+```python
 db.query(language: str, command: str, params: Optional[dict] = None) -> ResultSet
-\```
+```
 
 Execute a query and return results.
 
@@ -554,7 +552,7 @@ Execute a query and return results.
 
 **Example:**
 
-\```python
+```python
 # Basic query
 result = db.query("sql", "SELECT FROM User")
 for user in result:
@@ -565,7 +563,7 @@ result = db.query("sql",
     "SELECT FROM User WHERE age > :min_age",
     {"min_age": 18}
 )
-\```
+```
 ````
 
 ## Pull Request Process
@@ -790,10 +788,10 @@ dependencies = [
 
 ```bash
 # Check Java version
-java -version  # Must be 21+
+java -version  # Must be 25+
 
 # Set JAVA_HOME
-export JAVA_HOME=/path/to/jdk-21
+export JAVA_HOME=/path/to/jdk-25
 ```
 
 ### Build Errors
@@ -835,7 +833,7 @@ docker build --no-cache -f Dockerfile.build ../..
 
 ## Getting Help
 
-- **Documentation**: [https://docs.arcadedb.com](https://docs.arcadedb.com)
+- **Documentation**: [https://docs.humem.ai/arcadedb/](https://docs.humem.ai/arcadedb/)
 - **GitHub Issues**: [https://github.com/humemai/arcadedb-embedded-python/issues](https://github.com/humemai/arcadedb-embedded-python/issues)
 
 ## Code of Conduct
