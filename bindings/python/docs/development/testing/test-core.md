@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_core.py){ .md-button }
 
-These notes mirror the Python tests in [test_core.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_core.py). There are **15 tests** covering fundamental database operations.
+There are **15 tests** covering fundamental database operations.
 
 ## Overview
 
