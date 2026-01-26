@@ -5,7 +5,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 !!! success "Test Coverage"
     **252 tests** across 6 test files, 100% passing
 
-    - **Current package**: 252 passed, 0 skipped
+    - **Current package**: 252 passed, 6 skipped
     - All ArcadeDB features working (SQL, OpenCypher, Studio)
 
 ## Quick Navigation
@@ -139,8 +139,6 @@ pytest -x
 
 # Drop into debugger on failure
 pytest --pdb
-```
-
 
 # Show skipped test reasons
 pytest -v -rs
@@ -148,7 +146,7 @@ pytest -v -rs
 
 ## Test Organization
 
-```
+```bash
 tests/
 ├── test_core.py              # Core operations (13 tests)
 ├── test_server.py            # Server mode (6 tests)
