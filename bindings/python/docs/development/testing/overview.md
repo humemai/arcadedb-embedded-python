@@ -5,10 +5,10 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 ## Quick Statistics
 
 !!! success "Test Results"
-    - **Current package**: ✅ 252 passed, 0 skipped
+    - **Current package**: ✅ 252 passed, 6 skipped (258 collected)
     - All features available (SQL, OpenCypher, Studio UI, Vector search)
 
-    **Total: 252 tests + 7 examples** across all platforms, 100% passing
+    **Total: 258 tests (252 passed, 6 skipped) + 7 examples** across all platforms
 
 ## What's Tested
 
@@ -67,14 +67,18 @@ pytest -v -s
 
 ## Test Files Overview
 
-| Test File | Tests | Description |
-|-----------|-------|-------------|
-| [`test_core.py`](test-core.md) | 13 | Core database operations, CRUD, transactions, queries |
-| [`test_server.py`](test-server.md) | 6 | Server mode, HTTP API, configuration |
-| [`test_concurrency.py`](test-concurrency.md) | 4 | File locking, thread safety, multi-process behavior |
-| [`test_server_patterns.py`](test-server-patterns.md) | 4 | Best practices for embedded + server mode |
-| [`test_importer.py`](test-importer.md) | 16 | CSV import with type inference |
-| [`test_cypher.py`](test-opencypher.md) | 1 | OpenCypher query language |
+Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs`.
+
+| Test File | Description |
+|-----------|-------------|
+| [`test_core.py`](test-core.md) | Core database operations, CRUD, transactions, queries |
+| [`test_server.py`](test-server.md) | Server mode, HTTP API, configuration |
+| [`test_concurrency.py`](test-concurrency.md) | File locking, thread safety, multi-process behavior |
+| [`test_server_patterns.py`](test-server-patterns.md) | Best practices for embedded + server mode |
+| [`test_importer.py`](test-importer.md) | CSV import with type inference |
+| [`test_cypher.py`](test-opencypher.md) | OpenCypher query language |
+| [`test_jvm_args.py`](test-jvm-args.md) | JVM args handling |
+| [`test_vector_params_verification.py`](test-vector-params-verification.md) | Vector param validation |
 
 ## Common Testing Workflows
 

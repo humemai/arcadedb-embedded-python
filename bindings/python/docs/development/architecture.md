@@ -24,7 +24,7 @@ arcadedb_embedded/
 ├── async_executor.py    # Async bulk executor wrapper
 ├── batch.py             # BatchContext (async-powered bulk helper)
 ├── importer.py          # Importer (CSV/XML)
-├── exporter.py          # Export (JSONL/GraphML/GraphSON/CSV)
+├── exporter.py          # Export (JSONL/GraphML/GraphSON + CSV helper)
 ├── vector.py            # VectorIndex + array helpers
 ├── results.py           # ResultSet, Result (query results)
 ├── transactions.py      # TransactionContext (ACID guard)

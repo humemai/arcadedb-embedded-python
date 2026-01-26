@@ -1,23 +1,13 @@
-# ![ArcadeDB](https://arcadedb.com/assets/images/arcadedb-logo.png)
+# ArcadeDB Embedded for Python
 
-<h2 align="center">Multi Model DBMS Built for Extreme Performance</h2>
+Native Python bindings for ArcadeDB (forked from the official Java project).
 
-<p align="center">
-  <a href="https://github.com/ArcadeData/arcadedb/releases"><img src="https://img.shields.io/github/v/release/arcadedata/arcadedb?color=%23ff00a0&include_prereleases&label=version&sort=semver"></a>
-  &nbsp;
-  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-green.svg"></a>
-  &nbsp;
-  <a href="https://docs.oracle.org/en/java/21/"><img src="https://img.shields.io/badge/Java-%3D21-green.svg"></a>
-  &nbsp;
-  <a href="https://docs.oracle.org/en/java/17/"><img src="https://img.shields.io/badge/Java-%3D17-green.svg"></a>
-  &nbsp;
-  <a href="https://api.reuse.software/info/github.com/ArcadeData/arcadedb"><img src="https://api.reuse.software/badge/github.com/ArcadeData/arcadedb"></a>
-  &nbsp;
-  <a href="https://maven-badges.herokuapp.com/maven-central/com.arcadedb/arcadedb-parent"><img src="https://maven-badges.herokuapp.com/maven-central/com.arcadedb/arcadedb-parent/badge.svg"></a>
-  &nbsp;
-  <a href="https://hub.docker.com/repository/docker/arcadedata/arcadedb/general"><img src="https://img.shields.io/docker/pulls/arcadedata/arcadedb"></a>
-  <a href="https://deepwiki.com/ArcadeData/arcadedb"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-</p>
+[![PyPI](https://img.shields.io/pypi/v/arcadedb-embedded)](https://pypi.org/project/arcadedb-embedded/)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/arcadedb-embedded)](https://pypi.org/project/arcadedb-embedded/)
+[![Docs](https://img.shields.io/badge/docs-humem.ai-blue)](https://docs.humem.ai/arcadedb/latest/)
+[![Test Python Bindings](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-bindings.yml/badge.svg)](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-bindings.yml)
+[![Test Python Examples](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-examples.yml/badge.svg)](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-examples.yml)
+[![Release to PyPI](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/release-python-packages.yml/badge.svg)](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/release-python-packages.yml)
 
 <p align="center">
   <a href="https://github.com/ArcadeData/arcadedb/actions/workflows/mvn-deploy.yml"><img src="https://github.com/ArcadeData/arcadedb/actions/workflows/mvn-deploy.yml/badge.svg"></a>
@@ -35,57 +25,32 @@
   <a href="https://www.meterian.io/report/gh/ArcadeData/arcadedb"><img src="https://www.meterian.io/badge/gh/ArcadeData/arcadedb/stability?branch=main"></a>
 </p>
 
-<p align="center">
-  <a href="https://discord.gg/w2Npx2B7hZ"><img width="208" height="97" src="https://arcadedb.com/assets/images/discord_button.png" alt="Join Discord"></a>
-</p>
+## ✨ What this repo provides
 
-<p align="center">
-	<a href="https://github.com/arcadedata/arcadedb"><img height="25" src="studio/src/main/resources/static/images/social/github.svg" alt="Github"></a>
-	&nbsp;
-  <a href="https://www.linkedin.com/company/arcadedb/"><img height="25" src="studio/src/main/resources/static/images/social/linkedin.svg" alt="LinkedIn"></a>
-  &nbsp;
-  <a href="https://bsky.app/profile/arcadedb.bsky.social"><img height="25" src="studio/src/main/resources/static/images/social/bluesky.svg" alt="Bluesky"></a>
-  &nbsp;
-  <a href="https://twitter.com/arcade_db"><img height="25" src="studio/src/main/resources/static/images/social/twitter.svg" alt="Twitter"></a>
-  &nbsp;
-  <a href="https://www.youtube.com/@ArcadeDB"><img height="25" src="studio/src/main/resources/static/images/social/youtube.svg" alt="Youtube"></a>
-  &nbsp;
-  <a href="https://discord.gg/w2Npx2B7hZ"><img height="25" src="studio/src/main/resources/static/images/social/discord.svg" alt="Discord"></a>
-  &nbsp;
-  <a href="https://stackoverflow.com/questions/tagged/arcadedb"><img height="25" src="studio/src/main/resources/static/images/social/stack-overflow.svg" alt="StackOverflow"></a>
-	&nbsp;
-	<a href="https://blog.arcadedb.com/"><img height="25" src="studio/src/main/resources/static/images/social/blog.svg" alt="Blog"></a>
-</p>
+- Native Python bindings for ArcadeDB with a bundled JRE (no local Java required).
+- Wheels for Linux x86_64, Linux ARM64, and macOS Apple Silicon.
+- Embedded usage (in-process) with optional server mode.
+- Tests and examples validated in CI across supported platforms.
 
-ArcadeDB is a Multi-Model DBMS (created originally as a fork
-from [OrientDB Open Source project](https://github.com/orientechnologies/orientdb) after the acquisition by SAP) with a brand-new
-engine made of Alien Technology, able to crunch millions of records per second on common hardware with the usage of
-minimal resources. ArcadeDB is written in LLJ: Low Level Java. It's still Java21+ but only using low level API to use advanced
-mechanical sympathy techniques and a reduced pressure of the Garbage Collector. It's highly optimized for extreme performance. Runs
-from a Raspberry Pi to multiple servers on the cloud.
+The Python bindings and packaging live under bindings/python. The upstream Java project remains the source of the core database.
 
-ArcadeDB is fully transactional DBMS with support for ACID transactions, structured and unstructured data, native graph engine (no
-joins but links between records), full-text indexing, geospatial querying, and advanced security.
+## 🧱 What’s inside
 
-ArcadeDB supports the following models:
+- bindings/python: Python package source, build scripts, tests, and examples.
+- docs site: https://docs.humem.ai/arcadedb/
+- CI: Build/test workflows for bindings and examples (badges above).
 
-- [Graph Database](https://docs.arcadedb.com#Graph-Model) (compatible with Neo4j Cypher, Apache Tinkerpop Gremlin and OrientDB SQL)
-- [Document Database](https://docs.arcadedb.com#Document-Model) (compatible with the MongoDB driver + MongoDB queries and OrientDB
-  SQL)
-- [Key/Value](https://docs.arcadedb.com#KeyValue-Model) (compatible with the Redis driver)
-- [Search Engine](https://docs.arcadedb.com/#SearchEngine-Model)
-- [Time Series](https://docs.arcadedb.com#TimeSeries-Model)
-- [Vector Embedding](https://docs.arcadedb.com/#VectorEmbedding-Model)
+## ✅ Typical use cases
 
-ArcadeDB understands multiple languages:
+- Local embedded analytics without a separate server process.
+- Vector search and graph workloads from Python.
+- Running ArcadeDB in-process for testing or tooling.
 
-- [SQL](https://docs.arcadedb.com#SQL) (from OrientDB SQL)
-- Neo4j [Cypher (Open Cypher)](https://docs.arcadedb.com#Cypher)
-- [Apache Gremlin (Apache Tinkerpop v3.7.x)](https://docs.arcadedb.com#Gremlin-API)
-- [GraphQL Language](https://docs.arcadedb.com#GraphQL)
-- [MongoDB Query Language](https://docs.arcadedb.com#MongoDB-API)
+## 🧠 ArcadeDB at a glance
 
-ArcadeDB can be used as:
+- Multi-model database built for performance.
+- Document + Graph + Key/Value + Vector + Time Series in one engine.
+- Supports SQL, OpenCypher, and MongoDB query language.
 
 - Embedded from any language on top of the Java Virtual Machine
 - Embedded from Python via bindings: [arcadedb-embedded-python](https://github.com/humemai/arcadedb-embedded-python)
@@ -94,104 +59,43 @@ ArcadeDB can be used as:
 - Remotely by using a [Redis driver](https://docs.arcadedb.com#Redis-API) (only a subset of the operations are implemented)
 - Remotely by using a [MongoDB driver](https://docs.arcadedb.com#MongoDB-API) (only a subset of the operations are implemented)
 
-For more information, see the [documentation](https://docs.arcadedb.com).
+- Lightweight Java 25 runtime (jlink) bundled per platform.
+- ArcadeDB JARs required for the embedded engine.
+- Python bindings and source modules.
 
-### Getting started in 5 minutes
+## ✨ ArcadeDB capabilities (via Python)
 
-Start ArcadeDB Server with Docker:
+- Multi-model: Graph, Document, Key/Value, Vector, Time Series.
+- Query languages: SQL, OpenCypher, MongoDB.
+- ACID transactions and high performance.
 
-```
-docker run --rm -p 2480:2480 -p 2424:2424 \
-           -e JAVA_OPTS="-Darcadedb.server.rootPassword=playwithdata -Darcadedb.server.defaultDatabases=Imported[root]{import:https://github.com/ArcadeData/arcadedb-datasets/raw/main/orientdb/OpenBeer.gz}" \
-           arcadedata/arcadedb:latest
-```
+## 🚀 Quick start (Python)
 
-Now open your browser on http://localhost:2480 and play with [ArcadeDB Studio](https://docs.arcadedb.com/#_studio) and the
-imported `OpenBeer` database to find your favorite beer.
-
-![ArcadeDB Studio](https://arcadedb.com/assets/images/openbeer-demo-graph.png)
-
-ArcadeDB is cloud-ready with [Docker](https://docs.arcadedb.com/#Docker) and [Kubernetes](https://docs.arcadedb.com/#Kubernetes) support.
-
-You can also [download the latest release](https://github.com/ArcadeData/arcadedb/releases), unpack it on your local hard drive and start the server with `bin/server.sh` or `bin/server.bat` for Windows.
-
-### Releases
-
-There are three variants of (about monthly) releases:
-
-- `full` - this is the complete package of including all modules
-- `minimal` - this package excludes the `gremlin`, `redisw`, `mongodbw`, `graphql` modules
-- `headless` - this package excludes the `gremlin`, `redisw`, `mongodbw`, `graphql`, `studio` modules
-
-The nightly builds of the repository head can be found [here](https://central.sonatype.com/service/rest/repository/browse/maven-snapshots/com/arcadedb/arcadedb-package/).
-
-### Java Versions
-
-Starting from ArcadeDB 24.4.1 code is compatible with Java 21.
-
-Java 21 packages are available on [Maven central](https://repo.maven.apache.org/maven2/com/arcadedb/) and docker images on [Docker Hub](https://hub.docker.com/r/arcadedata/arcadedb).
-
-We also support Java 17 on a separate branch `java17` for those who cannot upgrade to Java 21 yet through GitHub packages.
-
-To use Java 17 inside your project, add the repository to your `pom.xml` and reference dependencies as follows:
-
-```xml
-    <repositories>
-        <repository>
-            <name>github</name>
-            <id>github</id>
-            <url>https://maven.pkg.github.com/ArcadeData/arcadedb</url>
-        </repository>
-    </repositories>
-    <dependencies>
-      <dependency>
-          <groupId>com.arcadedb</groupId>
-          <artifactId>arcadedb-engine</artifactId>
-          <version>25.5.1-java17</version>
-      </dependency>
-    </dependencies>
+```bash
+uv pip install arcadedb-embedded
 ```
 
-Docker images are available on ghcr.io too:
+See [the Python README](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/README.md) for usage, examples, and build details.
 
-```shell
-docker pull ghcr.io/arcadedata/arcadedb:25.5.1-java17
-```
+## 🔗 Quick Links
 
-### Community
+- Python README: https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/README.md
+- PyPI: https://pypi.org/project/arcadedb-embedded/
 
-Join our growing community around the world, for ideas, discussions and help regarding ArcadeDB.
+## 🧭 Upstream ArcadeDB (Java)
 
-- Chat live with us on [Discord](https://discord.gg/w2Npx2B7hZ)
-- Follow us on [Twitter](https://twitter.com/arcade_db)
-- or on [Bluesky](https://bsky.app/profile/arcadedb.bsky.social)
-- Connect with us on [LinkedIn](https://www.linkedin.com/products/arcadedb)
-- or on [Facebook](https://www.facebook.com/arcadedb)
-- Questions tagged `#arcadedb` on [Stack Overflow](https://stackoverflow.com/questions/tagged/arcadedb)
-- View our official [Blog](https://blog.arcadedb.com/)
+This repo is a fork of ArcadeDB Java. For the server, Java API, and core database docs:
 
-### Security
+- Upstream repo: https://github.com/ArcadeData/arcadedb
+- Docs: https://docs.arcadedb.com
 
-For security issues kindly email us at support@arcadedb.com instead of posting a public issue on GitHub.
+## 💬 Support & community
 
-### License
+- Issues (Python bindings): https://github.com/humemai/arcadedb-embedded-python/issues
+- ArcadeDB Discord: https://discord.gg/w2Npx2B7hZ
 
-ArcadeDB is Free for any usage and licensed under the liberal [Open Source Apache 2 license](LICENSE). If you need commercial
-support, or you need to have an issue fixed ASAP, check our [GitHub Sponsor page](https://github.com/sponsors/ArcadeData) on both
-Recurrent and One-Time tiers. All the sponsorship received will be distributed to the active contributors of this project.
+## 📄 License
 
-### Thanks To
+Both upstream ArcadeDB (Java) and this ArcadeDB Embedded Python project are licensed under Apache 2.0, which is fully open and free for everyone, including commercial use.
 
-<a href="https://www.yourkit.com"><img src="https://www.yourkit.com/images/yklogo.png"></a> for providing YourKit Profiler to our committers.
-
-### Contributing
-
-We would love for you to get involved with ArcadeDB project.
-If you wish to help, you can learn more about how you can contribute to this project in the [contribution guide](CONTRIBUTING.md).
-
-Have fun with data!
-
-The ArcadeDB Team
-
-## Stargazers over time
-[![Stargazers over time](https://starchart.cc/ArcadeData/arcadedb.svg?variant=adaptive)](https://starchart.cc/ArcadeData/arcadedb)
+Apache License 2.0 – see https://github.com/humemai/arcadedb-embedded-python/blob/main/LICENSE
