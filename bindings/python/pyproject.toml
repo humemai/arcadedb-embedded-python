@@ -3,11 +3,11 @@ requires = ["build>=0.7.0", "setuptools>=61.0", "wheel", "jpype1"]
 build-backend = "setuptools.build_meta"
 
 # This file defines the package metadata for arcadedb-embedded.
-# During build, the version is extracted from parent pom.xml via extract_version.py
+# During build, the version is overwritten from parent pom.xml via extract_version.py
 
 [project]
 name = "arcadedb-embedded"
-version = "25.11.1.dev0"
+version = "0.0.0"
 description = "ArcadeDB embedded multi-model database with bundled JRE - no Java installation required"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -57,7 +57,7 @@ examples = [
 
 [project.urls]
 Homepage = "https://github.com/humemai/arcadedb-embedded-python"
-Documentation = "https://humemai.github.io/arcadedb-embedded-python/"
+Documentation = "https://docs.humem.ai/arcadedb/"
 Repository = "https://github.com/humemai/arcadedb-embedded-python"
 "Bug Tracker" = "https://github.com/humemai/arcadedb-embedded-python/issues"
 "ArcadeDB Upstream" = "https://github.com/ArcadeData/arcadedb"

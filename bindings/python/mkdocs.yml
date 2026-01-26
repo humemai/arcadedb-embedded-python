@@ -191,12 +191,14 @@ nav:
       - BatchContext: development/testing/test-batch-context.md
       - Schema: development/testing/test-schema.md
       - Exporter: development/testing/test-exporter.md
+      - JVM Args: development/testing/test-jvm-args.md
       - ResultSet: development/testing/test-resultset.md
       - Type Conversion: development/testing/test-type-conversion.md
       - Database Utils: development/testing/test-database-utils.md
       - Transaction Config: development/testing/test-transaction-config.md
       - NumPy Support: development/testing/test-numpy-support.md
       - Vector Search: development/testing/test-vector.md
+      - Vector Params Verification: development/testing/test-vector-params-verification.md
       - Graph API: development/testing/test-graph-api.md
       - Vector SQL: development/testing/test-vector-sql.md
     - Advanced Testing:

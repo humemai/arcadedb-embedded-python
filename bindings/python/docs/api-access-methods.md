@@ -217,6 +217,7 @@ finally:
 ## When to Use Each
 
 ### Use Java API When:
+
 - Single Python process application
 - Maximum performance required
 - Complex data manipulation
@@ -224,6 +225,7 @@ finally:
 - Local development/testing
 
 ### Use HTTP API When:
+
 - Multi-process architecture
 - Remote database access
 - Web applications/APIs
@@ -232,6 +234,7 @@ finally:
 - Cross-network access
 
 ### Use Both When:
+
 - Local high-performance operations + remote monitoring
 - Hybrid applications with embedded + web components
 - Development (Java API) + production monitoring (HTTP API)

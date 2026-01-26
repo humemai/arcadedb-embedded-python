@@ -146,8 +146,8 @@ Python bindings follow the ArcadeDB main project version from `pom.xml`:
 
 1. Set in `pom.xml` root: `<version>X.Y.Z-SNAPSHOT</version>` or `<version>X.Y.Z</version>`
 2. `extract_version.py` converts based on mode:
-   - Development: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0`
-   - Release: `X.Y.Z` → `X.Y.Z` (or `X.Y.Z.postN` with --python-patch)
+    - Development: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0`
+    - Release: `X.Y.Z` → `X.Y.Z` (or `X.Y.Z.postN` with --python-patch)
 3. Create annotated tag: `git tag -a X.Y.Z -m "Python release X.Y.Z"`
 4. GitHub Release tag: `X.Y.Z`
 5. Workflows use the tag version directly: `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN`
@@ -239,7 +239,7 @@ mike set-default 25.9.0 --push
 
 **Size limit exceeded:**
 
-- Distribution might hit PyPI limits (~215 MB)
+- Distribution might hit PyPI limits
 - Request size increase: <https://pypi.org/help/#file-size-limit>
 - Or distribute via GitHub releases only
 

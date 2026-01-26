@@ -60,15 +60,15 @@ Documentation is versioned using [mike](https://github.com/jimporter/mike) and a
 
 1. **Create a GitHub Release** with tag like `python-X.Y.Z`
 2. **GitHub Actions** automatically:
-   - Builds documentation with MkDocs
-   - Deploys version `X.Y.Z` to GitHub Pages
-   - Sets it as the `latest` version
-   - Updates version selector
+    - Builds documentation with MkDocs
+    - Deploys version `X.Y.Z` to GitHub Pages
+    - Sets it as the `latest` version
+    - Updates version selector
 
 3. **Users can view**:
-   - Latest stable docs: <https://humemai.github.io/arcadedb-embedded-python/>
-   - Specific version: <https://humemai.github.io/arcadedb-embedded-python/X.Y.Z/>
-   - Version selector in top-right corner
+    - Latest stable docs: <https://docs.humem.ai/arcadedb/>
+    - Specific version: <https://docs.humem.ai/arcadedb/X.Y.Z/>
+    - Version selector in top-right corner
 
 ### Deployment Workflow
 
@@ -91,8 +91,8 @@ gh release create python-X.Y.Z \
   --notes "Release notes"
 
 # ✅ Docs automatically deploy to:
-# https://humemai.github.io/arcadedb-embedded-python/X.Y.Z/ (versioned)
-# https://humemai.github.io/arcadedb-embedded-python/ (redirects to latest)
+# https://docs.humem.ai/arcadedb/X.Y.Z/ (versioned)
+# https://docs.humem.ai/arcadedb/ (redirects to latest)
 ```
 
 **Manual deployment** (for testing):
@@ -102,8 +102,8 @@ You can manually trigger deployment from GitHub Actions:
 1. Go to **Actions** → **Deploy MkDocs to GitHub Pages**
 2. Click **Run workflow**
 3. Choose:
-   - **Version**: `dev` (or any version name)
-   - **Set as latest**: `false` (to keep as separate version)
+    - **Version**: `dev` (or any version name)
+    - **Set as latest**: `false` (to keep as separate version)
 
 This creates a test deployment without affecting the stable docs.
 
@@ -244,7 +244,7 @@ Check the [official ArcadeDB docs](https://docs.arcadedb.com) for more.
 
 When documenting API methods, use this structure:
 
-```markdown
+````markdown
 ## method_name()
 
 Brief one-line description.
@@ -273,6 +273,7 @@ method_name(param1: type, param2: type = default) -> ReturnType
 ```python
 result = obj.method_name("value", param2=True)
 ```
+````
 
 ## Testing Documentation
 

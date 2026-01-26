@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_vector_sql.py){ .md-button }
 
-These notes mirror the Python tests in [test_vector_sql.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_vector_sql.py). There are 12 tests covering SQL vector functions for math, aggregations, distance metrics, normalization, and quantization.
+There are 12 tests covering SQL vector functions for math, aggregations, distance metrics, normalization, and quantization.
 
 ## Overview
 

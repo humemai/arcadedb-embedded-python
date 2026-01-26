@@ -6,7 +6,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 
 | Package | Wheel Size | Installed Size (uncompressed) | Java Required | Studio UI | Query Languages |
 |---------|-----------|------------------------------|---------------|-----------|----------------|
-| **arcadedb-embedded** | ~116MB | ~281MB | ❌ No | ✅ | SQL, OpenCypher, MongoDB |
+| **arcadedb-embedded** | ~63–115MB | ~87–281MB | ❌ No | ✅ | SQL, OpenCypher, MongoDB |
 
 **Installation:**
 
@@ -23,7 +23,7 @@ The package includes everything you need:
 - **ArcadeDB JARs** (~32MB, uncompressed): Core database with all features
 - **Bundled JRE** (~249MB, uncompressed): Platform-specific Java 25 runtime (via jlink)
 
-**Total:** ~116MB compressed wheel, ~281MB uncompressed installed size
+**Total:** ~63–115MB compressed wheel, ~87–281MB uncompressed installed size (platform-dependent)
 
 ## Platform Support
 
@@ -107,13 +107,16 @@ Simple and consistent across all platforms!
 
 ## Size Breakdown
 
-Ballpark sizes (non-platform-specific):
+Platform-specific sizes (current):
 
-- **Wheel size (compressed)**: ~116MB
-- **ArcadeDB JARs (uncompressed)**: ~32MB
-- **Bundled JRE (uncompressed)**: ~249MB
+- **linux/amd64**: 115.2MB wheel, ~281MB installed
+- **linux/arm64**: 114.1MB wheel, ~281MB installed
+- **darwin/arm64**: 63.1MB wheel, ~87MB installed
 
-**Total uncompressed installed size**: ~281MB
+**Components (uncompressed):**
+
+- **ArcadeDB JARs**: ~31.7MB
+- **Bundled JRE**: ~55–250MB (platform-dependent)
 
 **Optimizations:**
 

@@ -2,7 +2,6 @@ name: Deploy MkDocs to GitHub Pages
 
 on:
   # Deploy docs when a version tag is pushed (e.g., 25.10.1, 25.10.1.post0)
-  # Skip .devN versions (e.g., 25.10.1.dev0)
   push:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+*'

@@ -1,57 +1,55 @@
 ## Java API Coverage Analysis
 
-This section provides a comprehensive comparison of the ArcadeDB Java API and what's been implemented in the Python bindings.
+This section provides a practical mapping between the ArcadeDB Java API and the
+Python bindings surface in this repository. It reflects the current code in
+`arcadedb_embedded` rather than a theoretical, full Java surface comparison.
 
 ### Executive Summary
 
-**Overall Coverage: ~87% of the Java API surface used in practice**
+The Python bindings expose the **core database, schema, graph, vector, async,
+import/export, and server workflows** needed for typical application usage. Most
+omissions are **low-level JVM internals** (WAL details, bucket scanning, binary
+protocol, server plugins, clustering) that are not typically used from Python.
 
-The Python bindings provide **excellent coverage for real-world use** (~87% of common operations), with only a small portion of low-level or niche Java APIs intentionally omitted (~13%).
+#### Coverage by Area (Qualitative)
 
-#### Coverage by Category
-
-| Category                     | Coverage | Status       |
-| ---------------------------- | -------- | ------------ |
-| **Core Database Operations** | 95%      | ✅ Excellent |
-| **Query Execution**          | 100%     | ✅ Complete  |
-| **Server Mode**              | 90%      | ✅ Excellent |
-| **Data Import**              | 70%      | ✅ Good      |
-| **Data Export**              | 100%     | ✅ Complete  |
-| **Graph API**                | 85%      | ✅ Excellent |
-| **Schema API**               | 100%     | ✅ Complete  |
-| **Index Management**         | 90%      | ✅ Excellent |
-| **Vector Search**            | 100%     | ✅ Complete  |
-| **Advanced Features**        | 5%       | ❌ Minimal   |
+| Area | Status | Notes |
+| --- | --- | --- |
+| Core Database | ✅ Supported | `DatabaseFactory`, `Database`, transactions, lookups, batch helpers |
+| Query Execution | ✅ Supported | SQL, OpenCypher, MongoDB, GraphQL passthrough |
+| Schema & Indexes | ✅ Supported | Types, properties, LSM/FULL_TEXT/Vector indexes |
+| Graph API | ✅ Supported | `Document`, `Vertex`, `Edge` wrappers + query traversal |
+| Vector Search | ✅ Supported | JVector indexes + NumPy conversion helpers |
+| Async & Batch | ✅ Supported | `AsyncExecutor`, `BatchContext` |
+| Data Import | ⚠️ Partial | CSV/TSV and XML importers; JSONL via SQL import |
+| Data Export | ✅ Supported | JSONL/GraphML/GraphSON + CSV for query results |
+| Server Mode | ✅ Supported | Embedded server lifecycle + Studio access |
+| Advanced/Low-level | ❌ Not exposed | WAL internals, binary protocol, HA/replication, plugins |
 
 ### Detailed Coverage
 
-#### 1. Core Database Operations - 95%
+#### 1. Core Database Operations
 
 **DatabaseFactory:**
 
-- ✅ `create()` - Create new database
-- ✅ `open()` - Open existing database
-- ✅ `exists()` - Check if database exists
-- ❌ `setAutoTransaction()` - Not exposed (use config)
-- ❌ `setSecurity()` - Not exposed (server-managed)
+- ✅ `create()`, `open()`, `exists()`
 
 **Database:**
 
-- ✅ `query(language, query, *args)` - Full support for all query languages
-- ✅ `command(language, command, *args)` - Full support for write operations
-- ✅ `begin()`, `commit()`, `rollback()` - Full transaction support
-- ✅ `transaction()` - Python context manager (enhancement)
-- ✅ `newDocument(type)`, `newVertex(type)` - Record creation
-- ✅ `lookup_by_rid(rid)` - Direct record lookup
-- ✅ `count_type(type)` - Efficient record counting
-- ✅ `getName()`, `getDatabasePath()`, `isOpen()`, `close()` - Database info
-- ❌ `scanType()`, `scanBucket()` - Use SQL SELECT instead
-- ❌ `lookupByKey()` - Use SQL WHERE clause instead
-- ❌ `async()` - Async operations not exposed
+- ✅ `query(language, query, *args)` and `command(language, command, *args)`
+- ✅ Transactions: `begin()`, `commit()`, `rollback()`, `transaction()`
+- ✅ Records: `new_document()`, `new_vertex()`, `lookup_by_rid()`, `lookup_by_key()`
+- ✅ Utilities: `count_type()`, `drop()`, `get_name()`, `get_database_path()`, `is_open()`, `close()`
+- ✅ Configuration: `set_auto_transaction()`, `set_read_your_writes()`
+- ✅ Async/batch: `async_executor()` and `batch_context()`
+- ✅ Export helpers: `export_database()` and `export_to_csv()`
 
-#### 2. Query Execution - 100%
+**Not directly exposed:** bucket scans, WAL internals, low-level binary protocol
 
-All query languages fully supported:
+#### 2. Query Execution
+
+All query languages supported by the underlying ArcadeDB engine can be used via
+`db.query()` and `db.command()`:
 
 - ✅ SQL
 - ✅ OpenCypher
@@ -65,17 +63,17 @@ All query languages fully supported:
 - ✅ `get()`, `has_property()`, `get_property_names()`
 - ✅ `to_json()`, `to_dict()` (Python enhancement)
 
-#### 3. Graph API - 85%
+#### 3. Graph API
 
-**Hybrid approach: Pythonic object manipulation + Powerful Query Languages**
+**Hybrid approach: Pythonic object manipulation + query languages**
 
 **Vertex & Edge Manipulation (Pythonic):**
 
-- ✅ `db.new_vertex(type)` - Returns vertex object
-- ✅ `vertex.set(name, value)` - Fluent property setting
-- ✅ `vertex.save()` - Persist changes
-- ✅ `vertex.new_edge(label, target, **props)` - Create edges (bidirectionality controlled by EdgeType schema)
-- ✅ `db.lookup_by_rid(rid)` - Direct lookup (e.g., `db.lookup_by_rid("#10:0")`)
+- ✅ `db.new_vertex(type)` / `db.new_document(type)`
+- ✅ `record.set(name, value)` / `record.save()` / `record.delete()` / `record.modify()`
+- ✅ `vertex.new_edge(label, target, **props)` (bidirectionality controlled by EdgeType schema)
+- ✅ `vertex.get_out_edges()`, `get_in_edges()`, `get_both_edges()`
+- ✅ `db.lookup_by_rid(rid)` for direct record access
 
 **Graph Traversals & Queries:**
 
@@ -83,9 +81,7 @@ All query languages fully supported:
 - ✅ OpenCypher patterns: `MATCH (a:User)-[:FOLLOWS]->(b) RETURN b`
 - ✅ Path finding, shortest paths, pattern matching
 
-**What's Not Exposed:**
-
-- ❌ Graph event listeners and callbacks
+**Not exposed:** event listeners/callback hooks, low-level graph internals
 
 **Object-Oriented Approach (Recommended):**
 
@@ -122,42 +118,34 @@ result = db.query("cypher", """
 """)
 ```
 
-#### 4. Schema API - 100%
+#### 4. Schema & Index API
 
 Full Pythonic Schema API available via `db.schema`:
 
 - ✅ `create_document_type()`, `create_vertex_type()`, `create_edge_type()`
+- ✅ `get_or_create_*()` helpers
 - ✅ `create_property()`, `drop_property()`
-- ✅ `drop_type()`, `exists_type()`, `get_type()`
-- ✅ `get_types()` - Iterate all types
+- ✅ `drop_type()`, `exists_type()`, `get_type()`, `get_types()`
+- ✅ Indexes: `create_index()`, `drop_index()`, `get_indexes()`, `exists_index()`
+- ✅ Vector indexes: `create_vector_index()` (on `Database`), `list_vector_indexes()`
 
-#### 5. Index Management - 90%
-
-- ✅ `create_index()` - Supports LSM_TREE, FULL_TEXT, and UNIQUE indexes
-- ✅ `create_vector_index()` - Specialized API for vector search
-- ✅ `drop_index()`
-- ✅ `get_indexes()` - List indexes on type
-- ✅ `exists_index()`
-
-#### 6. Server Mode - 90%
+#### 5. Server Mode
 
 - ✅ `ArcadeDBServer(root_path, config)` - Server initialization
-- ✅ `start()`, `stop()` - Server lifecycle
+- ✅ `start()`, `stop()`, context manager support
 - ✅ `get_database()`, `create_database()` - Database management
-- ✅ `exists()` - Check database existence
+- ✅ `get_studio_url()`, `get_http_port()`
 - ✅ Context manager support
 - ✅ `get_studio_url()`, `get_http_port()` - Python enhancements
 - ✅ Embedded and HTTP mode support
-- ❌ Plugin management - Not exposed
-- ❌ HA/Replication - Not exposed
-- ❌ User/security management - Server handles automatically
+- ❌ Plugin management, HA/replication, advanced user/security management
 
-#### 7. Data Import - 70% (3 primary formats)
+#### 6. Data Import
 
 **Supported:**
 
-- ✅ CSV - `import_csv()` with full edge/vertex/document support
-- ✅ XML - `import_xml()` with nesting and attribute extraction
+- ✅ CSV/TSV - `import_csv()` (documents/vertices/edges, FK resolution)
+- ✅ XML - `import_xml()` (documents/vertices; see known XML importer limitations)
 - ✅ ArcadeDB JSONL exports - `IMPORT DATABASE file://...` via SQL
 - ✅ Edge import with foreign key resolution
 - ✅ Batch processing and parallel import
@@ -165,45 +153,38 @@ Full Pythonic Schema API available via `db.schema`:
 
 **Not Implemented:**
 
-- ❌ RDF, OrientDB, GloVe, Word2Vec formats
+- ❌ RDF/OrientDB/GloVe/Word2Vec importers
 - ❌ Direct JSON array import (use JSONL instead)
-- ❌ SQL/database import
 
 **Note:** The 70% coverage reflects that the 3 supported formats (CSV, XML, ArcadeDB
 JSONL export/import) cover most real-world data migration scenarios.
 
-#### 8. Data Export - 100%
+#### 7. Data Export
 
 - ✅ JSONL export - Full database backup format
-- ✅ GraphML export - For visualization tools (Gephi, Cytoscape)
-- ✅ GraphSON export - Graph JSON format
-- ✅ CSV export - Tabular data export
-- ✅ Type filtering - Include/exclude specific types
-- ✅ Compression support - Automatic .tgz compression
-- ✅ Progress tracking and statistics
+- ✅ GraphML export - Graph visualization format
+- ✅ GraphSON export - TinkerPop-compatible graph JSON
+- ✅ CSV export of query results via `export_to_csv()`
+- ✅ Type filtering via `include_types` / `exclude_types`
+- ✅ Compression when exporting JSONL/GraphML/GraphSON (Java exporter)
 
-#### 9. Vector Search - 100%
+#### 8. Vector Search
 
-- ✅ Vector index creation - `create_vector_index()` with HNSW (JVector)
+- ✅ Vector index creation - `create_vector_index()` (JVector)
 - ✅ NumPy array support - `to_java_float_array()`, `to_python_array()`
-- ✅ Similarity search - `index.find_nearest()`
-- ✅ Add/remove vectors - Automatic via vertex save/delete
+- ✅ Similarity search - `VectorIndex.find_nearest()` and PQ approximate search
 - ✅ Distance functions - cosine, euclidean, inner_product
-- ✅ Vector parameters - max_connections, beam_width
-- ✅ Automatic indexing - Existing records indexed on creation
+- ✅ Index tuning parameters (connections, beam width, quantization)
+- ✅ Automatic indexing of existing records
 - ✅ List vector indexes - `schema.list_vector_indexes()`
 
-#### 10. Advanced Features - 5%
+#### 9. Advanced / Low-Level APIs Not Exposed
 
-**Not Implemented:**
-
-- ❌ Callbacks & Events (DocumentCallback, RecordCallback, DatabaseEvents)
-- ❌ Low-Level APIs (WAL, bucket scanning, binary protocol)
-- ❌ Async operations & parallel queries
-- ❌ Security management (SecurityManager, user management)
-- ❌ High Availability (HAServer, replication)
-- ❌ Custom query engines
-- ❌ Schema builders & DSL
+- ❌ WAL and storage internals
+- ❌ Binary protocol and custom network stacks
+- ❌ HA/replication, distributed clustering
+- ❌ Server plugins and module management
+- ❌ Custom query engines and DSLs
 
 ### Design Philosophy: Query-First Approach
 
@@ -231,112 +212,37 @@ index = index_builder.withUnique(true).create()
 
 ### Use Case Suitability
 
-| Use Case                              | Suitable?        | Notes                                |
-| ------------------------------------- | ---------------- | ------------------------------------ |
-| Embedded database in Python app       | ✅ Perfect       | Core use case                        |
-| Graph analytics with Cypher           | ✅ Excellent     | All query languages work             |
-| Graph traversals & pattern matching   | ✅ Excellent     | SQL and OpenCypher fully supported |
-| Document store                        | ✅ Excellent     | Full SQL support                     |
-| Vector similarity search              | ✅ Excellent     | Native NumPy integration             |
-| Development with Studio UI            | ✅ Excellent     | Server mode included                 |
-| Data migration (CSV/XML/JSONL import) | ✅ Good          | 3 major formats covered              |
-| Real-time event processing            | ⚠️ Limited       | No async, no callbacks               |
-| Multi-master replication              | ❌ Not supported | Java/Server only                     |
-| Custom query language                 | ❌ Not supported | Use built-in languages               |
+| Use Case | Suitable? | Notes |
+| --- | --- | --- |
+| Embedded database in Python app | ✅ Excellent | Core use case |
+| Graph analytics with Cypher | ✅ Excellent | SQL and OpenCypher supported |
+| Document store | ✅ Excellent | SQL and schema APIs |
+| Vector similarity search | ✅ Excellent | JVector + NumPy integration |
+| Development with Studio UI | ✅ Excellent | Server mode included |
+| Data migration (CSV/XML/JSONL import) | ✅ Good | CSV/XML importers + JSONL via SQL |
+| Async bulk ingestion | ✅ Good | `AsyncExecutor` and `BatchContext` |
+| Multi-master replication | ❌ Not supported | Java server only |
+| Custom query language | ❌ Not supported | Use built-in languages |
 
 ### Conclusion
 
-**For 90% of Python developers:** These bindings are **production-ready** and provide
-everything needed for:
+These bindings cover the **primary workflows** most Python developers need:
 
 - Embedded multi-model database
 - Graph, document, vector, and time-series data
 - SQL and OpenCypher queries
-- Development and production deployment
+- Server mode for Studio UI and HTTP access
 
-**Not suitable for:**
-
-- Applications requiring async/await patterns
-- Custom database extensions or plugins
-- Direct manipulation of Graph API objects
-- High-availability clustering from Python
-
-The **practical coverage for real-world applications is 85%+**, which is excellent. The
-40-45% "total coverage" number is misleading because it counts low-level Java APIs that
-Python developers shouldn't use anyway.
+They intentionally **do not expose** low-level JVM internals, clustering, and plugin
+management. For those scenarios, use the Java APIs directly.
 
 ---
 
 ## 🚧 Future Work
 
-This Python binding is actively being developed. Here are the planned improvements:
-
-### 1. High-Level SQL Support for Vectors
-
-**Goal**: Simplify vector operations with SQL-based API
-
-Currently, vector similarity search requires direct interaction with Java APIs (creating
-vector indexes, converting arrays, managing vertices manually).
-
-**Current approach** (requires understanding Java internals):
-
-```python
-# Lots of Java API calls
-java_embedding = arcadedb.to_java_float_array(embedding)
-vertex = db._java_db.new_vertex("Document")
-vertex.set("embedding", java_embedding)
-index = db.create_vector_index(...)
-```
-
-**Future approach** (with SQL support):
-
-```python
-# Clean SQL-based API
-db.command("sql", """
-    CREATE VECTOR INDEX ON Document(embedding)
-    WITH (dimensions=768, distance='cosine')
-""")
-
-result = db.query("sql", """
-    SELECT FROM Document
-    WHERE embedding NEAR [0.1, 0.2, ...]
-    LIMIT 10
-""")
-```
-
-Once ArcadeDB adds native SQL syntax for vector operations, we'll adapt the Python
-bindings to expose this cleaner interface.
-
-### 2. Comprehensive Testing & Performance Benchmarks
-
-**Goal**: Validate stability and performance at scale
-
-Current testing covers basic functionality (14/14 tests passing), but we need:
-
-- **Load testing**: Insert/query millions of records
-- **Vector performance**: Benchmark vector search with large datasets (100K+ vectors)
-- **Concurrency testing**: Multiple transactions, thread safety
-- **Memory profiling**: Long-running processes, leak detection
-- **Platform testing**: Verify behavior across Linux, macOS, Windows
-- **Python version matrix**: Expand tests across 3.10–3.14 (currently exercised on 3.11)
-
-This will ensure production readiness for high-volume applications.
-
-### 3. Upstream Contribution
-
-**Goal**: Merge into official ArcadeDB repository
-
-Once the bindings are thoroughly tested and PyPI-ready, we plan to submit a pull request
-to the official [ArcadeDB repository](https://github.com/ArcadeData/arcadedb). This
-will:
-
-- Make Python bindings an officially supported feature
-- Ensure long-term maintenance and updates
-- Benefit the broader ArcadeDB community
-- Keep bindings in sync with Java releases
-
-**Timeline**: Waiting for items 1-3 to be completed and validated before proposing
-upstream integration.
+- SQL-level vector syntax in ArcadeDB (when available upstream)
+- Expanded performance benchmarks and scale testing
+- Continued alignment with upstream Java releases
 
 ---
 

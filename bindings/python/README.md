@@ -8,15 +8,7 @@ Native Python bindings for ArcadeDB - the multi-model database that supports Gra
 
 ## 📚 Documentation
 
-**[📖 Read the Full Documentation →](https://humemai.github.io/arcadedb-embedded-python/latest)**
-
-Quick links:
-
-- [Installation Guide](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/)
-- [Quick Start Tutorial](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/quickstart/)
-- [User Guide](https://humemai.github.io/arcadedb-embedded-python/latest/guide/core/database/)
-- [API Reference](https://humemai.github.io/arcadedb-embedded-python/latest/api/database/)
-- [Examples](https://humemai.github.io/arcadedb-embedded-python/latest/examples/)
+**[📖 Read the Full Documentation →](https://docs.humem.ai/arcadedb/latest)**
 
 ---
 
@@ -34,10 +26,6 @@ uv pip install arcadedb-embedded
 - **Supported Platforms**: Prebuilt wheels for **3 platforms**
   - Linux: x86_64, ARM64
   - macOS: Apple Silicon (ARM64)
-- **Development version**: Use `--pre` flag to install `.devN` versions
-
-!!! tip "Development Releases"
-We publish development versions (`X.Y.Z.devN`) for every push to main when `pom.xml` contains a SNAPSHOT version. These are great for testing new features but may be unstable. [Learn more](DEV_RELEASE_STRATEGY.md)
 
 ### 5-Minute Example
 
@@ -64,7 +52,7 @@ with arcadedb.create_database("./mydb") as db:
   # but the embedded API above is preferred for local use.
 ```
 
-**[👉 See full tutorial](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/quickstart/)**
+**[👉 See full tutorial](https://docs.humem.ai/arcadedb/latest/getting-started/quickstart/)**
 
 ---
 
@@ -95,7 +83,7 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 - **Bundled JRE (uncompressed)**: ~249MB (platform-specific Java 25 runtime via jlink)
 - **Total uncompressed size**: ~281MB
 
-**Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See `jar_exclusions.txt` for details.
+**Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See [`jar_exclusions.txt`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/jar_exclusions.txt) for details.
 
 Import: `import arcadedb_embedded as arcadedb`
 
@@ -113,87 +101,47 @@ pytest tests/
 pytest tests/test_core.py -v
 ```
 
-See [tests/README.md](tests/README.md) for detailed test documentation.
+See [testing documentation](https://docs.humem.ai/arcadedb/latest/development/testing/) for detailed test documentation.
 
 ---
 
-## 🔧 Building from Source
+## 🔧 Building from Source (Advanced)
 
-**Requirements vary by platform:**
-
-- **Linux**: Docker (handles all dependencies)
-- **macOS**: Java 25+ JDK with jlink (to build the bundled JRE)
-
-### Setup Virtual Environment
-
-First, create and activate a Python virtual environment:
+Linux uses Docker. macOS uses a native Java 25+ JDK with jlink.
 
 ```bash
 cd bindings/python/
 
-# Create virtual environment
-python3 -m venv .venv
+# Install uv (one-time)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Activate it
-# On macOS/Linux:
+# Create virtual environment with uv
+uv venv .venv
 source .venv/bin/activate
-
-# On Windows:
-.venv\Scripts\activate
 
 # Install build and test dependencies
 uv pip install build
 uv pip install -e ".[test]"
-```
 
-### Build the Package
-
-```bash
 # Build for your current platform (auto-detected)
 ./build.sh
-
-# Build for specific platform
-./build.sh linux/amd64    # Requires Docker
-./build.sh darwin/arm64   # Requires Java JDK (native build)
-# etc.
 ```
 
-### Run Tests
+Built wheels will be in `dist/`.
 
-```bash
-# Run all tests
-pytest tests/
+**[Build instructions](https://docs.humem.ai/arcadedb/latest/getting-started/installation/#building-from-source)**
 
-# Run specific test file
-pytest tests/test_core.py -v
-```
-
-Built wheels will be in `dist/`. **[Build instructions](https://humemai.github.io/arcadedb-embedded-python/latest/getting-started/installation/#building-from-source)**
-
-**Supported platforms:**
-
-- `linux/amd64` (Docker build on native x64 runner)
-- `linux/arm64` (Docker build on native ARM64 runner)
-- `darwin/amd64` (Native build on macOS Intel)
-- `darwin/arm64` (Native build on macOS Apple Silicon)
-- `windows/amd64` (Native build on Windows x64)
-- `windows/arm64` (Native build on Windows ARM64)
-
-> **Developer Note:** See [docs/development/build-architecture.md](docs/development/build-architecture.md) for comprehensive documentation of the multi-platform build architecture, including how we achieve platform-specific JRE bundling across the supported platforms on GitHub Actions.
+> **Developer Note:** See [build architecture docs](https://docs.humem.ai/arcadedb/latest/development/build-architecture/) for comprehensive documentation of the multi-platform build architecture, including how we achieve platform-specific JRE bundling across the supported platforms on GitHub Actions.
 
 ## Development
 
-!!! note "Package Contents"
-The package includes optimized ArcadeDB JARs. Some components are excluded for size optimization - see `jar_exclusions.txt` for details.
-
-!!! note "Versioning"
-Versions are automatically extracted from the main ArcadeDB `pom.xml`. See [versioning strategy](https://humemai.github.io/arcadedb-embedded-python/latest/development/release/#python-versioning-strategy) for details on development vs release mode handling.
+Versions are automatically extracted from the main ArcadeDB `pom.xml`. See [versioning strategy](https://docs.humem.ai/arcadedb/latest/development/release/#python-versioning-strategy) for details on development vs release mode handling.
 
 ---
 
 ## 📋 Package Structure
 
-```text
+```bash
 arcadedb_embedded/
 ├── __init__.py          # Public API exports
 ├── core.py              # Database and DatabaseFactory
@@ -204,6 +152,7 @@ arcadedb_embedded/
 ├── vector.py            # Vector search and HNSW (JVector) indexing
 ├── importer.py          # Data import (CSV, JSONL)
 ├── exporter.py          # Data export (JSONL, GraphML, GraphSON, CSV)
+├── graph.py             # Graph API helpers
 ├── batch.py             # Batch operations context
 ├── async_executor.py    # Asynchronous query execution
 ├── type_conversion.py   # Python-Java type conversion utilities
@@ -212,32 +161,26 @@ arcadedb_embedded/
 └── _version.py          # Package version info
 ```
 
-**[Architecture details](https://humemai.github.io/arcadedb-embedded-python/latest/development/architecture/)**
+**[Architecture details](https://docs.humem.ai/arcadedb/latest/development/architecture/)**
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](../../CONTRIBUTING.md) and our [development guide](https://humemai.github.io/arcadedb-embedded-python/latest/development/contributing/).
-
----
+[See our contributing guidelines](https://docs.humem.ai/arcadedb/latest/development/contributing/)
 
 ## 📄 License
 
-Apache License 2.0 - see [LICENSE](../../LICENSE)
+Both upstream ArcadeDB (Java) and this ArcadeDB Embedded Python project are licensed under Apache 2.0, which is fully open and free for everyone, including commercial use.
+
+Apache License 2.0 - see [LICENSE](https://github.com/humemai/arcadedb-embedded-python/blob/main/LICENSE)
 
 ---
 
 ## 🔗 Links
 
-- **Documentation**: <https://humemai.github.io/arcadedb-embedded-python/latest/>
+- **Documentation**: <https://docs.humem.ai/arcadedb/latest/>
 - **PyPI**: <https://pypi.org/project/arcadedb-embedded/>
 - **GitHub**: <https://github.com/humemai/arcadedb-embedded-python>
 - **ArcadeDB Main Docs**: <https://docs.arcadedb.com>
 - **Issues**: <https://github.com/humemai/arcadedb-embedded-python/issues>
-
----
-
-## Community
-
-Made with ❤️ by the ArcadeDB community

@@ -3,12 +3,12 @@
 Comprehensive test suite for the ArcadeDB Python embedded bindings.
 
 !!! info "📚 Full Documentation"
-    For detailed test documentation, examples, and best practices, see the **[Testing Guide](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/)**
+    For detailed test documentation, examples, and best practices, see the **[Testing Guide](https://docs.humem.ai/arcadedb/latest/development/testing/)**
 
 ## Quick Stats
 
 - **252 tests** across 6 test files
-- ✅ **Current package**: 221 passed, 0 skipped
+- ✅ **Current package**: 252 passed, 6 skipped
 - Package includes all ArcadeDB features (SQL, OpenCypher, Studio)
 
 ## Running Tests
@@ -43,14 +43,14 @@ pytest -k "transaction" -v
 
 ## Documentation Links
 
-- **[Testing Overview](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/overview/)** - Quick start guide
-- **[Core Tests](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-core/)** - Database operations
-- **[Server Tests](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-server/)** - HTTP API
-- **[Concurrency Tests](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-concurrency/)** - Multi-process, threads
-- **[Server Patterns](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-server-patterns/)** - Best practices
-- **[Data Import Tests](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-importer/)** - CSV, JSON import
-- **[OpenCypher Tests](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/test-opencypher/)** - Graph queries
-- **[Best Practices](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/best-practices/)** - Summary checklist
+- **[Testing Overview](https://docs.humem.ai/arcadedb/latest/development/testing/overview/)** - Quick start guide
+- **[Core Tests](https://docs.humem.ai/arcadedb/latest/development/testing/test-core/)** - Database operations
+- **[Server Tests](https://docs.humem.ai/arcadedb/latest/development/testing/test-server/)** - HTTP API
+- **[Concurrency Tests](https://docs.humem.ai/arcadedb/latest/development/testing/test-concurrency/)** - Multi-process, threads
+- **[Server Patterns](https://docs.humem.ai/arcadedb/latest/development/testing/test-server-patterns/)** - Best practices
+- **[Data Import Tests](https://docs.humem.ai/arcadedb/latest/development/testing/test-importer/)** - CSV, JSON import
+- **[OpenCypher Tests](https://docs.humem.ai/arcadedb/latest/development/testing/test-opencypher/)** - Graph queries
+- **[Best Practices](https://docs.humem.ai/arcadedb/latest/development/testing/best-practices/)** - Summary checklist
 
 ## Common Patterns
 
@@ -96,6 +96,6 @@ db = server.create_database("mydb")
 
 ## Need Help?
 
-- **Questions?** See the [Testing Guide](https://humemai.github.io/arcadedb-embedded-python/latest/development/testing/)
+- **Questions?** See the [Testing Guide](https://docs.humem.ai/arcadedb/latest/development/testing/)
 - **Found a bug?** [Open an issue](https://github.com/humemai/arcadedb-embedded-python/issues)
-- **Contributing?** Read [Contributing Guide](https://github.com/humemai/arcadedb-embedded-python/blob/main/CONTRIBUTING.md)
+- **Contributing?** Read [Contributing Guide](https://docs.humem.ai/arcadedb/latest/development/contributing/)

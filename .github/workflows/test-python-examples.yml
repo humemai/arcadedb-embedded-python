@@ -25,7 +25,7 @@ on:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
         type: string
-        default: "01_*.py"
+        default: "0[1-7]_*.py"
       build-version:
         description: "Override package version (PEP 440) for build.sh"
         required: false
@@ -37,10 +37,10 @@ on:
       examples:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
-        default: "01_*.py"
+        default: "0[1-7]_*.py"
 
 env:
-  EXAMPLES: ${{ inputs.examples || '01_*.py' }}
+  EXAMPLES: ${{ inputs.examples || '0[1-7]_*.py' }}
 
 permissions:
   contents: read
