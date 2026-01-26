@@ -6,20 +6,20 @@ This document describes the build architecture for creating platform-specific Py
 
 **Goal:** Distribute a single `arcadedb-embedded` package that works on 3 platforms with **zero Java installation required**.
 
-**Achievement:** 3 platform-specific wheels (~215MB each) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
+**Achievement:** 3 platform-specific wheels (~63–115MB compressed) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
 
 ## Supported Platforms
 
 | Platform | Wheel Size | JRE Size | Runner | Build Method | Notes |
 |----------|-----------|----------|---------|--------------|-------|
-| **linux/amd64** | 215.0M | 62.7M | `ubuntu-24.04` | Docker native | Most common Linux platform |
-| **linux/arm64** | 214.1M | 61.8M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
-| **darwin/arm64** | 210.8M | 53.9M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
+| **linux/amd64** | 115.2M | 249.0M | `ubuntu-24.04` | Docker native | Most common Linux platform |
+| **linux/arm64** | 114.1M | 249.6M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
+| **darwin/arm64** | 63.1M | 55.1M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
 
 **All supported platforms:**
 
 - ✅ 252 tests passing
-- ✅ 226.0M JARs (83 files, identical across platforms)
+- ✅ 31.7M JARs (83 files, identical across platforms)
 - ✅ All native runners (no QEMU emulation)
 - ✅ Reproducible builds (pinned runner versions)
 
@@ -30,14 +30,14 @@ This document describes the build architecture for creating platform-specific Py
 We use a **hybrid build approach** to create platform-specific wheels:
 
 1. **Linux platforms:** Docker native builds
-   - linux/amd64: Native Docker on `ubuntu-24.04`
-   - linux/arm64: Native Docker on `ubuntu-24.04-arm` (GitHub ARM64 runner)
-   - Builds platform-specific JRE via `jlink`
+    - linux/amd64: Native Docker on `ubuntu-24.04`
+    - linux/arm64: Native Docker on `ubuntu-24.04-arm` (GitHub ARM64 runner)
+    - Builds platform-specific JRE via `jlink`
 
 2. **macOS platform:** Native builds
-  - Uses platform-specific GitHub Actions runner
-  - Native `jlink` creates correct JRE for the platform
-  - Pre-filtered JARs from artifact (eliminates glob issues)
+    - Uses platform-specific GitHub Actions runner
+    - Native `jlink` creates correct JRE for the platform
+    - Pre-filtered JARs from artifact (eliminates glob issues)
 
 **Critical:** All wheels are **platform-specific** (not `py3-none-any`). This is achieved by:
 
@@ -77,6 +77,7 @@ This simple class tells setuptools "this package has binary content" which:
 - Enables platform tags like `macosx_11_0_arm64`, `manylinux_2_17_x86_64`, etc.
 
 **Without setup.py**: All platforms → `arcadedb_embedded-X.Y.Z-py3-none-any.whl` (wrong!)
+
 **With setup.py**: Each platform → `arcadedb_embedded-X.Y.Z-py3-none-<platform>.whl` (correct!)
 
 See `bindings/python/setup.py` for the complete implementation.
@@ -86,7 +87,6 @@ See `bindings/python/setup.py` for the complete implementation.
 **Key Insight:** `jlink` can ONLY create JREs for the platform it's running on.
 
 - Running `jlink` on macOS-amd64 → Creates macOS-amd64 JRE ✅
-- Running `jlink` on Windows → Creates Windows JRE ✅
 - Running `jlink` in Docker on linux-x64 → Creates linux-x64 JRE ✅
 - Running `jlink` in Docker on linux-arm64 → Creates linux-arm64 JRE ✅
 - Running `jlink` with `--platform linux/arm64` on x64 → **Still creates linux-x64 JRE** ❌
@@ -107,8 +107,7 @@ jobs:
     needs: download-jars
     strategy:
       matrix:
-        platform: [linux/amd64, linux/arm64, darwin/amd64, darwin/arm64,
-                   windows/amd64, windows/arm64]
+        platform: [linux/amd64, linux/arm64, darwin/arm64]
     # Builds platform-specific wheel, runs tests
 ```
 
@@ -117,13 +116,14 @@ jobs:
 **Purpose:** Single point of JAR filtering to avoid cross-platform issues.
 
 **Steps:**
+
 1. Download 84 JARs from ArcadeDB Docker image
 2. Read `jar_exclusions.txt` (single source of truth)
 3. Filter out excluded JARs (currently: `arcadedb-grpcw-*.jar`)
 4. Result: 83 JARs (167.4M)
 5. Upload as artifact for native builds
 
-**Why Ubuntu?** Bash filtering works reliably, avoids Windows glob issues.
+**Why Ubuntu?** Bash filtering works reliably and avoids cross-platform glob differences.
 
 ### Job 2: test (Matrix)
 
@@ -132,17 +132,17 @@ jobs:
 #### Linux Platforms (Docker)
 1. Run Docker multi-stage build on native ARM64/AMD64 runner
 2. Build platform-specific wheel:
-   - `jre-builder`: Creates platform-specific JRE via `jlink`
-   - `python-builder`: Builds wheel with bundled JRE
+    - `jre-builder`: Creates platform-specific JRE via `jlink`
+    - `python-builder`: Builds wheel with bundled JRE
 3. Skip artifact download (Docker gets JARs directly)
 4. Tests run on same native platform
 
-#### macOS/Windows Platforms (Native)
+#### macOS Platform (Native)
 1. Download pre-filtered JARs artifact
 2. Run `build-native.sh`:
-   - Uses system Java (GitHub runner provides Java 25)
-   - Runs `jlink` natively → platform-specific JRE
-   - Builds wheel with `python -m build`
+  - Uses system Java (GitHub runner provides Java 25)
+  - Runs `jlink` natively → platform-specific JRE
+  - Builds wheel with `python -m build`
 3. Run tests on native platform
 
 ## JAR Exclusion System
@@ -157,6 +157,7 @@ arcadedb-grpcw-*.jar
 ```
 
 **Used by:**
+
 1. `.github/workflows/test-python-bindings.yml` (download-jars job)
 2. `bindings/python/Dockerfile.build` (Docker builds)
 3. `bindings/python/setup_jars.py` (documentation/validation)
@@ -166,12 +167,14 @@ arcadedb-grpcw-*.jar
 ### Implementation
 
 **Before (Broken):** Each build step filtered independently
-- `build-native.sh`: Filtered with bash on macOS/Windows
+
+- `build-native.sh`: Filtered with bash on macOS
 - `Dockerfile.build`: Filtered with bash on Linux
 - `setup_jars.py`: Filtered with Python glob
-- **Problem:** Windows glob patterns failed, duplication, inconsistency
+- **Problem:** Glob patterns varied across shells, causing duplication and inconsistency
 
 **After (Fixed):** Single upstream filter
+
 - `download-jars` job: Filters once on Ubuntu (reliable bash)
 - Native builds: Use pre-filtered JARs from artifact
 - Docker builds: Filter independently (different source)
@@ -181,7 +184,7 @@ arcadedb-grpcw-*.jar
 
 ### JUnit XML for Reliable Results
 
-**Challenge:** Parse test results across Linux (bash), macOS (BSD tools), Windows (PowerShell)
+**Challenge:** Parse test results across Linux (bash) and macOS (BSD tools)
 
 **Solution:** Structured data via pytest's JUnit XML output
 
@@ -196,6 +199,7 @@ errors=$(grep -oE 'errors="[0-9]+"' test-results.xml | grep -oE '[0-9]+')
 ```
 
 **Benefits:**
+
 - ✅ Cross-platform compatible (POSIX grep, not GNU)
 - ✅ Structured data (no fragile regex)
 - ✅ Reliable counts (no sed greediness issues)
@@ -293,7 +297,7 @@ Since the runner itself is ARM64, Docker builds run natively without emulation.
 ```
 bindings/python/
 ├── jar_exclusions.txt          # Single source of truth for JAR filtering
-├── build-native.sh             # Native builds (macOS/Windows)
+├── build-native.sh             # Native builds (macOS)
 ├── Dockerfile.build            # Docker builds (Linux)
 ├── setup_jars.py               # Copies JARs/JRE to package
 ├── pyproject.toml              # Package metadata, dependencies
@@ -311,16 +315,16 @@ bindings/python/
 **Key sections:**
 
 1. **download-jars job** (lines 18-89)
-   - Downloads and filters JARs once
-   - Uploads artifact for native builds
+    - Downloads and filters JARs once
+    - Uploads artifact for native builds
 
 2. **test job matrix** (lines 91-364)
-  - Builds 3 platforms
-  - Platform-specific steps (native runners, artifact download, tests)
+    - Builds 3 platforms
+    - Platform-specific steps (native runners, artifact download, tests)
 
 3. **Test parsing** (lines 200-237)
-   - JUnit XML generation and parsing
-   - Cross-platform compatible
+    - JUnit XML generation and parsing
+    - Cross-platform compatible
 
 ## Common Issues & Solutions
 
@@ -328,69 +332,65 @@ bindings/python/
 
 **Problem:** Original Docker-only approach built linux-x64 JRE for all platforms.
 
-**Solution:** Native runners for macOS/Windows, Docker only for Linux.
+**Solution:** Native runners for macOS, Docker only for Linux.
 
-### Issue 2: Windows JAR Filtering Failed
+### Issue 2: Test Count Parsing Failed
 
-**Problem:** Glob patterns didn't work in Windows PowerShell.
-
-**Solution:** Move JAR filtering upstream to Ubuntu (download-jars job).
-
-### Issue 3: Test Count Parsing Failed
-
-**Problem:** `grep -P` (Perl regex) not available on macOS/Windows.
+**Problem:** `grep -P` (Perl regex) not available on macOS.
 
 **Solution:** Switch to JUnit XML + POSIX-compatible `grep -oE`.
 
-### Issue 4: Docker Copied Unfiltered JARs
+### Issue 3: Docker Copied Unfiltered JARs
 
 **Problem:** `python-builder` copied from `java-builder` (84 JARs) instead of `jre-builder` (83 JARs).
 
 **Solution:** Change `COPY --from=java-builder` to `COPY --from=jre-builder`.
 
-### Issue 5: Linux Builds Downloaded Unnecessary Artifact
+### Issue 4: Linux Builds Downloaded Unnecessary Artifact
 
 **Problem:** Linux Docker builds downloaded pre-filtered artifact but didn't use it.
 
 **Solution:** Skip artifact download for Linux platforms (Docker gets JARs directly).
 
-### Issue 6: Bash Counter Increment Failed
+### Issue 5: Bash Counter Increment Failed
 
 **Problem:** `COUNTER=$((COUNTER+1))` failed with `set -e` in bash.
 
 **Solution:** Use `((COUNTER++))` or `COUNTER=$((COUNTER + 1))` (spaces matter).
 
-### Issue 7: Sed Pattern Too Greedy
+### Issue 6: Sed Pattern Too Greedy
 
 **Problem:** Sed regex captured too much when parsing test output.
 
 **Solution:** Switch to JUnit XML (structured data, no regex).
 
-## Size Breakdown
+## Size Breakdown (current, as of 26-Jan-2026)
 
-### Before Optimization (195.9M)
+**linux/amd64**
 
-- ArcadeDB JARs: 205.6M (84 files)
-- Bundled JRE: ~63M
-- Python package: ~5M
-- **Total:** 195.9M wheel
+- Wheel: 115.2M (compressed)
+- JRE: 249.0M (uncompressed)
+- JARs: 31.7M (uncompressed)
+- Installed: ~281M (uncompressed)
 
-### After Optimization (215M)
+**linux/arm64**
 
-- ArcadeDB JARs: 226.0M (83 files, gRPC excluded)
-- Bundled JRE: ~63M
-- Python package: ~5M
-- **Total:** ~215M wheel (compressed)
-- **Installed:** ~289M (uncompressed)
+- Wheel: 114.1M (compressed)
+- JRE: 249.6M (uncompressed)
+- JARs: 31.7M (uncompressed)
+- Installed: ~281M (uncompressed)
+
+**darwin/arm64**
+
+- Wheel: 63.1M (compressed)
+- JRE: 55.1M (uncompressed)
+- JARs: 31.7M (uncompressed)
+- Installed: ~87M (uncompressed)
 
 ### Why Sizes Vary by Platform
 
-- JRE binaries differ by platform (different native code)
-- darwin/amd64: ~215M (Intel Mac JRE)
-- darwin/arm64: ~215M (Apple Silicon JRE)
-- windows/amd64: ~215M (Windows JRE)
-- linux/amd64: ~215M (Linux x64 JRE)
-- linux/arm64: ~215M (Linux ARM64 JRE)
+- JRE binaries differ by platform (different native code and compression).
+- Linux wheels include larger JRE footprints than macOS arm64.
 
 ## Development
 
@@ -415,45 +415,9 @@ uv pip install dist/arcadedb_embedded-*.whl
 pytest tests/
 ```
 
-### Add New Platform
-
-1. Add to matrix in `.github/workflows/test-python-bindings.yml`
-2. Add runner mapping (if needed)
-3. Ensure `jlink` works on that platform
-4. Test wheel on native hardware
-
-## Performance Notes
-
-### Build Times
-
-- **Linux/amd64:** ~3-5 minutes (native Docker)
-- **Linux/arm64:** ~5-7 minutes (native ARM64 runner, fast!)
-- **macOS:** ~5-7 minutes (native build)
-- **Windows:** ~6-8 minutes (native build)
-
-All builds now run on native hardware for optimal performance.
-
-## Future Improvements
-
-1. **Windows ARM64:** Add when GitHub runner becomes generally available (`windows-11-arm64`)
-2. **Build caching:** Cache JRE creation step (currently rebuilds every time)
-3. **Parallel JRE builds:** Build JREs for all platforms in parallel
-4. **Size optimization:** Further investigate JRE modules (currently 21 modules, ~63MB)
-
 ## References
 
-- **jlink documentation:** https://docs.oracle.com/en/java/javase/21/docs/specs/man/jlink.html
-- **GitHub Actions runners:** https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners
-- **GitHub ARM64 runners:** https://github.blog/changelog/2024-06-03-actions-arm-based-linux-and-windows-runners-are-now-in-public-beta/
-- **pytest JUnit XML:** https://docs.pytest.org/en/stable/how-to/output.html#creating-junitxml-format-files
-
-## Credits
-
-This multi-platform build system was developed through extensive iteration and debugging to achieve:
-- ✅ Zero Java installation required for users
-- ✅ True platform-specific wheels (not cross-compiled)
-- ✅ Optimized wheel sizes (~40MB savings)
-- ✅ Reliable CI/CD on GitHub Actions (free tier)
-- ✅ 5 platform support including ARM64
-
-**Status:** Production-ready as of 2025-01-29 (CI run #87)
+- **jlink documentation:** [Oracle jlink man page](https://docs.oracle.com/en/java/javase/21/docs/specs/man/jlink.html)
+- **GitHub Actions runners:** [GitHub-hosted runners](https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners)
+- **GitHub ARM64 runners:** [Supported runners and hardware resources](https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources)
+- **pytest JUnit XML:** [pytest JUnit XML output](https://docs.pytest.org/en/stable/how-to/output.html#creating-junitxml-format-files)

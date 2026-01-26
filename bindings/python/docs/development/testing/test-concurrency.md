@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_concurrency.py){ .md-button }
 
-These notes mirror the Python tests in [test_concurrency.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_concurrency.py). There are 4 tests demonstrating file locking, thread safety, sequential access, and concurrent limitation.
+There are 4 tests demonstrating file locking, thread safety, sequential access, and concurrent limitation.
 
 ## Key Insight
 
@@ -14,19 +14,19 @@ These notes mirror the Python tests in [test_concurrency.py]({{ config.repo_url 
 
 ### 1) file lock mechanism
 
-Opens database, checks for `database.lck` file, closes, verifies lock is released. See [test_concurrency.py#L23-L47]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_concurrency.py#L23-L47).
+Opens database, checks for `database.lck` file, closes, verifies lock is released.
 
 ### 2) thread safety
 
-Creates database with 20 Person records, spawns 4 threads querying disjoint id ranges (0–4, 5–9, 10–14, 15–19) concurrently, asserts all threads complete and find correct counts. See [test_concurrency.py#L50-L93]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_concurrency.py#L50-L93).
+Creates database with 20 Person records, spawns 4 threads querying disjoint id ranges (0–4, 5–9, 10–14, 15–19) concurrently, asserts all threads complete and find correct counts.
 
 ### 3) sequential access
 
-Sequence: create+insert → close → reopen+query (1 record) → close → reopen+insert+query (2 records). Verifies data persists and each step works. See [test_concurrency.py#L96-L143]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_concurrency.py#L96-L143).
+Sequence: create+insert → close → reopen+query (1 record) → close → reopen+insert+query (2 records). Verifies data persists and each step works.
 
 ### 4) concurrent access limitation
 
-Attempts concurrent access from same process; documents that a second handle to locked DB raises `ArcadeDBError`. See [test_concurrency.py#L146-L165]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_concurrency.py#L146-L165).
+Attempts concurrent access from same process; documents that a second handle to locked DB raises `ArcadeDBError`.
 
 ## Architecture
 
