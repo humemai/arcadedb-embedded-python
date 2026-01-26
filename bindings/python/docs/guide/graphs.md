@@ -515,7 +515,7 @@ with arcadedb.create_database("./graph_db") as db:
 ```python
 # Find all vertices
 results = db.query("opencypher", "MATCH (n) RETURN n")
-```
+
 # Find vertices by label
 results = db.query("opencypher", "MATCH (p:Person) RETURN p")
 

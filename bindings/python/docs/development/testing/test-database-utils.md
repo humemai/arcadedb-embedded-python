@@ -2,12 +2,13 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_database_utils.py){ .md-button }
 
-These notes mirror the Python tests in [test_database_utils.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_database_utils.py). There are 5 tests covering database creation helpers, schema initialization, test data generation, cleanup utilities, and type counting. See [test_database_utils.py]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_database_utils.py) for details.
+There are 5 tests covering database creation helpers, schema initialization, test data generation, cleanup utilities, and type counting.
 
 ### test_create_test_database
 Tests database creation helper functions.
 
 **What it tests:**
+
 - Creating clean test database
 - Cleanup of existing database
 - Context manager support
@@ -27,6 +28,7 @@ assert os.path.exists("./test_db")
 Tests test data population utilities.
 
 **What it tests:**
+
 - Generating test vertices
 - Creating test edges
 - Populating with realistic data
@@ -51,6 +53,7 @@ assert db.count_type("Post") == 500
 Tests counting records across all types.
 
 **What it tests:**
+
 - Getting count for each type
 - Summing total records
 - Empty database handling
@@ -75,6 +78,7 @@ assert total == 600
 Tests database cleanup utilities.
 
 **What it tests:**
+
 - Removing all records
 - Dropping all types
 - Full database cleanup
@@ -100,6 +104,7 @@ assert db.count_type("User") == 0
 Tests schema setup helpers.
 
 **What it tests:**
+
 - Creating common schema patterns
 - Social network schema
 - Document store schema

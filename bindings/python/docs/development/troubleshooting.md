@@ -123,13 +123,8 @@ db.close()
 
 2. **Check for orphaned processes:**
 ```bash
-# Linux/macOS
 ps aux | grep python
 kill <PID>
-
-# Windows
-tasklist | findstr python
-taskkill /PID <PID>
 ```
 
 3. **Remove lock file (last resort):**
@@ -203,6 +198,7 @@ python vector_app.py
 Total Process Memory = JVM Heap + Off-Heap Components
 
 Off-Heap Components:
+
 - Direct buffers (MaxDirectMemorySize)
 - Metaspace (class definitions)
 - Page cache
@@ -639,11 +635,7 @@ server.start()
 
 1. **Check port availability:**
 ```bash
-# Linux/macOS
 lsof -i :2480
-
-# Windows
-netstat -ano | findstr :2480
 ```
 
 Use different port:
