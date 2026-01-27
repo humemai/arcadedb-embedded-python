@@ -25,6 +25,7 @@ Common issues, solutions, and debugging techniques for ArcadeDB Python bindings.
 3. **Reinstall if wheel looks corrupted**:
     Wheels bundle the ArcadeDB JRE and JARs. If imports fail, reinstall the wheel
     (no external Java install is needed):
+
     ```bash
     uv pip uninstall -y arcadedb-embedded
     uv pip install --no-cache-dir arcadedb-embedded
@@ -182,15 +183,15 @@ python vector_app.py
 **Cache Size Guidelines:**
 
 - `locationCacheSize`: Number of vector locations (each ~56 bytes)
-  - 100000 entries ≈ 5.6 MB
-  - -1 = unlimited (backward compatible, may consume unbounded memory)
-  - Recommended: 100000 for datasets with 1M+ vectors
+    - 100000 entries ≈ 5.6 MB
+    - -1 = unlimited (backward compatible, may consume unbounded memory)
+    - Recommended: 100000 for datasets with 1M+ vectors
 
 - `graphBuildCacheSize`: Number of vectors during HNSW build
-  - Memory ≈ cacheSize × (dimensions × 4 + 64) bytes
-  - For 768-dim: 10000 entries ≈ 30 MB
-  - Lower values reduce build-time memory spikes
-  - Recommended: 3000-5000 for high-dimensional vectors
+    - Memory ≈ cacheSize × (dimensions × 4 + 64) bytes
+    - For 768-dim: 10000 entries ≈ 30 MB
+    - Lower values reduce build-time memory spikes
+    - Recommended: 3000-5000 for high-dimensional vectors
 
 **Memory Planning:**
 
@@ -236,6 +237,7 @@ ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
 
 !!! tip "Alternative: ARCADEDB_JVM_ERROR_FILE"
     Set crash log location:
+
     ```bash
     export ARCADEDB_JVM_ERROR_FILE="/var/log/arcade/errors.log"
     ```
@@ -328,6 +330,7 @@ with db.transaction():
 **Solution:**
 
 Don't nest transactions:
+
 ```python
 # Bad
 with db.transaction():
@@ -342,6 +345,7 @@ with db.transaction():
 ```
 
 Or use separate transaction blocks:
+
 ```python
 with db.transaction():
     some_operation()
@@ -367,6 +371,7 @@ db.query("sql", "SELECT * FROM User WHERE name = Alice")
 **Solution:**
 
 Use parameters (RECOMMENDED):
+
 ```python
 db.query("sql",
     "SELECT FROM User WHERE name = :name",
@@ -375,6 +380,7 @@ db.query("sql",
 ```
 
 Or quote strings in SQL:
+
 ```python
 db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
 #                                              ↑    ↑ quotes
@@ -417,6 +423,7 @@ db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
 **Problem**: SQL parser errors with complex queries
 
 **Solution**: Use single-line queries or proper escaping:
+
 ```python
 # ✅ Single line (wrap in a transaction when executing)
 query = "INSERT INTO Product SET name = 'test', created_at = sysdate()"
@@ -444,6 +451,7 @@ vertex.set("embedding", numpy_array)
 **Solution:**
 
 Use conversion utilities:
+
 ```python
 from arcadedb_embedded import to_java_float_array
 import numpy as np
@@ -462,6 +470,7 @@ Queries take seconds or minutes.
 **Diagnosis:**
 
 Use EXPLAIN to analyze:
+
 ```python
 result = db.query("sql", "EXPLAIN SELECT FROM User WHERE email = 'alice@example.com'")
 for row in result:
@@ -562,6 +571,7 @@ Process memory grows continuously.
 **Diagnosis:**
 
 Monitor memory:
+
 ```python
 import psutil
 import os
@@ -639,6 +649,7 @@ lsof -i :2480
 ```
 
 Use different port:
+
 ```python
 server = arcadedb.create_server(
     root_path="./databases",
@@ -710,6 +721,7 @@ Embedding dimension doesn't match index dimension.
 **Solution:**
 
 Verify dimensions match:
+
 ```python
 from sentence_transformers import SentenceTransformer
 
@@ -837,6 +849,7 @@ jpype.startJVM(
 ```
 
 logging.properties:
+
 ```properties
 .level=INFO
 handlers=java.util.logging.ConsoleHandler
@@ -1007,6 +1020,7 @@ else:
 
 3. **Report Bug:**
     Include:
+
     - Python version (`python --version`)
     - Package version (`uv pip show arcadedb-embedded`)
     - Minimal reproducible example

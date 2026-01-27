@@ -50,7 +50,9 @@ This pattern applies to many domains:
 ## Key Graph Concepts
 
 ### Vertices (Nodes)
+
 Represent entities in your domain:
+
 ```python
 # Person vertex with properties (using embedded ArcadeDB)
 with db.transaction():
@@ -62,7 +64,9 @@ with db.transaction():
 ```
 
 ### Edges (Relationships)
+
 Connect vertices with optional properties:
+
 ```python
 # Bidirectional friendship with relationship metadata
 with db.transaction():
@@ -76,7 +80,9 @@ with db.transaction():
 ```
 
 ### Schema Definition
+
 Define types and properties upfront for consistency:
+
 ```python
 import arcadedb_embedded as arcadedb
 
@@ -263,7 +269,9 @@ This pattern is useful for:
 ## Performance Considerations
 
 ### Indexing
+
 Create indexes on frequently queried properties:
+
 ```python
 # Index on person names for fast lookups
 db.schema.create_index("Person", ["name"], unique=False)
@@ -273,7 +281,9 @@ db.schema.create_index("Person", ["person_id"], unique=True)
 ```
 
 ### Batch Operations
+
 For large datasets, use batch operations:
+
 ```python
 import arcadedb_embedded as arcadedb
 
@@ -316,6 +326,7 @@ with arcadedb.open_database("./social_network_db") as db:
 ## Key Implementation Notes
 
 ### Property Access Pattern
+
 ```python
 # Always use .get() for query results
 for row in result:
@@ -325,6 +336,7 @@ for row in result:
 ```
 
 ### Transaction Handling
+
 ```python
 # Wrap all write operations in transactions
 with db.transaction():
@@ -333,6 +345,7 @@ with db.transaction():
 ```
 
 ### Edge Creation Best Practice
+
 ```python
 # Use property-based lookups instead of RIDs
 db.command("sql", """
