@@ -38,6 +38,7 @@ SQL vector operations are tested separately in `test_vector_sql.py`, including v
 ## Common Patterns
 
 ### Create JVector (LSM-backed) index
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     # Schema operations are auto-transactional
@@ -55,6 +56,7 @@ with arcadedb.create_database("./test_db") as db:
 ```
 
 ### Search with filters and overquery factor
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.schema.create_vertex_type("Doc")
@@ -84,6 +86,7 @@ with arcadedb.create_database("./test_db") as db:
 ```
 
 ### Chunked insert vectors (preferred)
+
 ```python
 with arcadedb.create_database("./test_db") as db:
     # Schema operations are auto-transactional
