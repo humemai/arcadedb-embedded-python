@@ -19,6 +19,7 @@ AsyncExecutor tests cover:
 ### Configuration Tests
 
 #### test_async_executor_basic_create
+
 Basic async record creation with 100 vertices (commit every 25).
 
 **What it tests:**
@@ -45,6 +46,7 @@ async_exec.close()
 ---
 
 #### test_async_executor_with_commit_every
+
 Automatic commit batching every 50 records; verifies 200 created.
 
 **What it tests:**
@@ -70,6 +72,7 @@ async_exec.close()
 ---
 
 #### test_async_executor_with_parallel_level
+
 Uses 4 workers, 500 records; measures elapsed time (informational) and asserts count.
 
 **What it tests:**
@@ -96,6 +99,7 @@ async_exec.close()
 ---
 
 #### test_async_executor_method_chaining
+
 Chains `set_parallel_level(2)`, `set_commit_every(25)`, `set_back_pressure(75)`; asserts 100 created.
 
 **What it tests:**
@@ -125,11 +129,13 @@ async_exec.close()
 ### Status Tracking Tests
 
 #### test_async_executor_is_pending
+
 Queues 1000 records with `set_commit_every(100)` and uses `is_pending()` after `wait_completion()` to confirm the queue is empty (no assertion during in-flight phase due to timing variability).
 
 ### Callback Tests
 
 #### test_async_executor_callback
+
 Per-operation callback collects created IDs; asserts 10 callbacks fired and 10 records exist.
 
 **Pattern:**
@@ -156,11 +162,13 @@ assert created_count == 10
 ---
 
 #### test_async_executor_global_callback
+
 Documents JPype proxy issues with global callbacks; uses per-operation callbacks as a workaround and asserts 20 successes.
 
 ### Performance Tests
 
 #### test_async_vs_sync_performance
+
 Times 1000 synchronous inserts vs async (4 workers, commit every 250); prints speedup but only sanity-checks that async run completes and records are present (no enforced speedup assertion).
 
 ## Test Pattern (mirrors `test_async_executor_basic_create`)
