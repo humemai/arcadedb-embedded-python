@@ -67,9 +67,6 @@ for start in range(0, len(people_data), chunk_size):
 
 ## SQL for Queries
 
-Use SQL for reading and complex analytics:
-graph traversal extensions.
-
 ### Basic Queries
 
 ```python

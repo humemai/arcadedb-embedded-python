@@ -36,7 +36,7 @@ The CI/CD workflows now support building and releasing across **3 platforms** fo
 
 - **Artifacts**: `wheel-{platform}-py{version}` (15 artifacts)
 - **Publish Job**:
-  - `publish-pypi`: Collects all 15 wheels and publishes to `arcadedb-embedded`
+    - `publish-pypi`: Collects all 15 wheels and publishes to `arcadedb-embedded`
 
 ## GitHub Repository Setup Required
 
