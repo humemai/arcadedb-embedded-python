@@ -24,6 +24,11 @@ bindings/python/
 Run a local development server with live reload:
 
 ```bash
+# Normalize Markdown formatting for proper MkDocs rendering
+python fix_markdown.py
+```
+
+```bash
 cd bindings/python
 mkdocs serve
 ```

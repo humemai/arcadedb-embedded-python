@@ -9,6 +9,7 @@ The AsyncExecutor provides low-level async operations for parallel processing, a
 
 !!! tip "Using Context Managers"
     For automatic resource cleanup, prefer using context managers:
+
     ```python
     with arcadedb.create_database("./mydb") as db:
         async_exec = db.async_executor()

@@ -1,11 +1,13 @@
 # Exporter API
 
 The exporter module provides two complementary utilities:
+
 - `export_database` for full database exports (JSONL/GraphML/GraphSON)
 - `export_to_csv` for exporting query results or in-memory data to CSV
 
 !!! tip "Context Managers"
     Prefer context managers for automatic cleanup:
+
     ```python
     with arcadedb.open_database("./mydb") as db:
         export_database(db, "backup.jsonl.tgz", overwrite=True)
