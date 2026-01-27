@@ -11,6 +11,7 @@ There are 3 tests covering NumPy array storage, retrieval, and vector search int
 - HNSW similarity search with NumPy vectors
 
 ### test_store_and_retrieve_numpy_array
+
 Tests storing and retrieving NumPy arrays.
 
 **What it tests:**
@@ -40,6 +41,7 @@ np.testing.assert_array_almost_equal(embedding, stored_embedding)
 ---
 
 ### test_numpy_vector_search
+
 Tests vector similarity search with NumPy arrays.
 
 **What it tests:**
@@ -84,6 +86,7 @@ for result in results:
 ---
 
 ### test_numpy_dtype_conversion
+
 Tests NumPy dtype handling.
 
 **What it tests:**
@@ -119,6 +122,7 @@ assert isinstance(result.get("vec_f32"), list)
 ## Test Patterns
 
 ### Store NumPy Array
+
 ```python
 import numpy as np
 
@@ -130,6 +134,7 @@ vertex.save()
 ```
 
 ### Retrieve as NumPy
+
 ```python
 result = db.query("sql", "SELECT FROM Document").first()
 embedding_list = result.get("embedding")
@@ -139,6 +144,7 @@ embedding = np.array(embedding_list, dtype=np.float32)
 ```
 
 ### Vector Search with NumPy
+
 ```python
 import numpy as np
 
@@ -176,6 +182,7 @@ assert isinstance(embedding, np.ndarray)
 ## Integration with ML Libraries
 
 ### Sentence Transformers
+
 ```python
 from sentence_transformers import SentenceTransformer
 import numpy as np
@@ -194,6 +201,7 @@ vertex.save()
 ```
 
 ### OpenAI Embeddings
+
 ```python
 import openai
 import numpy as np
@@ -211,6 +219,7 @@ vertex.set("embedding", embedding.tolist())
 ```
 
 ### scikit-learn
+
 ```python
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np

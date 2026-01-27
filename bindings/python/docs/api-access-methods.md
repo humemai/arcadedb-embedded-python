@@ -7,6 +7,7 @@ ArcadeDB Python bindings provide **two distinct access methods** that can be use
 Direct JVM method calls via JPype - **recommended for most Python applications**.
 
 ### Characteristics
+
 - **Transport**: Direct JVM method calls (no network)
 - **Performance**: Fastest (no serialization/network overhead)
 - **Use Cases**: Single-process applications, high-performance scenarios
@@ -77,6 +78,7 @@ finally:
 REST requests over HTTP - **enables remote access and multi-language support**.
 
 ### Characteristics
+
 - **Transport**: HTTP requests with JSON payloads
 - **Performance**: Moderate (network + JSON serialization overhead)
 - **Use Cases**: Multi-process applications, web services, remote access
