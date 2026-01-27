@@ -158,6 +158,7 @@ if result_alice.has_next() and result_bob.has_next():
 !!! warning "Vertex Must Be Saved First"
     Before creating an edge, both vertices must be saved (have a valid RID).
     Attempting to create an edge with unsaved vertices will raise an error:
+
     ```
     IllegalArgumentException: Current vertex is not persistent. Call save() first
     ```
