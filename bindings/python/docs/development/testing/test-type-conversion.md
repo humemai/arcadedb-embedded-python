@@ -36,6 +36,7 @@ assert result.get("none_val") is None
 ---
 
 ### test_datetime_conversion
+
 Tests datetime type conversion.
 
 **What it tests:**
@@ -67,6 +68,7 @@ assert result.get("start_time") == time(14, 30, 0)
 ---
 
 ### test_decimal_conversion
+
 Tests high-precision decimal conversion.
 
 **What it tests:**
@@ -99,6 +101,7 @@ assert tax == Decimal("1.60")
 ---
 
 ### test_list_conversion
+
 Tests list type conversion.
 
 **What it tests:**
@@ -128,6 +131,7 @@ assert result.get("nested") == [[1, 2], [3, 4]]
 ---
 
 ### test_set_conversion
+
 Tests set type conversion.
 
 **What it tests:**
@@ -156,6 +160,7 @@ assert "admin" in roles
 ---
 
 ### test_dict_conversion
+
 Tests dictionary type conversion.
 
 **What it tests:**
@@ -192,6 +197,7 @@ assert profile["address"]["city"] == "New York"
 ---
 
 ### test_binary_conversion
+
 Tests binary data conversion.
 
 **What it tests:**
@@ -220,6 +226,7 @@ assert retrieved == binary_data
 ---
 
 ### test_none_null_conversion
+
 Tests None/null handling.
 
 **What it tests:**
@@ -245,6 +252,7 @@ assert result.get("middle_name") is None
 ---
 
 ### test_large_integer_conversion
+
 Tests large integer handling.
 
 **What it tests:**
@@ -273,6 +281,7 @@ assert result.get("large") == 2 ** 40
 ---
 
 ### test_round_trip_conversion
+
 Tests full round-trip preservation.
 
 **What it tests:**
@@ -318,6 +327,7 @@ for key, original_value in original.items():
 ## Test Patterns
 
 ### Store and Retrieve
+
 ```python
 # Store
 vertex = db.new_vertex("Type")
@@ -332,6 +342,7 @@ assert retrieved == value
 ```
 
 ### Test Type
+
 ```python
 # Verify type after round-trip
 value = 42
@@ -346,6 +357,7 @@ assert type(retrieved) == type(value)
 ```
 
 ### Collections
+
 ```python
 # List
 vertex.set("list", [1, 2, 3])

@@ -20,6 +20,7 @@ Schema tests cover:
 ## Test Classes
 
 ### TestTypeCreation
+
 Tests creating vertex, edge, and document types.
 
 **Tests:**
@@ -43,6 +44,7 @@ with arcadedb.create_database("./test_db") as db:
 ---
 
 ### TestTypeQueries
+
 Tests querying schema for types.
 
 **Tests:**
@@ -73,6 +75,7 @@ with arcadedb.create_database("./test_db") as db:
 ---
 
 ### TestTypeDeletion
+
 Tests removing types from schema.
 
 **Tests:**
@@ -95,6 +98,7 @@ with arcadedb.create_database("./test_db") as db:
 ---
 
 ### TestPropertyCreation
+
 Tests adding properties to types.
 
 **Tests:**
@@ -128,6 +132,7 @@ with arcadedb.create_database("./test_db") as db:
 ---
 
 ### TestPropertyDeletion
+
 Tests removing properties from types.
 
 **Tests:**
@@ -158,6 +163,7 @@ with arcadedb.create_database("./test_db") as db:
 ---
 
 ### TestIndexCreation
+
 Tests creating indexes on types.
 
 **Tests:**
@@ -196,6 +202,7 @@ with arcadedb.create_database("./test_db") as db:
 ---
 
 ### TestIndexQueries
+
 Tests querying indexes.
 
 **Tests:**
@@ -228,6 +235,7 @@ with arcadedb.create_database("./test_db") as db:
 ---
 
 ### TestIndexDeletion
+
 Tests removing indexes.
 
 **Tests:**
@@ -259,6 +267,7 @@ with arcadedb.create_database("./test_db") as db:
 ---
 
 ### TestPropertyTypes
+
 Tests all ArcadeDB property types.
 
 **Tests:**
@@ -295,6 +304,7 @@ with arcadedb.create_database("./test_db") as db:
 ---
 
 ### TestIntegration
+
 Tests complete schema workflows.
 
 **Tests:**

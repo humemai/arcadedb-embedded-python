@@ -30,10 +30,10 @@ Tests validate:
 ### Distance Metrics
 
 - **vector_distance_functions**: Tests distance functions:
-  - `vector_distance_cosine(v1, v2)`: cosine similarity (0 to 1)
-  - `vector_distance_l2(v1, v2)`: Euclidean distance
-  - `vector_distance_dot(v1, v2)`: dot product
-  - Validates values for orthogonal, parallel, and arbitrary vectors
+    - `vector_distance_cosine(v1, v2)`: cosine similarity (0 to 1)
+    - `vector_distance_l2(v1, v2)`: Euclidean distance
+    - `vector_distance_dot(v1, v2)`: dot product
+    - Validates values for orthogonal, parallel, and arbitrary vectors
 
 ### Normalization
 

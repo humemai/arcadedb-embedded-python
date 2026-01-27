@@ -166,7 +166,8 @@ with arcadedb.create_database("./quickstart") as db:
 ```
 
 Output:
-```
+
+```markdown
 Name: Alice, Age: 30
 ```
 
@@ -223,7 +224,8 @@ if __name__ == "__main__":
 ```
 
 Output:
-```
+
+```markdown
 ✅ Inserted 3 records
 
 📋 All people:

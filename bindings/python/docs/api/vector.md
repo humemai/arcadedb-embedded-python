@@ -32,9 +32,9 @@ vector indexing.
 **Parameters:**
 
 - `vector`: Array-like object containing float values
-  - Python list: `[0.1, 0.2, 0.3]`
-  - NumPy array: `np.array([0.1, 0.2, 0.3])`
-  - Any iterable: `(0.1, 0.2, 0.3)`
+    - Python list: `[0.1, 0.2, 0.3]`
+    - NumPy array: `np.array([0.1, 0.2, 0.3])`
+    - Any iterable: `(0.1, 0.2, 0.3)`
 
 **Returns:**
 
@@ -71,8 +71,8 @@ Convert a Java array or ArrayList to a Python array.
 
 - `java_vector`: Java array or ArrayList of floats
 - `use_numpy` (bool): Return NumPy array if available (default: `True`)
-  - If `True` and NumPy is installed: returns `np.ndarray`
-  - If `False` or NumPy unavailable: returns Python `list`
+    - If `True` and NumPy is installed: returns `np.ndarray`
+    - If `False` or NumPy unavailable: returns Python `list`
 
 **Returns:**
 
@@ -136,17 +136,17 @@ db.create_vector_index(
 - `vector_property` (str): Property name storing vector arrays
 - `dimensions` (int): Vector dimensionality (must match your embeddings)
 - `distance_function` (str): Distance metric (default: `"cosine"`)
-  - `"cosine"`: Cosine distance (1 - cosine similarity)
-  - `"euclidean"`: Euclidean distance (L2 norm)
-  - `"inner_product"`: Negative inner product
+    - `"cosine"`: Cosine distance (1 - cosine similarity)
+    - `"euclidean"`: Euclidean distance (L2 norm)
+    - `"inner_product"`: Negative inner product
 - `max_connections` (int): Max connections per node (default: 16)
-  - Maps to `maxConnections` in JVector
-  - Higher = better recall, more memory
-    - Typical range: 8-64
+    - Maps to `maxConnections` in JVector
+    - Higher = better recall, more memory
+        - Typical range: 8-64
 - `beam_width` (int): Beam width for search/construction (default: 100)
-  - Maps to `beamWidth` in JVector
-  - Higher = better recall, slower search
-    - Typical range: 50-500
+    - Maps to `beamWidth` in JVector
+    - Higher = better recall, slower search
+        - Typical range: 50-500
 - `quantization` (str | None): `"INT8"`, `"BINARY"`, `"PRODUCT"`, or `None` (default: `"INT8"`)
 
 **Returns:**
@@ -194,9 +194,9 @@ been built yet. This "warm up" query may take longer than subsequent queries.
 **Parameters:**
 
 - `query_vector`: Query vector as:
-  - Python list: `[0.1, 0.2, ...]`
-  - NumPy array: `np.array([0.1, 0.2, ...])`
-  - Any array-like iterable
+    - Python list: `[0.1, 0.2, ...]`
+    - NumPy array: `np.array([0.1, 0.2, ...])`
+    - Any array-like iterable
 - `k` (int): Number of neighbors to return (default: 10)
 - `overquery_factor` (int): Multiplier for search-time over-querying (implicit efSearch)
     (default: 4)
@@ -206,10 +206,12 @@ been built yet. This "warm up" query may take longer than subsequent queries.
 **Returns:**
 
 - `List[Tuple[record, float]]`: List of `(record, distance)` tuples
-  - `record`: Matched ArcadeDB record object (Vertex, Document, or Edge)
-  - `distance`: Similarity score (float)
-    - Lower = more similar
-    - Range depends on distance function
+    - `record`: Matched ArcadeDB record object (Vertex, Document, or Edge)
+    - `distance`: Similarity score (float)
+        - Cosine: lower = more similar
+        - Euclidean: higher = more similar
+        - Inner product: lower = more similar (negative dot product)
+    - Range depends on `distance_function`
 
 **Example:**
 
@@ -234,11 +236,11 @@ for record, distance in neighbors:
 
 **Distance Interpretation:**
 
-| Function | Range | Lower = More Similar |
-|----------|-------|---------------------|
-| cosine | [0, 2] | ✓ (0 = identical) |
-| euclidean | [0, ∞) | ✓ (0 = identical) |
-| inner_product | (-∞, ∞) | ✗ (higher = more similar) |
+| Function | Range | Similarity direction |
+|----------|-------|----------------------|
+| cosine | [0, 2] | lower is better (0 = identical) |
+| euclidean | (0, 1] | higher is better (1 = identical) |
+| inner_product | (-∞, ∞) | lower is better (negative dot product) |
 
 - Vertex must have the vector property populated
 - Vector dimensionality must match index dimensions

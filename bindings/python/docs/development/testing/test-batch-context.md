@@ -33,6 +33,7 @@ BatchContext tests cover:
 - `test_batch_context_mixed_operations`: create 50 new, update 25, delete 25; final counts: total 75, updated 25, new 50.
 
 ### Example Snippet (mirrors `test_batch_context_basic`)
+
 ```python
 with db.batch_context(batch_size=100, parallel=2) as batch:
     for i in range(500):
@@ -43,6 +44,7 @@ assert count == 500
 ```
 
 ### Edge Creation (from `test_batch_context_with_edges`)
+
 ```python
 with db.transaction():
     a = db.new_vertex("Person"); a.set("name", "Alice"); a.save()
@@ -61,6 +63,7 @@ assert edge_count == 3
 ```
 
 ### Performance (informational)
+
 ```python
 with db.batch_context(batch_size=5000, parallel=8) as batch:
     for i in range(10000):
@@ -79,6 +82,7 @@ print(f"Speedup: {txn_time / batch_time:.1f}x")
 ### Edge Case Tests
 
 #### test_batch_context_empty
+
 Tests batch context with zero records.
 
 **What it tests:**
@@ -99,6 +103,7 @@ assert len(batch.get_errors()) == 0
 ---
 
 #### test_batch_context_single_record
+
 Tests batch context with single record.
 
 **What it tests:**
@@ -118,6 +123,7 @@ assert db.count_type("User") == 1
 ---
 
 #### test_batch_context_nested_not_allowed
+
 Tests that nested batch contexts are not supported.
 
 **What it tests:**
@@ -141,6 +147,7 @@ with db.batch_context() as batch1:
 ## Test Patterns
 
 ### Basic Batch Operations
+
 ```python
 with db.batch_context(batch_size=1000, parallel=4) as batch:
     for i in range(10000):
@@ -150,6 +157,7 @@ with db.batch_context(batch_size=1000, parallel=4) as batch:
 ```
 
 ### With Progress Tracking
+
 ```python
 with db.batch_context() as batch:
     batch.set_total(count)  # Enable progress bar
@@ -159,6 +167,7 @@ with db.batch_context() as batch:
 ```
 
 ### With Error Handling
+
 ```python
 with db.batch_context() as batch:
     for item in items:
@@ -171,6 +180,7 @@ print(f"Created {success}, failed {len(errors)}")
 ```
 
 ### Edge Creation
+
 ```python
 # Create vertices first
 vertex_rids = []

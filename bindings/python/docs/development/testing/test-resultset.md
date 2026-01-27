@@ -16,39 +16,51 @@ There are 12 tests that exercise list/DataFrame conversion, chunking, counting, 
 ## Test-by-test
 
 ### to_list
+
 Inserts Alice/Bob/Charlie, queries ordered by name, and calls `to_list(convert_types=True)` to get three dicts. Validates ordering and types.
 
 ### to_dataframe
+
 Skips if pandas is absent. Inserts three `Product` rows, converts with `to_dataframe(convert_types=True)`, checks columns, length 3, and that the stock sum is 225.
 
 ### iter_chunks
+
 Creates 250 `Item` docs, iterates with `iter_chunks(size=100)`, and asserts chunk sizes 100/100/50 plus boundary values (ids 0, 99, 200, 249).
 
 ### count
+
 Inserts 50 `Counter` docs and calls `count()` (no list conversion). Expects 50.
 
 ### first
+
 Inserts three `FirstTest` values, orders ascending, and expects `first()` to return the row with `value == "first"`. Empty query returns `None`.
 
 ### one
+
 Inserts unique and duplicate `OneTest` rows. `one()` returns the unique row, raises `ValueError` on empty or multiple results (asserts message contains "no results" or "multiple").
 
 ### iteration patterns
+
 Inserts ten `IterTest` docs. Uses list comprehension over the ResultSet, confirms 0..9, converts to list again, and checks `first()` on a DESC query returns 9.
 
 ### repr
+
 Inserts one `ReprTest` row and asserts `repr(result)` is a string containing "Result" and properties.
 
 ### complex queries
+
 Creates 100 `Sales` rows with regions cycling North/South/East/West and decimal amounts. Aggregation query groups by region; each group count is 25. A filtered/ordered query for North returns the highest amount via `first()`.
 
 ### empty handling
+
 Runs `SELECT FROM EmptyTest` with no rows. `to_list()` returns `[]`, `count()` returns 0, `first()` returns `None`, and `iter_chunks(size=10)` yields no chunks.
 
 ### reusability
+
 Iterating a `ResultSet` consumes it: first iteration returns two `ReuseTest` rows; the second is empty. A fresh query yields two rows again.
 
 ### get_rid and get_vertex
+
 For a `Person` vertex, `get_rid()` returns a string starting with `#`, and `get_vertex()` returns the underlying Java vertex with `name == 'Alice'`.
 
 ## Handy patterns from the tests

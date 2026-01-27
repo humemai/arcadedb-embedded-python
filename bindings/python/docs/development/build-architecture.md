@@ -130,6 +130,7 @@ jobs:
 **Platform-specific build and test:**
 
 #### Linux Platforms (Docker)
+
 1. Run Docker multi-stage build on native ARM64/AMD64 runner
 2. Build platform-specific wheel:
     - `jre-builder`: Creates platform-specific JRE via `jlink`
@@ -138,11 +139,12 @@ jobs:
 4. Tests run on same native platform
 
 #### macOS Platform (Native)
+
 1. Download pre-filtered JARs artifact
 2. Run `build-native.sh`:
-  - Uses system Java (GitHub runner provides Java 25)
-  - Runs `jlink` natively → platform-specific JRE
-  - Builds wheel with `python -m build`
+    - Uses system Java (GitHub runner provides Java 25)
+    - Runs `jlink` natively → platform-specific JRE
+    - Builds wheel with `python -m build`
 3. Run tests on native platform
 
 ## JAR Exclusion System

@@ -5,6 +5,7 @@
 There are 5 tests covering database creation helpers, schema initialization, test data generation, cleanup utilities, and type counting.
 
 ### test_create_test_database
+
 Tests database creation helper functions.
 
 **What it tests:**
@@ -25,6 +26,7 @@ assert os.path.exists("./test_db")
 ---
 
 ### test_populate_test_data
+
 Tests test data population utilities.
 
 **What it tests:**
@@ -50,6 +52,7 @@ assert db.count_type("Post") == 500
 ---
 
 ### test_count_all_types
+
 Tests counting records across all types.
 
 **What it tests:**
@@ -75,6 +78,7 @@ assert total == 600
 ---
 
 ### test_cleanup_database
+
 Tests database cleanup utilities.
 
 **What it tests:**
@@ -101,6 +105,7 @@ assert db.count_type("User") == 0
 ---
 
 ### test_schema_initialization_helper
+
 Tests schema setup helpers.
 
 **What it tests:**
@@ -127,6 +132,7 @@ assert db.schema.exists_type("Likes")
 ## Test Patterns
 
 ### Database Setup
+
 ```python
 from test_utils import create_test_database, init_social_schema
 
@@ -136,6 +142,7 @@ with create_test_database("./test_db") as db:
 ```
 
 ### Data Population
+
 ```python
 from test_utils import populate_users, populate_edges
 
@@ -148,6 +155,7 @@ with db:  # Assuming db is created in context
 ```
 
 ### Cleanup
+
 ```python
 from test_utils import cleanup_database
 
@@ -163,6 +171,7 @@ with create_test_database("./test_db") as db:
 ## Utility Functions Reference
 
 ### create_test_database
+
 ```python
 def create_test_database(path: str) -> Database:
     """Create a test database with cleanup."""
@@ -172,6 +181,7 @@ def create_test_database(path: str) -> Database:
 ```
 
 ### populate_users
+
 ```python
 def populate_users(db: Database, count: int) -> int:
     """Populate database with test users."""
@@ -186,6 +196,7 @@ def populate_users(db: Database, count: int) -> int:
 ```
 
 ### count_all_types
+
 ```python
 def count_all_types(db: Database) -> dict:
     """Get record count for all types."""
@@ -197,6 +208,7 @@ def count_all_types(db: Database) -> dict:
 ```
 
 ### cleanup_database
+
 ```python
 def cleanup_database(db: Database):
     """Remove all records from database."""
