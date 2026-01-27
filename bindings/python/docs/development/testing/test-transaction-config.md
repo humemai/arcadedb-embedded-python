@@ -13,6 +13,7 @@ here are 9 tests covering transaction isolation levels, WAL configuration, retry
 - Read-only: Optimized read transactions
 
 ### test_transaction_isolation_level
+
 Tests transaction isolation levels.
 
 **What it tests:**
@@ -38,6 +39,7 @@ with db.transaction(isolation_level="REPEATABLE_READ"):
 ---
 
 ### test_transaction_wal_configuration
+
 Tests Write-Ahead Log settings.
 
 **What it tests:**
@@ -66,6 +68,7 @@ with db.transaction(use_wal=False):
 ---
 
 ### test_transaction_retry_on_conflict
+
 Tests automatic retry configuration.
 
 **What it tests:**
@@ -92,6 +95,7 @@ with db.transaction(retry_on_conflict=True, max_retries=3):
 ---
 
 ### test_transaction_timeout
+
 Tests transaction timeout configuration.
 
 **What it tests:**
@@ -113,6 +117,7 @@ except TransactionTimeoutException:
 ---
 
 ### test_read_only_transaction
+
 Tests read-only transaction optimization.
 
 **What it tests:**
@@ -139,6 +144,7 @@ with db.transaction(read_only=True):
 ---
 
 ### test_transaction_rollback_on_error
+
 Tests automatic rollback on exceptions.
 
 **What it tests:**
@@ -171,6 +177,7 @@ assert db.count_type("User") == initial_count
 ---
 
 ### test_manual_rollback
+
 Tests explicit rollback call.
 
 **What it tests:**
@@ -200,6 +207,7 @@ with db.transaction():
 ---
 
 ### test_nested_transaction_behavior
+
 Tests nested transaction handling.
 
 **What it tests:**
@@ -228,6 +236,7 @@ with db.transaction():
 ---
 
 ### test_transaction_performance_impact
+
 Tests performance of different configurations.
 
 **What it tests:**
@@ -265,6 +274,7 @@ print(f"Speedup: {wal_time / no_wal_time:.1f}x")
 ## Test Patterns
 
 ### Basic Configuration
+
 ```python
 with db.transaction(
     isolation_level="READ_COMMITTED",
@@ -276,6 +286,7 @@ with db.transaction(
 ```
 
 ### Retry on Conflict
+
 ```python
 with db.transaction(retry_on_conflict=True, max_retries=5):
     # Operations that may conflict
@@ -283,6 +294,7 @@ with db.transaction(retry_on_conflict=True, max_retries=5):
 ```
 
 ### Read-Only
+
 ```python
 with db.transaction(read_only=True):
     # Only read operations
@@ -290,6 +302,7 @@ with db.transaction(read_only=True):
 ```
 
 ### Performance Tuning
+
 ```python
 # Fast bulk insert (no WAL)
 with db.transaction(use_wal=False):

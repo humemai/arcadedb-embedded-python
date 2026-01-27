@@ -171,9 +171,7 @@ arcadedb_embedded/
 
 ## 📄 License
 
-Both upstream ArcadeDB (Java) and this ArcadeDB Embedded Python project are licensed under Apache 2.0, which is fully open and free for everyone, including commercial use.
-
-Apache License 2.0 - see [LICENSE](https://github.com/humemai/arcadedb-embedded-python/blob/main/LICENSE)
+Both upstream ArcadeDB (Java) and this ArcadeDB Embedded Python project are licensed under Apache 2.0, fully open and free for everyone, including commercial use.
 
 ---
 

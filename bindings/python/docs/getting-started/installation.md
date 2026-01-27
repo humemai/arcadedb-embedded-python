@@ -12,8 +12,8 @@ uv pip install arcadedb-embedded
 
 - **Python 3.10–3.14** (packaged; primary testing on 3.12) - No Java installation required!
 - **Supported Platforms**: Prebuilt wheels for **3 platforms**
-  - Linux: x86_64, ARM64
-  - macOS: Apple Silicon (ARM64)
+    - Linux: x86_64, ARM64
+    - macOS: Apple Silicon (ARM64)
 
 ## What's Included
 
@@ -111,14 +111,14 @@ python your_script.py
 JVM arguments use two flag types:
 
 - **`-X` flags**: JVM runtime options (heap, GC, etc.)
-  - `-Xmx<size>`: Maximum heap memory (e.g., `-Xmx8g` for 8GB)
-  - `-Xms<size>`: Initial heap size (recommended: same as `-Xmx`)
-  - `-XX:MaxDirectMemorySize=<size>`: Limit off-heap buffers
+    - `-Xmx<size>`: Maximum heap memory (e.g., `-Xmx8g` for 8GB)
+    - `-Xms<size>`: Initial heap size (recommended: same as `-Xmx`)
+    - `-XX:MaxDirectMemorySize=<size>`: Limit off-heap buffers
 
 - **`-D` flags**: System properties for ArcadeDB configuration
-  - `-Darcadedb.vectorIndex.locationCacheSize=<count>`: Vector location cache limit
-  - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: JVector build cache limit
-  - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: Mutations threshold before rebuilding JVector
+    - `-Darcadedb.vectorIndex.locationCacheSize=<count>`: Vector location cache limit
+    - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: JVector build cache limit
+    - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: Mutations threshold before rebuilding JVector
 
 !!! warning "Set Before Import"
     `ARCADEDB_JVM_ARGS` must be set **before** the first `import arcadedb_embedded` in your Python process. The JVM can only be configured once.
