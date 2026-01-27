@@ -37,6 +37,7 @@ with arcadedb.create_database("./mydb") as db:
 
 !!! tip "Use Context Manager"
     Prefer using `with` statement for automatic cleanup:
+
     ```python
     with arcadedb.create_database("./mydb") as db:
         # Database automatically closed on exit
@@ -220,6 +221,7 @@ with db.transaction():
 
 !!! warning "Transaction Required"
     Write operations must be wrapped in a transaction:
+
     ```python
     # ✅ Correct
     with db.transaction():
@@ -352,6 +354,7 @@ with db.transaction():
 
 !!! info "Creating Edges"
     There is no `db.new_edge()` method. Edges are created **from vertices**:
+
     ```python
     edge = vertex1.new_edge("Knows", vertex2)
     edge.save()
