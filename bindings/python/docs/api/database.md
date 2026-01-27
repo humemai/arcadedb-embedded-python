@@ -518,6 +518,9 @@ Enable or disable automatic transaction management.
 db.async_executor() -> AsyncExecutor
 ```
 
+**Experimental:** Not advised for production use yet. Prefer standard transactions and
+synchronous workflows.
+
 ---
 
 ### export_database

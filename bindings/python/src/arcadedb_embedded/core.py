@@ -539,6 +539,8 @@ class Database:
         """
         Get async executor for parallel operations.
 
+        Experimental: not advised for production use yet.
+
         Returns async executor that enables:
         - Parallel record creation (3-5x faster bulk inserts)
         - Automatic transaction batching
@@ -620,6 +622,8 @@ class Database:
     ):
         """
         Create a batch processing context manager.
+
+        Experimental: not advised for production use yet.
 
         Provides a high-level interface for bulk operations with automatic
         async executor configuration, progress tracking, and error handling.
