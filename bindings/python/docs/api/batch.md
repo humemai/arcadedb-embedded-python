@@ -1,5 +1,9 @@
 # Batch Processing API
 
+!!! warning "Experimental"
+    `batch_context()` is experimental and not advised for production use yet. Prefer
+    chunked transactions with `db.transaction()` for reliable embedded workloads.
+
 The Batch Processing API provides a high-level interface for bulk operations with automatic async executor configuration, progress tracking, and error handling.
 
 ## Overview
