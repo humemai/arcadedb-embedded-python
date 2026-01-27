@@ -34,10 +34,10 @@ It is important to distinguish between operations that require explicit transact
 
 - **`db.query()`**: Always used for **read-only queries**. Returns a `ResultSet` with read-only results. **Does NOT require a transaction.**
 - **`db.command()`**: Used for **both DDL and DML operations**:
-  - DML Read: `SELECT` queries (returns ResultSet, optional transaction)
-  - DML Write: `INSERT`, `UPDATE`, `DELETE` (requires transaction)
-  - DDL: `CREATE TYPE`, `CREATE PROPERTY`, `CREATE INDEX`, `DROP`, etc. (auto-transactional)
-  - Bulk: `IMPORT DATABASE`, `MOVE` (auto-transactional)
+    - DML Read: `SELECT` queries (returns ResultSet, optional transaction)
+    - DML Write: `INSERT`, `UPDATE`, `DELETE` (requires transaction)
+    - DDL: `CREATE TYPE`, `CREATE PROPERTY`, `CREATE INDEX`, `DROP`, etc. (auto-transactional)
+    - Bulk: `IMPORT DATABASE`, `MOVE` (auto-transactional)
 
 ### Best Practice Pattern
 
