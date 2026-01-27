@@ -1,6 +1,11 @@
 # AsyncExecutor API
 
-The AsyncExecutor provides low-level async operations for parallel processing, automatic batching, and optimized WAL operations. It offers 3-5x faster bulk inserts compared to sequential operations.
+!!! warning "Experimental"
+    `async_executor()` is experimental and not advised for production use yet. Prefer
+    standard transactions and synchronous workflows unless you are explicitly testing
+    or benchmarking.
+
+The AsyncExecutor provides low-level async operations for parallel processing, automatic batching, and optimized WAL operations.
 
 !!! tip "Using Context Managers"
     For automatic resource cleanup, prefer using context managers:
