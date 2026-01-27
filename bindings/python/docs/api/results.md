@@ -4,6 +4,7 @@ The `ResultSet` and `Result` classes provide Python-friendly interfaces for work
 
 !!! tip "Using Context Managers"
     For automatic resource cleanup, prefer using context managers:
+
     ```python
     with arcadedb.open_database("./mydb") as db:
         result_set = db.query("sql", "SELECT FROM Person WHERE age > 25")
@@ -170,12 +171,12 @@ Get the value of a property by name.
 **Returns:**
 
 - `Any`: Property value (type depends on the data), or `None` if property doesn't exist
-  - Automatically converts Java types to Python types
-  - Java `Boolean` → Python `bool`
-  - Java `Integer`/`Long` → Python `int`
-  - Java `Float`/`Double` → Python `float`
-  - Java `String` → Python `str`
-  - Java collections → Python lists/dicts
+    - Automatically converts Java types to Python types
+    - Java `Boolean` → Python `bool`
+    - Java `Integer`/`Long` → Python `int`
+    - Java `Float`/`Double` → Python `float`
+    - Java `String` → Python `str`
+    - Java collections → Python lists/dicts
 
 **Example:**
 

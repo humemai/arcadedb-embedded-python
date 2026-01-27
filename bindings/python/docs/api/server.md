@@ -36,17 +36,17 @@ Create an ArcadeDB server instance.
 **Parameters:**
 
 - `root_path` (str): Root directory for databases (default: `"./databases"`)
-  - All databases will be created under this directory
-  - Automatically created if it doesn't exist
+    - All databases will be created under this directory
+    - Automatically created if it doesn't exist
 - `root_password` (Optional[str]): Root user password (default: `None`)
-  - **Strongly recommended for production**
-  - If `None`, uses default password (insecure!)
+    - **Strongly recommended for production**
+    - If `None`, uses default password (insecure!)
 - `config` (Optional[Dict[str, Any]]): Configuration dictionary (default: `None`)
-  - `http_port` (int): HTTP API port (default: 2480)
-  - `binary_port` (int): Binary protocol port (default: 2424)
-  - `host` (str): Host to bind to (default: "0.0.0.0")
-  - `mode` (str): Server mode - "development" or "production" (default: "development")
-  - Additional ArcadeDB configuration keys (see Advanced Configuration)
+    - `http_port` (int): HTTP API port (default: 2480)
+    - `binary_port` (int): Binary protocol port (default: 2424)
+    - `host` (str): Host to bind to (default: "0.0.0.0")
+    - `mode` (str): Server mode - "development" or "production" (default: "development")
+    - Additional ArcadeDB configuration keys (see Advanced Configuration)
 
 **Returns:**
 
@@ -210,8 +210,8 @@ Create a new database on the server.
 **Parameters:**
 
 - `name` (str): Database name
-  - Alphanumeric and underscores recommended
-  - Will be created under `root_path/{name}/`
+    - Alphanumeric and underscores recommended
+    - Will be created under `root_path/{name}/`
 
 **Returns:**
 
@@ -731,11 +731,11 @@ finally:
 **Common Errors:**
 
 - **Port already in use**: Another process using port 2480
-  - Solution: Change `http_port` in config or stop conflicting process
+    - Solution: Change `http_port` in config or stop conflicting process
 - **Permission denied**: Cannot write to `root_path`
-  - Solution: Check directory permissions
+    - Solution: Check directory permissions
 - **Database not found**: `get_database()` on non-existent DB
-  - Solution: Use `create_database()` first
+    - Solution: Use `create_database()` first
 
 ---
 
