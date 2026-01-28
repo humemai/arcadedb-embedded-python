@@ -51,16 +51,16 @@ pre-existing document database from Example 04.
 
 ```bash
 # Recommended: Fastest configuration (Java API, synchronous)
-python 05_csv_import_graph.py --size small --method java --no-async
+python 05_csv_import_graph.py --dataset movielens-small --method java --no-async
 
 # Compare with SQL
-python 05_csv_import_graph.py --size small --method sql
+python 05_csv_import_graph.py --dataset movielens-small --method sql
 
 # Run with export for roundtrip validation
-python 05_csv_import_graph.py --size small --method java --no-async --export
+python 05_csv_import_graph.py --dataset movielens-small --batch-size 5000 --method java --no-async --export
 
 # Comprehensive benchmark (all 6 configurations in parallel)
-./run_benchmark_05_csv_import_graph.sh small 5000 4 all_6 --export
+./run_benchmark_05_csv_import_graph.sh movielens-small 5000 4 all_6 --export
 
 # See all options
 python 05_csv_import_graph.py --help
@@ -68,7 +68,7 @@ python 05_csv_import_graph.py --help
 
 **Key options:**
 
-- `--size {small,large}` - Dataset size (default: small)
+- `--dataset {movielens-small,movielens-large}` - Dataset size (default: movielens-small)
 - `--method {java,sql}` - Creation method: 'java' (recommended) or 'sql'
 - `--no-async` - Use synchronous transactions (FASTER for embedded mode)
 - `--no-index` - Skip creating indexes (slower, for comparison)
@@ -419,26 +419,26 @@ print(f"✅ TAGGED: {tagged_count:,}")
 
 ```bash
 # Fastest configuration (recommended)
-python 05_csv_import_graph.py --size small --method java --no-async
+python 05_csv_import_graph.py --dataset movielens-small --method java --no-async
 
 # Compare with SQL
-python 05_csv_import_graph.py --size small --method sql
+python 05_csv_import_graph.py --dataset movielens-small --method sql
 
 # With export for roundtrip validation
-python 05_csv_import_graph.py --size small --method java --no-async --export
+python 05_csv_import_graph.py --dataset movielens-small --batch-size 5000 --method java --no-async --export
 ```
 
 ### Comprehensive Benchmark (All 6 Configurations)
 
 ```bash
 # Run all 6 methods in parallel
-./run_benchmark_05_csv_import_graph.sh small 5000 4 all_6
+./run_benchmark_05_csv_import_graph.sh movielens-small 5000 4 all_6
 
 # With export and roundtrip validation
-./run_benchmark_05_csv_import_graph.sh small 5000 4 all_6 --export
+./run_benchmark_05_csv_import_graph.sh movielens-small 5000 4 all_6 --export
 
 # Large dataset (takes several hours)
-./run_benchmark_05_csv_import_graph.sh large 50000 4 all_6 --export
+./run_benchmark_05_csv_import_graph.sh movielens-large 50000 4 all_6 --export
 ```
 
 **6 Configurations:**
