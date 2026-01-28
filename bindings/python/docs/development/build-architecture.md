@@ -18,7 +18,7 @@ This document describes the build architecture for creating platform-specific Py
 
 **All supported platforms:**
 
-- ✅ 252 tests passing
+- ✅ 258 tests passing
 - ✅ 31.7M JARs (83 files, identical across platforms)
 - ✅ All native runners (no QEMU emulation)
 - ✅ Reproducible builds (pinned runner versions)
