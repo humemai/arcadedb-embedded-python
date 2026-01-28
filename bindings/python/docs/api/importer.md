@@ -15,7 +15,7 @@ data as documents, vertices, or edges depending on your schema needs.
 
 - **CSV/TSV**: Comma or tab-separated values (recommended for bulk imports)
 - **ArcadeDB JSONL export/import**: Use `IMPORT DATABASE file://...` via SQL for full database moves (see example)
-- **XML**: Limited support via Java importer (not recommended for production use)
+- **XML**: Supports document/vertex imports via Java importer
 
 ## Module Functions
 
@@ -269,7 +269,13 @@ stats = arcadedb.import_csv(db, "data.csv", "Data", commitEvery=5000)
 The importer uses streaming parsers:
 
 - **CSV**: Line-by-line processing (very efficient)
-- **XML**: Streaming parser; keep attributes consistent across rows
+- **XML**: Streaming parser; attributes and first-level child elements are supported
+
+### XML Tips
+
+For XML imports, prefer attributes for data fields and use `objectNestLevel`
+to target the correct nesting level (for example, `<posts><row .../></posts>`
+uses `objectNestLevel=1`).
 
 ### Schema Pre-Creation
 

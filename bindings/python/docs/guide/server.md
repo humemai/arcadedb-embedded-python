@@ -71,6 +71,47 @@ server = arcadedb.create_server(
 | `host` | "0.0.0.0" | Host to bind to |
 | `mode` | "development" | Server mode (`development` or `production`) |
 
+## Server Info Endpoint
+
+The server exposes `/api/v1/server` for metadata such as version, server name,
+and supported query languages:
+
+```python
+import requests
+from requests.auth import HTTPBasicAuth
+
+base_url = f"http://localhost:{server.get_http_port()}"
+auth = HTTPBasicAuth("root", "password123")
+
+info = requests.get(f"{base_url}/api/v1/server", auth=auth).json()
+print("Server version:", info.get("version"))
+print("Languages:", info.get("languages"))
+```
+
+## Authentication Tokens (HTTP API)
+
+If you make many HTTP requests, you can obtain a token once and use Bearer
+authentication afterward:
+
+```python
+import requests
+from requests.auth import HTTPBasicAuth
+
+base_url = f"http://localhost:{server.get_http_port()}"
+auth = HTTPBasicAuth("root", "password123")
+
+# Exchange Basic Auth for a token
+token = requests.post(f"{base_url}/api/v1/login", auth=auth).json()["token"]
+
+# Use Bearer token in subsequent requests
+headers = {"Authorization": f"Bearer {token}"}
+requests.post(
+    f"{base_url}/api/v1/command/mydb",
+    headers=headers,
+    json={"language": "sql", "command": "SELECT FROM Person"},
+)
+```
+
 ## Multi-Process Access
 
 ArcadeDB's embedded mode uses file-based locking, which prevents multiple processes from accessing the same database simultaneously. **Server mode solves this problem** by providing a central HTTP endpoint that multiple processes (or applications) can connect to.

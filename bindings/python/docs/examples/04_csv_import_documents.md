@@ -82,7 +82,7 @@ For quick testing with the smaller dataset (124,003 records), use: `python downl
 python 04_csv_import_documents.py
 
 # Use small dataset for quick testing
-python 04_csv_import_documents.py --size small
+python 04_csv_import_documents.py --dataset movielens-small
 
 # Configure parallel threads and batch size
 python 04_csv_import_documents.py --parallel 8 --batch-size 10000
@@ -96,7 +96,7 @@ python 04_csv_import_documents.py --help
 
 **Key options:**
 
-- `--size {small,large}` - Dataset size (default: large)
+- `--dataset {movielens-small,movielens-large}` - Dataset size (default: movielens-large)
 - `--parallel PARALLEL` - Number of parallel import threads (default: auto-detect)
 - `--batch-size BATCH_SIZE` - Records per commit batch (default: 5000)
 - `--export` - Export database to JSONL after import
@@ -144,7 +144,7 @@ the data and selects optimal ArcadeDB types:
 ### Step 1: Check Dataset Availability
 
 ```python
-data_dir = Path(__file__).parent / "data" / "ml-latest-small"
+data_dir = Path(__file__).parent / "data" / "movielens-small"
 if not data_dir.exists():
     print("❌ MovieLens dataset not found!")
     print("💡 Please download the dataset first:")
@@ -166,7 +166,7 @@ need for explicit schema definition before import.
 ```python
 # Import with batch commits for performance
 import_options = {
-    "commit_every": args.batch_size,  # Batch size for commits
+   "commitEvery": args.batch_size,  # Batch size for commits
 }
 stats = arcadedb.import_csv(db, movies_csv, "Movie", **import_options)
 
@@ -493,18 +493,18 @@ cd bindings/python/examples
 python 04_csv_import_documents.py
 
 # Use small dataset for quick testing - downloads automatically if needed
-python 04_csv_import_documents.py --size small
+python 04_csv_import_documents.py --dataset movielens-small
 
 # Use large dataset explicitly
-python 04_csv_import_documents.py --size large
+python 04_csv_import_documents.py --dataset movielens-large
 
 # With custom JVM heap for large datasets
-ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python 04_csv_import_documents.py --size large
+ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python 04_csv_import_documents.py --dataset movielens-large
 ```
 
 **Command-line options:**
 
-- `--size {small,large}` - Dataset size to use (default: large)
+- `--dataset {movielens-small,movielens-large}` - Dataset size to use (default: movielens-large)
 - The script automatically downloads the dataset if it doesn't exist
 
 **Expected output:**
