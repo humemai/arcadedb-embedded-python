@@ -299,6 +299,8 @@ for result in result_set:
 
 **Note:** The JSON includes ArcadeDB metadata like `@rid` (record ID) and `@type` (type name).
 
+**Note:** Array/list properties are serialized as JSON arrays in `to_json()`.
+
 ---
 
 ## Common Patterns
