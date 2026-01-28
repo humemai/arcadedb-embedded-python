@@ -13,10 +13,7 @@
 
 ### Tests Run on 22-Jan-2026
 
-We ran the same 1024-dimensional MSMARCO vectors with `INT8` quantization.
-Config (all runs): `store_vectors_in_graph=False`, `add_hierarchy=True`,
-`max_connections=16`, `beam_width=100`, `overquery_factor=1`, `batch_size=10000`.
-These runs include both index build and search timings.
+We ran the same 1024-dimensional MSMARCO vectors with `INT8` quantization. Config (all runs): `store_vectors_in_graph=False`, `add_hierarchy=True`, `max_connections=16`, `beam_width=100`, `batch_size=10000`. These runs include both index build and search timings.
 
 **Index build (INT8, 1000 queries, Recall@50):**
 
