@@ -11,7 +11,7 @@
 - Take the duration with a grain of salt, since there are other processes running on the machine. RSS and DB size are more stable. 4 threads were allocated per task, but there aren't always the same number of tasks runing in parallel, so effective CPU usage may vary.
 - If not mentioned, `MAX_CONNECTIONS` is fixed as 12, `BEAM_WIDTHS` as 64, and `OVERQUERY_FACTORS` as 1
 
-### Commit/Date: main @ a75817367 (2026-01-28 10:11:01 +0100)
+### Tests Run on 22-Jan-2026
 
 We ran the same 1024-dimensional MSMARCO vectors with `INT8` quantization.
 Config (all runs): `store_vectors_in_graph=False`, `add_hierarchy=True`,
