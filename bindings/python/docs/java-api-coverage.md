@@ -145,7 +145,7 @@ Full Pythonic Schema API available via `db.schema`:
 **Supported:**
 
 - ✅ CSV/TSV - `import_csv()` (documents/vertices/edges, FK resolution)
-- ✅ XML - `import_xml()` (documents/vertices; see known XML importer limitations)
+- ✅ XML - `import_xml()` (documents/vertices)
 - ✅ ArcadeDB JSONL exports - `IMPORT DATABASE file://...` via SQL
 - ✅ Edge import with foreign key resolution
 - ✅ Batch processing and parallel import
