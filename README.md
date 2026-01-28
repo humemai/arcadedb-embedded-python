@@ -126,6 +126,20 @@ This repo is a fork of ArcadeDB Java. For the server, Java API, and core databas
 - Issues (Python bindings): https://github.com/humemai/arcadedb-embedded-python/issues
 - ArcadeDB Discord: https://discord.gg/w2Npx2B7hZ
 
+## 🧾 Citing
+
+If you use this project in scholarly work, please cite the version you used via Zenodo:
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18399208.svg)](https://doi.org/10.5281/zenodo.18399208)
+
+You can also get a version-specific DOI URL from the installed package:
+
+```python
+import arcadedb_embedded as arcadedb
+
+arcadedb.cite()
+```
+
 ## 📄 License
 
 Both upstream ArcadeDB (Java) and this ArcadeDB Embedded Python project are licensed under Apache 2.0, which is fully open and free for everyone, including commercial use.
