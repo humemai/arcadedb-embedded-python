@@ -8,6 +8,7 @@ Native Python bindings for ArcadeDB (forked from the official Java project).
 [![Test Python Bindings](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-bindings.yml/badge.svg)](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-bindings.yml)
 [![Test Python Examples](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-examples.yml/badge.svg)](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/test-python-examples.yml)
 [![Release to PyPI](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/release-python-packages.yml/badge.svg)](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/release-python-packages.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18399208.svg)](https://doi.org/10.5281/zenodo.18399208)
 
 <p align="center">
   <a href="https://github.com/ArcadeData/arcadedb/actions/workflows/mvn-deploy.yml"><img src="https://github.com/ArcadeData/arcadedb/actions/workflows/mvn-deploy.yml/badge.svg"></a>
@@ -93,6 +94,20 @@ This repo is a fork of ArcadeDB Java. For the server, Java API, and core databas
 
 - Issues (Python bindings): https://github.com/humemai/arcadedb-embedded-python/issues
 - ArcadeDB Discord: https://discord.gg/w2Npx2B7hZ
+
+## 🧾 Citing
+
+If you use this project in scholarly work, please cite the version you used via Zenodo:
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18399208.svg)](https://doi.org/10.5281/zenodo.18399208)
+
+You can also get a version-specific DOI URL from the installed package:
+
+```python
+import arcadedb_embedded as arcadedb
+
+arcadedb.cite()
+```
 
 ## 📄 License
 
