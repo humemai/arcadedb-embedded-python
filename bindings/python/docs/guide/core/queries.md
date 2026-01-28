@@ -149,6 +149,25 @@ result = db.query(
 )
 ```
 
+### SQLScript (multi-statement)
+
+Use `sqlscript` to run multiple statements in one call. When there is no
+explicit `RETURN`, the result set contains the **last executed statement**
+(including DDL such as `CREATE`/`ALTER`).
+
+```python
+script = """
+    CREATE VERTEX TYPE SqlScriptVertex;
+    INSERT INTO SqlScriptVertex SET name = 'test';
+    ALTER TYPE SqlScriptVertex ALIASES ss;
+"""
+
+result = db.command("sqlscript", script)
+last = result.first()
+assert last.get("operation") == "ALTER TYPE"
+assert last.get("typeName") == "SqlScriptVertex"
+```
+
 ### Updating Data
 
 **Prefer Pythonic API for updates:**
@@ -170,6 +189,51 @@ with db.transaction():
         UPDATE Task SET completed = true, cost = 127.50
         WHERE title = 'Buy groceries'
     """)
+```
+
+#### Update with JSON array content
+
+ArcadeDB supports `UPDATE ... CONTENT` with JSON arrays to update multiple
+documents in one statement.
+
+```python
+with db.transaction():
+    db.command(
+        "sql",
+        """
+        INSERT INTO JsonArrayDoc CONTENT
+        [{"name":"tim"},{"name":"tom"}]
+        """,
+    )
+
+with db.transaction():
+    inserted = db.query("sql", "SELECT @rid, name FROM JsonArrayDoc").to_list()
+    update_content = ", ".join(
+        f"{{@rid:'{row['@rid']}',name:'{row['name']}',status:'updated'}}"
+        for row in inserted
+    )
+
+    result = db.command(
+        "sql",
+        f"UPDATE JsonArrayDoc CONTENT [{update_content}] RETURN AFTER",
+    )
+
+rows = result.to_list()
+assert {row["status"] for row in rows} == {"updated"}
+```
+
+#### TRUNCATE BUCKET
+
+Use `TRUNCATE BUCKET` to quickly delete all records in a bucket. This is a
+low-level operation; prefer `DELETE FROM <Type>` unless you specifically need
+bucket-level maintenance.
+
+```python
+doc_type = db.schema.create_document_type("BucketDoc", buckets=1)
+bucket_name = doc_type.getBuckets(False)[0].getName()
+
+with db.transaction():
+    db.command("sql", f"TRUNCATE BUCKET {bucket_name}")
 ```
 
 ### Graph Traversal
@@ -235,6 +299,26 @@ for row in result:
     count = row.get("person_count")  # Python int
     avg_age = row.get("avg_age")  # Python float
     print(f"{city}: {count} people, avg age {avg_age:.1f}")
+```
+
+### Full-text search ($score)
+
+When using full-text indexes, ArcadeDB exposes a `$score` variable that you can
+select and order by.
+
+```python
+# Create full-text index
+db.schema.create_document_type("Article")
+db.schema.create_property("Article", "content", "STRING")
+db.schema.create_index("Article", ["content"], index_type="FULL_TEXT")
+
+# Query with SEARCH_FIELDS and $score
+result = db.query(
+    "sql",
+    "SELECT content, $score FROM Article WHERE SEARCH_FIELDS(['content'], 'database') = true ORDER BY $score DESC",
+)
+for row in result:
+    print(row.get("content"), row.get("$score"))
 ```
 
 ### ResultSet Methods

@@ -153,8 +153,38 @@ try:
     for record in result["result"]:
         print(f"Name: {record['name']}")
 
+    # Optional: inspect server info (includes available languages)
+    response = requests.get(
+        f"{base_url}/api/v1/server",
+        auth=auth,
+    )
+    server_info = response.json()
+    print("Available languages:", server_info.get("languages"))
+
 finally:
     server.stop()
+```
+
+### Token-based authentication (optional)
+
+For repeated requests, you can exchange Basic Auth for a session token and use
+`Authorization: Bearer <token>` instead of sending credentials each time:
+
+```python
+# Login to receive a token
+response = requests.post(
+    f"{base_url}/api/v1/login",
+    auth=auth,
+)
+token = response.json()["token"]
+
+# Use Bearer token for subsequent requests
+headers = {"Authorization": f"Bearer {token}"}
+response = requests.post(
+    f"{base_url}/api/v1/query/mydb",
+    headers=headers,
+    json={"language": "sql", "command": "SELECT FROM Person"}
+)
 ```
 
 ## Hybrid Usage
