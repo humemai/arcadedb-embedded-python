@@ -16,20 +16,71 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 cff-version: 1.2.0
-title: ArcadeDB
+title: ArcadeDB Embedded for Python
 message: If you use this software, please cite it using the metadata from this file.
 type: software
 authors:
-  - given-names: Luca
-    family-names: Garulli
-repository-code: "https://github.com/ArcadeData/arcadedb"
-url: "https://arcadedb.com"
-abstract: Play With Data!
+  - name: lvca
+  - name: dependabot[bot]
+  - name: Roberto Franchini
+  - name: mergify[bot]
+  - name: Taewoon Kim
+  - name: Christian Himpe
+  - name: Luca Garulli
+  - name: arcade-player
+  - name: copilot-swe-agent[bot]
+  - name: hr.stoyanov
+  - name: Oleg Cohen
+  - name: Antarctic Giraffe
+  - name: Copilot
+  - name: GitHub Actions
+  - name: carlos-rodrigues-8x8
+  - name: ExtReMLapin
+  - name: Snyk bot
+  - name: github-actions[bot]
+  - name: snyk-bot
+  - name: Gregor Frey
+  - name: Aleš Najmann
+  - name: Josh Soref
+  - name: Matteo Baccan
+  - name: giastfader
+  - name: Claude
+  - name: Claudio
+  - name: Dominik Bergen
+  - name: Erick J
+  - name: Ilia Naryzhny
+  - name: Luke
+  - name: Pierre F
+  - name: T. H. Soh
+  - name: bennelli
+  - name: claude[bot]
+  - name: odysseaspenta
+  - name: Christoph Thelen
+  - name: Eric Le Goff
+  - name: Greg Lincoln
+  - name: Jonathan Leitschuh
+  - name: Lucian Musca
+  - name: Miles Granger
+  - name: Pawel Maslej
+  - name: Roman Heinrich
+  - name: Sam Stowers
+  - name: Shasaur
+  - name: Szabi
+  - name: The Codacy Badger
+  - name: psytron
+  - name: robfrank
+repository-code: "https://github.com/humemai/arcadedb-embedded-python"
+url: "https://docs.humem.ai/arcadedb/latest/"
+abstract: Embedded ArcadeDB Python bindings with a bundled JRE, enabling in-process multi-model database access (graph, document, key/value, vector, time series) via SQL, OpenCypher, and MongoDB query languages.
 license: Apache-2.0
-copyright: Copyright (c) 2021 Arcade Data Ltd
+copyright: Copyright (c) 2021–present Arcade Data Ltd; 2025–present HumemAI
 keywords:
+  - ArcadeDB
+  - Python
+  - Embedded
+  - Bindings
   - Multi-Model
-  - NoSQL
+  - Graph
+  - Vector
   - SQL
-  - Database
-  - DBMS
+  - NoSQL
