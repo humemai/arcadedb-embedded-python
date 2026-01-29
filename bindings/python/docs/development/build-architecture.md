@@ -4,9 +4,9 @@ This document describes the build architecture for creating platform-specific Py
 
 ## Overview
 
-**Goal:** Distribute a single `arcadedb-embedded` package that works on 3 platforms with **zero Java installation required**.
+**Goal:** Distribute a single `arcadedb-embedded` package that works on 4 platforms with **zero Java installation required**.
 
-**Achievement:** 3 platform-specific wheels (~63–115MB compressed) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
+**Achievement:** 4 platform-specific wheels (~63–115MB compressed) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
 
 ## Supported Platforms
 
@@ -15,6 +15,7 @@ This document describes the build architecture for creating platform-specific Py
 | **linux/amd64** | 115.2M | 249.0M | `ubuntu-24.04` | Docker native | Most common Linux platform |
 | **linux/arm64** | 114.1M | 249.6M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
 | **darwin/arm64** | 63.1M | 55.1M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
+| **windows/amd64** | ~115M | ~249M | `windows-2025` | Native build | Windows x86_64 |
 
 **All supported platforms:**
 
@@ -38,6 +39,11 @@ We use a **hybrid build approach** to create platform-specific wheels:
     - Uses platform-specific GitHub Actions runner
     - Native `jlink` creates correct JRE for the platform
     - Pre-filtered JARs from artifact (eliminates glob issues)
+
+3. **Windows platform:** Native builds
+  - Uses platform-specific GitHub Actions runner
+  - Native `jlink` creates correct JRE for the platform
+  - Pre-filtered JARs from artifact (eliminates glob issues)
 
 **Critical:** All wheels are **platform-specific** (not `py3-none-any`). This is achieved by:
 
@@ -107,7 +113,7 @@ jobs:
     needs: download-jars
     strategy:
       matrix:
-        platform: [linux/amd64, linux/arm64, darwin/arm64]
+        platform: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]
     # Builds platform-specific wheel, runs tests
 ```
 
@@ -145,6 +151,15 @@ jobs:
     - Uses system Java (GitHub runner provides Java 25)
     - Runs `jlink` natively → platform-specific JRE
     - Builds wheel with `python -m build`
+3. Run tests on native platform
+
+#### Windows Platform (Native)
+
+1. Download pre-filtered JARs artifact
+2. Run `build-native.sh`:
+  - Uses system Java (GitHub runner provides Java 25)
+  - Runs `jlink` natively → platform-specific JRE
+  - Builds wheel with `python -m build`
 3. Run tests on native platform
 
 ## JAR Exclusion System
@@ -321,7 +336,7 @@ bindings/python/
     - Uploads artifact for native builds
 
 2. **test job matrix** (lines 91-364)
-    - Builds 3 platforms
+  - Builds 4 platforms
     - Platform-specific steps (native runners, artifact download, tests)
 
 3. **Test parsing** (lines 200-237)
