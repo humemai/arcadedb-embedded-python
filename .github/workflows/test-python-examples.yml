@@ -18,11 +18,6 @@ on:
     workflows: ["Release"]
     types: [completed]
 
-  # Run after release workflow completes
-  workflow_run:
-    workflows: ["Release"]
-    types: [completed]
-
   # Allow being called by other workflows (e.g., release workflow)
   workflow_call:
     inputs:
@@ -46,9 +41,6 @@ on:
 
 env:
   EXAMPLES: ${{ inputs.examples || '0[1-7]_*.py' }}
-
-permissions:
-  contents: read
 
 permissions:
   contents: read
