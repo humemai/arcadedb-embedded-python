@@ -59,11 +59,11 @@ with arcadedb.create_database("./mydb") as db:
 
 ## ✨ Features
 
-- ☕ **No Java Installation Required**: Bundled JRE (~249MB uncompressed)
+- ☕ **No Java Installation Required**: Bundled JRE (~60MB uncompressed)
 - 🌍 **4 Platforms Supported**: Linux (x86_64, ARM64), macOS (ARM64), Windows (x86_64)
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network)
 - 🌐 **Server Mode**: Optional HTTP server with Studio web interface
-- 📦 **Self-contained**: All dependencies bundled (~116MB wheel)
+- 📦 **Self-contained**: All dependencies bundled (~68MB wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
 - 🔍 **Multiple query languages**: SQL, OpenCypher, MongoDB
 - ⚡ **High performance**: Direct JVM integration via JPype
@@ -79,10 +79,10 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 
 **Package Contents (all platforms):**
 
-- **Wheel size (compressed)**: ~116MB
+- **Wheel size (compressed)**: ~68MB
 - **ArcadeDB JARs (uncompressed)**: ~32MB
-- **Bundled JRE (uncompressed)**: ~249MB (platform-specific Java 25 runtime via jlink)
-- **Total uncompressed size**: ~281MB
+- **Bundled JRE (uncompressed)**: ~60MB (platform-specific Java 25 runtime via jlink)
+- **Total uncompressed size**: ~95MB
 
 **Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See [`jar_exclusions.txt`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/jar_exclusions.txt) for details.
 
