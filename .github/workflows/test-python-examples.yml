@@ -18,11 +18,6 @@ on:
     workflows: ["Release"]
     types: [completed]
 
-  # Run after release workflow completes
-  workflow_run:
-    workflows: ["Release"]
-    types: [completed]
-
   # Allow being called by other workflows (e.g., release workflow)
   workflow_call:
     inputs:
@@ -46,9 +41,6 @@ on:
 
 env:
   EXAMPLES: ${{ inputs.examples || '0[1-7]_*.py' }}
-
-permissions:
-  contents: read
 
 permissions:
   contents: read
@@ -139,9 +131,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
-        # Temporarily limit to three platforms (skip macOS x86_64, all Windows)
+        # Temporarily limit to four platforms (skip macOS x86_64, Windows ARM64)
         # platform: ['linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64']
-        platform: ['linux/amd64', 'linux/arm64', 'darwin/arm64']
+        platform: ['linux/amd64', 'linux/arm64', 'darwin/arm64', 'windows/amd64']
         include:
           - platform: linux/amd64
             runs-on: ubuntu-24.04
@@ -149,13 +141,13 @@ jobs:
             runs-on: ubuntu-24.04-arm
           - platform: darwin/arm64
             runs-on: macos-15
+          - platform: windows/amd64
+            runs-on: windows-2025
           # - platform: darwin/amd64
           #   runs-on: macos-15-intel
-          # - platform: windows/amd64
-          #   runs-on: windows-2025
           # - platform: windows/arm64
           #   runs-on: windows-11-arm
-          # macOS x86_64 and all Windows temporarily disabled
+          # macOS x86_64 and Windows ARM64 temporarily disabled
 
     steps:
       - name: Checkout code
@@ -194,7 +186,7 @@ jobs:
         run: |
           uv pip install --system build wheel setuptools
 
-      # Windows currently disabled, no symlink needed
+      # Windows currently enabled, no symlink needed
       # - name: Create python3 symlink (Windows only)
       #   if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
       #   shell: bash
@@ -270,7 +262,7 @@ jobs:
           # macOS doesn't have timeout command by default, use coreutils
           brew install coreutils
 
-      # Windows currently disabled, no env override needed
+      # Windows currently enabled, no env override needed
       # - name: Set UTF-8 encoding (Windows only)
       #   if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
       #   shell: bash
@@ -494,7 +486,7 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "All examples ran successfully across all enabled platforms." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Platforms tested**: linux/amd64, linux/arm64, darwin/arm64" >> $GITHUB_STEP_SUMMARY
+            echo "**Platforms tested**: linux/amd64, linux/arm64, darwin/arm64, windows/amd64" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Some platforms failed example testing**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
