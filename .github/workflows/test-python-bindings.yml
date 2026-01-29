@@ -182,6 +182,13 @@ jobs:
         run: |
           uv pip install --system build wheel setuptools
 
+      - name: Set UTF-8 encoding (Windows only)
+        if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
+        shell: bash
+        run: |
+          echo "PYTHONIOENCODING=utf-8" >> $GITHUB_ENV
+          echo "PYTHONUTF8=1" >> $GITHUB_ENV
+
       # Windows currently enabled, no symlink needed
       # - name: Create python3 symlink (Windows only)
       #   if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
