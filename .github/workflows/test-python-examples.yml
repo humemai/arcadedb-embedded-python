@@ -264,12 +264,12 @@ jobs:
           # macOS doesn't have timeout command by default, use coreutils
           brew install coreutils
 
-      # Windows currently enabled, no env override needed
-      # - name: Set UTF-8 encoding (Windows only)
-      #   if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
-      #   shell: bash
-      #   run: |
-      #     echo "PYTHONIOENCODING=utf-8" >> $GITHUB_ENV
+      - name: Set UTF-8 encoding (Windows only)
+        if: matrix.platform == 'windows/amd64' || matrix.platform == 'windows/arm64'
+        shell: bash
+        run: |
+          echo "PYTHONIOENCODING=utf-8" >> $GITHUB_ENV
+          echo "PYTHONUTF8=1" >> $GITHUB_ENV
 
       - name: Run all examples
         id: run_examples

@@ -41,9 +41,9 @@ We use a **hybrid build approach** to create platform-specific wheels:
     - Pre-filtered JARs from artifact (eliminates glob issues)
 
 3. **Windows platform:** Native builds
-  - Uses platform-specific GitHub Actions runner
-  - Native `jlink` creates correct JRE for the platform
-  - Pre-filtered JARs from artifact (eliminates glob issues)
+    - Uses platform-specific GitHub Actions runner
+    - Native `jlink` creates correct JRE for the platform
+    - Pre-filtered JARs from artifact (eliminates glob issues)
 
 **Critical:** All wheels are **platform-specific** (not `py3-none-any`). This is achieved by:
 
@@ -157,9 +157,9 @@ jobs:
 
 1. Download pre-filtered JARs artifact
 2. Run `build-native.sh`:
-  - Uses system Java (GitHub runner provides Java 25)
-  - Runs `jlink` natively → platform-specific JRE
-  - Builds wheel with `python -m build`
+    - Uses system Java (GitHub runner provides Java 25)
+    - Runs `jlink` natively → platform-specific JRE
+    - Builds wheel with `python -m build`
 3. Run tests on native platform
 
 ## JAR Exclusion System
@@ -336,8 +336,8 @@ bindings/python/
     - Uploads artifact for native builds
 
 2. **test job matrix** (lines 91-364)
-  - Builds 4 platforms
-    - Platform-specific steps (native runners, artifact download, tests)
+    - Builds 4 platforms
+        - Platform-specific steps (native runners, artifact download, tests)
 
 3. **Test parsing** (lines 200-237)
     - JUnit XML generation and parsing

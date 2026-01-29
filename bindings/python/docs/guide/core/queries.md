@@ -196,6 +196,7 @@ with db.transaction():
 ArcadeDB supports `UPDATE ... CONTENT` with JSON arrays to update multiple
 documents in one statement.
 
+{% raw %}
 ```python
 with db.transaction():
     db.command(
@@ -221,6 +222,7 @@ with db.transaction():
 rows = result.to_list()
 assert {row["status"] for row in rows} == {"updated"}
 ```
+{% endraw %}
 
 #### TRUNCATE BUCKET
 
