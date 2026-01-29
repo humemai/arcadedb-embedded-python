@@ -45,7 +45,7 @@ Native Python bindings for ArcadeDB (forked from the official Java project).
 ## ✨ What this repo provides
 
 - Native Python bindings for ArcadeDB with a bundled JRE (no local Java required).
-- Wheels for Linux x86_64, Linux ARM64, and macOS Apple Silicon.
+- Wheels for Linux x86_64, Linux ARM64, macOS Apple Silicon, and Windows x86_64.
 - Embedded usage (in-process) with optional server mode.
 - Tests and examples validated in CI across supported platforms.
 
