@@ -81,7 +81,7 @@ ArcadeDB has **three distinct types of logs** stored in **two different location
 ```
 # A fatal error has been detected by the Java Runtime Environment:
 # SIGSEGV (0xb) at pc=0x000000000056950b, pid=1194752
-# JRE version: OpenJDK Runtime Environment Temurin-21.0.4+7
+# JRE version: OpenJDK Runtime Environment Corretto-25
 # Problematic frame: C  [python+0x16950b]  PyObject_RichCompareBool+0x3b
 ```
 

@@ -6,7 +6,7 @@
 #
 # Quick local-jar workflow (no host Java install required):
 #   1) Build ArcadeDB JARs in Docker:
-#        docker run --rm -v "$PWD":/src -w /src maven:3.9-eclipse-temurin-25 \
+#        docker run --rm -v "$PWD":/src -w /src maven:3.9-amazoncorretto-25 \
 #          sh -c "git config --global --add safe.directory /src && ./mvnw -DskipTests -pl package -am package"
 #   2) Point the build at your JAR directory:
 #        cd bindings/python && ./build.sh linux/amd64 3.12 package/target/arcadedb-*/lib

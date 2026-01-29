@@ -21,7 +21,7 @@ log "Building ArcadeDB JARs via Docker Maven..."
 docker run --rm \
     -v "${REPO_ROOT}":/src \
     -w /src \
-    maven:3.9-eclipse-temurin-25 \
+    maven:3.9-amazoncorretto-25 \
     sh -c "git config --global --add safe.directory /src && ./mvnw -DskipTests -pl package -am package"
 
 # 2) Copy freshly built JARs into local-jars for the Python build
