@@ -6,7 +6,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 
 | Package | Wheel Size | Installed Size (uncompressed) | Java Required | Studio UI | Query Languages |
 |---------|-----------|------------------------------|---------------|-----------|----------------|
-| **arcadedb-embedded** | ~63–115MB | ~87–281MB | ❌ No | ✅ | SQL, OpenCypher, MongoDB |
+| **arcadedb-embedded** | ~68MB | ~95MB | ❌ No | ✅ | SQL, OpenCypher, MongoDB |
 
 **Installation:**
 
@@ -21,13 +21,13 @@ uv pip install arcadedb-embedded
 The package includes everything you need:
 
 - **ArcadeDB JARs** (~32MB, uncompressed): Core database with all features
-- **Bundled JRE** (~249MB, uncompressed): Platform-specific Java 25 runtime (via jlink)
+- **Bundled JRE** (~60MB, uncompressed): Platform-specific Java 25 runtime (via jlink)
 
-**Total:** ~63–115MB compressed wheel, ~87–281MB uncompressed installed size (platform-dependent)
+**Total:** ~68MB compressed wheel, ~95MB uncompressed installed size (similar across platforms)
 
 ## Platform Support
 
-Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes vary slightly by platform, but the ballpark totals are consistent (see size breakdown below).
+Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes are consistent across platforms (see size breakdown below).
 
 **Key Features:**
 
@@ -41,7 +41,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 
 **Core Features:**
 
-- ✅ **No Java Installation Required**: Platform-specific JRE bundled (~249MB uncompressed)
+- ✅ **No Java Installation Required**: Platform-specific JRE bundled (~60MB uncompressed)
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
 - ✅ **Query Languages**: SQL, OpenCypher, MongoDB (all included)
 - ✅ **Studio Web UI**: Visual database explorer and query editor
@@ -107,17 +107,15 @@ Simple and consistent across all platforms!
 
 ## Size Breakdown
 
-Platform-specific sizes (current):
+Current sizes are consistent across platforms (ballpark):
 
-- **linux/amd64**: 115.2MB wheel, ~281MB installed
-- **linux/arm64**: 114.1MB wheel, ~281MB installed
-- **darwin/arm64**: 63.1MB wheel, ~87MB installed
-- **windows/amd64**: ~115MB wheel, ~281MB installed (sizes may vary)
+- **Wheel (compressed)**: ~68MB
+- **Installed (uncompressed)**: ~95MB
 
 **Components (uncompressed):**
 
 - **ArcadeDB JARs**: ~31.7MB
-- **Bundled JRE**: ~55–250MB (platform-dependent)
+- **Bundled JRE**: ~60MB (platform-specific Java 25 runtime via jlink)
 
 **Optimizations:**
 
