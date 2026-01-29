@@ -81,7 +81,7 @@ jobs:
     secrets: inherit
 
   publish:
-    name: Publish arcadedb-embedded to PyPI (3 platforms)
+    name: Publish arcadedb-embedded to PyPI (4 platforms)
     needs: [validate-version, test, test-examples]
     runs-on: ubuntu-latest
     continue-on-error: true  # Don't block GitHub Release if PyPI upload fails (size limit)
@@ -102,15 +102,15 @@ jobs:
           echo "📦 Wheels for PyPI (current platforms):"
           ls dist/*.whl
 
-          # Count wheels (should be 15: 3 platforms x 5 Python versions)
+          # Count wheels (should be 20: 4 platforms x 5 Python versions)
           WHEEL_COUNT=$(ls dist/*.whl | wc -l)
-          echo "📊 Wheel count: $WHEEL_COUNT (expected: 15)"
+          echo "📊 Wheel count: $WHEEL_COUNT (expected: 20)"
 
           echo ""
-          echo "ℹ️  Current PyPI platforms: linux x86_64, linux arm64, macOS Apple Silicon"
+          echo "ℹ️  Current PyPI platforms: linux x86_64, linux arm64, macOS Apple Silicon, windows x86_64"
 
-          if [ "$WHEEL_COUNT" -ne 15 ]; then
-            echo "❌ Expected 15 wheels (3 platforms x 5 Python versions), got $WHEEL_COUNT"
+          if [ "$WHEEL_COUNT" -ne 20 ]; then
+            echo "❌ Expected 20 wheels (4 platforms x 5 Python versions), got $WHEEL_COUNT"
             exit 1
           fi
 
@@ -140,8 +140,8 @@ jobs:
               PLATFORM="darwin/arm64"
             # elif [[ "$WHEEL_NAME" == *"macosx"*"x86_64"* ]]; then
             #   PLATFORM="darwin/amd64"
-            # elif [[ "$WHEEL_NAME" == *"win_amd64"* ]]; then
-            #   PLATFORM="windows/amd64"
+            elif [[ "$WHEEL_NAME" == *"win_amd64"* ]]; then
+              PLATFORM="windows/amd64"
             else
               PLATFORM="unknown"
             fi
