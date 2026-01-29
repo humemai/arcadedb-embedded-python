@@ -6,16 +6,16 @@ This document describes the build architecture for creating platform-specific Py
 
 **Goal:** Distribute a single `arcadedb-embedded` package that works on 4 platforms with **zero Java installation required**.
 
-**Achievement:** 4 platform-specific wheels (~63–115MB compressed) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
+**Achievement:** 4 platform-specific wheels (~68MB compressed) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
 
 ## Supported Platforms
 
 | Platform | Wheel Size | JRE Size | Runner | Build Method | Notes |
 |----------|-----------|----------|---------|--------------|-------|
-| **linux/amd64** | 115.2M | 249.0M | `ubuntu-24.04` | Docker native | Most common Linux platform |
-| **linux/arm64** | 114.1M | 249.6M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
-| **darwin/arm64** | 63.1M | 55.1M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
-| **windows/amd64** | ~115M | ~249M | `windows-2025` | Native build | Windows x86_64 |
+| **linux/amd64** | ~68M | ~60M | `ubuntu-24.04` | Docker native | Most common Linux platform |
+| **linux/arm64** | ~68M | ~60M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
+| **darwin/arm64** | ~68M | ~60M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
+| **windows/amd64** | ~68M | ~60M | `windows-2025` | Native build | Windows x86_64 |
 
 **All supported platforms:**
 
@@ -381,33 +381,14 @@ bindings/python/
 
 **Solution:** Switch to JUnit XML (structured data, no regex).
 
-## Size Breakdown (current, as of 26-Jan-2026)
+## Size Breakdown (current, as of 29-Jan-2026)
 
-**linux/amd64**
+Sizes are now consistent across platforms (ballpark):
 
-- Wheel: 115.2M (compressed)
-- JRE: 249.0M (uncompressed)
-- JARs: 31.7M (uncompressed)
-- Installed: ~281M (uncompressed)
-
-**linux/arm64**
-
-- Wheel: 114.1M (compressed)
-- JRE: 249.6M (uncompressed)
-- JARs: 31.7M (uncompressed)
-- Installed: ~281M (uncompressed)
-
-**darwin/arm64**
-
-- Wheel: 63.1M (compressed)
-- JRE: 55.1M (uncompressed)
-- JARs: 31.7M (uncompressed)
-- Installed: ~87M (uncompressed)
-
-### Why Sizes Vary by Platform
-
-- JRE binaries differ by platform (different native code and compression).
-- Linux wheels include larger JRE footprints than macOS arm64.
+- Wheel: ~68M (compressed)
+- JRE: ~60M (uncompressed)
+- JARs: ~32M (uncompressed)
+- Installed: ~95M (uncompressed)
 
 ## Development
 

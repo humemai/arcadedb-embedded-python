@@ -18,10 +18,10 @@ uv pip install arcadedb-embedded
 
 ## What's Included
 
-The `arcadedb-embedded` package (~63–115MB wheel, ~87–281MB uncompressed installed, platform-dependent) includes everything you need:
+The `arcadedb-embedded` package (~68MB wheel, ~95MB uncompressed installed, similar across platforms) includes everything you need:
 
 - **ArcadeDB JARs**: ~31.7MB (uncompressed)
-- **Bundled JRE**: ~55–250MB (uncompressed, platform-specific Java 25 runtime via jlink)
+- **Bundled JRE**: ~60MB (uncompressed, platform-specific Java 25 runtime via jlink)
 
 **Features Included:**
 
