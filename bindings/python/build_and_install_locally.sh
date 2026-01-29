@@ -36,6 +36,7 @@ cp "${HEADLESS_LIB_DIR}"/*.jar "${LOCAL_JARS_DIR}/"
 log "Copied $(ls -1 "${LOCAL_JARS_DIR}" | wc -l) JARs into local stash"
 
 # 3) Build the Python wheel (defaults to linux/amd64 + Python 3.12) using staged JARs
+#    For Windows or macOS, run this script on that OS and update the platform accordingly.
 log "Building Python wheel with local JARs..."
 cd "${PY_BINDINGS_DIR}"
 ./build.sh linux/amd64 3.12 "${LOCAL_JARS_DIR}"
