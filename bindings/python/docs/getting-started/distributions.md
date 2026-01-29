@@ -27,7 +27,7 @@ The package includes everything you need:
 
 ## Platform Support
 
-Pre-built **platform-specific** wheels are available for **3 platforms**. Sizes vary slightly by platform, but the ballpark totals are consistent (see size breakdown below).
+Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes vary slightly by platform, but the ballpark totals are consistent (see size breakdown below).
 
 **Key Features:**
 
@@ -112,6 +112,7 @@ Platform-specific sizes (current):
 - **linux/amd64**: 115.2MB wheel, ~281MB installed
 - **linux/arm64**: 114.1MB wheel, ~281MB installed
 - **darwin/arm64**: 63.1MB wheel, ~87MB installed
+- **windows/amd64**: ~115MB wheel, ~281MB installed (sizes may vary)
 
 **Components (uncompressed):**
 
@@ -144,6 +145,7 @@ uv pip automatically selects the correct platform-specific wheel:
 ```bash
 # On Linux x64, installs: arcadedb_embedded-X.Y.Z-py3-none-manylinux_2_17_x86_64.whl
 # On macOS ARM64, installs: arcadedb_embedded-X.Y.Z-py3-none-macosx_11_0_arm64.whl
+# On Windows x86_64, installs: arcadedb_embedded-X.Y.Z-py3-none-win_amd64.whl
 # etc.
 ```
 

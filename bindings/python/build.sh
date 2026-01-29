@@ -44,6 +44,7 @@ print_usage() {
     echo "  linux/amd64    Linux x86_64 (Docker build)"
     echo "  linux/arm64    Linux ARM64 (Docker build, native ARM64 runner)"
     echo "  darwin/arm64   macOS ARM64 Apple Silicon (native build on macOS)"
+    echo "  windows/amd64  Windows x86_64 (native build on Windows)"
     echo ""
     echo "PYTHON_VERSION:"
     echo "  Python version for wheel (default: 3.12)"
@@ -75,7 +76,7 @@ print_usage() {
     echo "Package features:"
     echo "  ✅ Bundled platform-specific JRE (no Java required)"
     echo "  ✅ Optimized JAR selection (see jar_exclusions.txt)"
-    echo "  ✅ Multi-platform support (3 platforms)"
+    echo "  ✅ Multi-platform support (4 platforms)"
     echo "  📦 Size: ~215MB (compressed), ~289MB (installed)"
     echo ""
 }
