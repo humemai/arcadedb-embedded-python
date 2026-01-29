@@ -64,8 +64,9 @@ ${YELLOW}Protected Files (never overwritten):${NC}
   • README.md            - Fork-specific documentation
 
 ${YELLOW}After Sync:${NC}
-  1. Test: cd bindings/python && ./build.sh linux/amd64 && pytest tests/
-  2. Push: git push --force-with-lease origin main
+1. Test: cd bindings/python && ./build.sh linux/amd64 && pytest tests/
+        (or on Windows: ./build.sh windows/amd64; on macOS: ./build.sh darwin/arm64)
+2. Push: git push --force-with-lease origin main
 
 ${YELLOW}Troubleshooting:${NC}
     Abort rebase:     git rebase --abort
@@ -249,6 +250,7 @@ echo ""
 echo -e "   ${CYAN}2. Test locally (REQUIRED):${NC}"
 echo -e "      ${YELLOW}cd bindings/python && ./build.sh linux/amd64${NC}"
 echo -e "      ${YELLOW}pytest tests/ -v${NC}"
+echo -e "      ${YELLOW}(or ./build.sh windows/amd64 on Windows; ./build.sh darwin/arm64 on macOS)${NC}"
 echo ""
 echo -e "   ${CYAN}3. Push to your fork:${NC}"
 echo -e "      ${YELLOW}git push --force-with-lease origin main${NC}"
