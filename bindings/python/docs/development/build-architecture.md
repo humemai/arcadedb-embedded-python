@@ -231,7 +231,7 @@ FROM arcadedb/arcadedb:24.11.1 AS java-builder
 # Downloads 84 JARs to /jars
 
 # Stage 2: jre-builder (filters JARs, creates JRE)
-FROM eclipse-temurin:21-jdk AS jre-builder
+FROM amazoncorretto:25 AS jre-builder
 COPY --from=java-builder /jars/*.jar /jars/
 # Reads jar_exclusions.txt
 # Filters to 83 JARs (167.4M)
