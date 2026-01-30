@@ -84,12 +84,13 @@ python 06_vector_search_recommendations.py --help
 - `--source-db SOURCE_DB` - Source graph database path (required)
 - `--db-path DB_PATH` - Working database path for vectors (required)
 - `--import-jsonl IMPORT_JSONL` - Import from JSONL file (optional)
+- `--heap-size SIZE` - JVM max heap size (e.g. `8g`, `4096m`)
 - `--force-embed` - Force re-generation of embeddings (optional)
 
 **Recommendations:**
 
 - **Setup:** Use fresh copy or import from JSONL to avoid conflicts
-- **Memory:** 8GB JVM heap for large dataset (`ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"`)
+- **Memory:** 8GB JVM heap for large dataset (`--heap-size 8g`)
 - **Embeddings:** Cached automatically, use `--force-embed` to regenerate
 - **Models:** Both models included for comparison
 
