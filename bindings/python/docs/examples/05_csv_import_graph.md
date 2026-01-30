@@ -454,9 +454,12 @@ python 05_csv_import_graph.py --dataset movielens-small --batch-size 5000 --meth
 
 ### JVM Settings
 
-```bash
-export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"
-export ARCADEDB_JVM_ARGS="-Xms8g"
+Prefer configuring heap inside the script before it creates the first database:
+
+```python
+import arcadedb_embedded as arcadedb
+
+arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g")
 ```
 
 **Memory Planning:**

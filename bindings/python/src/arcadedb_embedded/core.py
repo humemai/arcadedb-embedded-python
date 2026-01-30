@@ -782,8 +782,18 @@ class Database:
 class DatabaseFactory:
     """Factory for creating/opening ArcadeDB databases."""
 
-    def __init__(self, path: str):
-        start_jvm()
+    def __init__(
+        self,
+        path: str,
+        jvm_kwargs: Optional[dict] = None,
+    ):
+        """
+        Args:
+            path: Database path
+            jvm_kwargs: Optional JVM args passed to start_jvm()
+                Example: {"heap_size": "8g"}
+        """
+        start_jvm(**(jvm_kwargs or {}))
         from com.arcadedb.database import DatabaseFactory as JavaDatabaseFactory
 
         self._java_factory = JavaDatabaseFactory(path)
@@ -813,15 +823,39 @@ class DatabaseFactory:
 
 
 # Convenience functions
-def create_database(path: str) -> Database:
-    """Create a new database at the given path."""
-    factory = DatabaseFactory(path)
+def create_database(
+    path: str,
+    jvm_kwargs: Optional[dict] = None,
+) -> Database:
+    """Create a new database at the given path.
+
+    Args:
+        path: Database path
+        jvm_kwargs: Optional JVM args passed to start_jvm()
+            Example: {"heap_size": "8g"}
+    """
+    factory = DatabaseFactory(
+        path,
+        jvm_kwargs=jvm_kwargs,
+    )
     return factory.create()
 
 
-def open_database(path: str) -> Database:
-    """Open an existing database at the given path."""
-    factory = DatabaseFactory(path)
+def open_database(
+    path: str,
+    jvm_kwargs: Optional[dict] = None,
+) -> Database:
+    """Open an existing database at the given path.
+
+    Args:
+        path: Database path
+        jvm_kwargs: Optional JVM args passed to start_jvm()
+            Example: {"heap_size": "8g"}
+    """
+    factory = DatabaseFactory(
+        path,
+        jvm_kwargs=jvm_kwargs,
+    )
     return factory.open()
 
 
