@@ -13,7 +13,9 @@ Prerequisites:
     Run example 07 first to generate the 'stackoverflow_small_db_graph' dataset.
 """
 
+import argparse
 import concurrent.futures
+import json
 import os
 import time
 
@@ -29,7 +31,7 @@ HTTP_URL = f"http://localhost:{HTTP_PORT}"
 
 # Define a diverse set of queries to simulate a real-world workload
 # (Language, Description, Query)
-WORKLOAD_QUERIES = [
+STACKOVERFLOW_QUERIES = [
     # === Vertex Count Queries (SQL) ===
     ("sql", "Count User vertices", "SELECT count(*) as count FROM User"),
     ("sql", "Count Question vertices", "SELECT count(*) as count FROM Question"),
@@ -187,6 +189,19 @@ def check_database_exists(path, name):
     return os.path.exists(db_path)
 
 
+def load_schema_types(db_path):
+    schema_path = os.path.join(db_path, "schema.json")
+    if not os.path.exists(schema_path):
+        return set()
+    try:
+        with open(schema_path, "r", encoding="utf-8") as schema_file:
+            schema = json.load(schema_file)
+        types = schema.get("schema", {}).get("types", {})
+        return set(types.keys())
+    except Exception:
+        return set()
+
+
 def run_client_query(client_id, db_name, query_def):
     """Executes a query via HTTP API simulating a remote client."""
     language, name, query = query_def
@@ -230,15 +245,37 @@ def run_client_query(client_id, db_name, query_def):
         return f"Client {client_id} [{name}]: Error - {str(e)}"
 
 
-def demonstrate_concurrency(db_name, num_clients=6):
+def build_generic_queries(schema_types: set[str]) -> list[tuple[str, str, str]]:
+    if not schema_types:
+        return [
+            (
+                "sql",
+                "Sanity check",
+                "SELECT 1 as ok",
+            )
+        ]
+
+    queries = []
+    for type_name in sorted(schema_types)[:12]:
+        queries.append(
+            (
+                "sql",
+                f"Count {type_name} records",
+                f"SELECT count(*) as count FROM {type_name}",
+            )
+        )
+    return queries
+
+
+def demonstrate_concurrency(db_name, queries, num_clients=6):
     print_header("Demonstrating Concurrent HTTP Clients (Mixed Workload)")
     print(
-        f"Simulating {num_clients} concurrent clients executing {len(WORKLOAD_QUERIES)} SQL and OpenCypher queries..."
+        f"Simulating {num_clients} concurrent clients executing {len(queries)} SQL and OpenCypher queries..."
     )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_clients) as executor:
         futures = []
-        for i, query_def in enumerate(WORKLOAD_QUERIES):
+        for i, query_def in enumerate(queries):
             # Distribute queries among the simulated clients
             client_id = (i % num_clients) + 1
             futures.append(
@@ -250,8 +287,23 @@ def demonstrate_concurrency(db_name, num_clients=6):
 
 
 def main():
-    db_name = "stackoverflow_small_db_graph"
-    abs_root_path = os.path.abspath(ROOT_PATH)
+    parser = argparse.ArgumentParser(
+        description="Server Mode, Studio & Concurrent HTTP Clients"
+    )
+    parser.add_argument(
+        "db_path",
+        nargs="?",
+        default=os.path.join(ROOT_PATH, "stackoverflow_small_db_graph"),
+        help=(
+            "Path to database directory (default: "
+            "my_test_databases/stackoverflow_small_db_graph)"
+        ),
+    )
+    args = parser.parse_args()
+
+    abs_db_path = os.path.abspath(args.db_path)
+    db_name = os.path.basename(abs_db_path)
+    abs_root_path = os.path.dirname(abs_db_path)
 
     print_header(f"Example 08: Server Mode (Database: {db_name})")
 
@@ -263,6 +315,15 @@ def main():
         print(f"❌ Database '{db_name}' not found in {abs_root_path}")
         print("   Please run Example 07 first to generate the dataset.")
         return
+
+    schema_types = load_schema_types(abs_db_path)
+    required_types = {"Question", "Answer", "User", "Tag", "Comment"}
+    if schema_types and required_types.issubset(schema_types):
+        queries = STACKOVERFLOW_QUERIES
+        print("Using StackOverflow workload based on detected schema.")
+    else:
+        queries = build_generic_queries(schema_types)
+        print("Using generic workload (schema does not match StackOverflow).")
 
     # 2. Start Server
     print("\nStarting ArcadeDB Server...")
@@ -284,7 +345,7 @@ def main():
         time.sleep(2)
 
         # 3. Run Concurrency Demo
-        demonstrate_concurrency(db_name)
+        demonstrate_concurrency(db_name, queries)
 
         # 4. Interactive Mode
         print_header("Interactive Studio Session")
