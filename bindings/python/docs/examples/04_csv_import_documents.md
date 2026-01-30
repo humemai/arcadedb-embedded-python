@@ -499,12 +499,13 @@ python 04_csv_import_documents.py --dataset movielens-small
 python 04_csv_import_documents.py --dataset movielens-large
 
 # With custom JVM heap for large datasets
-ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python 04_csv_import_documents.py --dataset movielens-large
+python 04_csv_import_documents.py --dataset movielens-large --heap-size 8g
 ```
 
 **Command-line options:**
 
 - `--dataset {movielens-small,movielens-large}` - Dataset size to use (default: movielens-large)
+- `--heap-size SIZE` - JVM max heap size (e.g. `8g`, `4096m`)
 - The script automatically downloads the dataset if it doesn't exist
 
 **Expected output:**
