@@ -6,8 +6,8 @@ Covers JVM argument construction for the embedded runtime.
 
 ## What's Covered
 
-- Defaults when no environment variables are set.
-- Merging custom `ARCADEDB_JVM_ARGS` while preserving mandatory flags:
+- Defaults when no explicit JVM args are provided.
+- Merging custom `jvm_args` / env fallback while preserving mandatory flags:
 	- `-Djava.awt.headless=true`
 	- `--add-modules=jdk.incubator.vector`
 	- `--enable-native-access=ALL-UNNAMED`

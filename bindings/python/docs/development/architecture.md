@@ -42,7 +42,8 @@ arcadedb_embedded/
 **`jvm.py`**
 
 - Starts JVM using bundled JRE and packaged JARs
-- Honors `ARCADEDB_JVM_ARGS` / `ARCADEDB_JVM_ERROR_FILE`
+- Prefers programmatic configuration (`start_jvm(...)`, `jvm_kwargs`)
+- Supports `ARCADEDB_JVM_ARGS` / `ARCADEDB_JVM_ERROR_FILE` as fallback
 - Refuses to start twice in a process
 
 **`core.py`**
@@ -111,7 +112,7 @@ arcadedb_embedded/
 ### JVM Lifecycle
 
 ```python
-def start_jvm():
+def start_jvm(heap_size="4g", disable_xml_limits=True, jvm_args=None):
     if jpype.isJVMStarted():
         return
 
@@ -119,16 +120,12 @@ def start_jvm():
     jvm_path = get_bundled_jre_lib_path()
     jar_files = glob.glob(os.path.join(get_jar_path(), "*.jar"))
 
-    # Memory/flags can be overridden via ARCADEDB_JVM_ARGS
-    jvm_args = os.environ.get("ARCADEDB_JVM_ARGS")
-    if jvm_args:
-        args = jvm_args.split()
-    else:
-        args = ["-Xmx4g", "-Djava.awt.headless=true"]
-
-    # Crash log location (default ./log/hs_err_pid%p.log)
-    error_file = os.environ.get("ARCADEDB_JVM_ERROR_FILE", "./log/hs_err_pid%p.log")
-    args.append(f"-XX:ErrorFile={error_file}")
+    # Merge programmatic args (preferred) with optional env fallback
+    args = _build_jvm_args(
+        heap_size=heap_size,
+        disable_xml_limits=disable_xml_limits,
+        jvm_args=jvm_args,
+    )
 
     # Single-shot startup per process
     jpype.startJVM(jvm_path, *args, classpath=os.pathsep.join(jar_files))
@@ -138,12 +135,12 @@ def start_jvm():
 
 1. Uses the bundled JRE inside the wheel (no system JVM required)
 2. Loads packaged ArcadeDB JARs from `arcadedb_embedded/jars`
-3. Configurable via env vars before first import (`ARCADEDB_JVM_ARGS`, `ARCADEDB_JVM_ERROR_FILE`)
+3. Configurable via Python API before first database/importer creation (`start_jvm`, `jvm_kwargs`)
 4. JVM stays live for the process lifetime and cannot be restarted
 
 **Implications:**
 
-- Set memory/GC flags _before_ importing `arcadedb_embedded`
+- Set JVM options _before_ creating the first database/importer in a process
 - Tests that need different JVM args must run in separate processes
 - Server and embedded modes share the same in-process JVM
 

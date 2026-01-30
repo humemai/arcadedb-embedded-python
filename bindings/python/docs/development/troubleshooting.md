@@ -140,20 +140,17 @@ rm ./mydb/.lock
 
 #### JVM Memory Configuration
 
-Configure JVM memory via the `ARCADEDB_JVM_ARGS` environment variable **before** importing `arcadedb_embedded`:
+Configure JVM memory in Python **before the first database/importer is created**:
 
-**Basic Configuration:**
+**Basic Configuration (preferred):**
 
-```bash
-# Default: 4GB heap
-python script.py
+```python
+import arcadedb_embedded as arcadedb
+
+# Default: 4GB heap (no changes needed)
 
 # Production: 8GB heap with matching initial size
-export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"
-python script.py
-
-# One-liner
-ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python script.py
+arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g")
 ```
 
 **Common JVM Options:**
@@ -171,13 +168,17 @@ ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g" python script.py
 
 For applications using vector indexes, control memory usage:
 
-```bash
+```python
 # Conservative: bounded caches for large vector datasets
-export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
-  -Darcadedb.vectorIndex.locationCacheSize=100000 \
-  -Darcadedb.vectorIndex.graphBuildCacheSize=3000 \
-  -Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
-python vector_app.py
+arcadedb.start_jvm(
+    heap_size="8g",
+    jvm_args=(
+        "-Xms8g -XX:MaxDirectMemorySize=8g "
+        "-Darcadedb.vectorIndex.locationCacheSize=100000 "
+        "-Darcadedb.vectorIndex.graphBuildCacheSize=3000 "
+        "-Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
+    ),
+)
 ```
 
 **Cache Size Guidelines:**
@@ -211,29 +212,40 @@ Rule of thumb: Plan for 1.5-2× your heap size in actual RAM
 
 **Example Configurations:**
 
-```bash
+```python
 # Small datasets (<1M records, <100K vectors)
-ARCADEDB_JVM_ARGS="-Xmx2g -Xms2g"
+arcadedb.start_jvm(heap_size="2g", jvm_args="-Xms2g")
 
 # Medium datasets (1M-10M records, 100K-1M vectors)
-ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g"
+arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
 
 # Large datasets (10M+ records, 1M+ vectors) with bounded caches
-ARCADEDB_JVM_ARGS="-Xmx16g -Xms16g -XX:MaxDirectMemorySize=16g \
-  -Darcadedb.vectorIndex.locationCacheSize=100000 \
-  -Darcadedb.vectorIndex.graphBuildCacheSize=5000 \
-  -Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
+arcadedb.start_jvm(
+    heap_size="16g",
+    jvm_args=(
+        "-Xms16g -XX:MaxDirectMemorySize=16g "
+        "-Darcadedb.vectorIndex.locationCacheSize=100000 "
+        "-Darcadedb.vectorIndex.graphBuildCacheSize=5000 "
+        "-Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
+    ),
+)
 
 # High-dimensional vectors (e.g., 1536-dim embeddings)
-ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
-  -Darcadedb.vectorIndex.locationCacheSize=50000 \
-  -Darcadedb.vectorIndex.graphBuildCacheSize=2000 \
-  -Darcadedb.vectorIndex.mutationsBeforeRebuild=150"
+arcadedb.start_jvm(
+    heap_size="8g",
+    jvm_args=(
+        "-Xms8g -XX:MaxDirectMemorySize=8g "
+        "-Darcadedb.vectorIndex.locationCacheSize=50000 "
+        "-Darcadedb.vectorIndex.graphBuildCacheSize=2000 "
+        "-Darcadedb.vectorIndex.mutationsBeforeRebuild=150"
+    ),
+)
 ```
 
 !!! warning "Configuration Timing"
-    `ARCADEDB_JVM_ARGS` must be set **before** the first `import arcadedb_embedded`. The
-    JVM can only be configured once per Python process.
+    JVM options are locked after the JVM starts. Configure `start_jvm(...)` or pass
+    `jvm_kwargs` before the first database/importer is created. To change settings,
+    start a new Python process.
 
 !!! tip "Alternative: ARCADEDB_JVM_ERROR_FILE"
     Set crash log location:
@@ -248,19 +260,23 @@ ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g -XX:MaxDirectMemorySize=8g \
 
 **Solutions**:
 
-1. **Increase Heap via Environment Variable** (Recommended):
-   ```bash
-   export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"
-   python script.py
-   ```
+1. **Increase Heap (preferred)**:
+    ```python
+    import arcadedb_embedded as arcadedb
+    arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g")
+    ```
 
 2. **Bound Vector Caches** (for vector workloads):
-   ```bash
-   export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g \
-     -Darcadedb.vectorIndex.locationCacheSize=100000 \
-     -Darcadedb.vectorIndex.graphBuildCacheSize=3000"
-   python script.py
-   ```
+    ```python
+    arcadedb.start_jvm(
+        heap_size="8g",
+        jvm_args=(
+            "-Xms8g "
+            "-Darcadedb.vectorIndex.locationCacheSize=100000 "
+            "-Darcadedb.vectorIndex.graphBuildCacheSize=3000"
+        ),
+    )
+    ```
 
 3. **Use Batch Processing**:
    ```python
