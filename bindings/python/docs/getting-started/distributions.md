@@ -34,7 +34,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 - ✅ All platforms use **platform-specific wheels** (not universal)
 - ✅ uv pip automatically selects the correct wheel for your system
 - ✅ Each platform has its own bundled JRE optimized for that architecture
-- ✅ All supported platforms tested and verified (258/258 tests passing)
+- ✅ All supported platforms tested and verified (259/259 tests passing)
 - ✅ Built on native runners (no emulation) for optimal performance
 
 ## What's Included
@@ -47,7 +47,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
 - ✅ **Vector Search**: Graph-based indexing for embeddings
-- ✅ **Data Import**: CSV and ArcadeDB JSONL import (XML supported but has limitations)
+- ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 
 **Optimized:**
 
@@ -56,7 +56,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 
 ## Test Results
 
-**258 out of 258 tests pass** on all platforms (100% success rate):
+**259 out of 259 tests pass** on all platforms (100% success rate):
 
 - ✅ All core database operations
 - ✅ SQL and OpenCypher queries
