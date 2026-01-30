@@ -9,7 +9,7 @@
     Native Python bindings for ArcadeDB with full test coverage
 
     - **Status**: ✅ Production Ready
-    - **Tests**: ✅ 258 + 7 Examples Passing
+    - **Tests**: ✅ 259 + 7 Examples Passing
 
 -   :fontawesome-brands-python:{ .lg .middle } **Pure Python API**
 
@@ -151,7 +151,7 @@ features most relevant to Python developers:
 | Schema Management | ✅ 100% | Types, properties, indexes |
 | Server Mode | ✅ 90% | HTTP server, Studio UI, database management |
 | Vector Search | ✅ 100% | HNSW (JVector) indexing, similarity search |
-| Data Import | ⚠️ 70% | CSV and ArcadeDB JSONL (XML support limited, not recommended) |
+| Data Import | ✅ 100% | CSV, XML, and ArcadeDB JSONL |
 | Data Export | ✅ 100% | JSONL, GraphML, GraphSON; CSV for query results |
 | Graph API | ✅ 85% | Full support via SQL and OpenCypher |
 
