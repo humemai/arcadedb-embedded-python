@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Union
 
 import jpype
+import jpype.imports
 
 from .exceptions import ArcadeDBError
 
