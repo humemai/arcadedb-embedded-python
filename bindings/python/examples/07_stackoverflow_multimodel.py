@@ -12,10 +12,10 @@ This example uses Stack Overflow data dump (Users, Posts, Comments, etc.)
 to build a comprehensive knowledge graph with semantic search capabilities.
 
 Dataset Options (disk size → recommended JVM heap):
-- stackoverflow-tiny: ~34 MB → 2 GB (ARCADEDB_JVM_ARGS='-Xmx2g -Xms2g')
-- stackoverflow-small: ~642 MB → 8 GB (ARCADEDB_JVM_ARGS='-Xmx8g -Xms8g')
-- stackoverflow-medium: ~2.9 GB → 32 GB (ARCADEDB_JVM_ARGS='-Xmx32g -Xms32g')
-- stackoverflow-large: ~323 GB → 64+ GB (ARCADEDB_JVM_ARGS='-Xmx64g -Xms64g')
+- stackoverflow-tiny: ~34 MB → 2 GB (use --heap-size 2g)
+- stackoverflow-small: ~642 MB → 8 GB (use --heap-size 8g)
+- stackoverflow-medium: ~2.9 GB → 32 GB (use --heap-size 32g)
+- stackoverflow-large: ~323 GB → 64+ GB (use --heap-size 64g)
 
 Usage:
     # Phase 1 only (import + index)
@@ -32,7 +32,7 @@ Usage:
 
 Requirements:
 - arcadedb-embedded
-- lxml (for XML parsing)
+- lxml (for XML schema analysis)
 - Stack Overflow data dump in data/stackoverflow-{dataset}/ directory
 
 ⚠️  BEST PRACTICE NOTE (Database Lifecycle):
@@ -101,7 +101,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 import arcadedb_embedded as arcadedb
 from lxml import etree
@@ -111,7 +111,7 @@ def escape_sql_string(value: str) -> str:
     """Properly escape a string for SQL queries.
 
     Must escape backslashes first, then single quotes.
-    Otherwise a value like '\' becomes '\'' which escapes the quote.
+    Otherwise a value like '\\' becomes '\\'' which escapes the quote.
     """
     if value is None:
         return value
@@ -481,7 +481,11 @@ class StackOverflowValidator:
 
     @staticmethod
     def validate_phase1(
-        db_path: Path, dataset_size: str = None, verbose: bool = True, indent: str = ""
+        db_path: Path,
+        dataset_size: str = None,
+        verbose: bool = True,
+        indent: str = "",
+        jvm_kwargs: Optional[dict] = None,
     ) -> tuple[bool, dict]:
         """Complete Phase 1 validation (standalone entry point).
 
@@ -490,6 +494,7 @@ class StackOverflowValidator:
             dataset_size: Dataset size name for count validation
             verbose: Print detailed output
             indent: Indentation for output
+            jvm_kwargs: Optional JVM args passed to open_database
 
         Returns:
             Tuple of (validation_passed, counts_dict)
@@ -506,7 +511,7 @@ class StackOverflowValidator:
         validation_passed = True
         counts = {}
 
-        with arcadedb.open_database(str(db_path)) as db:
+        with arcadedb.open_database(str(db_path), jvm_kwargs=jvm_kwargs) as db:
             # Verify document counts
             if verbose:
                 print(f"{indent}  Document Counts:")
@@ -1253,6 +1258,7 @@ class StackOverflowValidator:
         dataset_size: str = None,
         verbose: bool = True,
         indent: str = "",
+        jvm_kwargs: Optional[dict] = None,
     ) -> tuple[bool, dict]:
         """Complete Phase 2 validation (standalone entry point).
 
@@ -1262,6 +1268,7 @@ class StackOverflowValidator:
             dataset_size: Dataset size name for count validation
             verbose: Print detailed output
             indent: Indentation for output
+            jvm_kwargs: Optional JVM args passed to open_database
 
         Returns:
             Tuple of (validation_passed, counts_dict)
@@ -1317,7 +1324,7 @@ class StackOverflowValidator:
             _run_validation(db)
         else:
             # Open database from path
-            with arcadedb.open_database(str(db_path)) as database:
+            with arcadedb.open_database(str(db_path), **(jvm_kwargs or {})) as database:
                 _run_validation(database)
 
         if verbose:
@@ -1804,13 +1811,20 @@ class Phase1XMLImporter:
     """Handles Phase 1: Import XMLs → Documents → Create Indexes."""
 
     def __init__(
-        self, db_path, data_dir, batch_size, dataset_size, analysis_limit=1_000_000
+        self,
+        db_path,
+        data_dir,
+        batch_size,
+        dataset_size,
+        analysis_limit=1_000_000,
+        jvm_kwargs: Optional[dict] = None,
     ):
         self.db_path = Path(db_path)
         self.data_dir = Path(data_dir)
         self.batch_size = batch_size
         self.dataset_size = dataset_size
         self.analysis_limit = analysis_limit
+        self.jvm_kwargs = jvm_kwargs or {}
         self.db = None
         self.schemas = {}  # Store discovered schemas
 
@@ -1867,7 +1881,10 @@ class Phase1XMLImporter:
             if log_dir.exists():
                 shutil.rmtree(log_dir)
 
-            self.db = arcadedb.create_database(str(self.db_path))
+            self.db = arcadedb.create_database(
+                str(self.db_path),
+                jvm_kwargs=self.jvm_kwargs,
+            )
 
             print(f"  ✅ Database created")
             print(f"  ⏱️  Time: {time.time() - step_start:.2f}s")
@@ -1883,8 +1900,8 @@ class Phase1XMLImporter:
             print(f"  ⏱️  Time: {time.time() - step_start:.2f}s")
             print()
 
-            # Step 3: Import XML files using discovered schemas
-            print("Step 3: Importing XML files...")
+            # Step 3: Import XML files using Java XML importer
+            print("Step 3: Importing XML files via Java importer...")
             import_start = time.time()
 
             import_stats = []  # Collect statistics from each import
@@ -2032,7 +2049,7 @@ class Phase1XMLImporter:
             print(f"    ✓ Created {entity_name} ({prop_count} properties)")
 
     def _import_xml_generic(self, xml_path: Path, entity_name: str):
-        """Generic XML importer using discovered schema.
+        """Import XML using Java XML importer and rename the auto-created type.
 
         Returns:
             dict: Statistics with keys: count, elapsed, avg_rate, db_time,
@@ -2053,110 +2070,40 @@ class Phase1XMLImporter:
                 "entity_name": entity_name,
             }
 
-        # Get field info from schema
-        fields = schema.fields
-        integer_fields = {
-            name
-            for name, stats in fields.items()
-            if stats.type_name in ["BYTE", "SHORT", "INTEGER", "LONG"]
-        }
-
-        batch = []
-        total_count = 0
-        batch_times = []
-        total_db_time = 0
-        total_embed_time = 0  # For future use (Phase 3)
-        total_query_time = 0  # For future use (Phase 2)
         start_time = time.time()
 
-        context = etree.iterparse(str(xml_path), events=("end",), tag="row")
-
-        for _, elem in context:
-            # Build document from ALL discovered attributes
-            doc_data = {}
-
-            for attr_name in fields.keys():
-                attr_value = elem.get(attr_name)
-
-                if attr_value is not None:
-                    # Convert integers
-                    if attr_name in integer_fields:
-                        try:
-                            doc_data[attr_name] = int(attr_value)
-                        except ValueError:
-                            # Skip invalid integers
-                            pass
-                    else:
-                        doc_data[attr_name] = attr_value
-
-            batch.append(doc_data)
-
-            if len(batch) >= self.batch_size:
-                batch_start = time.time()
-
-                db_time = self._insert_batch(entity_name, batch)
-                total_time = time.time() - batch_start
-
-                total_count += len(batch)
-                total_db_time += db_time  # Accumulate database time
-                batch_times.append((len(batch), db_time))
-
-                print_batch_stats(
-                    count=len(batch),
-                    db_time=db_time,
-                    total_time=total_time,
-                    item_name=entity_name.lower(),
-                )
-                batch = []
-
-            # Memory cleanup
-            elem.clear()
-            while elem.getprevious() is not None:
-                del elem.getparent()[0]
-
-        # Final batch
-        if batch:
-            batch_start = time.time()
-
-            db_time = self._insert_batch(entity_name, batch)
-            total_time = time.time() - batch_start
-
-            total_count += len(batch)
-            total_db_time += db_time  # Accumulate database time
-            batch_times.append((len(batch), db_time))
-
-            print_batch_stats(
-                count=len(batch),
-                db_time=db_time,
-                total_time=total_time,
-                item_name=entity_name.lower(),
-            )
-
-        elapsed = time.time() - start_time
-
-        # Calculate average rate
-        avg_rate = total_count / elapsed if elapsed > 0 else 0
-
-        # Print summary statistics
-        print_summary_stats(
-            total_count=total_count,
-            elapsed=elapsed,
-            batch_times=batch_times,
-            item_name=entity_name.lower(),
-            has_embed=False,
-            has_query=False,
+        # Java XML importer creates a "row" document type for StackExchange XML
+        stats = arcadedb.import_xml(
+            self.db,
+            str(xml_path),
+            import_type="documents",
+            objectNestLevel=1,
+            commitEvery=self.batch_size,
         )
 
-        del context
+        elapsed = time.time() - start_time
+        total_count = int(stats.get("documents", 0))
 
-        # Return statistics for aggregation
+        # Move imported records from the auto-created "row" type into target type
+        if self.db.schema.exists_type("row"):
+            with self.db.transaction():
+                self.db.command("sql", f"INSERT INTO {entity_name} SELECT FROM row")
+            self.db.schema.drop_type("row")
+
+        avg_rate = total_count / elapsed if elapsed > 0 else 0
+
+        print(
+            f"    ✓ Imported {total_count:,} records in {elapsed:.2f}s "
+            f"({avg_rate:,.0f} rec/s)"
+        )
+
         return {
             "count": total_count,
             "elapsed": elapsed,
             "avg_rate": avg_rate,
-            "db_time": total_db_time,
-            "embed_time": total_embed_time,
-            "query_time": total_query_time,
+            "db_time": elapsed,
+            "embed_time": 0,
+            "query_time": 0,
             "entity_name": entity_name,
         }
 
@@ -2196,21 +2143,6 @@ class Phase1XMLImporter:
     # ========================================================================
     # Database Helper Methods
     # ========================================================================
-
-    def _insert_batch(self, type_name, records):
-        """Insert a batch of records using transaction.
-
-        Returns:
-            float: Time elapsed in seconds for the database operation
-        """
-        batch_start = time.time()
-        with self.db.transaction():
-            for record in records:
-                doc = self.db.new_document(type_name)
-                for key, value in record.items():
-                    doc.set(key, value)
-                doc.save()
-        return time.time() - batch_start
 
     def _run_validation_queries(self):
         """Run validation queries using StackOverflowValidator."""
@@ -2381,11 +2313,13 @@ class Phase2GraphConverter:
         graph_db_path: Path,
         batch_size: int = 10000,
         dataset_size: str = "stackoverflow-small",
+        jvm_kwargs: Optional[dict] = None,
     ):
         self.doc_db_path = doc_db_path
         self.graph_db_path = graph_db_path
         self.batch_size = batch_size
         self.dataset_size = dataset_size
+        self.jvm_kwargs = jvm_kwargs or {}
         self.doc_db = None
         self.graph_db = None
 
@@ -2488,6 +2422,7 @@ class Phase2GraphConverter:
             dataset_size=self.dataset_size,
             verbose=True,
             indent="  ",
+            jvm_kwargs=self.jvm_kwargs,
         )
 
         if not validation_passed:
@@ -2502,7 +2437,11 @@ class Phase2GraphConverter:
 
         # Use the reusable standalone validator
         validation_passed, counts = StackOverflowValidator.validate_phase1(
-            self.doc_db_path, dataset_size=self.dataset_size, verbose=True, indent="  "
+            self.doc_db_path,
+            dataset_size=self.dataset_size,
+            verbose=True,
+            indent="  ",
+            jvm_kwargs=self.jvm_kwargs,
         )
 
         if not validation_passed:
@@ -2542,7 +2481,10 @@ class Phase2GraphConverter:
             print("    • Cleaned up existing graph database")
 
         # Create new graph database
-        self.graph_db = arcadedb.create_database(str(self.graph_db_path))
+        self.graph_db = arcadedb.create_database(
+            str(self.graph_db_path),
+            jvm_kwargs=self.jvm_kwargs,
+        )
         print(f"    • Created graph database: {self.graph_db_path.name}")
 
         # Create vertex types (schema ops are auto-transactional)
@@ -2716,7 +2658,10 @@ class Phase2GraphConverter:
         - Vote documents → Aggregate into Question/Answer properties
         """
         print("  Opening Phase 1 database (read-only)...")
-        doc_db = arcadedb.open_database(str(self.doc_db_path))
+        doc_db = arcadedb.open_database(
+            str(self.doc_db_path),
+            jvm_kwargs=self.jvm_kwargs,
+        )
 
         try:
             # Step 3.1: Convert Users
@@ -3322,7 +3267,10 @@ class Phase2GraphConverter:
         8. LINKED_TO: Post -> Post (from PostLink)
         """
         print("  Opening Phase 1 database (read-only)...")
-        doc_db = arcadedb.open_database(str(self.doc_db_path))
+        doc_db = arcadedb.open_database(
+            str(self.doc_db_path),
+            jvm_kwargs=self.jvm_kwargs,
+        )
 
         try:
             # Edge 1: ASKED (User -> Question)
@@ -4293,6 +4241,7 @@ class Phase3VectorEmbeddings:
         batch_size: int = 1000,
         encode_batch_size: int = 256,
         model_name: str = "all-MiniLM-L6-v2",
+        jvm_kwargs: Optional[dict] = None,
     ):
         """Initialize Phase 3.
 
@@ -4307,6 +4256,7 @@ class Phase3VectorEmbeddings:
         self.encode_batch_size = encode_batch_size
         self.model = None
         self.model_name = model_name
+        self.jvm_kwargs = jvm_kwargs or {}
 
         # Detect GPU availability
         import torch
@@ -4335,7 +4285,10 @@ class Phase3VectorEmbeddings:
 
         # Open graph database
         print(f"Opening graph database: {self.graph_db_path}")
-        db = arcadedb.open_database(str(self.graph_db_path))
+        db = arcadedb.open_database(
+            str(self.graph_db_path),
+            jvm_kwargs=self.jvm_kwargs,
+        )
 
         try:
             print("✓ Database opened")
@@ -5223,7 +5176,12 @@ class Phase4Analytics:
     - Hybrid queries combining multiple paradigms
     """
 
-    def __init__(self, graph_db_path: Path, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(
+        self,
+        graph_db_path: Path,
+        model_name: str = "all-MiniLM-L6-v2",
+        jvm_kwargs: Optional[dict] = None,
+    ):
         """Initialize Phase 4.
 
         Args:
@@ -5233,6 +5191,7 @@ class Phase4Analytics:
         self.graph_db_path = graph_db_path
         self.model = None
         self.model_name = model_name
+        self.jvm_kwargs = jvm_kwargs or {}
 
         # Detect GPU availability
         try:
@@ -5262,7 +5221,10 @@ class Phase4Analytics:
 
         # Open database and load indexes
         print(f"Opening database: {self.graph_db_path}")
-        db = arcadedb.open_database(str(self.graph_db_path))
+        db = arcadedb.open_database(
+            str(self.graph_db_path),
+            jvm_kwargs=self.jvm_kwargs,
+        )
 
         try:
             print("✓ Database opened")
@@ -6350,7 +6312,18 @@ Phases:
         help="Only analyze schema without importing (useful for understanding data structure)",
     )
 
+    parser.add_argument(
+        "--heap-size",
+        type=str,
+        default=None,
+        help="Set JVM max heap size (e.g. 8g, 4096m). Sets -Xmx only.",
+    )
+
     args = parser.parse_args()
+
+    jvm_kwargs = {
+        "heap_size": args.heap_size,
+    }
 
     # Start overall timer
     script_start_time = time.time()
@@ -6377,18 +6350,19 @@ Phases:
         sys.exit(1)
 
     # Check JVM heap configuration
-    jvm_args = os.environ.get("ARCADEDB_JVM_ARGS")
-    if jvm_args and "-Xmx" in jvm_args:
-        import re
-
-        match = re.search(r"-Xmx(\S+)", jvm_args)
-        heap_size = match.group(1) if match else "unknown"
-        print(f"💡 JVM Max Heap: {heap_size}")
+    if args.heap_size:
+        print(f"💡 JVM Max Heap: {args.heap_size} (from --heap-size)")
     else:
-        print("💡 JVM Max Heap: 4g (default)")
-        if args.dataset in ["stackoverflow-medium", "stackoverflow-large"]:
-            print("   ⚠️  Consider increasing heap for large datasets:")
-            print('      export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"')
+        jvm_args = os.environ.get("ARCADEDB_JVM_ARGS")
+        if jvm_args and "-Xmx" in jvm_args:
+            match = re.search(r"-Xmx(\S+)", jvm_args)
+            heap_size = match.group(1) if match else "unknown"
+            print(f"💡 JVM Max Heap: {heap_size} (from ARCADEDB_JVM_ARGS)")
+        else:
+            print("💡 JVM Max Heap: 4g (default)")
+            if args.dataset in ["stackoverflow-medium", "stackoverflow-large"]:
+                print("   ⚠️  Consider increasing heap for large datasets:")
+                print("      Use --heap-size 8g (or higher)")
     print()
 
     # Schema analysis mode
@@ -6471,6 +6445,7 @@ Phases:
                 batch_size=args.batch_size,
                 dataset_size=args.dataset,
                 analysis_limit=args.analysis_limit,
+                jvm_kwargs=jvm_kwargs,
             )
             phase1.run()
 
@@ -6490,6 +6465,7 @@ Phases:
                 graph_db_path=graph_db_path,
                 batch_size=args.batch_size,
                 dataset_size=args.dataset,
+                jvm_kwargs=jvm_kwargs,
             )
             phase2.run()
 
@@ -6507,6 +6483,7 @@ Phases:
                 graph_db_path=graph_db_path,
                 batch_size=args.batch_size,
                 encode_batch_size=args.encode_batch_size,
+                jvm_kwargs=jvm_kwargs,
             )
             phase3.run()
 
@@ -6522,6 +6499,7 @@ Phases:
 
             phase4 = Phase4Analytics(
                 graph_db_path=graph_db_path,
+                jvm_kwargs=jvm_kwargs,
             )
             phase4.run()
 

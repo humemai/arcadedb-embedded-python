@@ -34,6 +34,9 @@ cd bindings/python/examples
 # Run all phases with the small dataset
 python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phases 1 2 3 4
 
+# Increase JVM heap for larger datasets
+python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phases 1 2 3 4 --heap-size 8g
+
 # Run only Phase 1 (Import)
 python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phases 1
 ```
@@ -42,7 +45,12 @@ python 07_stackoverflow_multimodel.py --dataset stackoverflow-small --phases 1
 
 ### Phase 1: Document Import (XML → Documents)
 
-We use `lxml` for streaming XML parsing to handle large files efficiently.
+We use ArcadeDB’s **Java XML importer** (via Python bindings) for fast, streaming XML import.
+The script still uses `lxml` to analyze schemas and create types/properties before import.
+
+> **Note on XML limits**: Stack Exchange XML may exceed the JDK’s default entity size limits.
+> The Python bindings relax these XML limits by default when starting the JVM. If you pass
+> custom JVM args, keep the `jdk.xml.*` flags (or keep `disable_xml_limits=True`).
 
 **Schema:**
 
@@ -54,9 +62,9 @@ We use `lxml` for streaming XML parsing to handle large files efficiently.
 
 **Key Techniques:**
 
-- **Streaming Parse**: Processes XML elements one by one to keep memory usage low.
-- **Batch Insert**: Uses `BatchContext` for high-performance insertion.
-- **Type Conversion**: Handles nullable fields and type mismatches (e.g., `Integer` vs `String`).
+- **Java XML Importer**: Uses ArcadeDB’s production importer for streaming XML ingestion.
+- **Schema Analysis**: Uses `lxml` to infer fields/types and pre-create document types.
+- **Batching**: Uses importer batch commits for high-throughput inserts.
 
 ### Phase 2: Graph Creation (Documents → Graph)
 
