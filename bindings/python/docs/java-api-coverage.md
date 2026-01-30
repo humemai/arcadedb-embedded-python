@@ -21,7 +21,7 @@ protocol, server plugins, clustering) that are not typically used from Python.
 | Graph API | ✅ Supported | `Document`, `Vertex`, `Edge` wrappers + query traversal |
 | Vector Search | ✅ Supported | JVector indexes + NumPy conversion helpers |
 | Async & Batch | ✅ Supported | `AsyncExecutor`, `BatchContext` |
-| Data Import | ⚠️ Partial | CSV/TSV and XML importers; JSONL via SQL import |
+| Data Import | ✅ Supported | CSV/TSV, XML, and ArcadeDB JSONL import |
 | Data Export | ✅ Supported | JSONL/GraphML/GraphSON + CSV for query results |
 | Server Mode | ✅ Supported | Embedded server lifecycle + Studio access |
 | Advanced/Low-level | ❌ Not exposed | WAL internals, binary protocol, HA/replication, plugins |
@@ -156,8 +156,8 @@ Full Pythonic Schema API available via `db.schema`:
 - ❌ RDF/OrientDB/GloVe/Word2Vec importers
 - ❌ Direct JSON array import (use JSONL instead)
 
-**Note:** The 70% coverage reflects that the 3 supported formats (CSV, XML, ArcadeDB
-JSONL export/import) cover most real-world data migration scenarios.
+**Note:** The supported formats (CSV, XML, ArcadeDB JSONL export/import) cover most
+real-world data migration scenarios.
 
 #### 7. Data Export
 
