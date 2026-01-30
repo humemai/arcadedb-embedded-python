@@ -379,7 +379,7 @@ ArcadeDB writes logs to multiple locations:
 
 **Location:** `./log/hs_err_pid*.log` (default)
 
-**Customize BEFORE importing:**
+**Customize BEFORE the JVM starts:**
 
 ```python
 import os
@@ -394,7 +394,7 @@ server = arcadedb.create_server()
 # Crash logs will go to /var/log/arcade/errors.log
 ```
 
-**Important:** Must be set before importing `arcadedb_embedded`.
+**Important:** Must be set before the first server/database/importer is created.
 
 ---
 
