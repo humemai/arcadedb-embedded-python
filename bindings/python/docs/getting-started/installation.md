@@ -31,7 +31,7 @@ The `arcadedb-embedded` package (~68MB wheel, ~95MB uncompressed installed, simi
 - ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
 - ✅ **Vector Search**: Graph-based indexing for embeddings
-- ✅ **Data Import**: CSV and ArcadeDB JSONL import (XML supported but has limitations)
+- ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 
 !!! tip "Platform Selection"
     uv pip automatically selects the correct platform-specific wheel for your system. You don't need to specify the platform manually.
@@ -96,15 +96,17 @@ uv pip install dist/arcadedb_embedded-*.whl
 
 ## JVM Configuration
 
-The bundled JVM can be configured via the `ARCADEDB_JVM_ARGS` environment variable **before** importing `arcadedb_embedded`:
+Prefer configuring the bundled JVM **inside Python** before the first database/importer is created:
 
-```bash
-# Default (4GB heap)
-python your_script.py
+```python
+import arcadedb_embedded as arcadedb
 
-# Custom memory for large datasets
-export ARCADEDB_JVM_ARGS="-Xmx8g -Xms8g"
-python your_script.py
+# Option A: configure JVM explicitly once per process
+arcadedb.start_jvm(heap_size="8g", jvm_args="-XX:MaxDirectMemorySize=8g")
+
+# Option B: pass JVM config when creating/opening the database
+with arcadedb.create_database("./db", jvm_kwargs={"heap_size": "8g"}) as db:
+    pass
 ```
 
 **Common Options:**
@@ -121,8 +123,11 @@ JVM arguments use two flag types:
     - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: JVector build cache limit
     - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: Mutations threshold before rebuilding JVector
 
-!!! warning "Set Before Import"
-    `ARCADEDB_JVM_ARGS` must be set **before** the first `import arcadedb_embedded` in your Python process. The JVM can only be configured once.
+!!! warning "One JVM configuration per process"
+    JVM options are locked after the JVM starts. Set `start_jvm(...)` or pass `jvm_kwargs` **before** the first database/importer is created. To change JVM settings, start a new Python process.
+
+!!! tip "Environment fallback (optional)"
+    If you must configure JVM flags externally (CI, shell scripts), `ARCADEDB_JVM_ARGS` is still supported, but in-code configuration is preferred.
 
 For detailed configuration and memory tuning, see [Troubleshooting - Memory Configuration](../development/troubleshooting.md#memory-configuration).
 
