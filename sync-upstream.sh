@@ -178,7 +178,7 @@ if [ "$UPSTREAM_COMMITS" -eq 0 ]; then
     echo -e "${GREEN}✅ Already up to date with upstream!${NC}"
 else
     echo -e "${BLUE}📋 Changes in upstream/main ($UPSTREAM_COMMITS new commit(s)):${NC}"
-    git log upstream-main..upstream/main --oneline --max-count=10
+    git log upstream-main..upstream/main --oneline
 fi
 
 # 6. Dry run mode
