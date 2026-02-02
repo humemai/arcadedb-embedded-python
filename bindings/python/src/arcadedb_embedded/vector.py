@@ -241,7 +241,7 @@ class VectorIndex:
         self,
         query_vector,
         k=10,
-        overquery_factor=1,
+        overquery_factor=4,
         allowed_rids=None,
     ):
         """
