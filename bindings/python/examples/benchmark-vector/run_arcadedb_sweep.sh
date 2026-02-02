@@ -23,8 +23,8 @@ if [[ ! -f "$BENCH_PY" ]]; then
     exit 1
 fi
 
-# Heap selection: use ARCADEDB_JVM_ARGS if set, otherwise sweep HEAP_SIZES
-PRESET_JVM_ARGS="${ARCADEDB_JVM_ARGS:-}"
+# Heap selection: use BENCH_JVM_ARGS if set, otherwise sweep HEAP_SIZES
+PRESET_JVM_ARGS="${BENCH_JVM_ARGS:-}"
 HEAP_SIZES_CSV="${HEAP_SIZES:-}"
 HEAP_SIZES=()
 
@@ -43,13 +43,13 @@ HEAP_SIZES=()
 if [[ -z "$PRESET_JVM_ARGS" ]]; then
     # Default heap sweep per dataset (override by setting HEAP_SIZES="8g,12g,16g")
     case "$(basename "$DATASET_DIR")" in
-        # *MSMARCO-100K*) HEAP_SIZES=("1g" "2g") ;;  # 1g works fine. ran with 4 threads
-        # *MSMARCO-1M*) HEAP_SIZES=("4g") ;;   # below 4g heap is already really slow. ran with 4 threads
+        *MSMARCO-100K*) HEAP_SIZES=("2g") ;; # 1g works fine. ran with 4 threads
+        # *MSMARCO-1M*) HEAP_SIZES=("4g") ;;   #
         # *MSMARCO-2M*) HEAP_SIZES=("8g") ;;   # 4 threads
         # *MSMARCO-4M*) HEAP_SIZES=("16g") ;;  # 4 threads
         # *MSMARCO-8M*) HEAP_SIZES=("32g") ;; # 4 threads
-        # *MSMARCO-16M*) HEAP_SIZES=("32g") ;;  # 4 threads
-        *MSMARCO-32M*) HEAP_SIZES=("32g") ;; # 4 threads
+        # *MSMARCO-16M*) HEAP_SIZES=("64g") ;;  # 4 threads
+        # *MSMARCO-32M*) HEAP_SIZES=("128g") ;; # 4 threads
         *) HEAP_SIZES=("default") ;;
     esac
 
@@ -57,7 +57,7 @@ if [[ -z "$PRESET_JVM_ARGS" ]]; then
         IFS="," read -ra HEAP_SIZES <<< "$HEAP_SIZES_CSV"
     fi
 else
-    echo "Using pre-set ARCADEDB_JVM_ARGS='${PRESET_JVM_ARGS}'" >&2
+    echo "Using pre-set BENCH_JVM_ARGS='${PRESET_JVM_ARGS}'" >&2
     HEAP_SIZES=("preset")
 fi
 
@@ -106,11 +106,13 @@ for HEAP in "${HEAP_SIZES[@]}"; do
     fi
 
     BASE_ENV="${THREAD_ENV}"
-    if [[ -n "$JVM_ARGS" ]]; then
-        BASE_ENV="ARCADEDB_JVM_ARGS=\"${JVM_ARGS}\" ${BASE_ENV}"
-    fi
-
     BASE="${BASE_ENV} python \"${BENCH_PY}\" --dataset-dir \"${DATASET_DIR}\" --db-root \"${DB_ROOT}\""
+    if [[ -n "$JVM_ARGS" ]]; then
+        BASE="${BASE} --jvm-args \"${JVM_ARGS}\""
+    fi
+    if [[ "$HEAP" != "default" && "$HEAP" != "preset" ]]; then
+        BASE="${BASE} --heap-size ${HEAP}"
+    fi
 
     for MC in "${MAX_CONNECTIONS[@]}"; do
         for BW in "${BEAM_WIDTHS[@]}"; do
