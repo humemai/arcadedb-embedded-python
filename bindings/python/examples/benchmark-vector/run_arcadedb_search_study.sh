@@ -58,11 +58,17 @@ for HEAP in "${HEAPS[@]}"; do
     fi
 
     echo ">>> RUN: heap=${HEAP} threads=${THREADS} overquery=${OVERQUERY_CSV}" >&2
-    ARCADEDB_JVM_ARGS="$JVM_ARGS" \
-        python "$PY" \
+    HEAP_FLAG=()
+    if [[ "$HEAP" != "default" ]]; then
+        HEAP_FLAG=("--heap-size" "$HEAP")
+    fi
+
+    python "$PY" \
         --db-path "$DB_PATH" \
         --dataset-dir "$DATASET_DIR" \
         --overquery-factors "$OVERQUERY_CSV" \
         --output-root "$OUTPUT_ROOT" \
-        --heap-tag "$HEAP"
+        --heap-tag "$HEAP" \
+        --jvm-args "$JVM_ARGS" \
+        "${HEAP_FLAG[@]}"
 done
