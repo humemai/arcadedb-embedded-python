@@ -22,14 +22,29 @@ docker run --rm \
     -v "${REPO_ROOT}":/src \
     -w /src \
     maven:3.9-amazoncorretto-25 \
-    sh -c "git config --global --add safe.directory /src && ./mvnw -DskipTests -pl package -am package"
+    sh -c "if ! command -v git >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then \
+        if command -v yum >/dev/null 2>&1; then \
+            yum -y install git tar; \
+        elif command -v apt-get >/dev/null 2>&1; then \
+            apt-get update && apt-get install -y git tar; \
+        else \
+            echo '❌ git/tar not found and no supported package manager (yum/apt-get) available' >&2; \
+            exit 1; \
+        fi; \
+    fi; \
+    git config --global --add safe.directory /src && ./mvnw -DskipTests -pl package -am package"
 
 # 2) Copy freshly built JARs into local-jars for the Python build
 log "Staging JARs into bindings/python/local-jars/lib..."
 mkdir -p "${LOCAL_JARS_DIR}"
-HEADLESS_LIB_DIR="${REPO_ROOT}/package/target/arcadedb-26.1.1-SNAPSHOT-headless.dir/arcadedb-26.1.1-SNAPSHOT/lib"
-if [[ ! -d "${HEADLESS_LIB_DIR}" ]]; then
-    echo "❌ Headless package lib directory not found at ${HEADLESS_LIB_DIR}" >&2
+HEADLESS_PARENT_DIR=$(ls -d "${REPO_ROOT}/package/target/arcadedb-"*-headless.dir 2> /dev/null | sort | tail -n 1)
+if [[ -z "${HEADLESS_PARENT_DIR}" ]]; then
+    echo "❌ Headless package directory not found under ${REPO_ROOT}/package/target" >&2
+    exit 1
+fi
+HEADLESS_LIB_DIR=$(ls -d "${HEADLESS_PARENT_DIR}"/arcadedb-*/lib 2> /dev/null | sort | tail -n 1)
+if [[ -z "${HEADLESS_LIB_DIR}" || ! -d "${HEADLESS_LIB_DIR}" ]]; then
+    echo "❌ Headless package lib directory not found under ${HEADLESS_PARENT_DIR}" >&2
     exit 1
 fi
 cp "${HEADLESS_LIB_DIR}"/*.jar "${LOCAL_JARS_DIR}/"
@@ -43,7 +58,7 @@ cd "${PY_BINDINGS_DIR}"
 
 # 4) Install the wheel with uv (force reinstall)
 log "Installing wheel via uv pip..."
-WHEEL_PATH=$(ls -1 dist/arcadedb_embedded-*-linux_x86_64.whl | sort | tail -n 1)
+WHEEL_PATH=$(ls -1 dist/arcadedb_embedded-*.whl | sort | tail -n 1)
 if [[ -z "${WHEEL_PATH}" ]]; then
     echo "❌ No wheel found in dist/. Did the build succeed?" >&2
     exit 1
