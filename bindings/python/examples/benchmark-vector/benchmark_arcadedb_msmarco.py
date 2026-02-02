@@ -89,14 +89,16 @@ def start_cpu_logger(interval_sec: int = 2):
     return stop_event
 
 
-def heap_tag_from_env() -> str:
-    """Return heap tag derived from ARCADEDB_JVM_ARGS (-Xmx), or 'default'."""
+def heap_tag_from_args(heap_size: str | None, jvm_args: str | None) -> str:
+    """Return heap tag derived from explicit args, or 'default'."""
 
-    jvm_args = os.environ.get("ARCADEDB_JVM_ARGS", "")
-    m = re.search(r"-Xmx(\S+)", jvm_args)
-    if not m:
-        return "default"
-    return m.group(1)
+    if heap_size:
+        return heap_size
+    if jvm_args:
+        m = re.search(r"-Xmx(\S+)", jvm_args)
+        if m:
+            return m.group(1)
+    return "default"
 
 
 # -------------------------
@@ -466,6 +468,22 @@ def main():
         default=100_000,
         help="Number of vectors to ingest per transaction batch",
     )
+    ap.add_argument(
+        "--heap-size",
+        default=None,
+        help=(
+            "Heap size for the embedded JVM (e.g., 8g). Prefer this over "
+            "ARCADEDB_JVM_ARGS."
+        ),
+    )
+    ap.add_argument(
+        "--jvm-args",
+        default=None,
+        help=(
+            "Extra JVM args to pass to start_jvm (e.g., thread flags). "
+            "Prefer this over ARCADEDB_JVM_ARGS."
+        ),
+    )
     args = ap.parse_args()
 
     stop_cpu = start_cpu_logger(2)
@@ -473,8 +491,14 @@ def main():
     np.random.seed(args.seed)
     eval_k = 50
 
-    # Import after potential JVM arg override
+    # Import and configure JVM before any DB creation
     import arcadedb_embedded as arcadedb
+
+    jvm_kwargs = {}
+    if args.heap_size is not None:
+        jvm_kwargs["heap_size"] = args.heap_size
+    if args.jvm_args is not None:
+        jvm_kwargs["jvm_args"] = args.jvm_args
 
     sources, gt_path, dim, label = resolve_dataset(Path(args.dataset_dir))
     total_rows = sum(s["count"] for s in sources)
@@ -513,7 +537,7 @@ def main():
     record("load_queries", {"queries": len(queries)}, dur, r0, r1)
 
     # Prepare DB path
-    heap_tag = heap_tag_from_env()
+    heap_tag = heap_tag_from_args(args.heap_size, args.jvm_args)
     param_dir = "_".join(
         [
             f"dataset={Path(args.dataset_dir).name}",
@@ -537,7 +561,8 @@ def main():
 
     # Create DB
     (db, dur, r0, r1) = timed_section(
-        "create_db", lambda: arcadedb.create_database(str(db_path))
+        "create_db",
+        lambda: arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs),
     )
     record("create_db", {"db_path": str(db_path)}, dur, r0, r1)
 
@@ -670,7 +695,8 @@ def main():
 
         # Reopen
         (db, dur, r0, r1) = timed_section(
-            "open_db", lambda: arcadedb.open_database(str(db_path))
+            "open_db",
+            lambda: arcadedb.open_database(str(db_path), jvm_kwargs=jvm_kwargs),
         )
         record("open_db", {}, dur, r0, r1)
 
