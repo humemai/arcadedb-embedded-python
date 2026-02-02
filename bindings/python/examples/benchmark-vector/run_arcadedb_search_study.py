@@ -90,8 +90,9 @@ def run_single(
     output_root: Path,
     base_config: Dict,
     heap_tag: str | None,
+    jvm_kwargs: Dict,
+    arcadedb,
 ) -> Path:
-    import arcadedb_embedded as arcadedb
 
     sources, gt_path, dim, label = resolve_dataset(dataset_dir)
     total_rows = sum(s["count"] for s in sources)
@@ -111,7 +112,8 @@ def run_single(
     record(phases, "load_queries", {"queries": len(queries)}, dur, r0, r1)
 
     (db, dur, r0, r1) = timed_section(
-        "open_db", lambda: arcadedb.open_database(str(db_path))
+        "open_db",
+        lambda: arcadedb.open_database(str(db_path), jvm_kwargs=jvm_kwargs),
     )
     record(phases, "open_db", {}, dur, r0, r1)
 
@@ -288,6 +290,22 @@ def main() -> None:
         "--heap-tag",
         help="Heap tag to record in outputs (e.g., 8g). Defaults to heap from db path.",
     )
+    ap.add_argument(
+        "--heap-size",
+        default=None,
+        help=(
+            "Heap size for the embedded JVM (e.g., 8g). Prefer this over "
+            "ARCADEDB_JVM_ARGS."
+        ),
+    )
+    ap.add_argument(
+        "--jvm-args",
+        default=None,
+        help=(
+            "Extra JVM args to pass to start_jvm (e.g., thread flags). "
+            "Prefer this over ARCADEDB_JVM_ARGS."
+        ),
+    )
 
     args = ap.parse_args()
 
@@ -299,11 +317,19 @@ def main() -> None:
     if not db_path.exists():
         raise SystemExit(f"DB path not found: {db_path}")
 
+    import arcadedb_embedded as arcadedb
+
+    jvm_kwargs: Dict = {}
+    if args.heap_size is not None:
+        jvm_kwargs["heap_size"] = args.heap_size
+    if args.jvm_args is not None:
+        jvm_kwargs["jvm_args"] = args.jvm_args
+
     base_config = load_existing_config(db_path)
     quant = (base_config.get("quantization") or "NONE").upper()
 
     fallback_heap = run_dir_value(db_path.name, "heap")
-    heap_tag = args.heap_tag or fallback_heap
+    heap_tag = args.heap_tag or args.heap_size or fallback_heap
 
     created: List[Path] = []
     for oq in overqueries:
@@ -317,6 +343,8 @@ def main() -> None:
                 output_root=output_root,
                 base_config=base_config,
                 heap_tag=heap_tag,
+                jvm_kwargs=jvm_kwargs,
+                arcadedb=arcadedb,
             )
         )
 
