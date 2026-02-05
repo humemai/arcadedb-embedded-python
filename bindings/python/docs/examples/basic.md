@@ -106,6 +106,7 @@ with arcadedb.create_database("./mydb") as db:
 Browse all examples:
 
 - **[Examples Overview](index.md)** - Complete list of examples
+- **[Dataset Downloader](download_data.md)** - Download and prepare example datasets
 - **[01 - Simple Document Store](01_simple_document_store.md)** - Document database basics
 - **[02 - Social Network Graph](02_social_network_graph.md)** - Graph database basics
 - **[03 - Vector Search](03_vector_search.md)** - AI-powered semantic search
