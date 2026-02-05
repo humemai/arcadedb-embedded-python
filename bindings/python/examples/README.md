@@ -14,6 +14,8 @@ cd bindings/python/examples
 python 01_simple_document_store.py
 ```
 
+See the dataset downloader guide: [docs/examples/download_data.md](../docs/examples/download_data.md).
+
 ## Available Examples
 
 ### 📄 [01_simple_document_store.py](./01_simple_document_store.py)
@@ -68,6 +70,8 @@ High-performance CSV import for document data:
 - Batch processing for optimal performance
 - Index creation strategies
 
+**Note:** Download the MovieLens dataset first with `python download_data.py movielens-<size>`.
+
 **Learn:** ETL patterns, bulk import, schema management, performance tuning
 
 **Status:** ✅ Fully functional - Imports 100K+ records efficiently
@@ -115,6 +119,8 @@ Comprehensive Stack Overflow dataset analysis:
 - **Phase 4 (Analytics):** Complex multi-model queries and aggregations
 - Handling large datasets (XML parsing, batching)
 - Advanced schema design with inheritance and polymorphism
+
+**Note:** Download the Stack Exchange dataset first with `python download_data.py stackoverflow-<size>`.
 
 **Learn:** Multi-model architecture, complex ETL, advanced querying, full-stack analytics
 

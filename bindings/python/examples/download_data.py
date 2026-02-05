@@ -14,13 +14,28 @@ Features:
 
 Available datasets:
 1. MovieLens (movie ratings, tags, genres):
-   - movielens-small: ~1 MB, ~100K ratings, 9K movies, 600 users
-   - movielens-large: ~265 MB, ~33M ratings, 86K movies, 280K users
+    - movielens-small: ~1 MB, ~100K ratings, 9K movies, 600 users
+    - movielens-large: ~265 MB, ~33M ratings, 86K movies, 280K users
 
 2. Stack Exchange (Q&A posts, users, tags, links):
-   - stackoverflow-small: ~642 MB, 1.41M records (cs.stackexchange.com, 2024-06-30)
-   - stackoverflow-medium: ~2.9 GB, 5.56M records (stats.stackexchange.com, 2024-06-30)
-   - stackoverflow-large: ~323 GB, records (full stackoverflow.com, 2024-06-30)
+    - stackoverflow-small: ~642 MB, 1.41M records (cs.stackexchange.com, 2024-06-30)
+    - stackoverflow-medium: ~2.9 GB, 5.56M records (stats.stackexchange.com, 2024-06-30)
+    - stackoverflow-large: ~323 GB, records (full stackoverflow.com, 2024-06-30)
+
+3. TPC-H (table benchmark):
+    - tpch-sf1: TPC-H scale factor 1 (dbgen, local generation)
+    - tpch-sf10: TPC-H scale factor 10 (dbgen, local generation)
+    - tpch-sf100: TPC-H scale factor 100 (dbgen, local generation)
+
+4. LDBC SNB Interactive v1 (graph benchmark):
+    - ldbc-snb-sf1: Scale factor 1 (CsvMergeForeign, LongDateFormatter, Docker datagen)
+    - ldbc-snb-sf10: Scale factor 10 (CsvMergeForeign, LongDateFormatter, Docker datagen)
+    - ldbc-snb-sf100: Scale factor 100 (CsvMergeForeign, LongDateFormatter, Docker datagen)
+
+5. MSMARCO v2.1 embeddings (vector benchmark):
+    - msmarco-1m: 1M passage vectors
+    - msmarco-5m: 5M passage vectors
+    - msmarco-10m: 10M passage vectors
 
 
 Stack Exchange Data Note:
@@ -42,19 +57,35 @@ NULL Value Injection (MovieLens only):
 License:
 - MovieLens: Free for educational use (grouplens.org)
 - Stack Exchange: CC BY-SA (archive.org/details/stackexchange)
+- MSMARCO: See dataset card on Hugging Face
+- TPC-H: Generated with dbgen (local build or Docker); see TPC license terms
+- LDBC SNB: Generated locally via Docker (ldbc/datagen). See LDBC terms.
 
 Usage:
     python download_data.py movielens-small
     python download_data.py movielens-large
+    python download_data.py movielens-small --no-nulls  # Skip NULL injection
     python download_data.py stackoverflow-small
     python download_data.py stackoverflow-medium
     python download_data.py stackoverflow-large
-    python download_data.py movielens-small --no-nulls  # Skip NULL injection
     python download_data.py stackoverflow-small --verify-only  # Verify existing
+    python download_data.py tpch-sf1
+    python download_data.py tpch-sf10
+    python download_data.py tpch-sf100
+    python download_data.py ldbc-snb-sf1
+    python download_data.py ldbc-snb-sf10
+    python download_data.py ldbc-snb-sf100
+    python download_data.py msmarco-1m
+    python download_data.py msmarco-5m
+    python download_data.py msmarco-10m
 """
 
 import argparse
+import json
+import os
+import re
 import shutil
+import subprocess
 import time
 import urllib.request
 import zipfile
@@ -65,6 +96,237 @@ try:
 except ImportError:
     # Fallback if tqdm not installed
     tqdm = None
+
+
+def ensure_clean_dir(path: Path, label: str) -> None:
+    if path.exists():
+        print(f"[CLEAN] Removing existing {label} directory: {path}")
+        shutil.rmtree(path)
+
+
+def parse_tpch_ddl(ddl_path: Path) -> dict[str, dict[str, object]]:
+    ddl_text = ddl_path.read_text(encoding="utf-8", errors="ignore")
+    tables: dict[str, dict[str, object]] = {}
+    for match in re.finditer(r"CREATE TABLE\s+(\w+)\s*\((.*?)\);", ddl_text, re.S):
+        table = match.group(1).lower()
+        body = match.group(2)
+        columns = []
+        types = {}
+        for raw_line in body.splitlines():
+            line = raw_line.strip().rstrip(",")
+            if not line:
+                continue
+            col_match = re.match(r"^([A-Z_]+)\s+([A-Z]+(?:\([^)]*\))?)", line)
+            if not col_match:
+                continue
+            col = col_match.group(1).lower()
+            col_type = col_match.group(2).upper()
+            if col_type.startswith("DECIMAL"):
+                inferred = "double"
+            elif col_type.startswith("INT"):
+                inferred = "integer"
+            elif col_type.startswith("DATE"):
+                inferred = "date"
+            else:
+                inferred = "string"
+            columns.append(col)
+            types[col] = inferred
+        tables[table] = {"columns": columns, "types": types}
+    if not tables:
+        raise RuntimeError(f"No tables parsed from {ddl_path}")
+    return tables
+
+
+def _iter_tpch_records(tbl_path: Path, chunk_size: int = 1024 * 1024):
+    """Yield TPC-H records split by the record delimiter '|\n'.
+
+    TPC-H .tbl files can contain embedded newlines inside fields, so we
+    cannot parse line-by-line. The record delimiter is the trailing "|\n".
+    """
+    delimiter = "|\n"
+    buffer = ""
+    with tbl_path.open("r", encoding="utf-8", errors="ignore") as fin:
+        while True:
+            chunk = fin.read(chunk_size)
+            if not chunk:
+                break
+            buffer += chunk
+            while True:
+                idx = buffer.find(delimiter)
+                if idx == -1:
+                    break
+                record = buffer[:idx]
+                buffer = buffer[idx + len(delimiter) :]
+                yield record
+        if buffer.strip():
+            yield buffer.rstrip("|")
+
+
+def convert_tpch_tbl_to_csv(tbl_path: Path, csv_path: Path, columns: list[str]) -> None:
+    import csv
+
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", encoding="utf-8", newline="") as fout:
+        writer = csv.writer(
+            fout,
+            delimiter="|",
+            quoting=csv.QUOTE_NONE,
+            escapechar="\\",
+        )
+        writer.writerow(columns)
+        for record in _iter_tpch_records(tbl_path):
+            fields = record.split("|")
+            if len(fields) != len(columns):
+                raise ValueError(
+                    f"Unexpected column count in {tbl_path.name}: "
+                    f"{len(fields)} (expected {len(columns)})"
+                )
+            fields = [f.replace("\n", " ").replace("\r", " ") for f in fields]
+            writer.writerow(fields)
+
+
+def generate_tpch_csv_and_schema(out_dir: Path, ddl_path: Path) -> None:
+    ddl_schema = parse_tpch_ddl(ddl_path)
+    csv_dir = out_dir / "csv"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+
+    for table, meta in ddl_schema.items():
+        columns = meta["columns"]
+        tbl_path = out_dir / f"{table}.tbl"
+        if not tbl_path.exists():
+            raise FileNotFoundError(f"Missing {tbl_path}")
+        csv_path = csv_dir / f"{table}.csv"
+        if not csv_path.exists():
+            print(f"[convert] {tbl_path.name} -> csv/{csv_path.name}")
+            convert_tpch_tbl_to_csv(tbl_path, csv_path, columns)
+
+    schema_path = out_dir / "schema.json"
+    if not schema_path.exists():
+        schema_path.write_text(
+            json.dumps({"tables": ddl_schema}, indent=2), encoding="utf-8"
+        )
+        print(f"[schema] wrote {schema_path}")
+
+
+def _infer_value_type(value: str) -> str:
+    if value is None:
+        return "string"
+    value = value.strip()
+    if value == "":
+        return "string"
+    if value.lower() in {"true", "false"}:
+        return "boolean"
+    if re.fullmatch(r"-?\d+", value):
+        return "integer"
+    if re.fullmatch(r"-?\d+\.\d+", value):
+        return "double"
+    return "string"
+
+
+def _merge_types(current: str | None, new_type: str) -> str:
+    if current is None:
+        return new_type
+    if current == "string" or new_type == "string":
+        return "string"
+    if current == "double" or new_type == "double":
+        return "double"
+    if current == "integer" or new_type == "integer":
+        return "integer"
+    if current == "boolean" or new_type == "boolean":
+        return "boolean"
+    return "string"
+
+
+def _looks_like_header(row: list[str]) -> bool:
+    if not row:
+        return False
+    tokens = 0
+    for val in row:
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]*", val or ""):
+            tokens += 1
+    return tokens >= max(1, int(0.6 * len(row)))
+
+
+def _apply_ldbc_overrides(name: str, inferred: str) -> str:
+    lowered = name.lower()
+    if lowered.endswith(".id") or lowered.endswith("_id"):
+        return "integer"
+    if lowered in {"ispartof", "issubclassof"}:
+        return "integer"
+    return inferred
+
+
+def generate_ldbc_snb_schema(out_dir: Path, sample_rows: int = 100_000) -> None:
+    import csv
+
+    schema = {"nodes": {}, "edges": {}}
+    csv_files = sorted(out_dir.rglob("*.csv"))
+    if not csv_files:
+        return
+
+    def base_name(path: Path) -> str:
+        stem = path.stem
+        return re.sub(r"_\d+_\d+$", "", stem)
+
+    for csv_path in csv_files:
+        if csv_path.name.endswith(".crc"):
+            continue
+        base = base_name(csv_path)
+        if base in schema["nodes"] or base in schema["edges"]:
+            continue
+
+        with csv_path.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+            reader = csv.reader(f, delimiter="|")
+            try:
+                first_row = next(reader)
+            except StopIteration:
+                continue
+
+            if not _looks_like_header(first_row):
+                print(f"[schema] skip (no header): {csv_path}")
+                continue
+
+            header = first_row
+            type_map: dict[str, str | None] = {name: None for name in header}
+            rows_read = 0
+            for row in reader:
+                if not row:
+                    continue
+                rows_read += 1
+                for idx, name in enumerate(header):
+                    value = row[idx] if idx < len(row) else ""
+                    inferred = _infer_value_type(value)
+                    type_map[name] = _merge_types(type_map[name], inferred)
+                if rows_read >= sample_rows:
+                    break
+
+        properties = {
+            name: _apply_ldbc_overrides(name, (type_map[name] or "string"))
+            for name in header
+        }
+
+        tokens = base.split("_")
+        if len(tokens) >= 3:
+            source = tokens[0]
+            target = tokens[-1]
+            label = "_".join(tokens[1:-1])
+            schema["edges"][base] = {
+                "label": label,
+                "from": source,
+                "to": target,
+                "file": str(csv_path.relative_to(out_dir)),
+                "properties": properties,
+            }
+        else:
+            schema["nodes"][base] = {
+                "type": base,
+                "file": str(csv_path.relative_to(out_dir)),
+                "properties": properties,
+            }
+
+    schema_path = out_dir / "schema.json"
+    schema_path.write_text(json.dumps(schema, indent=2), encoding="utf-8")
+    print(f"[schema] wrote {schema_path}")
 
 
 def introduce_null_values_movielens(extract_dir):
@@ -199,21 +461,7 @@ def download_movielens(size="large", inject_nulls=True):
     extract_dir = data_dir / dirname
 
     # Check if already downloaded
-    if extract_dir.exists():
-        print(f"[OK] Dataset already exists at: {extract_dir}")
-        print(f"   Size: {config['description']} ({config['size_mb']})")
-        print()
-        for csv_file in ["movies.csv", "ratings.csv", "tags.csv", "links.csv"]:
-            file_path = extract_dir / csv_file
-            if file_path.exists():
-                size_mb = file_path.stat().st_size / (1024 * 1024)
-                print(f"   - {csv_file}: {size_mb:.1f} MB")
-
-        # Ask if user wants to re-introduce NULL values
-        print(
-            "\n[INFO] To re-introduce NULL values, delete the data directory and re-run."
-        )
-        return extract_dir
+    ensure_clean_dir(extract_dir, f"MovieLens {size}")
 
     print(f"[DOWNLOAD] Downloading MovieLens {size} dataset")
     print(f"   Description: {config['description']} ({config['size_mb']})")
@@ -367,23 +615,7 @@ def download_stackoverflow(size="small"):
     extract_dir = data_dir / dirname
 
     # Check if already downloaded
-    if extract_dir.exists():
-        print(f"[OK] Dataset already exists at: {extract_dir}")
-        print(f"   Site: {config['site']}")
-        print(f"   Size: {config['description']} ({config['size_mb']})")
-        print(f"   Date: {config['date']}")
-        print()
-
-        # Show extracted files
-        xml_files = list(extract_dir.glob("*.xml"))
-        if xml_files:
-            print("   Files:")
-            for xml_file in sorted(xml_files):
-                size_mb = xml_file.stat().st_size / (1024 * 1024)
-                print(f"   - {xml_file.name}: {size_mb:.1f} MB")
-
-        print("\n[INFO] To re-download, delete the data directory and re-run.")
-        return extract_dir
+    ensure_clean_dir(extract_dir, f"Stack Exchange {size}")
 
     print(f"[DOWNLOAD] Downloading Stack Exchange {size} dataset")
     print(f"   Site: {config['site']}")
@@ -453,6 +685,467 @@ def download_stackoverflow(size="small"):
         print(f"[ERROR] Error downloading dataset: {e}")
         print(f"   You can manually download from: {config['urls'][0]}")
         raise
+
+
+def download_tpch(scale_factor: int = 10) -> Path:
+    """Generate TPC-H data using dbgen via Docker."""
+    data_dir = Path(__file__).parent / "data"
+    data_dir.mkdir(exist_ok=True)
+
+    out_dir = data_dir / f"tpch-sf{scale_factor}"
+    dbgen_zip = data_dir / "tpch-dbgen.zip"
+    dbgen_dir = data_dir / "tpch-dbgen"
+
+    ensure_clean_dir(out_dir, f"TPC-H SF{scale_factor}")
+
+    marker = out_dir / "customer.tbl"
+    legacy_marker = dbgen_dir / "customer.tbl"
+    ddl_path = dbgen_dir / "dss.ddl"
+    if marker.exists():
+        print(f"[OK] TPC-H already generated at: {out_dir}")
+        generate_tpch_csv_and_schema(out_dir, ddl_path)
+        return out_dir
+    if legacy_marker.exists():
+        print(f"[OK] TPC-H already generated at: {dbgen_dir}")
+        generate_tpch_csv_and_schema(out_dir, ddl_path)
+        return out_dir
+
+    if not dbgen_dir.exists():
+        print("[DOWNLOAD] Downloading dbgen source (TPC-H)")
+        url = "https://github.com/electrum/tpch-dbgen/archive/refs/heads/master.zip"
+
+        def report_progress(block_num, block_size, total_size):
+            downloaded = block_num * block_size
+            percent = min(100, (downloaded / total_size) * 100) if total_size > 0 else 0
+            downloaded_mb = downloaded / (1024 * 1024)
+            total_mb = total_size / (1024 * 1024)
+            print(
+                f"\r   Progress: {percent:.1f}% "
+                f"({downloaded_mb:.1f}/{total_mb:.1f} MB)",
+                end="",
+            )
+
+        urllib.request.urlretrieve(url, dbgen_zip, reporthook=report_progress)
+        print()
+
+        extract_dir = data_dir / "tpch-dbgen-extract"
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+
+        with zipfile.ZipFile(dbgen_zip, "r") as zip_ref:
+            zip_ref.extractall(extract_dir)
+
+        extracted_folders = [p for p in extract_dir.iterdir() if p.is_dir()]
+        if len(extracted_folders) != 1:
+            raise RuntimeError("Unexpected dbgen zip structure")
+
+        extracted = extracted_folders[0]
+        if dbgen_dir.exists():
+            shutil.rmtree(dbgen_dir)
+        shutil.move(str(extracted), str(dbgen_dir))
+        shutil.rmtree(extract_dir)
+        dbgen_zip.unlink(missing_ok=True)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dists_src = dbgen_dir / "dists.dss"
+    if not dists_src.exists():
+        raise RuntimeError("dists.dss not found in dbgen directory")
+
+    if shutil.which("docker") is None:
+        raise RuntimeError("Docker is required to generate TPC-H datasets.")
+    print("[BUILD] Building dbgen via Docker")
+    print(f"[GENERATE] TPC-H SF{scale_factor} via Docker (this can take a while)")
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "--mount",
+        f"type=bind,source={dbgen_dir},target=/work",
+        "--mount",
+        f"type=bind,source={out_dir},target=/out",
+        "gcc:13",
+        "sh",
+        "-lc",
+        "make -C /work && cd /out && /work/dbgen -s "
+        f"{scale_factor} -f -b /work/dists.dss",
+    ]
+    subprocess.run(cmd, check=True)
+
+    if not (out_dir / "customer.tbl").exists():
+        legacy_tbls = list(dbgen_dir.glob("*.tbl"))
+        if legacy_tbls:
+            for tbl in legacy_tbls:
+                shutil.move(str(tbl), str(out_dir / tbl.name))
+
+    generate_tpch_csv_and_schema(out_dir, ddl_path)
+    print(f"[OK] TPC-H generated at: {out_dir}")
+    return out_dir
+
+
+def download_ldbc_snb(scale_factor: int = 1) -> Path:
+    """Generate LDBC SNB Interactive v1 dataset via Docker datagen."""
+    if scale_factor not in {1, 10, 100}:
+        raise ValueError("Unsupported LDBC SNB scale factor. Use 1, 10, or 100.")
+
+    data_dir = Path(__file__).parent / "data"
+    data_dir.mkdir(exist_ok=True)
+
+    out_dir = data_dir / f"ldbc-snb-sf{scale_factor}"
+    marker = out_dir / ".ldbc_snb_ok"
+    ensure_clean_dir(out_dir, f"LDBC SNB SF{scale_factor}")
+
+    if shutil.which("docker") is None:
+        raise RuntimeError("Docker is required to generate LDBC SNB datasets.")
+
+    params_dir = data_dir / "ldbc-snb-datagen"
+    params_dir.mkdir(parents=True, exist_ok=True)
+    params_path = params_dir / f"params-csv-merge-foreign-longdate-sf{scale_factor}.ini"
+
+    if not params_path.exists():
+        template_url = (
+            "https://raw.githubusercontent.com/ldbc/ldbc_snb_datagen_hadoop/"
+            "main/params-csv-merge-foreign.ini"
+        )
+        print("[DOWNLOAD] LDBC SNB params template")
+        template = urllib.request.urlopen(template_url).read().decode("utf-8")
+        lines = []
+        inserted = False
+        for line in template.splitlines():
+            if line.startswith("ldbc.snb.datagen.generator.scaleFactor:"):
+                lines.append(
+                    f"ldbc.snb.datagen.generator.scaleFactor:snb.interactive.{scale_factor}"
+                )
+                lines.append(
+                    "ldbc.snb.datagen.serializer.dateFormatter:"
+                    "ldbc.snb.datagen.util.formatter.LongDateFormatter"
+                )
+                inserted = True
+            else:
+                lines.append(line)
+        if not inserted:
+            lines.insert(
+                0,
+                f"ldbc.snb.datagen.generator.scaleFactor:snb.interactive.{scale_factor}",
+            )
+            lines.insert(
+                1,
+                "ldbc.snb.datagen.serializer.dateFormatter:"
+                "ldbc.snb.datagen.util.formatter.LongDateFormatter",
+            )
+        params_path.write_text("\n".join(lines) + "\n")
+
+    hadoop_xmx = {1: "-Xmx2G", 10: "-Xmx8G", 100: "-Xmx24G"}[scale_factor]
+
+    print(f"[GENERATE] LDBC SNB Interactive SF{scale_factor} via Docker")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "--mount",
+        f"type=bind,source={out_dir},target=/opt/ldbc_snb_datagen/out",
+        "--mount",
+        f"type=bind,source={params_path},target=/opt/ldbc_snb_datagen/params.ini",
+        "-e",
+        f"HADOOP_CLIENT_OPTS={hadoop_xmx}",
+        "ldbc/datagen",
+    ]
+    subprocess.run(cmd, check=True)
+
+    marker.write_text("ok")
+    generate_ldbc_snb_schema(out_dir)
+    print(f"[OK] LDBC SNB generated at: {out_dir}")
+    return out_dir
+
+
+def convert_msmarco_parquet_to_shards(
+    *,
+    parquet_glob: str,
+    out_dir: Path,
+    count: int,
+    shard_size: int = 100_000,
+    batch_rows: int = 8192,
+    fsync_every: int = 50_000,
+    progress_every: int = 100_000,
+    q_count: int = 1000,
+    topk: int = 50,
+    chunk: int = 4096,
+):
+    """Convert MSMARCO parquet parts to shard files and build GT."""
+    try:
+        import glob
+        import heapq
+        import json
+        import mmap
+
+        import numpy as np
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise RuntimeError(
+            "Missing dependencies for MSMARCO conversion. "
+            "Install with: uv pip install numpy pyarrow"
+        ) from exc
+
+    def fmt_secs(secs: float | None) -> str:
+        if secs is None or secs <= 0:
+            return "?"
+        m, s = divmod(int(secs + 0.5), 60)
+        h, m = divmod(m, 60)
+        return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+    def sync_and_advise(fd: int) -> None:
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        except (AttributeError, OSError):
+            pass
+
+    def close_memmap(mm: "np.memmap | None") -> None:
+        if mm is None:
+            return
+        mm.flush()
+        m = getattr(mm, "_mmap", None)
+        if m is not None:
+            try:
+                m.madvise(mmap.MADV_DONTNEED)
+            except Exception:
+                pass
+            m.close()
+
+    def build_gt_sharded(
+        *,
+        shards: list[dict],
+        total_count: int,
+        dim: int,
+        gt_path: Path,
+        q_count: int,
+        topk: int,
+    ) -> None:
+        print(f"[GT] building exact GT for {q_count} queries, k={topk}")
+
+        q_count = min(q_count, total_count)
+        rng = np.random.default_rng()
+        q_indices = rng.choice(total_count, size=q_count, replace=False)
+
+        queries = np.empty((q_count, dim), dtype=np.float32)
+        shard_map: dict[Path, list[tuple[int, int]]] = {}
+
+        for qi, gidx in enumerate(q_indices):
+            for s in shards:
+                if s["start"] <= gidx < s["start"] + s["count"]:
+                    shard_map.setdefault(s["path"], []).append((qi, gidx - s["start"]))
+                    break
+
+        for s in shards:
+            assigns = shard_map.get(s["path"])
+            if not assigns:
+                continue
+            mm = np.memmap(
+                s["path"], dtype=np.float32, mode="r", shape=(s["count"], dim)
+            )
+            for qi, li in assigns:
+                queries[qi] = mm[li]
+            close_memmap(mm)
+
+        heaps = [[] for _ in range(q_count)]
+
+        for s in shards:
+            print(f"[GT] scanning {s['path'].name}")
+            mm = np.memmap(
+                s["path"], dtype=np.float32, mode="r", shape=(s["count"], dim)
+            )
+            for off in range(0, s["count"], chunk):
+                block = mm[off : off + chunk]
+                sims = block @ queries.T
+                for qi in range(q_count):
+                    heap = heaps[qi]
+                    col = sims[:, qi]
+                    for i, score in enumerate(col):
+                        doc_id = s["start"] + off + i
+                        if len(heap) < topk:
+                            heapq.heappush(heap, (score, doc_id))
+                        else:
+                            heapq.heappushpop(heap, (score, doc_id))
+            close_memmap(mm)
+
+        with open(gt_path, "w", encoding="utf-8") as f:
+            for qi, heap in enumerate(heaps):
+                heap.sort(reverse=True)
+                json.dump(
+                    {
+                        "query_id": int(q_indices[qi]),
+                        "topk": [
+                            {"doc_id": int(d), "score": float(s)} for s, d in heap
+                        ],
+                    },
+                    f,
+                )
+                f.write("\n")
+
+        print(f"[GT] wrote {gt_path}")
+
+    parquet_files = sorted(glob.glob(parquet_glob))
+    if not parquet_files:
+        raise RuntimeError("No parquet files found for MSMARCO")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[init] Found {len(parquet_files)} parquet files to process")
+
+    dim = None
+    written = 0
+    filled = 0
+    shard_idx = 0
+    shard_start = 0
+    shards: list[dict] = []
+
+    path = None
+    writer = None
+    t0 = time.time()
+    last_report = 0
+
+    for file_idx, parquet_file in enumerate(parquet_files):
+        if written >= count:
+            break
+
+        print(
+            f"[process] File {file_idx + 1}/{len(parquet_files)}: "
+            f"{Path(parquet_file).name}"
+        )
+
+        pf = pq.ParquetFile(parquet_file)
+        for record_batch in pf.iter_batches(columns=["emb"], batch_size=batch_rows):
+            col = record_batch.column(0)
+            offsets = col.offsets.to_numpy()
+            values = np.asarray(
+                col.values.to_numpy(zero_copy_only=False), dtype=np.float32
+            )
+
+            if dim is None:
+                dim = int(offsets[1] - offsets[0])
+                path = out_dir / f"msmarco-passages-{count}.shard{shard_idx:04d}.f32"
+                writer = open(path, "wb", buffering=1 << 20)
+
+            spans = offsets[1:] - offsets[:-1]
+            if not np.all(spans == dim):
+                raise RuntimeError(
+                    f"Non-uniform embedding dimension detected in {parquet_file}"
+                )
+
+            embs = np.asarray(values, dtype=np.float32).reshape(-1, dim)
+            embs = embs / (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-12)
+            embs = np.ascontiguousarray(embs)
+
+            off = 0
+            while off < len(embs) and written < count:
+                take = min(shard_size - filled, count - written, len(embs) - off)
+                writer.write(embs[off : off + take].tobytes(order="C"))
+                off += take
+                filled += take
+                written += take
+
+                if written % fsync_every == 0:
+                    sync_and_advise(writer.fileno())
+
+                if filled == shard_size and written < count:
+                    sync_and_advise(writer.fileno())
+                    writer.close()
+                    shards.append({"path": path, "count": filled, "start": shard_start})
+                    shard_start += filled
+                    shard_idx += 1
+                    filled = 0
+                    path = (
+                        out_dir / f"msmarco-passages-{count}.shard{shard_idx:04d}.f32"
+                    )
+                    writer = open(path, "wb", buffering=1 << 20)
+
+            if written - last_report >= progress_every:
+                elapsed = time.time() - t0
+                rate = written / elapsed
+                eta = (count - written) / rate if rate else None
+                print(
+                    f"[convert] {written:,}/{count:,} | {rate:,.0f} v/s | "
+                    f"eta {fmt_secs(eta)}"
+                )
+                last_report = written
+
+            if written >= count:
+                break
+
+    if writer is not None:
+        sync_and_advise(writer.fileno())
+        writer.close()
+        if filled > 0:
+            shards.append({"path": path, "count": filled, "start": shard_start})
+
+    meta = {
+        "dim": dim,
+        "dtype": "float32",
+        "count": written,
+        "shard_size": shard_size,
+    }
+    (out_dir / f"msmarco-passages-{count}.meta.json").write_text(json.dumps(meta))
+
+    print(f"[done] wrote {written:,} vectors across {len(shards)} shards")
+
+    build_gt_sharded(
+        shards=shards,
+        total_count=written,
+        dim=dim,
+        gt_path=out_dir / f"msmarco-passages-{count}.gt.jsonl",
+        q_count=q_count,
+        topk=topk,
+    )
+
+
+def download_msmarco(count: int, data_dir: Path) -> Path:
+    """Download MSMARCO v2.1 parquet parts and convert to shard files."""
+    size_label = f"{count // 1_000_000}M"
+    out_dir = data_dir / f"MSMARCO-{size_label}"
+    meta_path = out_dir / f"msmarco-passages-{count}.meta.json"
+
+    ensure_clean_dir(out_dir, f"MSMARCO {size_label}")
+
+    hf_home = Path(os.environ.get("HF_HOME", str(data_dir / "hf_cache")))
+    hf_home.mkdir(parents=True, exist_ok=True)
+    local_dir = hf_home / "datasets" / "Cohere___msmarco-v2.1-embed-english-v3"
+
+    if shutil.which("hf") is None:
+        raise RuntimeError(
+            "Missing Hugging Face CLI. Install with: uv pip install huggingface_hub"
+        )
+
+    print("[DOWNLOAD] MSMARCO v2.1 parquet parts (Hugging Face)")
+    subprocess.run(
+        [
+            "hf",
+            "download",
+            "Cohere/msmarco-v2.1-embed-english-v3",
+            "--repo-type",
+            "dataset",
+            "--include",
+            "passages_parquet/*",
+            "--local-dir",
+            str(local_dir),
+        ],
+        check=True,
+    )
+
+    parquet_glob = (local_dir / "passages_parquet" / "*.parquet").as_posix()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print("[CONVERT] Converting MSMARCO parquet to shard files")
+    convert_msmarco_parquet_to_shards(
+        parquet_glob=parquet_glob,
+        out_dir=out_dir,
+        count=count,
+    )
+
+    print(f"[OK] MSMARCO ready at: {out_dir}")
+    return out_dir
 
 
 def verify_csv_nulls(extract_dir, dataset_type="movielens", sample_size=None):
@@ -706,32 +1399,56 @@ def main():
 Available datasets:
 
 MovieLens (movie ratings):
-  movielens-small  - ~1 MB, ~100K ratings, 9K movies, 600 users
-  movielens-large  - ~265 MB, ~33M ratings, 86K movies, 280K users
+    movielens-small  - ~1 MB, ~100K ratings, 9K movies, 600 users
+    movielens-large  - ~265 MB, ~33M ratings, 86K movies, 280K users
 
 Stack Exchange (Q&A posts, pinned to 2024-06-30):
-  stackoverflow-small   - ~80 MB, ~80K posts (cs.stackexchange.com)
-  stackoverflow-medium  - ~500 MB, ~300K posts (stats.stackexchange.com)
-  stackoverflow-large   - ~5 GB, full Posts.xml (stackoverflow.com)
+    stackoverflow-small   - ~80 MB, ~80K posts (cs.stackexchange.com)
+    stackoverflow-medium  - ~500 MB, ~300K posts (stats.stackexchange.com)
+    stackoverflow-large   - ~5 GB, full Posts.xml (stackoverflow.com)
+
+TPC-H (table benchmark):
+    tpch-sf1    - Scale factor 1 (generated locally via dbgen)
+    tpch-sf10   - Scale factor 10 (generated locally via dbgen)
+    tpch-sf100  - Scale factor 100 (generated locally via dbgen)
+
+LDBC SNB Interactive v1 (graph benchmark):
+    ldbc-snb-sf1   - Scale factor 1 (CsvMergeForeign, LongDateFormatter)
+    ldbc-snb-sf10  - Scale factor 10 (CsvMergeForeign, LongDateFormatter)
+    ldbc-snb-sf100 - Scale factor 100 (CsvMergeForeign, LongDateFormatter)
+
+MSMARCO v2.1 embeddings (vector benchmark):
+    msmarco-1m  - 1M passage vectors
+    msmarco-5m  - 5M passage vectors
+    msmarco-10m - 10M passage vectors
 
 Examples:
-  python download_data.py movielens-small
-  python download_data.py movielens-large
-  python download_data.py stackoverflow-small
-  python download_data.py stackoverflow-medium
-  python download_data.py stackoverflow-large
-  python download_data.py movielens-small --no-nulls  # Skip NULL injection
-  python download_data.py stackoverflow-small --verify-only  # Verify existing
+    python download_data.py movielens-small
+    python download_data.py movielens-large
+    python download_data.py movielens-small --no-nulls  # Skip NULL injection
+    python download_data.py stackoverflow-small
+    python download_data.py stackoverflow-medium
+    python download_data.py stackoverflow-large
+    python download_data.py stackoverflow-small --verify-only  # Verify existing
+    python download_data.py msmarco-1m
+    python download_data.py msmarco-5m
+    python download_data.py msmarco-10m
+    python download_data.py tpch-sf1
+    python download_data.py tpch-sf10
+    python download_data.py tpch-sf100
+    python download_data.py ldbc-snb-sf1
+    python download_data.py ldbc-snb-sf10
+    python download_data.py ldbc-snb-sf100
 
 Note: Stack Exchange datasets require py7zr library:
     uv pip install py7zr
 
 NULL Handling:
-  MovieLens (CSV): NULL injection enabled by default (use --no-nulls to skip)
+    MovieLens (CSV): NULL injection enabled by default (use --no-nulls to skip)
     - Injects empty strings "" in nullable fields (2-8% of values)
     - Makes synthetic data more realistic for testing
 
-  Stack Exchange (XML): Original data (no modification)
+Stack Exchange (XML): Original data (no modification)
     - Data downloaded and extracted as-is from archive.org
 
 Use --verify-only to verify existing datasets without re-downloading.
@@ -747,6 +1464,15 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
             "stackoverflow-small",
             "stackoverflow-medium",
             "stackoverflow-large",
+            "msmarco-1m",
+            "msmarco-5m",
+            "msmarco-10m",
+            "tpch-sf1",
+            "tpch-sf10",
+            "tpch-sf100",
+            "ldbc-snb-sf1",
+            "ldbc-snb-sf10",
+            "ldbc-snb-sf100",
         ],
         help="Dataset to download",
     )
@@ -773,6 +1499,59 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
 
     # Determine dataset directory
     data_dir = Path(__file__).parent / "data"
+
+    if args.dataset.startswith("tpch-"):
+        scale = int(args.dataset.replace("tpch-sf", ""))
+        if scale not in {1, 10, 100}:
+            raise ValueError("Unsupported TPC-H scale factor. Use 1, 10, or 100.")
+        out_dir = data_dir / f"tpch-sf{scale}"
+        marker = out_dir / "customer.tbl"
+
+        if args.verify_only:
+            if marker.exists():
+                print(f"[OK] TPC-H dataset exists at: {out_dir}")
+            else:
+                print(f"[ERROR] TPC-H dataset not found: {out_dir}")
+            return
+
+        download_tpch(scale_factor=scale)
+        return
+
+    if args.dataset.startswith("ldbc-snb-"):
+        scale = int(args.dataset.replace("ldbc-snb-sf", ""))
+        out_dir = data_dir / f"ldbc-snb-sf{scale}"
+        marker = out_dir / ".ldbc_snb_ok"
+
+        if args.verify_only:
+            if marker.exists():
+                print(f"[OK] LDBC SNB dataset exists at: {out_dir}")
+            else:
+                print(f"[ERROR] LDBC SNB dataset not found: {out_dir}")
+            return
+
+        download_ldbc_snb(scale_factor=scale)
+        return
+
+    if args.dataset.startswith("msmarco-"):
+        counts = {
+            "msmarco-1m": 1_000_000,
+            "msmarco-5m": 5_000_000,
+            "msmarco-10m": 10_000_000,
+        }
+        count = counts[args.dataset]
+        size_label = f"{count // 1_000_000}M"
+        out_dir = data_dir / f"MSMARCO-{size_label}"
+        meta_path = out_dir / f"msmarco-passages-{count}.meta.json"
+
+        if args.verify_only:
+            if meta_path.exists():
+                print(f"[OK] MSMARCO dataset exists at: {out_dir}")
+            else:
+                print(f"[ERROR] MSMARCO dataset not found: {out_dir}")
+            return
+
+        download_msmarco(count=count, data_dir=data_dir)
+        return
     if args.dataset.startswith("movielens-"):
         size = args.dataset.replace("movielens-", "")
         dirname = f"movielens-{size}"
