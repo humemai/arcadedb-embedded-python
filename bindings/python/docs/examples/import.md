@@ -2,6 +2,8 @@
 
 This page covers examples for importing data into ArcadeDB from various sources.
 
+Before running any import example, download the datasets using **[Dataset Downloader](download_data.md)**.
+
 ## CSV Import Examples
 
 ### Import Tabular Data (Documents)
