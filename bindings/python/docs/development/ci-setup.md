@@ -98,11 +98,11 @@ After a successful release, you should see:
 
 ### Test Results (CI run #96)
 
-All 4 platforms passing 259 tests and example scripts:
+All 4 platforms passing 260 tests and example scripts:
 
 | Platforms | Wheel Size | JRE Size | Tests |
 |-----------|-----------|----------|-------|
-| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | ~68M | ~60M | 259 passed ✅ |
+| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | ~68M | ~60M | 260 passed ✅ |
 
 **All platforms include:**
 

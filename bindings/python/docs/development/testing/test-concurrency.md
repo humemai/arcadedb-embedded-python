@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_concurrency.py){ .md-button }
 
-There are 4 tests demonstrating file locking, thread safety, sequential access, and concurrent limitation.
+There are 5 tests demonstrating file locking, thread safety, sequential access, concurrent limitation, and a mixed OLTP-style workload.
 
 ## Key Insight
 
@@ -27,6 +27,10 @@ Sequence: create+insert → close → reopen+query (1 record) → close → reop
 ### 4) concurrent access limitation
 
 Attempts concurrent access from same process; documents that a second handle to locked DB raises `ArcadeDBError`.
+
+### 5) OLTP mixed workload (multi-thread)
+
+Runs a mixed read/write workload across multiple threads, measures basic latency/throughput, and includes retry/backoff for concurrent modifications.
 
 ## Architecture
 

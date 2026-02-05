@@ -17,6 +17,8 @@ system, showcasing ArcadeDB's true multi-model capabilities.
 
 The example supports multiple dataset sizes from the [Stack Exchange Data Dump](https://archive.org/details/stackexchange).
 
+**Note:** Download the dataset first with `python download_data.py stackoverflow-<size>` before running this example.
+
 | Dataset | Size (XML) | Records | Recommended Heap |
 | :--- | :--- | :--- | :--- |
 | **Tiny** (`cs.stackexchange.com`) | ~34 MB | ~100K | 2 GB |
