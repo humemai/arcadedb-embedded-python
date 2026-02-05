@@ -48,6 +48,8 @@ python download_data.py movielens-large # movielens large dataset
 python download_data.py movielens-small # movielens small dataset
 ```
 
+**Note:** You must download the dataset before running this example if the auto-download is disabled or blocked by your environment.
+
 **Two dataset sizes available:**
 
 - **movielens-large**: ~86,000 movies, ~33M ratings (~265 MB) - Realistic performance testing
