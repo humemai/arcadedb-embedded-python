@@ -140,6 +140,7 @@ nav:
 - Examples:
   - Overview: examples/index.md
   - Quick Start: examples/basic.md
+  - Dataset Downloader: examples/download_data.md
   - 01 - Simple Document Store: examples/01_simple_document_store.md
   - 02 - Social Network Graph: examples/02_social_network_graph.md
   - 03 - Vector Search: examples/03_vector_search.md
