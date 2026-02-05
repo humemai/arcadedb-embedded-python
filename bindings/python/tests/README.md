@@ -6,8 +6,8 @@ For detailed test documentation, examples, and best practices, see the **[Testin
 
 ## Quick Stats
 
-- **259 tests** across 20 test files
-- ✅ **Current package**: 259 passed, 6 skipped
+- **260 tests** across 20 test files
+- ✅ **Current package**: 260 passed, 6 skipped
 - Package includes all ArcadeDB features (SQL, OpenCypher, Studio)
 
 ## Running Tests
