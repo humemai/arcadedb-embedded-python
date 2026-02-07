@@ -226,7 +226,7 @@ class TestLSMVectorIndex:
         ]
 
         # Add enough filler vectors so PQ (K=256) has sufficient points and does not fail
-        for i in range(260):
+        for i in range(256):
             a = (i % 3) / 10.0
             b = ((i + 1) % 3) / 10.0
             c = ((i + 2) % 3) / 10.0
