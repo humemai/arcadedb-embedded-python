@@ -157,6 +157,19 @@ echo -e "${YELLOW}📊 Checking current branch...${NC}"
 CURRENT_BRANCH=$(git branch --show-current)
 START_BRANCH="$CURRENT_BRANCH"
 
+# 2b. Backup fork README so it never gets overwritten during rebase
+README_BACKUP=""
+cleanup() {
+    if [ -n "$README_BACKUP" ] && [ -f "$README_BACKUP" ]; then
+        rm -f "$README_BACKUP"
+    fi
+}
+trap cleanup EXIT
+if git show "${START_BRANCH}:README.md" >/dev/null 2>&1; then
+    README_BACKUP=$(mktemp -t arcadedb_readme.XXXXXX)
+    git show "${START_BRANCH}:README.md" > "$README_BACKUP"
+fi
+
 # 3. Check for uncommitted changes
 if ! git diff-index --quiet HEAD --; then
     echo -e "${RED}❌ You have uncommitted changes${NC}"
@@ -231,6 +244,12 @@ else
         echo -e "${CYAN}Run './sync-upstream.sh --help' for more troubleshooting tips${NC}"
         exit 1
     fi
+fi
+
+# 9b. Restore fork README regardless of conflicts
+if [ -n "$README_BACKUP" ] && [ -f "$README_BACKUP" ]; then
+    cp "$README_BACKUP" README.md
+    git add README.md
 fi
 
 # 10. Return to original branch if needed
