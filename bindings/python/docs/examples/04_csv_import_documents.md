@@ -57,10 +57,10 @@ python download_data.py movielens-small # movielens small dataset
 
 Both datasets include intentional NULL values for testing:
 
-- `movies.csv`: ~3% NULL genres
-- `ratings.csv`: ~2% NULL timestamps
-- `links.csv`: ~10% NULL imdbId, ~15% NULL tmdbId
-- `tags.csv`: ~5% NULL tags
+- `movies.csv`: ~2% NULL genres, ~0.5% NULL titles
+- `ratings.csv`: ~3% NULL timestamps, ~1% NULL ratings
+- `links.csv`: ~5% NULL imdbId, ~8% NULL tmdbId
+- `tags.csv`: ~5% NULL tags, ~2% NULL timestamps
 
 ## Dataset Structure
 

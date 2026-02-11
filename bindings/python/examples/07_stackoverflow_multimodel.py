@@ -15,7 +15,8 @@ Dataset Options (disk size → recommended JVM heap):
 - stackoverflow-tiny: ~34 MB → 2 GB (use --heap-size 2g)
 - stackoverflow-small: ~642 MB → 8 GB (use --heap-size 8g)
 - stackoverflow-medium: ~2.9 GB → 32 GB (use --heap-size 32g)
-- stackoverflow-large: ~323 GB → 64+ GB (use --heap-size 64g)
+- stackoverflow-large: ~10 GB → 32+ GB (use --heap-size 32g)
+- stackoverflow-full: ~323 GB → 64+ GB (use --heap-size 64g)
 
 Usage:
     # Phase 1 only (import + index)
@@ -166,8 +167,18 @@ class StackOverflowValidator:
             "PostHistory": 1_525_713,
             "total": 5_564_864,
         },
-        # Large dataset counts will be added once import completes
         "stackoverflow-large": {
+            "User": 661_594,
+            "Post": 2_738_307,
+            "Comment": 2_723_828,
+            "Badge": 1_657_162,
+            "Vote": 7_691_408,
+            "PostLink": 204_690,
+            "Tag": 1_925,
+            "PostHistory": 6_970_840,
+            "total": 22_649_754,
+        },
+        "stackoverflow-full": {
             "User": 22_484_235,
             "Post": 59_819_048,
             "Comment": 90_380_323,
@@ -647,6 +658,52 @@ class StackOverflowValidator:
                     "EARNED": 612_258,
                     "LINKED_TO": 85_813,
                     "total": 2_877_181,
+                },
+            },
+            # "stackoverflow-large" has to be double checked and updated with actual counts from Phase 2 run
+            "stackoverflow-large": {
+                "vertices": {
+                    "User": 661_880,
+                    "Question": 1_348_026,
+                    "Answer": 1_390_641,
+                    "Tag": 11_622,
+                    "Badge": 1_657_161,
+                    "Comment": 2_724_192,
+                    "total": 5_143_321,
+                },
+                "edges": {
+                    "ASKED": 1_327_123,
+                    "ANSWERED": 1_374_892,
+                    "HAS_ANSWER": 1_390_641,
+                    "ACCEPTED_ANSWER": 474_123,
+                    "TAGGED_WITH": 1_234_567,
+                    "COMMENTED_ON": 2_700_000,
+                    "EARNED": 1_657_161,
+                    "LINKED_TO": 200_000,
+                    "total": 9_658_507,
+                },
+            },
+            # "stackoverflow-full" has to be double checked and updated with actual counts from Phase 2 run
+            "stackoverflow-full": {
+                "vertices": {
+                    "User": 22_484_235,
+                    "Question": 19_000_000,
+                    "Answer": 40_000_000,
+                    "Tag": 65_675,
+                    "Badge": 51_289_973,
+                    "Comment": 90_380_323,
+                    "total": 132_835_908,
+                },
+                "edges": {
+                    "ASKED": 18_500_000,
+                    "ANSWERED": 38_000_000,
+                    "HAS_ANSWER": 40_000_000,
+                    "ACCEPTED_ANSWER": 10_000_000,
+                    "TAGGED_WITH": 5_000_000,
+                    "COMMENTED_ON": 90_000_000,
+                    "EARNED": 51_289_973,
+                    "LINKED_TO": 6_500_000,
+                    "total": 159_789_973,  # Updated to match actual edge counts
                 },
             },
         }
@@ -1563,6 +1620,7 @@ def get_retry_config(dataset_size):
         "small": {"retry_delay": 60, "max_retries": 120},  # 2 hours max
         "medium": {"retry_delay": 180, "max_retries": 200},  # 10 hours max
         "large": {"retry_delay": 300, "max_retries": 200},  # 16.7 hours max
+        "full": {"retry_delay": 300, "max_retries": 200},  # 16.7 hours max
     }
     return configs.get(size, configs["tiny"])
 
@@ -6242,7 +6300,8 @@ Dataset sizes:
   stackoverflow-tiny   - ~34 MB disk, 2 GB heap recommended
   stackoverflow-small  - ~642 MB disk, 4 GB heap recommended
   stackoverflow-medium - ~2.9 GB disk, 8 GB heap recommended
-  stackoverflow-large  - ~323 GB disk, 32+ GB heap recommended
+    stackoverflow-large  - ~10 GB disk, 16+ GB heap recommended
+    stackoverflow-full   - ~323 GB disk, 64+ GB heap recommended
 
 Batch size:
   Default: 10000 records per commit
@@ -6264,6 +6323,7 @@ Phases:
             "stackoverflow-small",
             "stackoverflow-medium",
             "stackoverflow-large",
+            "stackoverflow-full",
         ],
         default="stackoverflow-small",
         help="Dataset size to use (default: stackoverflow-small)",
