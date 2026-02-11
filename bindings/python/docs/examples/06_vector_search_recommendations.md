@@ -39,10 +39,10 @@ This example requires a graph database from Example 05:
 
 ```bash
 # Option A: Use existing database
-python 05_csv_import_graph.py --size small --method java --no-async
+python 05_csv_import_graph.py --dataset movielens-small --method java
 
 # Option B: Import from JSONL export
-python 05_csv_import_graph.py --size small --import-jsonl ./exports/movielens_graph_small_db.jsonl.tgz
+python 05_csv_import_graph.py --dataset movielens-small --import-jsonl ./exports/movielens_graph_small_db.jsonl.tgz
 ```
 
 **Two dataset sizes available:**
