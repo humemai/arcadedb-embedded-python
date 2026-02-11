@@ -11,6 +11,7 @@ Features:
 - Timing measurements for performance monitoring
 - Memory-efficient streaming for large files
 - Smart sampling for fast verification (100K rows)
+- Stack Overflow vector conversion (requires sentence-transformers + torch)
 
 Available datasets:
 1. MovieLens (movie ratings, tags, genres):
@@ -18,9 +19,11 @@ Available datasets:
     - movielens-large: ~265 MB, ~33M ratings, 86K movies, 280K users
 
 2. Stack Exchange (Q&A posts, users, tags, links):
+    - stackoverflow-tiny: ~34 MB, ~100K records (subset of stackoverflow-small)
     - stackoverflow-small: ~642 MB, 1.41M records (cs.stackexchange.com, 2024-06-30)
     - stackoverflow-medium: ~2.9 GB, 5.56M records (stats.stackexchange.com, 2024-06-30)
-    - stackoverflow-large: ~323 GB, records (full stackoverflow.com, 2024-06-30)
+    - stackoverflow-large: ~10 GB, subset of full stackoverflow.com (2024-06-30)
+    - stackoverflow-full: ~323 GB, full stackoverflow.com (2024-06-30)
 
 3. TPC-H (table benchmark):
     - tpch-sf1: TPC-H scale factor 1 (dbgen, local generation)
@@ -42,6 +45,9 @@ Stack Exchange Data Note:
 - Pinned to 2024-06-30 quarterly dump for reproducibility
 - Downloaded from archive.org
 - 7z compressed format (requires py7zr library)
+- stackoverflow-tiny is derived from stackoverflow-small (first 10k rows per XML,
+  full Tags.xml)
+- stackoverflow-large is derived from stackoverflow-full (proportional subset)
 
 NULL Value Injection (MovieLens only):
 - Enabled by default for MovieLens CSV files
@@ -65,9 +71,11 @@ Usage:
     python download_data.py movielens-small
     python download_data.py movielens-large
     python download_data.py movielens-small --no-nulls  # Skip NULL injection
+    python download_data.py stackoverflow-tiny
     python download_data.py stackoverflow-small
     python download_data.py stackoverflow-medium
     python download_data.py stackoverflow-large
+    python download_data.py stackoverflow-full
     python download_data.py stackoverflow-small --verify-only  # Verify existing
     python download_data.py tpch-sf1
     python download_data.py tpch-sf10
@@ -78,9 +86,11 @@ Usage:
     python download_data.py msmarco-1m
     python download_data.py msmarco-5m
     python download_data.py msmarco-10m
+    python download_data.py stackoverflow-tiny --no-vectors  # Skip vector generation
 """
 
 import argparse
+import html
 import json
 import os
 import re
@@ -541,18 +551,31 @@ def download_stackoverflow(size="small"):
     """Download and extract Stack Exchange dataset.
 
     Args:
-        size: 'small' (~80 MB), 'medium' (~500 MB), or 'large' (~5 GB)
+        size: 'tiny' (~34 MB), 'small' (~80 MB), 'medium' (~500 MB),
+              'large' (~10 GB subset), or 'full' (~323 GB)
     """
+    # Create data directory
+    data_dir = Path(__file__).parent / "data"
+    data_dir.mkdir(exist_ok=True)
+
+    if size == "tiny":
+        source_dir = data_dir / "stackoverflow-small"
+        if not source_dir.exists():
+            download_stackoverflow(size="small")
+        return create_stackoverflow_tiny(source_dir=source_dir)
+
+    if size == "large":
+        source_dir = data_dir / "stackoverflow-full"
+        if not source_dir.exists():
+            download_stackoverflow(size="full")
+        return create_stackoverflow_large(source_dir=source_dir)
+
     try:
         import py7zr
     except ImportError:
         print("[ERROR] Missing dependency: py7zr")
         print("   Install with: uv pip install py7zr")
         raise
-
-    # Create data directory
-    data_dir = Path(__file__).parent / "data"
-    data_dir.mkdir(exist_ok=True)
 
     # Dataset configurations (pinned to 2024-06-30 for reproducibility)
     datasets = {
@@ -577,8 +600,8 @@ def download_stackoverflow(size="small"):
             "size_mb": "~500 MB",
             "date": "2024-06-30",
         },
-        "large": {
-            # Full Stack Overflow dump now split into multiple parts
+        "full": {
+            # Full Stack Overflow dump split into multiple parts
             "urls": [
                 "https://archive.org/download/stackexchange/"
                 "stackoverflow.com-Posts.7z",
@@ -597,17 +620,18 @@ def download_stackoverflow(size="small"):
                 "https://archive.org/download/stackexchange/"
                 "stackoverflow.com-PostHistory.7z",
             ],
-            "dirname": "stackoverflow-large",
+            "dirname": "stackoverflow-full",
             "site": "stackoverflow.com",
             "description": "Full Stack Overflow dump (all XML files)",
-            "size_mb": "~5–6 GB",
+            "size_mb": "~323 GB",
             "date": "2024-06-30",
         },
     }
 
     if size not in datasets:
         raise ValueError(
-            f"Unknown dataset size: {size}. Choose 'small', 'medium', or 'large'"
+            "Unknown dataset size: "
+            f"{size}. Choose 'tiny', 'small', 'medium', 'large', or 'full'"
         )
 
     config = datasets[size]
@@ -685,6 +709,500 @@ def download_stackoverflow(size="small"):
         print(f"[ERROR] Error downloading dataset: {e}")
         print(f"   You can manually download from: {config['urls'][0]}")
         raise
+
+
+def _write_stackoverflow_subset(
+    source_path: Path,
+    target_path: Path,
+    max_rows: int,
+) -> int:
+    """Write a truncated Stack Exchange XML file with the first max_rows rows."""
+    root_tag = None
+    row_count = 0
+    closed = False
+
+    with source_path.open(
+        "r", encoding="utf-8", errors="ignore"
+    ) as fin, target_path.open("w", encoding="utf-8") as fout:
+        for line in fin:
+            if root_tag is None:
+                fout.write(line)
+                match = re.match(r"\s*<(\w+)>\s*$", line)
+                if match:
+                    root_tag = match.group(1)
+                continue
+
+            if re.match(r"\s*</\w+>\s*$", line):
+                if not closed:
+                    fout.write(line)
+                    closed = True
+                break
+
+            if re.match(r"\s*<row\b", line):
+                if row_count < max_rows:
+                    fout.write(line)
+                    row_count += 1
+                if row_count >= max_rows and root_tag:
+                    fout.write(f"</{root_tag}>\n")
+                    closed = True
+                    break
+                continue
+
+            if row_count < max_rows:
+                fout.write(line)
+
+        if not closed and root_tag:
+            fout.write(f"</{root_tag}>\n")
+
+    return row_count
+
+
+def _write_stackoverflow_subset_by_bytes(
+    source_path: Path,
+    target_path: Path,
+    max_bytes: int,
+) -> int:
+    """Write a truncated Stack Exchange XML file up to max_bytes."""
+    root_tag = None
+    row_count = 0
+    closed = False
+    bytes_written = 0
+
+    with source_path.open(
+        "r", encoding="utf-8", errors="ignore"
+    ) as fin, target_path.open("w", encoding="utf-8") as fout:
+        for line in fin:
+            if root_tag is None:
+                fout.write(line)
+                bytes_written += len(line.encode("utf-8"))
+                match = re.match(r"\s*<(\w+)>\s*$", line)
+                if match:
+                    root_tag = match.group(1)
+                continue
+
+            if re.match(r"\s*</\w+>\s*$", line):
+                if not closed:
+                    fout.write(line)
+                    bytes_written += len(line.encode("utf-8"))
+                    closed = True
+                break
+
+            if re.match(r"\s*<row\b", line):
+                if row_count == 0 or bytes_written < max_bytes:
+                    fout.write(line)
+                    bytes_written += len(line.encode("utf-8"))
+                    row_count += 1
+                if bytes_written >= max_bytes and root_tag:
+                    fout.write(f"</{root_tag}>\n")
+                    bytes_written += len(f"</{root_tag}>\n".encode("utf-8"))
+                    closed = True
+                    break
+                continue
+
+            if bytes_written < max_bytes:
+                fout.write(line)
+                bytes_written += len(line.encode("utf-8"))
+
+        if not closed and root_tag:
+            fout.write(f"</{root_tag}>\n")
+
+    return row_count
+
+
+def create_stackoverflow_tiny(source_dir: Path, max_rows: int = 10_000) -> Path:
+    """Create a tiny Stack Exchange subset from the small dataset."""
+    data_dir = Path(__file__).parent / "data"
+    out_dir = data_dir / "stackoverflow-tiny"
+
+    ensure_clean_dir(out_dir, "Stack Exchange tiny")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    xml_files = [
+        "Posts.xml",
+        "Users.xml",
+        "Comments.xml",
+        "Tags.xml",
+        "Badges.xml",
+        "PostLinks.xml",
+        "PostHistory.xml",
+        "Votes.xml",
+    ]
+    keep_full = {"Tags.xml"}
+
+    print("[BUILD] Creating stackoverflow-tiny from stackoverflow-small")
+    print(f"   Source: {source_dir}")
+    print(f"   Output: {out_dir}")
+    print(f"   Rows per file: {max_rows} (except Tags.xml)")
+    print()
+
+    for filename in xml_files:
+        source_path = source_dir / filename
+        target_path = out_dir / filename
+        if not source_path.exists():
+            raise FileNotFoundError(f"Missing source XML: {source_path}")
+
+        if filename in keep_full:
+            shutil.copy2(source_path, target_path)
+            print(f"   [OK] {filename}: copied full file")
+            continue
+
+        count = _write_stackoverflow_subset(
+            source_path=source_path,
+            target_path=target_path,
+            max_rows=max_rows,
+        )
+        print(f"   [OK] {filename}: {count:,} rows")
+
+    print("\n[OK] Created stackoverflow-tiny dataset")
+    return out_dir
+
+
+def create_stackoverflow_large(
+    source_dir: Path,
+    target_size_gb: int = 10,
+) -> Path:
+    """Create a large Stack Exchange subset from the full dataset."""
+    data_dir = Path(__file__).parent / "data"
+    out_dir = data_dir / "stackoverflow-large"
+
+    ensure_clean_dir(out_dir, "Stack Exchange large")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    xml_files = [
+        "Posts.xml",
+        "Users.xml",
+        "Comments.xml",
+        "Tags.xml",
+        "Badges.xml",
+        "PostLinks.xml",
+        "PostHistory.xml",
+        "Votes.xml",
+    ]
+
+    file_sizes = {}
+    total_bytes = 0
+    for filename in xml_files:
+        source_path = source_dir / filename
+        if not source_path.exists():
+            raise FileNotFoundError(f"Missing source XML: {source_path}")
+        size = source_path.stat().st_size
+        file_sizes[filename] = size
+        total_bytes += size
+
+    target_bytes_total = target_size_gb * 1024 * 1024 * 1024
+    if total_bytes <= 0:
+        raise RuntimeError("Full Stack Exchange dataset is empty.")
+
+    ratio = min(1.0, target_bytes_total / total_bytes)
+
+    print("[BUILD] Creating stackoverflow-large from stackoverflow-full")
+    print(f"   Source: {source_dir}")
+    print(f"   Output: {out_dir}")
+    print(f"   Target size: ~{target_size_gb} GB")
+    print(f"   Ratio: {ratio:.6f}")
+    print()
+
+    for filename in xml_files:
+        source_path = source_dir / filename
+        target_path = out_dir / filename
+        target_bytes = max(1, int(file_sizes[filename] * ratio))
+
+        if target_bytes >= file_sizes[filename]:
+            shutil.copy2(source_path, target_path)
+            print(f"   [OK] {filename}: copied full file")
+            continue
+
+        count = _write_stackoverflow_subset_by_bytes(
+            source_path=source_path,
+            target_path=target_path,
+            max_bytes=target_bytes,
+        )
+        print(f"   [OK] {filename}: {count:,} rows")
+
+    print("\n[OK] Created stackoverflow-large dataset")
+    return out_dir
+
+
+def _iter_stackoverflow_rows(xml_path: Path, fields: list[str]):
+    import xml.etree.ElementTree as ET
+
+    context = ET.iterparse(xml_path, events=("start", "end"))
+    _, root = next(context)
+    for event, elem in context:
+        if event == "end" and elem.tag == "row":
+            attrs = elem.attrib
+            yield {key: attrs.get(key) for key in fields}
+            elem.clear()
+            root.clear()
+
+
+def _clean_stackoverflow_text(text: str | None) -> str:
+    if not text:
+        return ""
+    text = html.unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+class _VectorShardWriter:
+    def __init__(self, out_dir: Path, base_name: str, shard_size: int):
+        self.out_dir = out_dir
+        self.base_name = base_name
+        self.shard_size = shard_size
+        self.shards: list[dict[str, int | str]] = []
+        self._writer = None
+        self._current_path: Path | None = None
+        self._shard_idx = 0
+        self._filled = 0
+        self.count = 0
+        self.dim: int | None = None
+
+    def _open_new(self) -> None:
+        if self._writer:
+            self._close_current()
+        self._current_path = (
+            self.out_dir / f"{self.base_name}.shard{self._shard_idx:04d}.f32"
+        )
+        self._writer = open(self._current_path, "wb", buffering=1 << 20)
+        self._shard_idx += 1
+        self._filled = 0
+
+    def _close_current(self) -> None:
+        if not self._writer or not self._current_path:
+            return
+        self._writer.close()
+        self.shards.append(
+            {
+                "path": self._current_path.name,
+                "count": self._filled,
+                "start": self.count - self._filled,
+            }
+        )
+        self._writer = None
+        self._current_path = None
+        self._filled = 0
+
+    def write(self, vectors) -> None:
+        if vectors.size == 0:
+            return
+        if self.dim is None:
+            self.dim = int(vectors.shape[1])
+        idx = 0
+        total = int(vectors.shape[0])
+        while idx < total:
+            if not self._writer or self._filled == self.shard_size:
+                self._open_new()
+            take = min(self.shard_size - self._filled, total - idx)
+            self._writer.write(vectors[idx : idx + take].tobytes(order="C"))
+            idx += take
+            self._filled += take
+            self.count += take
+            if self._filled == self.shard_size:
+                self._close_current()
+
+    def close(self) -> None:
+        if self._writer:
+            self._close_current()
+
+
+def embed_stackoverflow_vectors(
+    extract_dir: Path,
+    dataset_name: str,
+    model_name: str = "all-MiniLM-L6-v2",
+    batch_size: int = 256,
+    shard_size: int = 100_000,
+    max_rows: int | None = None,
+    progress_every: int = 10_000,
+) -> None:
+    try:
+        import numpy as np
+        import torch
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:
+        raise RuntimeError(
+            "Missing dependencies for Stack Overflow embeddings. "
+            "Install with: uv pip install sentence-transformers torch numpy"
+        ) from exc
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[VECTORS] Loading model: {model_name} ({device})")
+    model = SentenceTransformer(model_name, device=device)
+    tokenizer = getattr(model, "tokenizer", None)
+    max_seq_len = None
+    if hasattr(model, "get_max_seq_length"):
+        max_seq_len = model.get_max_seq_length()
+    if not max_seq_len or max_seq_len <= 0:
+        max_seq_len = None
+
+    out_dir = extract_dir / "vectors"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def _truncate_for_model(text: str) -> tuple[str, bool]:
+        if not max_seq_len:
+            return text, False
+        if tokenizer is None:
+            approx_max_chars = max_seq_len * 4
+            if len(text) <= approx_max_chars:
+                return text, False
+            return text[:approx_max_chars], True
+        encoded = tokenizer(
+            text,
+            truncation=True,
+            max_length=max_seq_len,
+            return_overflowing_tokens=True,
+        )
+        truncated = bool(encoded.get("overflowing_tokens"))
+        input_ids = encoded["input_ids"]
+        if input_ids and isinstance(input_ids[0], list):
+            input_ids = input_ids[0]
+        return tokenizer.decode(input_ids, skip_special_tokens=True), truncated
+
+    def process_corpus(
+        name: str,
+        rows_iter,
+        text_builder,
+        id_builder,
+        text_fields: list[str],
+    ) -> None:
+        ids_path = out_dir / f"{dataset_name}-{name}.ids.jsonl"
+        writer = _VectorShardWriter(out_dir, f"{dataset_name}-{name}", shard_size)
+        total_written = 0
+        skipped = 0
+        truncated = 0
+        seen_rows = 0
+        batch_texts: list[str] = []
+        batch_ids: list[dict[str, object]] = []
+
+        def flush() -> None:
+            nonlocal total_written, batch_texts, batch_ids
+            if not batch_texts:
+                return
+            remaining = None if max_rows is None else max_rows - total_written
+            if remaining is not None and remaining <= 0:
+                batch_texts = []
+                batch_ids = []
+                return
+            if remaining is not None and len(batch_texts) > remaining:
+                batch_texts = batch_texts[:remaining]
+                batch_ids = batch_ids[:remaining]
+            vectors = model.encode(
+                batch_texts,
+                batch_size=batch_size,
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
+            vectors = vectors.astype(np.float32, copy=False)
+            writer.write(vectors)
+            for idx, meta in enumerate(batch_ids):
+                meta["vector_id"] = total_written + idx
+                ids_file.write(json.dumps(meta) + "\n")
+            total_written += len(batch_texts)
+            batch_texts = []
+            batch_ids = []
+
+        print(f"[VECTORS] Building {name} vectors...")
+        with open(ids_path, "w", encoding="utf-8") as ids_file:
+            for row in rows_iter:
+                seen_rows += 1
+                if max_rows is not None and total_written >= max_rows:
+                    break
+                text = _clean_stackoverflow_text(text_builder(row))
+                if not text:
+                    skipped += 1
+                    continue
+                text, was_truncated = _truncate_for_model(text)
+                if was_truncated:
+                    truncated += 1
+                batch_texts.append(text)
+                batch_ids.append(id_builder(row))
+                if len(batch_texts) >= batch_size:
+                    flush()
+                if progress_every and seen_rows % progress_every == 0:
+                    in_flight = len(batch_texts)
+                    print(
+                        f"[VECTORS] {name}: seen {seen_rows:,}, "
+                        f"embedded {total_written + in_flight:,}, "
+                        f"skipped {skipped:,}"
+                    )
+            flush()
+
+        writer.close()
+        meta = {
+            "dataset": dataset_name,
+            "corpus": name,
+            "model": model_name,
+            "device": device,
+            "dim": writer.dim,
+            "dtype": "float32",
+            "count": writer.count,
+            "shard_size": shard_size,
+            "shards": writer.shards,
+            "text_fields": text_fields,
+            "ids_file": ids_path.name,
+            "skipped_empty": skipped,
+            "truncated": truncated,
+            "max_seq_length": max_seq_len,
+        }
+        meta_path = out_dir / f"{dataset_name}-{name}.meta.json"
+        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        print(
+            f"[VECTORS] {name}: {writer.count:,} vectors, "
+            f"{len(writer.shards)} shards (skipped {skipped:,})"
+        )
+
+    posts_xml = extract_dir / "Posts.xml"
+    comments_xml = extract_dir / "Comments.xml"
+    if not posts_xml.exists() or not comments_xml.exists():
+        raise FileNotFoundError("Posts.xml or Comments.xml not found")
+
+    def question_text(row: dict[str, str | None]) -> str:
+        title = row.get("Title") or ""
+        body = row.get("Body") or ""
+        if title and body:
+            return f"{title}\n\n{body}"
+        return title or body
+
+    def answer_text(row: dict[str, str | None]) -> str:
+        return row.get("Body") or ""
+
+    process_corpus(
+        "questions",
+        (
+            row
+            for row in _iter_stackoverflow_rows(
+                posts_xml, ["Id", "PostTypeId", "Title", "Body"]
+            )
+            if row.get("PostTypeId") == "1"
+        ),
+        question_text,
+        lambda row: {"post_id": int(row.get("Id") or 0), "post_type": "question"},
+        ["Title", "Body"],
+    )
+
+    process_corpus(
+        "answers",
+        (
+            row
+            for row in _iter_stackoverflow_rows(posts_xml, ["Id", "PostTypeId", "Body"])
+            if row.get("PostTypeId") == "2"
+        ),
+        answer_text,
+        lambda row: {"post_id": int(row.get("Id") or 0), "post_type": "answer"},
+        ["Body"],
+    )
+
+    process_corpus(
+        "comments",
+        _iter_stackoverflow_rows(comments_xml, ["Id", "PostId", "Text"]),
+        lambda row: row.get("Text") or "",
+        lambda row: {
+            "comment_id": int(row.get("Id") or 0),
+            "post_id": int(row.get("PostId") or 0),
+        },
+        ["Text"],
+    )
 
 
 def download_tpch(scale_factor: int = 10) -> Path:
@@ -1403,6 +1921,7 @@ MovieLens (movie ratings):
     movielens-large  - ~265 MB, ~33M ratings, 86K movies, 280K users
 
 Stack Exchange (Q&A posts, pinned to 2024-06-30):
+    stackoverflow-tiny    - ~34 MB, ~100K rows (subset of stackoverflow-small)
     stackoverflow-small   - ~80 MB, ~80K posts (cs.stackexchange.com)
     stackoverflow-medium  - ~500 MB, ~300K posts (stats.stackexchange.com)
     stackoverflow-large   - ~5 GB, full Posts.xml (stackoverflow.com)
@@ -1426,6 +1945,7 @@ Examples:
     python download_data.py movielens-small
     python download_data.py movielens-large
     python download_data.py movielens-small --no-nulls  # Skip NULL injection
+    python download_data.py stackoverflow-tiny
     python download_data.py stackoverflow-small
     python download_data.py stackoverflow-medium
     python download_data.py stackoverflow-large
@@ -1450,6 +1970,7 @@ NULL Handling:
 
 Stack Exchange (XML): Original data (no modification)
     - Data downloaded and extracted as-is from archive.org
+    - stackoverflow-tiny is built locally from stackoverflow-small
 
 Use --verify-only to verify existing datasets without re-downloading.
 
@@ -1461,9 +1982,11 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
         choices=[
             "movielens-small",
             "movielens-large",
+            "stackoverflow-tiny",
             "stackoverflow-small",
             "stackoverflow-medium",
             "stackoverflow-large",
+            "stackoverflow-full",
             "msmarco-1m",
             "msmarco-5m",
             "msmarco-10m",
@@ -1485,6 +2008,35 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
         "--verify-only",
         action="store_true",
         help="Only verify existing dataset (skip download)",
+    )
+    parser.add_argument(
+        "--no-vectors",
+        action="store_true",
+        help="Skip Stack Overflow vector generation",
+    )
+    parser.add_argument(
+        "--vector-model",
+        type=str,
+        default="all-MiniLM-L6-v2",
+        help="Embedding model for Stack Overflow vectors (default: all-MiniLM-L6-v2)",
+    )
+    parser.add_argument(
+        "--vector-batch-size",
+        type=int,
+        default=256,
+        help="Embedding batch size for vector generation (default: 256)",
+    )
+    parser.add_argument(
+        "--vector-shard-size",
+        type=int,
+        default=100_000,
+        help="Vectors per shard file (default: 100000)",
+    )
+    parser.add_argument(
+        "--vector-max-rows",
+        type=int,
+        default=None,
+        help="Optional max vectors per corpus (questions/answers/comments)",
     )
     args = parser.parse_args()
 
@@ -1637,7 +2189,11 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
         print("   users_xml = data_dir / 'Users.xml'")
         print()
         print("[INFO] Dataset info:")
-        if size == "small":
+        if size == "tiny":
+            print("   - Site: cs.stackexchange.com")
+            print("   - ~10,000 rows per XML (Tags.xml full)")
+            print("   - ~100,000 total rows")
+        elif size == "small":
             print("   - Site: cs.stackexchange.com")
             print("   - ~80,000 posts (questions + answers)")
             print("   - ~50,000 users")
@@ -1645,6 +2201,9 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
             print("   - Site: stats.stackexchange.com")
             print("   - ~300,000 posts (questions + answers)")
             print("   - ~150,000 users")
+        elif size == "large":
+            print("   - Site: stackoverflow.com")
+            print("   - ~10 GB subset of full stackoverflow.com dump")
         else:
             print("   - Site: stackoverflow.com")
             print("   - ~20,000,000 posts (questions + answers)")
@@ -1653,8 +2212,19 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
         print("   - License: CC BY-SA")
         print()
 
+        if not args.no_vectors:
+            embed_stackoverflow_vectors(
+                extract_dir=extract_dir,
+                dataset_name=args.dataset,
+                model_name=args.vector_model,
+                batch_size=args.vector_batch_size,
+                shard_size=args.vector_shard_size,
+                max_rows=args.vector_max_rows,
+            )
+            print()
+
         # Run verification with smart sampling
-        sample_size = 100000 if size in ["medium", "large"] else None
+        sample_size = 100000 if size in ["medium", "large", "full"] else None
         xml_results = verify_xml_nulls(extract_dir, sample_size=sample_size)
         print_verification_report({}, xml_results, inject_nulls=not args.no_nulls)
 
