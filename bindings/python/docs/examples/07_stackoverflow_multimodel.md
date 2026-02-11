@@ -21,10 +21,11 @@ The example supports multiple dataset sizes from the [Stack Exchange Data Dump](
 
 | Dataset | Size (XML) | Records | Recommended Heap |
 | :--- | :--- | :--- | :--- |
-| **Tiny** (`cs.stackexchange.com`) | ~34 MB | ~100K | 2 GB |
-| **Small** (`stats.stackexchange.com`) | ~642 MB | ~1.5M | 8 GB |
-| **Medium** (`stackoverflow.com` subset) | ~2.9 GB | ~5M | 32 GB |
-| **Large** (`stackoverflow.com` full) | ~323 GB | ~350M | 64+ GB |
+| **Tiny** (`cs.stackexchange.com` subset) | ~34 MB | ~100K | 2 GB |
+| **Small** (`cs.stackexchange.com`) | ~642 MB | ~1.5M | 8 GB |
+| **Medium** (`stats.stackexchange.com`) | ~2.9 GB | ~5M | 32 GB |
+| **Large** (`stackoverflow.com` subset) | ~10 GB | ~23M | 64+ GB |
+| **Full** (`stackoverflow.com`) | ~323 GB | ~630M | 128+ GB |
 
 ## 🚀 Usage
 
