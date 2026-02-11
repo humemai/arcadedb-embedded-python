@@ -12,8 +12,8 @@ for:
 
 - **Graph modeling** - Users and Movies as vertices, ratings and tags as edges
 - **Java API vs SQL** - Compare both approaches for bulk graph creation
-- **Async vs Sync** - Understand when parallelism helps (and when it hurts)
-- **Index optimization** - Create indexes AFTER bulk operations for 2-3× speedup
+- **Async vs Sync** - Compare async vs sync modes in embedded mode
+- **Index optimization** - Create indexes BEFORE bulk edge creation for 2-3× speedup
 - **Export & roundtrip validation** - Verify data integrity through complete cycle
 - **Performance benchmarking** - Measure and compare 6 different configurations
 - **Query validation** - 10 graph queries with result verification
