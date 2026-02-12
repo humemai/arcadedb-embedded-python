@@ -19,6 +19,16 @@ HEAPS_CSV="${4:-}"
 THREADS="${5:-4}"
 OUTPUT_ROOT="${6:-arcadedb_runs_search}"
 
+# as for M=16, efConstruction=100, k=50
+# | Overquery | Equivalent efSearch |
+# | --------- | ------------------- |
+# | 1.0       | 50                  |
+# | 2.0       | 100                 |
+# | 3.0       | 150                 |
+# | 4.0       | 200                 |
+# | 6.0       | 300                 |
+# | 8.0       | 400                 |
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PY="${SCRIPT_DIR}/run_arcadedb_search_study.py"
 
