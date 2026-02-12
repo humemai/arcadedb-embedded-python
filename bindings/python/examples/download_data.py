@@ -12,6 +12,7 @@ Features:
 - Memory-efficient streaming for large files
 - Smart sampling for fast verification (100K rows)
 - Stack Overflow vector conversion (requires sentence-transformers + torch)
+- Stack Overflow unified vector ground-truth generation (MSMARCO-style)
 
 Available datasets:
 1. MovieLens (movie ratings, tags, genres):
@@ -1014,6 +1015,9 @@ def embed_stackoverflow_vectors(
     shard_size: int = 100_000,
     max_rows: int | None = None,
     progress_every: int = 10_000,
+    gt_queries: int = 1000,
+    gt_topk: int = 50,
+    gt_chunk: int = 4096,
 ) -> None:
     try:
         import numpy as np
@@ -1202,6 +1206,217 @@ def embed_stackoverflow_vectors(
             "post_id": int(row.get("PostId") or 0),
         },
         ["Text"],
+    )
+
+    corpus_names = ["questions", "answers", "comments"]
+    corpus_metas: list[dict[str, object]] = []
+    for name in corpus_names:
+        meta_path = out_dir / f"{dataset_name}-{name}.meta.json"
+        if not meta_path.exists():
+            raise FileNotFoundError(f"Missing vector metadata: {meta_path}")
+        corpus_metas.append(json.loads(meta_path.read_text(encoding="utf-8")))
+
+    dims = {
+        int(meta["dim"])
+        for meta in corpus_metas
+        if meta.get("dim") is not None and int(meta.get("count", 0)) > 0
+    }
+    if len(dims) > 1:
+        raise RuntimeError(
+            f"Mismatched vector dimensions across corpora: {sorted(dims)}"
+        )
+    combined_dim = next(iter(dims)) if dims else None
+
+    combined_shards: list[dict[str, object]] = []
+    combined_total = 0
+    for meta in corpus_metas:
+        source_corpus = str(meta["corpus"])
+        for shard in meta.get("shards", []):
+            shard_obj = dict(shard)
+            shard_path = out_dir / str(shard_obj["path"])
+            shard_count = int(shard_obj["count"])
+            combined_shards.append(
+                {
+                    "path": str(shard_obj["path"]),
+                    "path_obj": shard_path,
+                    "count": shard_count,
+                    "start": combined_total,
+                    "source_corpus": source_corpus,
+                }
+            )
+            combined_total += shard_count
+
+    combined_ids_path = out_dir / f"{dataset_name}-all.ids.jsonl"
+    global_id = 0
+    with open(combined_ids_path, "w", encoding="utf-8") as fout:
+        for name in corpus_names:
+            source_ids = out_dir / f"{dataset_name}-{name}.ids.jsonl"
+            with open(source_ids, "r", encoding="utf-8") as fin:
+                for line in fin:
+                    if not line.strip():
+                        continue
+                    obj = json.loads(line)
+                    obj["source_corpus"] = name
+                    obj["source_vector_id"] = obj.get("vector_id")
+                    obj["vector_id"] = global_id
+                    fout.write(json.dumps(obj) + "\n")
+                    global_id += 1
+
+    if global_id != combined_total:
+        raise RuntimeError(
+            "Combined id count does not match combined vector count: "
+            f"ids={global_id}, vectors={combined_total}"
+        )
+
+    def build_gt_sharded(
+        *,
+        shards: list[dict[str, object]],
+        total_count: int,
+        dim: int,
+        gt_path: Path,
+        q_count: int,
+        topk: int,
+    ) -> None:
+        import heapq
+        import mmap
+
+        print(f"[GT] building exact GT for {q_count} queries, k={topk}")
+
+        q_count = min(q_count, total_count)
+        rng = np.random.default_rng()
+        q_indices = rng.choice(total_count, size=q_count, replace=False)
+
+        queries = np.empty((q_count, dim), dtype=np.float32)
+        shard_map: dict[Path, list[tuple[int, int]]] = {}
+
+        for qi, gidx in enumerate(q_indices):
+            for shard in shards:
+                shard_start = int(shard["start"])
+                shard_count = int(shard["count"])
+                if shard_start <= gidx < shard_start + shard_count:
+                    shard_map.setdefault(Path(shard["path_obj"]), []).append(
+                        (qi, int(gidx - shard_start))
+                    )
+                    break
+
+        def close_memmap(mm: "np.memmap | None") -> None:
+            if mm is None:
+                return
+            mm.flush()
+            m = getattr(mm, "_mmap", None)
+            if m is not None:
+                try:
+                    m.madvise(mmap.MADV_DONTNEED)
+                except Exception:
+                    pass
+                m.close()
+
+        for shard in shards:
+            shard_path = Path(shard["path_obj"])
+            assigns = shard_map.get(shard_path)
+            if not assigns:
+                continue
+            mm = np.memmap(
+                shard_path,
+                dtype=np.float32,
+                mode="r",
+                shape=(int(shard["count"]), dim),
+            )
+            for qi, local_idx in assigns:
+                queries[qi] = mm[local_idx]
+            close_memmap(mm)
+
+        heaps = [[] for _ in range(q_count)]
+
+        for shard in shards:
+            shard_path = Path(shard["path_obj"])
+            print(f"[GT] scanning {shard_path.name}")
+            mm = np.memmap(
+                shard_path,
+                dtype=np.float32,
+                mode="r",
+                shape=(int(shard["count"]), dim),
+            )
+            for off in range(0, int(shard["count"]), gt_chunk):
+                block = mm[off : off + gt_chunk]
+                sims = block @ queries.T
+                for qi in range(q_count):
+                    heap = heaps[qi]
+                    col = sims[:, qi]
+                    for i, score in enumerate(col):
+                        doc_id = int(shard["start"]) + off + i
+                        if len(heap) < topk:
+                            heapq.heappush(heap, (float(score), doc_id))
+                        else:
+                            heapq.heappushpop(heap, (float(score), doc_id))
+            close_memmap(mm)
+
+        with open(gt_path, "w", encoding="utf-8") as f:
+            for qi, heap in enumerate(heaps):
+                heap.sort(reverse=True)
+                json.dump(
+                    {
+                        "query_id": int(q_indices[qi]),
+                        "topk": [
+                            {"doc_id": int(doc_id), "score": float(score)}
+                            for score, doc_id in heap
+                        ],
+                    },
+                    f,
+                )
+                f.write("\n")
+
+        print(f"[GT] wrote {gt_path}")
+
+    gt_path = out_dir / f"{dataset_name}-all.gt.jsonl"
+    if combined_total <= 0:
+        print("[GT] skipping GT generation (no vectors found)")
+    elif combined_dim is None:
+        print("[GT] skipping GT generation (missing vector dimensions)")
+    else:
+        build_gt_sharded(
+            shards=combined_shards,
+            total_count=combined_total,
+            dim=int(combined_dim),
+            gt_path=gt_path,
+            q_count=gt_queries,
+            topk=gt_topk,
+        )
+
+    combined_meta_path = out_dir / f"{dataset_name}-all.meta.json"
+    combined_meta = {
+        "dataset": dataset_name,
+        "corpus": "all",
+        "source_corpora": corpus_names,
+        "model": model_name,
+        "device": device,
+        "dim": combined_dim,
+        "dtype": "float32",
+        "count": combined_total,
+        "shard_size": shard_size,
+        "shards": [
+            {
+                "path": str(shard["path"]),
+                "count": int(shard["count"]),
+                "start": int(shard["start"]),
+                "source_corpus": str(shard["source_corpus"]),
+            }
+            for shard in combined_shards
+        ],
+        "ids_file": combined_ids_path.name,
+        "gt_file": gt_path.name,
+        "gt_queries": min(gt_queries, combined_total),
+        "gt_topk": gt_topk,
+        "max_seq_length": max_seq_len,
+    }
+    combined_meta_path.write_text(
+        json.dumps(combined_meta, indent=2),
+        encoding="utf-8",
+    )
+    print(
+        f"[VECTORS] all: {combined_total:,} vectors, "
+        f"{len(combined_shards)} shards, "
+        f"gt={gt_path.name}"
     )
 
 
@@ -2038,6 +2253,18 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
         default=None,
         help="Optional max vectors per corpus (questions/answers/comments)",
     )
+    parser.add_argument(
+        "--vector-gt-queries",
+        type=int,
+        default=1000,
+        help="Number of sampled queries for Stack Overflow GT (default: 1000)",
+    )
+    parser.add_argument(
+        "--vector-gt-topk",
+        type=int,
+        default=50,
+        help="Top-k neighbors per sampled query for Stack Overflow GT (default: 50)",
+    )
     args = parser.parse_args()
 
     print("=" * 70)
@@ -2220,6 +2447,8 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
                 batch_size=args.vector_batch_size,
                 shard_size=args.vector_shard_size,
                 max_rows=args.vector_max_rows,
+                gt_queries=args.vector_gt_queries,
+                gt_topk=args.vector_gt_topk,
             )
             print()
 
