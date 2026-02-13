@@ -51,7 +51,6 @@ Complete social network modeling with graph database:
 
 **Status:** ✅ Fully functional - 8 people, 24 bidirectional edges, comprehensive queries
 
-
 ### 🔍 [03_vector_search.py](./03_vector_search.py) ✅ **COMPLETE**
 **Vector Embeddings | HNSW (JVector) Index | Semantic Search | Performance Analysis**
 
@@ -75,6 +74,7 @@ High-performance CSV import for document data:
 **Learn:** ETL patterns, bulk import, schema management, performance tuning
 
 **Status:** ✅ Fully functional - Imports 100K+ records efficiently
+
 ---
 
 ### 🕸️ [05_csv_import_graph.py](./05_csv_import_graph.py) ✅ **COMPLETE**
@@ -128,7 +128,7 @@ Comprehensive Stack Overflow dataset analysis:
 
 ---
 
-### 🌐 [08_server_mode_rest_api.py](./08_server_mode_rest_api.py) ✅ **COMPLETE**
+### 🌐 [07_server_mode_rest_api.py](./07_server_mode_rest_api.py) ✅ **COMPLETE**
 **Server Mode | HTTP API | Studio UI | Concurrency | Polyglot Querying**
 
 Running ArcadeDB as a server with concurrent client simulation:

@@ -369,4 +369,4 @@ db.command("sql", """
 - Learn about [Vector Search](03_vector_search.md) for AI-powered semantic search
 - Explore [CSV Import (Graph)](05_csv_import_graph.md) for importing graph data from files
 - See [Multi-Model Stack Overflow](07_stackoverflow_multimodel.md) for combining graph with documents and vectors
-- Check out [Server Mode & HTTP API](08_server_mode_rest_api.md) for production deployment
+- Check out [Server Mode & HTTP API](07_server_mode_rest_api.md) for production deployment
