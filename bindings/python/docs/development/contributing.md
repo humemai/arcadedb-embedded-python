@@ -136,7 +136,7 @@ arcadedb/bindings/python/
 │   ├── 05_csv_import_graph.py
 │   ├── 06_vector_search_recommendations.py
 │   ├── 07_stackoverflow_multimodel.py
-│   ├── 08_server_mode_rest_api.py
+│   ├── 07_server_mode_rest_api.py
 │   ├── download_data.py           # Data download helper
 │   ├── data/                      # Example datasets
 │   └── benchmark-vector/          # Vector benchmark suite
