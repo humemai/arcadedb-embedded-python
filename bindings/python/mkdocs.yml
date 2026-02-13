@@ -148,7 +148,7 @@ nav:
   - 05 - CSV Import (Graph): examples/05_csv_import_graph.md
   - 06 - Vector Search (Movies): examples/06_vector_search_recommendations.md
   - 07 - StackOverflow (Multi-Model): examples/07_stackoverflow_multimodel.md
-  - 08 - Server Mode (HTTP/Studio): examples/08_server_mode_rest_api.md
+  - 07 - Server Mode (HTTP/Studio): examples/07_server_mode_rest_api.md
   - Data Import Patterns: examples/import.md
   - Vector Search Patterns: examples/vectors.md
 - User Guide:
