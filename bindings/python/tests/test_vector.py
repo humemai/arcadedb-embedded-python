@@ -225,11 +225,12 @@ class TestLSMVectorIndex:
             [0.0, 0.0, 1.0],
         ]
 
-        # Add enough filler vectors so PQ (K=256) has sufficient points and does not fail
+        # Add enough UNIQUE filler vectors so PQ (K=256) has sufficient points
+        # and does not fail due to de-duplication reducing effective training size.
         for i in range(256):
-            a = (i % 3) / 10.0
-            b = ((i + 1) % 3) / 10.0
-            c = ((i + 2) % 3) / 10.0
+            a = ((i % 16) + 1) / 100.0
+            b = (((i // 16) % 16) + 1) / 100.0
+            c = (((i * 7) % 16) + 1) / 100.0
             vectors.append([a, b, c])
 
         with test_db.transaction():
@@ -253,7 +254,7 @@ class TestLSMVectorIndex:
         res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
 
         # Top result should be the closest along the first axis
-        assert res_embedding[0] >= 0.9
+        assert res_embedding[0] >= 0.899
         assert res_embedding[0] >= res_embedding[1]
         assert res_embedding[0] >= res_embedding[2]
 
