@@ -31,7 +31,7 @@ Production-ready vector embeddings and HNSW (JVector) indexing for semantic movi
 **[07 - Multi-Model: Stack Overflow Q&A](07_stackoverflow_multimodel.md)**
 Documents (questions/answers), graph (user relationships, tags), and vectors (duplicate detection) in one comprehensive system. Demonstrates all three models working together with rich Stack Exchange dataset. Features RID-based pagination patterns and index-based vertex lookups for high performance.
 
-**[08 - Server Mode & HTTP API](08_server_mode_rest_api.md)**
+**[07 - Server Mode & HTTP API](07_server_mode_rest_api.md)**
 Embedded server with Studio UI and REST API. Demonstrates hybrid access pattern (embedded Python + HTTP API), concurrent load testing with multiple clients, polyglot querying (SQL + OpenCypher), and visual database exploration using ArcadeDB Studio.
 
 ## Quick Start
