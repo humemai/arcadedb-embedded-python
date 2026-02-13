@@ -114,7 +114,7 @@ Browse all examples:
 - **[05 - CSV Import (Graph)](05_csv_import_graph.md)** - Import graph data
 - **[06 - Vector Search (Movies)](06_vector_search_recommendations.md)** - Movie recommendations
 - **[07 - StackOverflow (Multi-Model)](07_stackoverflow_multimodel.md)** - Multi-model database
-- **[08 - Server Mode](08_server_mode_rest_api.md)** - HTTP server & Studio UI
+- **[07 - Server Mode](07_server_mode_rest_api.md)** - HTTP server & Studio UI
 
 ## Source Code
 

@@ -1,6 +1,6 @@
 # Example 08: Server Mode, Studio & Concurrent HTTP Clients
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/08_server_mode_rest_api.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/07_server_mode_rest_api.py){ .md-button }
 
 This example demonstrates how to run ArcadeDB in **Server Mode**, which enables the HTTP REST API and the Studio Web UI while maintaining embedded Python access. It also showcases **concurrent load testing** and **polyglot querying** (SQL + OpenCypher).
 
@@ -88,7 +88,7 @@ RETURN count(DISTINCT u) as count
 
 ```bash
 cd bindings/python/examples
-python 08_server_mode_rest_api.py
+python 07_server_mode_rest_api.py
 ```
 
 ## When to Use Server Mode?
