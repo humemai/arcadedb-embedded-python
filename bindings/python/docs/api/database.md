@@ -570,10 +570,11 @@ db.create_vector_index(
     pq_clusters: int | None = None,
     pq_center_globally: bool | None = None,
     pq_training_limit: int | None = None,
+    build_graph_now: bool = True,
 ) -> VectorIndex
 ```
 
-Create a vector index for similarity search (JVector implementation). Existing records are indexed automatically when the index is created.
+Create a vector index for similarity search (JVector implementation). Existing records are indexed automatically when the index is created. By default, graph preparation is performed immediately (`build_graph_now=True`).
 
 **Parameters:**
 
@@ -594,6 +595,7 @@ Create a vector index for similarity search (JVector implementation). Existing r
 - `pq_clusters` (int | None): PQ clusters per subspace (K). Requires `quantization="PRODUCT"`.
 - `pq_center_globally` (bool | None): PQ global centering flag. Requires `quantization="PRODUCT"`.
 - `pq_training_limit` (int | None): PQ training sample cap. Requires `quantization="PRODUCT"`.
+- `build_graph_now` (bool): If `True` (default), eagerly builds/loads the vector graph immediately after index creation. Set to `False` to defer graph preparation to first query.
 
 **Returns:**
 

@@ -763,18 +763,26 @@ index = db.create_vector_index(
 The first vector search query takes significantly longer than subsequent queries.
 
 **Cause:**
-The vector index is built lazily. The first query triggers the actual construction of
-the index ("warm up").
+Most apps should not see this with current defaults, because `create_vector_index()`
+eagerly prepares the graph (`build_graph_now=True`). A slow first query typically means
+you created the index with `build_graph_now=False`, so graph preparation is deferred.
 
 **Solution:**
-This is expected behavior. You can perform a "warm up" query during application startup
-if consistent query latency is required.
+If you want predictable first-query latency, either keep the default eager behavior or
+explicitly rebuild before serving traffic. This is also useful after bulk vector inserts
+or removals/deletes when you want to force rebuild at a controlled time.
 
 ```python
-# Warm up index on startup
-print("Warming up vector index...")
-index.find_nearest(np.zeros(384), k=1)
-print("Index ready")
+# Preferred: eager at creation (default)
+index = db.create_vector_index(
+    vertex_type="Document",
+    vector_property="embedding",
+    dimensions=384,
+    build_graph_now=True,
+)
+
+# Optional: if created with build_graph_now=False, rebuild explicitly
+index.build_graph_now()
 ```
 
 ---
