@@ -147,7 +147,9 @@ db.create_vector_index(
     - Maps to `beamWidth` in JVector
     - Higher = better recall, slower search
         - Typical range: 50-500
-- `quantization` (str | None): `"INT8"`, `"BINARY"`, `"PRODUCT"`, or `None` (default: `"INT8"`)
+- `quantization` (str | None): `"INT8"` (recommended), `"BINARY"`, `"PRODUCT"`, or `None` (default: `"INT8"`)
+    - Prefer `"INT8"` for current production usage in these bindings.
+    - `"PRODUCT"`/PQ is available but currently not recommended for production workloads.
 
 **Returns:**
 
