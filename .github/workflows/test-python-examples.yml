@@ -249,7 +249,7 @@ jobs:
 
           if echo "$examples" | grep -qE '(^|[[:space:]])07_stackoverflow_multimodel\.py([[:space:]]|$)'; then
             echo "📥 Downloading Stack Overflow Small dataset..."
-            python3 download_data.py stackoverflow-small
+            python3 download_data.py stackoverflow-small --no-vectors
           fi
 
       - name: Download datasets
@@ -260,7 +260,7 @@ jobs:
           echo "📥 Downloading MovieLens Small dataset..."
           python3 download_data.py movielens-small
           echo "📥 Downloading Stack Overflow Small dataset..."
-          python3 download_data.py stackoverflow-small
+          python3 download_data.py stackoverflow-small --no-vectors
 
       - name: Install timeout command (macOS only)
         if: matrix.platform == 'darwin/amd64' || matrix.platform == 'darwin/arm64'
