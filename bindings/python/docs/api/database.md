@@ -575,7 +575,7 @@ db.create_vector_index(
 
 Create a vector index for similarity search (JVector implementation). Existing records are indexed automatically when the index is created.
 
-**Parameters:**`
+**Parameters:**
 
 - `vertex_type` (str): Vertex type containing vectors
 - `vector_property` (str): Property storing vector arrays
@@ -583,7 +583,8 @@ Create a vector index for similarity search (JVector implementation). Existing r
 - `distance_function` (str): `"cosine"`, `"euclidean"`, or `"inner_product"`
 - `max_connections` (int): Max connections per node (default: 16). Maps to `maxConnections` in HNSW (JVector).
 - `beam_width` (int): Beam width for search/construction (default: 100). Maps to `beamWidth` in HNSW (JVector).
-- `quantization` (str | None): `"INT8"`, `"BINARY"`, `"PRODUCT"` for PQ, or `None` for full precision (default: `"INT8"`).
+- `quantization` (str | None): `"INT8"` (recommended), `"BINARY"`, `"PRODUCT"` for PQ, or `None` for full precision (default: `"INT8"`).
+    Prefer `"INT8"` for current production usage in these bindings; `"PRODUCT"`/PQ is currently not recommended for production workloads.
 - `location_cache_size` (int | None): Override location cache size (default: `None`, uses engine default).
 - `graph_build_cache_size` (int | None): Override graph build cache size (default: `None`, uses engine default).
 - `mutations_before_rebuild` (int | None): Override rebuild threshold (default: `None`, uses engine default).
