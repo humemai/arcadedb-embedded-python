@@ -109,39 +109,6 @@ Building a movie recommendation engine:
 
 ---
 
-### 📚 [07_stackoverflow_multimodel.py](./07_stackoverflow_multimodel.py) ✅ **COMPLETE**
-**Multi-Model | Complex Schema | Advanced Analytics | Full Pipeline**
-
-Comprehensive Stack Overflow dataset analysis:
-- **Phase 1 (Document):** Import Posts, Users, Tags, Comments, Votes
-- **Phase 2 (Graph):** Create relationships (ASKED, ANSWERED, HAS_TAG, VOTED)
-- **Phase 3 (Vector):** Semantic search for questions and tags
-- **Phase 4 (Analytics):** Complex multi-model queries and aggregations
-- Handling large datasets (XML parsing, batching)
-- Advanced schema design with inheritance and polymorphism
-
-**Note:** Download the Stack Exchange dataset first with `python download_data.py stackoverflow-<size>`.
-
-**Learn:** Multi-model architecture, complex ETL, advanced querying, full-stack analytics
-
-**Status:** ✅ Fully functional - Validated on Stack Exchange datasets
-
----
-
-### 🌐 [07_server_mode_rest_api.py](./07_server_mode_rest_api.py) ✅ **COMPLETE**
-**Server Mode | HTTP API | Studio UI | Concurrency | Polyglot Querying**
-
-Running ArcadeDB as a server with concurrent client simulation:
-- Starting the embedded server programmatically
-- **Concurrent Load Testing:** Simulating multiple HTTP clients using `ThreadPoolExecutor`
-- **Polyglot Workload:** Executing mixed SQL and OpenCypher queries in parallel
-- Accessing the **Studio Web UI** for visual exploration
-- Using the **HTTP REST API** (via `requests`) for remote interaction
-- Validating complex graph patterns and aggregations under load
-
-**Learn:** Server management, concurrency patterns, HTTP API integration, mixed SQL/OpenCypher workloads
-
-**Status:** ✅ Fully functional - Simulates 6 concurrent clients executing 30+ diverse queries
 
 
 ## 💡 Tips
