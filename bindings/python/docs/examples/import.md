@@ -131,18 +131,6 @@ with arcadedb.open_database("./graph_import_demo") as db:
     print(stats)
 ```
 
-## Multi-Model Import
-
-Combine different import strategies for multi-model databases:
-
-**[Example 07 - StackOverflow Multi-Model](07_stackoverflow_multimodel.md)**
-
-See a complete example that combines:
-
-- Document storage for questions/answers
-- Graph relationships for user connections
-- Vector embeddings for semantic search
-
 ## Performance Tips
 
 ### Optimize Import Speed

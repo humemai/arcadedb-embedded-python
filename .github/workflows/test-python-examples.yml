@@ -247,7 +247,7 @@ jobs:
             python3 download_data.py movielens-small
           fi
 
-          if echo "$examples" | grep -qE '(^|[[:space:]])07_stackoverflow_multimodel\.py([[:space:]]|$)'; then
+          if echo "$examples" | grep -qE '(^|[[:space:]])(08_stackoverflow_tables_oltp|09_stackoverflow_tables_olap|10_stackoverflow_graph_oltp|11_stackoverflow_graph_olap|14_stackoverflow_hybrid_queries)\.py([[:space:]]|$)'; then
             echo "📥 Downloading Stack Overflow Small dataset..."
             python3 download_data.py stackoverflow-small --no-vectors
           fi
@@ -333,11 +333,6 @@ jobs:
                 example_args="--import-jsonl ./exports/movielens_graph_small_db.jsonl.tgz"
                 example_name="$example (vector search, import from JSONL)"
                 timeout_duration=900  # 15 minutes
-                ;;
-              "07_stackoverflow_multimodel.py")
-                example_args="--dataset stackoverflow-small"
-                example_name="$example (stackoverflow-small dataset)"
-                timeout_duration=1800  # 30 minutes
                 ;;
               *)
                 example_args=""

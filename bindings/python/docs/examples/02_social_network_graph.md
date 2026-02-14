@@ -362,11 +362,8 @@ db.command("sql", """
 - [**03 - Vector Search**](03_vector_search.md) - Semantic similarity search with HNSW indexing
 - [**05 - CSV Import (Graph)**](05_csv_import_graph.md) - Creating graph structures from CSV data
 - [**06 - Vector Search Recommendations**](06_vector_search_recommendations.md) - Semantic search and movie recommendations
-- [**07 - Multi-Model Stack Overflow**](07_stackoverflow_multimodel.md) - Combining graph, documents, and vectors
 
 ## Next Steps
 
 - Learn about [Vector Search](03_vector_search.md) for AI-powered semantic search
 - Explore [CSV Import (Graph)](05_csv_import_graph.md) for importing graph data from files
-- See [Multi-Model Stack Overflow](07_stackoverflow_multimodel.md) for combining graph with documents and vectors
-- Check out [Server Mode & HTTP API](07_server_mode_rest_api.md) for production deployment

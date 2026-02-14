@@ -28,11 +28,6 @@ Production graph creation from MovieLens dataset. Comprehensive performance anal
 **[06 - Vector Search - Movie Recommendations](06_vector_search_recommendations.md)**
 Production-ready vector embeddings and HNSW (JVector) indexing for semantic movie search.
 
-**[07 - Multi-Model: Stack Overflow Q&A](07_stackoverflow_multimodel.md)**
-Documents (questions/answers), graph (user relationships, tags), and vectors (duplicate detection) in one comprehensive system. Demonstrates all three models working together with rich Stack Exchange dataset. Features RID-based pagination patterns and index-based vertex lookups for high performance.
-
-**[07 - Server Mode & HTTP API](07_server_mode_rest_api.md)**
-Embedded server with Studio UI and REST API. Demonstrates hybrid access pattern (embedded Python + HTTP API), concurrent load testing with multiple clients, polyglot querying (SQL + OpenCypher), and visual database exploration using ArcadeDB Studio.
 
 ## Quick Start
 
@@ -51,8 +46,6 @@ python 01_simple_document_store.py
 4. **CSV Import - Documents** (04) - ETL to documents with MovieLens
 5. **CSV Import - Graph** (05) - Same data as graph with performance benchmarks
 6. **Vector Search - Movies** (06) - Semantic search and recommendations
-7. **Multi-Model Stack Overflow** (07) - Documents + Graph + Vectors
-8. **Server Mode** (08) - Production deployment and Studio UI
 
 ---
 
