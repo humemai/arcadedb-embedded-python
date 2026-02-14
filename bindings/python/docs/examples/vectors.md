@@ -47,6 +47,10 @@ with arcadedb.create_database("./vector_demo") as db:
         dimensions=384,
         distance_function="cosine",
     )
+
+    # By default, create_vector_index(..., build_graph_now=True) eagerly
+    # prepares the vector graph. Set build_graph_now=False to defer until
+    # first query.
 ```
 
 ### Insert Vectors
@@ -216,6 +220,7 @@ with arcadedb.create_database("./vector_demo") as db:
     - 64: Fast search, lower accuracy
     - 100: Balanced (default)
     - 200: High accuracy, slower search
+- **build_graph_now**: `True` by default (eager graph preparation). Set `False` to defer graph preparation to first query.
 - **overquery_factor**: Search-time tuning (default: 4)
     - Multiplies k internally; 16 means searches ~160 candidates for k=10
     - Smaller (4-8) = faster, lower recall

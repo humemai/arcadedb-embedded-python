@@ -45,7 +45,11 @@ with arcadedb.create_database("./vector_demo") as db:
 ## API Essentials
 
 - Vector property type must be `ARRAY_OF_FLOATS`.
-- `create_vector_index(vertex_type, vector_property, dimensions, distance_function="cosine", max_connections=16, beam_width=100, quantization="INT8", location_cache_size=None, graph_build_cache_size=None, mutations_before_rebuild=None, store_vectors_in_graph=False, add_hierarchy=True, pq_subspaces=None, pq_clusters=None, pq_center_globally=None, pq_training_limit=None)`
+- `create_vector_index(vertex_type, vector_property, dimensions, distance_function="cosine", max_connections=16, beam_width=100, quantization="INT8", location_cache_size=None, graph_build_cache_size=None, mutations_before_rebuild=None, store_vectors_in_graph=False, add_hierarchy=True, pq_subspaces=None, pq_clusters=None, pq_center_globally=None, pq_training_limit=None, build_graph_now=True)`
+    - `build_graph_now=True` eagerly prepares the graph at creation time.
+    - Set `build_graph_now=False` to defer graph preparation until first query.
+- `build_graph_now()` on the returned index can be called later to force rebuild/preparation,
+    e.g. after bulk vector inserts or removals/deletes.
 - `find_nearest(query_vector, k=10, overquery_factor=4, allowed_rids=None)`
     - `overquery_factor` multiplies `k` during search to improve recall.
     - `allowed_rids` filters candidates server-side (useful for metadata-prefilter).
