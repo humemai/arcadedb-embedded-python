@@ -298,7 +298,6 @@ See full implementations:
 
 - **[Example 03: Product Vector Search](03_vector_search.md)** - Complete vector search implementation
 - **[Example 06: Movie Recommendations](06_vector_search_recommendations.md)** - Recommendation system
-- **[Example 07: StackOverflow Multi-Model](07_stackoverflow_multimodel.md)** - Vectors + Graph + Documents
 
 ## Additional Resources
 
