@@ -140,12 +140,13 @@ rids = [row.get_rid() for row in db.query("sql", "SELECT @rid FROM Doc WHERE top
 results = index.find_nearest(query_vec, k=5, allowed_rids=rids)
 ```
 
-## Quantization (Experimental)
+## Quantization
 
 - `quantization` accepts `"INT8"`, `"BINARY"`, `"PRODUCT"` (PQ), or `None` (full precision).
-- Default is `"INT8"`; set `quantization=None` for full-precision vectors.
+- Default and recommended setting is `"INT8"`.
+- Use `quantization=None` only when you explicitly need full-precision vectors and can accept higher memory usage.
 - PQ tunables (require `quantization="PRODUCT"`): `pq_subspaces` (M), `pq_clusters` (K), `pq_center_globally`, `pq_training_limit`.
-- INT8/BINARY have shown instability on larger inserts; PQ is the recommended quantization path for recall/latency trade-offs.
+- `"PRODUCT"`/PQ is currently not recommended for production workloads in these bindings.
 
 ## SQL Helpers (Optional)
 
@@ -155,7 +156,7 @@ results = index.find_nearest(query_vec, k=5, allowed_rids=rids)
     - `SELECT vectorNeighbors('Doc[embedding]', [0.1,0.2], 5) AS res`
     - Or with type/property signature: `SELECT vectorNeighbors('Doc', 'embedding', [0.1,0.2], 5)`
 - Math/distance helpers: `vectorCosineSimilarity`, `vectorL2Distance`, `vectorDotProduct`, `vectorNormalize`, `vectorAdd`, `vectorSum`, etc.
-- Quantization via SQL: `METADATA {"quantization": "INT8"}` works for tiny datasets; larger inserts still unstable (see tests).
+- Quantization via SQL: `METADATA {"quantization": "INT8"}` is the recommended path for embedded usage.
 
 ## Examples & References
 
