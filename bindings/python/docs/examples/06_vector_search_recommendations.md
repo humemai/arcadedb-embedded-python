@@ -327,6 +327,7 @@ index = db.create_vector_index(
 - **vector_property:** Property containing the embedding vectors
 - **dimensions:** Vector dimensionality (384 for sentence-transformers models)
 - **distance_function:** "cosine" for normalized similarity (0-1 range)
+- **build_graph_now:** `True` by default (eager graph preparation). Set `False` to defer graph preparation to first query.
 
 ## Output
 
