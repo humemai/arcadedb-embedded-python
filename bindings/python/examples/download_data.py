@@ -24,6 +24,7 @@ Available datasets:
     - stackoverflow-small: ~642 MB, 1.41M records (cs.stackexchange.com, 2024-06-30)
     - stackoverflow-medium: ~2.9 GB, 5.56M records (stats.stackexchange.com, 2024-06-30)
     - stackoverflow-large: ~10 GB, subset of full stackoverflow.com (2024-06-30)
+    - stackoverflow-xlarge: ~50 GB, subset of full stackoverflow.com (2024-06-30)
     - stackoverflow-full: ~323 GB, full stackoverflow.com (2024-06-30)
 
 3. TPC-H (table benchmark):
@@ -49,6 +50,7 @@ Stack Exchange Data Note:
 - stackoverflow-tiny is derived from stackoverflow-small (first 10k rows per XML,
   full Tags.xml)
 - stackoverflow-large is derived from stackoverflow-full (proportional subset)
+- stackoverflow-xlarge is derived from stackoverflow-full (proportional subset)
 
 NULL Value Injection (MovieLens only):
 - Enabled by default for MovieLens CSV files
@@ -76,6 +78,7 @@ Usage:
     python download_data.py stackoverflow-small
     python download_data.py stackoverflow-medium
     python download_data.py stackoverflow-large
+    python download_data.py stackoverflow-xlarge
     python download_data.py stackoverflow-full
     python download_data.py stackoverflow-small --verify-only  # Verify existing
     python download_data.py tpch-sf1
@@ -553,7 +556,8 @@ def download_stackoverflow(size="small"):
 
     Args:
         size: 'tiny' (~34 MB), 'small' (~80 MB), 'medium' (~500 MB),
-              'large' (~10 GB subset), or 'full' (~323 GB)
+              'large' (~10 GB subset), 'xlarge' (~50 GB subset), or
+              'full' (~323 GB)
     """
     # Create data directory
     data_dir = Path(__file__).parent / "data"
@@ -569,7 +573,23 @@ def download_stackoverflow(size="small"):
         source_dir = data_dir / "stackoverflow-full"
         if not source_dir.exists():
             download_stackoverflow(size="full")
-        return create_stackoverflow_large(source_dir=source_dir)
+        return create_stackoverflow_large(
+            source_dir=source_dir,
+            target_size_gb=10,
+            out_name="stackoverflow-large",
+            label="large",
+        )
+
+    if size == "xlarge":
+        source_dir = data_dir / "stackoverflow-full"
+        if not source_dir.exists():
+            download_stackoverflow(size="full")
+        return create_stackoverflow_large(
+            source_dir=source_dir,
+            target_size_gb=50,
+            out_name="stackoverflow-xlarge",
+            label="xlarge",
+        )
 
     try:
         import py7zr
@@ -632,7 +652,7 @@ def download_stackoverflow(size="small"):
     if size not in datasets:
         raise ValueError(
             "Unknown dataset size: "
-            f"{size}. Choose 'tiny', 'small', 'medium', 'large', or 'full'"
+            f"{size}. Choose 'tiny', 'small', 'medium', 'large', 'xlarge', or 'full'"
         )
 
     config = datasets[size]
@@ -861,12 +881,14 @@ def create_stackoverflow_tiny(source_dir: Path, max_rows: int = 10_000) -> Path:
 def create_stackoverflow_large(
     source_dir: Path,
     target_size_gb: int = 10,
+    out_name: str = "stackoverflow-large",
+    label: str = "large",
 ) -> Path:
     """Create a large Stack Exchange subset from the full dataset."""
     data_dir = Path(__file__).parent / "data"
-    out_dir = data_dir / "stackoverflow-large"
+    out_dir = data_dir / out_name
 
-    ensure_clean_dir(out_dir, "Stack Exchange large")
+    ensure_clean_dir(out_dir, f"Stack Exchange {label}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     xml_files = [
@@ -896,7 +918,7 @@ def create_stackoverflow_large(
 
     ratio = min(1.0, target_bytes_total / total_bytes)
 
-    print("[BUILD] Creating stackoverflow-large from stackoverflow-full")
+    print(f"[BUILD] Creating {out_name} from stackoverflow-full")
     print(f"   Source: {source_dir}")
     print(f"   Output: {out_dir}")
     print(f"   Target size: ~{target_size_gb} GB")
@@ -920,7 +942,7 @@ def create_stackoverflow_large(
         )
         print(f"   [OK] {filename}: {count:,} rows")
 
-    print("\n[OK] Created stackoverflow-large dataset")
+    print(f"\n[OK] Created {out_name} dataset")
     return out_dir
 
 
@@ -2070,6 +2092,50 @@ def verify_xml_nulls(extract_dir, sample_size=None):
     return results
 
 
+def _count_xml_rows_fast(xml_path: Path) -> int:
+    """Count Stack Exchange <row .../> entries using a fast line scan."""
+    row_count = 0
+    with xml_path.open("r", encoding="utf-8", errors="ignore") as fin:
+        for line in fin:
+            if line.lstrip().startswith("<row "):
+                row_count += 1
+    return row_count
+
+
+def emit_stackoverflow_entity_counts(extract_dir: Path) -> dict[str, int]:
+    """Print markdown-friendly Stack Overflow entity counts and return them."""
+    mapping = [
+        ("Users.xml", "User"),
+        ("Posts.xml", "Post"),
+        ("Comments.xml", "Comment"),
+        ("Badges.xml", "Badge"),
+        ("Votes.xml", "Vote"),
+        ("PostLinks.xml", "PostLink"),
+        ("Tags.xml", "Tag"),
+        ("PostHistory.xml", "PostHistory"),
+    ]
+
+    print()
+    print("[COUNTS] Stack Overflow entity counts")
+    print("   (copy-friendly for markdown)")
+
+    counts: dict[str, int] = {}
+    total = 0
+    for filename, label in mapping:
+        xml_path = extract_dir / filename
+        if not xml_path.exists():
+            continue
+        count = _count_xml_rows_fast(xml_path)
+        counts[label] = count
+        total += count
+        print(f"- {label}: {count:,}")
+
+    counts["Total"] = total
+    print(f"- Total: {total:,}")
+    print()
+    return counts
+
+
 def print_verification_report(csv_results, xml_results, inject_nulls):
     """Print verification report."""
     print()
@@ -2139,7 +2205,9 @@ Stack Exchange (Q&A posts, pinned to 2024-06-30):
     stackoverflow-tiny    - ~34 MB, ~100K rows (subset of stackoverflow-small)
     stackoverflow-small   - ~80 MB, ~80K posts (cs.stackexchange.com)
     stackoverflow-medium  - ~500 MB, ~300K posts (stats.stackexchange.com)
-    stackoverflow-large   - ~5 GB, full Posts.xml (stackoverflow.com)
+    stackoverflow-large   - ~10 GB, subset of stackoverflow-full
+    stackoverflow-xlarge  - ~50 GB, subset of stackoverflow-full
+    stackoverflow-full    - ~323 GB, full stackoverflow.com
 
 TPC-H (table benchmark):
     tpch-sf1    - Scale factor 1 (generated locally via dbgen)
@@ -2164,6 +2232,8 @@ Examples:
     python download_data.py stackoverflow-small
     python download_data.py stackoverflow-medium
     python download_data.py stackoverflow-large
+    python download_data.py stackoverflow-xlarge
+    python download_data.py stackoverflow-full
     python download_data.py stackoverflow-small --verify-only  # Verify existing
     python download_data.py msmarco-1m
     python download_data.py msmarco-5m
@@ -2201,6 +2271,7 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
             "stackoverflow-small",
             "stackoverflow-medium",
             "stackoverflow-large",
+            "stackoverflow-xlarge",
             "stackoverflow-full",
             "msmarco-1m",
             "msmarco-5m",
@@ -2365,6 +2436,7 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
             print_verification_report(
                 {}, xml_results, inject_nulls=True  # Assume NULLs exist
             )
+            emit_stackoverflow_entity_counts(extract_dir)
         return
 
     # Download requested dataset
@@ -2439,6 +2511,8 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
         print("   - License: CC BY-SA")
         print()
 
+        emit_stackoverflow_entity_counts(extract_dir)
+
         if not args.no_vectors:
             embed_stackoverflow_vectors(
                 extract_dir=extract_dir,
@@ -2453,7 +2527,7 @@ Note: Verification uses smart sampling (100K rows) for fast performance.
             print()
 
         # Run verification with smart sampling
-        sample_size = 100000 if size in ["medium", "large", "full"] else None
+        sample_size = 100000 if size in ["medium", "large", "xlarge", "full"] else None
         xml_results = verify_xml_nulls(extract_dir, sample_size=sample_size)
         print_verification_report({}, xml_results, inject_nulls=not args.no_nulls)
 
