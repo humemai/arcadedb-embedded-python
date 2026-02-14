@@ -16,7 +16,7 @@ All datasets are stored under `bindings/python/examples/data/`.
 ## Supported Datasets
 
 - **MovieLens**: `movielens-small`, `movielens-large`
-- **Stack Exchange**: `stackoverflow-tiny`, `stackoverflow-small`, `stackoverflow-medium`, `stackoverflow-large`, `stackoverflow-full`
+- **Stack Exchange**: `stackoverflow-tiny`, `stackoverflow-small`, `stackoverflow-medium`, `stackoverflow-large`, `stackoverflow-xlarge`, `stackoverflow-full`
 - **MSMARCO v2.1**: `msmarco-1m`, `msmarco-5m`, `msmarco-10m`
 
 ## Usage
@@ -32,6 +32,7 @@ python download_data.py stackoverflow-small --vector-shard-size 100000
 python download_data.py stackoverflow-small --vector-max-rows 50000
 python download_data.py stackoverflow-small --vector-gt-queries 1000 --vector-gt-topk 50
 python download_data.py stackoverflow-large
+python download_data.py stackoverflow-xlarge
 python download_data.py stackoverflow-full
 python download_data.py msmarco-1m
 ```
@@ -43,6 +44,8 @@ python download_data.py msmarco-1m
     The script also builds a combined `all` corpus and computes exact ground truth
     (`.gt.jsonl`) from sampled queries, MSMARCO-style.
     Use `--no-vectors` to skip.
+- For Stack Exchange datasets, the script emits a copy-friendly entity count block after run
+    (`User`, `Post`, `Comment`, `Badge`, `Vote`, `PostLink`, `Tag`, `PostHistory`, `Total`) so you can paste directly into markdown.
 - **MSMARCO** downloads parquet shards and converts them to vector shards with a ground-truth file.
 
 ## Dependencies
@@ -81,9 +84,22 @@ Dataset sizes:
 - stackoverflow-small: ~642 MB disk
 - stackoverflow-medium: ~2.9 GB disk
 - stackoverflow-large: ~10 GB disk (subset of full)
+- stackoverflow-xlarge: ~50 GB disk (subset of full)
 - stackoverflow-full: ~323 GB disk
 
 Expected document counts:
+
+**stackoverflow-tiny**
+
+- User: 10,000
+- Post: 10,000
+- Comment: 10,000
+- Badge: 10,000
+- Vote: 10,000
+- PostLink: 10,000
+- Tag: 668
+- PostHistory: 10,000
+- Total: 70,668
 
 **stackoverflow-small**
 
@@ -121,6 +137,18 @@ Expected document counts:
 - PostHistory: 6,970,840
 - Total: 22,649,754
 
+**stackoverflow-xlarge**
+
+- User: 3,620,888
+- Post: 12,150,753
+- Comment: 13,800,490
+- Badge: 8,283,261
+- Vote: 38,042,985
+- PostLink: 1,023,432
+- Tag: 9,959
+- PostHistory: 31,269,534
+- Total: 108,201,302
+
 **stackoverflow-full**
 
 - User: 22,484,235
@@ -145,4 +173,5 @@ Expected document counts:
 | StackOverflow small | ~642 MB |
 | StackOverflow medium | ~2.9 GB |
 | StackOverflow large | ~10 GB |
+| StackOverflow xlarge | ~50 GB |
 | StackOverflow full | ~323 GB |
