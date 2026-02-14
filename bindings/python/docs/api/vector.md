@@ -127,6 +127,7 @@ db.create_vector_index(
     pq_clusters: int | None = None,
     pq_center_globally: bool | None = None,
     pq_training_limit: int | None = None,
+    build_graph_now: bool = True,
 ) -> VectorIndex
 ```
 
@@ -150,6 +151,8 @@ db.create_vector_index(
 - `quantization` (str | None): `"INT8"` (recommended), `"BINARY"`, `"PRODUCT"`, or `None` (default: `"INT8"`)
     - Prefer `"INT8"` for current production usage in these bindings.
     - `"PRODUCT"`/PQ is available but currently not recommended for production workloads.
+- `build_graph_now` (bool): If `True` (default), eagerly prepares the vector graph during index creation.
+    Set to `False` to defer graph preparation until first query.
 
 **Returns:**
 
@@ -190,8 +193,9 @@ print(f"Created vector index: {index}")
 
 Find k-nearest neighbors to the query vector.
 
-**Note:** The first call to `find_nearest` triggers the index construction if it hasn't
-been built yet. This "warm up" query may take longer than subsequent queries.
+**Note:** With default settings (`build_graph_now=True` in `create_vector_index`), graph
+preparation runs during index creation. If you set `build_graph_now=False`, the first call
+to `find_nearest` may perform lazy graph preparation and therefore take longer.
 
 **Parameters:**
 
@@ -247,6 +251,32 @@ for record, distance in neighbors:
 - Vertex must have the vector property populated
 - Vector dimensionality must match index dimensions
 - Call within a transaction for consistency
+
+---
+
+### `VectorIndex.build_graph_now()`
+
+Force an immediate rebuild/preparation of the vector graph.
+
+Use this when you want to control when rebuild cost is paid, for example:
+
+- after bulk inserts,
+- after bulk deletes/removals,
+- before opening traffic after large vector mutations.
+
+This is especially useful if you created the index with `build_graph_now=False` and want
+to avoid rebuild work on the first query.
+
+**Returns:**
+
+- `None`
+
+**Example:**
+
+```python
+# After large vector changes, force rebuild now
+index.build_graph_now()
+```
 
 ---
 
