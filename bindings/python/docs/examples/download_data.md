@@ -83,7 +83,7 @@ Dataset sizes:
 - stackoverflow-large: ~10 GB disk (subset of full)
 - stackoverflow-full: ~323 GB disk
 
-Expected document counts (from `07_stackoverflow_multimodel.py`):
+Expected document counts:
 
 **stackoverflow-small**
 
