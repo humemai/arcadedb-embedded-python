@@ -90,4 +90,3 @@ Key behaviors: ResultSet is single-use for iteration, `count()` runs server-side
 - **[Results API](../../api/results.md)** - Full API reference
 - **[Query Guide](../../guide/core/queries.md)** - Query patterns
 - **[Database Tests](test-core.md)** - Database operations
-- **[Example 07: StackOverflow](../../examples/07_stackoverflow_multimodel.md)** - Complex queries
