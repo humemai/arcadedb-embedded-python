@@ -227,10 +227,12 @@ class TestLSMVectorIndex:
 
         # Add enough UNIQUE filler vectors so PQ (K=256) has sufficient points
         # and does not fail due to de-duplication reducing effective training size.
+        # Keep fillers far from the query direction (mostly Y/Z) to avoid valid
+        # cosine-nearest matches overshadowing the intended top candidates.
         for i in range(256):
-            a = ((i % 16) + 1) / 100.0
-            b = (((i // 16) % 16) + 1) / 100.0
-            c = (((i * 7) % 16) + 1) / 100.0
+            a = 0.01
+            b = ((i % 16) + 1) / 10.0
+            c = (((i // 16) % 16) + 1) / 10.0
             vectors.append([a, b, c])
 
         with test_db.transaction():
