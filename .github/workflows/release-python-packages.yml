@@ -102,15 +102,15 @@ jobs:
           echo "📦 Wheels for PyPI (current platforms):"
           ls dist/*.whl
 
-          # Count wheels (should be 20: 4 platforms x 5 Python versions)
+          # Count wheels (should be 16: 4 platforms x 4 Python versions)
           WHEEL_COUNT=$(ls dist/*.whl | wc -l)
-          echo "📊 Wheel count: $WHEEL_COUNT (expected: 20)"
+          echo "📊 Wheel count: $WHEEL_COUNT (expected: 16)"
 
           echo ""
           echo "ℹ️  Current PyPI platforms: linux x86_64, linux arm64, macOS Apple Silicon, windows x86_64"
 
-          if [ "$WHEEL_COUNT" -ne 20 ]; then
-            echo "❌ Expected 20 wheels (4 platforms x 5 Python versions), got $WHEEL_COUNT"
+          if [ "$WHEEL_COUNT" -ne 16 ]; then
+            echo "❌ Expected 16 wheels (4 platforms x 4 Python versions), got $WHEEL_COUNT"
             exit 1
           fi
 
