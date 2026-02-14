@@ -22,6 +22,55 @@ def test_db(tmp_path):
 class TestLSMVectorIndex:
     """Test LSM Vector Index functionality."""
 
+    def test_create_vector_index_build_graph_now_default_true(
+        self, test_db, monkeypatch
+    ):
+        """create_vector_index should eagerly call build_graph_now by default."""
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+        from arcadedb_embedded.vector import VectorIndex
+
+        called = {"count": 0}
+        original_build_graph_now = VectorIndex.build_graph_now
+
+        def wrapped_build_graph_now(self):
+            called["count"] += 1
+            return original_build_graph_now(self)
+
+        monkeypatch.setattr(VectorIndex, "build_graph_now", wrapped_build_graph_now)
+
+        test_db.create_vector_index("Doc", "embedding", dimensions=3)
+
+        assert called["count"] == 1
+
+    def test_create_vector_index_build_graph_now_can_be_disabled(
+        self, test_db, monkeypatch
+    ):
+        """create_vector_index should skip eager graph build when disabled."""
+        test_db.schema.create_vertex_type("Doc")
+        test_db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+
+        from arcadedb_embedded.vector import VectorIndex
+
+        called = {"count": 0}
+        original_build_graph_now = VectorIndex.build_graph_now
+
+        def wrapped_build_graph_now(self):
+            called["count"] += 1
+            return original_build_graph_now(self)
+
+        monkeypatch.setattr(VectorIndex, "build_graph_now", wrapped_build_graph_now)
+
+        test_db.create_vector_index(
+            "Doc",
+            "embedding",
+            dimensions=3,
+            build_graph_now=False,
+        )
+
+        assert called["count"] == 0
+
     def test_create_vector_index(self, test_db):
         """Test creating a vector index (JVector implementation)."""
         # Create schema

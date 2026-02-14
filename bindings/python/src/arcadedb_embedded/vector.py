@@ -351,8 +351,8 @@ class VectorIndex:
         """
         Trigger an immediate rebuild of the underlying vector graph.
 
-        Useful after bulk inserts/updates to avoid waiting for a search-triggered lazy build.
-        For TypeIndex wrappers, rebuilds all underlying LSMVectorIndex instances.
+        Useful after bulk inserts/updates to avoid waiting for a search-triggered lazy
+        build. For TypeIndex wrappers, rebuilds all underlying LSMVectorIndex instances.
         """
         try:
             if "LSMVectorIndex" in self._java_index.getClass().getName():

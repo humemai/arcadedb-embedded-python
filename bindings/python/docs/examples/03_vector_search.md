@@ -71,6 +71,7 @@ index = db.create_vector_index(
 **Parameters:**
 - `dimensions`: Must match embedding model size
 - `distance_function`: `cosine` (for normalized vectors), `euclidean`, or `inner_product`
+- `build_graph_now`: Defaults to `True` (eager graph preparation). Set to `False` to defer preparation to first query.
 
 ### 5. Semantic Search
 
