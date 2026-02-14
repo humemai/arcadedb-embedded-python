@@ -34,7 +34,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 - ✅ All platforms use **platform-specific wheels** (not universal)
 - ✅ uv pip automatically selects the correct wheel for your system
 - ✅ Each platform has its own bundled JRE optimized for that architecture
-- ✅ All supported platforms tested and verified (262/262 tests passing)
+- ✅ All supported platforms tested and verified (258/258 tests passing)
 - ✅ Built on native runners (no emulation) for optimal performance
 
 ## What's Included
@@ -56,7 +56,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 
 ## Test Results
 
-**262 out of 262 tests pass** on all platforms (100% success rate):
+**258 out of 258 tests pass** on all platforms (100% success rate):
 
 - ✅ All core database operations
 - ✅ SQL and OpenCypher queries
