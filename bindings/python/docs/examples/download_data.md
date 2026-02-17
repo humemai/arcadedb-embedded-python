@@ -161,6 +161,19 @@ Expected document counts:
 - PostHistory: 160,790,317
 - Total: 630,366,172
 
+## Stack Overflow vector counts (combined `all` corpus)
+
+These counts come from generated `vectors/stackoverflow-<size>-all.meta.json` files (`count` field):
+
+| Dataset | Vectors (`count`) |
+| --- | ---: |
+| stackoverflow-tiny | 19,591 |
+| stackoverflow-small | 300,424 |
+| stackoverflow-medium | 1,242,391 |
+| stackoverflow-large | 5,461,227 |
+| stackoverflow-xlarge | 25,910,526 |
+| stackoverflow-full | Not generated yet in this workspace |
+
 ## Approximate Sizes
 
 | Dataset | Size |
