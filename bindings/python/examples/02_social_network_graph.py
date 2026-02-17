@@ -830,12 +830,12 @@ def demonstrate_gremlin_queries(db):
         print("      • Filtering with WHERE")
         print("      • DISTINCT for deduplication")
         print("      • Aggregations with count()")
-        print("      • Variable-length paths with *1..3")
-        print("      • Sorting with ORDER BY")
+        print("      • Variable-length paths with repeat()")
+        print("      • Sorting with order()")
 
     except Exception as e:
-        print(f"    ❌ Error in OpenCypher queries: {e}")
-        print("    💡 Note: OpenCypher support depends on your ArcadeDB build")
+        print(f"    ❌ Error in Gremlin queries: {e}")
+        print("    💡 Note: Gremlin support depends on your ArcadeDB build")
         import traceback
 
         traceback.print_exc()
