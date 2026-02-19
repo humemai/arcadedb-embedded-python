@@ -172,7 +172,7 @@ These counts come from generated `vectors/stackoverflow-<size>-all.meta.json` fi
 | stackoverflow-medium | 1,242,391 |
 | stackoverflow-large | 5,461,227 |
 | stackoverflow-xlarge | 25,910,526 |
-| stackoverflow-full | Not generated yet in this workspace |
+| stackoverflow-full | 150,063,678 |
 
 ## Approximate Sizes
 
