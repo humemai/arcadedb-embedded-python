@@ -34,7 +34,7 @@ Perfect introduction to ArcadeDB basics:
 
 ---
 
-### 🔗 [02_social_network_graph.py](./02_social_network_graph.py) ✅ **COMPLETE**
+### 🔗 [02_social_network_graph.py](./02_social_network_graph.py)
 **Vertex Types | Edge Types | Graph Traversal | SQL MATCH vs OpenCypher | NULL Handling**
 
 Complete social network modeling with graph database:
@@ -49,17 +49,22 @@ Complete social network modeling with graph database:
 
 **Learn:** Graph schema design, relationship modeling, multi-language querying, NULL handling in graphs
 
-**Status:** ✅ Fully functional - 8 people, 24 bidirectional edges, comprehensive queries
-
-### 🔍 [03_vector_search.py](./03_vector_search.py) ✅ **COMPLETE**
+### 🔍 [03_vector_search.py](./03_vector_search.py)
 **Vector Embeddings | HNSW (JVector) Index | Semantic Search | Performance Analysis**
 
 Semantic similarity search with AI/ML:
-**Status:** ✅ Fully functional - Demonstrates vector search capabilities
+- Creating vector-ready schema (`ARRAY_OF_FLOATS`) for embeddings
+- Generating deterministic mock embeddings for repeatable experiments
+- Building a JVector (HNSW) index for nearest-neighbor search
+- Running top-k similarity queries and inspecting distance scores
+- Comparing "most similar" vs "least similar" result sets
+- Measuring insertion, indexing, and query phases
+
+**Learn:** Vector data modeling, index creation strategy, and practical semantic search behavior
 
 ---
 
-### 📄 [04_csv_import_documents.py](./04_csv_import_documents.py) ✅ **COMPLETE**
+### 📄 [04_csv_import_documents.py](./04_csv_import_documents.py)
 **CSV Import | Schema Definition | Batch Processing | Type Inference**
 
 High-performance CSV import for document data:
@@ -73,11 +78,9 @@ High-performance CSV import for document data:
 
 **Learn:** ETL patterns, bulk import, schema management, performance tuning
 
-**Status:** ✅ Fully functional - Imports 100K+ records efficiently
-
 ---
 
-### 🕸️ [05_csv_import_graph.py](./05_csv_import_graph.py) ✅ **COMPLETE**
+### 🕸️ [05_csv_import_graph.py](./05_csv_import_graph.py)
 **Graph Import | Edge Creation | Foreign Keys | Performance Benchmarking**
 
 Complex graph construction from CSV data:
@@ -89,11 +92,9 @@ Complex graph construction from CSV data:
 
 **Learn:** Graph ETL, edge creation patterns, performance optimization, memory management
 
-**Status:** ✅ Fully functional - Benchmarks show optimal import strategies
-
 ---
 
-### 🎬 [06_vector_search_recommendations.py](./06_vector_search_recommendations.py) ✅ **COMPLETE**
+### 🎬 [06_vector_search_recommendations.py](./06_vector_search_recommendations.py)
 **Hybrid Search | Recommendation Engine | Vector + Graph | Real-world Use Case**
 
 Building a movie recommendation engine:
@@ -105,70 +106,21 @@ Building a movie recommendation engine:
 
 **Learn:** Recommendation systems, hybrid search, vector+graph integration
 
-**Status:** ✅ Fully functional - Generates relevant movie recommendations
-
 ---
 
+### ⏱️ [14_lifecycle_timing.py](./14_lifecycle_timing.py)
+**JVM Startup | DB Create/Open | Transaction Load | Query Phases | Reopen Timing**
 
-### 🔍 [03_vector_search.py](./03_vector_search.py) ✅ **COMPLETE**
-**Vector Embeddings | HNSW (JVector) Index | Semantic Search | Performance Analysis**
+Lifecycle benchmark for embedded ArcadeDB with mixed workloads:
+- Measures JVM startup time in-process
+- Creates schema and loads table/graph/vector data
+- Runs query workload before and after reopen
+- Prints per-run timings and final averages
+- Uses random `/tmp` database path and always cleans up
 
-Semantic similarity search with AI/ML:
-**Status:** ✅ Fully functional - Demonstrates vector search capabilities
-
----
-
-### 📄 [04_csv_import_documents.py](./04_csv_import_documents.py) ✅ **COMPLETE**
-**CSV Import | Schema Definition | Batch Processing | Type Inference**
-
-High-performance CSV import for document data:
-- Importing MovieLens dataset (movies.csv)
-- Automatic schema creation with type inference
-- Handling NULL values and data cleaning
-- Batch processing for optimal performance
-- Index creation strategies
-
-**Note:** Download the MovieLens dataset first with `python download_data.py movielens-<size>`.
-
-**Learn:** ETL patterns, bulk import, schema management, performance tuning
-
-**Status:** ✅ Fully functional - Imports 100K+ records efficiently
+**Learn:** Cold-start behavior, lifecycle costs, and realistic mixed-workload timing patterns
 
 ---
-
-### 🕸️ [05_csv_import_graph.py](./05_csv_import_graph.py) ✅ **COMPLETE**
-**Graph Import | Edge Creation | Foreign Keys | Performance Benchmarking**
-
-Complex graph construction from CSV data:
-- Importing Users, Movies, and Ratings
-- Creating edges (User-[RATED]->Movie) from foreign keys
-- Handling large-scale edge creation (millions of edges)
-- Benchmarking different import strategies (Sync vs Async vs Batch)
-- Memory management for large graphs
-
-**Learn:** Graph ETL, edge creation patterns, performance optimization, memory management
-
-**Status:** ✅ Fully functional - Benchmarks show optimal import strategies
-
----
-
-### 🎬 [06_vector_search_recommendations.py](./06_vector_search_recommendations.py) ✅ **COMPLETE**
-**Hybrid Search | Recommendation Engine | Vector + Graph | Real-world Use Case**
-
-Building a movie recommendation engine:
-- Generating embeddings for movies (Title + Genres)
-- Combining vector similarity with graph relationships
-- "More like this" functionality
-- Hybrid queries (Vector Search + SQL Filtering)
-- Personalized recommendations based on user history
-
-**Learn:** Recommendation systems, hybrid search, vector+graph integration
-
-**Status:** ✅ Fully functional - Generates relevant movie recommendations
-
----
-
-
 
 ## 💡 Tips
 
