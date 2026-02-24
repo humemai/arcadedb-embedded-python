@@ -5,6 +5,7 @@
 #   - .github/workflows/  (Python CI/CD)
 #   - bindings/python/    (Python bindings)
 #   - README.md          (modified for Python)
+#   - CLAUDE.md          (excluded from this fork)
 #
 # Usage: ./sync-upstream.sh [--help|--status|--dry-run]
 
@@ -18,7 +19,7 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-PROTECTED_PATHS=(".github/workflows" "bindings/python" "README.md")
+PROTECTED_PATHS=(".github/workflows" "bindings/python" "README.md" "CLAUDE.md")
 
 try_auto_resolve() {
     local conflicts resolved
@@ -62,6 +63,7 @@ ${YELLOW}Protected Files (never overwritten):${NC}
   • .github/workflows/    - Python CI/CD pipelines
   • bindings/python/      - Python bindings implementation
   • README.md            - Fork-specific documentation
+    • CLAUDE.md            - Removed from this fork
 
 ${YELLOW}After Sync:${NC}
 1. Test: cd bindings/python && ./build.sh linux/amd64 && pytest tests/
@@ -157,17 +159,18 @@ echo -e "${YELLOW}📊 Checking current branch...${NC}"
 CURRENT_BRANCH=$(git branch --show-current)
 START_BRANCH="$CURRENT_BRANCH"
 
-# 2b. Backup fork README so it never gets overwritten during rebase
+# 2b. Backup fork main README so it never gets overwritten during rebase
 README_BACKUP=""
+README_SOURCE_BRANCH="main"
 cleanup() {
     if [ -n "$README_BACKUP" ] && [ -f "$README_BACKUP" ]; then
         rm -f "$README_BACKUP"
     fi
 }
 trap cleanup EXIT
-if git show "${START_BRANCH}:README.md" >/dev/null 2>&1; then
+if git show "${README_SOURCE_BRANCH}:README.md" >/dev/null 2>&1; then
     README_BACKUP=$(mktemp -t arcadedb_readme.XXXXXX)
-    git show "${START_BRANCH}:README.md" > "$README_BACKUP"
+    git show "${README_SOURCE_BRANCH}:README.md" > "$README_BACKUP"
 fi
 
 # 3. Check for uncommitted changes
@@ -246,10 +249,22 @@ else
     fi
 fi
 
-# 9b. Restore fork README regardless of conflicts
+# 9b. Restore fork README and enforce CLAUDE.md absence
 if [ -n "$README_BACKUP" ] && [ -f "$README_BACKUP" ]; then
     cp "$README_BACKUP" README.md
     git add README.md
+fi
+
+# Keep CLAUDE.md out of this fork even if present upstream
+if git ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1; then
+    git rm -f --quiet --ignore-unmatch CLAUDE.md
+elif [ -f CLAUDE.md ]; then
+    rm -f CLAUDE.md
+fi
+
+# Commit fork-specific preservation changes only when needed
+if ! git diff --cached --quiet; then
+    git commit -m "chore(sync): preserve fork custom files"
 fi
 
 # 10. Return to original branch if needed
