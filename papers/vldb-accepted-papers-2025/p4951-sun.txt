@@ -1,0 +1,1323 @@
+GaussDB-Vector: A Large-Scale Persistent Real-Time Vector
+Database for LLM Applications
+Ji Sun
+
+Guoliang Li
+
+James Pan
+
+Tsinghua University
+sunji@tsinghua.edu.cn
+
+Tsinghua University
+liguoliang@tsinghua.edu.cn
+
+Tsinghua University
+jamesjpan@tsinghua.edu.cn
+
+Jiang Wang
+
+Yongqing Xie
+
+Ruicheng Liu
+
+Huawei
+wangjiang16@huawei.com
+
+Huawei
+xieyongqing1@huawei.com
+
+Huawei
+liuruicheng1@huawei.com
+
+Wen Nie
+Huawei
+niewen2@huawei.com
+
+ABSTRACT
+
+these challenges, a popular approach is to use a vector database to
+serve as "long-term memory". For example, retrieval-augmented
+generation (RAG) [26] can reduce hallucinations by using a vector database populated with knowledge embeddings to make LLM
+answers more controllable and explainable. To reduce inference
+cost, semantic memory [12, 16] caches various stages of inference
+in embedding form inside a vector database to be retrieved later
+for future queries without invoking the LLM. To support these use
+cases, the vector database must eciently store and search up to
+billions of embeddings while supporting features like frequent updates, high user concurrency, distributed search, high availability,
+user isolation, and hybrid scalar-vector ltered search.
+This need for a high-performance feature-rich vector database
+has led to a number of commercial vector database systems, such
+as Milvus [35], PGVector[6] and ElasticSearch[2]. Milvus is designed for large-scale web applications. Data is organized inside
+segments of an LSM tree [30], and a search index is built for each
+segment. Milvus can persist segments onto the le system and load
+them into memory during search. However, Milvus suers from
+(1) high query latency as it must search every segment and then
+merge the results; (2) expensive updates due to index rebuild when
+merging and splitting segments; (3) slow attribute ltering because
+it only supports pre-ltering (rst predicates then vectors); (4) low
+data freshness as new data is not inserted into indexes immediately.
+On the other hand, ElasticSearch is designed for text searching,
+and it integrates vector search ability to support semantic search.
+Similar to Milvus, ElasticSearch also caches inserted data into
+in-memory segments, storing data onto disk when the size of a
+segment exceeds a threshold. Data on disk is also organized into
+segments, leading to similar drawbacks. PGVector is a vector extension built on PostgreSQL. Similar vector engines include AlloyDB
+(Google) and PASE [37] (Alibaba). PGVector supports IVFFLAT[3]
+and HNSW [28], and it works by building index structures over data
+pages in PostgreSQL. However, it also has drawbacks: (1) HNSW
+consumes more I/Os for search on disk-based systems, and its performance is worse than algorithms like NSG [21] and DiskANN [32];
+(2) only single-machine search is supported, making it unable to
+scale to datasets with billions of vectors.
+To address these limitations, we propose a persistent real-time
+vector database system GaussDB-Vector for LLM applications,
+
+Vector databases are widely used as a fundamental tool for addressing the weaknesses of large language model (LLM) applications,
+specically hallucinations and the high cost of inference. However,
+existing vector databases either cater to niche applications with lowlatency in-memory search, or oer sophisticated data management
+capabilities but at the cost of low performance.
+To address these limitations, we propose GaussDB-Vector, a
+high-performance, real-time persistent vector database that excels
+in low-latency scalable search, real-time inserts and deletes, high
+availability, large-scale distributed search, and hybrid scalar-vector
+ltered search capabilities. These features are primarily achieved
+through an innovative storage architecture designed for a graphbased vector index, optimized for I/O operations and adaptable
+across various dataset sizes and dimensions, complemented by
+novel buering strategies to further reduce I/O burdens. GaussDBVector supports product quantization, parallel search, and hardware acceleration via SIMD, GPUs, and NPUs in order to further accelerate queries. Experimental results show that GaussDB-Vector
+outperforms competitive baselines by a factor of 1 to 5 times.
+PVLDB Reference Format:
+Ji Sun, Guoliang Li, James Pan, Jiang Wang, Yongqing Xie, Ruicheng Liu,
+and Wen Nie. GaussDB-Vector: A Large-Scale Persistent Real-Time Vector
+Database for LLM Applications. PVLDB, 18(12): 4951 - 4963, 2025.
+doi:10.14778/3750601.3750619
+
+1
+
+INTRODUCTION
+
+Large language models (LLM) are the foundation for modern AI
+applications. For example, intelligent Q&A systems such as ChatGPT use LLMs to generate answers according to user prompts, and
+intelligent agents use LLMs to generate actions that can be taken
+to accomplish certain tasks. But LLM-based tools face two main
+challenges, hallucinations and expensive inference cost. To address
+This work is licensed under the Creative Commons BY-NC-ND 4.0 International
+License. Visit https://creativecommons.org/licenses/by-nc-nd/4.0/ to view a copy of
+this license. For any use beyond those covered by this license, obtain permission by
+emailing info@vldb.org. Copyright is held by the owner/author(s). Publication rights
+licensed to the VLDB Endowment.
+Proceedings of the VLDB Endowment, Vol. 18, No. 12 ISSN 2150-8097.
+doi:10.14778/3750601.3750619
+
+4951
+
+4952
+
+queries, including hybrid search and nested queries. We integrate
+new vector types into SQL and expose vector manipulation commands for ease of use. For example, users can create a table with
+both vector and ordinary data by using CREATE TABLE; build a vector index by using CREATE INDEX; and conduct a top-: search using
+SELECT· · · ORDER BY· · · LIMIT K. With the help of the SQL engine, GaussDB-Vector is able to apply rewrite rules and cost-based
+optimization to accelerate query processing. For example, the optimizer selects sequence scan if the selectivity of a predicate is large;
+otherwise index scan is used. On top of the standard SQL interface, GaussDB-Vector also supports SDKs for other programming
+languages that can be used to develop database clients.
+Storage Management. In order to reduce data fragmentation and
+increase the eciency of concurrent I/O, GaussDB-Vector adopts
+page-based storage management. Vector data is a special type of
+xed length array, and it is stored in a row-based storage format
+with other relational columns. GaussDB-Vector supports building
+vector indexes to reduce the vector search I/O cost. Each vector
+index is a structured le containing vector IDs and their locations
+in the data les. The index can be organized as an inverted list
+or a graph. In order to reduce the number of random page visits,
+GaussDB-Vector clusters closest vectors into physically contiguous
+data blocks. Moreover, the logical structures of the vector indexes
+are designed to reduce I/O and improve cache locality of hot data.
+GaussDB-Vector supports data sharding according to both the
+scalar column and the vector column to support high scalability on
+large-scale datasets. For graph-based indexes, GaussDB-Vector also
+optimizes the edge pruning algorithm to reduce index construction
+time. The details of ANN indexing are described in Section 3.
+Hardware Acceleration. Vector search queries depend on many
+compute-bound operators, including clustering, quantization, similarity computations, etc. GaussDB-Vector optimizes these implementation for machines with Ascend/Kunpeng CPUs. On Kunpeng
+CPUs, parallel oat instructions can be carried out using SIMD
+capability, where multiple oat numbers are calculated in one instruction cycle. Kunpeng CPUs have more cores than other CPUs
+of the same grade, and thus thread parallelism is a vital approach to
+reducing latency of vector queries. GaussDB-Vector also supports
+parallel vector index construction and search, and selects the degree of parallelism and balances the load automatically. On Ascend
+NPUs, GaussDB-Vector supports batching vectors into matrices,
+synchronizing data in a unied memory space between the CPU
+and NPU to accelerate computations using NPU tensor cores.
+
+<cos>,<euc> and <ham> to denote operators of Cosine distance,
+Euclidean distance and Hamming distance respectively.
+-- DDL: create a vector table
+CREATE TABLE [schema_name.]vectortab
+(id int, vec floatvector(128), doc text)
+WITH (ORIENTATION={ROW|COL})
+[PARTITION BY {
+{RANGE (partition_key)} |
+{RANGE (partition_key)} |
+{LIST|HASH (partition_key)}];
+-- create a vector index
+CREATE INDEX [CONCURRENTLY][IF NOT EXISTS]
+[[schema_name.]vectoridx]
+ON table_name [USING {IVF|VAMANA}]
+({{column_name {L2|Cosine|IP|Hamming}}
+[LOCAL]
+[WITH ({storage_parameter=value} [, ...])]
+[{VISIBLE|INVISIBLE}]
+[WHERE predicate];
+-- alter parameters of index
+ALTER INDEX vectoridx
+SET(storage_parameter=value);
+-- rebuild the index
+REINDEX [CONCURRENTLY] vectoridx;
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+
+-- DML: copy vector data from csv file
+COPY t1 FROM 'floatvector.csv' CSV HEADER;
+-- insert vector into table
+INSERT INTO t1 VALUES
+(9711839, '[30,12,12,25]');
+-- update vector data
+UPDATE t1
+SET repr = '[30,12,12,25]'
+WHERE id = 1;
+-- top-k search (Cosine)
+SELECT id, repr <cos> '[1,1,3,2]' as s
+FROM t1 ORDER BY s LIMIT 2;
+-- range search (Cosine)
+SELECT id, repr <cos> '[1,1,3,2]' as s
+FROM t1 WHERE s < 0.8;
+-- delete vector from table
+DELETE FROM t1 WHERE id = 1;
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+
+3
+2.2
+
+SQL Interface
+
+VECTOR INDEXING
+
+Vector indexing reorganizes vector data into index les in order to
+accelerate ANN search, and it is the core part of a vector database.
+Various ANN indexing algorithms have been proposed, and they
+can be classied as IVF-based methods [19], hashing-based methods [18], graph-based methods [10, 11, 13, 36] and quantizationbased methods [20, 24, 25]. IVF-based methods and graph-based
+methods can shape the index according to the data distribution
+and have better accuracy on top-k search, thus GaussDB-Vector
+focuses on IVF and Vamana graph [32] as basic algorithms for ANN
+indexing. Based on these two algorithms, GaussDB-Vector adopts
+product quantization to further accelerate the search, and it also
+supports real-time updates.
+
+GaussDB-Vector extends SQL to support vector search. Below, we
+present some typical usage examples.
+Data Denition Language (DDL). The DDL can be used to dene
+vector table schemas and build indexes on vectors and scalars. As
+vector index construction can take several hours for trillions of data
+items, users can add the CONCURRENTLY keyword to avoid blocking
+other business applications, which builds the index using a data
+snapshot and then incrementally updates it based on the delta data.
+Data Manipulation Language (DML). The DML can be used
+for querying and manipulating vector data. Users can orchestrate
+dierent operations using standard SQL. For simplicity, we use
+
+4953
+
+Index Construction. During index construction, GaussDB-Vector
+rst collects a set of vectors from heap table into memory by using reservoir sampling and then conducts :-means clustering on
+the samples, constructing cluster pages according to the results.
+GaussDB-Vector then scans all the vectors in the table and labels
+each vector with the ID of its nearest cluster (centroid), then sorts
+all the vectors by label. Next GaussDB-Vector builds data pages for
+each cluster according to the sorted vectors while also updating the
+information in the cluster pages. Building data pages in sorted order
+results in clusters that are stored contiguously, allowing search to
+be optimized by batch processing and data prefetching.
+Vector Top-: Search. When a top-: query comes, the query vector is rst compared against the centroids in the rst-layer cluster
+pages to nd # nearest clusters, along with " nearest sub-clusters
+from each cluster. In our evaluation, we observed that setting # ×"
+to cover 5–10% of the dataset proves eective in achieving
+√ high
+recall with minimal latency. Therefore, we set N and M as 10% of
+total number of rst/second layer buckets respectively by default (at
+least 1). Then, GaussDB-Vector scans the candidate vector set, Vę ,
+ÍĊ
+"ğ sub-clusters, and computes
+consisting of vectors from the ğ=1
+distances to each candidate vector. Next, GaussDB-Vector conducts
+binary sort on these vectors according to distance to the query. The
+binary sort iteratively picks a vector with distance X and removes
+vectors from Vę with distances greater than X, stopping once |Vę |
+is less than 2: GaussDB-Vector then fetches the corresponding
+rows from the table in the order of distances for vectors in Vę and
+checks their visibility. If a row is not visible (based on transactions),
+GaussDB-Vector scans the next row. If there are not enough visible
+rows, GaussDB-Vector sorts and scans the next partition of candidate vectors (resulting from the binary sort). In this way, the sorting
+complexity should be O (|Vę | + 21 |Vę | + 41 |Vę | + 18 |Vę | +· · ·+ 21Ĥ |Vę |),
+which is O (2|Vę |) when = is innite, and the total top-: fetching
+complexity is O (2|Vę | +: + #ğĤĬğĩğĘĢě ), where #ğĤĬğĩğĘĢě is the number of rows being lazy deleted. Since the term |Vę | often dominates
+over other two terms, we simplify it as $ (|Vę |). The full sorting
+complexity is $ (|Vę |;>6(|Vę |)) for any query. This mechanism allows GaussDB-Vector to handle invalid entries appearing in the
+candidate set due to situations such as asynchronous deletion and
+multi-attribute ltering.
+Vector Insert. For an insert query, GaussDB-Vector compares
+distances between centroids of clusters to nd the nearest cluster.
+It then obtains the insert block ID that points to the last data page
+corresponding to the nearest cluster from the cluster page and
+appends the context ID (ctid) of the query vector to this page. The
+ctid gives the location of the vector in the heap table. If the last
+page is full, GaussDB-Vector tries to insert the vector into the next
+page and then updates the insert block ID upon success. But if the
+last page is full and it is also the last valid page, GaussDB-Vector
+requests a sequence of recycled pages from the free space manager
+(FSM) or creates new pages from the le system.
+Vector Delete. For vector delete, GaussDB-Vector rst identies
+the target row based on the query, then locates the cluster containing the corresponding vector by nding the cluster with centroid
+nearest to the vector. The vector is then marked for deletion by
+setting a deletion ag. In order to achieve low latency, physical
+removal is conducted during asynchronous batch cleanup.
+
+IVF ANN Index
+MetaPage
+
+1st Layer Cluster Page
+
+nclus
+
+nclus2
+
+is_pq
+
+centroids
+
+2nd_start
+
+is_compress
+
+Ntuple
+
+NIdx
+
+centroids
+
+2nd_start
+
+2nd Layer Cluster Page
+
+2nd Layer Cluster Page
+
+centroids
+
+data_start
+
+data_insert
+
+centroids
+
+data_start
+
+data_insert
+
+centroids
+
+data_start
+
+data_insert
+
+centroids
+
+data_start
+
+data_insert
+
+Code1
+
+PQ Table
+
+Code2
+
+dis_11
+
+dis_12
+
+dis_13
+
+dis_14
+
+Vec/pq
+
+Ctid
+
+Vec/pq
+
+Ctid
+
+dis_21
+
+dis_22
+
+dis_23
+
+dis_24
+
+Vec/pq
+
+Ctid
+
+Vec/pq
+
+Ctid
+
+Clustering Data Page
+
+Clustering Data Page
+
+Clustering Data Page
+
+Vec/pq
+
+Ctid
+
+Vec/pq
+
+Ctid
+
+Vec/pq
+
+Ctid
+
+Vec/pq
+
+Ctid
+
+Vec/pq
+
+Ctid
+
+Vec/pq
+
+Ctid
+
+Vec/pq
+
+Ctid
+
+Vec/pq
+
+Ctid
+
+Figure 2: Structure of IVF Index
+
+3.1
+
+IVF-based Index
+
+An IVF-based index splits the high-dimensional vector space by
+clustering, and then locates the data from clusters with nearest centroids. IVF-based indexes are popular for their small data expansion
+and sequential data access characteristics. IVF-based indexes are especially suitable for data sizes in the millions, and they are fast and
+easy to maintain. In this section, we describe the implementation
+details for the IVF-based index in GaussDB-Vector.
+Index Structure. GaussDB-Vector uses two-layer clustering for
+the IVF index in order to balance the load of clusters. As Figure 2
+shows, the index is composed of a sequence of linked pages, organized logically as a three-layer tree structure. The metapage is
+the rst page in the index le, and it stores the conguration and
+statistics of the index, including the number of clusters in the upper
+two layers, number of vectors, whether the index is compressed,
+and whether the index uses product quantization. Following this
+page are the rst-layer clustering pages, containing centroids and
+start positions of secondary-layer clusters. Each secondary-layer
+cluster page contains the centroid and start point of full data in this
+sub-cluster.
+In order to accelerate distance computing and reduce the space
+overhead, ANN search engines can take advantage of product quantization (PQ) techniques. PQ splits each of the vectors into segments,
+and each segment is represented by the closest centroid. If the index
+uses PQ, then GaussDB-Vector will build a PQ table structure according to the distribution of data and store it before the data pages.
+The data pages then store PQ codes instead of full vectors in order
+to reduce storage and distance computing cost. When the query
+computes the distance of two vectors, it nds the centroids and
+computes sum of distances between centroids. GaussDB-Vector
+adopts PQ-ADC [24] to increase the precision of product quantization, PQ-ADC only quantizes the data in the index, and the query
+vector remains unchanged. On the other hand if PQ is not used,
+data pages directly follow the cluster pages, and all the indexed
+data is stored in the data pages. Each tuple in a data page contains
+vector data and the corresponding tuple ID in the heap table. The
+vector is used to select nearest neighbors by distance, and the tuple
+ID is used to locate the row tuple in the original table.
+
+4954
+
+Graph ANN Index
+MetaPage
+Dim
+
+EnablePQ
+
+Format
+
+PQTable Page
+StartPoint
+
+locks
+
+nseg
+
+pqcode_size
+
+nclus
+
+pqtable_start_blkid
+
+pqtable_end_blkid
+
+NodeSize
+
+centroids[nseg][Dim/nseg][nclus]
+
+pqcode_end_blkid
+
+pqcode_start_blkid
+
+EdgeSize
+
+distance_table[nseg][nclus][nclus]
+
+(1565>dim>130)
+
+dim<=130)
+Data Page
+vector
+
+ctid
+
+idxtid1
+
+dist1
+
+idxtidD
+
+distD
+
+É
+
+Data Page
+PQ0
+
+vector
+
+ctid
+
+sqrs1
+
+PQ1
+
+idxtid1
+
+dist1
+
+sqrsD
+
+PQD
+
+idxtidD
+
+distD
+
+(dim>=1565,EnablePQ)
+Data Page
+ctid
+dist1
+
+idxtidD
+
+distD
+
+É
+
+sqrs1
+
+PQ1
+
+sqrsD
+
+PQD
+
+PQ1
+
+sqrs1
+
+PQtid1
+
+PQ2
+
+sqrsD
+
+PQtidD
+
+PQD
+
+É
+
+(dim>=1565,DisablePQ)
+Node Page
+
+PQ0
+
+idxtid1
+
+É
+
+PQ
+PQtid0
+
+Edge Page
+
+vector1
+
+ctid1
+
+idxtid1
+
+dist1
+
+É
+
+sqrs1
+
+vector2
+
+ctid2
+
+idxtidD
+
+distD
+
+sqrsD
+
+idxtid1
+
+dist1
+
+É
+
+sqrs1
+
+idxtidD
+
+distD
+
+sqrsD
+
+É
+vectorN
+
+ctidN
+
+Figure 3: Structure of Graph-Based Index
+Vector Vacuum. GaussDB-Vector relies on a vacuum operation
+to do space vacuum and batch cleanup of index les and tables. The
+vacuum operation is executed automatically when the number of
+tuples marked for deletion exceeds 10% of the table. For the IVFbased index, the vacuum operation scans all clusters one by one.
+For each cluster, GaussDB-Vector acquires new pages from FSM
+or le system, adds a shared lock on the data pages in this cluster,
+and then copies the undeleted vectors in this cluster to the new
+pages sequentially. Then, GaussDB-Vector adds an exclusive lock
+on the secondary cluster page and updates the start/insert block
+ID. Once all vectors have been copied, GaussDB-Vector releases
+all the locks and puts the replaced data pages for the cluster into
+FSM. This procedure is executed iteratively until all clusters have
+been processed. In this way, only update/insert queries on certain
+clusters are blocked by vacuum, and only for a short period of time.
+
+3.2
+
+Graph-based Index
+
+Graph-based indexes have the advantage of fast and accurate approximation for dierent data distributions. GaussDB-Vector adopts
+Vamana graph [32] as the basic algorithm. Vamana graph is a directed monotonic relative neighborhood graph which guarantees
+a search complexity close to logarithmic time, and Vamana graph
+restricts the maximal out-degree for each node to ease management
+on the disk. Compared to NSG [21], Simhadri et. al. [32] show that
+adding a soft coecient to the distance when pruning edges brings
+benets to the performance. Aditi et. al. [22] propose methods for
+data modication and show that the soft coecient can make the
+performance of Vamana graph stable, even after 40% of the data
+is deleted. Based on these previous works, GaussDB-Vector judiciously implements the structure of Vamana graph in terms of page
+design for reducing I/O cost, lock management for supporting high
+concurrency, and buer management for reducing query latency.
+GaussDB-Vector proposes a two-phase neighbor pruning method
+to further reduce the overhead of vector insert and graph construction. Next we introduce the details of the graph-based index.
+Index Structure. GaussDB-Vector builds and stores the graph
+structure in the blocks of index les. The rst page in the index les
+
+4955
+
+is the metapage, and it stores metadata about the index including
+vector dimension, storage method, object size, start locations of
+dierence page types, product quantization congurations, and
+locks for the current index. Following the metapage, the PQTable
+page stores the centroids of each PQ segment along with distances
+of all centroid pairs in each segment. The main components of the
+graph-based index are the nodes, edges, and PQ codes.
+GaussDB-Vector designs three structures for adapting to dierent scenarios. (1) If the vector dimension is not very large, GaussDBVector stores all data associated with a single vector (i.e. its PQ
+code and neighbor codes, etc.) together in one page. When a query
+navigates the graph index, it can easily get the PQ code of the current vector as well as all the PQ codes of the neighbors by reading
+a single page, thereby reducing overhead of I/O. For example in
+Figure 3, the threshold value of 130 dimensions is calculated assuming 96 neighbors, 6-byte tuple IDs, 4-byte oat vector values,
+96-byte PQ codes (maximum), and 8*1024 bytes of space per page.
+(2) If the dimension of vectors is larger, the neighbor codes are too
+large to be put on one page. GaussDB-Vector moves the PQ codes
+out to a separate zone to avoid redundancy, and the data page only
+stores the tuple IDs of each neighbor. Even so, as the total size of
+PQ codes for all the vectors is small compared to the index, they
+can easily be cached in memory. Therefore, this structure is still
+very ecient even though GaussDB-Vector needs to read multiple
+PQ code pages for getting the neighbors. For example in Figure 3,
+the threshold value of 1565 dimensions is calculated using the same
+assumptions as before. (3) Users can also select a compression mode
+for the index structure if the data volume is very large (e.g. 1 billion vectors on one machine) or the dimension is very high (e.g.
+2048). In this structure, GaussDB-Vector separates nodes and edges
+completely and each of them can be compactly arranged. If PQ is
+enabled for a query, the raw vectors can be dropped from the index
+to further reduce storage cost.
+Index Construction. To quickly build the graph-based index,
+GaussDB-Vector clusters the vectors into Nĝ overlapped groups so
+that each vector belongs to its two nearest clusters. For each group,
+GaussDB-Vector constructs a small graph with only half the maximum out-degrees of the full graph. In this way, the index can be
+built in memory to avoid frequent data swaps, and global connectivity can also be maintained as each vector belongs to two subgraphs.
+The index construction procedure is shown in Algorithm 1.
+Each subgraph is constructed by incrementally inserting vectors
+into a randomly initialized graph, as shown in Algorithm 2. In
+this way, early inserted nodes can retain some longer edges to
+reduce the radius of the graph. The insertion operation relies on
+vector search and neighbor pruning to keep the neighbors close and
+maximize the edge angle (this feature is proposed by MRNG [21]).
+For vector search, Algorithm 4 shows the greedy search procedure.
+Given a query vector, a root node is retrieved from the min-heap
+representing the closest vector so far to the query, and then the
+distances between its unvisited neighbors and the query vector are
+computed. Next, these neighbors are inserted into the min-heap.
+The min-heap has a limited size so that nodes far away from the
+query are gradually evicted. This process continues until there are
+no more unvisited nodes. Note that duplicate vectors are linked
+into one node, and only the main node participates in neighbor
+selection. This greatly improves the quality of the graph because
+
+Algorithm 1: BuildGraphIndex
+Input: A column of vector data in table S, number of
+segments for PQ (Ħħ , number of clusters in each PQ
+segment Ħħ , number of subgraphs #ĝ
+Output: A graph-structured index G.
+1 G ← initialize an empty graph structure on the disk ;
+2 %& ← calculate PQ table on S ;
+3 G ← calculate PQ code for each node ;
+4 (0<?;4 ← sample from S;
+5 4=CA>83B ← cluster (0<?;4 into #ĝ clusters ;
+6 for ( 8 ← 0; 8 < #ĝ ; 8 ← 8 + 1 )
+7
+GĩīĘ ← ∅;
+8
+foreach ( E ∈ S )
+9
+83B ← calculate the nearest two centroid ids ;
+10
+if 8 ∈ 83B then
+11
+GĩīĘ ← GĩīĘ ∪ {E } ;
+12
+GĩīĘ ← Call BuildSubgraph() to build the Vamana
+graph with 48 out-degree on vectors in GĩīĘ ;
+13
+G ← G ∪ GĩīĘ ² Merge the in-memory subgraph into
+on-disk index with 96 out-degree for each node ;
+14 return G ;
+
+Algorithm 3: VectorInsert
+Input: An in-memory graph G, a query vector E.
+Output: An in-memory graph with query vector G.
+1 ?>>; ← get candidates list by searching query E from G ;
+2 U ← 1.2 ;
+3 N (E) ← ∅ ;
+4 D ← {38BC0=24 (:, E)|: ∈ ?>>; } ;
+′
+′
+′
+′
+5 for ( U ← 1.0; U f U ' |N (E)| < 346A44; U ← U ∗ 1.2 )
+6
+foreach ( : ∈ ($') (?>>;, 0B24=38=6) )
+7
+3ġġ ′ ← "8=(38BC0=24 (:, : ′ )|: ′ ∈ N (E)) ;
+8
+if ġĬ f 3ġġ ′ ∗ U ′ then
+9
+N (E) ← N (E) ∪ {: } ² As k is closer to v than to
+any existing neighbor of v, v connects to k ;
+10 G ← set neighbors N (E) ;
+11 foreach ( ? ∈ N (E) )
+12
+foreach ( ? ′ ∈ ($') (N (?), 34B24=38=6) )
+13
+if ĦĦ ′ f ĦĬ then
+14
+break;
+15
+if 38BC0=24 (E, ? ′ ) < ĦĦ ′ ∗ U then
+16
+N (?) ← N (?) − ? ′ + E
+² As p’ is closer to v
+than to p, p connects to v instead ;
+17
+G ← set neighbors N (?) ;
+18
+break;
+19 return G ;
+
+Algorithm 2: BuildSubgraph
+Input: A column of vector data in this subgraph S.
+Output: An in-memory Vamana graph G.
+1 G ← initialize an in-memory regular graph ;
+2 parallelly foreach( E ∈ S )
+3
+G ← insert E in G ;
+4 return G ;
+
+Algorithm 4: VectorSearch
+Input: In-memory graph G, query E, candidate size "ĝĨėĦℎ .
+Output: A set of vectors C visited when searching.
+1 C ← ∅ ;
+2 H ← a min-heap with size "ĝĨėĦℎ with the xed start
+point in the graph G ;
+3 ? ← pop a node from H ;
+4 C ← C ∪ {?} ;
+5 while ? is valid do
+6
+N (?) ← unvisited neighbors of p ;
+7
+foreach ( ? ′ ∈ N (?) )
+8
+H ← insert ? ′ and its distance to ? ;
+9
+? ← pop a node from H ;
+10
+C ← C ∪ {?} ;
+11 return C ;
+
+having too many duplicate neighbors can create cliques, leading to
+local minima traps that result in low recall during searches.
+The total cost consists of subgraph construction, which for each
+subgraph is proportional to |( |/|#ĝ | times the insertion complexity,
+along with the overhead of the partitioning phase (Algorithm 1
+lines 2–5). For this phase in particular, the exact cost depends on
+the number of PQ segments and clusters in each segment, but in
+general is linear with respect to |( |.
+Vector Top-k Search. ANN search on the graph-based index follows the procedure in Algorithm 4, returning results from the candidate set. However, as the index is stored on disk, the search query
+needs several random I/Os to get the candidates and their neighbors. As the size of the shared buer is limited, only the data that
+will be frequently visited is worth caching. Based on this principal,
+GaussDB-Vector caches nodes and edges visited in the rst two
+steps when searching, along with the PQ table and codes, while
+other data is fetched from disk. GaussDB-Vector also optimizes
+SSD read speed by fetching neighbors using multiple I/O threads.
+Specically, the default value of "ĝĨėĦℎ is 128. If the total number
+of data rows is smaller than 128, the candidate set will decrease to
+the number of rows automatically. If we cannot get enough results
+(:-NN vectors) from candidate set due to invisible or ltered rows,
+
+GaussDB-Vector will double the candidate size "ĝĨėĦℎ and search
+more candidates starting from the existing candidates.
+Vector Insert. Given a vector to insert, the candidate set is obtained
+by searching the graph for the nearest neighbors, and then selecting
+some of the nodes in the candidate set to keep as the neighbors of
+the vector, as shown in Algorithm 3. The aim of neighbor selection
+is to nd the nodes whose distance to the vector is smaller than the
+distances to the other kept neighbors of the vector. Vamana [32]
+introduces a relaxation coecient to keep more connections, and
+this can enhance the overall connectivity of the graph. Additionally,
+in order to make the vector reachable by existing nodes, GaussDBVector tries to add the vector as a neighbor of each of its neighbors.
+
+4956
+
+4957
+
+4.1
+
+DN1
+
+k=18
+
+DN1
+0.4
+
+DN2
+
+0.5
+
+DN2
+
+k=10
+0.8
+
+0.9
+
+DN4
+
+DN3
+
+k=18
+
+Query
+k=3
+
+DN4
+
+DN3
+k=10,18
+Data Sharding: Adaptive sharding for dynamic data distribution
+Interted
+Deleted
+
+DN1
+
+DN1
+DN2
+
+Move from DN2 to
+DN1 to repair the
+data sharding
+
+DN2
+
+Hybrid Search
+
+In the hybrid index, all the root and middle nodes have vector
+subindexes. When a query searches a node where the scalar predicate selects more than 50% of the data, the query can search for
+the answer from the vector subindex directly. Thus the query does
+not have to scan all the leaf data and individually rank the vectors.
+However, the leaf nodes themselves do not have vector subindexes.
+This is because a leaf node will not contain many tuples (less than
+100 in general), and sequence scan is fast enough for small amount
+of data. Therefore, queries with small selectivities can quickly locate the scalar data and get the answer by sorting a small number
+of vectors, and queries with high selectivities can search the answer
+from a vector subindex with the minimal super-set of selected data.
+
+4.3
+
+k=3,10,18
+
+Query
+
+The scalar values are organized as a balanced tree structure that
+can be searched in O (;>6(=)) time. Just like a b-tree in a relational
+database, each node in the hybrid index occupies one page, and
+it also supports data updates by using INSERT, SPLIT, and ROTATE
+operations. In each root and middle node, a pointer linking the
+metapage of a vector subindex is arranged at the beginning, and
+a series of scalar division values and pointers linking to the next
+level are staggered and tightly arranged. In each leaf node, all the
+scalar values are tightly arranged, and each of the scalar values is
+linked to a vector and ctid in the heap table.
+
+4.2
+
+Query Schedule: Send query to the closest DNs
+
+Data Sharding: Insert query into one DN
+
+Hybrid Index Structure
+
+DN4
+
+DN3
+
+DN4
+
+DN3
+
+Figure 5: Data is inserted into the nearest node, and query
+will be sent to multiple near nodes.
+In summary, the design of the hybrid index involves a tradeo
+between search performance and update eciency. Having more
+vector indexes on a greater number of scalar index nodes improves
+search performance but reduces update eciency. GaussDB-Vector
+achieves a balance between search and updates by selectively building dierent types of vector indexes based on the node type and
+the volume of data associated with each node.
+
+Hybrid Data Update
+
+5
+
+An update query may involve insert, delete or both. Data delete is
+cheap because the deleted vector only needs to be marked as dead
+instead of removing it immediately. But data insert may trigger node
+splitting or rotating if the inserted page is full. Splitting happens
+when one node is full and the neighbors are also full. It creates a new
+node with half of the values, then inserts a pointer to the new node
+into the parent node. Rotating happens when the inserted node is
+full but neighbors still have space. For example in the bottom of
+Figure 4, the last middle node is full, but the left still has one free
+space, and thus 75 is moved down to the middle node and 90 moved
+up to the root node so that 95 can be inserted successfully. Rotating
+causes update operations in the last middle node and the root node
+along with an insert operation in the left middle node.
+Node modication dominates the cost of data update in the
+hybrid index, especially for nodes with vector subindexes. This is
+also one of the reasons why vector subindexes are not built on the
+leaf nodes (the leaf node is highly likely to be split frequently). For
+the vector subindexes, the splitting and merging cost is higher for
+the graph-based index than for the IVF index. For the IVF index, the
+distribution of vectors does not change after node splitting/merging
+in most cases, and each bucket can be evenly split. But sometimes,
+dierent ranges of scalar values correspond to dierent vector
+distributions (even if the ranges are close to each other) so that
+the IVF index needs to be rebuilt over the new nodes. Likewise for
+the graph-based index, deleting half of the data in one subindex
+when splitting degrades the quality of the index, and GaussDBVector overcomes this by rebuilding on each of the new nodes. A
+graph-based index is only used in the root node or middle nodes
+containing more than 10 million vectors so that the construction
+cost can be compensated by the search performance gain.
+
+DISTRIBUTED VECTOR SEARCH
+
+The two-tier architecture of GaussDB-Vector enables it to eciently manage and scale large volumes of vectors. It supports
+billions of vectors on individual data nodes and can be expanded to
+handle trillions of vectors by adding more machines. In this section,
+we detail the methods used for distributing vectors and routing
+queries across the data nodes.
+Data Sharding. In GaussDB-Vector, all the data is distributed by
+distance. Vectors are split into 2 clusters, with each cluster corresponding to one of the 2 data nodes. The centroid of each cluster
+is stored in a coordinate node. As Figure 5 shows, the distribution
+status has 4 types. In the RANDOM phase, the centroids information
+is invalid, and inserted vectors are randomly distributed to the data
+nodes. After the volume of data reaches a threshold (e.g. 50,000),
+GaussDB-Vector starts the FULL REDISTRIBUTING phase. In this
+phase, GaussDB-Vector clusters the data and moves the tuples to
+the corresponding data nodes. During this phase, clustering blocks
+data update queries for a short time, and search queries are still
+sent to all data nodes. After the centroids are decided, new vectors
+are inserted into the nearest data nodes, and old vectors are moved
+in the background. When the status becomes CLUSTERED, search
+queries are sent to close clusters, increasing the throughput. Data
+updates may cause the distribution to shift, degrading the quality
+of the clustering. GaussDB-Vector supports periodic incremental
+redistribution. In the background, GaussDB-Vector samples data
+from each data node and computes centroids for each data node.
+GaussDB-Vector then relabels each vector, and if the ratio of shifted
+vectors exceeds a threshold (e.g. 10%), GaussDB-Vector will update
+the centroids and start redistribution in the background.
+Query Routing. One of the challenges in distributed vector search
+is determining how many data nodes each search query should be
+
+4958
+
+Table 1: Datasets
+
+sent to. If too few data nodes are searched, the recall of the ANN
+search will be very low. Conversely, if too many data nodes are
+involved, the performance will be suboptimal. We can estimate the
+cardinality of each data node for search queries [33], and when
+users do ANALYZE for distributed tables, GaussDB-Vector trains
+a cardinality model for each data node using a small data sample, and the models are stored in the coordinate node. For range
+queries, the query vector and distance threshold are used to directly
+estimate the cardinalities of each data node, allowing the query
+to be sent to only those data nodes with large cardinalities. For
+top-: queries, cardinality estimation of each data node is more
+complicated. GaussDB-Vector uses binary search on distances to
+nd the threshold where the sum of all estimated cardinalities on
+data nodes exceeds :, and then queries are sent to those nodes
+with high contributions. For hybrid queries with a scalar lter condition, selectivity of the lter condition is considered during the
+cardinality estimation. However, cardinality estimation errors are
+unavoidable, even with sophisticated models. We nd that error
+propagation across various query types showed that query vectors near a cluster centroid (i.e., assigned to a single machine in
+our distributed architecture) were least likely to suer accuracy
+degradation. In contrast, queries with vectors near inter-cluster
+boundaries experienced the most signicant performance decline.
+To address this issue, GaussDB-Vector additionally selects clusters
+whose centroids’ distance to the query vector is equal to or less than
+the maximum distance among currently selected cluster centers.
+
+6
+
+dataset
+SIFT
+GIST
+HUAWEINet
+SIFT-H
+GIST-H
+HUAWEINet-H
+SIFT-10B
+
+#rows
+10M
+1M
+15M
+10M
+1M
+10M
+10B
+
+#dims
+128
+960
+1024
+128
+960
+1024
+128
+
+#cols
+1
+1
+1
+2
+2
+2
+1
+
+scalar ndv
+/
+/
+/
+1M
+500K
+1M
+/
+
+distance
+Euclidean
+Euclidean
+Cosine
+Euclidean
+Euclidean
+Cosine
+Euclidean
+
+7 EXPERIMENTS
+7.1 Experimental Settings
+In this section, we conduct experiments for testing vector search
+performance (see Section 7.2), hybrid search performance (see Section 7.3), scalability on large scale datasets (see Section 7.4) and
+acceleration by using heterogeneous hardware (see Section 7.6).
+Datasets. We use three basic datasets with representative dimensions (128, 960, and 1,024). SIFT contains a collection of image embeddings generated using the SIFT algorithm [27]. GIST contains
+vectors describing the GIST features of images [29]. HUAWEINet is
+a collection of embedding vectors for documents in the telecommunication eld provided by Huawei. We extend each dataset by
+adding an ID column that is a biased integer column with duplicates
+and a large range of distinct values, and we test hybrid search on
+these datasets. We extend SIFT to SIFT-10B to test the scalability
+of distributed GaussDB-Vector. Table 1 shows the details.
+Baselines. We take three well-known and widely-used ANN systems, ElasticSearch, Milvus, and PGVector, as baselines. In order to ensure fairness of comparison, we only test the standalone
+versions of these systems. ElasticSearch is a NoSQL ANN system. It supports very comprehensive document and vector similarity retrieval features, stores semi-structured data (like JSON),
+and supports near real-time ANN query processing. Milvus is a
+storage-compute disaggregated system. It is also a vector-native
+ANN system, and all the data is organized as vector index structures. PGVector is an extension of PostgreSQL to support vector
+data storage, computing, and searching. Both GaussDB-Vector and
+PGVector are relational vector databases and support real-time
+ANN query processing. Additionally, we use HNSW indexes for
+all baselines, as HNSW performs the best on these datasets among
+all indexes supported by these systems. We build a graph-based
+index for single vector searching queries, and hybrid index for
+multi-column searching queries in GaussDB-Vector. And the default value for size of probing candidate set is 128. The index sizes of
+GaussDB-Vector are 9GB for 10M SIFT, 8.6 TB for 10B SIFT-10B,
+and 35GB for 10M HUAWEINet. These are comparable to the index
+sizes of the baseline systems, Milvus and ElasticSearch.
+Hardware Environment. We conduct experiments on clusters
+of 40 machines. Each machine is equipped with 72 Intel 3.00GHz
+CPU cores, 64GB memory and 2TB of disk, connected by 10 Gigabit
+Ethernet. One machine also contains eight Ascend-920B type NPUs.
+
+HARDWARE ACCELERATION
+
+GaussDB-Vector can improve vector search performance by utilizing specialized hardware like NPUs or GPUs, which are capable
+of calculating distances for batches of vector pairs. To utilize new
+hardware, the distance computation between two sets of vectors
+is transformed into basic matrix operations by using the formula
+ (G, ~) = G 2 − 2 · (G × ~Đ ) + ~ 2 , where G 2 is a self sum-product of
+rows of G that can be precomputed when loading each vector into
+an index. Note that a fairly large matrix is needed to fully utilize
+the parallelism of NPUs.
+Using NPUs/GPUs can signicantly accelerate vector index construction and searching. For the IVF-based index, GaussDB-Vector
+uses NPUs to conduct data clustering. It computes distances of
+vectors to centroids in the NPU and labels the vectors according to
+their closest centroids, and then it sends vectors in the same cluster
+to the NPU to rene the centroid. After clustering is completed,
+the centroids are xed, and vectors are labeled in batch according to their distances to centroids computed in the NPU. For the
+graph-based index, GaussDB-Vector builds a graph-based index by
+inserting each vector into a random graph in parallel, as mentioned
+in Section 3. For each inserted vector, we nd the candidate set
+and select edges for it and its neighbors, and the performance bottleneck is distance computations during edge pruning. Therefore,
+we accumulate the inserted vectors, candidate sets closest to the
+vectors, and the neighbors of vectors in the candidate sets, and
+compute the distances in the NPU. Based on the distance table, we
+run the neighbor selection algorithm for each node.
+GaussDB-Vector also supports using SIMD, available in mainstream CPUs, to accelerate distance computing for single vector
+pairs by folding the vectors into segments.
+
+7.2
+
+Vector Query Performance
+
+Concurrent Execution. We compared query latency, recall, and
+throughput across the three datasets with an increased number of
+connections. We set the concurrency to 50 to ensure that the number of cores wouldn’t become a bottleneck. Figure 7 and Figure 8
+
+4959
+
+4960
+
+4961
+
+4962
+
+REFERENCES
+
+[23] P. Indyk and R. Motwani. Approximate nearest neighbors: Towards removing the
+curse of dimensionality. In Proceedings of the Thirtieth Annual ACM Symposium
+on Theory of Computing, STOC ’98, page 604–613, New York, NY, USA, 1998.
+Association for Computing Machinery.
+[24] H. Jégou, M. Douze, and C. Schmid. Product quantization for nearest neighbor
+search. IEEE Transactions on Pattern Analysis and Machine Intelligence, 33(1):117–
+128, 2011.
+[25] Y. Kalantidis and Y. Avrithis. Locally optimized product quantization for approximate nearest neighbor search. In 2014 IEEE Conference on Computer Vision and
+Pattern Recognition, pages 2329–2336, 2014.
+[26] P. Lewis, E. Perez, A. Piktus, F. Petroni, V. Karpukhin, N. Goyal, H. Küttler,
+M. Lewis, W.-t. Yih, T. Rocktäschel, S. Riedel, and D. Kiela. Retrieval-augmented
+generation for knowledge-intensive nlp tasks. In Proceedings of the 34th International Conference on Neural Information Processing Systems, NIPS ’20, Red Hook,
+NY, USA, 2020. Curran Associates Inc.
+[27] D. G. Lowe. Distinctive image features from scale-invariant keypoints. International Journal of Computer Vision, 60(2), 2004.
+[28] Y. Malkov and D. A. Yashunin. Ecient and robust approximate nearest neighbor
+search using hierarchical navigable small world graphs. IEEE Transactions on
+Pattern Analysis and Machine Intelligence, 42(4):824–836, 2020.
+[29] A. Oliva and A. Torralba. Modeling the shape of the scene: A holistic representation of the spatial envelope. International Journal of Computer Vision, 42(3),
+2001.
+[30] P. O’Neil, E. Cheng, D. Gawlick, and E. O’Neil. The log-structured merge-tree
+(LSM-tree). Acta Inform., 33:351–385, 1996.
+[31] J. J. Pan, J. Wang, and G. Li. Survey of vector database management systems.
+VLDB Journal, 2024.
+[32] S. J. Subramanya, Devvrit, R. Kadekodi, R. Krishnaswamy, and H. V. Simhadri.
+DiskANN: Fast accurate billion-point nearest neighbor search on a single node.
+In NeurIPS 2019, November 2019.
+[33] J. Sun, G. Li, and N. Tang. Learned cardinality estimation for similarity queries. In
+Proceedings of the 2021 International Conference on Management of Data, SIGMOD
+’21, page 1745–1757, New York, NY, USA, 2021. Association for Computing
+Machinery.
+[34] H. Wang, W. Wu, C. Luo, A. Bian, C. Meng, Y. Wu, and J. Sun. Boosting Accuracy
+and Eciency for Vector Retrieval with Local Scaling Graph . In 2025 IEEE
+41st International Conference on Data Engineering (ICDE), pages 336–348, Los
+Alamitos, CA, USA, May 2025. IEEE Computer Society.
+[35] J. Wang, X. Yi, R. Guo, H. Jin, P. Xu, S. Li, X. Wang, X. Guo, C. Li, X. Xu, K. Yu,
+Y. Yuan, Y. Zou, J. Long, Y. Cai, Z. Li, Z. Zhang, Y. Mo, J. Gu, R. Jiang, Y. Wei, and
+C. Xie. Milvus: A purpose-built vector data management system. In SIGMOD,
+pages 2614–2627, 2021.
+[36] M. Wang, X. Xu, Q. Yue, and Y. Wang. A comprehensive survey and experimental
+comparison of graph-based approximate nearest neighbor search. Proc. VLDB
+Endow., 14(11):1964–1978, July 2021.
+[37] W. Yang, T. Li, G. Fang, and H. Wei. PASE: PostgreSQL ultra-high-dimensional
+approximate nearest neighbor search extension. In Proceedings of the 2020 ACM
+SIGMOD International Conference on Management of Data, SIGMOD ’20, page
+2241–2253, New York, NY, USA, 2020. Association for Computing Machinery.
+[38] Q. Zhang, S. Xu, Q. Chen, G. Sui, J. Xie, Z. Cai, Y. Chen, Y. He, Y. Yang, F. Yang,
+M. Yang, and L. Zhou. VBASE: Unifying online vector similarity search and
+relational queries via relaxed monotonicity. In 17th USENIX Symposium on
+Operating Systems Design and Implementation (OSDI 23), pages 377–395, Boston,
+MA, July 2023. USENIX Association.
+[39] Y. Zhang, S. Liu, and J. Wang. Are there fundamental limitations in supporting
+vector data management in relational databases? A case study of PostgreSQL. In
+ICDE, 2024.
+
+http://clickhouse.com.
+http://elastic.co.
+http://faiss.ai.
+http://pinecone.io.
+http://redis.io.
+https://github.com/pgvector/pgvector.
+http://weaviate.io.
+A. Andoni, P. Indyk, T. Laarhoven, I. Razenshteyn, and L. Schmidt. Practical
+and optimal lsh for angular distance. In Proceedings of the 28th International
+Conference on Neural Information Processing Systems - Volume 1, NIPS’15, page
+1225–1233, Cambridge, MA, USA, 2015. MIT Press.
+[9] A. Andoni, P. Indyk, and I. Razenshteyn. Approximate nearest neighbor search
+in high dimensions. In ICM, pages 3287–3318, 2018.
+[10] M. Aumüller, E. Bernhardsson, and A. Faithfull. Ann-benchmarks: A benchmarking tool for approximate nearest neighbor algorithms. Inf. Syst., 87(C), Jan.
+2020.
+[11] F. Aurenhammer. Voronoi diagrams—a survey of a fundamental geometric data
+structure. ACM Comput. Surv., 23(3):345–405, Sept. 1991.
+[12] F. Bang. GPTCache: An open-source semantic cache for LLM applications enabling faster answers and cost savings. In L. Tan, D. Milajevs, G. Chauhan,
+J. Gwinnup, and E. Rippeth, editors, Proceedings of the 3rd Workshop for Natural Language Processing Open Source Software (NLP-OSS 2023), pages 212–218,
+Singapore, Dec. 2023. Association for Computational Linguistics.
+[13] O. Beaumont, A.-M. Kermarrec, L. Marchal, and E. Riviere. Voronet: A scalable
+object network based on voronoi tessellations. In 2007 IEEE International Parallel
+and Distributed Processing Symposium, pages 1–10, 2007.
+[14] E. Chávez, G. Navarro, R. Baeza-Yates, and J. L. Marroquín. Searching in metric
+spaces. ACM Comput. Surv., 33(3):273–321, 2001.
+[15] C. Chen, C. Jin, Y. Zhang, S. Podolsky, C. Wu, S.-P. Wang, E. Hanson, Z. Sun,
+R. Walzer, and J. Wang. SingleStore-V: An integrated vector database system in
+SingleStore. Proc. VLDB Endow., 17(12):3772–3785, 2024.
+[16] L. Chen, M. Zaharia, and J. Zou. Frugalgpt: How to use large language models
+while reducing cost and improving performance. arXiv preprint arXiv:2305.05176,
+2023.
+[17] Q. Chen, B. Zhao, H. Wang, M. Li, C. Liu, Z. Li, M. Yang, J. Wang, M. Yang, and
+J. Wang. SPANN: Highly-ecient billion-scale approximate nearest neighbor
+search. In NeurIPS 2021, 2021.
+[18] M. Datar, N. Immorlica, P. Indyk, and V. S. Mirrokni. Locality-sensitive hashing
+scheme based on p-stable distributions. In Proceedings of the Twentieth Annual
+Symposium on Computational Geometry, SCG ’04, page 253–262, New York, NY,
+USA, 2004. Association for Computing Machinery.
+[19] M. Douze, A. Guzhva, C. Deng, J. Johnson, G. Szilvasy, P.-E. Mazaré, M. Lomeli,
+L. Hosseini, and H. Jégou. The faiss library. 2024.
+[20] J. Fan, Z. Pan, L. Wang, and Y. Wang. Codebook-softened product quantization for high accuracy approximate nearest neighbor search. Neurocomput.,
+507(C):107–116, Oct. 2022.
+[21] C. Fu, C. Xiang, C. Wang, and D. Cai. Fast approximate nearest neighbor search
+with the navigating spreading-out graph. Proc. VLDB Endow., 12(5):461–474,
+2019.
+[22] S. Gollapudi, N. Karia, V. Sivashankar, R. Krishnaswamy, N. Begwani, S. Raz,
+Y. Lin, Y. Zhang, N. Mahapatro, P. Srinivasan, A. Singh, and H. V. Simhadri.
+Filtered-diskann: Graph algorithms for approximate nearest neighbor search
+with lters. In Proceedings of the ACM Web Conference 2023, WWW ’23, page
+3406–3416, New York, NY, USA, 2023. Association for Computing Machinery.
+[1]
+[2]
+[3]
+[4]
+[5]
+[6]
+[7]
+[8]
+
+4963
