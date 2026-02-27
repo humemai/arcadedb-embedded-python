@@ -35,10 +35,10 @@ import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./vector_demo") as db:
     # Create vertex type with vector property (schema ops are auto-transactional)
-    db.schema.create_vertex_type("Product")
-    db.schema.create_property("Product", "name", "STRING")
-    db.schema.create_property("Product", "description", "STRING")
-    db.schema.create_property("Product", "embedding", "ARRAY_OF_FLOATS")
+    db.command("sql", "CREATE VERTEX TYPE Product")
+    db.command("sql", "CREATE PROPERTY Product.name STRING")
+    db.command("sql", "CREATE PROPERTY Product.description STRING")
+    db.command("sql", "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS")
 
     # Create vector index (384 dims to mirror Example 03)
     db.create_vector_index(
@@ -75,12 +75,13 @@ with arcadedb.open_database("./vector_demo") as db:
     with db.transaction():
         for name, description in products:
             embedding = get_embedding(f"{name}: {description}")
-            product = db.new_vertex("Product")
-            product.set("name", name)
-            product.set("description", description)
-            # Convert to Java float[]
-            product.set("embedding", arcadedb.to_java_float_array(embedding))
-            product.save()
+            db.command(
+                "sql",
+                "INSERT INTO Product SET name = ?, description = ?, embedding = ?",
+                name,
+                description,
+                arcadedb.to_java_float_array(embedding),
+            )
 ```
 
 ### Search Similar Items
@@ -114,19 +115,24 @@ with arcadedb.open_database("./vector_demo") as db:
         print(f"{record.get('name')}: {record.get('distance'):.4f}")
 ```
 
-#### Pythonic nearest-neighbor (preferred for code):
+#### SQL nearest-neighbor (preferred for DSL-first code):
 
 ```python
 import arcadedb_embedded as arcadedb
 import numpy as np
 
 with arcadedb.open_database("./vector_demo") as db:
-    index = db.schema.get_vector_index("Product", "embedding")
     query_embedding = np.random.rand(384).tolist()
-
-    results = index.find_nearest(query_embedding, k=5)
-    for vertex, distance in results:
-        print(f"{vertex.get('name')}: {distance:.4f}")
+    qvec_literal = "[" + ", ".join(str(float(x)) for x in query_embedding) + "]"
+    rows = db.query(
+        "sql",
+        f"SELECT vectorNeighbors('Product[embedding]', {qvec_literal}, 5) as res",
+    ).to_list()
+    for hit in rows[0].get("res", []):
+        record = hit.get("record")
+        distance = hit.get("distance")
+        if record is not None:
+            print(f"{record.get('name')}: {distance:.4f}")
 ```
 
 ## Vector Functions
@@ -203,8 +209,8 @@ import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./vector_demo") as db:
     # Create vertex type
-    db.schema.create_vertex_type("Product")
-    db.schema.create_property("Product", "embedding", "ARRAY_OF_FLOATS")
+    db.command("sql", "CREATE VERTEX TYPE Product")
+    db.command("sql", "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS")
 
     # Create index with JVector parameters (schema operations are auto-transactional)
     db.create_vector_index("Product", "embedding",
@@ -291,10 +297,12 @@ with arcadedb.open_database("./vector_demo") as db:
     # Batch insert with transaction
     with db.transaction():
         for text, embedding in zip(texts, embeddings):
-            product = db.new_vertex("Product")
-            product.set("description", text)
-            product.set("embedding", arcadedb.to_java_float_array(embedding))
-            product.save()
+            db.command(
+                "sql",
+                "INSERT INTO Product SET description = ?, embedding = ?",
+                text,
+                arcadedb.to_java_float_array(embedding),
+            )
 ```
 
 ## Complete Examples

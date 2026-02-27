@@ -27,7 +27,7 @@ import arcadedb_embedded as arcadedb
 from arcadedb_embedded import Importer
 
 with arcadedb.create_database("./mydb") as db:
-    db.schema.create_vertex_type("Product")
+    db.command("sql", "CREATE VERTEX TYPE Product")
 
     importer = Importer(db)
     stats = importer.import_file(
@@ -113,14 +113,13 @@ id,name,email,age
 
 ```python
 with arcadedb.create_database("./mydb") as db:
-    # Define schema using Python API (auto-transactions under the hood)
-    db.schema.create_vertex_type("User")
-    db.schema.create_property("User", "id", "STRING")
-    db.schema.create_property("User", "name", "STRING")
-    db.schema.create_property("User", "email", "STRING")
-    db.schema.create_property("User", "age", "INTEGER")
-    db.schema.create_index("User", ["id"], unique=True)
-    db.schema.create_index("User", ["email"], unique=True)
+    db.command("sql", "CREATE VERTEX TYPE User")
+    db.command("sql", "CREATE PROPERTY User.id STRING")
+    db.command("sql", "CREATE PROPERTY User.name STRING")
+    db.command("sql", "CREATE PROPERTY User.email STRING")
+    db.command("sql", "CREATE PROPERTY User.age INTEGER")
+    db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
+    db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 
     importer = Importer(db)
     importer.import_file(
@@ -181,9 +180,9 @@ with arcadedb.create_database("./mydb") as db:
 ```python
 with arcadedb.create_database("./mydb") as db:
     # Define only the critical parts; importer will add the rest
-    db.schema.create_vertex_type("User")
-    db.schema.create_property("User", "id", "STRING")
-    db.schema.create_index("User", ["id"], unique=True)
+    db.command("sql", "CREATE VERTEX TYPE User")
+    db.command("sql", "CREATE PROPERTY User.id STRING")
+    db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
 
     importer = Importer(db)
     importer.import_file(
@@ -357,9 +356,9 @@ print(f"Imported {len(chunks)} chunks")
 For massive imports, temporarily disable indexes:
 
 ```python
-# 1. Drop indexes (use schema API)
-db.schema.drop_index("User[email]")
-db.schema.drop_index("User[id]")
+# 1. Drop indexes
+db.command("sql", "DROP INDEX `User[email]`")
+db.command("sql", "DROP INDEX `User[id]`")
 
 # 2. Import data (vertices)
 stats = importer.import_file(
@@ -371,8 +370,8 @@ stats = importer.import_file(
 )
 
 # 3. Recreate indexes
-db.schema.create_index("User", ["id"], unique=True)
-db.schema.create_index("User", ["email"], unique=True)
+db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 ```
 
 **Speed Improvement:** 2-5x faster for large imports
@@ -481,14 +480,19 @@ with open("purchases.csv", 'r') as f:
                 f"SELECT FROM Product WHERE id = '{row['product_id']}'")
 
             if user_result.has_next() and product_result.has_next():
-                user = user_result.next()
-                product = product_result.next()
-
-                # Create edge
-                edge = user.new_edge("Purchased", product)
-                edge.set("date", row['date'])
-                edge.set("amount", float(row['amount']))
-                edge.save()
+                db.command(
+                    "sql",
+                    """
+                    CREATE EDGE Purchased
+                    FROM (SELECT FROM User WHERE id = ?)
+                    TO (SELECT FROM Product WHERE id = ?)
+                    SET date = ?, amount = ?
+                    """,
+                    row["user_id"],
+                    row["product_id"],
+                    row["date"],
+                    float(row["amount"]),
+                )
 ```
 
 ---
@@ -523,19 +527,23 @@ with db.transaction():
         if customer_result.has_next():
             customer = customer_result.next()
         else:
-            customer = db.new_vertex("Customer")
-            customer.set("id", customer_id)
-            customer.set("name", order['customer']['name'])
-            customer.save()
+            db.command(
+                "sql",
+                "INSERT INTO Customer SET id = ?, name = ?",
+                customer_id,
+                order["customer"]["name"],
+            )
 
         # Create order vertex
-        order_vertex = db.new_vertex("Order")
-        order_vertex.set("order_id", order['order_id'])
-        order_vertex.save()
+        db.command("sql", "INSERT INTO Order SET order_id = ?", order["order_id"])
 
         # Link customer to order
-        edge = customer.new_edge("Placed", order_vertex)
-        edge.save()
+        db.command(
+            "sql",
+            "CREATE EDGE Placed FROM (SELECT FROM Customer WHERE id = ?) TO (SELECT FROM Order WHERE order_id = ?)",
+            customer_id,
+            order["order_id"],
+        )
 
         # Link order to products
         for item in order['items']:
@@ -543,11 +551,18 @@ with db.transaction():
                 f"SELECT FROM Product WHERE id = '{item['product_id']}'")
 
             if product_result.has_next():
-                product = product_result.next()
-
-                contains_edge = order_vertex.new_edge("Contains", product)
-                contains_edge.set("quantity", item['qty'])
-                contains_edge.save()
+                db.command(
+                    "sql",
+                    """
+                    CREATE EDGE Contains
+                    FROM (SELECT FROM Order WHERE order_id = ?)
+                    TO (SELECT FROM Product WHERE id = ?)
+                    SET quantity = ?
+                    """,
+                    order["order_id"],
+                    item["product_id"],
+                    item["qty"],
+                )
 ```
 
 ## See Also

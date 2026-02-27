@@ -177,13 +177,12 @@ from threading import Thread
 
 # Use context manager so the database closes cleanly after threads finish
 with arcadedb.create_database("./mydb") as db:
-    db.schema.create_document_type("Log")
+    db.command("sql", "CREATE DOCUMENT TYPE Log")
 
     def worker(thread_id):
         # ✅ Multiple threads in SAME process can share the database
         with db.transaction():
-            rec = db.new_document("Log")
-            rec.set("thread", thread_id).save()
+            db.command("sql", "INSERT INTO Log SET thread = ?", thread_id)
 
 # Start multiple threads
 threads = [Thread(target=worker, args=(i,)) for i in range(10)]

@@ -54,7 +54,7 @@ class Schema:
     Provides type-safe methods for creating types, properties, and indexes
     instead of using SQL strings.
 
-    This class wraps the Java Schema interface and provides a Pythonic API.
+    This class wraps the Java Schema interface with Python-friendly methods.
 
     Attributes:
         _java_schema: The underlying Java Schema object

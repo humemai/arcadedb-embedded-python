@@ -521,11 +521,13 @@ def postgres_type(field_type: str) -> str:
 
 def create_schema_arcadedb(db):
     for table in TABLE_DEFS:
-        db.schema.create_document_type(table["name"])
+        db.command("sql", f"CREATE DOCUMENT TYPE {table['name']}")
         for field_name, field_type, _ in table["fields"]:
             arc_type = "STRING" if field_type == "BOOLEAN" else field_type
-            db.schema.create_property(table["name"], field_name, arc_type)
-        db.schema.create_index(table["name"], ["Id"], unique=True)
+            db.command(
+                "sql", f"CREATE PROPERTY {table['name']}.{field_name} {arc_type}"
+            )
+        db.command("sql", f"CREATE INDEX ON {table['name']} (Id) UNIQUE")
 
 
 def create_schema_sqlite(conn: sqlite3.Connection):

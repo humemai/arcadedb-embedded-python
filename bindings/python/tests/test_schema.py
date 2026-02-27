@@ -664,9 +664,11 @@ class TestLSMVectorIndexSchemaOps:
 
         # Add data
         with test_db.transaction():
-            v = test_db.new_vertex("Doc")
-            v.set("embedding", arcadedb.to_java_float_array([1.0, 0.0, 0.0]))
-            v.save()
+            test_db.command(
+                "sql",
+                "INSERT INTO Doc SET embedding = ?",
+                arcadedb.to_java_float_array([1.0, 0.0, 0.0]),
+            )
 
         # Retrieve
         index = schema.get_vector_index("Doc", "embedding")

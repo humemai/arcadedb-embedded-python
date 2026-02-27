@@ -16,9 +16,9 @@ from arcadedb_embedded import to_java_float_array
 texts = ["python database", "graph queries", "vector search"]
 
 with arcadedb.create_database("./vector_demo") as db:
-    db.schema.create_vertex_type("Doc")
-    db.schema.create_property("Doc", "text", "STRING")
-    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+    db.command("sql", "CREATE VERTEX TYPE Doc")
+    db.command("sql", "CREATE PROPERTY Doc.text STRING")
+    db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
 
     index = db.create_vector_index(
         vertex_type="Doc",
@@ -32,10 +32,12 @@ with arcadedb.create_database("./vector_demo") as db:
     with db.transaction():
         for i, t in enumerate(texts):
             embedding = [float(i == j) for j in range(3)]  # toy vectors
-            v = db.new_vertex("Doc")
-            v.set("text", t)
-            v.set("embedding", to_java_float_array(embedding))
-            v.save()
+            db.command(
+                "sql",
+                "INSERT INTO Doc SET text = ?, embedding = ?",
+                t,
+                to_java_float_array(embedding),
+            )
 
     results = index.find_nearest([0.9, 0.1, 0.0], k=2)
     for vertex, score in results:
@@ -111,9 +113,9 @@ doc_text = "retrieval augmented generation"
 vec = model.encode(doc_text, normalize_embeddings=True)
 
 with arcadedb.create_database("./vector_demo") as db:
-    db.schema.create_vertex_type("Doc")
-    db.schema.create_property("Doc", "text", "STRING")
-    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+    db.command("sql", "CREATE VERTEX TYPE Doc")
+    db.command("sql", "CREATE PROPERTY Doc.text STRING")
+    db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
 
     index = db.create_vector_index(
         vertex_type="Doc",
@@ -123,10 +125,12 @@ with arcadedb.create_database("./vector_demo") as db:
     )
 
     with db.transaction():
-        v = db.new_vertex("Doc")
-        v.set("text", doc_text)
-        v.set("embedding", to_java_float_array(vec))
-        v.save()
+        db.command(
+            "sql",
+            "INSERT INTO Doc SET text = ?, embedding = ?",
+            doc_text,
+            to_java_float_array(vec),
+        )
 
     hits = index.find_nearest(vec, k=1)
 ```
@@ -152,13 +156,11 @@ results = index.find_nearest(query_vec, k=5, allowed_rids=rids)
 - PQ tunables (require `quantization="PRODUCT"`): `pq_subspaces` (M), `pq_clusters` (K), `pq_center_globally`, `pq_training_limit`.
 - `"PRODUCT"`/PQ is currently not recommended for production workloads in these bindings.
 
-## SQL Helpers (Optional)
+## SQL Helpers
 
-- Prefer Schema API for embedded: `db.schema.create_index("Doc", ["embedding"], index_type="LSM_VECTOR")`
-- SQL is also available (useful for remote servers): `CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA {"dimensions": 128, "distanceFunction": "COSINE"}`
+- Preferred path for embedded and server modes: `CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA {"dimensions": 128, "distanceFunction": "COSINE"}`
 - Search via SQL:
     - `SELECT vectorNeighbors('Doc[embedding]', [0.1,0.2], 5) AS res`
-    - Or with type/property signature: `SELECT vectorNeighbors('Doc', 'embedding', [0.1,0.2], 5)`
 - Math/distance helpers: `vectorCosineSimilarity`, `vectorL2Distance`, `vectorDotProduct`, `vectorNormalize`, `vectorAdd`, `vectorSum`, etc.
 - Quantization via SQL: `METADATA {"quantization": "INT8"}` is the recommended path for embedded usage.
 

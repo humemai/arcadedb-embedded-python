@@ -138,11 +138,11 @@ arcadedb.import_csv(
 ### ✅ Define Schema Before Import
 
 ```python
-# Good: Schema first for better performance (Schema API preferred for embedded)
-db.schema.create_document_type("Person")
-db.schema.create_property("Person", "age", "INTEGER")
-db.schema.create_property("Person", "name", "STRING")
-db.schema.create_index("Person", ["name"])
+# Good: Define schema first for better performance
+db.command("sql", "CREATE DOCUMENT TYPE Person")
+db.command("sql", "CREATE PROPERTY Person.age INTEGER")
+db.command("sql", "CREATE PROPERTY Person.name STRING")
+db.command("sql", "CREATE INDEX ON Person (name)")
 
 # Then import
 arcadedb.import_csv(db, "people.csv", type_name="Person")
@@ -232,7 +232,7 @@ def db():
 
 def test_something(db):
     # db is ready to use
-    db.schema.create_document_type("Test")
+    db.command("sql", "CREATE DOCUMENT TYPE Test")
 ```
 
 ## Performance

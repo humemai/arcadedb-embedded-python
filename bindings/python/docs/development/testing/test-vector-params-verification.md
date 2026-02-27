@@ -9,9 +9,9 @@ Covers validation of vector index parameters passed into the Java layer and thei
 - Quantization modes: `INT8`, `NONE`, `BINARY`, `PRODUCT`.
 - `store_vectors_in_graph` and `add_hierarchy` flags.
 - Per-index cache settings:
-	- `location_cache_size`
-	- `graph_build_cache_size`
-	- `mutations_before_rebuild`
+    - `location_cache_size`
+    - `graph_build_cache_size`
+    - `mutations_before_rebuild`
 - Parameter persistence after database reopen.
 - JVM heap sanity check via JPype runtime memory stats.
 

@@ -560,9 +560,11 @@ def iter_xml_rows(xml_path: Path) -> Iterable[Dict[str, str]]:
 
 def create_schema(db):
     for table in TABLE_DEFS:
-        db.schema.create_document_type(table["name"])
+        db.command("sql", f"CREATE DOCUMENT TYPE {table['name']}")
         for field_name, field_type, _ in table["fields"]:
-            db.schema.create_property(table["name"], field_name, field_type)
+            db.command(
+                "sql", f"CREATE PROPERTY {table['name']}.{field_name} {field_type}"
+            )
 
 
 def insert_batch(db, table_name: str, batch: List[Dict[str, Any]]):
@@ -828,7 +830,12 @@ def create_indexes(db, retry_delay: int = 10, max_retries: int = 60) -> float:
         created = False
         for attempt in range(1, max_retries + 1):
             try:
-                db.schema.create_index(table, props, unique=unique)
+                unique_clause = "UNIQUE" if unique else "NOTUNIQUE"
+                props_clause = ", ".join(props)
+                db.command(
+                    "sql",
+                    f"CREATE INDEX ON {table} ({props_clause}) {unique_clause}",
+                )
                 created = True
                 break
             except Exception as exc:

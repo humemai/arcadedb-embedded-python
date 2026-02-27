@@ -1,8 +1,7 @@
 # Transactions
 
-Prefer the Pythonic wrappers (`new_vertex`, `new_document`, `new_edge`, `modify`) over
-raw SQL. When you see `temp_db_path`, substitute your own path if you are not in the
-test harness.
+Prefer SQL/OpenCypher for schema and CRUD. When you see `temp_db_path`, substitute your own path if you are not in
+the test harness.
 
 > **Embedded note:** For bulk ingest in embedded mode, explicit chunked transactions are
 > currently faster and more stable. Use `with db.transaction():` in fixed-size slices for
@@ -14,7 +13,7 @@ test harness.
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database(temp_db_path) as db:
-    db.schema.create_document_type("TransactionTest")
+    db.command("sql", "CREATE DOCUMENT TYPE TransactionTest")
 
     # Commit on success
     with db.transaction():
@@ -45,7 +44,7 @@ import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database(temp_db_path) as db:
     # Schema changes do not need an explicit transaction
-    db.schema.create_document_type("TestDoc")
+    db.command("sql", "CREATE DOCUMENT TYPE TestDoc")
 
     # Data writes do
     with db.transaction():
@@ -56,48 +55,46 @@ with arcadedb.create_database(temp_db_path) as db:
     assert record.get("value") == 42
 ```
 
-## Pythonic vertex/document creation in a transaction
+## SQL inserts in a transaction
 
 ```python
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded.graph import Document, Vertex
 
 with arcadedb.create_database(temp_db_path) as db:
-    db.schema.create_vertex_type("Person")
-    db.schema.create_document_type("Task")
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE DOCUMENT TYPE Task")
 
     with db.transaction():
-        alice = db.new_vertex("Person")
-        assert isinstance(alice, Vertex)
-        alice.set("name", "Alice").set("age", 30).save()
-
-        task = db.new_document("Task")
-        assert isinstance(task, Document)
-        task.set("title", "Test Task")
-        task.set("priority", 5)
-        task.save()
+        db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)
+        db.command("sql", "INSERT INTO Task SET title = ?, priority = ?", "Test Task", 5)
 ```
 
-## Pythonic edge creation with properties
+## SQL edge creation with properties
 
 ```python
 with arcadedb.create_database(temp_db_path) as db:
-    db.schema.create_vertex_type("Person")
-    db.schema.create_edge_type("Knows")
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE EDGE TYPE Knows")
 
     with db.transaction():
-        alice = db.new_vertex("Person").set("name", "Alice").save()
-        bob = db.new_vertex("Person").set("name", "Bob").save()
-
-        edge = alice.new_edge("Knows", bob, since="2020", strength=0.8)
-        edge.save()
+        db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+        db.command("sql", "INSERT INTO Person SET name = 'Bob'")
+        db.command(
+            "sql",
+            """
+            CREATE EDGE Knows
+            FROM (SELECT FROM Person WHERE name = 'Alice')
+            TO (SELECT FROM Person WHERE name = 'Bob')
+            SET since = '2020', strength = 0.8
+            """,
+        )
 ```
 
-## Update after querying (immutables -> modify())
+## Update after querying (SQL-first)
 
 ```python
 with arcadedb.create_database(temp_db_path) as db:
-    db.schema.create_vertex_type("City")
+    db.command("sql", "CREATE VERTEX TYPE City")
 
     with db.transaction():
         db.command(
@@ -105,13 +102,11 @@ with arcadedb.create_database(temp_db_path) as db:
             "INSERT INTO City SET name = 'New York', population = 8000000",
         )
 
-    result = db.query("sql", "SELECT FROM City WHERE name = 'New York'")
-    city = list(result)[0].get_vertex()
-
     with db.transaction():
-        mutable_city = city.modify()
-        mutable_city.set("country", "USA")
-        mutable_city.save()
+        db.command(
+            "sql",
+            "UPDATE City SET country = 'USA' WHERE name = 'New York'",
+        )
 
     updated = list(db.query("sql", "SELECT FROM City WHERE name = 'New York'"))[0]
     assert updated.get("country") == "USA"
@@ -126,13 +121,15 @@ BATCH_SIZE = 1000
 with db.transaction():
     total_inserted = 0
     for i, doc in enumerate(documents):
-        vertex = db.new_vertex("Article")
-        vertex.set("id", doc["id"])
-        vertex.set("title", doc["title"])
-        vertex.set("content", doc["content"])
-        vertex.set("category", doc["category"])
-        vertex.set("embedding", arcadedb.to_java_float_array(doc["embedding"]))
-        vertex.save()
+        db.command(
+            "sql",
+            "INSERT INTO Article SET id = ?, title = ?, content = ?, category = ?, embedding = ?",
+            doc["id"],
+            doc["title"],
+            doc["content"],
+            doc["category"],
+            arcadedb.to_java_float_array(doc["embedding"]),
+        )
 
         total_inserted += 1
         if total_inserted % BATCH_SIZE == 0:
