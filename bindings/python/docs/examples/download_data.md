@@ -176,15 +176,16 @@ These counts come from generated `vectors/stackoverflow-<size>-all.meta.json` fi
 
 ## Approximate Sizes
 
-| Dataset | Size |
-| --- | --- |
-| MovieLens small | ~3.2 MB |
-| MovieLens large | ~1.5 GB |
-| MSMARCO 1M | ~3.9 GB |
-| MSMARCO 5M | ~20 GB |
-| MSMARCO 10M | ~39 GB |
-| StackOverflow small | ~642 MB |
-| StackOverflow medium | ~2.9 GB |
-| StackOverflow large | ~10 GB |
-| StackOverflow xlarge | ~50 GB |
-| StackOverflow full | ~323 GB |
+| Dataset | Dataset size (non-vectors) | Vector size |
+| --- | --- | --- |
+| MovieLens small | ~3.2 MB | — |
+| MovieLens large | ~1.5 GB | — |
+| MSMARCO 1M | — | ~3.9 GB |
+| MSMARCO 5M | — | ~20 GB |
+| MSMARCO 10M | — | ~39 GB |
+| StackOverflow tiny | ~34 MB | ~35 MB |
+| StackOverflow small | ~642 MB | ~495 MB |
+| StackOverflow medium | ~2.9 GB | ~2.0 GB |
+| StackOverflow large | ~10 GB | ~8.8 GB |
+| StackOverflow xlarge | ~50 GB | ~42 GB |
+| StackOverflow full | ~323 GB | — |
