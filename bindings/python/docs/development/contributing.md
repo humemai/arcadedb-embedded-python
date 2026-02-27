@@ -250,8 +250,7 @@ def test_create_database(tmp_path):
 
     try:
         # Test operations
-        # Schema operations are auto-transactional
-        db.schema.create_vertex_type("User")
+        db.command("sql", "CREATE VERTEX TYPE User")
 
         # Verify
         result = db.query("sql", "SELECT FROM schema:types WHERE name = 'User'")
@@ -265,7 +264,7 @@ def test_transaction_rollback(tmp_path):
     db = arcadedb.create_database(str(db_path))
 
     try:
-        db.schema.create_vertex_type("User")
+        db.command("sql", "CREATE VERTEX TYPE User")
 
         # Should rollback
         with pytest.raises(Exception):

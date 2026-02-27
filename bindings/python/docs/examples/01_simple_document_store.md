@@ -29,32 +29,36 @@ import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./task_db") as db:
     # Schema operations are auto-transactional (no wrapper needed)
-    db.schema.create_document_type("Task")
-    db.schema.create_property("Task", "title", "STRING")
-    db.schema.create_property("Task", "priority", "STRING")
-    db.schema.create_property("Task", "completed", "BOOLEAN")
-    db.schema.create_property("Task", "tags", "LIST", of_type="STRING")
-    db.schema.create_property("Task", "created_date", "DATE")
-    db.schema.create_property("Task", "due_datetime", "DATETIME")
-    db.schema.create_property("Task", "estimated_hours", "FLOAT")
-    db.schema.create_property("Task", "priority_score", "INTEGER")
-    db.schema.create_property("Task", "cost", "DECIMAL")
-    db.schema.create_property("Task", "task_id", "STRING")
+    db.command("sql", "CREATE DOCUMENT TYPE Task")
+    db.command("sql", "CREATE PROPERTY Task.title STRING")
+    db.command("sql", "CREATE PROPERTY Task.priority STRING")
+    db.command("sql", "CREATE PROPERTY Task.completed BOOLEAN")
+    db.command("sql", "CREATE PROPERTY Task.tags LIST")
+    db.command("sql", "CREATE PROPERTY Task.created_date DATE")
+    db.command("sql", "CREATE PROPERTY Task.due_datetime DATETIME")
+    db.command("sql", "CREATE PROPERTY Task.estimated_hours FLOAT")
+    db.command("sql", "CREATE PROPERTY Task.priority_score INTEGER")
+    db.command("sql", "CREATE PROPERTY Task.cost DECIMAL")
+    db.command("sql", "CREATE PROPERTY Task.task_id STRING")
 
     # Insert with Python objects (auto-converted) and UUID
     with db.transaction():
-        task = db.new_document("Task")
-        task.set("title", "Write documentation")
-        task.set("priority", "medium")
-        task.set("completed", False)
-        task.set("tags", ["work", "writing"])
-        task.set("created_date", date(2024, 1, 16))
-        task.set("due_datetime", None)
-        task.set("estimated_hours", 8.0)
-        task.set("priority_score", 70)
-        task.set("cost", None)
-        task.set("task_id", str(uuid.uuid4()))
-        task.save()
+        db.command(
+            "sql",
+            f"""
+            INSERT INTO Task SET
+                title = 'Write documentation',
+                priority = 'medium',
+                completed = false,
+                tags = ['work', 'writing'],
+                created_date = '2024-01-16',
+                due_datetime = null,
+                estimated_hours = 8.0,
+                priority_score = 70,
+                cost = null,
+                task_id = '{str(uuid.uuid4())}'
+            """,
+        )
 ```
 
 ### 2. SQL Functions and NULL Queries
@@ -69,13 +73,17 @@ import arcadedb_embedded as arcadedb
 with arcadedb.open_database("./task_db") as db:
     # Insert with Python-native types (UUID, datetime handled by converter)
     with db.transaction():
-        task = db.new_document("Task")
-        task.set("title", "Buy groceries")
-        task.set("task_id", str(uuid.uuid4()))
-        task.set("created_date", date(2024, 1, 15))
-        task.set("due_datetime", datetime(2024, 1, 20, 18, 0, 0))
-        task.set("cost", 150.00)
-        task.save()
+        db.command(
+            "sql",
+            f"""
+            INSERT INTO Task SET
+                title = 'Buy groceries',
+                task_id = '{str(uuid.uuid4())}',
+                created_date = '2024-01-15',
+                due_datetime = '2024-01-20T18:00:00',
+                cost = 150.00
+            """,
+        )
 
     # Query for NULL values (reads don't need transaction)
     print("Tasks with NULL due_datetime:")
@@ -88,13 +96,12 @@ with arcadedb.open_database("./task_db") as db:
     for record in result:
         print(f"  Title: {record.get('title')}, Due: {record.get('due_datetime')}, Cost: {record.get('cost')}")
 
-    # UPDATE via API (fetch + mutate in transaction)
+    # UPDATE via SQL
     with db.transaction():
-        for record in db.query("sql", "SELECT FROM Task WHERE title = 'Call dentist'"):
-            doc = record.get_element()
-            doc.set("cost", None)
-            doc.set("estimated_hours", None)
-            doc.save()
+        db.command(
+            "sql",
+            "UPDATE Task SET cost = null, estimated_hours = null WHERE title = 'Call dentist'",
+        )
 ```
 
 ### 3. Record Types Explained
@@ -158,9 +165,8 @@ After mastering this example:
 A: All ArcadeDB types support NULL by default. You can INSERT NULL, UPDATE to NULL, and query with IS NULL/IS NOT NULL operators.
 
 **Q: How do I create a LIST with STRING elements?**
-A: In Python API: `db.schema.create_property("Task", "tags", "LIST", of_type="STRING")`.
-In SQL: `CREATE PROPERTY Task.tags LIST OF STRING`. Both create a type-safe list of
-strings.
+A: Use SQL DDL: `CREATE PROPERTY Task.tags LIST` and store string arrays/lists in inserts and updates.
+ArcadeDB validates values at write time for the declared property type.
 
 **Q: Why use typed properties?**
 A: They provide better performance, validation, and enable advanced features like indexes. But ArcadeDB is schema-optional - you can still add properties dynamically.

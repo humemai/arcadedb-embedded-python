@@ -39,23 +39,23 @@ def _build_dummy_vector(index: int, dimensions: int) -> List[float]:
 
 
 def create_schema(db, vector_dimensions: int) -> None:
-    db.schema.create_document_type("TableRecord")
-    db.schema.create_property("TableRecord", "name", "STRING")
-    db.schema.create_property("TableRecord", "value", "INTEGER")
-    db.schema.create_index("TableRecord", ["value"], unique=False)
+    db.command("sql", "CREATE DOCUMENT TYPE TableRecord")
+    db.command("sql", "CREATE PROPERTY TableRecord.name STRING")
+    db.command("sql", "CREATE PROPERTY TableRecord.value INTEGER")
+    db.command("sql", "CREATE INDEX ON TableRecord (value) NOTUNIQUE")
 
-    db.schema.create_vertex_type("Node")
-    db.schema.create_property("Node", "node_id", "INTEGER")
-    db.schema.create_property("Node", "group_name", "STRING")
-    db.schema.create_index("Node", ["node_id"], unique=True)
+    db.command("sql", "CREATE VERTEX TYPE Node")
+    db.command("sql", "CREATE PROPERTY Node.node_id INTEGER")
+    db.command("sql", "CREATE PROPERTY Node.group_name STRING")
+    db.command("sql", "CREATE INDEX ON Node (node_id) UNIQUE")
 
-    db.schema.create_edge_type("CONNECTED_TO")
-    db.schema.create_property("CONNECTED_TO", "weight", "INTEGER")
+    db.command("sql", "CREATE EDGE TYPE CONNECTED_TO")
+    db.command("sql", "CREATE PROPERTY CONNECTED_TO.weight INTEGER")
 
-    db.schema.create_vertex_type("VectorDoc")
-    db.schema.create_property("VectorDoc", "doc_id", "STRING")
-    db.schema.create_property("VectorDoc", "embedding", "ARRAY_OF_FLOATS")
-    db.schema.create_index("VectorDoc", ["doc_id"], unique=True)
+    db.command("sql", "CREATE VERTEX TYPE VectorDoc")
+    db.command("sql", "CREATE PROPERTY VectorDoc.doc_id STRING")
+    db.command("sql", "CREATE PROPERTY VectorDoc.embedding ARRAY_OF_FLOATS")
+    db.command("sql", "CREATE INDEX ON VectorDoc (doc_id) UNIQUE")
 
     db.create_vector_index(
         vertex_type="VectorDoc",
@@ -94,35 +94,42 @@ def run_single_iteration(
     transaction_breakdown_start = time.perf_counter()
     with db.transaction():
         for index in range(table_records):
-            record = db.new_document("TableRecord")
-            record.set("name", f"record-{index}")
-            record.set("value", index)
-            record.save()
+            db.command(
+                "sql",
+                "INSERT INTO TableRecord SET name = ?, value = ?",
+                f"record-{index}",
+                index,
+            )
 
-        graph_nodes = []
         for index in range(graph_vertices):
-            vertex = db.new_vertex("Node")
-            vertex.set("node_id", index)
-            vertex.set("group_name", f"group-{index % 10}")
-            vertex.save()
-            graph_nodes.append(vertex)
+            db.command(
+                "sql",
+                "INSERT INTO Node SET node_id = ?, group_name = ?",
+                index,
+                f"group-{index % 10}",
+            )
 
         for index in range(1, graph_vertices):
-            edge = graph_nodes[index - 1].new_edge(
-                "CONNECTED_TO", graph_nodes[index], weight=(index % 100)
+            db.command(
+                "sql",
+                "CREATE EDGE CONNECTED_TO "
+                "FROM (SELECT FROM Node WHERE node_id = ?) "
+                "TO (SELECT FROM Node WHERE node_id = ?) "
+                "SET weight = ?",
+                index - 1,
+                index,
+                (index % 100),
             )
-            edge.save()
 
         for index in range(vector_records):
-            vertex = db.new_vertex("VectorDoc")
-            vertex.set("doc_id", f"vec-{index}")
-            vertex.set(
-                "embedding",
+            db.command(
+                "sql",
+                "INSERT INTO VectorDoc SET doc_id = ?, embedding = ?",
+                f"vec-{index}",
                 arcadedb.to_java_float_array(
                     _build_dummy_vector(index=index, dimensions=vector_dimensions)
                 ),
             )
-            vertex.save()
     transaction_time_s = time.perf_counter() - transaction_start
     load_time_s = time.perf_counter() - transaction_breakdown_start
 
@@ -144,12 +151,13 @@ def run_single_iteration(
         "SELECT count(*) AS count FROM CONNECTED_TO",
     ).first()
 
-    vector_index = db.schema.get_vector_index("VectorDoc", "embedding")
-    if vector_index is None:
-        raise RuntimeError("Vector index not found for VectorDoc.embedding")
     query_vector = _build_dummy_vector(index=999_999, dimensions=vector_dimensions)
+    query_vector_sql = "[" + ", ".join(str(v) for v in query_vector) + "]"
     for _ in range(query_runs):
-        vector_index.find_nearest(query_vector, k=5)
+        db.query(
+            "sql",
+            f"SELECT vectorNeighbors('VectorDoc[embedding]', {query_vector_sql}, 5) AS res",
+        ).first()
 
     query_time_s = time.perf_counter() - query_start
 
@@ -172,15 +180,11 @@ def run_single_iteration(
     reopened_db.query("sql", "SELECT count(*) AS count FROM Node").first()
     reopened_db.query("sql", "SELECT count(*) AS count FROM CONNECTED_TO").first()
 
-    reopened_vector_index = reopened_db.schema.get_vector_index(
-        "VectorDoc", "embedding"
-    )
-    if reopened_vector_index is None:
-        raise RuntimeError(
-            "Vector index not found for VectorDoc.embedding after reopen"
-        )
     for _ in range(query_runs):
-        reopened_vector_index.find_nearest(query_vector, k=5)
+        reopened_db.query(
+            "sql",
+            f"SELECT vectorNeighbors('VectorDoc[embedding]', {query_vector_sql}, 5) AS res",
+        ).first()
 
     reopen_query_time_s = time.perf_counter() - reopen_query_start
 

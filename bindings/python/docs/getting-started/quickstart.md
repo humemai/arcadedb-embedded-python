@@ -17,26 +17,24 @@ uv pip install arcadedb-embedded
 
 ArcadeDB Python bindings support **two access methods**:
 
-### Java API (Embedded Mode) - Recommended for Getting Started
+### Embedded Mode (SQL) - Recommended for Getting Started
 
-Direct JVM method calls via JPype, using the Pythonic embedded API:
+Direct local database access via JPype, using SQL for schema and CRUD:
 
 ```python
 import arcadedb_embedded as arcadedb
 
-# Direct database access (embedded API)
+# Direct database access (SQL)
 with arcadedb.create_database("./mydb") as db:
-    # Schema (auto-transactional)
-    db.schema.create_document_type("Person")
-    db.schema.create_property("Person", "name", "STRING")
+    # Schema
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
 
     # Insert (requires explicit transaction)
     with db.transaction():
-        doc = db.new_document("Person")
-        doc.set("name", "Alice")
-        doc.save()
+        db.command("sql", "INSERT INTO Person SET name = ?", "Alice")
 
-    # Query (No transaction needed. SQL is still fine for reads)
+    # Query (no transaction needed)
     result = db.query("sql", "SELECT FROM Person")
     for record in result:
         print(record.get("name"))
@@ -91,7 +89,7 @@ server.stop()
 ```
 
 !!! tip "Choose Your Method"
-    - **Java API**: Use for single-process apps (fastest)
+    - **Embedded mode**: Use for single-process apps (fastest)
     - **HTTP API**: Use for multi-process/remote access
     - **Both**: Can be used simultaneously on same server!
 
@@ -111,10 +109,9 @@ with arcadedb.create_database("./quickstart") as db:
 
 ```python
 with arcadedb.create_database("./quickstart") as db:
-    # Schema operations are auto-transactional
-    db.schema.create_document_type("Person")
-    db.schema.create_property("Person", "name", "STRING")
-    db.schema.create_property("Person", "age", "INTEGER")
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
     print("Schema created!")
 ```
 
@@ -124,17 +121,14 @@ All writes must be in a transaction:
 
 ```python
 with arcadedb.create_database("./quickstart") as db:
-    db.schema.create_document_type("Person")
-    db.schema.create_property("Person", "name", "STRING")
-    db.schema.create_property("Person", "age", "INTEGER")
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
 
     # Use transaction for writes
     with db.transaction():
         for name, age in [("Alice", 30), ("Bob", 25), ("Charlie", 35)]:
-            doc = db.new_document("Person")
-            doc.set("name", name)
-            doc.set("age", age)
-            doc.save()
+            db.command("sql", "INSERT INTO Person SET name = ?, age = ?", name, age)
 
     print("Inserted 3 records")
 ```
@@ -146,15 +140,12 @@ with arcadedb.create_database("./quickstart") as db:
 
 ```python
 with arcadedb.create_database("./quickstart") as db:
-    db.schema.create_document_type("Person")
-    db.schema.create_property("Person", "name", "STRING")
-    db.schema.create_property("Person", "age", "INTEGER")
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
     with db.transaction():
         for name, age in [("Alice", 30), ("Bob", 25)]:
-            doc = db.new_document("Person")
-            doc.set("name", name)
-            doc.set("age", age)
-            doc.save()
+            db.command("sql", "INSERT INTO Person SET name = ?, age = ?", name, age)
 
     # Query data
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
@@ -181,11 +172,12 @@ import arcadedb_embedded as arcadedb
 def main():
     # Create database
     with arcadedb.create_database("./quickstart") as db:
-        # Create schema (pythonic API)
-        db.schema.create_document_type("Person")
-        db.schema.create_property("Person", "name", "STRING")
-        db.schema.create_property("Person", "age", "INTEGER")
-        db.schema.create_index("Person", ["name"], unique=False)
+        # Create schema (SQL)
+        db.command("sql", "CREATE DOCUMENT TYPE Person")
+        db.command("sql", "CREATE PROPERTY Person.name STRING")
+        db.command("sql", "CREATE PROPERTY Person.age INTEGER")
+        db.command("sql", "CREATE PROPERTY Person.email STRING")
+        db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
 
         # Insert data (in transaction)
         with db.transaction():
@@ -194,11 +186,13 @@ def main():
                 ("Bob", 25, "bob@example.com"),
                 ("Charlie", 35, "charlie@example.com"),
             ]:
-                doc = db.new_document("Person")
-                doc.set("name", name)
-                doc.set("age", age)
-                doc.set("email", email)
-                doc.save()
+                db.command(
+                    "sql",
+                    "INSERT INTO Person SET name = ?, age = ?, email = ?",
+                    name,
+                    age,
+                    email,
+                )
 
         print("✅ Inserted 3 records")
 
@@ -266,14 +260,11 @@ All writes require a transaction:
 ```python
 # ✅ Good - in transaction
 with db.transaction():
-    doc = db.new_document("Person")
-    doc.set("name", "Alice")
-    doc.save()
+    db.command("sql", "INSERT INTO Person SET name = ?", "Alice")
 
 # ❌ Will fail - no transaction
-doc = db.new_document("Person")
-doc.set("name", "Alice")
-# doc.save() outside a transaction will raise
+db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+# write commands outside a transaction will raise
 ```
 
 !!! info "Read-Only Operations"
@@ -319,10 +310,7 @@ with arcadedb.open_database("./quickstart") as db:
 ```python
 with db.transaction():
     for i in range(100):
-        doc = db.new_document("Person")
-        doc.set("name", f"User{i}")
-        doc.set("age", 20 + i)
-        doc.save()
+        db.command("sql", "INSERT INTO Person SET name = ?, age = ?", f"User{i}", 20 + i)
 ```
 
 ### Error Handling
@@ -330,19 +318,16 @@ with db.transaction():
 ```python
 try:
     with arcadedb.create_database("./mydb") as db:
-        # Schema operations are auto-transactional
-        db.schema.create_document_type("User")
-        db.schema.create_property("User", "email", "STRING")
-        db.schema.create_index("User", ["email"], unique=True)
+        db.command("sql", "CREATE DOCUMENT TYPE User")
+        db.command("sql", "CREATE PROPERTY User.email STRING")
+        db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 
         # Data operations require an explicit transaction
         with db.transaction():
-            doc = db.new_document("User")
-            doc.set("email", "alice@example.com").save()
+            db.command("sql", "INSERT INTO User SET email = ?", "alice@example.com")
 
             # This will raise an exception due to unique constraint
-            dup = db.new_document("User")
-            dup.set("email", "alice@example.com").save()
+            db.command("sql", "INSERT INTO User SET email = ?", "alice@example.com")
 except Exception as e:
     print(f"Database error: {e}")
 ```

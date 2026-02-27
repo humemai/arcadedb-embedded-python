@@ -24,8 +24,7 @@ import arcadedb_embedded as arcadedb
 from arcadedb_embedded.graph import Document, Vertex, Edge
 
 with arcadedb.create_database("./mydb") as db:
-    # Schema operations are auto-transactional
-    db.schema.create_document_type("Note")
+    db.command("sql", "CREATE DOCUMENT TYPE Note")
 
     # Create a document
     with db.transaction():
@@ -191,8 +190,7 @@ traversing edges.
 ### Creating Vertices
 
 ```python
-# Schema operations are auto-transactional
-db.schema.create_vertex_type("Person")
+db.command("sql", "CREATE VERTEX TYPE Person")
 
 with db.transaction():
     alice = db.new_vertex("Person")
@@ -342,8 +340,7 @@ with db.transaction():
 ### 3. Create Indexes for Frequent Lookups
 
 ```python
-db.schema.create_index("Person", ["name"], unique=False)
-# SQL DDL is also supported, but the Schema API is preferred in embedded mode.
+db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
 ```
 
 ### 4. Chain Methods for Brevity

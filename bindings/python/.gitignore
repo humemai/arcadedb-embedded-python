@@ -45,3 +45,6 @@ notebooks/
 
 # local built jars
 local-jars/
+
+# test databases
+my_test_databases/

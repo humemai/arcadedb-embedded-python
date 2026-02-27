@@ -53,18 +53,18 @@ ArcadeDB is a next-generation multi-model database that supports:
 These bindings provide native Python access to ArcadeDB's full capabilities with **two
 access methods**:
 
-### Java API (Embedded Mode)
+### Embedded Engine (DSL-first)
 
 - **Direct JVM Integration**: Run database directly in your Python process via JPype
 - **Best Performance**: No network overhead, direct method calls
 - **Use Cases**: Single-process applications, high-performance scenarios
+- **Recommended style**: SQL/OpenCypher via `db.command(...)` and `db.query(...)`
 - **Example**:
-  ```python
-  with db.transaction():
-      vertex = db.new_vertex("Person")
-      vertex.set("name", "Alice")
-      vertex.save()
-  ```
+    ```python
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    with db.transaction():
+            db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+    ```
 
 ### HTTP API (Server Mode)
 
@@ -72,17 +72,17 @@ access methods**:
 - **Multi-Language**: Any language can connect via HTTP
 - **Use Cases**: Multi-process applications, web services, remote access
 - **Example**:
-  ```python
-  import requests
-  from requests.auth import HTTPBasicAuth
+    ```python
+    import requests
+    from requests.auth import HTTPBasicAuth
 
-  requests.post(
-      "http://localhost:2480/api/v1/command/mydb",
-      json={"language": "sql", "command": "SELECT FROM Person"},
-            auth=HTTPBasicAuth("root", "password"),
-            timeout=30,
-  )
-  ```
+    requests.post(
+        "http://localhost:2480/api/v1/command/mydb",
+        json={"language": "sql", "command": "SELECT FROM Person"},
+        auth=HTTPBasicAuth("root", "password"),
+        timeout=30,
+    )
+    ```
 
 Both APIs can be used **simultaneously** on the same server instance.
 
@@ -90,7 +90,7 @@ Both APIs can be used **simultaneously** on the same server instance.
 
 - **Multiple Query Languages**: SQL, OpenCypher, MongoDB syntax
 - **ACID Transactions**: Full transactional guarantees
-- **Type Safety**: Pythonic API with proper error handling
+- **Type Safety**: Strong Python type handling and clear errors
 
 ## Features
 
@@ -117,24 +117,17 @@ Both APIs can be used **simultaneously** on the same server instance.
 ```python
 import arcadedb_embedded as arcadedb
 
-# Create database (context manager for automatic open and close)
 with arcadedb.create_database("./mydb") as db:
-    # Create schema (auto-transactional)
-    db.schema.create_document_type("Person")
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
 
-    # Insert data (requires transaction)
     with db.transaction():
-        person = db.new_document("Person")
-        person.set("name", "Alice")
-        person.set("age", 30)
-        person.save()
+        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
 
-    # Query data
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
     for record in result:
         print(f"Name: {record.get('name')}")
-
-    # db.drop()  # Permanently deletes the database
 ```
 
 !!! tip "Resource Management"

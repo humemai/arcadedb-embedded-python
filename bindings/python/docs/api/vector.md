@@ -168,11 +168,11 @@ import numpy as np
 # Create database and schema
 db = arcadedb.create_database("./vector_db")
 
-db.schema.create_vertex_type("Document")
-db.schema.create_property("Document", "id", "STRING")
-db.schema.create_property("Document", "text", "STRING")
-db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
-db.schema.create_index("Document", ["id"], unique=True)
+db.command("sql", "CREATE VERTEX TYPE Document")
+db.command("sql", "CREATE PROPERTY Document.id STRING")
+db.command("sql", "CREATE PROPERTY Document.text STRING")
+db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
+db.command("sql", "CREATE INDEX ON Document (id) UNIQUE")
 
 # Create vector index
 index = db.create_vector_index(
@@ -296,12 +296,12 @@ model = SentenceTransformer('all-MiniLM-L6-v2')  # 384 dimensions
 # Create database and schema
 db = arcadedb.create_database("./semantic_search")
 
-db.schema.create_vertex_type("Document")
-db.schema.create_property("Document", "id", "STRING")
-db.schema.create_property("Document", "title", "STRING")
-db.schema.create_property("Document", "content", "STRING")
-db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
-db.schema.create_index("Document", ["id"], unique=True)
+db.command("sql", "CREATE VERTEX TYPE Document")
+db.command("sql", "CREATE PROPERTY Document.id STRING")
+db.command("sql", "CREATE PROPERTY Document.title STRING")
+db.command("sql", "CREATE PROPERTY Document.content STRING")
+db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
+db.command("sql", "CREATE INDEX ON Document (id) UNIQUE")
 
 # Create vector index (384 dimensions for all-MiniLM-L6-v2)
 index = db.create_vector_index(
@@ -331,13 +331,14 @@ with db.transaction():
         text = f"{doc['title']} {doc['content']}"
         embedding = model.encode(text)
 
-        # Create vertex
-        vertex = db.new_vertex("Document")
-        vertex.set("id", doc["id"])
-        vertex.set("title", doc["title"])
-        vertex.set("content", doc["content"])
-        vertex.set("embedding", to_java_float_array(embedding))
-        vertex.save()
+        db.command(
+            "sql",
+            "INSERT INTO Document SET id = ?, title = ?, content = ?, embedding = ?",
+            doc["id"],
+            doc["title"],
+            doc["content"],
+            to_java_float_array(embedding),
+        )
 
 print(f"Indexed {len(documents)} documents")
 
@@ -370,13 +371,13 @@ import numpy as np
 db = arcadedb.open_database("./products_db")
 
 # Create schema
-db.schema.create_vertex_type("Product")
-db.schema.create_property("Product", "id", "STRING")
-db.schema.create_property("Product", "name", "STRING")
-db.schema.create_property("Product", "category", "STRING")
-db.schema.create_property("Product", "price", "DECIMAL")
-db.schema.create_property("Product", "features", "ARRAY_OF_FLOATS")
-db.schema.create_index("Product", ["category"], unique=False)
+db.command("sql", "CREATE VERTEX TYPE Product")
+db.command("sql", "CREATE PROPERTY Product.id STRING")
+db.command("sql", "CREATE PROPERTY Product.name STRING")
+db.command("sql", "CREATE PROPERTY Product.category STRING")
+db.command("sql", "CREATE PROPERTY Product.price DECIMAL")
+db.command("sql", "CREATE PROPERTY Product.features ARRAY_OF_FLOATS")
+db.command("sql", "CREATE INDEX ON Product (category) NOTUNIQUE")
 
 # Create vector index
 index = db.create_vector_index(
@@ -397,13 +398,15 @@ products = [
 
 with db.transaction():
     for prod in products:
-        v = db.new_vertex("Product")
-        v.set("id", prod["id"])
-        v.set("name", prod["name"])
-        v.set("category", prod["category"])
-        v.set("price", prod["price"])
-        v.set("features", to_java_float_array(prod["features"]))
-        v.save()
+        db.command(
+            "sql",
+            "INSERT INTO Product SET id = ?, name = ?, category = ?, price = ?, features = ?",
+            prod["id"],
+            prod["name"],
+            prod["category"],
+            prod["price"],
+            to_java_float_array(prod["features"]),
+        )
         # Note: LSM vector index automatically indexes new records
 
 # Hybrid search: vector similarity + filters
@@ -451,11 +454,11 @@ def get_image_embedding(image_path):
 db = arcadedb.create_database("./image_search")
 
 # Schema
-db.schema.create_vertex_type("Image")
-db.schema.create_property("Image", "id", "STRING")
-db.schema.create_property("Image", "filename", "STRING")
-db.schema.create_property("Image", "path", "STRING")
-db.schema.create_property("Image", "embedding", "ARRAY_OF_FLOATS")
+db.command("sql", "CREATE VERTEX TYPE Image")
+db.command("sql", "CREATE PROPERTY Image.id STRING")
+db.command("sql", "CREATE PROPERTY Image.filename STRING")
+db.command("sql", "CREATE PROPERTY Image.path STRING")
+db.command("sql", "CREATE PROPERTY Image.embedding ARRAY_OF_FLOATS")
 
 # Create index
 index = db.create_vector_index(

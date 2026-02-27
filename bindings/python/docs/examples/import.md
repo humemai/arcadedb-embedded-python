@@ -58,11 +58,11 @@ from arcadedb_embedded import import_csv
 with arcadedb.create_database("./import_demo") as db:
     # Define schema up front so imports get typed correctly
     with db.transaction():
-        db.schema.create_document_type("Product")
-        db.schema.create_property("Product", "id", arcadedb.PropertyType.INTEGER)
-        db.schema.create_property("Product", "name", arcadedb.PropertyType.STRING)
-        db.schema.create_property("Product", "price", arcadedb.PropertyType.FLOAT)
-        db.schema.create_property("Product", "inStock", arcadedb.PropertyType.BOOLEAN)
+        db.command("sql", "CREATE DOCUMENT TYPE Product")
+        db.command("sql", "CREATE PROPERTY Product.id INTEGER")
+        db.command("sql", "CREATE PROPERTY Product.name STRING")
+        db.command("sql", "CREATE PROPERTY Product.price FLOAT")
+        db.command("sql", "CREATE PROPERTY Product.inStock BOOLEAN")
 
     stats = import_csv(
         db,
@@ -147,7 +147,7 @@ from arcadedb_embedded import Importer
 with arcadedb.create_database("./import_demo") as db:
     # Example: Optimized bulk import
     # Drop heavy indexes before bulk insert (replace with your index names)
-    db.schema.drop_index("MyType[id]")
+    db.command("sql", "DROP INDEX `MyType[id]`")
 
     importer = Importer(db)
 
@@ -159,7 +159,7 @@ with arcadedb.create_database("./import_demo") as db:
     )
 
     # Recreate indexes after import (schema ops are auto-transactional)
-    db.schema.create_index("MyType", ["id"], unique=True)
+    db.command("sql", "CREATE INDEX ON MyType (id) UNIQUE")
 ```
 
 ## Additional Resources

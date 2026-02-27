@@ -131,8 +131,7 @@ import arcadedb_embedded as arcadedb
 
 # Create database
 db = arcadedb.create_database("./test_db")
-# Schema operations are auto-transactional
-db.schema.create_document_type("Counter")
+db.command("sql", "CREATE DOCUMENT TYPE Counter")
 
 # Insert initial record
 with db.transaction():
@@ -213,7 +212,7 @@ Use a single database instance shared across threads:
 ```python
 # Good: Share one database instance
 db = arcadedb.create_database("./mydb")
-db.schema.create_document_type("MyType")
+db.command("sql", "CREATE DOCUMENT TYPE MyType")
 
 def thread_worker():
     result = db.query("sql", "SELECT FROM MyType")
@@ -245,7 +244,7 @@ import arcadedb_embedded as arcadedb
 
 # First: Create and populate
 db1 = arcadedb.create_database("./test_db")
-db1.schema.create_document_type("Person")
+db1.command("sql", "CREATE DOCUMENT TYPE Person")
 
 with db1.transaction():
     person = db1.new_document("Person")
@@ -309,7 +308,7 @@ import sys
 
 # Create test database
 db = arcadedb.create_database("./test_db")
-db.schema.create_document_type("Data")
+db.command("sql", "CREATE DOCUMENT TYPE Data")
 with db.transaction():
     doc = db.new_document("Data")
     doc.set("value", "test").save()

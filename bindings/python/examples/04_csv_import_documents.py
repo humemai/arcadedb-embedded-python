@@ -619,13 +619,13 @@ def create_indexes(db, indexes, verbose=True):
 
         for attempt in range(1, max_retries + 1):
             try:
-                # Convert uniqueness string to Schema API parameters
+                # Convert uniqueness string to SQL index creation
                 if uniqueness == "UNIQUE":
-                    db.schema.create_index(table, [column], unique=True)
+                    db.command("sql", f"CREATE INDEX ON {table} ({column}) UNIQUE")
                 elif uniqueness == "FULL_TEXT":
-                    db.schema.create_index(table, [column], index_type="FULL_TEXT")
+                    db.command("sql", f"CREATE INDEX ON {table} ({column}) FULL_TEXT")
                 else:  # NOTUNIQUE
-                    db.schema.create_index(table, [column], unique=False)
+                    db.command("sql", f"CREATE INDEX ON {table} ({column}) NOTUNIQUE")
 
                 if verbose:
                     print(

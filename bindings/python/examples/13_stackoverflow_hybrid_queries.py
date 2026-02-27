@@ -429,7 +429,12 @@ def create_indexes_with_retry(
         created = False
         for attempt in range(1, max_retries + 1):
             try:
-                db.schema.create_index(table, props, unique=unique)
+                unique_clause = "UNIQUE" if unique else "NOTUNIQUE"
+                props_clause = ", ".join(props)
+                db.command(
+                    "sql",
+                    f"CREATE INDEX ON {table} ({props_clause}) {unique_clause}",
+                )
                 created = True
                 break
             except Exception as exc:
@@ -454,19 +459,24 @@ def create_indexes_with_retry(
 
 def create_table_schema(db, table_defs: List[Dict[str, Any]]) -> None:
     for table in table_defs:
-        db.schema.create_document_type(table["name"])
+        db.command("sql", f"CREATE DOCUMENT TYPE {table['name']}")
         for field_name, field_type, _ in table["fields"]:
-            db.schema.create_property(table["name"], field_name, field_type)
+            db.command(
+                "sql", f"CREATE PROPERTY {table['name']}.{field_name} {field_type}"
+            )
 
 
 def insert_table_batch(db, table_name: str, batch: List[Dict[str, Any]]) -> None:
+    from arcadedb_embedded.type_conversion import convert_python_to_java
+
     with db.transaction():
         for record in batch:
-            doc = db.new_document(table_name)
-            for key, value in record.items():
-                if value is not None:
-                    doc.set(key, value)
-            doc.save()
+            columns = [key for key, value in record.items() if value is not None]
+            if not columns:
+                continue
+            assignments = ", ".join(f"{col} = ?" for col in columns)
+            values = [convert_python_to_java(record[col]) for col in columns]
+            db.command("sql", f"INSERT INTO {table_name} SET {assignments}", *values)
 
 
 def load_table(
@@ -525,96 +535,138 @@ def parse_tags(tags_str: Optional[str]) -> List[str]:
 
 
 def create_graph_schema(db) -> None:
-    db.schema.create_vertex_type("User")
-    db.schema.create_property("User", "Id", "INTEGER")
-    db.schema.create_property("User", "DisplayName", "STRING")
-    db.schema.create_property("User", "Reputation", "INTEGER")
-    db.schema.create_property("User", "CreationDate", "INTEGER")
-    db.schema.create_property("User", "Views", "INTEGER")
-    db.schema.create_property("User", "UpVotes", "INTEGER")
-    db.schema.create_property("User", "DownVotes", "INTEGER")
+    db.command("sql", "CREATE VERTEX TYPE User")
+    db.command("sql", "CREATE PROPERTY User.Id INTEGER")
+    db.command("sql", "CREATE PROPERTY User.DisplayName STRING")
+    db.command("sql", "CREATE PROPERTY User.Reputation INTEGER")
+    db.command("sql", "CREATE PROPERTY User.CreationDate INTEGER")
+    db.command("sql", "CREATE PROPERTY User.Views INTEGER")
+    db.command("sql", "CREATE PROPERTY User.UpVotes INTEGER")
+    db.command("sql", "CREATE PROPERTY User.DownVotes INTEGER")
 
-    db.schema.create_vertex_type("Question")
-    db.schema.create_property("Question", "Id", "INTEGER")
-    db.schema.create_property("Question", "Title", "STRING")
-    db.schema.create_property("Question", "Body", "STRING")
-    db.schema.create_property("Question", "Score", "INTEGER")
-    db.schema.create_property("Question", "ViewCount", "INTEGER")
-    db.schema.create_property("Question", "CreationDate", "INTEGER")
-    db.schema.create_property("Question", "AnswerCount", "INTEGER")
-    db.schema.create_property("Question", "CommentCount", "INTEGER")
-    db.schema.create_property("Question", "FavoriteCount", "INTEGER")
+    db.command("sql", "CREATE VERTEX TYPE Question")
+    db.command("sql", "CREATE PROPERTY Question.Id INTEGER")
+    db.command("sql", "CREATE PROPERTY Question.Title STRING")
+    db.command("sql", "CREATE PROPERTY Question.Body STRING")
+    db.command("sql", "CREATE PROPERTY Question.Score INTEGER")
+    db.command("sql", "CREATE PROPERTY Question.ViewCount INTEGER")
+    db.command("sql", "CREATE PROPERTY Question.CreationDate INTEGER")
+    db.command("sql", "CREATE PROPERTY Question.AnswerCount INTEGER")
+    db.command("sql", "CREATE PROPERTY Question.CommentCount INTEGER")
+    db.command("sql", "CREATE PROPERTY Question.FavoriteCount INTEGER")
 
-    db.schema.create_vertex_type("Answer")
-    db.schema.create_property("Answer", "Id", "INTEGER")
-    db.schema.create_property("Answer", "Body", "STRING")
-    db.schema.create_property("Answer", "Score", "INTEGER")
-    db.schema.create_property("Answer", "CreationDate", "INTEGER")
-    db.schema.create_property("Answer", "CommentCount", "INTEGER")
+    db.command("sql", "CREATE VERTEX TYPE Answer")
+    db.command("sql", "CREATE PROPERTY Answer.Id INTEGER")
+    db.command("sql", "CREATE PROPERTY Answer.Body STRING")
+    db.command("sql", "CREATE PROPERTY Answer.Score INTEGER")
+    db.command("sql", "CREATE PROPERTY Answer.CreationDate INTEGER")
+    db.command("sql", "CREATE PROPERTY Answer.CommentCount INTEGER")
 
-    db.schema.create_vertex_type("Tag")
-    db.schema.create_property("Tag", "Id", "INTEGER")
-    db.schema.create_property("Tag", "TagName", "STRING")
-    db.schema.create_property("Tag", "Count", "INTEGER")
+    db.command("sql", "CREATE VERTEX TYPE Tag")
+    db.command("sql", "CREATE PROPERTY Tag.Id INTEGER")
+    db.command("sql", "CREATE PROPERTY Tag.TagName STRING")
+    db.command("sql", "CREATE PROPERTY Tag.Count INTEGER")
 
-    db.schema.create_vertex_type("Badge")
-    db.schema.create_property("Badge", "Id", "INTEGER")
-    db.schema.create_property("Badge", "Name", "STRING")
-    db.schema.create_property("Badge", "Date", "INTEGER")
-    db.schema.create_property("Badge", "Class", "INTEGER")
+    db.command("sql", "CREATE VERTEX TYPE Badge")
+    db.command("sql", "CREATE PROPERTY Badge.Id INTEGER")
+    db.command("sql", "CREATE PROPERTY Badge.Name STRING")
+    db.command("sql", "CREATE PROPERTY Badge.Date INTEGER")
+    db.command("sql", "CREATE PROPERTY Badge.Class INTEGER")
 
-    db.schema.create_vertex_type("Comment")
-    db.schema.create_property("Comment", "Id", "INTEGER")
-    db.schema.create_property("Comment", "Text", "STRING")
-    db.schema.create_property("Comment", "Score", "INTEGER")
-    db.schema.create_property("Comment", "CreationDate", "INTEGER")
+    db.command("sql", "CREATE VERTEX TYPE Comment")
+    db.command("sql", "CREATE PROPERTY Comment.Id INTEGER")
+    db.command("sql", "CREATE PROPERTY Comment.Text STRING")
+    db.command("sql", "CREATE PROPERTY Comment.Score INTEGER")
+    db.command("sql", "CREATE PROPERTY Comment.CreationDate INTEGER")
 
-    db.schema.create_edge_type("ASKED")
-    db.schema.create_property("ASKED", "CreationDate", "INTEGER")
-    db.schema.create_edge_type("ANSWERED")
-    db.schema.create_property("ANSWERED", "CreationDate", "INTEGER")
-    db.schema.create_edge_type("HAS_ANSWER")
-    db.schema.create_edge_type("ACCEPTED_ANSWER")
-    db.schema.create_edge_type("TAGGED_WITH")
-    db.schema.create_edge_type("COMMENTED_ON")
-    db.schema.create_property("COMMENTED_ON", "CreationDate", "INTEGER")
-    db.schema.create_property("COMMENTED_ON", "Score", "INTEGER")
-    db.schema.create_edge_type("COMMENTED_ON_ANSWER")
-    db.schema.create_property("COMMENTED_ON_ANSWER", "CreationDate", "INTEGER")
-    db.schema.create_property("COMMENTED_ON_ANSWER", "Score", "INTEGER")
-    db.schema.create_edge_type("EARNED")
-    db.schema.create_property("EARNED", "Date", "INTEGER")
-    db.schema.create_property("EARNED", "Class", "INTEGER")
-    db.schema.create_edge_type("LINKED_TO")
-    db.schema.create_property("LINKED_TO", "LinkTypeId", "INTEGER")
-    db.schema.create_property("LINKED_TO", "CreationDate", "INTEGER")
+    db.command("sql", "CREATE EDGE TYPE ASKED")
+    db.command("sql", "CREATE PROPERTY ASKED.CreationDate INTEGER")
+    db.command("sql", "CREATE EDGE TYPE ANSWERED")
+    db.command("sql", "CREATE PROPERTY ANSWERED.CreationDate INTEGER")
+    db.command("sql", "CREATE EDGE TYPE HAS_ANSWER")
+    db.command("sql", "CREATE EDGE TYPE ACCEPTED_ANSWER")
+    db.command("sql", "CREATE EDGE TYPE TAGGED_WITH")
+    db.command("sql", "CREATE EDGE TYPE COMMENTED_ON")
+    db.command("sql", "CREATE PROPERTY COMMENTED_ON.CreationDate INTEGER")
+    db.command("sql", "CREATE PROPERTY COMMENTED_ON.Score INTEGER")
+    db.command("sql", "CREATE EDGE TYPE COMMENTED_ON_ANSWER")
+    db.command("sql", "CREATE PROPERTY COMMENTED_ON_ANSWER.CreationDate INTEGER")
+    db.command("sql", "CREATE PROPERTY COMMENTED_ON_ANSWER.Score INTEGER")
+    db.command("sql", "CREATE EDGE TYPE EARNED")
+    db.command("sql", "CREATE PROPERTY EARNED.Date INTEGER")
+    db.command("sql", "CREATE PROPERTY EARNED.Class INTEGER")
+    db.command("sql", "CREATE EDGE TYPE LINKED_TO")
+    db.command("sql", "CREATE PROPERTY LINKED_TO.LinkTypeId INTEGER")
+    db.command("sql", "CREATE PROPERTY LINKED_TO.CreationDate INTEGER")
 
     for vertex_type in GRAPH_VERTEX_TYPES:
-        db.schema.create_index(vertex_type, ["Id"], unique=True)
+        db.command("sql", f"CREATE INDEX ON {vertex_type} (Id) UNIQUE")
 
     db.async_executor().wait_completion()
 
 
 def insert_vertices(db, vertex_type: str, rows: List[Dict[str, Any]]) -> None:
+    from arcadedb_embedded.type_conversion import convert_python_to_java
+
     with db.transaction():
         for row in rows:
-            vtx = db.new_vertex(vertex_type)
-            for key, value in row.items():
-                if value is not None:
-                    vtx.set(key, value)
-            vtx.save()
+            columns = [key for key, value in row.items() if value is not None]
+            if not columns:
+                continue
+            assignments = ", ".join(f"{col} = ?" for col in columns)
+            values = [convert_python_to_java(row[col]) for col in columns]
+            db.command("sql", f"INSERT INTO {vertex_type} SET {assignments}", *values)
 
 
 def insert_edges(db, edge_type: str, rows: List[Dict[str, Any]]) -> None:
+    from arcadedb_embedded.type_conversion import convert_python_to_java
+
     with db.transaction():
         for row in rows:
-            edge = row["from_vertex"].new_edge(edge_type, row["to_vertex"])
-            for key, value in row.items():
-                if key in ("from_vertex", "to_vertex"):
-                    continue
-                if value is not None:
-                    edge.set(key, value)
-            edge.save()
+            from_type = row["from_type"]
+            to_type = row["to_type"]
+            from_id = convert_python_to_java(row["from_id"])
+            to_id = convert_python_to_java(row["to_id"])
+
+            props = {
+                key: value
+                for key, value in row.items()
+                if key not in ("from_type", "from_id", "to_type", "to_id")
+                and value is not None
+            }
+
+            if props:
+                assignments = ", ".join(f"{col} = ?" for col in props)
+                values = [convert_python_to_java(props[col]) for col in props]
+                try:
+                    db.command(
+                        "sql",
+                        f"CREATE EDGE {edge_type} "
+                        f"FROM (SELECT FROM {from_type} WHERE Id = ?) "
+                        f"TO (SELECT FROM {to_type} WHERE Id = ?) "
+                        f"SET {assignments}",
+                        from_id,
+                        to_id,
+                        *values,
+                    )
+                except Exception as exc:
+                    if "NoSuchElementException" in str(exc):
+                        continue
+                    raise
+            else:
+                try:
+                    db.command(
+                        "sql",
+                        f"CREATE EDGE {edge_type} "
+                        f"FROM (SELECT FROM {from_type} WHERE Id = ?) "
+                        f"TO (SELECT FROM {to_type} WHERE Id = ?)",
+                        from_id,
+                        to_id,
+                    )
+                except Exception as exc:
+                    if "NoSuchElementException" in str(exc):
+                        continue
+                    raise
 
 
 def load_graph(db, data_dir: Path, batch_size: int) -> Dict[str, Any]:
@@ -795,14 +847,12 @@ def create_edge_asked(db, data_dir: Path, batch_size: int) -> float:
         post_id = parse_int(attrs.get("Id"))
         if user_id is None or post_id is None:
             continue
-        user_vertex = db.lookup_by_key("User", ["Id"], [user_id])
-        question_vertex = db.lookup_by_key("Question", ["Id"], [post_id])
-        if not user_vertex or not question_vertex:
-            continue
         batch.append(
             {
-                "from_vertex": user_vertex,
-                "to_vertex": question_vertex,
+                "from_type": "User",
+                "from_id": user_id,
+                "to_type": "Question",
+                "to_id": post_id,
                 "CreationDate": to_epoch_millis(
                     parse_datetime(attrs.get("CreationDate"))
                 ),
@@ -826,14 +876,12 @@ def create_edge_answered(db, data_dir: Path, batch_size: int) -> float:
         answer_id = parse_int(attrs.get("Id"))
         if user_id is None or answer_id is None:
             continue
-        user_vertex = db.lookup_by_key("User", ["Id"], [user_id])
-        answer_vertex = db.lookup_by_key("Answer", ["Id"], [answer_id])
-        if not user_vertex or not answer_vertex:
-            continue
         batch.append(
             {
-                "from_vertex": user_vertex,
-                "to_vertex": answer_vertex,
+                "from_type": "User",
+                "from_id": user_id,
+                "to_type": "Answer",
+                "to_id": answer_id,
                 "CreationDate": to_epoch_millis(
                     parse_datetime(attrs.get("CreationDate"))
                 ),
@@ -857,11 +905,14 @@ def create_edge_has_answer(db, data_dir: Path, batch_size: int) -> float:
         answer_id = parse_int(attrs.get("Id"))
         if parent_id is None or answer_id is None:
             continue
-        question_vertex = db.lookup_by_key("Question", ["Id"], [parent_id])
-        answer_vertex = db.lookup_by_key("Answer", ["Id"], [answer_id])
-        if not question_vertex or not answer_vertex:
-            continue
-        batch.append({"from_vertex": question_vertex, "to_vertex": answer_vertex})
+        batch.append(
+            {
+                "from_type": "Question",
+                "from_id": parent_id,
+                "to_type": "Answer",
+                "to_id": answer_id,
+            }
+        )
         if len(batch) >= batch_size:
             insert_edges(db, "HAS_ANSWER", batch)
             batch = []
@@ -880,11 +931,14 @@ def create_edge_accepted_answer(db, data_dir: Path, batch_size: int) -> float:
         answer_id = parse_int(attrs.get("AcceptedAnswerId"))
         if question_id is None or answer_id is None:
             continue
-        question_vertex = db.lookup_by_key("Question", ["Id"], [question_id])
-        answer_vertex = db.lookup_by_key("Answer", ["Id"], [answer_id])
-        if not question_vertex or not answer_vertex:
-            continue
-        batch.append({"from_vertex": question_vertex, "to_vertex": answer_vertex})
+        batch.append(
+            {
+                "from_type": "Question",
+                "from_id": question_id,
+                "to_type": "Answer",
+                "to_id": answer_id,
+            }
+        )
         if len(batch) >= batch_size:
             insert_edges(db, "ACCEPTED_ANSWER", batch)
             batch = []
@@ -904,17 +958,18 @@ def create_edge_tagged_with(
         question_id = parse_int(attrs.get("Id"))
         if question_id is None:
             continue
-        question_vertex = db.lookup_by_key("Question", ["Id"], [question_id])
-        if not question_vertex:
-            continue
         for tag in parse_tags(attrs.get("Tags")):
             tag_id = tag_map.get(tag)
             if tag_id is None:
                 continue
-            tag_vertex = db.lookup_by_key("Tag", ["Id"], [tag_id])
-            if not tag_vertex:
-                continue
-            batch.append({"from_vertex": question_vertex, "to_vertex": tag_vertex})
+            batch.append(
+                {
+                    "from_type": "Question",
+                    "from_id": question_id,
+                    "to_type": "Tag",
+                    "to_id": tag_id,
+                }
+            )
             if len(batch) >= batch_size:
                 insert_edges(db, "TAGGED_WITH", batch)
                 batch = []
@@ -940,25 +995,23 @@ def create_edge_commented_on(
         if comment_id is None or post_id is None:
             continue
 
-        comment_vertex = db.lookup_by_key("Comment", ["Id"], [comment_id])
-        if not comment_vertex:
-            continue
-
-        target_vertex = None
+        target_type = None
         target_edge = None
         if post_id in question_ids:
-            target_vertex = db.lookup_by_key("Question", ["Id"], [post_id])
+            target_type = "Question"
             target_edge = "COMMENTED_ON"
         elif post_id in answer_ids:
-            target_vertex = db.lookup_by_key("Answer", ["Id"], [post_id])
+            target_type = "Answer"
             target_edge = "COMMENTED_ON_ANSWER"
 
-        if not target_vertex:
+        if not target_type:
             continue
 
         payload = {
-            "from_vertex": comment_vertex,
-            "to_vertex": target_vertex,
+            "from_type": "Comment",
+            "from_id": comment_id,
+            "to_type": target_type,
+            "to_id": post_id,
             "CreationDate": to_epoch_millis(parse_datetime(attrs.get("CreationDate"))),
             "Score": parse_int(attrs.get("Score")),
         }
@@ -992,14 +1045,12 @@ def create_edge_earned(db, data_dir: Path, batch_size: int) -> float:
         badge_id = parse_int(attrs.get("Id"))
         if user_id is None or badge_id is None:
             continue
-        user_vertex = db.lookup_by_key("User", ["Id"], [user_id])
-        badge_vertex = db.lookup_by_key("Badge", ["Id"], [badge_id])
-        if not user_vertex or not badge_vertex:
-            continue
         batch.append(
             {
-                "from_vertex": user_vertex,
-                "to_vertex": badge_vertex,
+                "from_type": "User",
+                "from_id": user_id,
+                "to_type": "Badge",
+                "to_id": badge_id,
                 "Date": to_epoch_millis(parse_datetime(attrs.get("Date"))),
                 "Class": parse_int(attrs.get("Class")),
             }
@@ -1027,26 +1078,28 @@ def create_edge_linked_to(
         if post_id is None or related_id is None:
             continue
 
-        from_vertex = None
-        to_vertex = None
+        from_type = None
+        to_type = None
 
         if post_id in question_ids:
-            from_vertex = db.lookup_by_key("Question", ["Id"], [post_id])
+            from_type = "Question"
         elif post_id in answer_ids:
-            from_vertex = db.lookup_by_key("Answer", ["Id"], [post_id])
+            from_type = "Answer"
 
         if related_id in question_ids:
-            to_vertex = db.lookup_by_key("Question", ["Id"], [related_id])
+            to_type = "Question"
         elif related_id in answer_ids:
-            to_vertex = db.lookup_by_key("Answer", ["Id"], [related_id])
+            to_type = "Answer"
 
-        if not from_vertex or not to_vertex:
+        if not from_type or not to_type:
             continue
 
         batch.append(
             {
-                "from_vertex": from_vertex,
-                "to_vertex": to_vertex,
+                "from_type": from_type,
+                "from_id": post_id,
+                "to_type": to_type,
+                "to_id": related_id,
                 "LinkTypeId": parse_int(attrs.get("LinkTypeId")),
                 "CreationDate": to_epoch_millis(
                     parse_datetime(attrs.get("CreationDate"))
@@ -1095,8 +1148,16 @@ def count_graph(db) -> Dict[str, Any]:
 
 def ensure_embedding_properties(db) -> None:
     for vertex_type in ("Question", "Answer", "Comment"):
-        db.schema.get_or_create_property(vertex_type, "embedding", "ARRAY_OF_FLOATS")
-        db.schema.get_or_create_property(vertex_type, "vector_id", "STRING")
+        for prop_name, prop_type in (
+            ("embedding", "ARRAY_OF_FLOATS"),
+            ("vector_id", "STRING"),
+        ):
+            try:
+                db.command(
+                    "sql", f"CREATE PROPERTY {vertex_type}.{prop_name} {prop_type}"
+                )
+            except Exception:
+                pass
 
 
 def embed_vertex_type(

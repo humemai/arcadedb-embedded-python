@@ -41,9 +41,8 @@ SQL vector operations are tested separately in `test_vector_sql.py`, including v
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    # Schema operations are auto-transactional
-    db.schema.create_vertex_type("Doc")
-    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+    db.command("sql", "CREATE VERTEX TYPE Doc")
+    db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
 
     index = db.create_vector_index(
         "Doc",
@@ -59,8 +58,8 @@ with arcadedb.create_database("./test_db") as db:
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("Doc")
-    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+    db.command("sql", "CREATE VERTEX TYPE Doc")
+    db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
 
     index = db.create_vector_index(
         "Doc",
@@ -89,10 +88,9 @@ with arcadedb.create_database("./test_db") as db:
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    # Schema operations are auto-transactional
-    db.schema.create_vertex_type("Doc")
-    db.schema.create_property("Doc", "docId", "INTEGER")
-    db.schema.create_property("Doc", "embedding", "ARRAY_OF_FLOATS")
+    db.command("sql", "CREATE VERTEX TYPE Doc")
+    db.command("sql", "CREATE PROPERTY Doc.docId INTEGER")
+    db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
 
     # Prefer chunked transactions for embedded (avoids batch_context overhead)
     vectors = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
