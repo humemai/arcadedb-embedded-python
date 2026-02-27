@@ -321,7 +321,7 @@ class BatchContext:
             props[key] = convert_python_to_java(value)
 
         # Edge creation is synchronous - new_edge() persists immediately
-        # Use Pythonic API (bidirectionality determined by EdgeType schema)
+        # Use wrapper call (bidirectionality determined by EdgeType schema)
         if not isinstance(java_from, Vertex):
             from_vertex_wrapped = Vertex(java_from)
         else:

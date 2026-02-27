@@ -2,67 +2,63 @@
 
 ArcadeDB Python bindings support two approaches:
 
-1. **Pythonic API (Recommended)**: Use the Java embedded API directly -
-   `db.new_document()`, `vertex.set()`, `vertex.save()`
-2. **SQL/OpenCypher**: Traditional query languages for complex queries and analytics
+1. **SQL/OpenCypher (Recommended)**: Use DSL for schema, CRUD, and graph operations
+2. **Language Choice**: Use SQL for relational-style operations and OpenCypher for graph traversals
 
-## Best Practice: Use Pythonic API for CRUD
+## Best Practice: Use DSL for CRUD
 
-For creating, updating, and managing data, use the embedded API methods instead of SQL:
+For creating, updating, and managing data, prefer SQL/OpenCypher statements:
 
 ### Creating Documents
 
 ```python
 # Create schema
-db.schema.create_document_type("Task")
-db.schema.create_property("Task", "title", "STRING")
-db.schema.create_property("Task", "completed", "BOOLEAN")
+db.command("sql", "CREATE DOCUMENT TYPE Task")
+db.command("sql", "CREATE PROPERTY Task.title STRING")
+db.command("sql", "CREATE PROPERTY Task.completed BOOLEAN")
 
-# Insert using Pythonic API (RECOMMENDED)
+# Insert using SQL (RECOMMENDED)
 with db.transaction():
-    task = db.new_document("Task")
-    task.set("title", "Buy groceries")
-    task.set("completed", False)
-    task.set("tags", ["shopping", "urgent"])
-    task.save()
+    db.command(
+        "sql",
+        "INSERT INTO Task SET title = ?, completed = ?, tags = ?",
+        "Buy groceries",
+        False,
+        ["shopping", "urgent"],
+    )
 ```
 
 ### Creating Vertices
 
 ```python
 # Create schema
-db.schema.create_vertex_type("Person")
-db.schema.create_edge_type("Knows")
+db.command("sql", "CREATE VERTEX TYPE Person")
+db.command("sql", "CREATE EDGE TYPE Knows")
 
-# Insert using Pythonic API (RECOMMENDED)
+# Insert using SQL (RECOMMENDED)
 with db.transaction():
-    alice = db.new_vertex("Person")
-    alice.set("name", "Alice")
-    alice.set("age", 30)
-    alice.save()
-
-    bob = db.new_vertex("Person")
-    bob.set("name", "Bob")
-    bob.save()
+    db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)
+    db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Bob", 25)
 ```
 
 ### Bulk Inserts (preferred: chunked transactions)
 
 ```python
-# Efficient bulk insertion (embedded-friendly): use chunked transactions
+# Efficient bulk insertion (embedded-friendly): use chunked SQL transactions
 chunk_size = 500
 for start in range(0, len(people_data), chunk_size):
     with db.transaction():
         for name, age, city in people_data[start : start + chunk_size]:
-            person = db.new_vertex("Person")
-            person.set("name", name)
-            person.set("age", age)
-            person.set("city", city)
-            person.save()
+            db.command(
+                "sql",
+                "INSERT INTO Person SET name = ?, age = ?, city = ?",
+                name,
+                age,
+                city,
+            )
 
-# If you specifically need the Java batching API (e.g., remote/server workflows),
-# you can still use db.batch_context(...), but embedded users should prefer
-# explicit chunked transactions to avoid batch_context overhead.
+# If you specifically need wrapper-level Java batching APIs,
+# you can still use db.batch_context(...), but DSL remains the default path.
 ```
 
 ## SQL for Queries
@@ -170,20 +166,22 @@ assert last.get("typeName") == "SqlScriptVertex"
 
 ### Updating Data
 
-**Prefer Pythonic API for updates:**
+**Prefer SQL for updates:**
 
 ```python
-# RECOMMENDED: Update using Pythonic API with .modify()
-result = db.query("sql", "SELECT FROM Movie WHERE movieId = '1'")
+# RECOMMENDED: SQL UPDATE
 with db.transaction():
-    for movie_result in result:
-        movie = movie_result.get_vertex()  # or .get_document()
-        mutable_vertex = movie.modify()  # Get mutable version
-        mutable_vertex.set("embedding", java_embedding)
-        mutable_vertex.set("vector_id", "movie_1")
-        mutable_vertex.save()
+    db.command("sql", """
+        UPDATE Movie
+        SET embedding = :embedding, vector_id = :vector_id
+        WHERE movieId = :movie_id
+        """, {
+        "embedding": java_embedding,
+        "vector_id": "movie_1",
+        "movie_id": "1"
+    })
 
-# Alternative: SQL UPDATE (for bulk operations)
+# SQL UPDATE is also ideal for bulk operations
 with db.transaction():
     db.command("sql", """
         UPDATE Task SET completed = true, cost = 127.50
@@ -231,8 +229,12 @@ low-level operation; prefer `DELETE FROM <Type>` unless you specifically need
 bucket-level maintenance.
 
 ```python
-doc_type = db.schema.create_document_type("BucketDoc", buckets=1)
-bucket_name = doc_type.getBuckets(False)[0].getName()
+db.command("sql", "CREATE DOCUMENT TYPE BucketDoc BUCKETS 1")
+bucket_info = db.query(
+    "sql",
+    "SELECT name FROM schema:buckets WHERE type = 'BucketDoc' LIMIT 1",
+).first()
+bucket_name = bucket_info.get("name")
 
 with db.transaction():
     db.command("sql", f"TRUNCATE BUCKET {bucket_name}")
@@ -310,9 +312,9 @@ select and order by.
 
 ```python
 # Create full-text index
-db.schema.create_document_type("Article")
-db.schema.create_property("Article", "content", "STRING")
-db.schema.create_index("Article", ["content"], index_type="FULL_TEXT")
+db.command("sql", "CREATE DOCUMENT TYPE Article")
+db.command("sql", "CREATE PROPERTY Article.content STRING")
+db.command("sql", "CREATE INDEX ON Article (content) FULL_TEXT")
 
 # Query with SEARCH_FIELDS and $score
 result = db.query(

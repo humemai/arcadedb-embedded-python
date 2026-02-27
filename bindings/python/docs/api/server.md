@@ -231,9 +231,9 @@ server.start()
 db = server.create_database("products_db")
 
 # Create schema
-db.schema.create_document_type("Product")
-db.schema.create_property("Product", "name", "STRING")
-db.schema.create_property("Product", "price", "DECIMAL")
+db.command("sql", "CREATE DOCUMENT TYPE Product")
+db.command("sql", "CREATE PROPERTY Product.name STRING")
+db.command("sql", "CREATE PROPERTY Product.price DECIMAL")
 
 db.close()
 server.stop()
@@ -459,10 +459,9 @@ def startup():
         db = server.get_database("app_db")
     except:
         db = server.create_database("app_db")
-        # Prefer Schema API for embedded usage; SQL is still available for remote clients
-        db.schema.create_document_type("User")
-        db.schema.create_property("User", "email", "STRING")
-        db.schema.create_index("User", ["email"], unique=True)
+        db.command("sql", "CREATE DOCUMENT TYPE User")
+        db.command("sql", "CREATE PROPERTY User.email STRING")
+        db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
     finally:
         db.close()
 
@@ -505,12 +504,11 @@ with arcadedb.create_server() as server:
     analytics_db = server.create_database("analytics")
 
     # Initialize schemas
-    # Schema API is auto-transactional; SQL remains available when talking to remote servers
-    users_db.schema.create_vertex_type("User")
-    users_db.schema.create_property("User", "email", "STRING")
+    users_db.command("sql", "CREATE VERTEX TYPE User")
+    users_db.command("sql", "CREATE PROPERTY User.email STRING")
 
-    products_db.schema.create_document_type("Product")
-    products_db.schema.create_property("Product", "sku", "STRING")
+    products_db.command("sql", "CREATE DOCUMENT TYPE Product")
+    products_db.command("sql", "CREATE PROPERTY Product.sku STRING")
 
     # Use databases
     with users_db.transaction():
@@ -584,9 +582,9 @@ except:
     db = server.create_database("dev")
     print("Created new dev database")
 
-# Initialize schema (Schema API preferred for embedded)
-db.schema.get_or_create_vertex_type("TestNode")
-db.schema.get_or_create_edge_type("TestEdge")
+# Initialize schema
+db.command("sql", "CREATE VERTEX TYPE TestNode")
+db.command("sql", "CREATE EDGE TYPE TestEdge")
 
 db.close()
 
@@ -705,7 +703,7 @@ curl -X POST http://localhost:2480/api/v1/command/mydb \
   }'
 ```
 
-> Server HTTP commands are auto-transactional per request. For multiple writes that must succeed together, wrap them in an explicit transaction using the HTTP transactional endpoints or perform them via the embedded API within `with db.transaction():`.
+> Server HTTP commands are auto-transactional per request. For multiple writes that must succeed together, use explicit HTTP transactional endpoints or send a single multi-statement SQLScript transaction.
 
 ---
 

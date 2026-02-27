@@ -2,6 +2,10 @@
 
 Complete API reference for working with ArcadeDB databases in Python.
 
+!!! note "DSL-first usage"
+    For application code and examples, prefer SQL/OpenCypher via `db.command(...)` and `db.query(...)`.
+    This page also documents wrapper/object methods for compatibility and low-level API completeness.
+
 ## Module Functions
 
 ### create_database
@@ -30,9 +34,8 @@ Create a new database at the specified path.
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./mydb") as db:
-    # Schema operations are auto-transactional
-    db.schema.create_document_type("Person")
-    db.schema.create_property("Person", "name", "STRING")
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
 ```
 
 !!! tip "Use Context Manager"
@@ -199,24 +202,16 @@ Execute a command (write operation). Commands modify data and **require a transa
 **Example:**
 
 ```python
-# Schema operations are auto-transactional
-db.schema.create_document_type("Person")
-db.schema.create_property("Person", "name", "STRING")
-db.schema.create_property("Person", "age", "INTEGER")
+# Schema operations
+db.command("sql", "CREATE DOCUMENT TYPE Person")
+db.command("sql", "CREATE PROPERTY Person.name STRING")
+db.command("sql", "CREATE PROPERTY Person.age INTEGER")
 
 # Data operations must be in a transaction
 with db.transaction():
-    doc = db.new_document("Person")
-    doc.set("name", "Alice")
-    doc.set("age", 30)
-    doc.save()
-
-    # Update data via API
-    doc.set("age", 31)
-    doc.save()
-
-    # Delete data
-    doc.delete()
+    db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)
+    db.command("sql", "UPDATE Person SET age = 31 WHERE name = 'Alice'")
+    db.command("sql", "DELETE FROM Person WHERE name = 'Alice'")
 ```
 
 !!! warning "Transaction Required"
@@ -225,14 +220,10 @@ with db.transaction():
     ```python
     # ✅ Correct
     with db.transaction():
-        doc = db.new_document("Person")
-        doc.set("name", "Alice")
-        doc.save()
+        db.command("sql", "INSERT INTO Person SET name = 'Alice'")
 
     # ❌ Will fail
-    doc = db.new_document("Person")
-    doc.set("name", "Alice")
-    # doc.save() outside a transaction will raise
+    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
     ```
 
 ---
@@ -254,9 +245,7 @@ Create a transaction context manager.
 ```python
 with db.transaction():
     for name in ["Alice", "Bob"]:
-        doc = db.new_document("Person")
-        doc.set("name", name)
-        doc.save()
+        db.command("sql", "INSERT INTO Person SET name = ?", name)
     # Automatic commit on success, rollback on exception
 ```
 
@@ -267,9 +256,7 @@ with db.transaction():
 db.begin()
 try:
     for name in ["Alice", "Bob"]:
-        doc = db.new_document("Person")
-        doc.set("name", name)
-        doc.save()
+        db.command("sql", "INSERT INTO Person SET name = ?", name)
     db.commit()
 except Exception as e:
     db.rollback()
@@ -438,9 +425,9 @@ Lookup a record by an indexed key (O(1) index-based lookup).
 **Example:**
 
 ```python
-db.schema.create_vertex_type("User")
-db.schema.create_property("User", "email", "STRING")
-db.schema.create_index("User", ["email"], unique=True)
+db.command("sql", "CREATE VERTEX TYPE User")
+db.command("sql", "CREATE PROPERTY User.email STRING")
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 
 with db.transaction():
     db.new_vertex("User").set("email", "alice@example.com").save()
@@ -607,9 +594,9 @@ Create a vector index for similarity search (JVector implementation). Existing r
 import numpy as np
 
 # Create schema (auto-transactional)
-db.schema.create_vertex_type("Document")
-db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
-db.schema.create_property("Document", "id", "STRING")
+db.command("sql", "CREATE VERTEX TYPE Document")
+db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
+db.command("sql", "CREATE PROPERTY Document.id STRING")
 
 # Create vector index
 index = db.create_vector_index("Document", "embedding", dimensions=384)

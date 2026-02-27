@@ -12,7 +12,7 @@ There are 16 tests focused on CSV import (documents, vertices), delimiter handli
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./mydb") as db:
-    db.schema.create_document_type("Person")
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
 
     stats = arcadedb.import_csv(db, "data.csv", type_name="Person")
     print(stats)
@@ -22,7 +22,7 @@ with arcadedb.create_database("./mydb") as db:
 
 ```python
 with arcadedb.create_database("./mydb") as db:
-    db.schema.create_vertex_type("Product")
+    db.command("sql", "CREATE VERTEX TYPE Product")
 
     stats = arcadedb.import_csv(
         db,
@@ -147,7 +147,7 @@ arcadedb.import_csv(db, "small_file.csv", type_name="Data")
 
 ```python
 # Define schema first for better performance
-db.schema.create_document_type("Person")
+db.command("sql", "CREATE DOCUMENT TYPE Person")
 arcadedb.import_csv(db, "people.csv", type_name="Person")
 ```
 

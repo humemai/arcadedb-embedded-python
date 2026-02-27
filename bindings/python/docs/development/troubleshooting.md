@@ -47,28 +47,28 @@ Common issues, solutions, and debugging techniques for ArcadeDB Python bindings.
 **Solutions**:
 
 1. **Check Database Path**:
-   ```python
-   import os
-   db_path = "databases/mydb"
-   print(f"Exists: {os.path.exists(db_path)}")
-   ```
+    ```python
+    import os
+    db_path = "databases/mydb"
+    print(f"Exists: {os.path.exists(db_path)}")
+    ```
 
 2. **Verify Database Created**:
-   ```python
-   import arcadedb_embedded as arcadedb
+    ```python
+    import arcadedb_embedded as arcadedb
 
-   # Create if not exists
-   if not os.path.exists(db_path):
-       db = arcadedb.create_database(db_path)
-   else:
-       db = arcadedb.open_database(db_path)
-   ```
+    # Create if not exists
+    if not os.path.exists(db_path):
+        db = arcadedb.create_database(db_path)
+    else:
+        db = arcadedb.open_database(db_path)
+    ```
 
 3. **Check Permissions**:
-   ```bash
-   ls -la databases/
-   chmod -R 755 databases/
-   ```
+    ```bash
+    ls -la databases/
+    chmod -R 755 databases/
+    ```
 ---
 
 ### Database Already Exists
@@ -279,22 +279,22 @@ arcadedb.start_jvm(
     ```
 
 3. **Use Batch Processing**:
-   ```python
-   batch_size = 1000
-   for i in range(0, len(data), batch_size):
-       batch = data[i:i + batch_size]
-       process_batch(batch)
-   ```
+    ```python
+    batch_size = 1000
+    for i in range(0, len(data), batch_size):
+        batch = data[i:i + batch_size]
+        process_batch(batch)
+    ```
 
 4. **Close ResultSets**:
-   ```python
-   result = db.query("sql", "SELECT FROM LargeTable")
-   try:
-       for row in result:
-           process(row)
-   finally:
-       result.close()
-   ```
+    ```python
+    result = db.query("sql", "SELECT FROM LargeTable")
+    try:
+        for row in result:
+            process(row)
+    finally:
+        result.close()
+    ```
 
 ---
 
@@ -305,29 +305,29 @@ arcadedb.start_jvm(
 **Solutions**:
 
 1. **Use Correct Types**:
-   ```python
-   # Integer
-   vertex.set("age", 25)
+    ```python
+    # Integer
+    vertex.set("age", 25)
 
-   # String
-   vertex.set("name", "Alice")
+    # String
+    vertex.set("name", "Alice")
 
-   # List
-   vertex.set("tags", ["python", "database"])
+    # List
+    vertex.set("tags", ["python", "database"])
 
-   # DateTime
-   from datetime import datetime
-   vertex.set("created", datetime.now())
-   ```
+    # DateTime
+    from datetime import datetime
+    vertex.set("created", datetime.now())
+    ```
 
 2. **Convert NumPy Arrays**:
-   ```python
-   from arcadedb_embedded import to_java_float_array
-   import numpy as np
+    ```python
+    from arcadedb_embedded import to_java_float_array
+    import numpy as np
 
-   arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-   vertex.set("embedding", to_java_float_array(arr))
-   ```
+    arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    vertex.set("embedding", to_java_float_array(arr))
+    ```
 ---
 
 ### Transaction Already Active
@@ -411,26 +411,26 @@ db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
 **Solutions**:
 
 1. **Check Function Name Case**:
-   ```python
-   # Wrong
-   with db.transaction():
-       db.command("sql", "INSERT INTO Product SET created = SYSDATE()")
+    ```python
+    # Wrong
+    with db.transaction():
+        db.command("sql", "INSERT INTO Product SET created = SYSDATE()")
 
-   # Correct
-   with db.transaction():
-       db.command("sql", "INSERT INTO Product SET created = sysdate()")
-   ```
+    # Correct
+    with db.transaction():
+        db.command("sql", "INSERT INTO Product SET created = sysdate()")
+    ```
 
 2. **Use Built-in Functions**:
-   ```python
-   # Date/time
-   with db.transaction():
-       db.command("sql", "INSERT INTO Event SET timestamp = sysdate()")
+    ```python
+    # Date/time
+    with db.transaction():
+        db.command("sql", "INSERT INTO Event SET timestamp = sysdate()")
 
-   # UUID
-   with db.transaction():
-       db.command("sql", "INSERT INTO User SET id = uuid()")
-   ```
+    # UUID
+    with db.transaction():
+        db.command("sql", "INSERT INTO User SET id = uuid()")
+    ```
 
 ---
 
@@ -497,8 +497,7 @@ for row in result:
 
 1. **Create indexes:**
 ```python
-# Schema API is auto-transactional (preferred for embedded use)
-db.schema.create_index("User", ["email"], unique=True)
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 ```
 
 2. **Use LIMIT:**
@@ -543,8 +542,8 @@ stats = importer.import_file(
 
 2. **Drop indexes during import:**
 ```python
-# Drop indexes (Schema API preferred for embedded)
-db.schema.drop_index("User[email]", force=True)
+# Drop indexes
+db.command("sql", "DROP INDEX `User[email]`")
 
 # Import data (vertices)
 stats = importer.import_file(
@@ -555,7 +554,7 @@ stats = importer.import_file(
 )
 
 # Recreate indexes
-db.schema.create_index("User", ["email"], unique=True)
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 ```
 
 3. **Use transactions efficiently:**
@@ -980,8 +979,10 @@ name = vertex.get("name") or "Unknown"
 
 **Solution:**
 ```python
-# Create type first (Schema API is auto-transactional)
-db.schema.get_or_create_vertex_type("User")
+# Create type first
+result = db.query("sql", "SELECT FROM schema:types WHERE name = 'User'")
+if not result.has_next():
+    db.command("sql", "CREATE VERTEX TYPE User")
 
 # Then create vertex
 with db.transaction():
@@ -998,12 +999,12 @@ with db.transaction():
 ```python
 # Drop existing index
 try:
-    db.schema.drop_index("User[email]", force=True)
+    db.command("sql", "DROP INDEX `User[email]`")
 except Exception:
     pass  # Index doesn't exist
 
 # Create new index
-db.schema.create_index("User", ["email"], unique=True)
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 ```
 
 ---

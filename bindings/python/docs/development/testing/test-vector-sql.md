@@ -41,11 +41,11 @@ Tests validate:
 
 ### Quantization
 
-- **vector_quantization_functions**: Tests `vector_quantize_int8(v)` and `vector_unquantize_int8(v_quantized, scale)` for compression; validates reversibility
+- **vector_quantization_functions**: If enabled in your ArcadeDB build, tests `vector_quantize_int8(v)` and `vector_unquantize_int8(v_quantized, scale)` for compression
 
-- **int8_quantization_boundary_condition_sql**: Tests INT8 quantization at min/max boundaries (-128, 127) and zero edge cases; validates no overflow
+- **int8_quantization_boundary_condition_sql**: If quantization helpers are available, tests INT8 quantization at min/max boundaries (-128, 127) and zero edge cases
 
-- **quantization_with_scale_factors_sql**: Tests quantization with explicit scale factors; validates proper scaling math
+- **quantization_with_scale_factors_sql**: If quantization helpers are available, tests quantization with explicit scale factors
 
 ### Advanced
 
@@ -55,38 +55,34 @@ Tests validate:
 
 - **vector_indexes_sql**: Creates vector indexes on columns and validates query execution; tests index creation syntax and HNSW/IVF options if available
 
-- **vector_column_types_in_schema**: Tests schema definition with VECTOR type, dimension constraints, quantization config; validates type enforcement in insert/update
+- **vector_column_types_in_schema**: Tests schema definition for vector-capable properties and validates insert/update behavior
 
 ## Pattern
 
 ```python
 # Create vector columns
-db.execute("sql", """
-  CREATE TYPE VectorData
-  PROPERTIES (
-    embedding VECTOR(DIMENSION=3, QUANTIZATION_TYPE=INT8),
-    name STRING
-  )
-""")
+db.command("sql", "CREATE VERTEX TYPE VectorData")
+db.command("sql", "CREATE PROPERTY VectorData.embedding ARRAY_OF_FLOATS")
+db.command("sql", "CREATE PROPERTY VectorData.name STRING")
 
 # Insert vectors
-db.execute("sql", """
-  INSERT INTO VectorData SET
-    embedding = [1.0, 2.0, 3.0],
-    name = 'sample'
-""")
+with db.transaction():
+    db.command("sql", """
+        INSERT INTO VectorData SET
+            embedding = [1.0, 2.0, 3.0],
+            name = 'sample'
+    """)
 
 # Query with vector functions
 results = db.query("sql", """
-  SELECT
-    vector_normalize(embedding) as normalized,
-    vector_distance_cosine(embedding, [1, 0, 0]) as distance
-  FROM VectorData
+    SELECT
+        vector_normalize(embedding) as normalized,
+        vector_distance_cosine(embedding, [1, 0, 0]) as distance
+    FROM VectorData
 """)
 
-# Quantize for storage
-compressed = db.execute("sql",
-  "SELECT vector_quantize_int8([1.5, 2.5, 3.5]) as q")
+# Optional quantization check (only if helper functions are available in your build)
+# compressed = db.query("sql", "SELECT vector_quantize_int8([1.5, 2.5, 3.5]) as q")
 ```
 
 ## Key Functions
@@ -95,6 +91,6 @@ compressed = db.execute("sql",
 - **Aggregation**: `SUM()`, `AVG()`, `MIN()`, `MAX()`
 - **Distance**: `vector_distance_cosine()`, `vector_distance_l2()`, `vector_distance_dot()`
 - **Normalization**: `vector_normalize()`
-- **Quantization**: `vector_quantize_int8()`, `vector_unquantize_int8()`
-- **Schema**: `VECTOR(DIMENSION=n, QUANTIZATION_TYPE=INT8)`
+- **Quantization**: `vector_quantize_int8()`, `vector_unquantize_int8()` (if available in your build)
+- **Schema**: `ARRAY_OF_FLOATS` properties for vector-capable columns
 - **Indexes**: Vector indexes (HNSW, IVF)

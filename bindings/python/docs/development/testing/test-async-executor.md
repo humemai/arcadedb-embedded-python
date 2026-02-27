@@ -175,7 +175,7 @@ Times 1000 synchronous inserts vs async (4 workers, commit every 250); prints sp
 
 ```python
 db = arcadedb.create_database(str(db_path))
-db.schema.create_vertex_type("User")
+db.command("sql", "CREATE VERTEX TYPE User")
 
 async_exec = db.async_executor().set_commit_every(25)
 for i in range(100):

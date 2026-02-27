@@ -209,9 +209,9 @@ import arcadedb_embedded as arcadedb
 db = arcadedb.create_database("./txn_demo")
 
 # Create schema
-db.schema.create_document_type("Account")
-db.schema.create_property("Account", "name", "STRING")
-db.schema.create_property("Account", "balance", "DECIMAL")
+db.command("sql", "CREATE DOCUMENT TYPE Account")
+db.command("sql", "CREATE PROPERTY Account.name STRING")
+db.command("sql", "CREATE PROPERTY Account.balance DECIMAL")
 
 # Insert data
 with db.transaction():
@@ -443,18 +443,15 @@ with db.transaction():
 ### Consistency Example
 
 ```python
-# Schema constraints enforced in transactions (Schema API preferred for embedded)
-db.schema.create_document_type("User")
-db.schema.create_property("User", "email", "STRING")
-db.schema.create_index("User", ["email"], unique=True)
+# Schema constraints enforced in transactions
+db.command("sql", "CREATE DOCUMENT TYPE User")
+db.command("sql", "CREATE PROPERTY User.email STRING")
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 
 # This will fail - email is mandatory
 try:
     with db.transaction():
-        user = db.new_document("User")
-        user.set("name", "Alice")
-        # Missing email!
-        user.save()
+    db.command("sql", "INSERT INTO User SET name = 'Alice'")
 except Exception as e:
     print(f"Constraint violation: {e}")
     # Transaction rolled back automatically
@@ -462,13 +459,8 @@ except Exception as e:
 # This will fail - email must be unique
 try:
     with db.transaction():
-        user1 = db.new_document("User")
-        user1.set("email", "alice@example.com")
-        user1.save()
-
-        user2 = db.new_document("User")
-        user2.set("email", "alice@example.com")  # Duplicate!
-        user2.save()
+    db.command("sql", "INSERT INTO User SET email = 'alice@example.com'")
+    db.command("sql", "INSERT INTO User SET email = 'alice@example.com'")  # Duplicate!
 except Exception as e:
     print(f"Unique constraint violation: {e}")
     # Both user1 and user2 rolled back

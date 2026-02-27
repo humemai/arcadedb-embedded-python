@@ -17,8 +17,7 @@ def test_async_executor_basic_create():
     try:
         db = arcadedb.create_database(str(db_path))
 
-        # Create schema - use VERTEX type for vertices
-        db.schema.create_vertex_type("User")
+        db.command("sql", "CREATE VERTEX TYPE User")
 
         # Get async executor
         async_exec = db.async_executor()
@@ -54,7 +53,7 @@ def test_async_executor_with_commit_every():
 
     try:
         db = arcadedb.create_database(str(db_path))
-        db.schema.create_vertex_type("Item")
+        db.command("sql", "CREATE VERTEX TYPE Item")
 
         # Configure async executor with auto-commit
         async_exec = db.async_executor()
@@ -86,7 +85,7 @@ def test_async_executor_with_parallel_level():
 
     try:
         db = arcadedb.create_database(str(db_path))
-        db.schema.create_vertex_type("Product")
+        db.command("sql", "CREATE VERTEX TYPE Product")
 
         # Configure with 4 parallel workers
         async_exec = db.async_executor()
@@ -124,7 +123,7 @@ def test_async_executor_method_chaining():
 
     try:
         db = arcadedb.create_database(str(db_path))
-        db.schema.create_vertex_type("Task")
+        db.command("sql", "CREATE VERTEX TYPE Task")
 
         # Chain configuration methods
         async_exec = (
@@ -159,7 +158,7 @@ def test_async_executor_is_pending():
 
     try:
         db = arcadedb.create_database(str(db_path))
-        db.schema.create_vertex_type("Message")
+        db.command("sql", "CREATE VERTEX TYPE Message")
 
         async_exec = db.async_executor()
         async_exec.set_commit_every(100)
@@ -196,8 +195,7 @@ def test_async_executor_callback(temp_db):
     """Test async executor with callbacks."""
     db = temp_db
 
-    # Create a type
-    db.schema.create_vertex_type("User")
+    db.command("sql", "CREATE VERTEX TYPE User")
 
     # Track callback invocations
     created_ids = []
@@ -233,7 +231,7 @@ def test_async_executor_callback(temp_db):
 def test_async_executor_global_callback(temp_db):
     """Test that per-operation callbacks work (global callbacks have JPype proxy issues)."""
     db = temp_db
-    db.schema.create_vertex_type("Log")
+    db.command("sql", "CREATE VERTEX TYPE Log")
 
     success_count = [0]  # Use list to allow mutation in closure
 
@@ -266,7 +264,7 @@ def test_async_vs_sync_performance():
 
     try:
         db = arcadedb.create_database(str(db_path))
-        db.schema.create_vertex_type("Benchmark")
+        db.command("sql", "CREATE VERTEX TYPE Benchmark")
 
         # Test synchronous
         sync_start = time.time()

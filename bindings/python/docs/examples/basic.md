@@ -55,13 +55,17 @@ import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./mydb") as db:
     # Create document type (schema ops are auto-transactional)
-    db.schema.create_document_type("Product")
+    db.command("sql", "CREATE DOCUMENT TYPE Product")
+    db.command("sql", "CREATE PROPERTY Product.name STRING")
+    db.command("sql", "CREATE PROPERTY Product.price DOUBLE")
+    db.command("sql", "CREATE PROPERTY Product.inStock BOOLEAN")
 
     # Insert document
     with db.transaction():
-        product = db.new_document("Product")
-        product.set("name", "Laptop").set("price", 999.99).set("inStock", True)
-        product.save()
+        db.command(
+            "sql",
+            "INSERT INTO Product SET name = 'Laptop', price = 999.99, inStock = true",
+        )
 
     # Query documents (reads don't need transaction)
     results = db.query("sql", "SELECT FROM Product WHERE price < 1000")
@@ -75,20 +79,23 @@ with arcadedb.create_database("./mydb") as db:
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./mydb") as db:
-    # Create vertex types (schema ops are auto-transactional)
-    db.schema.create_vertex_type("Person")
-    db.schema.create_edge_type("Knows")
+    # Create graph schema (schema ops are auto-transactional)
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE EDGE TYPE Knows")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
 
     # Create vertices and edges
     with db.transaction():
-        alice = db.new_vertex("Person")
-        alice.set("name", "Alice").save()
-
-        bob = db.new_vertex("Person")
-        bob.set("name", "Bob").save()
-
-        edge = alice.new_edge("Knows", bob)
-        edge.save()
+        db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+        db.command("sql", "INSERT INTO Person SET name = 'Bob'")
+        db.command(
+            "sql",
+            """
+            CREATE EDGE Knows
+            FROM (SELECT FROM Person WHERE name = 'Alice')
+            TO (SELECT FROM Person WHERE name = 'Bob')
+            """,
+        )
 
     # Traverse graph (reads don't need transaction)
     results = db.query("opencypher", """
