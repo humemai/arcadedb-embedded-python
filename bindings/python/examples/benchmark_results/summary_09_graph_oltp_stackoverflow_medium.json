@@ -1,0 +1,2760 @@
+{
+  "meta": {
+    "name": "09 graph OLTP matrix summary",
+    "generated_at_utc": "2026-02-27T12:38:11Z",
+    "input_dir": "/mnt/ssd2/repos/arcadedb-embedded-python/bindings/python/examples/my_test_databases",
+    "dataset": "stackoverflow-medium",
+    "dataset_size_profile": "medium",
+    "dataset_size_source": "dataset name suffix",
+    "label_prefix": "sweep09",
+    "total_runs": 7,
+    "datasets_found": [
+      "stackoverflow-medium"
+    ]
+  },
+  "parameter_keys": [
+    "arcadedb_version",
+    "batch_size",
+    "dataset",
+    "db",
+    "docker_image",
+    "heap_size",
+    "ladybug_version",
+    "mem_limit",
+    "run_label",
+    "seed",
+    "threads",
+    "transactions"
+  ],
+  "parameters_detected": {
+    "arcadedb_version": [
+      "26.2.1"
+    ],
+    "batch_size": [
+      "5000"
+    ],
+    "dataset": [
+      "stackoverflow-medium"
+    ],
+    "db": [
+      "arcadedb",
+      "ladybug"
+    ],
+    "docker_image": [
+      "python:3.12-slim"
+    ],
+    "heap_size": [
+      "3276m",
+      "4g"
+    ],
+    "ladybug_version": [
+      "0.14.1"
+    ],
+    "mem_limit": [
+      "4g"
+    ],
+    "run_label": [
+      "sweep09_t01_r01_arcadedb_s00000",
+      "sweep09_t01_r01_ladybug_s00001",
+      "sweep09_t01_r02_arcadedb_s00002",
+      "sweep09_t01_r02_ladybug_s00003",
+      "sweep09_t01_r03_arcadedb_s00004",
+      "sweep09_t01_r03_ladybug_s00005",
+      "sweep09_t08_r01_arcadedb_s00000"
+    ],
+    "seed": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+    ],
+    "threads": [
+      "1",
+      "8"
+    ],
+    "transactions": [
+      "10000",
+      "100000"
+    ]
+  },
+  "numeric_metric_keys": [
+    "batch_size",
+    "counts_time_s",
+    "disk_after_load_bytes",
+    "disk_after_oltp_bytes",
+    "disk_usage.du_bytes",
+    "edge_count",
+    "edge_counts_by_type.ACCEPTED_ANSWER",
+    "edge_counts_by_type.ANSWERED",
+    "edge_counts_by_type.ASKED",
+    "edge_counts_by_type.COMMENTED_ON",
+    "edge_counts_by_type.COMMENTED_ON_ANSWER",
+    "edge_counts_by_type.EARNED",
+    "edge_counts_by_type.HAS_ANSWER",
+    "edge_counts_by_type.LINKED_TO",
+    "edge_counts_by_type.TAGGED_WITH",
+    "latency_summary.ops.delete.50",
+    "latency_summary.ops.delete.95",
+    "latency_summary.ops.delete.99",
+    "latency_summary.ops.insert.50",
+    "latency_summary.ops.insert.95",
+    "latency_summary.ops.insert.99",
+    "latency_summary.ops.read.50",
+    "latency_summary.ops.read.95",
+    "latency_summary.ops.read.99",
+    "latency_summary.ops.update.50",
+    "latency_summary.ops.update.95",
+    "latency_summary.ops.update.99",
+    "latency_summary.overall.50",
+    "latency_summary.overall.95",
+    "latency_summary.overall.99",
+    "load_counts_time_s",
+    "load_edge_count",
+    "load_edge_counts_by_type.ACCEPTED_ANSWER",
+    "load_edge_counts_by_type.ANSWERED",
+    "load_edge_counts_by_type.ASKED",
+    "load_edge_counts_by_type.COMMENTED_ON",
+    "load_edge_counts_by_type.COMMENTED_ON_ANSWER",
+    "load_edge_counts_by_type.EARNED",
+    "load_edge_counts_by_type.HAS_ANSWER",
+    "load_edge_counts_by_type.LINKED_TO",
+    "load_edge_counts_by_type.TAGGED_WITH",
+    "load_node_count",
+    "load_node_counts_by_type.Answer",
+    "load_node_counts_by_type.Badge",
+    "load_node_counts_by_type.Comment",
+    "load_node_counts_by_type.Question",
+    "load_node_counts_by_type.Tag",
+    "load_node_counts_by_type.User",
+    "load_stats.edges.ACCEPTED_ANSWER",
+    "load_stats.edges.ANSWERED",
+    "load_stats.edges.ASKED",
+    "load_stats.edges.COMMENTED_ON",
+    "load_stats.edges.COMMENTED_ON_ANSWER",
+    "load_stats.edges.EARNED",
+    "load_stats.edges.HAS_ANSWER",
+    "load_stats.edges.LINKED_TO",
+    "load_stats.edges.TAGGED_WITH",
+    "load_stats.nodes.Answer",
+    "load_stats.nodes.Badge",
+    "load_stats.nodes.Comment",
+    "load_stats.nodes.Post",
+    "load_stats.nodes.Question",
+    "load_stats.nodes.Tag",
+    "load_stats.nodes.User",
+    "load_time_s",
+    "node_count",
+    "node_counts_by_type.Answer",
+    "node_counts_by_type.Badge",
+    "node_counts_by_type.Comment",
+    "node_counts_by_type.Question",
+    "node_counts_by_type.Tag",
+    "node_counts_by_type.User",
+    "op_counts.delete",
+    "op_counts.insert",
+    "op_counts.read",
+    "op_counts.update",
+    "rss_peak_kb",
+    "schema_time_s",
+    "seed",
+    "threads",
+    "throughput_ops_s",
+    "total_time_s",
+    "transactions"
+  ],
+  "boolean_metric_keys": [],
+  "run_fields": [
+    "dataset",
+    "db",
+    "run_label",
+    "seed",
+    "du_bytes",
+    "du_human",
+    "result_file",
+    "numeric_metrics",
+    "human_readable_metrics",
+    "boolean_metrics",
+    "parameters"
+  ],
+  "runs": [
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "run_label": "sweep09_t01_r01_arcadedb_s00000",
+      "seed": 0,
+      "du_bytes": 1405227008,
+      "du_human": "1.4G",
+      "result_file": "stackoverflow_medium_graph_oltp_arcadedb_sweep09_t01_r01_arcadedb_s00000/results_sweep09_t01_r01_arcadedb_s00000.json",
+      "numeric_metrics": {
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "seed": 0,
+        "throughput_ops_s": 366.8734330095251,
+        "total_time_s": 272.5735662560328,
+        "schema_time_s": 0.7945733070373535,
+        "load_time_s": 3902.3592298030853,
+        "load_counts_time_s": 48.016995429992676,
+        "load_node_count": 2202019,
+        "load_edge_count": 2877037,
+        "load_node_counts_by_type.User": 345754,
+        "load_node_counts_by_type.Question": 213761,
+        "load_node_counts_by_type.Answer": 208986,
+        "load_node_counts_by_type.Tag": 1612,
+        "load_node_counts_by_type.Badge": 612258,
+        "load_node_counts_by_type.Comment": 819648,
+        "load_edge_counts_by_type.ASKED": 210226,
+        "load_edge_counts_by_type.ANSWERED": 206435,
+        "load_edge_counts_by_type.HAS_ANSWER": 208986,
+        "load_edge_counts_by_type.ACCEPTED_ANSWER": 71547,
+        "load_edge_counts_by_type.TAGGED_WITH": 662394,
+        "load_edge_counts_by_type.COMMENTED_ON": 475470,
+        "load_edge_counts_by_type.COMMENTED_ON_ANSWER": 344052,
+        "load_edge_counts_by_type.EARNED": 612258,
+        "load_edge_counts_by_type.LINKED_TO": 85669,
+        "counts_time_s": 31.94573211669922,
+        "node_count": 2205252,
+        "edge_count": 2618935,
+        "node_counts_by_type.User": 346583,
+        "node_counts_by_type.Question": 214570,
+        "node_counts_by_type.Answer": 209793,
+        "node_counts_by_type.Tag": 934,
+        "node_counts_by_type.Badge": 612945,
+        "node_counts_by_type.Comment": 820427,
+        "edge_counts_by_type.ASKED": 210304,
+        "edge_counts_by_type.ANSWERED": 206676,
+        "edge_counts_by_type.HAS_ANSWER": 208502,
+        "edge_counts_by_type.ACCEPTED_ANSWER": 72370,
+        "edge_counts_by_type.TAGGED_WITH": 407269,
+        "edge_counts_by_type.COMMENTED_ON": 474109,
+        "edge_counts_by_type.COMMENTED_ON_ANSWER": 343003,
+        "edge_counts_by_type.EARNED": 610562,
+        "edge_counts_by_type.LINKED_TO": 86140,
+        "disk_after_load_bytes": 1425361911,
+        "disk_after_oltp_bytes": 1513633079,
+        "rss_peak_kb": 3738624,
+        "latency_summary.ops.read.50": 0.000604272005148232,
+        "latency_summary.ops.read.95": 0.0035610400373116136,
+        "latency_summary.ops.read.99": 0.009315366973169148,
+        "latency_summary.ops.update.50": 0.0002521210117265582,
+        "latency_summary.ops.update.95": 0.003480350016616285,
+        "latency_summary.ops.update.99": 0.007520971994381398,
+        "latency_summary.ops.insert.50": 0.0009815330267883837,
+        "latency_summary.ops.insert.95": 0.022079145011957735,
+        "latency_summary.ops.insert.99": 0.032183233997784555,
+        "latency_summary.ops.delete.50": 0.0022538569755852222,
+        "latency_summary.ops.delete.95": 0.042355733981821686,
+        "latency_summary.ops.delete.99": 0.14761994901346043,
+        "latency_summary.overall.50": 0.0006410320056602359,
+        "latency_summary.overall.95": 0.009286416985560209,
+        "latency_summary.overall.99": 0.032810266013257205,
+        "op_counts.read": 60074,
+        "op_counts.update": 19838,
+        "op_counts.insert": 10067,
+        "op_counts.delete": 10021,
+        "load_stats.nodes.Tag": 2.324568748474121,
+        "load_stats.nodes.User": 346.01182866096497,
+        "load_stats.nodes.Post": 539.839515209198,
+        "load_stats.nodes.Badge": 333.7214529514313,
+        "load_stats.nodes.Comment": 498.17089581489563,
+        "load_stats.edges.ASKED": 199.00597953796387,
+        "load_stats.edges.ANSWERED": 176.21686458587646,
+        "load_stats.edges.HAS_ANSWER": 165.03434991836548,
+        "load_stats.edges.ACCEPTED_ANSWER": 53.51394748687744,
+        "load_stats.edges.TAGGED_WITH": 467.7499358654022,
+        "load_stats.edges.COMMENTED_ON": 642.9910883903503,
+        "load_stats.edges.COMMENTED_ON_ANSWER": 642.9910883903503,
+        "load_stats.edges.EARNED": 398.6903131008148,
+        "load_stats.edges.LINKED_TO": 78.8921389579773,
+        "disk_usage.du_bytes": 1405227008
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "arcadedb",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "3276m",
+        "arcadedb_version": "26.2.1",
+        "ladybug_version": "0.14.1",
+        "docker_image": "python:3.12-slim",
+        "seed": 0,
+        "run_label": "sweep09_t01_r01_arcadedb_s00000"
+      },
+      "human_readable_metrics": {
+        "disk_after_load_bytes": "1.3GiB",
+        "disk_after_oltp_bytes": "1.4GiB",
+        "rss_peak_kb": "3.6GiB",
+        "disk_usage.du_bytes": "1.3GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "run_label": "sweep09_t01_r02_arcadedb_s00002",
+      "seed": 2,
+      "du_bytes": 1405227008,
+      "du_human": "1.4G",
+      "result_file": "stackoverflow_medium_graph_oltp_arcadedb_sweep09_t01_r02_arcadedb_s00002/results_sweep09_t01_r02_arcadedb_s00002.json",
+      "numeric_metrics": {
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "seed": 2,
+        "throughput_ops_s": 417.8315403932854,
+        "total_time_s": 239.33090332499705,
+        "schema_time_s": 0.21258306503295898,
+        "load_time_s": 3746.340231180191,
+        "load_counts_time_s": 27.339016914367676,
+        "load_node_count": 2202019,
+        "load_edge_count": 2877037,
+        "load_node_counts_by_type.User": 345754,
+        "load_node_counts_by_type.Question": 213761,
+        "load_node_counts_by_type.Answer": 208986,
+        "load_node_counts_by_type.Tag": 1612,
+        "load_node_counts_by_type.Badge": 612258,
+        "load_node_counts_by_type.Comment": 819648,
+        "load_edge_counts_by_type.ASKED": 210226,
+        "load_edge_counts_by_type.ANSWERED": 206435,
+        "load_edge_counts_by_type.HAS_ANSWER": 208986,
+        "load_edge_counts_by_type.ACCEPTED_ANSWER": 71547,
+        "load_edge_counts_by_type.TAGGED_WITH": 662394,
+        "load_edge_counts_by_type.COMMENTED_ON": 475470,
+        "load_edge_counts_by_type.COMMENTED_ON_ANSWER": 344052,
+        "load_edge_counts_by_type.EARNED": 612258,
+        "load_edge_counts_by_type.LINKED_TO": 85669,
+        "counts_time_s": 26.29141330718994,
+        "node_count": 2205208,
+        "edge_count": 2619693,
+        "node_counts_by_type.User": 346509,
+        "node_counts_by_type.Question": 214574,
+        "node_counts_by_type.Answer": 209738,
+        "node_counts_by_type.Tag": 953,
+        "node_counts_by_type.Badge": 613034,
+        "node_counts_by_type.Comment": 820400,
+        "edge_counts_by_type.ASKED": 210319,
+        "edge_counts_by_type.ANSWERED": 206920,
+        "edge_counts_by_type.HAS_ANSWER": 208504,
+        "edge_counts_by_type.ACCEPTED_ANSWER": 72203,
+        "edge_counts_by_type.TAGGED_WITH": 407528,
+        "edge_counts_by_type.COMMENTED_ON": 474157,
+        "edge_counts_by_type.COMMENTED_ON_ANSWER": 342914,
+        "edge_counts_by_type.EARNED": 610816,
+        "edge_counts_by_type.LINKED_TO": 86332,
+        "disk_after_load_bytes": 1448014845,
+        "disk_after_oltp_bytes": 1449261922,
+        "rss_peak_kb": 3855716,
+        "latency_summary.ops.read.50": 0.0006020610453560948,
+        "latency_summary.ops.read.95": 0.0025699069956317544,
+        "latency_summary.ops.read.99": 0.005779264960438013,
+        "latency_summary.ops.update.50": 0.0002790210419334471,
+        "latency_summary.ops.update.95": 0.003304018988274038,
+        "latency_summary.ops.update.99": 0.005898554984014481,
+        "latency_summary.ops.insert.50": 0.0009230420109815896,
+        "latency_summary.ops.insert.95": 0.021858185005839914,
+        "latency_summary.ops.insert.99": 0.030806608963757753,
+        "latency_summary.ops.delete.50": 0.0017041839892044663,
+        "latency_summary.ops.delete.95": 0.03848541801562533,
+        "latency_summary.ops.delete.99": 0.14859078696463257,
+        "latency_summary.overall.50": 0.0006217219633981586,
+        "latency_summary.overall.95": 0.007573220005724579,
+        "latency_summary.overall.99": 0.029991085990332067,
+        "op_counts.read": 59859,
+        "op_counts.update": 20200,
+        "op_counts.insert": 9916,
+        "op_counts.delete": 10025,
+        "load_stats.nodes.Tag": 15.969741582870483,
+        "load_stats.nodes.User": 303.2162845134735,
+        "load_stats.nodes.Post": 456.63891077041626,
+        "load_stats.nodes.Badge": 367.7557785511017,
+        "load_stats.nodes.Comment": 499.32460260391235,
+        "load_stats.edges.ASKED": 168.82821321487427,
+        "load_stats.edges.ANSWERED": 165.44821405410767,
+        "load_stats.edges.HAS_ANSWER": 138.04018783569336,
+        "load_stats.edges.ACCEPTED_ANSWER": 44.98478651046753,
+        "load_stats.edges.TAGGED_WITH": 435.54653668403625,
+        "load_stats.edges.COMMENTED_ON": 630.4558298587799,
+        "load_stats.edges.COMMENTED_ON_ANSWER": 630.4558298587799,
+        "load_stats.edges.EARNED": 458.1580801010132,
+        "load_stats.edges.LINKED_TO": 61.95440936088562,
+        "disk_usage.du_bytes": 1405227008
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "arcadedb",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "3276m",
+        "arcadedb_version": "26.2.1",
+        "ladybug_version": "0.14.1",
+        "docker_image": "python:3.12-slim",
+        "seed": 2,
+        "run_label": "sweep09_t01_r02_arcadedb_s00002"
+      },
+      "human_readable_metrics": {
+        "disk_after_load_bytes": "1.3GiB",
+        "disk_after_oltp_bytes": "1.3GiB",
+        "rss_peak_kb": "3.7GiB",
+        "disk_usage.du_bytes": "1.3GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "run_label": "sweep09_t01_r03_arcadedb_s00004",
+      "seed": 4,
+      "du_bytes": 1405546496,
+      "du_human": "1.4G",
+      "result_file": "stackoverflow_medium_graph_oltp_arcadedb_sweep09_t01_r03_arcadedb_s00004/results_sweep09_t01_r03_arcadedb_s00004.json",
+      "numeric_metrics": {
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "seed": 4,
+        "throughput_ops_s": 464.3073006216424,
+        "total_time_s": 215.37460183398798,
+        "schema_time_s": 0.1873643398284912,
+        "load_time_s": 3848.6535618305206,
+        "load_counts_time_s": 25.302375555038452,
+        "load_node_count": 2202019,
+        "load_edge_count": 2877037,
+        "load_node_counts_by_type.User": 345754,
+        "load_node_counts_by_type.Question": 213761,
+        "load_node_counts_by_type.Answer": 208986,
+        "load_node_counts_by_type.Tag": 1612,
+        "load_node_counts_by_type.Badge": 612258,
+        "load_node_counts_by_type.Comment": 819648,
+        "load_edge_counts_by_type.ASKED": 210226,
+        "load_edge_counts_by_type.ANSWERED": 206435,
+        "load_edge_counts_by_type.HAS_ANSWER": 208986,
+        "load_edge_counts_by_type.ACCEPTED_ANSWER": 71547,
+        "load_edge_counts_by_type.TAGGED_WITH": 662394,
+        "load_edge_counts_by_type.COMMENTED_ON": 475470,
+        "load_edge_counts_by_type.COMMENTED_ON_ANSWER": 344052,
+        "load_edge_counts_by_type.EARNED": 612258,
+        "load_edge_counts_by_type.LINKED_TO": 85669,
+        "counts_time_s": 17.270771741867065,
+        "node_count": 2205168,
+        "edge_count": 2586028,
+        "node_counts_by_type.User": 346509,
+        "node_counts_by_type.Question": 214531,
+        "node_counts_by_type.Answer": 209723,
+        "node_counts_by_type.Tag": 964,
+        "node_counts_by_type.Badge": 612984,
+        "node_counts_by_type.Comment": 820457,
+        "edge_counts_by_type.ASKED": 210078,
+        "edge_counts_by_type.ANSWERED": 206919,
+        "edge_counts_by_type.HAS_ANSWER": 208440,
+        "edge_counts_by_type.ACCEPTED_ANSWER": 72329,
+        "edge_counts_by_type.TAGGED_WITH": 374381,
+        "edge_counts_by_type.COMMENTED_ON": 474107,
+        "edge_counts_by_type.COMMENTED_ON_ANSWER": 342931,
+        "edge_counts_by_type.EARNED": 610652,
+        "edge_counts_by_type.LINKED_TO": 86191,
+        "disk_after_load_bytes": 1523259174,
+        "disk_after_oltp_bytes": 1415237713,
+        "rss_peak_kb": 3850040,
+        "latency_summary.ops.read.50": 0.0005096610402688384,
+        "latency_summary.ops.read.95": 0.00205306604038924,
+        "latency_summary.ops.read.99": 0.00508897501276806,
+        "latency_summary.ops.update.50": 0.0002356200129725039,
+        "latency_summary.ops.update.95": 0.00310172897297889,
+        "latency_summary.ops.update.99": 0.005712026031687856,
+        "latency_summary.ops.insert.50": 0.0008153529488481581,
+        "latency_summary.ops.insert.95": 0.02097642997978255,
+        "latency_summary.ops.insert.99": 0.02874857297865674,
+        "latency_summary.ops.delete.50": 0.001508184999693185,
+        "latency_summary.ops.delete.95": 0.03389967797556892,
+        "latency_summary.ops.delete.99": 0.11605334398336709,
+        "latency_summary.overall.50": 0.0005285119987092912,
+        "latency_summary.overall.95": 0.0063791690045036376,
+        "latency_summary.overall.99": 0.027278587978798896,
+        "op_counts.read": 60037,
+        "op_counts.update": 19827,
+        "op_counts.insert": 10064,
+        "op_counts.delete": 10072,
+        "load_stats.nodes.Tag": 7.791598796844482,
+        "load_stats.nodes.User": 297.327196598053,
+        "load_stats.nodes.Post": 562.340656042099,
+        "load_stats.nodes.Badge": 356.3572096824646,
+        "load_stats.nodes.Comment": 514.3576686382294,
+        "load_stats.edges.ASKED": 173.0718092918396,
+        "load_stats.edges.ANSWERED": 163.19485926628113,
+        "load_stats.edges.HAS_ANSWER": 153.37178564071655,
+        "load_stats.edges.ACCEPTED_ANSWER": 57.61630344390869,
+        "load_stats.edges.TAGGED_WITH": 438.1934115886688,
+        "load_stats.edges.COMMENTED_ON": 610.9365584850311,
+        "load_stats.edges.COMMENTED_ON_ANSWER": 610.9365584850311,
+        "load_stats.edges.EARNED": 451.6111786365509,
+        "load_stats.edges.LINKED_TO": 62.46609449386597,
+        "disk_usage.du_bytes": 1405546496
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "arcadedb",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "3276m",
+        "arcadedb_version": "26.2.1",
+        "ladybug_version": "0.14.1",
+        "docker_image": "python:3.12-slim",
+        "seed": 4,
+        "run_label": "sweep09_t01_r03_arcadedb_s00004"
+      },
+      "human_readable_metrics": {
+        "disk_after_load_bytes": "1.4GiB",
+        "disk_after_oltp_bytes": "1.3GiB",
+        "rss_peak_kb": "3.7GiB",
+        "disk_usage.du_bytes": "1.3GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "run_label": "sweep09_t08_r01_arcadedb_s00000",
+      "seed": 0,
+      "du_bytes": 1405227008,
+      "du_human": "1.4G",
+      "result_file": "stackoverflow_medium_graph_oltp_arcadedb_sweep09_t08_r01_arcadedb_s00000/results_sweep09_t08_r01_arcadedb_s00000.json",
+      "numeric_metrics": {
+        "threads": 8,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "seed": 0,
+        "throughput_ops_s": 720.7927784761672,
+        "total_time_s": 138.73612914298428,
+        "schema_time_s": 0.6132731437683105,
+        "load_time_s": 2779.1042263507843,
+        "load_counts_time_s": 27.330768823623657,
+        "load_node_count": 2202019,
+        "load_edge_count": 2877037,
+        "load_node_counts_by_type.User": 345754,
+        "load_node_counts_by_type.Question": 213761,
+        "load_node_counts_by_type.Answer": 208986,
+        "load_node_counts_by_type.Tag": 1612,
+        "load_node_counts_by_type.Badge": 612258,
+        "load_node_counts_by_type.Comment": 819648,
+        "load_edge_counts_by_type.ASKED": 210226,
+        "load_edge_counts_by_type.ANSWERED": 206435,
+        "load_edge_counts_by_type.HAS_ANSWER": 208986,
+        "load_edge_counts_by_type.ACCEPTED_ANSWER": 71547,
+        "load_edge_counts_by_type.TAGGED_WITH": 662394,
+        "load_edge_counts_by_type.COMMENTED_ON": 475470,
+        "load_edge_counts_by_type.COMMENTED_ON_ANSWER": 344052,
+        "load_edge_counts_by_type.EARNED": 612258,
+        "load_edge_counts_by_type.LINKED_TO": 85669,
+        "counts_time_s": 10.58008599281311,
+        "node_count": 2205223,
+        "edge_count": 2619882,
+        "node_counts_by_type.User": 346540,
+        "node_counts_by_type.Question": 214561,
+        "node_counts_by_type.Answer": 209747,
+        "node_counts_by_type.Tag": 915,
+        "node_counts_by_type.Badge": 612982,
+        "node_counts_by_type.Comment": 820478,
+        "edge_counts_by_type.ASKED": 210248,
+        "edge_counts_by_type.ANSWERED": 206133,
+        "edge_counts_by_type.HAS_ANSWER": 208459,
+        "edge_counts_by_type.ACCEPTED_ANSWER": 72292,
+        "edge_counts_by_type.TAGGED_WITH": 408729,
+        "edge_counts_by_type.COMMENTED_ON": 474190,
+        "edge_counts_by_type.COMMENTED_ON_ANSWER": 342969,
+        "edge_counts_by_type.EARNED": 610415,
+        "edge_counts_by_type.LINKED_TO": 86447,
+        "disk_after_load_bytes": 1566793494,
+        "disk_after_oltp_bytes": 1625965424,
+        "rss_peak_kb": 3697380,
+        "latency_summary.ops.read.50": 0.0006275319610722363,
+        "latency_summary.ops.read.95": 0.00705100002232939,
+        "latency_summary.ops.read.99": 0.02313512604450807,
+        "latency_summary.ops.update.50": 0.0002872109762392938,
+        "latency_summary.ops.update.95": 0.02638351498171687,
+        "latency_summary.ops.update.99": 0.07796820299699903,
+        "latency_summary.ops.insert.50": 0.0011440730304457247,
+        "latency_summary.ops.insert.95": 0.09233839303487912,
+        "latency_summary.ops.insert.99": 0.23347984300926328,
+        "latency_summary.ops.delete.50": 0.0028243479900993407,
+        "latency_summary.ops.delete.95": 0.09534740197705105,
+        "latency_summary.ops.delete.99": 0.4659039370017126,
+        "latency_summary.overall.50": 0.0006329220486804843,
+        "latency_summary.overall.95": 0.026459575979970396,
+        "latency_summary.overall.99": 0.10369323496706784,
+        "op_counts.read": 60074,
+        "op_counts.update": 19838,
+        "op_counts.insert": 10067,
+        "op_counts.delete": 10021,
+        "load_stats.nodes.Tag": 14.190836668014526,
+        "load_stats.nodes.User": 170.60794949531555,
+        "load_stats.nodes.Post": 302.67543363571167,
+        "load_stats.nodes.Badge": 322.40513849258423,
+        "load_stats.nodes.Comment": 431.25180864334106,
+        "load_stats.edges.ASKED": 142.28609085083008,
+        "load_stats.edges.ANSWERED": 131.10922527313232,
+        "load_stats.edges.HAS_ANSWER": 119.98603081703186,
+        "load_stats.edges.ACCEPTED_ANSWER": 40.638153314590454,
+        "load_stats.edges.TAGGED_WITH": 330.17166543006897,
+        "load_stats.edges.COMMENTED_ON": 408.4385051727295,
+        "load_stats.edges.COMMENTED_ON_ANSWER": 408.4385051727295,
+        "load_stats.edges.EARNED": 314.7748918533325,
+        "load_stats.edges.LINKED_TO": 50.41272258758545,
+        "disk_usage.du_bytes": 1405227008
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "arcadedb",
+        "threads": 8,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "3276m",
+        "arcadedb_version": "26.2.1",
+        "ladybug_version": "0.14.1",
+        "docker_image": "python:3.12-slim",
+        "seed": 0,
+        "run_label": "sweep09_t08_r01_arcadedb_s00000"
+      },
+      "human_readable_metrics": {
+        "disk_after_load_bytes": "1.5GiB",
+        "disk_after_oltp_bytes": "1.5GiB",
+        "rss_peak_kb": "3.5GiB",
+        "disk_usage.du_bytes": "1.3GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "ladybug",
+      "run_label": "sweep09_t01_r01_ladybug_s00001",
+      "seed": 1,
+      "du_bytes": 1936621568,
+      "du_human": "1.9G",
+      "result_file": "stackoverflow_medium_graph_oltp_ladybug_sweep09_t01_r01_ladybug_s00001/results_sweep09_t01_r01_ladybug_s00001.json",
+      "numeric_metrics": {
+        "threads": 1,
+        "transactions": 10000,
+        "batch_size": 5000,
+        "seed": 1,
+        "throughput_ops_s": 44.49773385147338,
+        "total_time_s": 224.73054545605555,
+        "schema_time_s": 0.28226542472839355,
+        "load_time_s": 144.59260177612305,
+        "load_counts_time_s": 0.28554701805114746,
+        "load_node_count": 2202019,
+        "load_edge_count": 2877037,
+        "load_node_counts_by_type.User": 345754,
+        "load_node_counts_by_type.Question": 213761,
+        "load_node_counts_by_type.Answer": 208986,
+        "load_node_counts_by_type.Tag": 1612,
+        "load_node_counts_by_type.Badge": 612258,
+        "load_node_counts_by_type.Comment": 819648,
+        "load_edge_counts_by_type.ASKED": 210226,
+        "load_edge_counts_by_type.ANSWERED": 206435,
+        "load_edge_counts_by_type.HAS_ANSWER": 208986,
+        "load_edge_counts_by_type.ACCEPTED_ANSWER": 71547,
+        "load_edge_counts_by_type.TAGGED_WITH": 662394,
+        "load_edge_counts_by_type.COMMENTED_ON": 475470,
+        "load_edge_counts_by_type.COMMENTED_ON_ANSWER": 344052,
+        "load_edge_counts_by_type.EARNED": 612258,
+        "load_edge_counts_by_type.LINKED_TO": 85669,
+        "counts_time_s": 0.2696049213409424,
+        "node_count": 2202307,
+        "edge_count": 2840455,
+        "node_counts_by_type.User": 345825,
+        "node_counts_by_type.Question": 213819,
+        "node_counts_by_type.Answer": 209068,
+        "node_counts_by_type.Tag": 1553,
+        "node_counts_by_type.Badge": 612331,
+        "node_counts_by_type.Comment": 819711,
+        "edge_counts_by_type.ASKED": 210251,
+        "edge_counts_by_type.ANSWERED": 206511,
+        "edge_counts_by_type.HAS_ANSWER": 208995,
+        "edge_counts_by_type.ACCEPTED_ANSWER": 71639,
+        "edge_counts_by_type.TAGGED_WITH": 625768,
+        "edge_counts_by_type.COMMENTED_ON": 475295,
+        "edge_counts_by_type.COMMENTED_ON_ANSWER": 343973,
+        "edge_counts_by_type.EARNED": 612245,
+        "edge_counts_by_type.LINKED_TO": 85778,
+        "disk_after_load_bytes": 1906764330,
+        "disk_after_oltp_bytes": 1907441185,
+        "rss_peak_kb": 2719312,
+        "latency_summary.ops.read.50": 0.00392182101495564,
+        "latency_summary.ops.read.95": 0.0749505190178752,
+        "latency_summary.ops.read.99": 0.09111195302102715,
+        "latency_summary.ops.update.50": 0.029679131985176355,
+        "latency_summary.ops.update.95": 0.060304587008431554,
+        "latency_summary.ops.update.99": 0.14648989599663764,
+        "latency_summary.ops.insert.50": 0.029722273000515997,
+        "latency_summary.ops.insert.95": 0.05640524602495134,
+        "latency_summary.ops.insert.99": 0.15959038399159908,
+        "latency_summary.ops.delete.50": 0.033415102981962264,
+        "latency_summary.ops.delete.95": 0.08711910201236606,
+        "latency_summary.ops.delete.99": 0.15357068699086085,
+        "latency_summary.overall.50": 0.014575040026102215,
+        "latency_summary.overall.95": 0.07358556397957727,
+        "latency_summary.overall.99": 0.09773182100616395,
+        "op_counts.read": 6021,
+        "op_counts.update": 1959,
+        "op_counts.insert": 987,
+        "op_counts.delete": 1033,
+        "load_stats.nodes.Tag": 0.4398512840270996,
+        "load_stats.nodes.User": 1.3247573375701904,
+        "load_stats.nodes.Question": 8.63636827468872,
+        "load_stats.nodes.Answer": 10.161738395690918,
+        "load_stats.nodes.Badge": 0.7441623210906982,
+        "load_stats.nodes.Comment": 7.306993722915649,
+        "load_stats.nodes.Post": 18.79810667037964,
+        "load_stats.edges.ASKED": 0.3651432991027832,
+        "load_stats.edges.ANSWERED": 0.36250948905944824,
+        "load_stats.edges.HAS_ANSWER": 0.39122843742370605,
+        "load_stats.edges.ACCEPTED_ANSWER": 0.2008824348449707,
+        "load_stats.edges.TAGGED_WITH": 0.7123823165893555,
+        "load_stats.edges.COMMENTED_ON": 0.9075803756713867,
+        "load_stats.edges.COMMENTED_ON_ANSWER": 0.7935571670532227,
+        "load_stats.edges.EARNED": 1.17930269241333,
+        "load_stats.edges.LINKED_TO": 0.19163227081298828,
+        "disk_usage.du_bytes": 1936621568
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "ladybug",
+        "threads": 1,
+        "transactions": 10000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "ladybug_version": "0.14.1",
+        "docker_image": "python:3.12-slim",
+        "seed": 1,
+        "run_label": "sweep09_t01_r01_ladybug_s00001"
+      },
+      "human_readable_metrics": {
+        "disk_after_load_bytes": "1.8GiB",
+        "disk_after_oltp_bytes": "1.8GiB",
+        "rss_peak_kb": "2.6GiB",
+        "disk_usage.du_bytes": "1.8GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "ladybug",
+      "run_label": "sweep09_t01_r02_ladybug_s00003",
+      "seed": 3,
+      "du_bytes": 1988575232,
+      "du_human": "1.9G",
+      "result_file": "stackoverflow_medium_graph_oltp_ladybug_sweep09_t01_r02_ladybug_s00003/results_sweep09_t01_r02_ladybug_s00003.json",
+      "numeric_metrics": {
+        "threads": 1,
+        "transactions": 10000,
+        "batch_size": 5000,
+        "seed": 3,
+        "throughput_ops_s": 48.44944008741845,
+        "total_time_s": 206.40073408395983,
+        "schema_time_s": 0.15801239013671875,
+        "load_time_s": 133.6720986366272,
+        "load_counts_time_s": 0.2545778751373291,
+        "load_node_count": 2202019,
+        "load_edge_count": 2877037,
+        "load_node_counts_by_type.User": 345754,
+        "load_node_counts_by_type.Question": 213761,
+        "load_node_counts_by_type.Answer": 208986,
+        "load_node_counts_by_type.Tag": 1612,
+        "load_node_counts_by_type.Badge": 612258,
+        "load_node_counts_by_type.Comment": 819648,
+        "load_edge_counts_by_type.ASKED": 210226,
+        "load_edge_counts_by_type.ANSWERED": 206435,
+        "load_edge_counts_by_type.HAS_ANSWER": 208986,
+        "load_edge_counts_by_type.ACCEPTED_ANSWER": 71547,
+        "load_edge_counts_by_type.TAGGED_WITH": 662394,
+        "load_edge_counts_by_type.COMMENTED_ON": 475470,
+        "load_edge_counts_by_type.COMMENTED_ON_ANSWER": 344052,
+        "load_edge_counts_by_type.EARNED": 612258,
+        "load_edge_counts_by_type.LINKED_TO": 85669,
+        "counts_time_s": 0.39913272857666016,
+        "node_count": 2202424,
+        "edge_count": 2852265,
+        "node_counts_by_type.User": 345863,
+        "node_counts_by_type.Question": 213855,
+        "node_counts_by_type.Answer": 209088,
+        "node_counts_by_type.Tag": 1536,
+        "node_counts_by_type.Badge": 612331,
+        "node_counts_by_type.Comment": 819751,
+        "edge_counts_by_type.ASKED": 210299,
+        "edge_counts_by_type.ANSWERED": 206518,
+        "edge_counts_by_type.HAS_ANSWER": 209021,
+        "edge_counts_by_type.ACCEPTED_ANSWER": 71645,
+        "edge_counts_by_type.TAGGED_WITH": 637330,
+        "edge_counts_by_type.COMMENTED_ON": 475412,
+        "edge_counts_by_type.COMMENTED_ON_ANSWER": 344017,
+        "edge_counts_by_type.EARNED": 612251,
+        "edge_counts_by_type.LINKED_TO": 85772,
+        "disk_after_load_bytes": 1906698794,
+        "disk_after_oltp_bytes": 1907395233,
+        "rss_peak_kb": 2894432,
+        "latency_summary.ops.read.50": 0.004752652021124959,
+        "latency_summary.ops.read.95": 0.07706198503728956,
+        "latency_summary.ops.read.99": 0.09136270201997831,
+        "latency_summary.ops.update.50": 0.02142730401828885,
+        "latency_summary.ops.update.95": 0.03104290895862505,
+        "latency_summary.ops.update.99": 0.08614947798196226,
+        "latency_summary.ops.insert.50": 0.02196713595185429,
+        "latency_summary.ops.insert.95": 0.03213824098929763,
+        "latency_summary.ops.insert.99": 0.08880114502971992,
+        "latency_summary.ops.delete.50": 0.025583005044609308,
+        "latency_summary.ops.delete.95": 0.08267639996483922,
+        "latency_summary.ops.delete.99": 0.107666072959546,
+        "latency_summary.overall.50": 0.015988061029929668,
+        "latency_summary.overall.95": 0.07218993303831667,
+        "latency_summary.overall.99": 0.0919586829841137,
+        "op_counts.read": 6041,
+        "op_counts.update": 1906,
+        "op_counts.insert": 1035,
+        "op_counts.delete": 1018,
+        "load_stats.nodes.Tag": 0.30248141288757324,
+        "load_stats.nodes.User": 1.210834264755249,
+        "load_stats.nodes.Question": 8.266567468643188,
+        "load_stats.nodes.Answer": 11.06810188293457,
+        "load_stats.nodes.Badge": 0.6008810997009277,
+        "load_stats.nodes.Comment": 10.028988599777222,
+        "load_stats.nodes.Post": 19.33466935157776,
+        "load_stats.edges.ASKED": 0.42082858085632324,
+        "load_stats.edges.ANSWERED": 0.417248010635376,
+        "load_stats.edges.HAS_ANSWER": 0.3115723133087158,
+        "load_stats.edges.ACCEPTED_ANSWER": 0.19393539428710938,
+        "load_stats.edges.TAGGED_WITH": 0.6731274127960205,
+        "load_stats.edges.COMMENTED_ON": 1.0312793254852295,
+        "load_stats.edges.COMMENTED_ON_ANSWER": 0.8103015422821045,
+        "load_stats.edges.EARNED": 1.2813987731933594,
+        "load_stats.edges.LINKED_TO": 0.3353118896484375,
+        "disk_usage.du_bytes": 1988575232
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "ladybug",
+        "threads": 1,
+        "transactions": 10000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "ladybug_version": "0.14.1",
+        "docker_image": "python:3.12-slim",
+        "seed": 3,
+        "run_label": "sweep09_t01_r02_ladybug_s00003"
+      },
+      "human_readable_metrics": {
+        "disk_after_load_bytes": "1.8GiB",
+        "disk_after_oltp_bytes": "1.8GiB",
+        "rss_peak_kb": "2.8GiB",
+        "disk_usage.du_bytes": "1.9GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "ladybug",
+      "run_label": "sweep09_t01_r03_ladybug_s00005",
+      "seed": 5,
+      "du_bytes": 1990352896,
+      "du_human": "1.9G",
+      "result_file": "stackoverflow_medium_graph_oltp_ladybug_sweep09_t01_r03_ladybug_s00005/results_sweep09_t01_r03_ladybug_s00005.json",
+      "numeric_metrics": {
+        "threads": 1,
+        "transactions": 10000,
+        "batch_size": 5000,
+        "seed": 5,
+        "throughput_ops_s": 60.34822031512914,
+        "total_time_s": 165.70496938901488,
+        "schema_time_s": 0.1607346534729004,
+        "load_time_s": 124.35561156272888,
+        "load_counts_time_s": 0.35976672172546387,
+        "load_node_count": 2202019,
+        "load_edge_count": 2877037,
+        "load_node_counts_by_type.User": 345754,
+        "load_node_counts_by_type.Question": 213761,
+        "load_node_counts_by_type.Answer": 208986,
+        "load_node_counts_by_type.Tag": 1612,
+        "load_node_counts_by_type.Badge": 612258,
+        "load_node_counts_by_type.Comment": 819648,
+        "load_edge_counts_by_type.ASKED": 210226,
+        "load_edge_counts_by_type.ANSWERED": 206435,
+        "load_edge_counts_by_type.HAS_ANSWER": 208986,
+        "load_edge_counts_by_type.ACCEPTED_ANSWER": 71547,
+        "load_edge_counts_by_type.TAGGED_WITH": 662394,
+        "load_edge_counts_by_type.COMMENTED_ON": 475470,
+        "load_edge_counts_by_type.COMMENTED_ON_ANSWER": 344052,
+        "load_edge_counts_by_type.EARNED": 612258,
+        "load_edge_counts_by_type.LINKED_TO": 85669,
+        "counts_time_s": 0.406787633895874,
+        "node_count": 2202307,
+        "edge_count": 2847211,
+        "node_counts_by_type.User": 345838,
+        "node_counts_by_type.Question": 213842,
+        "node_counts_by_type.Answer": 209053,
+        "node_counts_by_type.Tag": 1540,
+        "node_counts_by_type.Badge": 612315,
+        "node_counts_by_type.Comment": 819719,
+        "edge_counts_by_type.ASKED": 210286,
+        "edge_counts_by_type.ANSWERED": 206500,
+        "edge_counts_by_type.HAS_ANSWER": 208989,
+        "edge_counts_by_type.ACCEPTED_ANSWER": 71625,
+        "edge_counts_by_type.TAGGED_WITH": 632509,
+        "edge_counts_by_type.COMMENTED_ON": 475392,
+        "edge_counts_by_type.COMMENTED_ON_ANSWER": 343904,
+        "edge_counts_by_type.EARNED": 612243,
+        "edge_counts_by_type.LINKED_TO": 85763,
+        "disk_after_load_bytes": 1906768426,
+        "disk_after_oltp_bytes": 1907446000,
+        "rss_peak_kb": 2647552,
+        "latency_summary.ops.read.50": 0.003165258967783302,
+        "latency_summary.ops.read.95": 0.07266074902145192,
+        "latency_summary.ops.read.99": 0.08971912798006088,
+        "latency_summary.ops.update.50": 0.016613378014881164,
+        "latency_summary.ops.update.95": 0.021788812999147922,
+        "latency_summary.ops.update.99": 0.07010538096074015,
+        "latency_summary.ops.insert.50": 0.016966769006103277,
+        "latency_summary.ops.insert.95": 0.02399036899441853,
+        "latency_summary.ops.insert.99": 0.06495868600904942,
+        "latency_summary.ops.delete.50": 0.018688384036067873,
+        "latency_summary.ops.delete.95": 0.06471060600597411,
+        "latency_summary.ops.delete.99": 0.09280277695506811,
+        "latency_summary.overall.50": 0.014477460994385183,
+        "latency_summary.overall.95": 0.0676685850485228,
+        "latency_summary.overall.99": 0.0888481559813954,
+        "op_counts.read": 5973,
+        "op_counts.update": 2035,
+        "op_counts.insert": 960,
+        "op_counts.delete": 1032,
+        "load_stats.nodes.Tag": 0.4611687660217285,
+        "load_stats.nodes.User": 1.0824260711669922,
+        "load_stats.nodes.Question": 8.032540321350098,
+        "load_stats.nodes.Answer": 11.186337947845459,
+        "load_stats.nodes.Badge": 0.5194594860076904,
+        "load_stats.nodes.Comment": 6.9425530433654785,
+        "load_stats.nodes.Post": 19.218878269195557,
+        "load_stats.edges.ASKED": 0.3468053340911865,
+        "load_stats.edges.ANSWERED": 0.39139628410339355,
+        "load_stats.edges.HAS_ANSWER": 0.34846997261047363,
+        "load_stats.edges.ACCEPTED_ANSWER": 0.2336876392364502,
+        "load_stats.edges.TAGGED_WITH": 0.6141834259033203,
+        "load_stats.edges.COMMENTED_ON": 0.923743724822998,
+        "load_stats.edges.COMMENTED_ON_ANSWER": 0.6901412010192871,
+        "load_stats.edges.EARNED": 1.2276661396026611,
+        "load_stats.edges.LINKED_TO": 0.30289435386657715,
+        "disk_usage.du_bytes": 1990352896
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "ladybug",
+        "threads": 1,
+        "transactions": 10000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "ladybug_version": "0.14.1",
+        "docker_image": "python:3.12-slim",
+        "seed": 5,
+        "run_label": "sweep09_t01_r03_ladybug_s00005"
+      },
+      "human_readable_metrics": {
+        "disk_after_load_bytes": "1.8GiB",
+        "disk_after_oltp_bytes": "1.8GiB",
+        "rss_peak_kb": "2.5GiB",
+        "disk_usage.du_bytes": "1.9GiB"
+      }
+    }
+  ],
+  "by_db": [
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "threads": 1,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 25.169305721918743,
+          "stddev": 6.043341215774369,
+          "min": 17.270771741867065,
+          "max": 31.94573211669922
+        },
+        "disk_after_load_bytes": {
+          "count": 3,
+          "mean": 1465545310,
+          "stddev": 41844604.814001694,
+          "min": 1425361911,
+          "max": 1523259174,
+          "mean_human": "1.4GiB",
+          "min_human": "1.3GiB",
+          "max_human": "1.4GiB"
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 1459377571.3333333,
+          "stddev": 40801607.677841276,
+          "min": 1415237713,
+          "max": 1513633079,
+          "mean_human": "1.4GiB",
+          "min_human": "1.3GiB",
+          "max_human": "1.4GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 1405333504,
+          "stddev": 150608.08753848512,
+          "min": 1405227008,
+          "max": 1405546496,
+          "mean_human": "1.3GiB",
+          "min_human": "1.3GiB",
+          "max_human": "1.3GiB"
+        },
+        "edge_count": {
+          "count": 3,
+          "mean": 2608218.6666666665,
+          "stddev": 15694.22200117681,
+          "min": 2586028,
+          "max": 2619693
+        },
+        "edge_counts_by_type.ACCEPTED_ANSWER": {
+          "count": 3,
+          "mean": 72300.66666666667,
+          "stddev": 71.06022484875456,
+          "min": 72203,
+          "max": 72370
+        },
+        "edge_counts_by_type.ANSWERED": {
+          "count": 3,
+          "mean": 206838.33333333334,
+          "stddev": 114.787726792642,
+          "min": 206676,
+          "max": 206920
+        },
+        "edge_counts_by_type.ASKED": {
+          "count": 3,
+          "mean": 210233.66666666666,
+          "stddev": 110.24316557299848,
+          "min": 210078,
+          "max": 210319
+        },
+        "edge_counts_by_type.COMMENTED_ON": {
+          "count": 3,
+          "mean": 474124.3333333333,
+          "stddev": 23.11324776447962,
+          "min": 474107,
+          "max": 474157
+        },
+        "edge_counts_by_type.COMMENTED_ON_ANSWER": {
+          "count": 3,
+          "mean": 342949.3333333333,
+          "stddev": 38.57748335781149,
+          "min": 342914,
+          "max": 343003
+        },
+        "edge_counts_by_type.EARNED": {
+          "count": 3,
+          "mean": 610676.6666666666,
+          "stddev": 105.15174220567575,
+          "min": 610562,
+          "max": 610816
+        },
+        "edge_counts_by_type.HAS_ANSWER": {
+          "count": 3,
+          "mean": 208482,
+          "stddev": 29.709706606876257,
+          "min": 208440,
+          "max": 208504
+        },
+        "edge_counts_by_type.LINKED_TO": {
+          "count": 3,
+          "mean": 86221,
+          "stddev": 81.20344820264715,
+          "min": 86140,
+          "max": 86332
+        },
+        "edge_counts_by_type.TAGGED_WITH": {
+          "count": 3,
+          "mean": 396392.6666666667,
+          "stddev": 15564.957914780525,
+          "min": 374381,
+          "max": 407528
+        },
+        "latency_summary.ops.delete.50": {
+          "count": 3,
+          "mean": 0.0018220753214942913,
+          "stddev": 0.00031562683512811575,
+          "min": 0.001508184999693185,
+          "max": 0.0022538569755852222
+        },
+        "latency_summary.ops.delete.95": {
+          "count": 3,
+          "mean": 0.038246943324338645,
+          "stddev": 0.0034562863913945824,
+          "min": 0.03389967797556892,
+          "max": 0.042355733981821686
+        },
+        "latency_summary.ops.delete.99": {
+          "count": 3,
+          "mean": 0.13742135998715335,
+          "stddev": 0.015114666443235608,
+          "min": 0.11605334398336709,
+          "max": 0.14859078696463257
+        },
+        "latency_summary.ops.insert.50": {
+          "count": 3,
+          "mean": 0.0009066426622060438,
+          "stddev": 6.882663513617074e-05,
+          "min": 0.0008153529488481581,
+          "max": 0.0009815330267883837
+        },
+        "latency_summary.ops.insert.95": {
+          "count": 3,
+          "mean": 0.0216379199991934,
+          "stddev": 0.00047636303761663436,
+          "min": 0.02097642997978255,
+          "max": 0.022079145011957735
+        },
+        "latency_summary.ops.insert.99": {
+          "count": 3,
+          "mean": 0.030579471980066348,
+          "stddev": 0.0014113628132882425,
+          "min": 0.02874857297865674,
+          "max": 0.032183233997784555
+        },
+        "latency_summary.ops.read.50": {
+          "count": 3,
+          "mean": 0.0005719980302577218,
+          "stddev": 4.408814902333897e-05,
+          "min": 0.0005096610402688384,
+          "max": 0.000604272005148232
+        },
+        "latency_summary.ops.read.95": {
+          "count": 3,
+          "mean": 0.002728004357777536,
+          "stddev": 0.0006256955999987005,
+          "min": 0.00205306604038924,
+          "max": 0.0035610400373116136
+        },
+        "latency_summary.ops.read.99": {
+          "count": 3,
+          "mean": 0.006727868982125074,
+          "stddev": 0.0018512130155128711,
+          "min": 0.00508897501276806,
+          "max": 0.009315366973169148
+        },
+        "latency_summary.ops.update.50": {
+          "count": 3,
+          "mean": 0.0002555873555441697,
+          "stddev": 1.7887127276593416e-05,
+          "min": 0.0002356200129725039,
+          "max": 0.0002790210419334471
+        },
+        "latency_summary.ops.update.95": {
+          "count": 3,
+          "mean": 0.0032953659926230707,
+          "stddev": 0.00015469244631756537,
+          "min": 0.00310172897297889,
+          "max": 0.003480350016616285
+        },
+        "latency_summary.ops.update.99": {
+          "count": 3,
+          "mean": 0.006377184336694579,
+          "stddev": 0.0008123570302609327,
+          "min": 0.005712026031687856,
+          "max": 0.007520971994381398
+        },
+        "latency_summary.overall.50": {
+          "count": 3,
+          "mean": 0.0005970886559225619,
+          "stddev": 4.9127642381525725e-05,
+          "min": 0.0005285119987092912,
+          "max": 0.0006410320056602359
+        },
+        "latency_summary.overall.95": {
+          "count": 3,
+          "mean": 0.007746268665262808,
+          "stddev": 0.001193170031125869,
+          "min": 0.0063791690045036376,
+          "max": 0.009286416985560209
+        },
+        "latency_summary.overall.99": {
+          "count": 3,
+          "mean": 0.030026646660796057,
+          "stddev": 0.002258438087143417,
+          "min": 0.027278587978798896,
+          "max": 0.032810266013257205
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 33.55279596646627,
+          "stddev": 10.261474117531094,
+          "min": 25.302375555038452,
+          "max": 48.016995429992676
+        },
+        "load_edge_count": {
+          "count": 3,
+          "mean": 2877037,
+          "stddev": 0.0,
+          "min": 2877037,
+          "max": 2877037
+        },
+        "load_edge_counts_by_type.ACCEPTED_ANSWER": {
+          "count": 3,
+          "mean": 71547,
+          "stddev": 0.0,
+          "min": 71547,
+          "max": 71547
+        },
+        "load_edge_counts_by_type.ANSWERED": {
+          "count": 3,
+          "mean": 206435,
+          "stddev": 0.0,
+          "min": 206435,
+          "max": 206435
+        },
+        "load_edge_counts_by_type.ASKED": {
+          "count": 3,
+          "mean": 210226,
+          "stddev": 0.0,
+          "min": 210226,
+          "max": 210226
+        },
+        "load_edge_counts_by_type.COMMENTED_ON": {
+          "count": 3,
+          "mean": 475470,
+          "stddev": 0.0,
+          "min": 475470,
+          "max": 475470
+        },
+        "load_edge_counts_by_type.COMMENTED_ON_ANSWER": {
+          "count": 3,
+          "mean": 344052,
+          "stddev": 0.0,
+          "min": 344052,
+          "max": 344052
+        },
+        "load_edge_counts_by_type.EARNED": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "load_edge_counts_by_type.HAS_ANSWER": {
+          "count": 3,
+          "mean": 208986,
+          "stddev": 0.0,
+          "min": 208986,
+          "max": 208986
+        },
+        "load_edge_counts_by_type.LINKED_TO": {
+          "count": 3,
+          "mean": 85669,
+          "stddev": 0.0,
+          "min": 85669,
+          "max": 85669
+        },
+        "load_edge_counts_by_type.TAGGED_WITH": {
+          "count": 3,
+          "mean": 662394,
+          "stddev": 0.0,
+          "min": 662394,
+          "max": 662394
+        },
+        "load_node_count": {
+          "count": 3,
+          "mean": 2202019,
+          "stddev": 0.0,
+          "min": 2202019,
+          "max": 2202019
+        },
+        "load_node_counts_by_type.Answer": {
+          "count": 3,
+          "mean": 208986,
+          "stddev": 0.0,
+          "min": 208986,
+          "max": 208986
+        },
+        "load_node_counts_by_type.Badge": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "load_node_counts_by_type.Comment": {
+          "count": 3,
+          "mean": 819648,
+          "stddev": 0.0,
+          "min": 819648,
+          "max": 819648
+        },
+        "load_node_counts_by_type.Question": {
+          "count": 3,
+          "mean": 213761,
+          "stddev": 0.0,
+          "min": 213761,
+          "max": 213761
+        },
+        "load_node_counts_by_type.Tag": {
+          "count": 3,
+          "mean": 1612,
+          "stddev": 0.0,
+          "min": 1612,
+          "max": 1612
+        },
+        "load_node_counts_by_type.User": {
+          "count": 3,
+          "mean": 345754,
+          "stddev": 0.0,
+          "min": 345754,
+          "max": 345754
+        },
+        "load_stats.edges.ACCEPTED_ANSWER": {
+          "count": 3,
+          "mean": 52.03834581375122,
+          "stddev": 5.261296116183564,
+          "min": 44.98478651046753,
+          "max": 57.61630344390869
+        },
+        "load_stats.edges.ANSWERED": {
+          "count": 3,
+          "mean": 168.2866459687551,
+          "stddev": 5.682468796597659,
+          "min": 163.19485926628113,
+          "max": 176.21686458587646
+        },
+        "load_stats.edges.ASKED": {
+          "count": 3,
+          "mean": 180.30200068155924,
+          "stddev": 13.338694231738785,
+          "min": 168.82821321487427,
+          "max": 199.00597953796387
+        },
+        "load_stats.edges.COMMENTED_ON": {
+          "count": 3,
+          "mean": 628.1278255780538,
+          "stddev": 13.189337229015978,
+          "min": 610.9365584850311,
+          "max": 642.9910883903503
+        },
+        "load_stats.edges.COMMENTED_ON_ANSWER": {
+          "count": 3,
+          "mean": 628.1278255780538,
+          "stddev": 13.189337229015978,
+          "min": 610.9365584850311,
+          "max": 642.9910883903503
+        },
+        "load_stats.edges.EARNED": {
+          "count": 3,
+          "mean": 436.15319061279297,
+          "stddev": 26.62474880387861,
+          "min": 398.6903131008148,
+          "max": 458.1580801010132
+        },
+        "load_stats.edges.HAS_ANSWER": {
+          "count": 3,
+          "mean": 152.14877446492514,
+          "stddev": 11.054200224001624,
+          "min": 138.04018783569336,
+          "max": 165.03434991836548
+        },
+        "load_stats.edges.LINKED_TO": {
+          "count": 3,
+          "mean": 67.7708809375763,
+          "stddev": 7.866690976773672,
+          "min": 61.95440936088562,
+          "max": 78.8921389579773
+        },
+        "load_stats.edges.TAGGED_WITH": {
+          "count": 3,
+          "mean": 447.16329471270245,
+          "stddev": 14.597004993096308,
+          "min": 435.54653668403625,
+          "max": 467.7499358654022
+        },
+        "load_stats.nodes.Badge": {
+          "count": 3,
+          "mean": 352.6114803949992,
+          "stddev": 14.14465024140051,
+          "min": 333.7214529514313,
+          "max": 367.7557785511017
+        },
+        "load_stats.nodes.Comment": {
+          "count": 3,
+          "mean": 503.95105568567914,
+          "stddev": 7.373644720529815,
+          "min": 498.17089581489563,
+          "max": 514.3576686382294
+        },
+        "load_stats.nodes.Post": {
+          "count": 3,
+          "mean": 519.6063606739044,
+          "stddev": 45.46243977326579,
+          "min": 456.63891077041626,
+          "max": 562.340656042099
+        },
+        "load_stats.nodes.Tag": {
+          "count": 3,
+          "mean": 8.695303042729696,
+          "stddev": 5.607149985697448,
+          "min": 2.324568748474121,
+          "max": 15.969741582870483
+        },
+        "load_stats.nodes.User": {
+          "count": 3,
+          "mean": 315.5184365908305,
+          "stddev": 21.69570708805613,
+          "min": 297.327196598053,
+          "max": 346.01182866096497
+        },
+        "load_time_s": {
+          "count": 3,
+          "mean": 3832.451007604599,
+          "stddev": 64.71668540855916,
+          "min": 3746.340231180191,
+          "max": 3902.3592298030853
+        },
+        "node_count": {
+          "count": 3,
+          "mean": 2205209.3333333335,
+          "stddev": 34.30581421404962,
+          "min": 2205168,
+          "max": 2205252
+        },
+        "node_counts_by_type.Answer": {
+          "count": 3,
+          "mean": 209751.33333333334,
+          "stddev": 30.09245014211298,
+          "min": 209723,
+          "max": 209793
+        },
+        "node_counts_by_type.Badge": {
+          "count": 3,
+          "mean": 612987.6666666666,
+          "stddev": 36.4264860903284,
+          "min": 612945,
+          "max": 613034
+        },
+        "node_counts_by_type.Comment": {
+          "count": 3,
+          "mean": 820428,
+          "stddev": 23.280893453645632,
+          "min": 820400,
+          "max": 820457
+        },
+        "node_counts_by_type.Question": {
+          "count": 3,
+          "mean": 214558.33333333334,
+          "stddev": 19.39644870130154,
+          "min": 214531,
+          "max": 214574
+        },
+        "node_counts_by_type.Tag": {
+          "count": 3,
+          "mean": 950.3333333333334,
+          "stddev": 12.39175353029407,
+          "min": 934,
+          "max": 964
+        },
+        "node_counts_by_type.User": {
+          "count": 3,
+          "mean": 346533.6666666667,
+          "stddev": 34.883934538536344,
+          "min": 346509,
+          "max": 346583
+        },
+        "op_counts.delete": {
+          "count": 3,
+          "mean": 10039.333333333334,
+          "stddev": 23.156472577277874,
+          "min": 10021,
+          "max": 10072
+        },
+        "op_counts.insert": {
+          "count": 3,
+          "mean": 10015.666666666666,
+          "stddev": 70.48561713017928,
+          "min": 9916,
+          "max": 10067
+        },
+        "op_counts.read": {
+          "count": 3,
+          "mean": 59990,
+          "stddev": 93.85449731721259,
+          "min": 59859,
+          "max": 60074
+        },
+        "op_counts.update": {
+          "count": 3,
+          "mean": 19955,
+          "stddev": 173.2993556441185,
+          "min": 19827,
+          "max": 20200
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 3814793.3333333335,
+          "stddev": 53909.67599811951,
+          "min": 3738624,
+          "max": 3855716,
+          "mean_human": "3.6GiB",
+          "min_human": "3.6GiB",
+          "max_human": "3.7GiB"
+        },
+        "schema_time_s": {
+          "count": 3,
+          "mean": 0.39817357063293457,
+          "stddev": 0.2804859584023821,
+          "min": 0.1873643398284912,
+          "max": 0.7945733070373535
+        },
+        "seed": {
+          "count": 3,
+          "mean": 2,
+          "stddev": 1.632993161855452,
+          "min": 0,
+          "max": 4
+        },
+        "threads": {
+          "count": 3,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 416.33742467481767,
+          "stddev": 39.79123794504706,
+          "min": 366.8734330095251,
+          "max": 464.3073006216424
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 242.42635713833928,
+          "stddev": 23.453738273055578,
+          "min": 215.37460183398798,
+          "max": 272.5735662560328
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "threads": 8,
+      "runs": 1,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 1,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "counts_time_s": {
+          "count": 1,
+          "mean": 10.58008599281311,
+          "stddev": 0.0,
+          "min": 10.58008599281311,
+          "max": 10.58008599281311
+        },
+        "disk_after_load_bytes": {
+          "count": 1,
+          "mean": 1566793494,
+          "stddev": 0.0,
+          "min": 1566793494,
+          "max": 1566793494,
+          "mean_human": "1.5GiB",
+          "min_human": "1.5GiB",
+          "max_human": "1.5GiB"
+        },
+        "disk_after_oltp_bytes": {
+          "count": 1,
+          "mean": 1625965424,
+          "stddev": 0.0,
+          "min": 1625965424,
+          "max": 1625965424,
+          "mean_human": "1.5GiB",
+          "min_human": "1.5GiB",
+          "max_human": "1.5GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 1,
+          "mean": 1405227008,
+          "stddev": 0.0,
+          "min": 1405227008,
+          "max": 1405227008,
+          "mean_human": "1.3GiB",
+          "min_human": "1.3GiB",
+          "max_human": "1.3GiB"
+        },
+        "edge_count": {
+          "count": 1,
+          "mean": 2619882,
+          "stddev": 0.0,
+          "min": 2619882,
+          "max": 2619882
+        },
+        "edge_counts_by_type.ACCEPTED_ANSWER": {
+          "count": 1,
+          "mean": 72292,
+          "stddev": 0.0,
+          "min": 72292,
+          "max": 72292
+        },
+        "edge_counts_by_type.ANSWERED": {
+          "count": 1,
+          "mean": 206133,
+          "stddev": 0.0,
+          "min": 206133,
+          "max": 206133
+        },
+        "edge_counts_by_type.ASKED": {
+          "count": 1,
+          "mean": 210248,
+          "stddev": 0.0,
+          "min": 210248,
+          "max": 210248
+        },
+        "edge_counts_by_type.COMMENTED_ON": {
+          "count": 1,
+          "mean": 474190,
+          "stddev": 0.0,
+          "min": 474190,
+          "max": 474190
+        },
+        "edge_counts_by_type.COMMENTED_ON_ANSWER": {
+          "count": 1,
+          "mean": 342969,
+          "stddev": 0.0,
+          "min": 342969,
+          "max": 342969
+        },
+        "edge_counts_by_type.EARNED": {
+          "count": 1,
+          "mean": 610415,
+          "stddev": 0.0,
+          "min": 610415,
+          "max": 610415
+        },
+        "edge_counts_by_type.HAS_ANSWER": {
+          "count": 1,
+          "mean": 208459,
+          "stddev": 0.0,
+          "min": 208459,
+          "max": 208459
+        },
+        "edge_counts_by_type.LINKED_TO": {
+          "count": 1,
+          "mean": 86447,
+          "stddev": 0.0,
+          "min": 86447,
+          "max": 86447
+        },
+        "edge_counts_by_type.TAGGED_WITH": {
+          "count": 1,
+          "mean": 408729,
+          "stddev": 0.0,
+          "min": 408729,
+          "max": 408729
+        },
+        "latency_summary.ops.delete.50": {
+          "count": 1,
+          "mean": 0.0028243479900993407,
+          "stddev": 0.0,
+          "min": 0.0028243479900993407,
+          "max": 0.0028243479900993407
+        },
+        "latency_summary.ops.delete.95": {
+          "count": 1,
+          "mean": 0.09534740197705105,
+          "stddev": 0.0,
+          "min": 0.09534740197705105,
+          "max": 0.09534740197705105
+        },
+        "latency_summary.ops.delete.99": {
+          "count": 1,
+          "mean": 0.4659039370017126,
+          "stddev": 0.0,
+          "min": 0.4659039370017126,
+          "max": 0.4659039370017126
+        },
+        "latency_summary.ops.insert.50": {
+          "count": 1,
+          "mean": 0.0011440730304457247,
+          "stddev": 0.0,
+          "min": 0.0011440730304457247,
+          "max": 0.0011440730304457247
+        },
+        "latency_summary.ops.insert.95": {
+          "count": 1,
+          "mean": 0.09233839303487912,
+          "stddev": 0.0,
+          "min": 0.09233839303487912,
+          "max": 0.09233839303487912
+        },
+        "latency_summary.ops.insert.99": {
+          "count": 1,
+          "mean": 0.23347984300926328,
+          "stddev": 0.0,
+          "min": 0.23347984300926328,
+          "max": 0.23347984300926328
+        },
+        "latency_summary.ops.read.50": {
+          "count": 1,
+          "mean": 0.0006275319610722363,
+          "stddev": 0.0,
+          "min": 0.0006275319610722363,
+          "max": 0.0006275319610722363
+        },
+        "latency_summary.ops.read.95": {
+          "count": 1,
+          "mean": 0.00705100002232939,
+          "stddev": 0.0,
+          "min": 0.00705100002232939,
+          "max": 0.00705100002232939
+        },
+        "latency_summary.ops.read.99": {
+          "count": 1,
+          "mean": 0.02313512604450807,
+          "stddev": 0.0,
+          "min": 0.02313512604450807,
+          "max": 0.02313512604450807
+        },
+        "latency_summary.ops.update.50": {
+          "count": 1,
+          "mean": 0.0002872109762392938,
+          "stddev": 0.0,
+          "min": 0.0002872109762392938,
+          "max": 0.0002872109762392938
+        },
+        "latency_summary.ops.update.95": {
+          "count": 1,
+          "mean": 0.02638351498171687,
+          "stddev": 0.0,
+          "min": 0.02638351498171687,
+          "max": 0.02638351498171687
+        },
+        "latency_summary.ops.update.99": {
+          "count": 1,
+          "mean": 0.07796820299699903,
+          "stddev": 0.0,
+          "min": 0.07796820299699903,
+          "max": 0.07796820299699903
+        },
+        "latency_summary.overall.50": {
+          "count": 1,
+          "mean": 0.0006329220486804843,
+          "stddev": 0.0,
+          "min": 0.0006329220486804843,
+          "max": 0.0006329220486804843
+        },
+        "latency_summary.overall.95": {
+          "count": 1,
+          "mean": 0.026459575979970396,
+          "stddev": 0.0,
+          "min": 0.026459575979970396,
+          "max": 0.026459575979970396
+        },
+        "latency_summary.overall.99": {
+          "count": 1,
+          "mean": 0.10369323496706784,
+          "stddev": 0.0,
+          "min": 0.10369323496706784,
+          "max": 0.10369323496706784
+        },
+        "load_counts_time_s": {
+          "count": 1,
+          "mean": 27.330768823623657,
+          "stddev": 0.0,
+          "min": 27.330768823623657,
+          "max": 27.330768823623657
+        },
+        "load_edge_count": {
+          "count": 1,
+          "mean": 2877037,
+          "stddev": 0.0,
+          "min": 2877037,
+          "max": 2877037
+        },
+        "load_edge_counts_by_type.ACCEPTED_ANSWER": {
+          "count": 1,
+          "mean": 71547,
+          "stddev": 0.0,
+          "min": 71547,
+          "max": 71547
+        },
+        "load_edge_counts_by_type.ANSWERED": {
+          "count": 1,
+          "mean": 206435,
+          "stddev": 0.0,
+          "min": 206435,
+          "max": 206435
+        },
+        "load_edge_counts_by_type.ASKED": {
+          "count": 1,
+          "mean": 210226,
+          "stddev": 0.0,
+          "min": 210226,
+          "max": 210226
+        },
+        "load_edge_counts_by_type.COMMENTED_ON": {
+          "count": 1,
+          "mean": 475470,
+          "stddev": 0.0,
+          "min": 475470,
+          "max": 475470
+        },
+        "load_edge_counts_by_type.COMMENTED_ON_ANSWER": {
+          "count": 1,
+          "mean": 344052,
+          "stddev": 0.0,
+          "min": 344052,
+          "max": 344052
+        },
+        "load_edge_counts_by_type.EARNED": {
+          "count": 1,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "load_edge_counts_by_type.HAS_ANSWER": {
+          "count": 1,
+          "mean": 208986,
+          "stddev": 0.0,
+          "min": 208986,
+          "max": 208986
+        },
+        "load_edge_counts_by_type.LINKED_TO": {
+          "count": 1,
+          "mean": 85669,
+          "stddev": 0.0,
+          "min": 85669,
+          "max": 85669
+        },
+        "load_edge_counts_by_type.TAGGED_WITH": {
+          "count": 1,
+          "mean": 662394,
+          "stddev": 0.0,
+          "min": 662394,
+          "max": 662394
+        },
+        "load_node_count": {
+          "count": 1,
+          "mean": 2202019,
+          "stddev": 0.0,
+          "min": 2202019,
+          "max": 2202019
+        },
+        "load_node_counts_by_type.Answer": {
+          "count": 1,
+          "mean": 208986,
+          "stddev": 0.0,
+          "min": 208986,
+          "max": 208986
+        },
+        "load_node_counts_by_type.Badge": {
+          "count": 1,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "load_node_counts_by_type.Comment": {
+          "count": 1,
+          "mean": 819648,
+          "stddev": 0.0,
+          "min": 819648,
+          "max": 819648
+        },
+        "load_node_counts_by_type.Question": {
+          "count": 1,
+          "mean": 213761,
+          "stddev": 0.0,
+          "min": 213761,
+          "max": 213761
+        },
+        "load_node_counts_by_type.Tag": {
+          "count": 1,
+          "mean": 1612,
+          "stddev": 0.0,
+          "min": 1612,
+          "max": 1612
+        },
+        "load_node_counts_by_type.User": {
+          "count": 1,
+          "mean": 345754,
+          "stddev": 0.0,
+          "min": 345754,
+          "max": 345754
+        },
+        "load_stats.edges.ACCEPTED_ANSWER": {
+          "count": 1,
+          "mean": 40.638153314590454,
+          "stddev": 0.0,
+          "min": 40.638153314590454,
+          "max": 40.638153314590454
+        },
+        "load_stats.edges.ANSWERED": {
+          "count": 1,
+          "mean": 131.10922527313232,
+          "stddev": 0.0,
+          "min": 131.10922527313232,
+          "max": 131.10922527313232
+        },
+        "load_stats.edges.ASKED": {
+          "count": 1,
+          "mean": 142.28609085083008,
+          "stddev": 0.0,
+          "min": 142.28609085083008,
+          "max": 142.28609085083008
+        },
+        "load_stats.edges.COMMENTED_ON": {
+          "count": 1,
+          "mean": 408.4385051727295,
+          "stddev": 0.0,
+          "min": 408.4385051727295,
+          "max": 408.4385051727295
+        },
+        "load_stats.edges.COMMENTED_ON_ANSWER": {
+          "count": 1,
+          "mean": 408.4385051727295,
+          "stddev": 0.0,
+          "min": 408.4385051727295,
+          "max": 408.4385051727295
+        },
+        "load_stats.edges.EARNED": {
+          "count": 1,
+          "mean": 314.7748918533325,
+          "stddev": 0.0,
+          "min": 314.7748918533325,
+          "max": 314.7748918533325
+        },
+        "load_stats.edges.HAS_ANSWER": {
+          "count": 1,
+          "mean": 119.98603081703186,
+          "stddev": 0.0,
+          "min": 119.98603081703186,
+          "max": 119.98603081703186
+        },
+        "load_stats.edges.LINKED_TO": {
+          "count": 1,
+          "mean": 50.41272258758545,
+          "stddev": 0.0,
+          "min": 50.41272258758545,
+          "max": 50.41272258758545
+        },
+        "load_stats.edges.TAGGED_WITH": {
+          "count": 1,
+          "mean": 330.17166543006897,
+          "stddev": 0.0,
+          "min": 330.17166543006897,
+          "max": 330.17166543006897
+        },
+        "load_stats.nodes.Badge": {
+          "count": 1,
+          "mean": 322.40513849258423,
+          "stddev": 0.0,
+          "min": 322.40513849258423,
+          "max": 322.40513849258423
+        },
+        "load_stats.nodes.Comment": {
+          "count": 1,
+          "mean": 431.25180864334106,
+          "stddev": 0.0,
+          "min": 431.25180864334106,
+          "max": 431.25180864334106
+        },
+        "load_stats.nodes.Post": {
+          "count": 1,
+          "mean": 302.67543363571167,
+          "stddev": 0.0,
+          "min": 302.67543363571167,
+          "max": 302.67543363571167
+        },
+        "load_stats.nodes.Tag": {
+          "count": 1,
+          "mean": 14.190836668014526,
+          "stddev": 0.0,
+          "min": 14.190836668014526,
+          "max": 14.190836668014526
+        },
+        "load_stats.nodes.User": {
+          "count": 1,
+          "mean": 170.60794949531555,
+          "stddev": 0.0,
+          "min": 170.60794949531555,
+          "max": 170.60794949531555
+        },
+        "load_time_s": {
+          "count": 1,
+          "mean": 2779.1042263507843,
+          "stddev": 0.0,
+          "min": 2779.1042263507843,
+          "max": 2779.1042263507843
+        },
+        "node_count": {
+          "count": 1,
+          "mean": 2205223,
+          "stddev": 0.0,
+          "min": 2205223,
+          "max": 2205223
+        },
+        "node_counts_by_type.Answer": {
+          "count": 1,
+          "mean": 209747,
+          "stddev": 0.0,
+          "min": 209747,
+          "max": 209747
+        },
+        "node_counts_by_type.Badge": {
+          "count": 1,
+          "mean": 612982,
+          "stddev": 0.0,
+          "min": 612982,
+          "max": 612982
+        },
+        "node_counts_by_type.Comment": {
+          "count": 1,
+          "mean": 820478,
+          "stddev": 0.0,
+          "min": 820478,
+          "max": 820478
+        },
+        "node_counts_by_type.Question": {
+          "count": 1,
+          "mean": 214561,
+          "stddev": 0.0,
+          "min": 214561,
+          "max": 214561
+        },
+        "node_counts_by_type.Tag": {
+          "count": 1,
+          "mean": 915,
+          "stddev": 0.0,
+          "min": 915,
+          "max": 915
+        },
+        "node_counts_by_type.User": {
+          "count": 1,
+          "mean": 346540,
+          "stddev": 0.0,
+          "min": 346540,
+          "max": 346540
+        },
+        "op_counts.delete": {
+          "count": 1,
+          "mean": 10021,
+          "stddev": 0.0,
+          "min": 10021,
+          "max": 10021
+        },
+        "op_counts.insert": {
+          "count": 1,
+          "mean": 10067,
+          "stddev": 0.0,
+          "min": 10067,
+          "max": 10067
+        },
+        "op_counts.read": {
+          "count": 1,
+          "mean": 60074,
+          "stddev": 0.0,
+          "min": 60074,
+          "max": 60074
+        },
+        "op_counts.update": {
+          "count": 1,
+          "mean": 19838,
+          "stddev": 0.0,
+          "min": 19838,
+          "max": 19838
+        },
+        "rss_peak_kb": {
+          "count": 1,
+          "mean": 3697380,
+          "stddev": 0.0,
+          "min": 3697380,
+          "max": 3697380,
+          "mean_human": "3.5GiB",
+          "min_human": "3.5GiB",
+          "max_human": "3.5GiB"
+        },
+        "schema_time_s": {
+          "count": 1,
+          "mean": 0.6132731437683105,
+          "stddev": 0.0,
+          "min": 0.6132731437683105,
+          "max": 0.6132731437683105
+        },
+        "seed": {
+          "count": 1,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0
+        },
+        "threads": {
+          "count": 1,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "throughput_ops_s": {
+          "count": 1,
+          "mean": 720.7927784761672,
+          "stddev": 0.0,
+          "min": 720.7927784761672,
+          "max": 720.7927784761672
+        },
+        "total_time_s": {
+          "count": 1,
+          "mean": 138.73612914298428,
+          "stddev": 0.0,
+          "min": 138.73612914298428,
+          "max": 138.73612914298428
+        },
+        "transactions": {
+          "count": 1,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "ladybug",
+      "threads": 1,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 0.3585084279378255,
+          "stddev": 0.06294190182370864,
+          "min": 0.2696049213409424,
+          "max": 0.406787633895874
+        },
+        "disk_after_load_bytes": {
+          "count": 3,
+          "mean": 1906743850,
+          "stddev": 31903.256427309527,
+          "min": 1906698794,
+          "max": 1906768426,
+          "mean_human": "1.8GiB",
+          "min_human": "1.8GiB",
+          "max_human": "1.8GiB"
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 1907427472.6666667,
+          "stddev": 22881.479211119393,
+          "min": 1907395233,
+          "max": 1907446000,
+          "mean_human": "1.8GiB",
+          "min_human": "1.8GiB",
+          "max_human": "1.8GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 1971849898.6666667,
+          "stddev": 24920760.86979461,
+          "min": 1936621568,
+          "max": 1990352896,
+          "mean_human": "1.8GiB",
+          "min_human": "1.8GiB",
+          "max_human": "1.9GiB"
+        },
+        "edge_count": {
+          "count": 3,
+          "mean": 2846643.6666666665,
+          "stddev": 4838.0729864505165,
+          "min": 2840455,
+          "max": 2852265
+        },
+        "edge_counts_by_type.ACCEPTED_ANSWER": {
+          "count": 3,
+          "mean": 71636.33333333333,
+          "stddev": 8.379870059984356,
+          "min": 71625,
+          "max": 71645
+        },
+        "edge_counts_by_type.ANSWERED": {
+          "count": 3,
+          "mean": 206509.66666666666,
+          "stddev": 7.408703590297623,
+          "min": 206500,
+          "max": 206518
+        },
+        "edge_counts_by_type.ASKED": {
+          "count": 3,
+          "mean": 210278.66666666666,
+          "stddev": 20.270394394014364,
+          "min": 210251,
+          "max": 210299
+        },
+        "edge_counts_by_type.COMMENTED_ON": {
+          "count": 3,
+          "mean": 475366.3333333333,
+          "stddev": 51.09685791600975,
+          "min": 475295,
+          "max": 475412
+        },
+        "edge_counts_by_type.COMMENTED_ON_ANSWER": {
+          "count": 3,
+          "mean": 343964.6666666667,
+          "stddev": 46.50686926561375,
+          "min": 343904,
+          "max": 344017
+        },
+        "edge_counts_by_type.EARNED": {
+          "count": 3,
+          "mean": 612246.3333333334,
+          "stddev": 3.39934634239519,
+          "min": 612243,
+          "max": 612251
+        },
+        "edge_counts_by_type.HAS_ANSWER": {
+          "count": 3,
+          "mean": 209001.66666666666,
+          "stddev": 13.888444437333106,
+          "min": 208989,
+          "max": 209021
+        },
+        "edge_counts_by_type.LINKED_TO": {
+          "count": 3,
+          "mean": 85771,
+          "stddev": 6.164414002968976,
+          "min": 85763,
+          "max": 85778
+        },
+        "edge_counts_by_type.TAGGED_WITH": {
+          "count": 3,
+          "mean": 631869,
+          "stddev": 4741.8112573150775,
+          "min": 625768,
+          "max": 637330
+        },
+        "latency_summary.ops.delete.50": {
+          "count": 3,
+          "mean": 0.02589549735421315,
+          "stddev": 0.006016217045647669,
+          "min": 0.018688384036067873,
+          "max": 0.033415102981962264
+        },
+        "latency_summary.ops.delete.95": {
+          "count": 3,
+          "mean": 0.0781687026610598,
+          "stddev": 0.009687609768977971,
+          "min": 0.06471060600597411,
+          "max": 0.08711910201236606
+        },
+        "latency_summary.ops.delete.99": {
+          "count": 3,
+          "mean": 0.11801317896849166,
+          "stddev": 0.02586479814470908,
+          "min": 0.09280277695506811,
+          "max": 0.15357068699086085
+        },
+        "latency_summary.ops.insert.50": {
+          "count": 3,
+          "mean": 0.02288539265282452,
+          "stddev": 0.00524773710371288,
+          "min": 0.016966769006103277,
+          "max": 0.029722273000515997
+        },
+        "latency_summary.ops.insert.95": {
+          "count": 3,
+          "mean": 0.0375112853362225,
+          "stddev": 0.013767916022203138,
+          "min": 0.02399036899441853,
+          "max": 0.05640524602495134
+        },
+        "latency_summary.ops.insert.99": {
+          "count": 3,
+          "mean": 0.10445007167678948,
+          "stddev": 0.04018669966269227,
+          "min": 0.06495868600904942,
+          "max": 0.15959038399159908
+        },
+        "latency_summary.ops.read.50": {
+          "count": 3,
+          "mean": 0.0039465773346213,
+          "stddev": 0.0006482868876106618,
+          "min": 0.003165258967783302,
+          "max": 0.004752652021124959
+        },
+        "latency_summary.ops.read.95": {
+          "count": 3,
+          "mean": 0.07489108435887222,
+          "stddev": 0.0017972885087996111,
+          "min": 0.07266074902145192,
+          "max": 0.07706198503728956
+        },
+        "latency_summary.ops.read.99": {
+          "count": 3,
+          "mean": 0.09073126100702211,
+          "stddev": 0.0007229701300044793,
+          "min": 0.08971912798006088,
+          "max": 0.09136270201997831
+        },
+        "latency_summary.ops.update.50": {
+          "count": 3,
+          "mean": 0.02257327133944879,
+          "stddev": 0.005395270307034116,
+          "min": 0.016613378014881164,
+          "max": 0.029679131985176355
+        },
+        "latency_summary.ops.update.95": {
+          "count": 3,
+          "mean": 0.03771210298873484,
+          "stddev": 0.016415943949749812,
+          "min": 0.021788812999147922,
+          "max": 0.060304587008431554
+        },
+        "latency_summary.ops.update.99": {
+          "count": 3,
+          "mean": 0.10091491831311335,
+          "stddev": 0.03288527740947206,
+          "min": 0.07010538096074015,
+          "max": 0.14648989599663764
+        },
+        "latency_summary.overall.50": {
+          "count": 3,
+          "mean": 0.015013520683472356,
+          "stddev": 0.0006902545820263527,
+          "min": 0.014477460994385183,
+          "max": 0.015988061029929668
+        },
+        "latency_summary.overall.95": {
+          "count": 3,
+          "mean": 0.07114802735547225,
+          "stddev": 0.002525448541888913,
+          "min": 0.0676685850485228,
+          "max": 0.07358556397957727
+        },
+        "latency_summary.overall.99": {
+          "count": 3,
+          "mean": 0.09284621999055769,
+          "stddev": 0.0036806401183697847,
+          "min": 0.0888481559813954,
+          "max": 0.09773182100616395
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.29996387163798016,
+          "stddev": 0.044136588088521035,
+          "min": 0.2545778751373291,
+          "max": 0.35976672172546387
+        },
+        "load_edge_count": {
+          "count": 3,
+          "mean": 2877037,
+          "stddev": 0.0,
+          "min": 2877037,
+          "max": 2877037
+        },
+        "load_edge_counts_by_type.ACCEPTED_ANSWER": {
+          "count": 3,
+          "mean": 71547,
+          "stddev": 0.0,
+          "min": 71547,
+          "max": 71547
+        },
+        "load_edge_counts_by_type.ANSWERED": {
+          "count": 3,
+          "mean": 206435,
+          "stddev": 0.0,
+          "min": 206435,
+          "max": 206435
+        },
+        "load_edge_counts_by_type.ASKED": {
+          "count": 3,
+          "mean": 210226,
+          "stddev": 0.0,
+          "min": 210226,
+          "max": 210226
+        },
+        "load_edge_counts_by_type.COMMENTED_ON": {
+          "count": 3,
+          "mean": 475470,
+          "stddev": 0.0,
+          "min": 475470,
+          "max": 475470
+        },
+        "load_edge_counts_by_type.COMMENTED_ON_ANSWER": {
+          "count": 3,
+          "mean": 344052,
+          "stddev": 0.0,
+          "min": 344052,
+          "max": 344052
+        },
+        "load_edge_counts_by_type.EARNED": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "load_edge_counts_by_type.HAS_ANSWER": {
+          "count": 3,
+          "mean": 208986,
+          "stddev": 0.0,
+          "min": 208986,
+          "max": 208986
+        },
+        "load_edge_counts_by_type.LINKED_TO": {
+          "count": 3,
+          "mean": 85669,
+          "stddev": 0.0,
+          "min": 85669,
+          "max": 85669
+        },
+        "load_edge_counts_by_type.TAGGED_WITH": {
+          "count": 3,
+          "mean": 662394,
+          "stddev": 0.0,
+          "min": 662394,
+          "max": 662394
+        },
+        "load_node_count": {
+          "count": 3,
+          "mean": 2202019,
+          "stddev": 0.0,
+          "min": 2202019,
+          "max": 2202019
+        },
+        "load_node_counts_by_type.Answer": {
+          "count": 3,
+          "mean": 208986,
+          "stddev": 0.0,
+          "min": 208986,
+          "max": 208986
+        },
+        "load_node_counts_by_type.Badge": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "load_node_counts_by_type.Comment": {
+          "count": 3,
+          "mean": 819648,
+          "stddev": 0.0,
+          "min": 819648,
+          "max": 819648
+        },
+        "load_node_counts_by_type.Question": {
+          "count": 3,
+          "mean": 213761,
+          "stddev": 0.0,
+          "min": 213761,
+          "max": 213761
+        },
+        "load_node_counts_by_type.Tag": {
+          "count": 3,
+          "mean": 1612,
+          "stddev": 0.0,
+          "min": 1612,
+          "max": 1612
+        },
+        "load_node_counts_by_type.User": {
+          "count": 3,
+          "mean": 345754,
+          "stddev": 0.0,
+          "min": 345754,
+          "max": 345754
+        },
+        "load_stats.edges.ACCEPTED_ANSWER": {
+          "count": 3,
+          "mean": 0.2095018227895101,
+          "stddev": 0.01733552481720607,
+          "min": 0.19393539428710938,
+          "max": 0.2336876392364502
+        },
+        "load_stats.edges.ANSWERED": {
+          "count": 3,
+          "mean": 0.39038459459940594,
+          "stddev": 0.02235835522899565,
+          "min": 0.36250948905944824,
+          "max": 0.417248010635376
+        },
+        "load_stats.edges.ASKED": {
+          "count": 3,
+          "mean": 0.37759240468343097,
+          "stddev": 0.03147586840455894,
+          "min": 0.3468053340911865,
+          "max": 0.42082858085632324
+        },
+        "load_stats.edges.COMMENTED_ON": {
+          "count": 3,
+          "mean": 0.9542011419932047,
+          "stddev": 0.05490050541219634,
+          "min": 0.9075803756713867,
+          "max": 1.0312793254852295
+        },
+        "load_stats.edges.COMMENTED_ON_ANSWER": {
+          "count": 3,
+          "mean": 0.7646666367848715,
+          "stddev": 0.05313896221222913,
+          "min": 0.6901412010192871,
+          "max": 0.8103015422821045
+        },
+        "load_stats.edges.EARNED": {
+          "count": 3,
+          "mean": 1.229455868403117,
+          "stddev": 0.041699758388947954,
+          "min": 1.17930269241333,
+          "max": 1.2813987731933594
+        },
+        "load_stats.edges.HAS_ANSWER": {
+          "count": 3,
+          "mean": 0.35042357444763184,
+          "stddev": 0.0325488038424281,
+          "min": 0.3115723133087158,
+          "max": 0.39122843742370605
+        },
+        "load_stats.edges.LINKED_TO": {
+          "count": 3,
+          "mean": 0.2766128381093343,
+          "stddev": 0.06153046275381892,
+          "min": 0.19163227081298828,
+          "max": 0.3353118896484375
+        },
+        "load_stats.edges.TAGGED_WITH": {
+          "count": 3,
+          "mean": 0.6665643850962321,
+          "stddev": 0.04035724249279273,
+          "min": 0.6141834259033203,
+          "max": 0.7123823165893555
+        },
+        "load_stats.nodes.Answer": {
+          "count": 3,
+          "mean": 10.805392742156982,
+          "stddev": 0.45768484794298897,
+          "min": 10.161738395690918,
+          "max": 11.186337947845459
+        },
+        "load_stats.nodes.Badge": {
+          "count": 3,
+          "mean": 0.6215009689331055,
+          "stddev": 0.09288604229179406,
+          "min": 0.5194594860076904,
+          "max": 0.7441623210906982
+        },
+        "load_stats.nodes.Comment": {
+          "count": 3,
+          "mean": 8.09284512201945,
+          "stddev": 1.377120892072955,
+          "min": 6.9425530433654785,
+          "max": 10.028988599777222
+        },
+        "load_stats.nodes.Post": {
+          "count": 3,
+          "mean": 19.117218097050984,
+          "stddev": 0.23054424111072025,
+          "min": 18.79810667037964,
+          "max": 19.33466935157776
+        },
+        "load_stats.nodes.Question": {
+          "count": 3,
+          "mean": 8.311825354894003,
+          "stddev": 0.24858031097842576,
+          "min": 8.032540321350098,
+          "max": 8.63636827468872
+        },
+        "load_stats.nodes.Tag": {
+          "count": 3,
+          "mean": 0.4011671543121338,
+          "stddev": 0.07032195214409344,
+          "min": 0.30248141288757324,
+          "max": 0.4611687660217285
+        },
+        "load_stats.nodes.User": {
+          "count": 3,
+          "mean": 1.2060058911641438,
+          "stddev": 0.09899022026710827,
+          "min": 1.0824260711669922,
+          "max": 1.3247573375701904
+        },
+        "load_time_s": {
+          "count": 3,
+          "mean": 134.20677065849304,
+          "stddev": 8.270362702746773,
+          "min": 124.35561156272888,
+          "max": 144.59260177612305
+        },
+        "node_count": {
+          "count": 3,
+          "mean": 2202346,
+          "stddev": 55.154328932550705,
+          "min": 2202307,
+          "max": 2202424
+        },
+        "node_counts_by_type.Answer": {
+          "count": 3,
+          "mean": 209069.66666666666,
+          "stddev": 14.337208778404378,
+          "min": 209053,
+          "max": 209088
+        },
+        "node_counts_by_type.Badge": {
+          "count": 3,
+          "mean": 612325.6666666666,
+          "stddev": 7.542472332656507,
+          "min": 612315,
+          "max": 612331
+        },
+        "node_counts_by_type.Comment": {
+          "count": 3,
+          "mean": 819727,
+          "stddev": 17.281975195754296,
+          "min": 819711,
+          "max": 819751
+        },
+        "node_counts_by_type.Question": {
+          "count": 3,
+          "mean": 213838.66666666666,
+          "stddev": 14.884742374510738,
+          "min": 213819,
+          "max": 213855
+        },
+        "node_counts_by_type.Tag": {
+          "count": 3,
+          "mean": 1543,
+          "stddev": 7.2571803523590805,
+          "min": 1536,
+          "max": 1553
+        },
+        "node_counts_by_type.User": {
+          "count": 3,
+          "mean": 345842,
+          "stddev": 15.769168230019828,
+          "min": 345825,
+          "max": 345863
+        },
+        "op_counts.delete": {
+          "count": 3,
+          "mean": 1027.6666666666667,
+          "stddev": 6.847546194724712,
+          "min": 1018,
+          "max": 1033
+        },
+        "op_counts.insert": {
+          "count": 3,
+          "mean": 994,
+          "stddev": 31.016124838541646,
+          "min": 960,
+          "max": 1035
+        },
+        "op_counts.read": {
+          "count": 3,
+          "mean": 6011.666666666667,
+          "stddev": 28.534579412043595,
+          "min": 5973,
+          "max": 6041
+        },
+        "op_counts.update": {
+          "count": 3,
+          "mean": 1966.6666666666667,
+          "stddev": 52.94231661807867,
+          "min": 1906,
+          "max": 2035
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 2753765.3333333335,
+          "stddev": 103690.91163431613,
+          "min": 2647552,
+          "max": 2894432,
+          "mean_human": "2.6GiB",
+          "min_human": "2.5GiB",
+          "max_human": "2.8GiB"
+        },
+        "schema_time_s": {
+          "count": 3,
+          "mean": 0.20033748944600424,
+          "stddev": 0.0579424577441241,
+          "min": 0.15801239013671875,
+          "max": 0.28226542472839355
+        },
+        "seed": {
+          "count": 3,
+          "mean": 3,
+          "stddev": 1.632993161855452,
+          "min": 1,
+          "max": 5
+        },
+        "threads": {
+          "count": 3,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 51.09846475134032,
+          "stddev": 6.736590583580759,
+          "min": 44.49773385147338,
+          "max": 60.34822031512914
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 198.94541630967674,
+          "stddev": 24.66699522098516,
+          "min": 165.70496938901488,
+          "max": 224.73054545605555
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 10000,
+          "stddev": 0.0,
+          "min": 10000,
+          "max": 10000
+        }
+      },
+      "boolean_metrics": {}
+    }
+  ]
+}
