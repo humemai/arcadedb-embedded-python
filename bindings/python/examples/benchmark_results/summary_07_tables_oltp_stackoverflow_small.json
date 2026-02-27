@@ -1,0 +1,4493 @@
+{
+  "meta": {
+    "name": "07 tables OLTP matrix summary",
+    "generated_at_utc": "2026-02-27T12:38:09Z",
+    "input_dir": "/mnt/ssd2/repos/arcadedb-embedded-python/bindings/python/examples/my_test_databases",
+    "dataset": "stackoverflow-small",
+    "dataset_size_profile": "small",
+    "dataset_size_source": "dataset name suffix",
+    "label_prefix": "sweep07",
+    "total_runs": 18,
+    "datasets_found": [
+      "stackoverflow-small"
+    ]
+  },
+  "parameter_keys": [
+    "arcadedb_version",
+    "batch_size",
+    "dataset",
+    "db",
+    "docker_image",
+    "duckdb_version",
+    "heap_size",
+    "mem_limit",
+    "run_label",
+    "seed",
+    "threads",
+    "transactions"
+  ],
+  "parameters_detected": {
+    "arcadedb_version": [
+      "26.2.1"
+    ],
+    "batch_size": [
+      "2500"
+    ],
+    "dataset": [
+      "stackoverflow-small"
+    ],
+    "db": [
+      "arcadedb",
+      "duckdb",
+      "postgresql",
+      "sqlite"
+    ],
+    "docker_image": [
+      "python:3.12-slim"
+    ],
+    "duckdb_version": [
+      "1.4.4"
+    ],
+    "heap_size": [
+      "1638m",
+      "2g"
+    ],
+    "mem_limit": [
+      "2g"
+    ],
+    "run_label": [
+      "sweep07_t01_r01_arcadedb_s00000",
+      "sweep07_t01_r01_duckdb_s00002",
+      "sweep07_t01_r01_postgresql_s00003",
+      "sweep07_t01_r01_sqlite_s00001",
+      "sweep07_t01_r02_arcadedb_s00004",
+      "sweep07_t01_r02_duckdb_s00006",
+      "sweep07_t01_r02_postgresql_s00007",
+      "sweep07_t01_r02_sqlite_s00005",
+      "sweep07_t01_r03_arcadedb_s00008",
+      "sweep07_t01_r03_duckdb_s00010",
+      "sweep07_t01_r03_postgresql_s00011",
+      "sweep07_t01_r03_sqlite_s00009",
+      "sweep07_t08_r01_arcadedb_s00000",
+      "sweep07_t08_r01_sqlite_s00001",
+      "sweep07_t08_r02_arcadedb_s00002",
+      "sweep07_t08_r02_sqlite_s00003",
+      "sweep07_t08_r03_arcadedb_s00004",
+      "sweep07_t08_r03_sqlite_s00005"
+    ],
+    "seed": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9"
+    ],
+    "threads": [
+      "1",
+      "8"
+    ],
+    "transactions": [
+      "50000"
+    ]
+  },
+  "numeric_metric_keys": [
+    "batch_size",
+    "counts_time_s",
+    "disk_after_oltp_bytes",
+    "disk_after_preload_bytes",
+    "disk_usage.du_bytes",
+    "final_counts.Badge",
+    "final_counts.Comment",
+    "final_counts.Post",
+    "final_counts.PostHistory",
+    "final_counts.PostLink",
+    "final_counts.Tag",
+    "final_counts.User",
+    "final_counts.Vote",
+    "latency_summary.ops.delete.count",
+    "latency_summary.ops.delete.p50_ms",
+    "latency_summary.ops.delete.p95_ms",
+    "latency_summary.ops.delete.p99_ms",
+    "latency_summary.ops.insert.count",
+    "latency_summary.ops.insert.p50_ms",
+    "latency_summary.ops.insert.p95_ms",
+    "latency_summary.ops.insert.p99_ms",
+    "latency_summary.ops.read.count",
+    "latency_summary.ops.read.p50_ms",
+    "latency_summary.ops.read.p95_ms",
+    "latency_summary.ops.read.p99_ms",
+    "latency_summary.ops.update.count",
+    "latency_summary.ops.update.p50_ms",
+    "latency_summary.ops.update.p95_ms",
+    "latency_summary.ops.update.p99_ms",
+    "latency_summary.overall.count",
+    "latency_summary.overall.p50_ms",
+    "latency_summary.overall.p95_ms",
+    "latency_summary.overall.p99_ms",
+    "load_counts_time_s",
+    "preload_counts.Badge",
+    "preload_counts.Comment",
+    "preload_counts.Post",
+    "preload_counts.PostHistory",
+    "preload_counts.PostLink",
+    "preload_counts.Tag",
+    "preload_counts.User",
+    "preload_counts.Vote",
+    "preload_time_s",
+    "rss_client_peak_kb",
+    "rss_peak_kb",
+    "rss_server_peak_kb",
+    "seed",
+    "table_schema.Badge.column_count",
+    "table_schema.Comment.column_count",
+    "table_schema.Post.column_count",
+    "table_schema.PostHistory.column_count",
+    "table_schema.PostLink.column_count",
+    "table_schema.Tag.column_count",
+    "table_schema.User.column_count",
+    "table_schema.Vote.column_count",
+    "threads",
+    "throughput_ops_s",
+    "total_time_s",
+    "transactions"
+  ],
+  "boolean_metric_keys": [],
+  "run_fields": [
+    "dataset",
+    "db",
+    "run_label",
+    "seed",
+    "du_bytes",
+    "du_human",
+    "result_file",
+    "numeric_metrics",
+    "human_readable_metrics",
+    "boolean_metrics",
+    "parameters"
+  ],
+  "runs": [
+    {
+      "dataset": "stackoverflow-small",
+      "db": "arcadedb",
+      "run_label": "sweep07_t01_r01_arcadedb_s00000",
+      "seed": 0,
+      "du_bytes": 601681920,
+      "du_human": "574M",
+      "result_file": "stackoverflow_small_tables_oltp_arcadedb_sweep07_t01_r01_arcadedb_s00000/results_sweep07_t01_r01_arcadedb_s00000.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.0016665458679199219,
+        "disk_after_oltp_bytes": 687485679,
+        "disk_after_preload_bytes": 748264221,
+        "final_counts.Badge": 183005,
+        "final_counts.Comment": 195765,
+        "final_counts.Post": 105357,
+        "final_counts.PostHistory": 360329,
+        "final_counts.PostLink": 11014,
+        "final_counts.Tag": 712,
+        "final_counts.User": 138730,
+        "final_counts.Vote": 411122,
+        "latency_summary.ops.delete.count": 4985,
+        "latency_summary.ops.delete.p50_ms": 1.2462940067052841,
+        "latency_summary.ops.delete.p95_ms": 15.032636001706123,
+        "latency_summary.ops.delete.p99_ms": 30.390474945306778,
+        "latency_summary.ops.insert.count": 4984,
+        "latency_summary.ops.insert.p50_ms": 0.3592009888961911,
+        "latency_summary.ops.insert.p95_ms": 5.11787598952651,
+        "latency_summary.ops.insert.p99_ms": 23.735464026685804,
+        "latency_summary.ops.read.count": 30147,
+        "latency_summary.ops.read.p50_ms": 0.06145000224933028,
+        "latency_summary.ops.read.p95_ms": 5.023985984735191,
+        "latency_summary.ops.read.p99_ms": 10.184062004555017,
+        "latency_summary.ops.update.count": 9884,
+        "latency_summary.ops.update.p50_ms": 0.14744099462404847,
+        "latency_summary.ops.update.p95_ms": 5.4522069985978305,
+        "latency_summary.ops.update.p99_ms": 11.411144980229437,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.1189700560644269,
+        "latency_summary.overall.p95_ms": 5.67778799450025,
+        "latency_summary.overall.p99_ms": 16.865782963577658,
+        "load_counts_time_s": 0.0886693000793457,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 75.69921159744263,
+        "rss_client_peak_kb": 1913272,
+        "rss_peak_kb": 1913272,
+        "rss_server_peak_kb": 0,
+        "seed": 0,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 874.2858752579486,
+        "total_time_s": 57.18953195400536,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 601681920
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "655.6MiB",
+        "disk_after_preload_bytes": "713.6MiB",
+        "rss_client_peak_kb": "1.8GiB",
+        "rss_peak_kb": "1.8GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "573.8MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "arcadedb",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "1638m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 0,
+        "run_label": "sweep07_t01_r01_arcadedb_s00000"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "arcadedb",
+      "run_label": "sweep07_t01_r02_arcadedb_s00004",
+      "seed": 4,
+      "du_bytes": 601690112,
+      "du_human": "574M",
+      "result_file": "stackoverflow_small_tables_oltp_arcadedb_sweep07_t01_r02_arcadedb_s00004/results_sweep07_t01_r02_arcadedb_s00004.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.01114201545715332,
+        "disk_after_oltp_bytes": 635987763,
+        "disk_after_preload_bytes": 671720794,
+        "final_counts.Badge": 183017,
+        "final_counts.Comment": 195813,
+        "final_counts.Post": 105358,
+        "final_counts.PostHistory": 360389,
+        "final_counts.PostLink": 10986,
+        "final_counts.Tag": 659,
+        "final_counts.User": 138717,
+        "final_counts.Vote": 411134,
+        "latency_summary.ops.delete.count": 5047,
+        "latency_summary.ops.delete.p50_ms": 0.9615130256861448,
+        "latency_summary.ops.delete.p95_ms": 21.834086976014078,
+        "latency_summary.ops.delete.p99_ms": 45.19556002924219,
+        "latency_summary.ops.insert.count": 5085,
+        "latency_summary.ops.insert.p50_ms": 0.2635910059325397,
+        "latency_summary.ops.insert.p95_ms": 17.498844012152404,
+        "latency_summary.ops.insert.p99_ms": 27.231103973463178,
+        "latency_summary.ops.read.count": 30072,
+        "latency_summary.ops.read.p50_ms": 0.04484003875404596,
+        "latency_summary.ops.read.p95_ms": 0.31317101093009114,
+        "latency_summary.ops.read.p99_ms": 3.76671104459092,
+        "latency_summary.ops.update.count": 9796,
+        "latency_summary.ops.update.p50_ms": 0.09377102833241224,
+        "latency_summary.ops.update.p95_ms": 2.458376984577626,
+        "latency_summary.ops.update.p99_ms": 6.012098980136216,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.07080100476741791,
+        "latency_summary.overall.p95_ms": 1.979946973733604,
+        "latency_summary.overall.p99_ms": 20.222992985509336,
+        "load_counts_time_s": 0.04184103012084961,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 72.47353935241699,
+        "rss_client_peak_kb": 1656852,
+        "rss_peak_kb": 1656852,
+        "rss_server_peak_kb": 0,
+        "seed": 4,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 1301.245960413197,
+        "total_time_s": 38.42471102398122,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 601690112
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "606.5MiB",
+        "disk_after_preload_bytes": "640.6MiB",
+        "rss_client_peak_kb": "1.6GiB",
+        "rss_peak_kb": "1.6GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "573.8MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "arcadedb",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "1638m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 4,
+        "run_label": "sweep07_t01_r02_arcadedb_s00004"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "arcadedb",
+      "run_label": "sweep07_t01_r03_arcadedb_s00008",
+      "seed": 8,
+      "du_bytes": 601686016,
+      "du_human": "574M",
+      "result_file": "stackoverflow_small_tables_oltp_arcadedb_sweep07_t01_r03_arcadedb_s00008/results_sweep07_t01_r03_arcadedb_s00008.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.010076522827148438,
+        "disk_after_oltp_bytes": 705972715,
+        "disk_after_preload_bytes": 600778646,
+        "final_counts.Badge": 182990,
+        "final_counts.Comment": 195786,
+        "final_counts.Post": 105373,
+        "final_counts.PostHistory": 360310,
+        "final_counts.PostLink": 11033,
+        "final_counts.Tag": 648,
+        "final_counts.User": 138786,
+        "final_counts.Vote": 411189,
+        "latency_summary.ops.delete.count": 4936,
+        "latency_summary.ops.delete.p50_ms": 1.1077839881181717,
+        "latency_summary.ops.delete.p95_ms": 22.252729977481067,
+        "latency_summary.ops.delete.p99_ms": 52.83719702856615,
+        "latency_summary.ops.insert.count": 5016,
+        "latency_summary.ops.insert.p50_ms": 0.2870609750971198,
+        "latency_summary.ops.insert.p95_ms": 18.671058991458267,
+        "latency_summary.ops.insert.p99_ms": 27.164265979081392,
+        "latency_summary.ops.read.count": 30162,
+        "latency_summary.ops.read.p50_ms": 0.04643999272957444,
+        "latency_summary.ops.read.p95_ms": 0.3479410079307854,
+        "latency_summary.ops.read.p99_ms": 1.3341239537112415,
+        "latency_summary.ops.update.count": 9886,
+        "latency_summary.ops.update.p50_ms": 0.09899097494781017,
+        "latency_summary.ops.update.p95_ms": 2.0860970253124833,
+        "latency_summary.ops.update.p99_ms": 4.9082759651355445,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.07452000863850117,
+        "latency_summary.overall.p95_ms": 2.099565987009555,
+        "latency_summary.overall.p99_ms": 20.979936001822352,
+        "load_counts_time_s": 0.2520020008087158,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 74.00477981567383,
+        "rss_client_peak_kb": 1629284,
+        "rss_peak_kb": 1629284,
+        "rss_server_peak_kb": 0,
+        "seed": 8,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 1168.8378417938825,
+        "total_time_s": 42.77753355697496,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 601686016
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "673.3MiB",
+        "disk_after_preload_bytes": "572.9MiB",
+        "rss_client_peak_kb": "1.6GiB",
+        "rss_peak_kb": "1.6GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "573.8MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "arcadedb",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "1638m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 8,
+        "run_label": "sweep07_t01_r03_arcadedb_s00008"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "arcadedb",
+      "run_label": "sweep07_t08_r01_arcadedb_s00000",
+      "seed": 0,
+      "du_bytes": 601686016,
+      "du_human": "574M",
+      "result_file": "stackoverflow_small_tables_oltp_arcadedb_sweep07_t08_r01_arcadedb_s00000/results_sweep07_t08_r01_arcadedb_s00000.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.010968208312988281,
+        "disk_after_oltp_bytes": 728636085,
+        "disk_after_preload_bytes": 641301703,
+        "final_counts.Badge": 183003,
+        "final_counts.Comment": 195807,
+        "final_counts.Post": 105336,
+        "final_counts.PostHistory": 360326,
+        "final_counts.PostLink": 11000,
+        "final_counts.Tag": 681,
+        "final_counts.User": 138766,
+        "final_counts.Vote": 411115,
+        "latency_summary.ops.delete.count": 4985,
+        "latency_summary.ops.delete.p50_ms": 2.1196169545874,
+        "latency_summary.ops.delete.p95_ms": 28.56058900943026,
+        "latency_summary.ops.delete.p99_ms": 55.81699300091714,
+        "latency_summary.ops.insert.count": 4984,
+        "latency_summary.ops.insert.p50_ms": 0.8470529573969543,
+        "latency_summary.ops.insert.p95_ms": 35.7140310225077,
+        "latency_summary.ops.insert.p99_ms": 75.6866349838674,
+        "latency_summary.ops.read.count": 30147,
+        "latency_summary.ops.read.p50_ms": 0.1430999836884439,
+        "latency_summary.ops.read.p95_ms": 4.815665015485138,
+        "latency_summary.ops.read.p99_ms": 8.10733501566574,
+        "latency_summary.ops.update.count": 9884,
+        "latency_summary.ops.update.p50_ms": 0.3584609949029982,
+        "latency_summary.ops.update.p95_ms": 17.55022502038628,
+        "latency_summary.ops.update.p99_ms": 40.755156020168215,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.2578999847173691,
+        "latency_summary.overall.p95_ms": 11.022554012015462,
+        "latency_summary.overall.p99_ms": 38.400218996685,
+        "load_counts_time_s": 0.038362979888916016,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 59.324416399002075,
+        "rss_client_peak_kb": 1554248,
+        "rss_peak_kb": 1554248,
+        "rss_server_peak_kb": 0,
+        "seed": 0,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 2879.463982623612,
+        "total_time_s": 17.364342913031578,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 601686016
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "694.9MiB",
+        "disk_after_preload_bytes": "611.6MiB",
+        "rss_client_peak_kb": "1.5GiB",
+        "rss_peak_kb": "1.5GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "573.8MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "arcadedb",
+        "threads": 8,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "1638m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 0,
+        "run_label": "sweep07_t08_r01_arcadedb_s00000"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "arcadedb",
+      "run_label": "sweep07_t08_r02_arcadedb_s00002",
+      "seed": 2,
+      "du_bytes": 601681920,
+      "du_human": "574M",
+      "result_file": "stackoverflow_small_tables_oltp_arcadedb_sweep07_t08_r02_arcadedb_s00002/results_sweep07_t08_r02_arcadedb_s00002.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.0019006729125976562,
+        "disk_after_oltp_bytes": 867080046,
+        "disk_after_preload_bytes": 679088938,
+        "final_counts.Badge": 182900,
+        "final_counts.Comment": 195768,
+        "final_counts.Post": 105340,
+        "final_counts.PostHistory": 360385,
+        "final_counts.PostLink": 11000,
+        "final_counts.Tag": 641,
+        "final_counts.User": 138756,
+        "final_counts.Vote": 411248,
+        "latency_summary.ops.delete.count": 4977,
+        "latency_summary.ops.delete.p50_ms": 2.818299049977213,
+        "latency_summary.ops.delete.p95_ms": 41.57560900785029,
+        "latency_summary.ops.delete.p99_ms": 90.43546201428398,
+        "latency_summary.ops.insert.count": 4979,
+        "latency_summary.ops.insert.p50_ms": 1.400234003085643,
+        "latency_summary.ops.insert.p95_ms": 43.33751503145322,
+        "latency_summary.ops.insert.p99_ms": 117.61141603346914,
+        "latency_summary.ops.read.count": 30021,
+        "latency_summary.ops.read.p50_ms": 0.18098001601174474,
+        "latency_summary.ops.read.p95_ms": 4.7792940167710185,
+        "latency_summary.ops.read.p99_ms": 15.620919002685696,
+        "latency_summary.ops.update.count": 10023,
+        "latency_summary.ops.update.p50_ms": 0.49539096653461456,
+        "latency_summary.ops.update.p95_ms": 23.019662010483444,
+        "latency_summary.ops.update.p99_ms": 60.81204902147874,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.3356609959155321,
+        "latency_summary.overall.p95_ms": 17.088192980736494,
+        "latency_summary.overall.p99_ms": 54.68914000084624,
+        "load_counts_time_s": 0.06844520568847656,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 61.536261796951294,
+        "rss_client_peak_kb": 1321924,
+        "rss_peak_kb": 1321924,
+        "rss_server_peak_kb": 0,
+        "seed": 2,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 2066.406135180441,
+        "total_time_s": 24.196598697977606,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 601681920
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "826.9MiB",
+        "disk_after_preload_bytes": "647.6MiB",
+        "rss_client_peak_kb": "1.3GiB",
+        "rss_peak_kb": "1.3GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "573.8MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "arcadedb",
+        "threads": 8,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "1638m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 2,
+        "run_label": "sweep07_t08_r02_arcadedb_s00002"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "arcadedb",
+      "run_label": "sweep07_t08_r03_arcadedb_s00004",
+      "seed": 4,
+      "du_bytes": 601686016,
+      "du_human": "574M",
+      "result_file": "stackoverflow_small_tables_oltp_arcadedb_sweep07_t08_r03_arcadedb_s00004/results_sweep07_t08_r03_arcadedb_s00004.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.001851797103881836,
+        "disk_after_oltp_bytes": 720242860,
+        "disk_after_preload_bytes": 661545943,
+        "final_counts.Badge": 182990,
+        "final_counts.Comment": 195758,
+        "final_counts.Post": 105348,
+        "final_counts.PostHistory": 360388,
+        "final_counts.PostLink": 11021,
+        "final_counts.Tag": 686,
+        "final_counts.User": 138703,
+        "final_counts.Vote": 411180,
+        "latency_summary.ops.delete.count": 5047,
+        "latency_summary.ops.delete.p50_ms": 2.1605469519272447,
+        "latency_summary.ops.delete.p95_ms": 39.36272201826796,
+        "latency_summary.ops.delete.p99_ms": 76.95281901396811,
+        "latency_summary.ops.insert.count": 5085,
+        "latency_summary.ops.insert.p50_ms": 0.8916319929994643,
+        "latency_summary.ops.insert.p95_ms": 41.65915894554928,
+        "latency_summary.ops.insert.p99_ms": 91.15005400963128,
+        "latency_summary.ops.read.count": 30072,
+        "latency_summary.ops.read.p50_ms": 0.13335002586245537,
+        "latency_summary.ops.read.p95_ms": 3.490551025606692,
+        "latency_summary.ops.read.p99_ms": 12.720460013952106,
+        "latency_summary.ops.update.count": 9796,
+        "latency_summary.ops.update.p50_ms": 0.3328609745949507,
+        "latency_summary.ops.update.p95_ms": 21.991677989717573,
+        "latency_summary.ops.update.p99_ms": 49.93343498790637,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.23659004364162683,
+        "latency_summary.overall.p95_ms": 14.730155002325773,
+        "latency_summary.overall.p99_ms": 46.96325695840642,
+        "load_counts_time_s": 0.04059195518493652,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 60.29455542564392,
+        "rss_client_peak_kb": 1329768,
+        "rss_peak_kb": 1329768,
+        "rss_server_peak_kb": 0,
+        "seed": 4,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 2530.6821147208607,
+        "total_time_s": 19.757519014005084,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 601686016
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "686.9MiB",
+        "disk_after_preload_bytes": "630.9MiB",
+        "rss_client_peak_kb": "1.3GiB",
+        "rss_peak_kb": "1.3GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "573.8MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "arcadedb",
+        "threads": 8,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "1638m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 4,
+        "run_label": "sweep07_t08_r03_arcadedb_s00004"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "duckdb",
+      "run_label": "sweep07_t01_r01_duckdb_s00002",
+      "seed": 2,
+      "du_bytes": 1586528256,
+      "du_human": "1.5G",
+      "result_file": "stackoverflow_small_tables_oltp_duckdb_sweep07_t01_r01_duckdb_s00002/results_sweep07_t01_r01_duckdb_s00002.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 20.96395492553711,
+        "disk_after_oltp_bytes": 1720599957,
+        "disk_after_preload_bytes": 1203093819,
+        "final_counts.Badge": 183008,
+        "final_counts.Comment": 195764,
+        "final_counts.Post": 105368,
+        "final_counts.PostHistory": 360335,
+        "final_counts.PostLink": 11007,
+        "final_counts.Tag": 636,
+        "final_counts.User": 138746,
+        "final_counts.Vote": 411173,
+        "latency_summary.ops.delete.count": 4977,
+        "latency_summary.ops.delete.p50_ms": 15.292437048628926,
+        "latency_summary.ops.delete.p95_ms": 42.73039195686579,
+        "latency_summary.ops.delete.p99_ms": 87.95010298490524,
+        "latency_summary.ops.insert.count": 4979,
+        "latency_summary.ops.insert.p50_ms": 16.02796994848177,
+        "latency_summary.ops.insert.p95_ms": 51.2347889598459,
+        "latency_summary.ops.insert.p99_ms": 135.92361297924072,
+        "latency_summary.ops.read.count": 30021,
+        "latency_summary.ops.read.p50_ms": 0.6728320149704814,
+        "latency_summary.ops.read.p95_ms": 6.69951003510505,
+        "latency_summary.ops.read.p99_ms": 39.763003995176405,
+        "latency_summary.ops.update.count": 10023,
+        "latency_summary.ops.update.p50_ms": 15.187687007710338,
+        "latency_summary.ops.update.p95_ms": 48.40921104187146,
+        "latency_summary.ops.update.p99_ms": 137.46047695167363,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 1.482694991864264,
+        "latency_summary.overall.p95_ms": 30.592744995374233,
+        "latency_summary.overall.p99_ms": 93.08348898775876,
+        "load_counts_time_s": 0.002005338668823242,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 44.73348116874695,
+        "rss_client_peak_kb": 1959948,
+        "rss_peak_kb": 1959948,
+        "rss_server_peak_kb": 0,
+        "seed": 2,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 93.35806118083717,
+        "total_time_s": 535.5723905100022,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 1586528256
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "1.6GiB",
+        "disk_after_preload_bytes": "1.1GiB",
+        "rss_client_peak_kb": "1.9GiB",
+        "rss_peak_kb": "1.9GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "1.5GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "duckdb",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 2,
+        "run_label": "sweep07_t01_r01_duckdb_s00002"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "duckdb",
+      "run_label": "sweep07_t01_r02_duckdb_s00006",
+      "seed": 6,
+      "du_bytes": 1592303616,
+      "du_human": "1.5G",
+      "result_file": "stackoverflow_small_tables_oltp_duckdb_sweep07_t01_r02_duckdb_s00006/results_sweep07_t01_r02_duckdb_s00006.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 9.468550443649292,
+        "disk_after_oltp_bytes": 1677029411,
+        "disk_after_preload_bytes": 1202569531,
+        "final_counts.Badge": 182983,
+        "final_counts.Comment": 195766,
+        "final_counts.Post": 105390,
+        "final_counts.PostHistory": 360319,
+        "final_counts.PostLink": 10917,
+        "final_counts.Tag": 661,
+        "final_counts.User": 138770,
+        "final_counts.Vote": 411204,
+        "latency_summary.ops.delete.count": 5057,
+        "latency_summary.ops.delete.p50_ms": 13.219191983807832,
+        "latency_summary.ops.delete.p95_ms": 36.41673602396622,
+        "latency_summary.ops.delete.p99_ms": 72.39611900877208,
+        "latency_summary.ops.insert.count": 5032,
+        "latency_summary.ops.insert.p50_ms": 14.191314985509962,
+        "latency_summary.ops.insert.p95_ms": 44.090140028856695,
+        "latency_summary.ops.insert.p99_ms": 116.3105980376713,
+        "latency_summary.ops.read.count": 29950,
+        "latency_summary.ops.read.p50_ms": 0.7152220350690186,
+        "latency_summary.ops.read.p95_ms": 5.004816048312932,
+        "latency_summary.ops.read.p99_ms": 25.542580988258123,
+        "latency_summary.ops.update.count": 9961,
+        "latency_summary.ops.update.p50_ms": 12.888590979855508,
+        "latency_summary.ops.update.p95_ms": 42.49022400472313,
+        "latency_summary.ops.update.p99_ms": 114.44528301944956,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 1.6057650209404528,
+        "latency_summary.overall.p95_ms": 30.11195600265637,
+        "latency_summary.overall.p99_ms": 75.29325800715014,
+        "load_counts_time_s": 0.001726388931274414,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 42.15181636810303,
+        "rss_client_peak_kb": 1863904,
+        "rss_peak_kb": 1863904,
+        "rss_server_peak_kb": 0,
+        "seed": 6,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 107.67538248724748,
+        "total_time_s": 464.3586941139656,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 1592303616
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "1.6GiB",
+        "disk_after_preload_bytes": "1.1GiB",
+        "rss_client_peak_kb": "1.8GiB",
+        "rss_peak_kb": "1.8GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "1.5GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "duckdb",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 6,
+        "run_label": "sweep07_t01_r02_duckdb_s00006"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "duckdb",
+      "run_label": "sweep07_t01_r03_duckdb_s00010",
+      "seed": 10,
+      "du_bytes": 1585745920,
+      "du_human": "1.5G",
+      "result_file": "stackoverflow_small_tables_oltp_duckdb_sweep07_t01_r03_duckdb_s00010/results_sweep07_t01_r03_duckdb_s00010.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 11.751949787139893,
+        "disk_after_oltp_bytes": 1672022183,
+        "disk_after_preload_bytes": 1202307387,
+        "final_counts.Badge": 182899,
+        "final_counts.Comment": 195785,
+        "final_counts.Post": 105385,
+        "final_counts.PostHistory": 360323,
+        "final_counts.PostLink": 11060,
+        "final_counts.Tag": 663,
+        "final_counts.User": 138673,
+        "final_counts.Vote": 411215,
+        "latency_summary.ops.delete.count": 4974,
+        "latency_summary.ops.delete.p50_ms": 11.963296972680837,
+        "latency_summary.ops.delete.p95_ms": 30.973986024037004,
+        "latency_summary.ops.delete.p99_ms": 54.98544004512951,
+        "latency_summary.ops.insert.count": 4942,
+        "latency_summary.ops.insert.p50_ms": 12.844940007198602,
+        "latency_summary.ops.insert.p95_ms": 36.78545297589153,
+        "latency_summary.ops.insert.p99_ms": 91.87188401119784,
+        "latency_summary.ops.read.count": 30189,
+        "latency_summary.ops.read.p50_ms": 0.696781964506954,
+        "latency_summary.ops.read.p95_ms": 5.304427002556622,
+        "latency_summary.ops.read.p99_ms": 23.034121026284993,
+        "latency_summary.ops.update.count": 9895,
+        "latency_summary.ops.update.p50_ms": 11.678526003379375,
+        "latency_summary.ops.update.p95_ms": 33.79336401121691,
+        "latency_summary.ops.update.p99_ms": 73.22381599806249,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 1.4750739792361856,
+        "latency_summary.overall.p95_ms": 24.422966002020985,
+        "latency_summary.overall.p99_ms": 52.42907197680324,
+        "load_counts_time_s": 0.0020318031311035156,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 26.83824348449707,
+        "rss_client_peak_kb": 1861776,
+        "rss_peak_kb": 1861776,
+        "rss_server_peak_kb": 0,
+        "seed": 10,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 126.35284635468518,
+        "total_time_s": 395.7172429629718,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 1585745920
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "1.6GiB",
+        "disk_after_preload_bytes": "1.1GiB",
+        "rss_client_peak_kb": "1.8GiB",
+        "rss_peak_kb": "1.8GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "1.5GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "duckdb",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 10,
+        "run_label": "sweep07_t01_r03_duckdb_s00010"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "postgresql",
+      "run_label": "sweep07_t01_r01_postgresql_s00003",
+      "seed": 3,
+      "du_bytes": 1653080064,
+      "du_human": "1.6G",
+      "result_file": "stackoverflow_small_tables_oltp_postgresql_sweep07_t01_r01_postgresql_s00003/results_sweep07_t01_r01_postgresql_s00003.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.23616576194763184,
+        "disk_after_oltp_bytes": 1652557129,
+        "disk_after_preload_bytes": 1598424393,
+        "final_counts.Badge": 182975,
+        "final_counts.Comment": 195781,
+        "final_counts.Post": 105373,
+        "final_counts.PostHistory": 360340,
+        "final_counts.PostLink": 11005,
+        "final_counts.Tag": 668,
+        "final_counts.User": 138727,
+        "final_counts.Vote": 411166,
+        "latency_summary.ops.delete.count": 5025,
+        "latency_summary.ops.delete.p50_ms": 0.6359519902616739,
+        "latency_summary.ops.delete.p95_ms": 2.783918986096978,
+        "latency_summary.ops.delete.p99_ms": 7.598914031405002,
+        "latency_summary.ops.insert.count": 5120,
+        "latency_summary.ops.insert.p50_ms": 0.14554098015651107,
+        "latency_summary.ops.insert.p95_ms": 0.29622099827975035,
+        "latency_summary.ops.insert.p99_ms": 0.8180419681593776,
+        "latency_summary.ops.read.count": 29913,
+        "latency_summary.ops.read.p50_ms": 0.04812004044651985,
+        "latency_summary.ops.read.p95_ms": 0.11666998034343123,
+        "latency_summary.ops.read.p99_ms": 2.9307989752851427,
+        "latency_summary.ops.update.count": 9942,
+        "latency_summary.ops.update.p50_ms": 0.11390104191377759,
+        "latency_summary.ops.update.p95_ms": 0.26479095686227083,
+        "latency_summary.ops.update.p99_ms": 4.897344973869622,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.07157004438340664,
+        "latency_summary.overall.p95_ms": 0.880362989846617,
+        "latency_summary.overall.p99_ms": 3.922402043826878,
+        "load_counts_time_s": 7.209056377410889,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 54.282108545303345,
+        "rss_client_peak_kb": 109704,
+        "rss_peak_kb": 828984,
+        "rss_server_peak_kb": 719280,
+        "seed": 3,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 4003.7819718094,
+        "total_time_s": 12.488192502001766,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 1653080064
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "1.5GiB",
+        "disk_after_preload_bytes": "1.5GiB",
+        "rss_client_peak_kb": "107.1MiB",
+        "rss_peak_kb": "809.6MiB",
+        "rss_server_peak_kb": "702.4MiB",
+        "disk_usage.du_bytes": "1.5GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "postgresql",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 3,
+        "run_label": "sweep07_t01_r01_postgresql_s00003"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "postgresql",
+      "run_label": "sweep07_t01_r02_postgresql_s00007",
+      "seed": 7,
+      "du_bytes": 1653088256,
+      "du_human": "1.6G",
+      "result_file": "stackoverflow_small_tables_oltp_postgresql_sweep07_t01_r02_postgresql_s00007/results_sweep07_t01_r02_postgresql_s00007.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.25781822204589844,
+        "disk_after_oltp_bytes": 1652565321,
+        "disk_after_preload_bytes": 1598424393,
+        "final_counts.Badge": 182975,
+        "final_counts.Comment": 195781,
+        "final_counts.Post": 105373,
+        "final_counts.PostHistory": 360340,
+        "final_counts.PostLink": 11005,
+        "final_counts.Tag": 668,
+        "final_counts.User": 138727,
+        "final_counts.Vote": 411166,
+        "latency_summary.ops.delete.count": 4970,
+        "latency_summary.ops.delete.p50_ms": 0.6649119895882905,
+        "latency_summary.ops.delete.p95_ms": 3.4295310033485293,
+        "latency_summary.ops.delete.p99_ms": 10.204742022324353,
+        "latency_summary.ops.insert.count": 4986,
+        "latency_summary.ops.insert.p50_ms": 0.14323001960292459,
+        "latency_summary.ops.insert.p95_ms": 0.35550101893022656,
+        "latency_summary.ops.insert.p99_ms": 1.306974038016051,
+        "latency_summary.ops.read.count": 30134,
+        "latency_summary.ops.read.p50_ms": 0.04700000863522291,
+        "latency_summary.ops.read.p95_ms": 0.14070101315155625,
+        "latency_summary.ops.read.p99_ms": 4.370083974208683,
+        "latency_summary.ops.update.count": 9910,
+        "latency_summary.ops.update.p50_ms": 0.11255999561399221,
+        "latency_summary.ops.update.p95_ms": 0.3666409756988287,
+        "latency_summary.ops.update.p99_ms": 8.36681597866118,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.07056002505123615,
+        "latency_summary.overall.p95_ms": 1.0026629897765815,
+        "latency_summary.overall.p99_ms": 5.5443079909309745,
+        "load_counts_time_s": 4.153341054916382,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 54.30066704750061,
+        "rss_client_peak_kb": 109868,
+        "rss_peak_kb": 831376,
+        "rss_server_peak_kb": 721508,
+        "seed": 7,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 3212.731780112548,
+        "total_time_s": 15.563079466985073,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 1653088256
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "1.5GiB",
+        "disk_after_preload_bytes": "1.5GiB",
+        "rss_client_peak_kb": "107.3MiB",
+        "rss_peak_kb": "811.9MiB",
+        "rss_server_peak_kb": "704.6MiB",
+        "disk_usage.du_bytes": "1.5GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "postgresql",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 7,
+        "run_label": "sweep07_t01_r02_postgresql_s00007"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "postgresql",
+      "run_label": "sweep07_t01_r03_postgresql_s00011",
+      "seed": 11,
+      "du_bytes": 1653104640,
+      "du_human": "1.6G",
+      "result_file": "stackoverflow_small_tables_oltp_postgresql_sweep07_t01_r03_postgresql_s00011/results_sweep07_t01_r03_postgresql_s00011.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.5371673107147217,
+        "disk_after_oltp_bytes": 1652516169,
+        "disk_after_preload_bytes": 1598424393,
+        "final_counts.Badge": 182975,
+        "final_counts.Comment": 195781,
+        "final_counts.Post": 105373,
+        "final_counts.PostHistory": 360340,
+        "final_counts.PostLink": 11005,
+        "final_counts.Tag": 668,
+        "final_counts.User": 138727,
+        "final_counts.Vote": 411166,
+        "latency_summary.ops.delete.count": 5024,
+        "latency_summary.ops.delete.p50_ms": 0.7118729990907013,
+        "latency_summary.ops.delete.p95_ms": 3.7289320025593042,
+        "latency_summary.ops.delete.p99_ms": 12.509848980698735,
+        "latency_summary.ops.insert.count": 4956,
+        "latency_summary.ops.insert.p50_ms": 0.15723000979050994,
+        "latency_summary.ops.insert.p95_ms": 0.37574104499071836,
+        "latency_summary.ops.insert.p99_ms": 1.248684013262391,
+        "latency_summary.ops.read.count": 30127,
+        "latency_summary.ops.read.p50_ms": 0.05132000660523772,
+        "latency_summary.ops.read.p95_ms": 0.1495900214649737,
+        "latency_summary.ops.read.p99_ms": 2.727437997236848,
+        "latency_summary.ops.update.count": 9893,
+        "latency_summary.ops.update.p50_ms": 0.12129003880545497,
+        "latency_summary.ops.update.p95_ms": 0.3404109738767147,
+        "latency_summary.ops.update.p99_ms": 3.925061959307641,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.07827102672308683,
+        "latency_summary.overall.p95_ms": 1.0394639684818685,
+        "latency_summary.overall.p99_ms": 3.8827420212328434,
+        "load_counts_time_s": 4.253307819366455,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 72.33655095100403,
+        "rss_client_peak_kb": 110592,
+        "rss_peak_kb": 837664,
+        "rss_server_peak_kb": 727072,
+        "seed": 11,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 3565.071343326967,
+        "total_time_s": 14.024964772048406,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 1653104640
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "1.5GiB",
+        "disk_after_preload_bytes": "1.5GiB",
+        "rss_client_peak_kb": "108.0MiB",
+        "rss_peak_kb": "818.0MiB",
+        "rss_server_peak_kb": "710.0MiB",
+        "disk_usage.du_bytes": "1.5GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "postgresql",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 11,
+        "run_label": "sweep07_t01_r03_postgresql_s00011"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "sqlite",
+      "run_label": "sweep07_t01_r01_sqlite_s00001",
+      "seed": 1,
+      "du_bytes": 603750400,
+      "du_human": "576M",
+      "result_file": "stackoverflow_small_tables_oltp_sqlite_sweep07_t01_r01_sqlite_s00001/results_sweep07_t01_r01_sqlite_s00001.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.006671905517578125,
+        "disk_after_oltp_bytes": 607923896,
+        "disk_after_preload_bytes": 607698616,
+        "final_counts.Badge": 182932,
+        "final_counts.Comment": 195765,
+        "final_counts.Post": 105381,
+        "final_counts.PostHistory": 360347,
+        "final_counts.PostLink": 11000,
+        "final_counts.Tag": 725,
+        "final_counts.User": 138695,
+        "final_counts.Vote": 411142,
+        "latency_summary.ops.delete.count": 5108,
+        "latency_summary.ops.delete.p50_ms": 0.8253229898400605,
+        "latency_summary.ops.delete.p95_ms": 5.807168025057763,
+        "latency_summary.ops.delete.p99_ms": 17.791674996260554,
+        "latency_summary.ops.insert.count": 5060,
+        "latency_summary.ops.insert.p50_ms": 0.037510006222873926,
+        "latency_summary.ops.insert.p95_ms": 0.12169999536126852,
+        "latency_summary.ops.insert.p99_ms": 0.3867309424094856,
+        "latency_summary.ops.read.count": 30101,
+        "latency_summary.ops.read.p50_ms": 0.010909978300333023,
+        "latency_summary.ops.read.p95_ms": 0.03189005656167865,
+        "latency_summary.ops.read.p99_ms": 0.08394004544243217,
+        "latency_summary.ops.update.count": 9731,
+        "latency_summary.ops.update.p50_ms": 0.018069986253976822,
+        "latency_summary.ops.update.p95_ms": 0.04745001206174493,
+        "latency_summary.ops.update.p99_ms": 0.14030002057552338,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.014940043911337852,
+        "latency_summary.overall.p95_ms": 0.8710620459169149,
+        "latency_summary.overall.p99_ms": 3.647280973382294,
+        "load_counts_time_s": 0.009246826171875,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 294.8090763092041,
+        "rss_client_peak_kb": 95144,
+        "rss_peak_kb": 95144,
+        "rss_server_peak_kb": 0,
+        "seed": 1,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 4319.261490891754,
+        "total_time_s": 11.576053014025092,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 603750400
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "579.8MiB",
+        "disk_after_preload_bytes": "579.5MiB",
+        "rss_client_peak_kb": "92.9MiB",
+        "rss_peak_kb": "92.9MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "575.8MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "sqlite",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 1,
+        "run_label": "sweep07_t01_r01_sqlite_s00001"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "sqlite",
+      "run_label": "sweep07_t01_r02_sqlite_s00005",
+      "seed": 5,
+      "du_bytes": 603705344,
+      "du_human": "576M",
+      "result_file": "stackoverflow_small_tables_oltp_sqlite_sweep07_t01_r02_sqlite_s00005/results_sweep07_t01_r02_sqlite_s00005.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.0062792301177978516,
+        "disk_after_oltp_bytes": 607878840,
+        "disk_after_preload_bytes": 607698616,
+        "final_counts.Badge": 182896,
+        "final_counts.Comment": 195759,
+        "final_counts.Post": 105370,
+        "final_counts.PostHistory": 360394,
+        "final_counts.PostLink": 10944,
+        "final_counts.Tag": 695,
+        "final_counts.User": 138731,
+        "final_counts.Vote": 411083,
+        "latency_summary.ops.delete.count": 5099,
+        "latency_summary.ops.delete.p50_ms": 0.7412720005959272,
+        "latency_summary.ops.delete.p95_ms": 3.7186919944360852,
+        "latency_summary.ops.delete.p99_ms": 11.24411600176245,
+        "latency_summary.ops.insert.count": 4936,
+        "latency_summary.ops.insert.p50_ms": 0.037739984691143036,
+        "latency_summary.ops.insert.p95_ms": 0.09604002116248012,
+        "latency_summary.ops.insert.p99_ms": 0.3156409948132932,
+        "latency_summary.ops.read.count": 29879,
+        "latency_summary.ops.read.p50_ms": 0.010590010788291693,
+        "latency_summary.ops.read.p95_ms": 0.02524995943531394,
+        "latency_summary.ops.read.p99_ms": 0.06066099740564823,
+        "latency_summary.ops.update.count": 10086,
+        "latency_summary.ops.update.p50_ms": 0.01736002741381526,
+        "latency_summary.ops.update.p95_ms": 0.04020001506432891,
+        "latency_summary.ops.update.p99_ms": 0.09147997479885817,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.01422001514583826,
+        "latency_summary.overall.p95_ms": 0.7843330386094749,
+        "latency_summary.overall.p99_ms": 2.8630190063267946,
+        "load_counts_time_s": 0.00913238525390625,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 205.42824506759644,
+        "rss_client_peak_kb": 94980,
+        "rss_peak_kb": 94980,
+        "rss_server_peak_kb": 0,
+        "seed": 5,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 4833.381756360431,
+        "total_time_s": 10.344723946996965,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 603705344
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "579.7MiB",
+        "disk_after_preload_bytes": "579.5MiB",
+        "rss_client_peak_kb": "92.8MiB",
+        "rss_peak_kb": "92.8MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "575.7MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "sqlite",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 5,
+        "run_label": "sweep07_t01_r02_sqlite_s00005"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "sqlite",
+      "run_label": "sweep07_t01_r03_sqlite_s00009",
+      "seed": 9,
+      "du_bytes": 603611136,
+      "du_human": "576M",
+      "result_file": "stackoverflow_small_tables_oltp_sqlite_sweep07_t01_r03_sqlite_s00009/results_sweep07_t01_r03_sqlite_s00009.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.007651090621948242,
+        "disk_after_oltp_bytes": 607784632,
+        "disk_after_preload_bytes": 607698616,
+        "final_counts.Badge": 183017,
+        "final_counts.Comment": 195754,
+        "final_counts.Post": 105296,
+        "final_counts.PostHistory": 360361,
+        "final_counts.PostLink": 11068,
+        "final_counts.Tag": 648,
+        "final_counts.User": 138700,
+        "final_counts.Vote": 411209,
+        "latency_summary.ops.delete.count": 4937,
+        "latency_summary.ops.delete.p50_ms": 0.686031999066472,
+        "latency_summary.ops.delete.p95_ms": 3.305780002847314,
+        "latency_summary.ops.delete.p99_ms": 11.369814979843795,
+        "latency_summary.ops.insert.count": 4955,
+        "latency_summary.ops.insert.p50_ms": 0.032240001019090414,
+        "latency_summary.ops.insert.p95_ms": 0.08403102401643991,
+        "latency_summary.ops.insert.p99_ms": 0.2747810212895274,
+        "latency_summary.ops.read.count": 30051,
+        "latency_summary.ops.read.p50_ms": 0.009650015272200108,
+        "latency_summary.ops.read.p95_ms": 0.022340042050927877,
+        "latency_summary.ops.read.p99_ms": 0.05509000038728118,
+        "latency_summary.ops.update.count": 10057,
+        "latency_summary.ops.update.p50_ms": 0.016139994841068983,
+        "latency_summary.ops.update.p95_ms": 0.03481999738141894,
+        "latency_summary.ops.update.p99_ms": 0.08247996447607875,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.012800039257854223,
+        "latency_summary.overall.p95_ms": 0.6946419598534703,
+        "latency_summary.overall.p99_ms": 2.6473079924471676,
+        "load_counts_time_s": 0.006925821304321289,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 150.69998383522034,
+        "rss_client_peak_kb": 95532,
+        "rss_peak_kb": 95532,
+        "rss_server_peak_kb": 0,
+        "seed": 9,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 6765.577933015838,
+        "total_time_s": 7.390351644018665,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 603611136
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "579.6MiB",
+        "disk_after_preload_bytes": "579.5MiB",
+        "rss_client_peak_kb": "93.3MiB",
+        "rss_peak_kb": "93.3MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "575.6MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "sqlite",
+        "threads": 1,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 9,
+        "run_label": "sweep07_t01_r03_sqlite_s00009"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "sqlite",
+      "run_label": "sweep07_t08_r01_sqlite_s00001",
+      "seed": 1,
+      "du_bytes": 603787264,
+      "du_human": "576M",
+      "result_file": "stackoverflow_small_tables_oltp_sqlite_sweep07_t08_r01_sqlite_s00001/results_sweep07_t08_r01_sqlite_s00001.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.007895469665527344,
+        "disk_after_oltp_bytes": 731716024,
+        "disk_after_preload_bytes": 607698616,
+        "final_counts.Badge": 182977,
+        "final_counts.Comment": 195764,
+        "final_counts.Post": 105386,
+        "final_counts.PostHistory": 360338,
+        "final_counts.PostLink": 11005,
+        "final_counts.Tag": 645,
+        "final_counts.User": 138702,
+        "final_counts.Vote": 411170,
+        "latency_summary.ops.delete.count": 5108,
+        "latency_summary.ops.delete.p50_ms": 0.7986429845914245,
+        "latency_summary.ops.delete.p95_ms": 5.7712679845280945,
+        "latency_summary.ops.delete.p99_ms": 53.65851696114987,
+        "latency_summary.ops.insert.count": 5060,
+        "latency_summary.ops.insert.p50_ms": 0.049399968702346087,
+        "latency_summary.ops.insert.p95_ms": 4.30044304812327,
+        "latency_summary.ops.insert.p99_ms": 35.494850017130375,
+        "latency_summary.ops.read.count": 30101,
+        "latency_summary.ops.read.p50_ms": 0.012080010492354631,
+        "latency_summary.ops.read.p95_ms": 0.03702001413330436,
+        "latency_summary.ops.read.p99_ms": 0.2179300063289702,
+        "latency_summary.ops.update.count": 9731,
+        "latency_summary.ops.update.p50_ms": 0.02082099672406912,
+        "latency_summary.ops.update.p95_ms": 4.716334980912507,
+        "latency_summary.ops.update.p99_ms": 47.86114901071414,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.017030048184096813,
+        "latency_summary.overall.p95_ms": 2.0932269981130958,
+        "latency_summary.overall.p99_ms": 18.521447957027704,
+        "load_counts_time_s": 0.006188392639160156,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 303.37839818000793,
+        "rss_client_peak_kb": 103956,
+        "rss_peak_kb": 103956,
+        "rss_server_peak_kb": 0,
+        "seed": 1,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 8531.920338820788,
+        "total_time_s": 5.860345387016423,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 603787264
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "697.8MiB",
+        "disk_after_preload_bytes": "579.5MiB",
+        "rss_client_peak_kb": "101.5MiB",
+        "rss_peak_kb": "101.5MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "575.8MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "sqlite",
+        "threads": 8,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 1,
+        "run_label": "sweep07_t08_r01_sqlite_s00001"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "sqlite",
+      "run_label": "sweep07_t08_r02_sqlite_s00003",
+      "seed": 3,
+      "du_bytes": 603697152,
+      "du_human": "576M",
+      "result_file": "stackoverflow_small_tables_oltp_sqlite_sweep07_t08_r02_sqlite_s00003/results_sweep07_t08_r02_sqlite_s00003.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.010097503662109375,
+        "disk_after_oltp_bytes": 734427488,
+        "disk_after_preload_bytes": 607698616,
+        "final_counts.Badge": 182936,
+        "final_counts.Comment": 195752,
+        "final_counts.Post": 105408,
+        "final_counts.PostHistory": 360350,
+        "final_counts.PostLink": 11007,
+        "final_counts.Tag": 731,
+        "final_counts.User": 138752,
+        "final_counts.Vote": 411194,
+        "latency_summary.ops.delete.count": 5025,
+        "latency_summary.ops.delete.p50_ms": 1.067123026587069,
+        "latency_summary.ops.delete.p95_ms": 10.921904002316296,
+        "latency_summary.ops.delete.p99_ms": 54.57336001563817,
+        "latency_summary.ops.insert.count": 5120,
+        "latency_summary.ops.insert.p50_ms": 0.05838100332766771,
+        "latency_summary.ops.insert.p95_ms": 5.40493696462363,
+        "latency_summary.ops.insert.p99_ms": 53.74757701065391,
+        "latency_summary.ops.read.count": 29913,
+        "latency_summary.ops.read.p50_ms": 0.013980024959892035,
+        "latency_summary.ops.read.p95_ms": 0.057469995226711035,
+        "latency_summary.ops.read.p99_ms": 0.39143103640526533,
+        "latency_summary.ops.update.count": 9942,
+        "latency_summary.ops.update.p50_ms": 0.02365000545978546,
+        "latency_summary.ops.update.p95_ms": 5.741398024838418,
+        "latency_summary.ops.update.p99_ms": 53.43280604574829,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.02003001281991601,
+        "latency_summary.overall.p95_ms": 2.7648090035654604,
+        "latency_summary.overall.p99_ms": 22.954440966714174,
+        "load_counts_time_s": 0.007304191589355469,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 234.41721439361572,
+        "rss_client_peak_kb": 103136,
+        "rss_peak_kb": 103136,
+        "rss_server_peak_kb": 0,
+        "seed": 3,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 5985.2277633188105,
+        "total_time_s": 8.353900967049412,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 603697152
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "700.4MiB",
+        "disk_after_preload_bytes": "579.5MiB",
+        "rss_client_peak_kb": "100.7MiB",
+        "rss_peak_kb": "100.7MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "575.7MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "sqlite",
+        "threads": 8,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 3,
+        "run_label": "sweep07_t08_r02_sqlite_s00003"
+      }
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "sqlite",
+      "run_label": "sweep07_t08_r03_sqlite_s00005",
+      "seed": 5,
+      "du_bytes": 603623424,
+      "du_human": "576M",
+      "result_file": "stackoverflow_small_tables_oltp_sqlite_sweep07_t08_r03_sqlite_s00005/results_sweep07_t08_r03_sqlite_s00005.json",
+      "numeric_metrics": {
+        "batch_size": 2500,
+        "counts_time_s": 0.012048482894897461,
+        "disk_after_oltp_bytes": 730962976,
+        "disk_after_preload_bytes": 607698616,
+        "final_counts.Badge": 183035,
+        "final_counts.Comment": 195762,
+        "final_counts.Post": 105348,
+        "final_counts.PostHistory": 360303,
+        "final_counts.PostLink": 11068,
+        "final_counts.Tag": 617,
+        "final_counts.User": 138698,
+        "final_counts.Vote": 411041,
+        "latency_summary.ops.delete.count": 5099,
+        "latency_summary.ops.delete.p50_ms": 0.9502129978500307,
+        "latency_summary.ops.delete.p95_ms": 8.204646001104265,
+        "latency_summary.ops.delete.p99_ms": 42.1080410014838,
+        "latency_summary.ops.insert.count": 4936,
+        "latency_summary.ops.insert.p50_ms": 0.0556100276298821,
+        "latency_summary.ops.insert.p95_ms": 4.989214998204261,
+        "latency_summary.ops.insert.p99_ms": 53.482415969483554,
+        "latency_summary.ops.read.count": 29879,
+        "latency_summary.ops.read.p50_ms": 0.013270007912069559,
+        "latency_summary.ops.read.p95_ms": 0.04593998892232776,
+        "latency_summary.ops.read.p99_ms": 0.22955099120736122,
+        "latency_summary.ops.update.count": 10086,
+        "latency_summary.ops.update.p50_ms": 0.022720021661370993,
+        "latency_summary.ops.update.p95_ms": 6.338760023936629,
+        "latency_summary.ops.update.p99_ms": 52.953824982978404,
+        "latency_summary.overall.count": 50000,
+        "latency_summary.overall.p50_ms": 0.01898000482469797,
+        "latency_summary.overall.p95_ms": 2.4833279894664884,
+        "latency_summary.overall.p99_ms": 20.112111989874393,
+        "load_counts_time_s": 0.009773969650268555,
+        "preload_counts.Badge": 182975,
+        "preload_counts.Comment": 195781,
+        "preload_counts.Post": 105373,
+        "preload_counts.PostHistory": 360340,
+        "preload_counts.PostLink": 11005,
+        "preload_counts.Tag": 668,
+        "preload_counts.User": 138727,
+        "preload_counts.Vote": 411166,
+        "preload_time_s": 256.36987566947937,
+        "rss_client_peak_kb": 103128,
+        "rss_peak_kb": 103128,
+        "rss_server_peak_kb": 0,
+        "seed": 5,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 5177.613135603139,
+        "total_time_s": 9.656959431013092,
+        "transactions": 50000,
+        "disk_usage.du_bytes": 603623424
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "697.1MiB",
+        "disk_after_preload_bytes": "579.5MiB",
+        "rss_client_peak_kb": "100.7MiB",
+        "rss_peak_kb": "100.7MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "575.7MiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-small",
+        "db": "sqlite",
+        "threads": 8,
+        "transactions": 50000,
+        "batch_size": 2500,
+        "mem_limit": "2g",
+        "heap_size": "2g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 5,
+        "run_label": "sweep07_t08_r03_sqlite_s00005"
+      }
+    }
+  ],
+  "by_db": [
+    {
+      "dataset": "stackoverflow-small",
+      "db": "arcadedb",
+      "threads": 1,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 2500,
+          "stddev": 0.0,
+          "min": 2500,
+          "max": 2500
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 0.0076283613840738935,
+          "stddev": 0.004238022480877873,
+          "min": 0.0016665458679199219,
+          "max": 0.01114201545715332
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 676482052.3333334,
+          "stddev": 29611745.715454526,
+          "min": 635987763,
+          "max": 705972715,
+          "mean_human": "645.1MiB",
+          "min_human": "606.5MiB",
+          "max_human": "673.3MiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 673587887,
+          "stddev": 60225206.43647001,
+          "min": 600778646,
+          "max": 748264221,
+          "mean_human": "642.4MiB",
+          "min_human": "572.9MiB",
+          "max_human": "713.6MiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 601686016,
+          "stddev": 3344.369995479966,
+          "min": 601681920,
+          "max": 601690112,
+          "mean_human": "573.8MiB",
+          "min_human": "573.8MiB",
+          "max_human": "573.8MiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 183004,
+          "stddev": 11.045361017187261,
+          "min": 182990,
+          "max": 183017
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 195788,
+          "stddev": 19.6468827043885,
+          "min": 195765,
+          "max": 195813
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 105362.66666666667,
+          "stddev": 7.3181661333667165,
+          "min": 105357,
+          "max": 105373
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 360342.6666666667,
+          "stddev": 33.668316791243896,
+          "min": 360310,
+          "max": 360389
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 11011,
+          "stddev": 19.30457631409368,
+          "min": 10986,
+          "max": 11033
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 673,
+          "stddev": 27.94041278626117,
+          "min": 648,
+          "max": 712
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 138744.33333333334,
+          "stddev": 29.93697082575694,
+          "min": 138717,
+          "max": 138786
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 411148.3333333333,
+          "stddev": 29.169999809545576,
+          "min": 411122,
+          "max": 411189
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 4989.333333333333,
+          "stddev": 45.419036635411906,
+          "min": 4936,
+          "max": 5047
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 1.1051970068365335,
+          "stddev": 0.11627573877546282,
+          "min": 0.9615130256861448,
+          "max": 1.2462940067052841
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 19.706484318400424,
+          "stddev": 3.3093261203522917,
+          "min": 15.032636001706123,
+          "max": 22.252729977481067
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 42.80774400103837,
+          "stddev": 9.31808571575304,
+          "min": 30.390474945306778,
+          "max": 52.83719702856615
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 5028.333333333333,
+          "stddev": 42.14525147892965,
+          "min": 4984,
+          "max": 5085
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 0.3032843233086169,
+          "stddev": 0.04068345266379639,
+          "min": 0.2635910059325397,
+          "max": 0.3592009888961911
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 13.762592997712394,
+          "stddev": 6.1314419784767855,
+          "min": 5.11787598952651,
+          "max": 18.671058991458267
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 26.043611326410126,
+          "stddev": 1.6323346873505546,
+          "min": 23.735464026685804,
+          "max": 27.231103973463178
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 30127,
+          "stddev": 39.370039370059054,
+          "min": 30072,
+          "max": 30162
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.0509100112443169,
+          "stddev": 0.007481466922570496,
+          "min": 0.04484003875404596,
+          "max": 0.06145000224933028
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 1.8950326678653557,
+          "stddev": 2.2125496427629843,
+          "min": 0.31317101093009114,
+          "max": 5.023985984735191
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 5.09496566761906,
+          "stddev": 3.7330547039156237,
+          "min": 1.3341239537112415,
+          "max": 10.184062004555017
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 9855.333333333334,
+          "stddev": 41.96294661828324,
+          "min": 9796,
+          "max": 9886
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 0.11340099930142362,
+          "stddev": 0.02416406314950836,
+          "min": 0.09377102833241224,
+          "max": 0.14744099462404847
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 3.3322270028293133,
+          "stddev": 1.5067369774586021,
+          "min": 2.0860970253124833,
+          "max": 5.4522069985978305
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 7.443839975167066,
+          "stddev": 2.841271788537192,
+          "min": 4.9082759651355445,
+          "max": 11.411144980229437
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 0.08809702315678199,
+          "stddev": 0.021883264048669356,
+          "min": 0.07080100476741791,
+          "max": 0.1189700560644269
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 3.2524336517478027,
+          "stddev": 1.7156796404564951,
+          "min": 1.979946973733604,
+          "max": 5.67778799450025
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 19.356237316969782,
+          "stddev": 1.7879248394407037,
+          "min": 16.865782963577658,
+          "max": 20.979936001822352
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.1275041103363037,
+          "stddev": 0.09008520139618563,
+          "min": 0.04184103012084961,
+          "max": 0.2520020008087158
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 182975,
+          "stddev": 0.0,
+          "min": 182975,
+          "max": 182975
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 195781,
+          "stddev": 0.0,
+          "min": 195781,
+          "max": 195781
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 105373,
+          "stddev": 0.0,
+          "min": 105373,
+          "max": 105373
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 360340,
+          "stddev": 0.0,
+          "min": 360340,
+          "max": 360340
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 11005,
+          "stddev": 0.0,
+          "min": 11005,
+          "max": 11005
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 668,
+          "stddev": 0.0,
+          "min": 668,
+          "max": 668
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 138727,
+          "stddev": 0.0,
+          "min": 138727,
+          "max": 138727
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 411166,
+          "stddev": 0.0,
+          "min": 411166,
+          "max": 411166
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 74.05917692184448,
+          "stddev": 1.317436814918015,
+          "min": 72.47353935241699,
+          "max": 75.69921159744263
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 1733136,
+          "stddev": 127871.63492607212,
+          "min": 1629284,
+          "max": 1913272,
+          "mean_human": "1.7GiB",
+          "min_human": "1.6GiB",
+          "max_human": "1.8GiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 1733136,
+          "stddev": 127871.63492607212,
+          "min": 1629284,
+          "max": 1913272,
+          "mean_human": "1.7GiB",
+          "min_human": "1.6GiB",
+          "max_human": "1.8GiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0,
+          "mean_human": "0.0B",
+          "min_human": "0.0B",
+          "max_human": "0.0B"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 4,
+          "stddev": 3.265986323710904,
+          "min": 0,
+          "max": 8
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 1114.7898924883427,
+          "stddev": 178.44628360199397,
+          "min": 874.2858752579486,
+          "max": 1301.245960413197
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 46.13059217832051,
+          "stddev": 8.019221812728167,
+          "min": 38.42471102398122,
+          "max": 57.18953195400536
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "arcadedb",
+      "threads": 8,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 2500,
+          "stddev": 0.0,
+          "min": 2500,
+          "max": 2500
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 0.004906892776489258,
+          "stddev": 0.004286043765208403,
+          "min": 0.001851797103881836,
+          "max": 0.010968208312988281
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 771986330.3333334,
+          "stddev": 67328659.70221394,
+          "min": 720242860,
+          "max": 867080046,
+          "mean_human": "736.2MiB",
+          "min_human": "686.9MiB",
+          "max_human": "826.9MiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 660645528,
+          "stddev": 15439707.307577109,
+          "min": 641301703,
+          "max": 679088938,
+          "mean_human": "630.0MiB",
+          "min_human": "611.6MiB",
+          "max_human": "647.6MiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 601684650.6666666,
+          "stddev": 1930.8729171600658,
+          "min": 601681920,
+          "max": 601686016,
+          "mean_human": "573.8MiB",
+          "min_human": "573.8MiB",
+          "max_human": "573.8MiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 182964.33333333334,
+          "stddev": 45.79907810814051,
+          "min": 182900,
+          "max": 183003
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 195777.66666666666,
+          "stddev": 21.139746660943903,
+          "min": 195758,
+          "max": 195807
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 105341.33333333333,
+          "stddev": 4.988876515698588,
+          "min": 105336,
+          "max": 105348
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 360366.3333333333,
+          "stddev": 28.546258754675524,
+          "min": 360326,
+          "max": 360388
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 11007,
+          "stddev": 9.899494936611665,
+          "min": 11000,
+          "max": 11021
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 669.3333333333334,
+          "stddev": 20.138409955990955,
+          "min": 641,
+          "max": 686
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 138741.66666666666,
+          "stddev": 27.644569488820444,
+          "min": 138703,
+          "max": 138766
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 411181,
+          "stddev": 54.30162674051917,
+          "min": 411115,
+          "max": 411248
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 5003,
+          "stddev": 31.283648551066843,
+          "min": 4977,
+          "max": 5047
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 2.366154318830619,
+          "stddev": 0.320150963971977,
+          "min": 2.1196169545874,
+          "max": 2.818299049977213
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 36.4996400118495,
+          "stddev": 5.685983662857652,
+          "min": 28.56058900943026,
+          "max": 41.57560900785029
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 74.40175800972308,
+          "stddev": 14.24758537186553,
+          "min": 55.81699300091714,
+          "max": 90.43546201428398
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 5016,
+          "stddev": 48.83304891839815,
+          "min": 4979,
+          "max": 5085
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 1.046306317827354,
+          "stddev": 0.2509255233437874,
+          "min": 0.8470529573969543,
+          "max": 1.400234003085643
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 40.2369016665034,
+          "stddev": 3.2707276391766684,
+          "min": 35.7140310225077,
+          "max": 43.33751503145322
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 94.81603500898927,
+          "stddev": 17.310909450979203,
+          "min": 75.6866349838674,
+          "max": 117.61141603346914
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 30080,
+          "stddev": 51.749396131742444,
+          "min": 30021,
+          "max": 30147
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.152476675187548,
+          "stddev": 0.020544192172118118,
+          "min": 0.13335002586245537,
+          "max": 0.18098001601174474
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 4.361836685954283,
+          "stddev": 0.6162709030030915,
+          "min": 3.490551025606692,
+          "max": 4.815665015485138
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 12.149571344101181,
+          "stddev": 3.0938564379022497,
+          "min": 8.10733501566574,
+          "max": 15.620919002685696
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 9901,
+          "stddev": 93.44873817589335,
+          "min": 9796,
+          "max": 10023
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 0.39557097867752117,
+          "stddev": 0.07135293846687193,
+          "min": 0.3328609745949507,
+          "max": 0.49539096653461456
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 20.85385500686243,
+          "stddev": 2.3734175222515193,
+          "min": 17.55022502038628,
+          "max": 23.019662010483444
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 50.50021334318444,
+          "stddev": 8.19799436832016,
+          "min": 40.755156020168215,
+          "max": 60.81204902147874
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 0.27671700809150934,
+          "stddev": 0.042577957306661314,
+          "min": 0.23659004364162683,
+          "max": 0.3356609959155321
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 14.28030066502591,
+          "stddev": 2.496633829553627,
+          "min": 11.022554012015462,
+          "max": 17.088192980736494
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 46.68420531864589,
+          "stddev": 6.652850979501999,
+          "min": 38.400218996685,
+          "max": 54.68914000084624
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.0491333802541097,
+          "stddev": 0.013685808560285152,
+          "min": 0.038362979888916016,
+          "max": 0.06844520568847656
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 182975,
+          "stddev": 0.0,
+          "min": 182975,
+          "max": 182975
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 195781,
+          "stddev": 0.0,
+          "min": 195781,
+          "max": 195781
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 105373,
+          "stddev": 0.0,
+          "min": 105373,
+          "max": 105373
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 360340,
+          "stddev": 0.0,
+          "min": 360340,
+          "max": 360340
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 11005,
+          "stddev": 0.0,
+          "min": 11005,
+          "max": 11005
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 668,
+          "stddev": 0.0,
+          "min": 668,
+          "max": 668
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 138727,
+          "stddev": 0.0,
+          "min": 138727,
+          "max": 138727
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 411166,
+          "stddev": 0.0,
+          "min": 411166,
+          "max": 411166
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 60.38507787386576,
+          "stddev": 0.9052479407438022,
+          "min": 59.324416399002075,
+          "max": 61.536261796951294
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 1401980,
+          "stddev": 107717.34602498646,
+          "min": 1321924,
+          "max": 1554248,
+          "mean_human": "1.3GiB",
+          "min_human": "1.3GiB",
+          "max_human": "1.5GiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 1401980,
+          "stddev": 107717.34602498646,
+          "min": 1321924,
+          "max": 1554248,
+          "mean_human": "1.3GiB",
+          "min_human": "1.3GiB",
+          "max_human": "1.5GiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0,
+          "mean_human": "0.0B",
+          "min_human": "0.0B",
+          "max_human": "0.0B"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 2,
+          "stddev": 1.632993161855452,
+          "min": 0,
+          "max": 4
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 2492.1840775083047,
+          "stddev": 333.0438809668031,
+          "min": 2066.406135180441,
+          "max": 2879.463982623612
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 20.439486875004757,
+          "stddev": 2.830634781612241,
+          "min": 17.364342913031578,
+          "max": 24.196598697977606
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "duckdb",
+      "threads": 1,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 2500,
+          "stddev": 0.0,
+          "min": 2500,
+          "max": 2500
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 14.061485052108765,
+          "stddev": 4.969007003795477,
+          "min": 9.468550443649292,
+          "max": 20.96395492553711
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 1689883850.3333333,
+          "stddev": 21815552.397766285,
+          "min": 1672022183,
+          "max": 1720599957,
+          "mean_human": "1.6GiB",
+          "min_human": "1.6GiB",
+          "max_human": "1.6GiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 1202656912.3333333,
+          "stddev": 326951.0113328227,
+          "min": 1202307387,
+          "max": 1203093819,
+          "mean_human": "1.1GiB",
+          "min_human": "1.1GiB",
+          "max_human": "1.1GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 1588192597.3333333,
+          "stddev": 2924422.252056559,
+          "min": 1585745920,
+          "max": 1592303616,
+          "mean_human": "1.5GiB",
+          "min_human": "1.5GiB",
+          "max_human": "1.5GiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 182963.33333333334,
+          "stddev": 46.62140662351958,
+          "min": 182899,
+          "max": 183008
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 195771.66666666666,
+          "stddev": 9.46337971105226,
+          "min": 195764,
+          "max": 195785
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 105381,
+          "stddev": 9.41629792788369,
+          "min": 105368,
+          "max": 105390
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 360325.6666666667,
+          "stddev": 6.79869268479038,
+          "min": 360319,
+          "max": 360335
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 10994.666666666666,
+          "stddev": 59.02730065166645,
+          "min": 10917,
+          "max": 11060
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 653.3333333333334,
+          "stddev": 12.283683848458853,
+          "min": 636,
+          "max": 663
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 138729.66666666666,
+          "stddev": 41.24991582482994,
+          "min": 138673,
+          "max": 138770
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 411197.3333333333,
+          "stddev": 17.78263822446552,
+          "min": 411173,
+          "max": 411215
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 5002.666666666667,
+          "stddev": 38.43898484033567,
+          "min": 4974,
+          "max": 5057
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 13.491642001705864,
+          "stddev": 1.372701757000986,
+          "min": 11.963296972680837,
+          "max": 15.292437048628926
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 36.707038001623005,
+          "stddev": 4.803920381177338,
+          "min": 30.973986024037004,
+          "max": 42.73039195686579
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 71.77722067960228,
+          "stddev": 13.464880913934165,
+          "min": 54.98544004512951,
+          "max": 87.95010298490524
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 4984.333333333333,
+          "stddev": 36.9353790047188,
+          "min": 4942,
+          "max": 5032
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 14.354741647063443,
+          "stddev": 1.3045947281451475,
+          "min": 12.844940007198602,
+          "max": 16.02796994848177
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 44.03679398819804,
+          "stddev": 5.8990373194468555,
+          "min": 36.78545297589153,
+          "max": 51.2347889598459
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 114.70203167603661,
+          "stddev": 18.019976333194116,
+          "min": 91.87188401119784,
+          "max": 135.92361297924072
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 30053.333333333332,
+          "stddev": 100.21421500410453,
+          "min": 29950,
+          "max": 30189
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.6949453381821513,
+          "stddev": 0.01735431451025586,
+          "min": 0.6728320149704814,
+          "max": 0.7152220350690186
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 5.669584361991535,
+          "stddev": 0.738467715421353,
+          "min": 5.004816048312932,
+          "max": 6.69951003510505
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 29.446568669906508,
+          "stddev": 7.36635238593082,
+          "min": 23.034121026284993,
+          "max": 39.763003995176405
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 9959.666666666666,
+          "stddev": 52.264285660052366,
+          "min": 9895,
+          "max": 10023
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 13.251601330315074,
+          "stddev": 1.455423220117286,
+          "min": 11.678526003379375,
+          "max": 15.187687007710338
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 41.56426635260383,
+          "stddev": 6.0027101815769885,
+          "min": 33.79336401121691,
+          "max": 48.40921104187146
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 108.3765253230619,
+          "stddev": 26.573288814150647,
+          "min": 73.22381599806249,
+          "max": 137.46047695167363
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 1.5211779973469675,
+          "stddev": 0.059892923225107704,
+          "min": 1.4750739792361856,
+          "max": 1.6057650209404528
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 28.375889000017196,
+          "stddev": 2.802021851561854,
+          "min": 24.422966002020985,
+          "max": 30.592744995374233
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 73.60193965723738,
+          "stddev": 16.64012868431273,
+          "min": 52.42907197680324,
+          "max": 93.08348898775876
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.0019211769104003906,
+          "stddev": 0.0001381589894528098,
+          "min": 0.001726388931274414,
+          "max": 0.0020318031311035156
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 182975,
+          "stddev": 0.0,
+          "min": 182975,
+          "max": 182975
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 195781,
+          "stddev": 0.0,
+          "min": 195781,
+          "max": 195781
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 105373,
+          "stddev": 0.0,
+          "min": 105373,
+          "max": 105373
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 360340,
+          "stddev": 0.0,
+          "min": 360340,
+          "max": 360340
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 11005,
+          "stddev": 0.0,
+          "min": 11005,
+          "max": 11005
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 668,
+          "stddev": 0.0,
+          "min": 668,
+          "max": 668
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 138727,
+          "stddev": 0.0,
+          "min": 138727,
+          "max": 138727
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 411166,
+          "stddev": 0.0,
+          "min": 411166,
+          "max": 411166
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 37.907847007115684,
+          "stddev": 7.898030973886201,
+          "min": 26.83824348449707,
+          "max": 44.73348116874695
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 1895209.3333333333,
+          "stddev": 45785.39299335057,
+          "min": 1861776,
+          "max": 1959948,
+          "mean_human": "1.8GiB",
+          "min_human": "1.8GiB",
+          "max_human": "1.9GiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 1895209.3333333333,
+          "stddev": 45785.39299335057,
+          "min": 1861776,
+          "max": 1959948,
+          "mean_human": "1.8GiB",
+          "min_human": "1.8GiB",
+          "max_human": "1.9GiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0,
+          "mean_human": "0.0B",
+          "min_human": "0.0B",
+          "max_human": "0.0B"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 3.265986323710904,
+          "min": 2,
+          "max": 10
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 109.12876334092327,
+          "stddev": 13.509211649746474,
+          "min": 93.35806118083717,
+          "max": 126.35284635468518
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 465.21610919564654,
+          "stddev": 57.09884379633344,
+          "min": 395.7172429629718,
+          "max": 535.5723905100022
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "postgresql",
+      "threads": 1,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 2500,
+          "stddev": 0.0,
+          "min": 2500,
+          "max": 2500
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 0.343717098236084,
+          "stddev": 0.13707527320928287,
+          "min": 0.23616576194763184,
+          "max": 0.5371673107147217
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 1652546206.3333333,
+          "stddev": 21501.290834634918,
+          "min": 1652516169,
+          "max": 1652565321,
+          "mean_human": "1.5GiB",
+          "min_human": "1.5GiB",
+          "max_human": "1.5GiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 1598424393,
+          "stddev": 0.0,
+          "min": 1598424393,
+          "max": 1598424393,
+          "mean_human": "1.5GiB",
+          "min_human": "1.5GiB",
+          "max_human": "1.5GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 1653090986.6666667,
+          "stddev": 10217.219104150709,
+          "min": 1653080064,
+          "max": 1653104640,
+          "mean_human": "1.5GiB",
+          "min_human": "1.5GiB",
+          "max_human": "1.5GiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 182975,
+          "stddev": 0.0,
+          "min": 182975,
+          "max": 182975
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 195781,
+          "stddev": 0.0,
+          "min": 195781,
+          "max": 195781
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 105373,
+          "stddev": 0.0,
+          "min": 105373,
+          "max": 105373
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 360340,
+          "stddev": 0.0,
+          "min": 360340,
+          "max": 360340
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 11005,
+          "stddev": 0.0,
+          "min": 11005,
+          "max": 11005
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 668,
+          "stddev": 0.0,
+          "min": 668,
+          "max": 668
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 138727,
+          "stddev": 0.0,
+          "min": 138727,
+          "max": 138727
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 411166,
+          "stddev": 0.0,
+          "min": 411166,
+          "max": 411166
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 5006.333333333333,
+          "stddev": 25.69478978746902,
+          "min": 4970,
+          "max": 5025
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 0.6709123263135552,
+          "stddev": 0.03128367972832625,
+          "min": 0.6359519902616739,
+          "max": 0.7118729990907013
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 3.3141273306682706,
+          "stddev": 0.3943356489691452,
+          "min": 2.783918986096978,
+          "max": 3.7289320025593042
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 10.104501678142697,
+          "stddev": 2.0061333644600836,
+          "min": 7.598914031405002,
+          "max": 12.509848980698735
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 5020.666666666667,
+          "stddev": 71.29905718560067,
+          "min": 4956,
+          "max": 5120
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 0.1486670031833152,
+          "stddev": 0.0061280201417316825,
+          "min": 0.14323001960292459,
+          "max": 0.15723000979050994
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 0.3424876874002318,
+          "stddev": 0.03374284670228444,
+          "min": 0.29622099827975035,
+          "max": 0.37574104499071836
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 1.1245666731459398,
+          "stddev": 0.21804812591378364,
+          "min": 0.8180419681593776,
+          "max": 1.306974038016051
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 30058,
+          "stddev": 102.57030109474509,
+          "min": 29913,
+          "max": 30134
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.04881335189566016,
+          "stddev": 0.0018305019692905365,
+          "min": 0.04700000863522291,
+          "max": 0.05132000660523772
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 0.1356536716533204,
+          "stddev": 0.013905371120802491,
+          "min": 0.11666998034343123,
+          "max": 0.1495900214649737
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 3.3427736489102244,
+          "stddev": 0.7311469529430263,
+          "min": 2.727437997236848,
+          "max": 4.370083974208683
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 9915,
+          "stddev": 20.314198646923455,
+          "min": 9893,
+          "max": 9942
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 0.11591702544440825,
+          "stddev": 0.003838537545127647,
+          "min": 0.11255999561399221,
+          "max": 0.12129003880545497
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 0.3239476354792714,
+          "stddev": 0.04317898962569138,
+          "min": 0.26479095686227083,
+          "max": 0.3666409756988287
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 5.729740970612814,
+          "stddev": 1.9064726615150467,
+          "min": 3.925061959307641,
+          "max": 8.36681597866118
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 0.07346703205257654,
+          "stddev": 0.0034218716475595628,
+          "min": 0.07056002505123615,
+          "max": 0.07827102672308683
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 0.9741633160350224,
+          "stddev": 0.06800712660305133,
+          "min": 0.880362989846617,
+          "max": 1.0394639684818685
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 4.449817351996899,
+          "stddev": 0.7740911007470981,
+          "min": 3.8827420212328434,
+          "max": 5.5443079909309745
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 5.205235083897908,
+          "stddev": 1.417503244146947,
+          "min": 4.153341054916382,
+          "max": 7.209056377410889
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 182975,
+          "stddev": 0.0,
+          "min": 182975,
+          "max": 182975
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 195781,
+          "stddev": 0.0,
+          "min": 195781,
+          "max": 195781
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 105373,
+          "stddev": 0.0,
+          "min": 105373,
+          "max": 105373
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 360340,
+          "stddev": 0.0,
+          "min": 360340,
+          "max": 360340
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 11005,
+          "stddev": 0.0,
+          "min": 11005,
+          "max": 11005
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 668,
+          "stddev": 0.0,
+          "min": 668,
+          "max": 668
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 138727,
+          "stddev": 0.0,
+          "min": 138727,
+          "max": 138727
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 411166,
+          "stddev": 0.0,
+          "min": 411166,
+          "max": 411166
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 60.306442181269325,
+          "stddev": 8.506574863529064,
+          "min": 54.282108545303345,
+          "max": 72.33655095100403
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 110054.66666666667,
+          "stddev": 385.8059385523015,
+          "min": 109704,
+          "max": 110592,
+          "mean_human": "107.5MiB",
+          "min_human": "107.1MiB",
+          "max_human": "108.0MiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 832674.6666666666,
+          "stddev": 3660.6466945366665,
+          "min": 828984,
+          "max": 837664,
+          "mean_human": "813.2MiB",
+          "min_human": "809.6MiB",
+          "max_human": "818.0MiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 722620,
+          "stddev": 3276.80983071442,
+          "min": 719280,
+          "max": 727072,
+          "mean_human": "705.7MiB",
+          "min_human": "702.4MiB",
+          "max_human": "710.0MiB"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 7,
+          "stddev": 3.265986323710904,
+          "min": 3,
+          "max": 11
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 3593.861698416305,
+          "stddev": 323.5859132240197,
+          "min": 3212.731780112548,
+          "max": 4003.7819718094
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 14.025412247011749,
+          "stddev": 1.2553173867011866,
+          "min": 12.488192502001766,
+          "max": 15.563079466985073
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "sqlite",
+      "threads": 1,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 2500,
+          "stddev": 0.0,
+          "min": 2500,
+          "max": 2500
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 0.006867408752441406,
+          "stddev": 0.0005768688163083217,
+          "min": 0.0062792301177978516,
+          "max": 0.007651090621948242
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 607862456,
+          "stddev": 58022.65084143146,
+          "min": 607784632,
+          "max": 607923896,
+          "mean_human": "579.7MiB",
+          "min_human": "579.6MiB",
+          "max_human": "579.8MiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 607698616,
+          "stddev": 0.0,
+          "min": 607698616,
+          "max": 607698616,
+          "mean_human": "579.5MiB",
+          "min_human": "579.5MiB",
+          "max_human": "579.5MiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 603688960,
+          "stddev": 58022.65084143146,
+          "min": 603611136,
+          "max": 603750400,
+          "mean_human": "575.7MiB",
+          "min_human": "575.6MiB",
+          "max_human": "575.8MiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 182948.33333333334,
+          "stddev": 50.73022329495067,
+          "min": 182896,
+          "max": 183017
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 195759.33333333334,
+          "stddev": 4.4969125210773475,
+          "min": 195754,
+          "max": 195765
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 105349,
+          "stddev": 37.74475681027322,
+          "min": 105296,
+          "max": 105381
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 360367.3333333333,
+          "stddev": 19.70335560817553,
+          "min": 360347,
+          "max": 360394
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 11004,
+          "stddev": 50.701742244884116,
+          "min": 10944,
+          "max": 11068
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 689.3333333333334,
+          "stddev": 31.689465477067017,
+          "min": 648,
+          "max": 725
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 138708.66666666666,
+          "stddev": 15.923427883328248,
+          "min": 138695,
+          "max": 138731
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 411144.6666666667,
+          "stddev": 51.473833697865906,
+          "min": 411083,
+          "max": 411209
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 5048,
+          "stddev": 78.57480512225277,
+          "min": 4937,
+          "max": 5108
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 0.7508756631674866,
+          "stddev": 0.057269350608990674,
+          "min": 0.686031999066472,
+          "max": 0.8253229898400605
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 4.277213340780388,
+          "stddev": 1.0948957576427583,
+          "min": 3.305780002847314,
+          "max": 5.807168025057763
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 13.4685353259556,
+          "stddev": 3.05735206946534,
+          "min": 11.24411600176245,
+          "max": 17.791674996260554
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 4983.666666666667,
+          "stddev": 54.53031776503375,
+          "min": 4936,
+          "max": 5060
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 0.03582999731103579,
+          "stddev": 0.002540246386488658,
+          "min": 0.032240001019090414,
+          "max": 0.037739984691143036
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 0.10059034684672952,
+          "stddev": 0.0157112899622943,
+          "min": 0.08403102401643991,
+          "max": 0.12169999536126852
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 0.3257176528374354,
+          "stddev": 0.0462554536416543,
+          "min": 0.2747810212895274,
+          "max": 0.3867309424094856
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 30010.333333333332,
+          "stddev": 95.08358895671161,
+          "min": 29879,
+          "max": 30101
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.010383334786941608,
+          "stddev": 0.0005347354082260445,
+          "min": 0.009650015272200108,
+          "max": 0.010909978300333023
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 0.026493352682640154,
+          "stddev": 0.00399668315519339,
+          "min": 0.022340042050927877,
+          "max": 0.03189005656167865
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 0.06656368107845385,
+          "stddev": 0.012495666737632558,
+          "min": 0.05509000038728118,
+          "max": 0.08394004544243217
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 9958,
+          "stddev": 160.94926736915167,
+          "min": 9731,
+          "max": 10086
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 0.01719000283628702,
+          "stddev": 0.0007970353322144261,
+          "min": 0.016139994841068983,
+          "max": 0.018069986253976822
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 0.04082334150249759,
+          "stddev": 0.0051749859640841875,
+          "min": 0.03481999738141894,
+          "max": 0.04745001206174493
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 0.10475331995015343,
+          "stddev": 0.025402440702483573,
+          "min": 0.08247996447607875,
+          "max": 0.14030002057552338
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 0.013986699438343445,
+          "stddev": 0.0008890939746939958,
+          "min": 0.012800039257854223,
+          "max": 0.014940043911337852
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 0.7833456814599534,
+          "stddev": 0.07202658234875896,
+          "min": 0.6946419598534703,
+          "max": 0.8710620459169149
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 3.052535990718752,
+          "stddev": 0.4296696453321915,
+          "min": 2.6473079924471676,
+          "max": 3.647280973382294
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.00843501091003418,
+          "stddev": 0.0010681804249658249,
+          "min": 0.006925821304321289,
+          "max": 0.009246826171875
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 182975,
+          "stddev": 0.0,
+          "min": 182975,
+          "max": 182975
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 195781,
+          "stddev": 0.0,
+          "min": 195781,
+          "max": 195781
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 105373,
+          "stddev": 0.0,
+          "min": 105373,
+          "max": 105373
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 360340,
+          "stddev": 0.0,
+          "min": 360340,
+          "max": 360340
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 11005,
+          "stddev": 0.0,
+          "min": 11005,
+          "max": 11005
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 668,
+          "stddev": 0.0,
+          "min": 668,
+          "max": 668
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 138727,
+          "stddev": 0.0,
+          "min": 138727,
+          "max": 138727
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 411166,
+          "stddev": 0.0,
+          "min": 411166,
+          "max": 411166
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 216.9791017373403,
+          "stddev": 59.39654507782152,
+          "min": 150.69998383522034,
+          "max": 294.8090763092041
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 95218.66666666667,
+          "stddev": 231.4552992600419,
+          "min": 94980,
+          "max": 95532,
+          "mean_human": "93.0MiB",
+          "min_human": "92.8MiB",
+          "max_human": "93.3MiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 95218.66666666667,
+          "stddev": 231.4552992600419,
+          "min": 94980,
+          "max": 95532,
+          "mean_human": "93.0MiB",
+          "min_human": "92.8MiB",
+          "max_human": "93.3MiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0,
+          "mean_human": "0.0B",
+          "min_human": "0.0B",
+          "max_human": "0.0B"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 3.265986323710904,
+          "min": 1,
+          "max": 9
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 5306.073726756008,
+          "stddev": 1053.1521915687208,
+          "min": 4319.261490891754,
+          "max": 6765.577933015838
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 9.770376201680241,
+          "stddev": 1.7564036151809799,
+          "min": 7.390351644018665,
+          "max": 11.576053014025092
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-small",
+      "db": "sqlite",
+      "threads": 8,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 2500,
+          "stddev": 0.0,
+          "min": 2500,
+          "max": 2500
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 0.010013818740844727,
+          "stddev": 0.0016964928716553464,
+          "min": 0.007895469665527344,
+          "max": 0.012048482894897461
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 732368829.3333334,
+          "stddev": 1487800.827162322,
+          "min": 730962976,
+          "max": 734427488,
+          "mean_human": "698.4MiB",
+          "min_human": "697.1MiB",
+          "max_human": "700.4MiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 607698616,
+          "stddev": 0.0,
+          "min": 607698616,
+          "max": 607698616,
+          "mean_human": "579.5MiB",
+          "min_human": "579.5MiB",
+          "max_human": "579.5MiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 603702613.3333334,
+          "stddev": 66998.78616479224,
+          "min": 603623424,
+          "max": 603787264,
+          "mean_human": "575.7MiB",
+          "min_human": "575.7MiB",
+          "max_human": "575.8MiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 182982.66666666666,
+          "stddev": 40.61472092179824,
+          "min": 182936,
+          "max": 183035
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 195759.33333333334,
+          "stddev": 5.2493385826745405,
+          "min": 195752,
+          "max": 195764
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 105380.66666666667,
+          "stddev": 24.78350706058814,
+          "min": 105348,
+          "max": 105408
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 360330.3333333333,
+          "stddev": 19.938795238317574,
+          "min": 360303,
+          "max": 360350
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 11026.666666666666,
+          "stddev": 29.23848301278452,
+          "min": 11005,
+          "max": 11068
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 664.3333333333334,
+          "stddev": 48.50658603621666,
+          "min": 617,
+          "max": 731
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 138717.33333333334,
+          "stddev": 24.567367696917707,
+          "min": 138698,
+          "max": 138752
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 411135,
+          "stddev": 67.1863081289633,
+          "min": 411041,
+          "max": 411194
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 5077.333333333333,
+          "stddev": 37.1872140511882,
+          "min": 5025,
+          "max": 5108
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 0.9386596696761748,
+          "stddev": 0.10991054781477338,
+          "min": 0.7986429845914245,
+          "max": 1.067123026587069
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 8.299272662649551,
+          "stddev": 2.1038026683033877,
+          "min": 5.7712679845280945,
+          "max": 10.921904002316296
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 50.11330599275728,
+          "stddev": 5.672884929731843,
+          "min": 42.1080410014838,
+          "max": 54.57336001563817
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 5038.666666666667,
+          "stddev": 76.61737545897942,
+          "min": 4936,
+          "max": 5120
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 0.05446366655329863,
+          "stddev": 0.003755028053489143,
+          "min": 0.049399968702346087,
+          "max": 0.05838100332766771
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 4.898198336983721,
+          "stddev": 0.45547757161129016,
+          "min": 4.30044304812327,
+          "max": 5.40493696462363
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 47.57494766575595,
+          "stddev": 8.542604871844242,
+          "min": 35.494850017130375,
+          "max": 53.74757701065391
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 29964.333333333332,
+          "stddev": 97.62968583149059,
+          "min": 29879,
+          "max": 30101
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.013110014454772076,
+          "stddev": 0.0007838844191998213,
+          "min": 0.012080010492354631,
+          "max": 0.013980024959892035
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 0.046809999427447714,
+          "stddev": 0.008371304971525724,
+          "min": 0.03702001413330436,
+          "max": 0.057469995226711035
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 0.2796373446471989,
+          "stddev": 0.07919231427379438,
+          "min": 0.2179300063289702,
+          "max": 0.39143103640526533
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 9919.666666666666,
+          "stddev": 145.78599231598199,
+          "min": 9731,
+          "max": 10086
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 0.022397007948408525,
+          "stddev": 0.001177306530676752,
+          "min": 0.02082099672406912,
+          "max": 0.02365000545978546
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 5.598831009895851,
+          "stddev": 0.6699799849598405,
+          "min": 4.716334980912507,
+          "max": 6.338760023936629
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 51.415926679813616,
+          "stddev": 2.521201951737734,
+          "min": 47.86114901071414,
+          "max": 53.43280604574829
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 0.018680021942903597,
+          "stddev": 0.0012429639981562067,
+          "min": 0.017030048184096813,
+          "max": 0.02003001281991601
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 2.4471213303816817,
+          "stddev": 0.2753649567796861,
+          "min": 2.0932269981130958,
+          "max": 2.7648090035654604
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 20.52933363787209,
+          "stddev": 1.833650672592922,
+          "min": 18.521447957027704,
+          "max": 22.954440966714174
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.0077555179595947266,
+          "stddev": 0.0014981905185928494,
+          "min": 0.006188392639160156,
+          "max": 0.009773969650268555
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 182975,
+          "stddev": 0.0,
+          "min": 182975,
+          "max": 182975
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 195781,
+          "stddev": 0.0,
+          "min": 195781,
+          "max": 195781
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 105373,
+          "stddev": 0.0,
+          "min": 105373,
+          "max": 105373
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 360340,
+          "stddev": 0.0,
+          "min": 360340,
+          "max": 360340
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 11005,
+          "stddev": 0.0,
+          "min": 11005,
+          "max": 11005
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 668,
+          "stddev": 0.0,
+          "min": 668,
+          "max": 668
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 138727,
+          "stddev": 0.0,
+          "min": 138727,
+          "max": 138727
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 411166,
+          "stddev": 0.0,
+          "min": 411166,
+          "max": 411166
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 264.7218294143677,
+          "stddev": 28.766039767090017,
+          "min": 234.41721439361572,
+          "max": 303.37839818000793
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 103406.66666666667,
+          "stddev": 388.451055117916,
+          "min": 103128,
+          "max": 103956,
+          "mean_human": "101.0MiB",
+          "min_human": "100.7MiB",
+          "max_human": "101.5MiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 103406.66666666667,
+          "stddev": 388.451055117916,
+          "min": 103128,
+          "max": 103956,
+          "mean_human": "101.0MiB",
+          "min_human": "100.7MiB",
+          "max_human": "101.5MiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0,
+          "mean_human": "0.0B",
+          "min_human": "0.0B",
+          "max_human": "0.0B"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 3,
+          "stddev": 1.632993161855452,
+          "min": 1,
+          "max": 5
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 6564.920412580913,
+          "stddev": 1429.4233986928289,
+          "min": 5177.613135603139,
+          "max": 8531.920338820788
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 7.95706859502631,
+          "stddev": 1.5751563940092421,
+          "min": 5.860345387016423,
+          "max": 9.656959431013092
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 50000,
+          "stddev": 0.0,
+          "min": 50000,
+          "max": 50000
+        }
+      },
+      "boolean_metrics": {}
+    }
+  ]
+}

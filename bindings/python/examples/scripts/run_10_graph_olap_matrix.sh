@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXAMPLES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PY_SCRIPT="$EXAMPLES_DIR/10_stackoverflow_graph_olap.py"
+
+# mark 🚧 for ongoing and ✅ for done
+# Dataset Tier  Batch       Memory  CPUs  Running   Note
+# Tiny          1,000       1GB     2     ✅
+# Small         2,500       2GB     4     ✅
+# Medium        5,000       4GB     8     ✅
+# Large         10,000      8GB     16    ✅
+# X-Large       25,000      32GB    32
+
+DATASET="stackoverflow-large"
+BATCH_SIZE=10000
+MEM_LIMIT="8g"
+THREADS=16
+RUNS=3
+SEED_START=0
+JVM_HEAP_FRACTION="0.80"
+ARCADEDB_VERSION="26.2.1"
+LADYBUG_VERSION="0.14.1"
+DOCKER_IMAGE="python:3.12-slim"
+QUERY_RUNS=10
+QUERY_ORDER="shuffled"
+ONLY_QUERY=""
+MANUAL_CHECKS=false
+DBS_RAW="arcadedb,ladybug"
+LABEL_PREFIX="sweep10"
+
+if [[ $# -gt 0 ]]; then
+    echo "This script does not accept command-line arguments." >&2
+    echo "Edit configuration values at the top of this file instead (for example DATASET)." >&2
+    exit 1
+fi
+
+IFS=',' read -r -a DBS <<< "$DBS_RAW"
+if [[ "${#DBS[@]}" -eq 0 ]]; then
+    echo "DBS_RAW cannot be empty" >&2
+    exit 1
+fi
+
+if [[ ! -f "$PY_SCRIPT" ]]; then
+    echo "Benchmark script not found: $PY_SCRIPT" >&2
+    exit 1
+fi
+
+if [[ "$QUERY_ORDER" != "fixed" && "$QUERY_ORDER" != "shuffled" ]]; then
+    echo "QUERY_ORDER must be either 'fixed' or 'shuffled'" >&2
+    exit 1
+fi
+
+if [[ "$QUERY_RUNS" -lt 1 ]]; then
+    echo "QUERY_RUNS must be >= 1" >&2
+    exit 1
+fi
+
+cd "$EXAMPLES_DIR"
+
+echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED_START"
+echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER"
+
+dataset_slug="${DATASET//-/_}"
+
+execution_idx=0
+for ((run = 1; run <= RUNS; run++)); do
+    for db in "${DBS[@]}"; do
+        db="$(echo "$db" | xargs)"
+        if [[ -z "$db" ]]; then
+            continue
+        fi
+
+        seed=$((SEED_START + execution_idx))
+        run_label=$(printf "%s_r%02d_%s_s%05d" "$LABEL_PREFIX" "$run" "$db" "$seed")
+
+        cmd=(
+            python3 "$PY_SCRIPT"
+            --dataset "$DATASET"
+            --db "$db"
+            --threads "$THREADS"
+            --batch-size "$BATCH_SIZE"
+            --mem-limit "$MEM_LIMIT"
+            --jvm-heap-fraction "$JVM_HEAP_FRACTION"
+            --arcadedb-version "$ARCADEDB_VERSION"
+            --ladybug-version "$LADYBUG_VERSION"
+            --docker-image "$DOCKER_IMAGE"
+            --query-runs "$QUERY_RUNS"
+            --query-order "$QUERY_ORDER"
+            --seed "$seed"
+            --run-label "$run_label"
+        )
+
+        if [[ -n "$ONLY_QUERY" ]]; then
+            cmd+=(--only-query "$ONLY_QUERY")
+        fi
+
+        if [[ "$MANUAL_CHECKS" == true ]]; then
+            cmd+=(--manual-checks)
+        fi
+
+        echo
+        echo "[$((execution_idx + 1))/$((RUNS * ${#DBS[@]}))] db=$db run=$run seed=$seed label=$run_label"
+        echo "Command: ${cmd[*]}"
+        "${cmd[@]}"
+
+        target_dir="my_test_databases/${dataset_slug}_graph_olap_${db}_${run_label}"
+        if [[ -d "$target_dir" ]]; then
+            du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"
+            du_human="$(du -sh "$target_dir" | awk '{print $1}')"
+            collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+            cat > "$target_dir/disk_usage_du.txt" << EOF
+path: $target_dir
+du_bytes: $du_bytes
+du_human: $du_human
+collected_at_utc: $collected_at
+EOF
+
+            cat > "$target_dir/disk_usage_du.json" << EOF
+{
+  "path": "$target_dir",
+  "du_bytes": $du_bytes,
+  "du_human": "$du_human",
+  "collected_at_utc": "$collected_at"
+}
+EOF
+
+            echo "Saved du size: $du_human ($du_bytes bytes) -> $target_dir/disk_usage_du.json"
+        else
+            echo "Warning: target directory not found for du capture: $target_dir"
+        fi
+
+        execution_idx=$((execution_idx + 1))
+    done
+done
+
+echo
+echo "Completed all runs."

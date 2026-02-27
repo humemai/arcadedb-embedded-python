@@ -1,0 +1,2853 @@
+{
+  "meta": {
+    "name": "11 vector index build matrix summary",
+    "generated_at_utc": "2026-02-27T12:38:13Z",
+    "input_dir": "/mnt/ssd2/repos/arcadedb-embedded-python/bindings/python/examples/my_test_databases",
+    "dataset": "stackoverflow-medium",
+    "dataset_size_profile": "medium",
+    "dataset_size_source": "dataset name suffix",
+    "label_prefix": "sweep11",
+    "total_runs": 12,
+    "datasets_found": [
+      "stackoverflow-medium"
+    ],
+    "backends_found": [
+      "arcadedb",
+      "milvus",
+      "pgvector",
+      "qdrant"
+    ]
+  },
+  "parameter_keys": [
+    "add_hierarchy",
+    "arcadedb_version",
+    "backend",
+    "batch_size",
+    "beam_width",
+    "count",
+    "cpus",
+    "dataset",
+    "dataset_label",
+    "dim",
+    "docker_image",
+    "heap",
+    "max_connections",
+    "mem_limit",
+    "milvus_version",
+    "postgres_version",
+    "qdrant_version",
+    "quantization",
+    "rows",
+    "run_label",
+    "seed",
+    "server_fraction",
+    "store_vectors_in_graph",
+    "threads"
+  ],
+  "parameters_detected": {
+    "add_hierarchy": [
+      "True"
+    ],
+    "arcadedb_version": [
+      "26.2.1"
+    ],
+    "backend": [
+      "arcadedb",
+      "milvus",
+      "pgvector",
+      "qdrant"
+    ],
+    "batch_size": [
+      "5000"
+    ],
+    "beam_width": [
+      "100"
+    ],
+    "count": [
+      "1242391"
+    ],
+    "cpus": [
+      "8"
+    ],
+    "dataset": [
+      "stackoverflow-medium"
+    ],
+    "dataset_label": [
+      "all"
+    ],
+    "dim": [
+      "384"
+    ],
+    "docker_image": [
+      "python:3.12-slim"
+    ],
+    "heap": [
+      "13107m"
+    ],
+    "max_connections": [
+      "16"
+    ],
+    "mem_limit": [
+      "16g"
+    ],
+    "milvus_version": [
+      "2.6.10"
+    ],
+    "postgres_version": [
+      "16.11 (Debian 16.11-1.pgdg12+1)"
+    ],
+    "qdrant_version": [
+      "1.11.3"
+    ],
+    "quantization": [
+      "NONE"
+    ],
+    "rows": [
+      "1242391"
+    ],
+    "run_label": [
+      "sweep11_r01_arcadedb_s00000",
+      "sweep11_r01_milvus_s00003",
+      "sweep11_r01_pgvector_s00001",
+      "sweep11_r01_qdrant_s00002",
+      "sweep11_r02_arcadedb_s00004",
+      "sweep11_r02_milvus_s00007",
+      "sweep11_r02_pgvector_s00005",
+      "sweep11_r02_qdrant_s00006",
+      "sweep11_r03_arcadedb_s00008",
+      "sweep11_r03_milvus_s00011",
+      "sweep11_r03_pgvector_s00009",
+      "sweep11_r03_qdrant_s00010"
+    ],
+    "seed": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9"
+    ],
+    "server_fraction": [
+      "0.0",
+      "0.8"
+    ],
+    "store_vectors_in_graph": [
+      "False"
+    ],
+    "threads": [
+      "8"
+    ]
+  },
+  "numeric_metric_keys": [
+    "budget.split.client_fraction",
+    "budget.split.server_fraction",
+    "budget.total.threads_input",
+    "config.batch_size",
+    "config.beam_width",
+    "config.count",
+    "config.max_connections",
+    "config.milvus.hnsw_ef_construct",
+    "config.milvus.hnsw_m",
+    "config.milvus.port",
+    "config.pg.port",
+    "config.qdrant.hnsw_ef_construct",
+    "config.qdrant.hnsw_m",
+    "config.seed",
+    "dataset.dim",
+    "dataset.rows",
+    "db_size_mb",
+    "disk_usage.du_bytes",
+    "environment.logical_cpu_count",
+    "environment.physical_cpu_count",
+    "environment.threads_limit",
+    "peak_rss_mb",
+    "phases.close_db.rss_after_mb",
+    "phases.close_db.rss_before_mb",
+    "phases.close_db.rss_delta_mb",
+    "phases.close_db.time_sec",
+    "phases.create_db.rss_after_mb",
+    "phases.create_db.rss_before_mb",
+    "phases.create_db.rss_delta_mb",
+    "phases.create_db.time_sec",
+    "phases.create_index.rss_after_mb",
+    "phases.create_index.rss_before_mb",
+    "phases.create_index.rss_delta_mb",
+    "phases.create_index.time_sec",
+    "phases.ingest.ingested",
+    "phases.ingest.rss_after_mb",
+    "phases.ingest.rss_before_mb",
+    "phases.ingest.rss_delta_mb",
+    "phases.ingest.time_sec",
+    "run.total_time_s",
+    "telemetry.db_close_time_s",
+    "telemetry.db_create_time_s"
+  ],
+  "boolean_metric_keys": [
+    "config.add_hierarchy",
+    "config.store_vectors_in_graph",
+    "environment.is_running_in_docker"
+  ],
+  "run_fields": [
+    "dataset",
+    "backend",
+    "run_label",
+    "seed",
+    "du_bytes",
+    "du_human",
+    "result_file",
+    "numeric_metrics",
+    "human_readable_metrics",
+    "boolean_metrics",
+    "parameters"
+  ],
+  "runs": [
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "arcadedb",
+      "run_label": "sweep11_r01_arcadedb_s00000",
+      "seed": 0,
+      "du_bytes": 2916085760,
+      "du_human": "2.8G",
+      "result_file": "backend=arcadedb_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r01_arcadedb_s00000/results_sweep11_r01_arcadedb_s00000.json",
+      "numeric_metrics": {
+        "run.total_time_s": 2538.943823858979,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 1.0,
+        "budget.split.server_fraction": 0.0,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 0,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.41576824797084555,
+        "phases.create_db.rss_before_mb": 50.2265625,
+        "phases.create_db.rss_after_mb": 188.3125,
+        "phases.create_db.rss_delta_mb": 138.0859375,
+        "phases.ingest.time_sec": 44.191381554002874,
+        "phases.ingest.rss_before_mb": 188.3125,
+        "phases.ingest.rss_after_mb": 4891.71875,
+        "phases.ingest.rss_delta_mb": 4703.40625,
+        "phases.ingest.ingested": 1242391,
+        "phases.create_index.time_sec": 2494.238185808994,
+        "phases.create_index.rss_before_mb": 4891.71875,
+        "phases.create_index.rss_after_mb": 10171.9296875,
+        "phases.create_index.rss_delta_mb": 5280.2109375,
+        "phases.close_db.time_sec": 0.06539887801045552,
+        "phases.close_db.rss_before_mb": 10171.9296875,
+        "phases.close_db.rss_after_mb": 10171.8671875,
+        "phases.close_db.rss_delta_mb": -0.0625,
+        "db_size_mb": 2780.9411125183105,
+        "peak_rss_mb": 10171.9296875,
+        "telemetry.db_create_time_s": 0.41576824797084555,
+        "telemetry.db_close_time_s": 0.06539887801045552,
+        "disk_usage.du_bytes": 2916085760
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "arcadedb",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.0,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r01_arcadedb_s00000",
+        "seed": 0,
+        "docker_image": "python:3.12-slim",
+        "arcadedb_version": "26.2.1"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "50.2MiB",
+        "phases.create_db.rss_after_mb": "188.3MiB",
+        "phases.create_db.rss_delta_mb": "138.1MiB",
+        "phases.ingest.rss_before_mb": "188.3MiB",
+        "phases.ingest.rss_after_mb": "4.8GiB",
+        "phases.ingest.rss_delta_mb": "4.6GiB",
+        "phases.create_index.rss_before_mb": "4.8GiB",
+        "phases.create_index.rss_after_mb": "9.9GiB",
+        "phases.create_index.rss_delta_mb": "5.2GiB",
+        "phases.close_db.rss_before_mb": "9.9GiB",
+        "phases.close_db.rss_after_mb": "9.9GiB",
+        "phases.close_db.rss_delta_mb": "-65536.0B",
+        "db_size_mb": "2.7GiB",
+        "peak_rss_mb": "9.9GiB",
+        "disk_usage.du_bytes": "2.7GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "arcadedb",
+      "run_label": "sweep11_r02_arcadedb_s00004",
+      "seed": 4,
+      "du_bytes": 2916020224,
+      "du_human": "2.8G",
+      "result_file": "backend=arcadedb_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r02_arcadedb_s00004/results_sweep11_r02_arcadedb_s00004.json",
+      "numeric_metrics": {
+        "run.total_time_s": 2379.081184398965,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 1.0,
+        "budget.split.server_fraction": 0.0,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 4,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.4566722339950502,
+        "phases.create_db.rss_before_mb": 50.31640625,
+        "phases.create_db.rss_after_mb": 189.14453125,
+        "phases.create_db.rss_delta_mb": 138.828125,
+        "phases.ingest.time_sec": 43.51883713999996,
+        "phases.ingest.rss_before_mb": 189.1484375,
+        "phases.ingest.rss_after_mb": 4784.3515625,
+        "phases.ingest.rss_delta_mb": 4595.203125,
+        "phases.ingest.ingested": 1242391,
+        "phases.create_index.time_sec": 2335.0333643190097,
+        "phases.create_index.rss_before_mb": 4784.3515625,
+        "phases.create_index.rss_after_mb": 9267.4453125,
+        "phases.create_index.rss_delta_mb": 4483.09375,
+        "phases.close_db.time_sec": 0.03598097601206973,
+        "phases.close_db.rss_before_mb": 9267.4453125,
+        "phases.close_db.rss_after_mb": 9267.3828125,
+        "phases.close_db.rss_delta_mb": -0.0625,
+        "db_size_mb": 2780.9411125183105,
+        "peak_rss_mb": 9267.4453125,
+        "telemetry.db_create_time_s": 0.4566722339950502,
+        "telemetry.db_close_time_s": 0.03598097601206973,
+        "disk_usage.du_bytes": 2916020224
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "arcadedb",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.0,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r02_arcadedb_s00004",
+        "seed": 4,
+        "docker_image": "python:3.12-slim",
+        "arcadedb_version": "26.2.1"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "50.3MiB",
+        "phases.create_db.rss_after_mb": "189.1MiB",
+        "phases.create_db.rss_delta_mb": "138.8MiB",
+        "phases.ingest.rss_before_mb": "189.1MiB",
+        "phases.ingest.rss_after_mb": "4.7GiB",
+        "phases.ingest.rss_delta_mb": "4.5GiB",
+        "phases.create_index.rss_before_mb": "4.7GiB",
+        "phases.create_index.rss_after_mb": "9.1GiB",
+        "phases.create_index.rss_delta_mb": "4.4GiB",
+        "phases.close_db.rss_before_mb": "9.1GiB",
+        "phases.close_db.rss_after_mb": "9.1GiB",
+        "phases.close_db.rss_delta_mb": "-65536.0B",
+        "db_size_mb": "2.7GiB",
+        "peak_rss_mb": "9.1GiB",
+        "disk_usage.du_bytes": "2.7GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "arcadedb",
+      "run_label": "sweep11_r03_arcadedb_s00008",
+      "seed": 8,
+      "du_bytes": 2916057088,
+      "du_human": "2.8G",
+      "result_file": "backend=arcadedb_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r03_arcadedb_s00008/results_sweep11_r03_arcadedb_s00008.json",
+      "numeric_metrics": {
+        "run.total_time_s": 2302.367215405975,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 1.0,
+        "budget.split.server_fraction": 0.0,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 8,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.4256949520204216,
+        "phases.create_db.rss_before_mb": 50.390625,
+        "phases.create_db.rss_after_mb": 185.8046875,
+        "phases.create_db.rss_delta_mb": 135.4140625,
+        "phases.ingest.time_sec": 45.116131055983715,
+        "phases.ingest.rss_before_mb": 185.8046875,
+        "phases.ingest.rss_after_mb": 5022.14453125,
+        "phases.ingest.rss_delta_mb": 4836.33984375,
+        "phases.ingest.ingested": 1242391,
+        "phases.create_index.time_sec": 2256.757520766987,
+        "phases.create_index.rss_before_mb": 5022.14453125,
+        "phases.create_index.rss_after_mb": 7556.31640625,
+        "phases.create_index.rss_delta_mb": 2534.171875,
+        "phases.close_db.time_sec": 0.035236208990681916,
+        "phases.close_db.rss_before_mb": 7556.31640625,
+        "phases.close_db.rss_after_mb": 7556.25390625,
+        "phases.close_db.rss_delta_mb": -0.0625,
+        "db_size_mb": 2780.9411125183105,
+        "peak_rss_mb": 7556.31640625,
+        "telemetry.db_create_time_s": 0.4256949520204216,
+        "telemetry.db_close_time_s": 0.035236208990681916,
+        "disk_usage.du_bytes": 2916057088
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "arcadedb",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.0,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r03_arcadedb_s00008",
+        "seed": 8,
+        "docker_image": "python:3.12-slim",
+        "arcadedb_version": "26.2.1"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "50.4MiB",
+        "phases.create_db.rss_after_mb": "185.8MiB",
+        "phases.create_db.rss_delta_mb": "135.4MiB",
+        "phases.ingest.rss_before_mb": "185.8MiB",
+        "phases.ingest.rss_after_mb": "4.9GiB",
+        "phases.ingest.rss_delta_mb": "4.7GiB",
+        "phases.create_index.rss_before_mb": "4.9GiB",
+        "phases.create_index.rss_after_mb": "7.4GiB",
+        "phases.create_index.rss_delta_mb": "2.5GiB",
+        "phases.close_db.rss_before_mb": "7.4GiB",
+        "phases.close_db.rss_after_mb": "7.4GiB",
+        "phases.close_db.rss_delta_mb": "-65536.0B",
+        "db_size_mb": "2.7GiB",
+        "peak_rss_mb": "7.4GiB",
+        "disk_usage.du_bytes": "2.7GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "milvus",
+      "run_label": "sweep11_r01_milvus_s00003",
+      "seed": 3,
+      "du_bytes": 7570968576,
+      "du_human": "7.1G",
+      "result_file": "backend=milvus_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r01_milvus_s00003/results_sweep11_r01_milvus_s00003.json",
+      "numeric_metrics": {
+        "run.total_time_s": 183.25804369302932,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 0.2,
+        "budget.split.server_fraction": 0.8,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 3,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.21357418899424374,
+        "phases.create_db.rss_before_mb": 522.375,
+        "phases.create_db.rss_after_mb": 522.69140625,
+        "phases.create_db.rss_delta_mb": 0.31640625,
+        "phases.create_index.time_sec": 0.92014131200267,
+        "phases.create_index.rss_before_mb": 562.64453125,
+        "phases.create_index.rss_after_mb": 564.1640625,
+        "phases.create_index.rss_delta_mb": 1.51953125,
+        "phases.ingest.time_sec": 166.24497548496583,
+        "phases.ingest.rss_before_mb": 564.19140625,
+        "phases.ingest.rss_after_mb": 2698.6953125,
+        "phases.ingest.rss_delta_mb": 2134.50390625,
+        "phases.ingest.ingested": 1242391,
+        "phases.close_db.time_sec": 0.2666550280409865,
+        "phases.close_db.rss_before_mb": 2698.73828125,
+        "phases.close_db.rss_after_mb": 2698.73828125,
+        "phases.close_db.rss_delta_mb": 0.0,
+        "db_size_mb": 8554.483144760132,
+        "peak_rss_mb": 2698.73828125,
+        "telemetry.db_create_time_s": 0.21357418899424374,
+        "telemetry.db_close_time_s": 0.2666550280409865,
+        "disk_usage.du_bytes": 7570968576
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "milvus",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.8,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r01_milvus_s00003",
+        "seed": 3,
+        "docker_image": "python:3.12-slim",
+        "milvus_version": "2.6.10"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "522.4MiB",
+        "phases.create_db.rss_after_mb": "522.7MiB",
+        "phases.create_db.rss_delta_mb": "324.0KiB",
+        "phases.create_index.rss_before_mb": "562.6MiB",
+        "phases.create_index.rss_after_mb": "564.2MiB",
+        "phases.create_index.rss_delta_mb": "1.5MiB",
+        "phases.ingest.rss_before_mb": "564.2MiB",
+        "phases.ingest.rss_after_mb": "2.6GiB",
+        "phases.ingest.rss_delta_mb": "2.1GiB",
+        "phases.close_db.rss_before_mb": "2.6GiB",
+        "phases.close_db.rss_after_mb": "2.6GiB",
+        "phases.close_db.rss_delta_mb": "0.0B",
+        "db_size_mb": "8.4GiB",
+        "peak_rss_mb": "2.6GiB",
+        "disk_usage.du_bytes": "7.1GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "milvus",
+      "run_label": "sweep11_r02_milvus_s00007",
+      "seed": 7,
+      "du_bytes": 7701360640,
+      "du_human": "7.2G",
+      "result_file": "backend=milvus_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r02_milvus_s00007/results_sweep11_r02_milvus_s00007.json",
+      "numeric_metrics": {
+        "run.total_time_s": 269.90294481499586,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 0.2,
+        "budget.split.server_fraction": 0.8,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 7,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.20753312797751278,
+        "phases.create_db.rss_before_mb": 539.73046875,
+        "phases.create_db.rss_after_mb": 539.96484375,
+        "phases.create_db.rss_delta_mb": 0.234375,
+        "phases.create_index.time_sec": 0.7435295779723674,
+        "phases.create_index.rss_before_mb": 584.03515625,
+        "phases.create_index.rss_after_mb": 585.34375,
+        "phases.create_index.rss_delta_mb": 1.30859375,
+        "phases.ingest.time_sec": 250.50253748899559,
+        "phases.ingest.rss_before_mb": 585.3515625,
+        "phases.ingest.rss_after_mb": 3274.09375,
+        "phases.ingest.rss_delta_mb": 2688.7421875,
+        "phases.ingest.ingested": 1242391,
+        "phases.close_db.time_sec": 0.264134171011392,
+        "phases.close_db.rss_before_mb": 3276.62890625,
+        "phases.close_db.rss_after_mb": 3280.3046875,
+        "phases.close_db.rss_delta_mb": 3.67578125,
+        "db_size_mb": 8992.261370658875,
+        "peak_rss_mb": 3280.3046875,
+        "telemetry.db_create_time_s": 0.20753312797751278,
+        "telemetry.db_close_time_s": 0.264134171011392,
+        "disk_usage.du_bytes": 7701360640
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "milvus",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.8,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r02_milvus_s00007",
+        "seed": 7,
+        "docker_image": "python:3.12-slim",
+        "milvus_version": "2.6.10"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "539.7MiB",
+        "phases.create_db.rss_after_mb": "540.0MiB",
+        "phases.create_db.rss_delta_mb": "240.0KiB",
+        "phases.create_index.rss_before_mb": "584.0MiB",
+        "phases.create_index.rss_after_mb": "585.3MiB",
+        "phases.create_index.rss_delta_mb": "1.3MiB",
+        "phases.ingest.rss_before_mb": "585.4MiB",
+        "phases.ingest.rss_after_mb": "3.2GiB",
+        "phases.ingest.rss_delta_mb": "2.6GiB",
+        "phases.close_db.rss_before_mb": "3.2GiB",
+        "phases.close_db.rss_after_mb": "3.2GiB",
+        "phases.close_db.rss_delta_mb": "3.7MiB",
+        "db_size_mb": "8.8GiB",
+        "peak_rss_mb": "3.2GiB",
+        "disk_usage.du_bytes": "7.2GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "milvus",
+      "run_label": "sweep11_r03_milvus_s00011",
+      "seed": 11,
+      "du_bytes": 9416826880,
+      "du_human": "8.8G",
+      "result_file": "backend=milvus_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r03_milvus_s00011/results_sweep11_r03_milvus_s00011.json",
+      "numeric_metrics": {
+        "run.total_time_s": 267.04009108501486,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 0.2,
+        "budget.split.server_fraction": 0.8,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 11,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.21093587798532099,
+        "phases.create_db.rss_before_mb": 533.59765625,
+        "phases.create_db.rss_after_mb": 533.85546875,
+        "phases.create_db.rss_delta_mb": 0.2578125,
+        "phases.create_index.time_sec": 0.7797861619619653,
+        "phases.create_index.rss_before_mb": 580.19921875,
+        "phases.create_index.rss_after_mb": 580.96875,
+        "phases.create_index.rss_delta_mb": 0.76953125,
+        "phases.ingest.time_sec": 249.1699796449975,
+        "phases.ingest.rss_before_mb": 580.96875,
+        "phases.ingest.rss_after_mb": 3000.80859375,
+        "phases.ingest.rss_delta_mb": 2419.83984375,
+        "phases.ingest.ingested": 1242391,
+        "phases.close_db.time_sec": 0.2934536039829254,
+        "phases.close_db.rss_before_mb": 2973.26953125,
+        "phases.close_db.rss_after_mb": 2959.83984375,
+        "phases.close_db.rss_delta_mb": -13.4296875,
+        "db_size_mb": 8962.421068191528,
+        "peak_rss_mb": 3000.80859375,
+        "telemetry.db_create_time_s": 0.21093587798532099,
+        "telemetry.db_close_time_s": 0.2934536039829254,
+        "disk_usage.du_bytes": 9416826880
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "milvus",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.8,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r03_milvus_s00011",
+        "seed": 11,
+        "docker_image": "python:3.12-slim",
+        "milvus_version": "2.6.10"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "533.6MiB",
+        "phases.create_db.rss_after_mb": "533.9MiB",
+        "phases.create_db.rss_delta_mb": "264.0KiB",
+        "phases.create_index.rss_before_mb": "580.2MiB",
+        "phases.create_index.rss_after_mb": "581.0MiB",
+        "phases.create_index.rss_delta_mb": "788.0KiB",
+        "phases.ingest.rss_before_mb": "581.0MiB",
+        "phases.ingest.rss_after_mb": "2.9GiB",
+        "phases.ingest.rss_delta_mb": "2.4GiB",
+        "phases.close_db.rss_before_mb": "2.9GiB",
+        "phases.close_db.rss_after_mb": "2.9GiB",
+        "phases.close_db.rss_delta_mb": "-14082048.0B",
+        "db_size_mb": "8.8GiB",
+        "peak_rss_mb": "2.9GiB",
+        "disk_usage.du_bytes": "8.8GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "pgvector",
+      "run_label": "sweep11_r01_pgvector_s00001",
+      "seed": 1,
+      "du_bytes": 5702930432,
+      "du_human": "5.4G",
+      "result_file": "backend=pgvector_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r01_pgvector_s00001/results_sweep11_r01_pgvector_s00001.json",
+      "numeric_metrics": {
+        "run.total_time_s": 1375.559298226959,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 1.0,
+        "budget.split.server_fraction": 0.0,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 1,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.006149771041236818,
+        "phases.create_db.rss_before_mb": 211.13671875,
+        "phases.create_db.rss_after_mb": 228.31640625,
+        "phases.create_db.rss_delta_mb": 17.1796875,
+        "phases.ingest.time_sec": 173.6057859529974,
+        "phases.ingest.rss_before_mb": 247.07421875,
+        "phases.ingest.rss_after_mb": 3907.43359375,
+        "phases.ingest.rss_delta_mb": 3660.359375,
+        "phases.ingest.ingested": 1242391,
+        "phases.create_index.time_sec": 1200.1416073889704,
+        "phases.create_index.rss_before_mb": 3907.43359375,
+        "phases.create_index.rss_after_mb": 9048.20703125,
+        "phases.create_index.rss_delta_mb": 5140.7734375,
+        "phases.close_db.time_sec": 0.001955146959517151,
+        "phases.close_db.rss_before_mb": 9048.20703125,
+        "phases.close_db.rss_after_mb": 4845.16796875,
+        "phases.close_db.rss_delta_mb": -4203.0390625,
+        "db_size_mb": 5438.441979408264,
+        "peak_rss_mb": 9048.20703125,
+        "telemetry.db_create_time_s": 0.006149771041236818,
+        "telemetry.db_close_time_s": 0.001955146959517151,
+        "disk_usage.du_bytes": 5702930432
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "pgvector",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.0,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r01_pgvector_s00001",
+        "seed": 1,
+        "docker_image": "python:3.12-slim",
+        "postgres_version": "16.11 (Debian 16.11-1.pgdg12+1)"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "211.1MiB",
+        "phases.create_db.rss_after_mb": "228.3MiB",
+        "phases.create_db.rss_delta_mb": "17.2MiB",
+        "phases.ingest.rss_before_mb": "247.1MiB",
+        "phases.ingest.rss_after_mb": "3.8GiB",
+        "phases.ingest.rss_delta_mb": "3.6GiB",
+        "phases.create_index.rss_before_mb": "3.8GiB",
+        "phases.create_index.rss_after_mb": "8.8GiB",
+        "phases.create_index.rss_delta_mb": "5.0GiB",
+        "phases.close_db.rss_before_mb": "8.8GiB",
+        "phases.close_db.rss_after_mb": "4.7GiB",
+        "phases.close_db.rss_delta_mb": "-4407205888.0B",
+        "db_size_mb": "5.3GiB",
+        "peak_rss_mb": "8.8GiB",
+        "disk_usage.du_bytes": "5.3GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "pgvector",
+      "run_label": "sweep11_r02_pgvector_s00005",
+      "seed": 5,
+      "du_bytes": 5686140928,
+      "du_human": "5.3G",
+      "result_file": "backend=pgvector_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r02_pgvector_s00005/results_sweep11_r02_pgvector_s00005.json",
+      "numeric_metrics": {
+        "run.total_time_s": 1207.4015337660094,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 1.0,
+        "budget.split.server_fraction": 0.0,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 5,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.005265070009045303,
+        "phases.create_db.rss_before_mb": 211.546875,
+        "phases.create_db.rss_after_mb": 228.95703125,
+        "phases.create_db.rss_delta_mb": 17.41015625,
+        "phases.ingest.time_sec": 183.00065962201916,
+        "phases.ingest.rss_before_mb": 247.25,
+        "phases.ingest.rss_after_mb": 3893.13671875,
+        "phases.ingest.rss_delta_mb": 3645.88671875,
+        "phases.ingest.ingested": 1242391,
+        "phases.create_index.time_sec": 1022.3738357269904,
+        "phases.create_index.rss_before_mb": 3893.13671875,
+        "phases.create_index.rss_after_mb": 8817.26953125,
+        "phases.create_index.rss_delta_mb": 4924.1328125,
+        "phases.close_db.time_sec": 0.0022315079695545137,
+        "phases.close_db.rss_before_mb": 8817.26953125,
+        "phases.close_db.rss_after_mb": 4615.23046875,
+        "phases.close_db.rss_delta_mb": -4202.0390625,
+        "db_size_mb": 5438.426354408264,
+        "peak_rss_mb": 8817.26953125,
+        "telemetry.db_create_time_s": 0.005265070009045303,
+        "telemetry.db_close_time_s": 0.0022315079695545137,
+        "disk_usage.du_bytes": 5686140928
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "pgvector",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.0,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r02_pgvector_s00005",
+        "seed": 5,
+        "docker_image": "python:3.12-slim",
+        "postgres_version": "16.11 (Debian 16.11-1.pgdg12+1)"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "211.5MiB",
+        "phases.create_db.rss_after_mb": "229.0MiB",
+        "phases.create_db.rss_delta_mb": "17.4MiB",
+        "phases.ingest.rss_before_mb": "247.2MiB",
+        "phases.ingest.rss_after_mb": "3.8GiB",
+        "phases.ingest.rss_delta_mb": "3.6GiB",
+        "phases.create_index.rss_before_mb": "3.8GiB",
+        "phases.create_index.rss_after_mb": "8.6GiB",
+        "phases.create_index.rss_delta_mb": "4.8GiB",
+        "phases.close_db.rss_before_mb": "8.6GiB",
+        "phases.close_db.rss_after_mb": "4.5GiB",
+        "phases.close_db.rss_delta_mb": "-4406157312.0B",
+        "db_size_mb": "5.3GiB",
+        "peak_rss_mb": "8.6GiB",
+        "disk_usage.du_bytes": "5.3GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "pgvector",
+      "run_label": "sweep11_r03_pgvector_s00009",
+      "seed": 9,
+      "du_bytes": 5702860800,
+      "du_human": "5.4G",
+      "result_file": "backend=pgvector_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r03_pgvector_s00009/results_sweep11_r03_pgvector_s00009.json",
+      "numeric_metrics": {
+        "run.total_time_s": 1356.6183564449893,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 1.0,
+        "budget.split.server_fraction": 0.0,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 9,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.0063539799884893,
+        "phases.create_db.rss_before_mb": 212.0234375,
+        "phases.create_db.rss_after_mb": 229.66796875,
+        "phases.create_db.rss_delta_mb": 17.64453125,
+        "phases.ingest.time_sec": 157.22524627897656,
+        "phases.ingest.rss_before_mb": 247.40234375,
+        "phases.ingest.rss_after_mb": 3858.6875,
+        "phases.ingest.rss_delta_mb": 3611.28515625,
+        "phases.ingest.ingested": 1242391,
+        "phases.create_index.time_sec": 1194.7619127180078,
+        "phases.create_index.rss_before_mb": 3858.6875,
+        "phases.create_index.rss_after_mb": 8861.14453125,
+        "phases.create_index.rss_delta_mb": 5002.45703125,
+        "phases.close_db.time_sec": 0.0019546060357242823,
+        "phases.close_db.rss_before_mb": 8861.14453125,
+        "phases.close_db.rss_after_mb": 4658.2890625,
+        "phases.close_db.rss_delta_mb": -4202.85546875,
+        "db_size_mb": 5438.434166908264,
+        "peak_rss_mb": 8861.14453125,
+        "telemetry.db_create_time_s": 0.0063539799884893,
+        "telemetry.db_close_time_s": 0.0019546060357242823,
+        "disk_usage.du_bytes": 5702860800
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "pgvector",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.0,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r03_pgvector_s00009",
+        "seed": 9,
+        "docker_image": "python:3.12-slim",
+        "postgres_version": "16.11 (Debian 16.11-1.pgdg12+1)"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "212.0MiB",
+        "phases.create_db.rss_after_mb": "229.7MiB",
+        "phases.create_db.rss_delta_mb": "17.6MiB",
+        "phases.ingest.rss_before_mb": "247.4MiB",
+        "phases.ingest.rss_after_mb": "3.8GiB",
+        "phases.ingest.rss_delta_mb": "3.5GiB",
+        "phases.create_index.rss_before_mb": "3.8GiB",
+        "phases.create_index.rss_after_mb": "8.7GiB",
+        "phases.create_index.rss_delta_mb": "4.9GiB",
+        "phases.close_db.rss_before_mb": "8.7GiB",
+        "phases.close_db.rss_after_mb": "4.5GiB",
+        "phases.close_db.rss_delta_mb": "-4407013376.0B",
+        "db_size_mb": "5.3GiB",
+        "peak_rss_mb": "8.7GiB",
+        "disk_usage.du_bytes": "5.3GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "qdrant",
+      "run_label": "sweep11_r01_qdrant_s00002",
+      "seed": 2,
+      "du_bytes": 2144157696,
+      "du_human": "2.0G",
+      "result_file": "backend=qdrant_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r01_qdrant_s00002/results_sweep11_r01_qdrant_s00002.json",
+      "numeric_metrics": {
+        "run.total_time_s": 318.7564046329935,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 0.2,
+        "budget.split.server_fraction": 0.8,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 2,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.18015136703616008,
+        "phases.create_db.rss_before_mb": 167.375,
+        "phases.create_db.rss_after_mb": 171.27734375,
+        "phases.create_db.rss_delta_mb": 3.90234375,
+        "phases.create_index.time_sec": 0.6248432550346479,
+        "phases.create_index.rss_before_mb": 171.27734375,
+        "phases.create_index.rss_after_mb": 185.07421875,
+        "phases.create_index.rss_delta_mb": 13.796875,
+        "phases.ingest.time_sec": 314.9771603560075,
+        "phases.ingest.rss_before_mb": 185.078125,
+        "phases.ingest.rss_after_mb": 3451.75390625,
+        "phases.ingest.rss_delta_mb": 3266.67578125,
+        "phases.ingest.ingested": 1242391,
+        "phases.close_db.time_sec": 0.057628095033578575,
+        "phases.close_db.rss_before_mb": 3451.8828125,
+        "phases.close_db.rss_after_mb": 3451.9375,
+        "phases.close_db.rss_delta_mb": 0.0546875,
+        "db_size_mb": 2507.078399658203,
+        "peak_rss_mb": 3451.9375,
+        "telemetry.db_create_time_s": 0.18015136703616008,
+        "telemetry.db_close_time_s": 0.057628095033578575,
+        "disk_usage.du_bytes": 2144157696
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "qdrant",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.8,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r01_qdrant_s00002",
+        "seed": 2,
+        "docker_image": "python:3.12-slim",
+        "qdrant_version": "1.11.3"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "167.4MiB",
+        "phases.create_db.rss_after_mb": "171.3MiB",
+        "phases.create_db.rss_delta_mb": "3.9MiB",
+        "phases.create_index.rss_before_mb": "171.3MiB",
+        "phases.create_index.rss_after_mb": "185.1MiB",
+        "phases.create_index.rss_delta_mb": "13.8MiB",
+        "phases.ingest.rss_before_mb": "185.1MiB",
+        "phases.ingest.rss_after_mb": "3.4GiB",
+        "phases.ingest.rss_delta_mb": "3.2GiB",
+        "phases.close_db.rss_before_mb": "3.4GiB",
+        "phases.close_db.rss_after_mb": "3.4GiB",
+        "phases.close_db.rss_delta_mb": "56.0KiB",
+        "db_size_mb": "2.4GiB",
+        "peak_rss_mb": "3.4GiB",
+        "disk_usage.du_bytes": "2.0GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "qdrant",
+      "run_label": "sweep11_r02_qdrant_s00006",
+      "seed": 6,
+      "du_bytes": 2142027776,
+      "du_human": "2.0G",
+      "result_file": "backend=qdrant_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r02_qdrant_s00006/results_sweep11_r02_qdrant_s00006.json",
+      "numeric_metrics": {
+        "run.total_time_s": 330.9824255029671,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 0.2,
+        "budget.split.server_fraction": 0.8,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 6,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.16971203399589285,
+        "phases.create_db.rss_before_mb": 170.2734375,
+        "phases.create_db.rss_after_mb": 174.171875,
+        "phases.create_db.rss_delta_mb": 3.8984375,
+        "phases.create_index.time_sec": 0.5320952210458927,
+        "phases.create_index.rss_before_mb": 174.171875,
+        "phases.create_index.rss_after_mb": 187.21484375,
+        "phases.create_index.rss_delta_mb": 13.04296875,
+        "phases.ingest.time_sec": 327.34833440498915,
+        "phases.ingest.rss_before_mb": 187.21875,
+        "phases.ingest.rss_after_mb": 3518.25390625,
+        "phases.ingest.rss_delta_mb": 3331.03515625,
+        "phases.ingest.ingested": 1242391,
+        "phases.close_db.time_sec": 0.05319060100009665,
+        "phases.close_db.rss_before_mb": 3517.30078125,
+        "phases.close_db.rss_after_mb": 3517.34765625,
+        "phases.close_db.rss_delta_mb": 0.046875,
+        "db_size_mb": 2529.937858581543,
+        "peak_rss_mb": 3518.25390625,
+        "telemetry.db_create_time_s": 0.16971203399589285,
+        "telemetry.db_close_time_s": 0.05319060100009665,
+        "disk_usage.du_bytes": 2142027776
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "qdrant",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.8,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r02_qdrant_s00006",
+        "seed": 6,
+        "docker_image": "python:3.12-slim",
+        "qdrant_version": "1.11.3"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "170.3MiB",
+        "phases.create_db.rss_after_mb": "174.2MiB",
+        "phases.create_db.rss_delta_mb": "3.9MiB",
+        "phases.create_index.rss_before_mb": "174.2MiB",
+        "phases.create_index.rss_after_mb": "187.2MiB",
+        "phases.create_index.rss_delta_mb": "13.0MiB",
+        "phases.ingest.rss_before_mb": "187.2MiB",
+        "phases.ingest.rss_after_mb": "3.4GiB",
+        "phases.ingest.rss_delta_mb": "3.3GiB",
+        "phases.close_db.rss_before_mb": "3.4GiB",
+        "phases.close_db.rss_after_mb": "3.4GiB",
+        "phases.close_db.rss_delta_mb": "48.0KiB",
+        "db_size_mb": "2.5GiB",
+        "peak_rss_mb": "3.4GiB",
+        "disk_usage.du_bytes": "2.0GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "qdrant",
+      "run_label": "sweep11_r03_qdrant_s00010",
+      "seed": 10,
+      "du_bytes": 2147373056,
+      "du_human": "2.0G",
+      "result_file": "backend=qdrant_dataset=stackoverflow-medium_label=all_heap=13107m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=5000_count=1242391_run=sweep11_r03_qdrant_s00010/results_sweep11_r03_qdrant_s00010.json",
+      "numeric_metrics": {
+        "run.total_time_s": 345.5233271170291,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 8,
+        "budget.total.threads_input": 8,
+        "budget.split.client_fraction": 0.2,
+        "budget.split.server_fraction": 0.8,
+        "dataset.dim": 384,
+        "dataset.rows": 1242391,
+        "config.count": 1242391,
+        "config.max_connections": 16,
+        "config.beam_width": 100,
+        "config.batch_size": 5000,
+        "config.seed": 10,
+        "config.pg.port": 6543,
+        "config.qdrant.hnsw_m": 16,
+        "config.qdrant.hnsw_ef_construct": 100,
+        "config.milvus.port": 19530,
+        "config.milvus.hnsw_m": 16,
+        "config.milvus.hnsw_ef_construct": 100,
+        "phases.create_db.time_sec": 0.17607713397592306,
+        "phases.create_db.rss_before_mb": 169.19921875,
+        "phases.create_db.rss_after_mb": 173.09765625,
+        "phases.create_db.rss_delta_mb": 3.8984375,
+        "phases.create_index.time_sec": 0.7532425029785372,
+        "phases.create_index.rss_before_mb": 173.09765625,
+        "phases.create_index.rss_after_mb": 186.83203125,
+        "phases.create_index.rss_delta_mb": 13.734375,
+        "phases.ingest.time_sec": 340.8538020129781,
+        "phases.ingest.rss_before_mb": 186.8359375,
+        "phases.ingest.rss_after_mb": 3114.21484375,
+        "phases.ingest.rss_delta_mb": 2927.37890625,
+        "phases.ingest.ingested": 1242391,
+        "phases.close_db.time_sec": 0.03880481596570462,
+        "phases.close_db.rss_before_mb": 3114.27734375,
+        "phases.close_db.rss_after_mb": 3103.75,
+        "phases.close_db.rss_delta_mb": -10.52734375,
+        "db_size_mb": 2108.2969789505005,
+        "peak_rss_mb": 3114.21484375,
+        "telemetry.db_create_time_s": 0.17607713397592306,
+        "telemetry.db_close_time_s": 0.03880481596570462,
+        "disk_usage.du_bytes": 2147373056
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "config.store_vectors_in_graph": false,
+        "config.add_hierarchy": true
+      },
+      "parameters": {
+        "backend": "qdrant",
+        "dataset": "stackoverflow-medium",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 1242391,
+        "count": 1242391,
+        "threads": 8,
+        "mem_limit": "16g",
+        "cpus": "8",
+        "server_fraction": 0.8,
+        "batch_size": 5000,
+        "max_connections": 16,
+        "beam_width": 100,
+        "quantization": "NONE",
+        "store_vectors_in_graph": false,
+        "add_hierarchy": true,
+        "heap": "13107m",
+        "run_label": "sweep11_r03_qdrant_s00010",
+        "seed": 10,
+        "docker_image": "python:3.12-slim",
+        "qdrant_version": "1.11.3"
+      },
+      "human_readable_metrics": {
+        "phases.create_db.rss_before_mb": "169.2MiB",
+        "phases.create_db.rss_after_mb": "173.1MiB",
+        "phases.create_db.rss_delta_mb": "3.9MiB",
+        "phases.create_index.rss_before_mb": "173.1MiB",
+        "phases.create_index.rss_after_mb": "186.8MiB",
+        "phases.create_index.rss_delta_mb": "13.7MiB",
+        "phases.ingest.rss_before_mb": "186.8MiB",
+        "phases.ingest.rss_after_mb": "3.0GiB",
+        "phases.ingest.rss_delta_mb": "2.9GiB",
+        "phases.close_db.rss_before_mb": "3.0GiB",
+        "phases.close_db.rss_after_mb": "3.0GiB",
+        "phases.close_db.rss_delta_mb": "-11038720.0B",
+        "db_size_mb": "2.1GiB",
+        "peak_rss_mb": "3.0GiB",
+        "disk_usage.du_bytes": "2.0GiB"
+      }
+    }
+  ],
+  "by_backend": [
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "arcadedb",
+      "runs": 3,
+      "numeric_metrics": {
+        "budget.split.client_fraction": {
+          "count": 3,
+          "mean": 1.0,
+          "stddev": 0.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "budget.split.server_fraction": {
+          "count": 3,
+          "mean": 0.0,
+          "stddev": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "budget.total.threads_input": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "config.batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "config.beam_width": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.count": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "config.max_connections": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.milvus.hnsw_ef_construct": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.milvus.hnsw_m": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.milvus.port": {
+          "count": 3,
+          "mean": 19530,
+          "stddev": 0.0,
+          "min": 19530,
+          "max": 19530
+        },
+        "config.pg.port": {
+          "count": 3,
+          "mean": 6543,
+          "stddev": 0.0,
+          "min": 6543,
+          "max": 6543
+        },
+        "config.qdrant.hnsw_ef_construct": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.qdrant.hnsw_m": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.seed": {
+          "count": 3,
+          "mean": 4,
+          "stddev": 3.265986323710904,
+          "min": 0,
+          "max": 8
+        },
+        "dataset.dim": {
+          "count": 3,
+          "mean": 384,
+          "stddev": 0.0,
+          "min": 384,
+          "max": 384
+        },
+        "dataset.rows": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "db_size_mb": {
+          "count": 3,
+          "mean": 2780.9411125183105,
+          "stddev": 0.0,
+          "min": 2780.9411125183105,
+          "max": 2780.9411125183105,
+          "mean_human": "2.7GiB",
+          "min_human": "2.7GiB",
+          "max_human": "2.7GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 2916054357.3333335,
+          "stddev": 26824.543852391766,
+          "min": 2916020224,
+          "max": 2916085760,
+          "mean_human": "2.7GiB",
+          "min_human": "2.7GiB",
+          "max_human": "2.7GiB"
+        },
+        "environment.logical_cpu_count": {
+          "count": 3,
+          "mean": 32,
+          "stddev": 0.0,
+          "min": 32,
+          "max": 32
+        },
+        "environment.physical_cpu_count": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "environment.threads_limit": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "peak_rss_mb": {
+          "count": 3,
+          "mean": 8998.563802083334,
+          "stddev": 1084.6139587416371,
+          "min": 7556.31640625,
+          "max": 10171.9296875,
+          "mean_human": "8.8GiB",
+          "min_human": "7.4GiB",
+          "max_human": "9.9GiB"
+        },
+        "phases.close_db.rss_after_mb": {
+          "count": 3,
+          "mean": 8998.501302083334,
+          "stddev": 1084.6139587416371,
+          "min": 7556.25390625,
+          "max": 10171.8671875,
+          "mean_human": "8.8GiB",
+          "min_human": "7.4GiB",
+          "max_human": "9.9GiB"
+        },
+        "phases.close_db.rss_before_mb": {
+          "count": 3,
+          "mean": 8998.563802083334,
+          "stddev": 1084.6139587416371,
+          "min": 7556.31640625,
+          "max": 10171.9296875,
+          "mean_human": "8.8GiB",
+          "min_human": "7.4GiB",
+          "max_human": "9.9GiB"
+        },
+        "phases.close_db.rss_delta_mb": {
+          "count": 3,
+          "mean": -0.0625,
+          "stddev": 0.0,
+          "min": -0.0625,
+          "max": -0.0625,
+          "mean_human": "-65536.0B",
+          "min_human": "-65536.0B",
+          "max_human": "-65536.0B"
+        },
+        "phases.close_db.time_sec": {
+          "count": 3,
+          "mean": 0.045538687671069056,
+          "stddev": 0.014046566358996334,
+          "min": 0.035236208990681916,
+          "max": 0.06539887801045552
+        },
+        "phases.create_db.rss_after_mb": {
+          "count": 3,
+          "mean": 187.75390625,
+          "stddev": 1.4195443639322707,
+          "min": 185.8046875,
+          "max": 189.14453125,
+          "mean_human": "187.8MiB",
+          "min_human": "185.8MiB",
+          "max_human": "189.1MiB"
+        },
+        "phases.create_db.rss_before_mb": {
+          "count": 3,
+          "mean": 50.311197916666664,
+          "stddev": 0.06707941079370447,
+          "min": 50.2265625,
+          "max": 50.390625,
+          "mean_human": "50.3MiB",
+          "min_human": "50.2MiB",
+          "max_human": "50.4MiB"
+        },
+        "phases.create_db.rss_delta_mb": {
+          "count": 3,
+          "mean": 137.44270833333334,
+          "stddev": 1.4661203927632918,
+          "min": 135.4140625,
+          "max": 138.828125,
+          "mean_human": "137.4MiB",
+          "min_human": "135.4MiB",
+          "max_human": "138.8MiB"
+        },
+        "phases.create_db.time_sec": {
+          "count": 3,
+          "mean": 0.43271181132877246,
+          "stddev": 0.017420510020891553,
+          "min": 0.41576824797084555,
+          "max": 0.4566722339950502
+        },
+        "phases.create_index.rss_after_mb": {
+          "count": 3,
+          "mean": 8998.563802083334,
+          "stddev": 1084.6139587416371,
+          "min": 7556.31640625,
+          "max": 10171.9296875,
+          "mean_human": "8.8GiB",
+          "min_human": "7.4GiB",
+          "max_human": "9.9GiB"
+        },
+        "phases.create_index.rss_before_mb": {
+          "count": 3,
+          "mean": 4899.404947916667,
+          "stddev": 97.23059266693532,
+          "min": 4784.3515625,
+          "max": 5022.14453125,
+          "mean_human": "4.8GiB",
+          "min_human": "4.7GiB",
+          "max_human": "4.9GiB"
+        },
+        "phases.create_index.rss_delta_mb": {
+          "count": 3,
+          "mean": 4099.158854166667,
+          "stddev": 1153.469299222389,
+          "min": 2534.171875,
+          "max": 5280.2109375,
+          "mean_human": "4.0GiB",
+          "min_human": "2.5GiB",
+          "max_human": "5.2GiB"
+        },
+        "phases.create_index.time_sec": {
+          "count": 3,
+          "mean": 2362.00969029833,
+          "stddev": 98.8097774841653,
+          "min": 2256.757520766987,
+          "max": 2494.238185808994
+        },
+        "phases.ingest.ingested": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "phases.ingest.rss_after_mb": {
+          "count": 3,
+          "mean": 4899.404947916667,
+          "stddev": 97.23059266693532,
+          "min": 4784.3515625,
+          "max": 5022.14453125,
+          "mean_human": "4.8GiB",
+          "min_human": "4.7GiB",
+          "max_human": "4.9GiB"
+        },
+        "phases.ingest.rss_before_mb": {
+          "count": 3,
+          "mean": 187.75520833333334,
+          "stddev": 1.4208205415479895,
+          "min": 185.8046875,
+          "max": 189.1484375,
+          "mean_human": "187.8MiB",
+          "min_human": "185.8MiB",
+          "max_human": "189.1MiB"
+        },
+        "phases.ingest.rss_delta_mb": {
+          "count": 3,
+          "mean": 4711.649739583333,
+          "stddev": 98.61607584554709,
+          "min": 4595.203125,
+          "max": 4836.33984375,
+          "mean_human": "4.6GiB",
+          "min_human": "4.5GiB",
+          "max_human": "4.7GiB"
+        },
+        "phases.ingest.time_sec": {
+          "count": 3,
+          "mean": 44.27544991666218,
+          "stddev": 0.6547964471039035,
+          "min": 43.51883713999996,
+          "max": 45.116131055983715
+        },
+        "run.total_time_s": {
+          "count": 3,
+          "mean": 2406.797407887973,
+          "stddev": 98.5503752746144,
+          "min": 2302.367215405975,
+          "max": 2538.943823858979
+        },
+        "telemetry.db_close_time_s": {
+          "count": 3,
+          "mean": 0.045538687671069056,
+          "stddev": 0.014046566358996334,
+          "min": 0.035236208990681916,
+          "max": 0.06539887801045552
+        },
+        "telemetry.db_create_time_s": {
+          "count": 3,
+          "mean": 0.43271181132877246,
+          "stddev": 0.017420510020891553,
+          "min": 0.41576824797084555,
+          "max": 0.4566722339950502
+        }
+      },
+      "boolean_metrics": {
+        "config.add_hierarchy": {
+          "count": 3,
+          "true_count": 3,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "config.store_vectors_in_graph": {
+          "count": 3,
+          "true_count": 0,
+          "false_count": 3,
+          "true_ratio": 0.0
+        },
+        "environment.is_running_in_docker": {
+          "count": 3,
+          "true_count": 3,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "milvus",
+      "runs": 3,
+      "numeric_metrics": {
+        "budget.split.client_fraction": {
+          "count": 3,
+          "mean": 0.2,
+          "stddev": 0.0,
+          "min": 0.2,
+          "max": 0.2
+        },
+        "budget.split.server_fraction": {
+          "count": 3,
+          "mean": 0.8,
+          "stddev": 0.0,
+          "min": 0.8,
+          "max": 0.8
+        },
+        "budget.total.threads_input": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "config.batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "config.beam_width": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.count": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "config.max_connections": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.milvus.hnsw_ef_construct": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.milvus.hnsw_m": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.milvus.port": {
+          "count": 3,
+          "mean": 19530,
+          "stddev": 0.0,
+          "min": 19530,
+          "max": 19530
+        },
+        "config.pg.port": {
+          "count": 3,
+          "mean": 6543,
+          "stddev": 0.0,
+          "min": 6543,
+          "max": 6543
+        },
+        "config.qdrant.hnsw_ef_construct": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.qdrant.hnsw_m": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.seed": {
+          "count": 3,
+          "mean": 7,
+          "stddev": 3.265986323710904,
+          "min": 3,
+          "max": 11
+        },
+        "dataset.dim": {
+          "count": 3,
+          "mean": 384,
+          "stddev": 0.0,
+          "min": 384,
+          "max": 384
+        },
+        "dataset.rows": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "db_size_mb": {
+          "count": 3,
+          "mean": 8836.388527870178,
+          "stddev": 199.70911293287244,
+          "min": 8554.483144760132,
+          "max": 8992.261370658875,
+          "mean_human": "8.6GiB",
+          "min_human": "8.4GiB",
+          "max_human": "8.8GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 8229718698.666667,
+          "stddev": 841098447.7574333,
+          "min": 7570968576,
+          "max": 9416826880,
+          "mean_human": "7.7GiB",
+          "min_human": "7.1GiB",
+          "max_human": "8.8GiB"
+        },
+        "environment.logical_cpu_count": {
+          "count": 3,
+          "mean": 32,
+          "stddev": 0.0,
+          "min": 32,
+          "max": 32
+        },
+        "environment.physical_cpu_count": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "environment.threads_limit": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "peak_rss_mb": {
+          "count": 3,
+          "mean": 2993.2838541666665,
+          "stddev": 237.48310466077757,
+          "min": 2698.73828125,
+          "max": 3280.3046875,
+          "mean_human": "2.9GiB",
+          "min_human": "2.6GiB",
+          "max_human": "3.2GiB"
+        },
+        "phases.close_db.rss_after_mb": {
+          "count": 3,
+          "mean": 2979.6276041666665,
+          "stddev": 237.83543024027568,
+          "min": 2698.73828125,
+          "max": 3280.3046875,
+          "mean_human": "2.9GiB",
+          "min_human": "2.6GiB",
+          "max_human": "3.2GiB"
+        },
+        "phases.close_db.rss_before_mb": {
+          "count": 3,
+          "mean": 2982.87890625,
+          "stddev": 236.02068932142456,
+          "min": 2698.73828125,
+          "max": 3276.62890625,
+          "mean_human": "2.9GiB",
+          "min_human": "2.6GiB",
+          "max_human": "3.2GiB"
+        },
+        "phases.close_db.rss_delta_mb": {
+          "count": 3,
+          "mean": -3.2513020833333335,
+          "stddev": 7.3519833703621496,
+          "min": -13.4296875,
+          "max": 3.67578125,
+          "mean_human": "-3409237.3B",
+          "min_human": "-14082048.0B",
+          "max_human": "3.7MiB"
+        },
+        "phases.close_db.time_sec": {
+          "count": 3,
+          "mean": 0.274747601011768,
+          "stddev": 0.013267117004298685,
+          "min": 0.264134171011392,
+          "max": 0.2934536039829254
+        },
+        "phases.create_db.rss_after_mb": {
+          "count": 3,
+          "mean": 532.1705729166666,
+          "stddev": 7.151786081974655,
+          "min": 522.69140625,
+          "max": 539.96484375,
+          "mean_human": "532.2MiB",
+          "min_human": "522.7MiB",
+          "max_human": "540.0MiB"
+        },
+        "phases.create_db.rss_before_mb": {
+          "count": 3,
+          "mean": 531.9010416666666,
+          "stddev": 7.186188125672801,
+          "min": 522.375,
+          "max": 539.73046875,
+          "mean_human": "531.9MiB",
+          "min_human": "522.4MiB",
+          "max_human": "539.7MiB"
+        },
+        "phases.create_db.rss_delta_mb": {
+          "count": 3,
+          "mean": 0.26953125,
+          "stddev": 0.034499065884093155,
+          "min": 0.234375,
+          "max": 0.31640625,
+          "mean_human": "276.0KiB",
+          "min_human": "240.0KiB",
+          "max_human": "324.0KiB"
+        },
+        "phases.create_db.time_sec": {
+          "count": 3,
+          "mean": 0.2106810649856925,
+          "stddev": 0.0024728258869225425,
+          "min": 0.20753312797751278,
+          "max": 0.21357418899424374
+        },
+        "phases.create_index.rss_after_mb": {
+          "count": 3,
+          "mean": 576.8255208333334,
+          "stddev": 9.129423187147955,
+          "min": 564.1640625,
+          "max": 585.34375,
+          "mean_human": "576.8MiB",
+          "min_human": "564.2MiB",
+          "max_human": "585.3MiB"
+        },
+        "phases.create_index.rss_before_mb": {
+          "count": 3,
+          "mean": 575.6263020833334,
+          "stddev": 9.312120582082422,
+          "min": 562.64453125,
+          "max": 584.03515625,
+          "mean_human": "575.6MiB",
+          "min_human": "562.6MiB",
+          "max_human": "584.0MiB"
+        },
+        "phases.create_index.rss_delta_mb": {
+          "count": 3,
+          "mean": 1.19921875,
+          "stddev": 0.3158028583032459,
+          "min": 0.76953125,
+          "max": 1.51953125,
+          "mean_human": "1.2MiB",
+          "min_human": "788.0KiB",
+          "max_human": "1.5MiB"
+        },
+        "phases.create_index.time_sec": {
+          "count": 3,
+          "mean": 0.8144856839790009,
+          "stddev": 0.07616197113369919,
+          "min": 0.7435295779723674,
+          "max": 0.92014131200267
+        },
+        "phases.ingest.ingested": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "phases.ingest.rss_after_mb": {
+          "count": 3,
+          "mean": 2991.19921875,
+          "stddev": 235.00368158148547,
+          "min": 2698.6953125,
+          "max": 3274.09375,
+          "mean_human": "2.9GiB",
+          "min_human": "2.6GiB",
+          "max_human": "3.2GiB"
+        },
+        "phases.ingest.rss_before_mb": {
+          "count": 3,
+          "mean": 576.8372395833334,
+          "stddev": 9.119213667613101,
+          "min": 564.19140625,
+          "max": 585.3515625,
+          "mean_human": "576.8MiB",
+          "min_human": "564.2MiB",
+          "max_human": "585.4MiB"
+        },
+        "phases.ingest.rss_delta_mb": {
+          "count": 3,
+          "mean": 2414.3619791666665,
+          "stddev": 226.29998284140976,
+          "min": 2134.50390625,
+          "max": 2688.7421875,
+          "mean_human": "2.4GiB",
+          "min_human": "2.1GiB",
+          "max_human": "2.6GiB"
+        },
+        "phases.ingest.time_sec": {
+          "count": 3,
+          "mean": 221.97249753965298,
+          "stddev": 39.40906379137191,
+          "min": 166.24497548496583,
+          "max": 250.50253748899559
+        },
+        "run.total_time_s": {
+          "count": 3,
+          "mean": 240.06702653101334,
+          "stddev": 40.18701598928514,
+          "min": 183.25804369302932,
+          "max": 269.90294481499586
+        },
+        "telemetry.db_close_time_s": {
+          "count": 3,
+          "mean": 0.274747601011768,
+          "stddev": 0.013267117004298685,
+          "min": 0.264134171011392,
+          "max": 0.2934536039829254
+        },
+        "telemetry.db_create_time_s": {
+          "count": 3,
+          "mean": 0.2106810649856925,
+          "stddev": 0.0024728258869225425,
+          "min": 0.20753312797751278,
+          "max": 0.21357418899424374
+        }
+      },
+      "boolean_metrics": {
+        "config.add_hierarchy": {
+          "count": 3,
+          "true_count": 3,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "config.store_vectors_in_graph": {
+          "count": 3,
+          "true_count": 0,
+          "false_count": 3,
+          "true_ratio": 0.0
+        },
+        "environment.is_running_in_docker": {
+          "count": 3,
+          "true_count": 3,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "pgvector",
+      "runs": 3,
+      "numeric_metrics": {
+        "budget.split.client_fraction": {
+          "count": 3,
+          "mean": 1.0,
+          "stddev": 0.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "budget.split.server_fraction": {
+          "count": 3,
+          "mean": 0.0,
+          "stddev": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "budget.total.threads_input": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "config.batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "config.beam_width": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.count": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "config.max_connections": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.milvus.hnsw_ef_construct": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.milvus.hnsw_m": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.milvus.port": {
+          "count": 3,
+          "mean": 19530,
+          "stddev": 0.0,
+          "min": 19530,
+          "max": 19530
+        },
+        "config.pg.port": {
+          "count": 3,
+          "mean": 6543,
+          "stddev": 0.0,
+          "min": 6543,
+          "max": 6543
+        },
+        "config.qdrant.hnsw_ef_construct": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.qdrant.hnsw_m": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.seed": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 3.265986323710904,
+          "min": 1,
+          "max": 9
+        },
+        "dataset.dim": {
+          "count": 3,
+          "mean": 384,
+          "stddev": 0.0,
+          "min": 384,
+          "max": 384
+        },
+        "dataset.rows": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "db_size_mb": {
+          "count": 3,
+          "mean": 5438.434166908264,
+          "stddev": 0.00637887953849786,
+          "min": 5438.426354408264,
+          "max": 5438.441979408264,
+          "mean_human": "5.3GiB",
+          "min_human": "5.3GiB",
+          "max_human": "5.3GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 5697310720,
+          "stddev": 7898286.82463499,
+          "min": 5686140928,
+          "max": 5702930432,
+          "mean_human": "5.3GiB",
+          "min_human": "5.3GiB",
+          "max_human": "5.3GiB"
+        },
+        "environment.logical_cpu_count": {
+          "count": 3,
+          "mean": 32,
+          "stddev": 0.0,
+          "min": 32,
+          "max": 32
+        },
+        "environment.physical_cpu_count": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "environment.threads_limit": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "peak_rss_mb": {
+          "count": 3,
+          "mean": 8908.873697916666,
+          "stddev": 100.13852818165887,
+          "min": 8817.26953125,
+          "max": 9048.20703125,
+          "mean_human": "8.7GiB",
+          "min_human": "8.6GiB",
+          "max_human": "8.8GiB"
+        },
+        "phases.close_db.rss_after_mb": {
+          "count": 3,
+          "mean": 4706.229166666667,
+          "stddev": 99.80482175124152,
+          "min": 4615.23046875,
+          "max": 4845.16796875,
+          "mean_human": "4.6GiB",
+          "min_human": "4.5GiB",
+          "max_human": "4.7GiB"
+        },
+        "phases.close_db.rss_before_mb": {
+          "count": 3,
+          "mean": 8908.873697916666,
+          "stddev": 100.13852818165887,
+          "min": 8817.26953125,
+          "max": 9048.20703125,
+          "mean_human": "8.7GiB",
+          "min_human": "8.6GiB",
+          "max_human": "8.8GiB"
+        },
+        "phases.close_db.rss_delta_mb": {
+          "count": 3,
+          "mean": -4202.64453125,
+          "stddev": 0.4346423600154404,
+          "min": -4203.0390625,
+          "max": -4202.0390625,
+          "mean_human": "-4406792192.0B",
+          "min_human": "-4407205888.0B",
+          "max_human": "-4406157312.0B"
+        },
+        "phases.close_db.time_sec": {
+          "count": 3,
+          "mean": 0.0020470869882653155,
+          "stddev": 0.0001304055134427234,
+          "min": 0.0019546060357242823,
+          "max": 0.0022315079695545137
+        },
+        "phases.create_db.rss_after_mb": {
+          "count": 3,
+          "mean": 228.98046875,
+          "stddev": 0.5520219108913763,
+          "min": 228.31640625,
+          "max": 229.66796875,
+          "mean_human": "229.0MiB",
+          "min_human": "228.3MiB",
+          "max_human": "229.7MiB"
+        },
+        "phases.create_db.rss_before_mb": {
+          "count": 3,
+          "mean": 211.56901041666666,
+          "stddev": 0.3623396361644195,
+          "min": 211.13671875,
+          "max": 212.0234375,
+          "mean_human": "211.6MiB",
+          "min_human": "211.1MiB",
+          "max_human": "212.0MiB"
+        },
+        "phases.create_db.rss_delta_mb": {
+          "count": 3,
+          "mean": 17.411458333333332,
+          "stddev": 0.18977389975840694,
+          "min": 17.1796875,
+          "max": 17.64453125,
+          "mean_human": "17.4MiB",
+          "min_human": "17.2MiB",
+          "max_human": "17.6MiB"
+        },
+        "phases.create_db.time_sec": {
+          "count": 3,
+          "mean": 0.00592294034625714,
+          "stddev": 0.00047259592251866657,
+          "min": 0.005265070009045303,
+          "max": 0.0063539799884893
+        },
+        "phases.create_index.rss_after_mb": {
+          "count": 3,
+          "mean": 8908.873697916666,
+          "stddev": 100.13852818165887,
+          "min": 8817.26953125,
+          "max": 9048.20703125,
+          "mean_human": "8.7GiB",
+          "min_human": "8.6GiB",
+          "max_human": "8.8GiB"
+        },
+        "phases.create_index.rss_before_mb": {
+          "count": 3,
+          "mean": 3886.4192708333335,
+          "stddev": 20.459529057072555,
+          "min": 3858.6875,
+          "max": 3907.43359375,
+          "mean_human": "3.8GiB",
+          "min_human": "3.8GiB",
+          "max_human": "3.8GiB"
+        },
+        "phases.create_index.rss_delta_mb": {
+          "count": 3,
+          "mean": 5022.454427083333,
+          "stddev": 89.56640731950017,
+          "min": 4924.1328125,
+          "max": 5140.7734375,
+          "mean_human": "4.9GiB",
+          "min_human": "4.8GiB",
+          "max_human": "5.0GiB"
+        },
+        "phases.create_index.time_sec": {
+          "count": 3,
+          "mean": 1139.0924519446562,
+          "stddev": 82.56174177552728,
+          "min": 1022.3738357269904,
+          "max": 1200.1416073889704
+        },
+        "phases.ingest.ingested": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "phases.ingest.rss_after_mb": {
+          "count": 3,
+          "mean": 3886.4192708333335,
+          "stddev": 20.459529057072555,
+          "min": 3858.6875,
+          "max": 3907.43359375,
+          "mean_human": "3.8GiB",
+          "min_human": "3.8GiB",
+          "max_human": "3.8GiB"
+        },
+        "phases.ingest.rss_before_mb": {
+          "count": 3,
+          "mean": 247.2421875,
+          "stddev": 0.13407033048226963,
+          "min": 247.07421875,
+          "max": 247.40234375,
+          "mean_human": "247.2MiB",
+          "min_human": "247.1MiB",
+          "max_human": "247.4MiB"
+        },
+        "phases.ingest.rss_delta_mb": {
+          "count": 3,
+          "mean": 3639.1770833333335,
+          "stddev": 20.58857518219192,
+          "min": 3611.28515625,
+          "max": 3660.359375,
+          "mean_human": "3.6GiB",
+          "min_human": "3.5GiB",
+          "max_human": "3.6GiB"
+        },
+        "phases.ingest.time_sec": {
+          "count": 3,
+          "mean": 171.2772306179977,
+          "stddev": 10.650809381209527,
+          "min": 157.22524627897656,
+          "max": 183.00065962201916
+        },
+        "run.total_time_s": {
+          "count": 3,
+          "mean": 1313.1930628126527,
+          "stddev": 75.20450133875879,
+          "min": 1207.4015337660094,
+          "max": 1375.559298226959
+        },
+        "telemetry.db_close_time_s": {
+          "count": 3,
+          "mean": 0.0020470869882653155,
+          "stddev": 0.0001304055134427234,
+          "min": 0.0019546060357242823,
+          "max": 0.0022315079695545137
+        },
+        "telemetry.db_create_time_s": {
+          "count": 3,
+          "mean": 0.00592294034625714,
+          "stddev": 0.00047259592251866657,
+          "min": 0.005265070009045303,
+          "max": 0.0063539799884893
+        }
+      },
+      "boolean_metrics": {
+        "config.add_hierarchy": {
+          "count": 3,
+          "true_count": 3,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "config.store_vectors_in_graph": {
+          "count": 3,
+          "true_count": 0,
+          "false_count": 3,
+          "true_ratio": 0.0
+        },
+        "environment.is_running_in_docker": {
+          "count": 3,
+          "true_count": 3,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "backend": "qdrant",
+      "runs": 3,
+      "numeric_metrics": {
+        "budget.split.client_fraction": {
+          "count": 3,
+          "mean": 0.2,
+          "stddev": 0.0,
+          "min": 0.2,
+          "max": 0.2
+        },
+        "budget.split.server_fraction": {
+          "count": 3,
+          "mean": 0.8,
+          "stddev": 0.0,
+          "min": 0.8,
+          "max": 0.8
+        },
+        "budget.total.threads_input": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "config.batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "config.beam_width": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.count": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "config.max_connections": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.milvus.hnsw_ef_construct": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.milvus.hnsw_m": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.milvus.port": {
+          "count": 3,
+          "mean": 19530,
+          "stddev": 0.0,
+          "min": 19530,
+          "max": 19530
+        },
+        "config.pg.port": {
+          "count": 3,
+          "mean": 6543,
+          "stddev": 0.0,
+          "min": 6543,
+          "max": 6543
+        },
+        "config.qdrant.hnsw_ef_construct": {
+          "count": 3,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "config.qdrant.hnsw_m": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "config.seed": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 3.265986323710904,
+          "min": 2,
+          "max": 10
+        },
+        "dataset.dim": {
+          "count": 3,
+          "mean": 384,
+          "stddev": 0.0,
+          "min": 384,
+          "max": 384
+        },
+        "dataset.rows": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "db_size_mb": {
+          "count": 3,
+          "mean": 2381.7710790634155,
+          "stddev": 193.60044987894264,
+          "min": 2108.2969789505005,
+          "max": 2529.937858581543,
+          "mean_human": "2.3GiB",
+          "min_human": "2.1GiB",
+          "max_human": "2.5GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 2144519509.3333333,
+          "stddev": 2197147.5804981533,
+          "min": 2142027776,
+          "max": 2147373056,
+          "mean_human": "2.0GiB",
+          "min_human": "2.0GiB",
+          "max_human": "2.0GiB"
+        },
+        "environment.logical_cpu_count": {
+          "count": 3,
+          "mean": 32,
+          "stddev": 0.0,
+          "min": 32,
+          "max": 32
+        },
+        "environment.physical_cpu_count": {
+          "count": 3,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "environment.threads_limit": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "peak_rss_mb": {
+          "count": 3,
+          "mean": 3361.46875,
+          "stddev": 176.91869517076972,
+          "min": 3114.21484375,
+          "max": 3518.25390625,
+          "mean_human": "3.3GiB",
+          "min_human": "3.0GiB",
+          "max_human": "3.4GiB"
+        },
+        "phases.close_db.rss_after_mb": {
+          "count": 3,
+          "mean": 3357.6783854166665,
+          "stddev": 181.52931962523073,
+          "min": 3103.75,
+          "max": 3517.34765625,
+          "mean_human": "3.3GiB",
+          "min_human": "3.0GiB",
+          "max_human": "3.4GiB"
+        },
+        "phases.close_db.rss_before_mb": {
+          "count": 3,
+          "mean": 3361.1536458333335,
+          "stddev": 176.59899783898348,
+          "min": 3114.27734375,
+          "max": 3517.30078125,
+          "mean_human": "3.3GiB",
+          "min_human": "3.0GiB",
+          "max_human": "3.4GiB"
+        },
+        "phases.close_db.rss_delta_mb": {
+          "count": 3,
+          "mean": -3.4752604166666665,
+          "stddev": 4.986576966483615,
+          "min": -10.52734375,
+          "max": 0.0546875,
+          "mean_human": "-3644074.7B",
+          "min_human": "-11038720.0B",
+          "max_human": "56.0KiB"
+        },
+        "phases.close_db.time_sec": {
+          "count": 3,
+          "mean": 0.049874503999793283,
+          "stddev": 0.008034356775885721,
+          "min": 0.03880481596570462,
+          "max": 0.057628095033578575
+        },
+        "phases.create_db.rss_after_mb": {
+          "count": 3,
+          "mean": 172.84895833333334,
+          "stddev": 1.1947010168859253,
+          "min": 171.27734375,
+          "max": 174.171875,
+          "mean_human": "172.8MiB",
+          "min_human": "171.3MiB",
+          "max_human": "174.2MiB"
+        },
+        "phases.create_db.rss_before_mb": {
+          "count": 3,
+          "mean": 168.94921875,
+          "stddev": 1.1964140825404228,
+          "min": 167.375,
+          "max": 170.2734375,
+          "mean_human": "168.9MiB",
+          "min_human": "167.4MiB",
+          "max_human": "170.3MiB"
+        },
+        "phases.create_db.rss_delta_mb": {
+          "count": 3,
+          "mean": 3.8997395833333335,
+          "stddev": 0.0018414239093399675,
+          "min": 3.8984375,
+          "max": 3.90234375,
+          "mean_human": "3.9MiB",
+          "min_human": "3.9MiB",
+          "max_human": "3.9MiB"
+        },
+        "phases.create_db.time_sec": {
+          "count": 3,
+          "mean": 0.17531351166932532,
+          "stddev": 0.004295909515787779,
+          "min": 0.16971203399589285,
+          "max": 0.18015136703616008
+        },
+        "phases.create_index.rss_after_mb": {
+          "count": 3,
+          "mean": 186.37369791666666,
+          "stddev": 0.9320661389227638,
+          "min": 185.07421875,
+          "max": 187.21484375,
+          "mean_human": "186.4MiB",
+          "min_human": "185.1MiB",
+          "max_human": "187.2MiB"
+        },
+        "phases.create_index.rss_before_mb": {
+          "count": 3,
+          "mean": 172.84895833333334,
+          "stddev": 1.1947010168859253,
+          "min": 171.27734375,
+          "max": 174.171875,
+          "mean_human": "172.8MiB",
+          "min_human": "171.3MiB",
+          "max_human": "174.2MiB"
+        },
+        "phases.create_index.rss_delta_mb": {
+          "count": 3,
+          "mean": 13.524739583333334,
+          "stddev": 0.3416176365353725,
+          "min": 13.04296875,
+          "max": 13.796875,
+          "mean_human": "13.5MiB",
+          "min_human": "13.0MiB",
+          "max_human": "13.8MiB"
+        },
+        "phases.create_index.time_sec": {
+          "count": 3,
+          "mean": 0.6367269930196926,
+          "stddev": 0.09067321360402619,
+          "min": 0.5320952210458927,
+          "max": 0.7532425029785372
+        },
+        "phases.ingest.ingested": {
+          "count": 3,
+          "mean": 1242391,
+          "stddev": 0.0,
+          "min": 1242391,
+          "max": 1242391
+        },
+        "phases.ingest.rss_after_mb": {
+          "count": 3,
+          "mean": 3361.4075520833335,
+          "stddev": 176.88741954489265,
+          "min": 3114.21484375,
+          "max": 3518.25390625,
+          "mean_human": "3.3GiB",
+          "min_human": "3.0GiB",
+          "max_human": "3.4GiB"
+        },
+        "phases.ingest.rss_before_mb": {
+          "count": 3,
+          "mean": 186.37760416666666,
+          "stddev": 0.9320661389227638,
+          "min": 185.078125,
+          "max": 187.21875,
+          "mean_human": "186.4MiB",
+          "min_human": "185.1MiB",
+          "max_human": "187.2MiB"
+        },
+        "phases.ingest.rss_delta_mb": {
+          "count": 3,
+          "mean": 3175.0299479166665,
+          "stddev": 177.07589920057154,
+          "min": 2927.37890625,
+          "max": 3331.03515625,
+          "mean_human": "3.1GiB",
+          "min_human": "2.9GiB",
+          "max_human": "3.3GiB"
+        },
+        "phases.ingest.time_sec": {
+          "count": 3,
+          "mean": 327.7264322579916,
+          "stddev": 10.567477288064874,
+          "min": 314.9771603560075,
+          "max": 340.8538020129781
+        },
+        "run.total_time_s": {
+          "count": 3,
+          "mean": 331.7540524176632,
+          "stddev": 10.941163584927192,
+          "min": 318.7564046329935,
+          "max": 345.5233271170291
+        },
+        "telemetry.db_close_time_s": {
+          "count": 3,
+          "mean": 0.049874503999793283,
+          "stddev": 0.008034356775885721,
+          "min": 0.03880481596570462,
+          "max": 0.057628095033578575
+        },
+        "telemetry.db_create_time_s": {
+          "count": 3,
+          "mean": 0.17531351166932532,
+          "stddev": 0.004295909515787779,
+          "min": 0.16971203399589285,
+          "max": 0.18015136703616008
+        }
+      },
+      "boolean_metrics": {
+        "config.add_hierarchy": {
+          "count": 3,
+          "true_count": 3,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "config.store_vectors_in_graph": {
+          "count": 3,
+          "true_count": 0,
+          "false_count": 3,
+          "true_ratio": 0.0
+        },
+        "environment.is_running_in_docker": {
+          "count": 3,
+          "true_count": 3,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    }
+  ]
+}
