@@ -123,10 +123,11 @@ from test_utils import init_social_schema
 init_social_schema(db)
 
 # Verify schema created
-assert db.schema.exists_type("User")
-assert db.schema.exists_type("Post")
-assert db.schema.exists_type("Follows")
-assert db.schema.exists_type("Likes")
+type_names = {r.get("name") for r in db.query("sql", "SELECT name FROM schema:types")}
+assert "User" in type_names
+assert "Post" in type_names
+assert "Follows" in type_names
+assert "Likes" in type_names
 ```
 
 ## Test Patterns
@@ -201,8 +202,8 @@ def populate_users(db: Database, count: int) -> int:
 def count_all_types(db: Database) -> dict:
     """Get record count for all types."""
     counts = {}
-    for type_obj in db.schema.get_types():
-        type_name = type_obj.get_name()
+    for row in db.query("sql", "SELECT name FROM schema:types"):
+        type_name = row.get("name")
         counts[type_name] = db.count_type(type_name)
     return counts
 ```
@@ -212,8 +213,8 @@ def count_all_types(db: Database) -> dict:
 ```python
 def cleanup_database(db: Database):
     """Remove all records from database."""
-    for type_obj in db.schema.get_types():
-        type_name = type_obj.get_name()
+    for row in db.query("sql", "SELECT name FROM schema:types"):
+        type_name = row.get("name")
         db.command("sql", f"DELETE FROM {type_name}")
 ```
 
@@ -228,7 +229,7 @@ assert os.path.exists(db_path)
 assert db.count_type("User") > 0
 
 # Schema initialized
-assert db.schema.exists_type("User")
+assert any(r.get("name") == "User" for r in db.query("sql", "SELECT name FROM schema:types"))
 
 # Database cleaned
 assert sum(count_all_types(db).values()) == 0

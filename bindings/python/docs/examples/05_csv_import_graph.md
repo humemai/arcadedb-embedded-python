@@ -11,7 +11,7 @@ transforming documents into vertices and edges. You'll learn production-ready pa
 for:
 
 - **Graph modeling** - Users and Movies as vertices, ratings and tags as edges
-- **Java API vs SQL** - Compare both approaches for bulk graph creation
+- **SQL pipeline** - End-to-end graph creation with SQL DDL/DML
 - **Async vs Sync** - Compare async vs sync modes in embedded mode
 - **Index optimization** - Create indexes BEFORE bulk edge creation for 2-3× speedup
 - **Export & roundtrip validation** - Verify data integrity through complete cycle
@@ -22,7 +22,6 @@ for:
 
 - Graph schema design (vertex types, edge types, properties)
 - Foreign key resolution (userId → User vertex, movieId → Movie vertex)
-- **Java API is faster than SQL for bulk edge creation** (5,071 vs 3,789 edges/sec)
 - **Synchronous is faster than async in embedded mode** (no network I/O to parallelize)
 - **Indexes provide 2-3× speedup** for edge creation
 - Export/import performance and compression ratios (50-80×)
@@ -50,11 +49,8 @@ pre-existing document database from Example 04.
 ## Usage
 
 ```bash
-# Recommended: Fastest configuration (Java API, synchronous)
-python 05_csv_import_graph.py --dataset movielens-small --method java --no-async
-
-# Compare with SQL
-python 05_csv_import_graph.py --dataset movielens-small --method sql
+# Recommended SQL configuration (synchronous)
+python 05_csv_import_graph.py --dataset movielens-small --method sql --no-async
 
 # Run with export for roundtrip validation
 python 05_csv_import_graph.py --dataset movielens-small --batch-size 5000 --method java --no-async --export
@@ -69,7 +65,7 @@ python 05_csv_import_graph.py --help
 **Key options:**
 
 - `--dataset {movielens-small,movielens-large}` - Dataset size (default: movielens-small)
-- `--method {java,sql}` - Creation method: 'java' (recommended) or 'sql'
+- `--method {java,sql}` - Creation method (DSL-first recommendation: `sql`)
 - `--no-async` - Use synchronous transactions (FASTER for embedded mode)
 - `--no-index` - Skip creating indexes (slower, for comparison)
 - `--batch-size BATCH_SIZE` - Batch size for operations (default: 5000)
@@ -80,7 +76,7 @@ python 05_csv_import_graph.py --help
 
 **Recommendations:**
 
-- **Method:** Use `java` (faster than SQL for bulk operations)
+- **Method:** Use `sql` for consistency with DSL-first examples and guides
 - **Async:** Use `--no-async` for best performance (2.5× faster in embedded mode)
 - **Indexes:** Keep enabled (2-3× speedup for edge creation)
 - **Batch size:** 5000 for small, 50000 for large datasets
@@ -179,21 +175,15 @@ Vertex Creation:
 
 **Why?** Async is designed for I/O-bound operations (network, disk). In embedded mode, all operations are in-memory JVM calls. Async overhead (thread pools, futures, synchronization) wastes CPU cycles.
 
-### 4. 🎯 **Java API vs SQL: Use Case Matters**
-
-**Use Java API For:**
-
-- ✅ **Bulk edge/vertex creation** (java_noasync: 5,071 edges/sec vs sql: 3,789 edges/sec)
-- ✅ Simple CRUD operations (cleaner, type-safe)
-- ✅ Batch operations via transactions
-- ✅ When raw performance matters most
+### 4. 🎯 **DSL-First: Use SQL for Ingestion and Queries**
 
 **Use SQL For:**
 
+- ✅ **Bulk edge/vertex creation** with one consistent DSL across examples
 - ✅ **Complex graph queries** (MATCH patterns, multi-hop traversals)
 - ✅ Aggregations (GROUP BY, COUNT, AVG)
 - ✅ Ad-hoc analysis and prototyping
-- ✅ When readability > raw speed
+- ✅ When readability and portability matter
 - ✅ Cypher compatibility (Neo4j migration path)
 
 ### 5. 💾 **Memory Usage: Heap vs Total Process Memory**
@@ -311,30 +301,28 @@ LIMIT 10
 ### Step 1: Create Graph Schema
 
 ```python
-# Create vertex types (Schema API preferred for embedded)
-db.schema.get_or_create_vertex_type("User")
-db.schema.get_or_create_property("User", "userId", "LONG")
-db.schema.get_or_create_property("User", "name", "STRING")
-db.schema.get_or_create_index("User", ["userId"], unique=True)
+# Create vertex types
+db.command("sql", "CREATE VERTEX TYPE User IF NOT EXISTS")
+db.command("sql", "CREATE PROPERTY User.userId LONG")
+db.command("sql", "CREATE PROPERTY User.name STRING")
+db.command("sql", "CREATE INDEX ON User (userId) UNIQUE")
 
-db.schema.get_or_create_vertex_type("Movie")
-db.schema.get_or_create_property("Movie", "movieId", "LONG")
-db.schema.get_or_create_property("Movie", "title", "STRING")
-db.schema.get_or_create_index("Movie", ["movieId"], unique=True)
+db.command("sql", "CREATE VERTEX TYPE Movie IF NOT EXISTS")
+db.command("sql", "CREATE PROPERTY Movie.movieId LONG")
+db.command("sql", "CREATE PROPERTY Movie.title STRING")
+db.command("sql", "CREATE INDEX ON Movie (movieId) UNIQUE")
 
 # Create edge types
-db.schema.get_or_create_edge_type("RATED")
-db.schema.get_or_create_property("RATED", "rating", "FLOAT")
-db.schema.get_or_create_property("RATED", "timestamp", "LONG")
+db.command("sql", "CREATE EDGE TYPE RATED IF NOT EXISTS")
+db.command("sql", "CREATE PROPERTY RATED.rating FLOAT")
+db.command("sql", "CREATE PROPERTY RATED.timestamp LONG")
 
-db.schema.get_or_create_edge_type("TAGGED")
-db.schema.get_or_create_property("TAGGED", "tag", "STRING")
-db.schema.get_or_create_property("TAGGED", "timestamp", "LONG")
-
-# SQL DDL remains available (e.g., for remote servers), but the Schema API above is recommended for embedded runs.
+db.command("sql", "CREATE EDGE TYPE TAGGED IF NOT EXISTS")
+db.command("sql", "CREATE PROPERTY TAGGED.tag STRING")
+db.command("sql", "CREATE PROPERTY TAGGED.timestamp LONG")
 ```
 
-### Step 2: Create Vertices (Java API - Recommended)
+### Step 2: Create Vertices (SQL)
 
 ```python
 # The example uses VertexCreator class for efficient batch creation
@@ -352,10 +340,12 @@ class VertexCreator:
 
             for record in users:
                 user_id = record.get("userId")
-                vertex = db.new_vertex("User")
-                vertex.set("userId", user_id)
-                vertex.set("name", f"User {user_id}")
-                vertex.save()
+                db.command(
+                    "sql",
+                    "INSERT INTO User SET userId = ?, name = ?",
+                    user_id,
+                    f"User {user_id}",
+                )
 
             last_rid = users[-1].get_identity()
 
@@ -381,15 +371,19 @@ class EdgeCreator:
             for rating_doc in ratings:
                 user_id = rating_doc.get("userId")
                 movie_id = rating_doc.get("movieId")
-
-                # Use index lookups (O(1)) instead of SQL queries
-                user_vertex = db.lookup_by_key("User", ["userId"], [user_id])[0]
-                movie_vertex = db.lookup_by_key("Movie", ["movieId"], [movie_id])[0]
-
-                edge = user_vertex.new_edge("RATED", movie_vertex, True, "User", "Movie")
-                edge.set("rating", rating_doc.get("rating"))
-                edge.set("timestamp", rating_doc.get("timestamp"))
-                edge.save()
+                db.command(
+                    "sql",
+                    """
+                    CREATE EDGE RATED
+                    FROM (SELECT FROM User WHERE userId = ?)
+                    TO (SELECT FROM Movie WHERE movieId = ?)
+                    SET rating = ?, timestamp = ?
+                    """,
+                    user_id,
+                    movie_id,
+                    rating_doc.get("rating"),
+                    rating_doc.get("timestamp"),
+                )
 
             last_rid = ratings[-1].get_identity()
 

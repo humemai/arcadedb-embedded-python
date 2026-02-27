@@ -12,6 +12,10 @@ The `Schema` class enables:
 - **Type Hierarchies**: Extend existing types
 - **Schema Inspection**: Query existing schema definitions
 
+!!! note "DSL-first recommendation"
+    For application code, prefer ArcadeDB SQL DDL via `db.command("sql", ...)`.
+    This page documents the Schema wrapper API for reference and advanced typed schema workflows.
+
 ## Getting Schema
 
 ```python

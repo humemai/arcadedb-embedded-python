@@ -376,11 +376,10 @@ def safe_database_operation():
             db = arcadedb.create_database("./mydb")
 
             # Initialize schema
-            # Prefer Schema API for embedded usage (auto-transactional)
-            db.schema.create_document_type("Person")
-            db.schema.create_property("Person", "name", "STRING")
-            db.schema.create_property("Person", "email", "STRING")
-            db.schema.create_index("Person", ["email"], unique=True)
+            db.command("sql", "CREATE DOCUMENT TYPE Person")
+            db.command("sql", "CREATE PROPERTY Person.name STRING")
+            db.command("sql", "CREATE PROPERTY Person.email STRING")
+            db.command("sql", "CREATE INDEX ON Person (email) UNIQUE")
         else:
             db = arcadedb.open_database("./mydb")
 

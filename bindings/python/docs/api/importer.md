@@ -5,6 +5,10 @@ capabilities for ArcadeDB. For full-database migrations, use ArcadeDB's native J
 export/import via the `IMPORT DATABASE file://...` SQL command (see JSONL example
 below).
 
+!!! note "DSL-first schema setup"
+    Prefer SQL DDL (`CREATE TYPE/PROPERTY/INDEX`) when preparing schema for imports.
+    Import functions themselves are unchanged.
+
 ## Overview
 
 The importer uses streaming parsers for memory efficiency and performs batch
@@ -222,8 +226,8 @@ stats = arcadedb.import_csv(
 # #1:0,#1:1,FRIEND,2020
 # #1:1,#1:2,COLLEAGUE,2021
 
-# First create the schema (Schema API is preferred for embedded use)
-db.schema.create_edge_type("Relationship")
+# First create the schema
+db.command("sql", "CREATE EDGE TYPE Relationship")
 
 # Then import (edges)
 stats = arcadedb.import_csv(
@@ -282,10 +286,10 @@ uses `objectNestLevel=1`).
 Create types before import for better performance:
 
 ```python
-# Create schema first (Schema API is auto-transactional)
-db.schema.create_document_type("Person")
-db.schema.create_property("Person", "email", "STRING")
-db.schema.create_index("Person", ["email"], unique=True)
+# Create schema first
+db.command("sql", "CREATE DOCUMENT TYPE Person")
+db.command("sql", "CREATE PROPERTY Person.email STRING")
+db.command("sql", "CREATE INDEX ON Person (email) UNIQUE")
 
 # Then import (type already exists)
 stats = arcadedb.import_csv(db, "people.csv", "Person")
@@ -303,9 +307,9 @@ stats = arcadedb.import_csv(
     typeIdProperty="id"
 )
 
-# Create indexes after import (Schema API)
-db.schema.create_index("User", ["email"], unique=True)
-db.schema.create_index("User", ["username"], unique=True)
+# Create indexes after import
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+db.command("sql", "CREATE INDEX ON User (username) UNIQUE")
 ```
 
 ---
@@ -354,9 +358,8 @@ import arcadedb_embedded as arcadedb
 
 # Open or create database (auto-closes)
 with arcadedb.create_database("./import_demo") as db:
-    # Create schema with embedded API
-    db.schema.create_vertex_type("Person")
-    db.schema.create_edge_type("Knows")
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE EDGE TYPE Knows")
 
     # Import vertices from CSV
     stats = arcadedb.import_csv(
@@ -385,8 +388,7 @@ import arcadedb_embedded as arcadedb
 import time
 
 with arcadedb.create_database("./large_import") as db:
-    # Create schema with embedded API
-    db.schema.create_vertex_type("Product")
+    db.command("sql", "CREATE VERTEX TYPE Product")
 
     # Import with progress monitoring
     print("Starting import...")

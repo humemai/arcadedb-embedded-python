@@ -12,8 +12,8 @@ OpenCypher is a declarative graph query language for pattern matching and traver
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./opencypher_test_db") as db:
-    db.schema.create_vertex_type("Person")
-    db.schema.create_edge_type("Knows")
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE EDGE TYPE Knows")
 
     with db.transaction():
         alice = db.new_vertex("Person")

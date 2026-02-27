@@ -19,10 +19,11 @@ This example demonstrates semantic similarity search using vector embeddings and
 Create a vertex type with an embedding property:
 
 ```python
-db.schema.create_vertex_type("Article")
-db.schema.create_property("Article", "title", "STRING")
-db.schema.create_property("Article", "embedding", "ARRAY_OF_FLOATS")
-db.schema.create_index("Article", ["id"], unique=True)
+db.command("sql", "CREATE VERTEX TYPE Article")
+db.command("sql", "CREATE PROPERTY Article.title STRING")
+db.command("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
+db.command("sql", "CREATE PROPERTY Article.id INTEGER")
+db.command("sql", "CREATE INDEX ON Article (id) UNIQUE")
 ```
 
 Vector properties must use the `ARRAY_OF_FLOATS` type.
@@ -49,10 +50,12 @@ Insert documents with embeddings in transactions:
 ```python
 with db.transaction():
     for doc in documents:
-        vertex = db.new_vertex("Article")
-        vertex.set("title", doc["title"])
-        vertex.set("embedding", arcadedb.to_java_float_array(doc["embedding"]))
-        vertex.save()
+      db.command(
+         "sql",
+         "INSERT INTO Article SET title = ?, embedding = ?",
+         doc["title"],
+         arcadedb.to_java_float_array(doc["embedding"]),
+      )
 ```
 
 ### 4. Creating Vector Index
@@ -79,12 +82,17 @@ Find the k most similar documents to a query embedding:
 
 ```python
 query_embedding = create_mock_embedding(category, "query")
-most_similar = index.find_nearest(query_embedding, k=5)
+qvec_literal = "[" + ", ".join(str(float(x)) for x in query_embedding.tolist()) + "]"
+rows = db.query(
+    "sql",
+    f"SELECT vectorNeighbors('Article[embedding]', {qvec_literal}, 5) as res",
+).to_list()
 
-for vertex, distance in most_similar:
-    title = vertex.get("title")
-    category = vertex.get("category")
-    print(f"{title}: {distance:.4f}")
+for hit in rows[0].get("res", []):
+    vertex = hit.get("record")
+    distance = hit.get("distance")
+    if vertex is not None:
+        print(f"{vertex.get('title')}: {distance:.4f}")
 ```
 
 The `find_nearest()` method returns (vertex, distance) pairs sorted by distance.

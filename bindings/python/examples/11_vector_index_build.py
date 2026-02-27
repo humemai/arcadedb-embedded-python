@@ -401,9 +401,15 @@ def ingest_vectors_arcadedb(
     batch_size: int,
     to_java_float_array,
 ) -> int:
-    db.schema.get_or_create_vertex_type("VectorData")
-    db.schema.get_or_create_property("VectorData", "id", "INTEGER")
-    db.schema.get_or_create_property("VectorData", "vector", "ARRAY_OF_FLOATS")
+    for command in (
+        "CREATE VERTEX TYPE VectorData",
+        "CREATE PROPERTY VectorData.id INTEGER",
+        "CREATE PROPERTY VectorData.vector ARRAY_OF_FLOATS",
+    ):
+        try:
+            db.command("sql", command)
+        except Exception:
+            pass
 
     ingested = 0
     for base_id, batch in stream_shards(
@@ -415,10 +421,12 @@ def ingest_vectors_arcadedb(
         with db.transaction():
             for idx, vec in enumerate(batch, start=base_id):
                 jvec = to_java_float_array(vec) if to_java_float_array else vec.tolist()
-                vertex = db.new_vertex("VectorData")
-                vertex.set("id", int(idx))
-                vertex.set("vector", jvec)
-                vertex.save()
+                db.command(
+                    "sql",
+                    "INSERT INTO VectorData SET id = ?, vector = ?",
+                    int(idx),
+                    jvec,
+                )
                 ingested += 1
 
     return ingested

@@ -2,6 +2,9 @@
 
 Hands-on examples demonstrating ArcadeDB Python bindings in real-world scenarios. Each example is self-contained, well-documented, and ready to run.
 
+!!! note "DSL-first examples"
+    Current examples and docs use SQL/OpenCypher as the default approach for schema, CRUD, and graph operations.
+
 ## Available Examples
 
 ### 🏁 Getting Started
@@ -23,7 +26,7 @@ creation, and nearest neighbor search.
 Production CSV import with automatic type inference by Java, NULL handling, and index optimization. Imports MovieLens dataset (36M+ records) with comprehensive performance analysis and result validation with actual data samples.
 
 **[05 - CSV Import - Graph](05_csv_import_graph.md)**
-Production graph creation from MovieLens dataset. Comprehensive performance analysis comparing Java API vs SQL, synchronous vs async, with/without indexes. 6 benchmark configurations, 10 validation queries, export/import roundtrip testing. Learn when to use Java API (bulk operations: 5,071 edges/sec) vs SQL (complex queries).
+Production graph creation from MovieLens dataset. Comprehensive performance analysis of SQL pipelines, synchronous vs async, and index effects. Includes benchmark configurations, validation queries, and export/import roundtrip testing.
 
 **[06 - Vector Search - Movie Recommendations](06_vector_search_recommendations.md)**
 Production-ready vector embeddings and HNSW (JVector) indexing for semantic movie search.
