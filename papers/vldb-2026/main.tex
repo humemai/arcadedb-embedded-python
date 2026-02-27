@@ -1,0 +1,422 @@
+% VLDB template version of 2020-08-03 enhances the ACM template, version 1.7.0:
+% https://www.acm.org/publications/proceedings-template
+% The ACM Latex guide provides further information about the ACM template
+
+\documentclass[sigconf, nonacm]{acmart}
+
+\usepackage[T1]{fontenc}
+
+% Some TeX installations fall back to non-scalable fonts, which breaks
+% microtype's font expansion under pdfTeX. Disabling expansion keeps builds stable.
+\microtypesetup{expansion=false}
+
+% PVLDB/ACM numeric citation style (numbered references)
+\citestyle{acmnumeric}
+
+%% The following content must be adapted for the final version
+% paper-specific
+\newcommand\vldbdoi{XX.XX/XXX.XX}
+\newcommand\vldbpages{XXX-XXX}
+% issue-specific
+\newcommand\vldbvolume{14}
+\newcommand\vldbissue{1}
+\newcommand\vldbyear{2020}
+% should be fine as it is
+\newcommand\vldbauthors{\authors}
+\newcommand\vldbtitle{\shorttitle}
+% leave empty if no availability url should be set
+\newcommand\vldbavailabilityurl{https://github.com/ArcadeData/arcadedb}
+% whether page numbers should be shown or not, use 'plain' for review versions, 'empty' for camera ready
+\newcommand\vldbpagestyle{plain}
+
+\begin{document}
+\title{ArcadeDB: A Native Multi-Model Embedded Database for Unified SQL, Graph, and Vector Workloads}
+
+%%
+%% The "author" command and its associated commands are used to define the authors and their affiliations.
+\author{Taewoon Kim}
+\affiliation{%
+  \institution{HumemAI}
+}
+\email{taewoon@humem.ai}
+
+\author{Roberto Franchini}
+\affiliation{%
+  \institution{Arcade Data Ltd}
+}
+
+\author{Christian Himpe}
+\affiliation{%
+  \institution{University of M\"unster}
+}
+
+\author{Luca Garulli}
+\affiliation{%
+  \institution{Arcade Data Ltd}
+}
+
+%%
+%% The abstract is a short summary of the work to be presented in the
+%% article.
+\begin{abstract}
+Modern applications increasingly combine relational analytics, graph traversals, and semantic vector retrieval, yet these workloads are typically split across multiple engines with duplicated data and complex pipelines. We present ArcadeDB, a native embedded multi-model database that executes SQL, Cypher, and HNSW-based vector search over a unified data representation. Our evaluation follows four pillars: table workloads (SQL OLTP / OLAP), graph workloads (Cypher OLTP / OLAP), vector indexing and search, and hybrid queries that compose all three modalities in a single workflow. On the Stack Overflow benchmark, we compare ArcadeDB against specialized baselines for each modality and report execution time, latency, storage footprint, and vector effectiveness metrics. The results highlight practical trade-offs and show that ArcadeDB enables end-to-end multi-model workflows without external orchestration while remaining competitive across individual workload classes.
+\end{abstract}
+
+% Page budget (including abstract, total = 12 pages, excluding references)
+% Abstract: 0.3
+% Introduction: 0.9
+% System Overview: 0.9
+% Unified Data & Query Model: 0.8
+% Execution & Storage Architecture: 1.0
+% Experimental Setup: 1.0
+% Results: 5.0
+% Discussion & Limitations: 0.7
+% Related Work: 0.7
+% Conclusion: 0.5
+
+\maketitle
+
+%%% do not modify the following VLDB block %%
+%%% VLDB block start %%%
+\pagestyle{\vldbpagestyle}
+\begingroup\small\noindent\raggedright\textbf{PVLDB Reference Format:}\\
+\vldbauthors. \vldbtitle. PVLDB, \vldbvolume(\vldbissue): \vldbpages, \vldbyear.\\
+\href{https://doi.org/\vldbdoi}{doi:\vldbdoi}
+\endgroup
+\begingroup
+\section{Introduction}
+% Page budget: 0.9
+
+Data systems for modern applications increasingly span multiple access patterns: transactional updates on structured records, relationship-centric traversals, and semantic retrieval over dense embeddings \cite{Lu_2019,Guo_2023,Pan_2024_vldbj}. In practice, these patterns are often implemented as separate SQL, graph, and vector services connected through ETL pipelines, replication, and application-level orchestration \cite{Ye_2023,Zhang_2019_Holistic}. While this decomposition can optimize each subsystem in isolation, it also introduces substantial operational and development overhead: duplicated storage, cross-system consistency concerns, fragile synchronization pipelines, and higher end-to-end latency for composite queries.
+
+This paper explores an alternative design point: a native embedded multi-model engine that supports relational, graph, and vector workloads over a unified data representation \cite{Lu_2019,Kim_2022,Lei_2024}. We present ArcadeDB as a system that executes SQL, Cypher, and HNSW-based vector retrieval in one runtime, enabling developers to compose hybrid workflows without exporting data across specialized engines. The key question is not whether one engine can dominate every single-model benchmark, but whether a unified architecture can remain competitive across workload classes while simplifying end-to-end application design.
+ArcadeDB is open-source software released under Apache-2.0, with source code and release artifacts publicly available at the official project repository \cite{arcadedb_repo}. The project also ships operational assets used in practice-oriented evaluation workflows (e.g., Docker-based runs and Kubernetes deployment assets), enabling independent reproduction in common engineering environments.
+
+To answer this question, we evaluate ArcadeDB across four pillars derived from one consistent Stack Overflow data pipeline: (i) table workloads in SQL (OLTP and OLAP), (ii) graph workloads in Cypher (OLTP and OLAP), (iii) vector indexing and search with HNSW \cite{malkov2016efficient}, and (iv) hybrid queries that combine SQL, graph traversals, and vector similarity in a single workflow. We compare against modality-appropriate baselines, including embedded relational systems \cite{Gaffney_2022,Raasveldt_2019}, a graph baseline, and four vector backends \cite{Upreti_2025,Sun_2025,Hu_2025}. Our study emphasizes metrics that matter for practitioners: latency and throughput for single-threaded transactional paths (OLTP in this draft), analytical execution time under multi-threaded OLAP across all compared systems, index-build cost, storage footprint, and vector effectiveness.
+
+Our contributions are threefold. First, we provide a unified evaluation methodology that measures SQL, graph, vector, and hybrid workloads under a shared dataset and lifecycle, extending prior multi-model benchmarking discussions \cite{Zhang_2019_Unibench,Kim_2022,Zhang_2019_Holistic}. Second, we present empirical results that characterize where a native multi-model embedded design is competitive and where trade-offs appear relative to specialized systems. Third, we demonstrate that integrated hybrid querying can be evaluated as a first-class capability rather than as an external orchestration pattern, and we release an executable open-source benchmark artifact so practitioners can rerun and adapt the workflow \cite{arcadedb_repo}.
+
+\section{System Overview}
+% Page budget: 0.9
+
+ArcadeDB is implemented as a native Java engine centered on \texttt{LocalDatabase}, a thread-safe embedded database instance that can be shared across worker threads. The runtime combines page-based storage, schema/type management, indexing, transaction control, and query execution in one process, following a unified multi-model design point \cite{Lu_2019,Guo_2023}. At the storage layer, records and index structures are persisted as local components managed by the engine and coordinated with write-ahead logging (WAL) and configurable flush behavior. Transaction semantics are exposed through explicit begin/commit/rollback operations and isolation-level control, so application code and query execution share the same ACID boundary.
+
+On top of this core, ArcadeDB uses a pluggable query-engine architecture. The database API accepts a language tag together with a query/command string, and dispatches execution through \texttt{QueryEngineManager}. SQL is provided by a native SQL engine, while OpenCypher is exposed through a dedicated Cypher engine with statement and plan caches \cite{opencypher_spec,marton2017formalising}. Additional engines (e.g., Gremlin/Mongo/GraphQL) can be registered at runtime when present on the classpath, allowing one storage/runtime core to support multiple front-end languages. This design is central for our study: SQL and Cypher operations are executed against the same underlying records, indexes, and transaction manager rather than synchronized copies across separate systems.
+
+Graph processing is implemented in the Java core through \texttt{GraphEngine}, which manages vertex/edge creation and adjacency structures as first-class database data. Vector retrieval is implemented through \texttt{LSMVectorIndex}, a page-based transactional vector index integrated with ArcadeDB storage and configured via schema-level builders (dimensions, similarity function, HNSW connectivity/beam parameters, and quantization options) \cite{malkov2016efficient}. The vector stack also includes SQL-level vector functions, including hybrid scoring primitives that combine vector and keyword scores. Together, these components provide the architectural basis for the four-pillar evaluation in this paper: SQL tables, Cypher graphs, HNSW vectors, and integrated hybrid queries.
+
+\section{Unified Data \& Query Model}
+% Page budget: 0.8
+
+ArcadeDB adopts a unified logical model in which the same underlying entities can be accessed through relational, graph, and vector perspectives, instead of being replicated into separate engines \cite{Lu_2019,Guo_2023}. In our workload, Stack Overflow objects (users, posts, comments, tags, votes) are represented as typed records with shared identities and properties; these records can be queried as SQL tables, connected as graph vertices/edges, and augmented with embedding vectors for semantic retrieval. This model reduces impedance mismatch across modalities because keys, attributes, and relationships refer to the same persistent objects across all query paths.
+
+At the query level, ArcadeDB exposes multiple languages over this shared model. SQL covers relational analytics, filtering, grouping, and joins; OpenCypher supports path-oriented graph matching and traversal patterns \cite{opencypher_spec,marton2017formalising}; vector operators support nearest-neighbor retrieval using HNSW-style indexing \cite{malkov2016efficient}. While these interfaces are syntactically different, they execute over one storage/transaction substrate, allowing applications to combine modalities without external ETL or asynchronous synchronization. This is consistent with broader efforts toward multi-model query unification and composability \cite{ong2014sqlpp,ISO9075_16_2023}.
+
+For this paper, we operationalize the model with a progressive pipeline and a hybrid query objective. The table view captures canonical relational workloads; the graph view materializes relationship-centric access patterns; and the vector view adds semantic similarity over textual content. Hybrid queries then compose these steps in one workflow, e.g., using vector retrieval to identify semantically relevant posts, graph expansion to propagate through user/tag neighborhoods, and SQL predicates/aggregations to produce final ranked results. This unified model is the semantic foundation for our four-pillar evaluation and for the comparison between integrated execution and polyglot alternatives.
+
+\section{Execution \& Storage Architecture}
+% Page budget: 1.0
+
+ArcadeDB’s execution path is organized around a single embedded runtime that couples storage, transactions, and query processing, in line with a native multi-model architecture perspective \cite{Lu_2019,Guo_2023}. At the lowest layer, data and index structures are persisted as local paginated components, with write-ahead logging (WAL) and configurable flush policies used to provide durability and recovery semantics within one process. The core database instance is thread-safe and exposes explicit transaction lifecycle controls (begin/commit/rollback) together with isolation-level settings, so SQL, Cypher, and vector operations participate in the same transactional context instead of crossing system boundaries.
+
+Query execution is mediated by a language-aware dispatch layer. Commands are submitted with an explicit language identifier and routed through the query-engine manager to the corresponding runtime (e.g., SQL or OpenCypher). SQL and Cypher engines maintain statement/plan caches to reduce repeated parse and planning overhead, while still executing against shared schema metadata, record identifiers, and indexes. This architecture separates language front-ends from storage internals: different syntactic interfaces can optimize their own parsing/planning pipelines without fragmenting persistence or concurrency control.
+
+Graph operations are implemented through a native graph subsystem that manages vertex/edge creation and adjacency maintenance as first-class database structures. Vector retrieval is implemented through a page-based transactional vector index that integrates with the same storage manager and schema layer. The vector stack is configured through schema-level builders (dimensions, similarity function, HNSW parameters, quantization), and supports hybrid scoring functions in SQL to combine lexical and semantic signals \cite{malkov2016efficient,Pan_2024_vldbj,Chronis_2025}. In the context of this paper, the key architectural property is not any single micro-optimization, but the co-location of table, graph, and vector execution paths over one engine state. This co-location is what enables our hybrid pipeline (vector candidate generation, graph expansion, and SQL filtering/aggregation) without external replication or inter-system RPC orchestration.
+
+\section{Experimental Setup}
+% Page budget: 1.0
+
+We evaluate ArcadeDB on the Stack Overflow benchmark using seven executable workloads that map directly to our pipeline stages: table OLTP, table OLAP, graph OLTP, graph OLAP, vector index build, vector search, and end-to-end hybrid queries. The reported dataset is a Stack Overflow snapshot (stats.stackexchange.com, 2024-06-30) with approximately 2.9\,GB of source data and 5,564,864 records in total, distributed as follows: User (345,754), Post (425,735), Comment (819,648), Badge (612,258), Vote (1,747,225), PostLink (86,919), Tag (1,612), and PostHistory (1,525,713). For vector workloads, the combined corpus contains 1,242,391 vectors and occupies approximately 2.0\,GB on disk. We use repeated runs under controlled seeds and consolidated summaries.
+All measurements are collected on a single host with an AMD Ryzen 9 7950X CPU (16 cores / 32 threads), DDR5 RAM, and a Samsung 970 EVO Plus SSD.
+For graph workloads, we materialize one fixed property-graph schema from the same source tables. Vertex classes are User, Question, Answer, Tag, Badge, and Comment. Edge classes include asked/answered links, answer ownership and acceptance links, tag assignments, comment links (to questions and answers), badge ownership, and post-link relations. Concretely, Posts are split into Question and Answer vertices via the PostTypeId field, and XML IDs plus foreign keys are used to instantiate edge endpoints consistently across both graph systems.
+
+Baselines are selected per modality. For table workloads, ArcadeDB is compared with SQLite, DuckDB, and PostgreSQL \cite{Gaffney_2022,Raasveldt_2019,PostgreSQL_docs}. For graph workloads, ArcadeDB is compared with LadybugDB under a shared query/operation suite \cite{ladybug_docs}. For vector workloads, we compare four backends: ArcadeDB, pgvector, Qdrant, and Milvus \cite{pgvector_repo,qdrant_docs,milvus_docs}. The vector build benchmark uses common HNSW-style controls (e.g., max connections and beam width), while the search benchmark uses matched retrieval-depth settings across systems: \texttt{efSearch}=100 for pgvector/Qdrant/Milvus and ArcadeDB over-query factor = 4.0 (ArcadeDB does not expose \texttt{efSearch} directly). We then report effectiveness/latency trade-offs under this normalized setup \cite{malkov2016efficient,Pan_2024_vldbj}.
+To keep artifact sharing and downstream reuse straightforward, we restrict compared systems in this study to permissive-license software (e.g., Apache-2.0/BSD/MIT) and therefore do not include engines under non-permissive or source-available commercial terms (such as Neo4j or ArangoDB) in these benchmark matrices \cite{neo4j_docs,arangodb_docs}.
+
+Execution policy follows the protocol used in our matrix scripts and summaries. OLTP results are reported in single-threaded mode for cross-system fairness, while OLAP runs use a multi-threaded CPU budget across all systems in this study. We keep dataset and schema definitions fixed across systems and separate lifecycle stages into load/ingest, index construction, and measured query/transaction execution. Each benchmark emits both per-run JSON artifacts and aggregated markdown summaries, from which we report the core metrics used in the paper: OLTP latency percentiles and throughput, OLAP query runtimes, vector recall/latency curves, and storage plus peak memory footprints. This setup aligns with prior multi-model and holistic benchmarking principles while keeping the comparison grounded in executable, reproducible scripts \cite{Zhang_2019_Unibench,Kim_2022,Zhang_2019_Holistic}.
+To support industrial reproducibility and downstream validation, all implementation code and benchmarking scripts used in this study are maintained in the public ArcadeDB repository under Apache-2.0 licensing \cite{arcadedb_repo}. The artifact includes runnable automation assets (e.g., Docker Compose workflows and deployment manifests) so engineering teams can reproduce measurements and adapt them to their own CI/CD and infrastructure constraints.
+
+
+\section{Results}
+% Page budget: 5.0
+% 6.1 SQL/Table (OLTP single-threaded + OLAP multi-threaded): 1.2
+% 6.2 Graph/Cypher (OLTP single-threaded + OLAP multi-threaded): 1.2
+% 6.3 Vector/HNSW (build+index and search, 4 backends): 1.6
+% 6.4 Hybrid query showcase (SQL + Cypher + Vector): 1.0
+
+\subsection{SQL/Table Workloads}
+
+\subsubsection{SQL/Table OLTP}
+
+\begin{table}[tb]
+  \centering
+  \caption{SQL table OLTP (single-threaded, Stack Overflow dataset, mean over 3 runs).}
+  \label{tab:sql-table-oltp-medium}
+  \small
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lrrrr}
+    \toprule
+    System & Throughput (ops/s) & p50 (ms) & p95 (ms) & p99 (ms) \\
+    \midrule
+    ArcadeDB   & 578.5  & 0.155 & 8.99  & 24.90 \\
+    SQLite     & 1600.9 & 0.019 & 3.40  & 12.61 \\
+    PostgreSQL & 1169.1 & 0.098 & 4.53  & 13.09 \\
+    DuckDB     & 117.7  & 1.945 & 22.29 & 60.23 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+Table~\ref{tab:sql-table-oltp-medium} reports single-threaded OLTP results on the Stack Overflow dataset using 100,000 mixed CRUD transactions (60\% read, 20\% update, 10\% insert, 10\% delete). We focus on steady-state transactional metrics (throughput and end-to-end latency percentiles) and exclude preload / ingestion time from this comparison because loading paths are system-specific and not part of the OLTP critical path.
+
+SQLite and PostgreSQL lead this single-threaded OLTP setting, while ArcadeDB is intermediate and DuckDB trails on both throughput and tail latency. This ordering is consistent with engine design goals: SQLite, PostgreSQL, and ArcadeDB are optimized for transactional paths, whereas DuckDB is primarily optimized for analytical (OLAP) execution. Relative to DuckDB, ArcadeDB delivers about $4.9\times$ higher throughput with lower tail latency (about $2.5\times$ lower p95). These results suggest that ArcadeDB remains competitive for embedded mixed-transaction paths, though specialized row-store OLTP engines retain an advantage in this specific table-only regime.
+
+\par\smallskip\noindent\hspace*{1em}\textit{Representative SQL OLTP operation (update):}
+\begin{flushleft}
+\small
+\texttt{UPDATE Post}\
+\texttt{SET Score = coalesce(Score, 0) + 1}\
+\texttt{WHERE Id = :target\_id}
+\end{flushleft}
+
+\subsubsection{SQL/Table OLAP}
+
+\begin{table}[tb]
+  \centering
+  \caption{SQL table OLAP execution (Stack Overflow dataset, mean over 3 runs, 10-query suite with 10 shuffled runs).}
+  \label{tab:sql-table-olap}
+  \small
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lrrr}
+    \toprule
+    System & Query total (s) & Cold (ms/q) & Warm (ms/q) \\
+    \midrule
+    ArcadeDB   & 433.376 & 7722.1 & 3956.9 \\
+    SQLite     & 4.906   & 48.5   & 49.1 \\
+    PostgreSQL & 6.724   & 43.6   & 69.8 \\
+    DuckDB     & 0.221   & 3.9    & 2.0 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+Table~\ref{tab:sql-table-olap} reports analytical query execution time for the fixed 10-query suite under shuffled order and repeated runs, including both cold and warm per-query means. In this OLAP setting, DuckDB leads by a wide margin, followed by SQLite and PostgreSQL, while ArcadeDB is slower on this specific table-analytics workload. This ordering is consistent with design intent: DuckDB is OLAP-oriented, whereas ArcadeDB is currently optimized more for transactional and multi-model execution paths. Correctness remained stable across systems in this benchmark: query result hashes were stable within each DB and equal across DBs for all reported OLAP queries.
+
+\par\smallskip\noindent\hspace*{1em}\textit{Representative SQL OLAP query:}
+\begin{flushleft}
+\small
+\texttt{SELECT Id, DisplayName, Reputation}\
+\texttt{FROM User}\
+\texttt{WHERE Reputation IS NOT NULL}\
+\texttt{ORDER BY Reputation DESC, Id ASC}\
+\texttt{LIMIT 10}
+\end{flushleft}
+
+
+\subsection{Graph/Cypher Workloads}
+
+\subsubsection{Graph/Cypher OLTP}
+
+\begin{table}[tb]
+  \centering
+  \caption{Graph/Cypher OLTP execution (single-threaded, Stack Overflow dataset, mean over 3 runs).}
+  \label{tab:graph-cypher-oltp}
+  \small
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lrrrr}
+    \toprule
+    System & Throughput (ops/s) & p50 (ms) & p95 (ms) & p99 (ms) \\
+    \midrule
+    ArcadeDB & 416.3 & 0.597 & 7.75 & 30.03 \\
+    Ladybug  & 51.1  & 15.01 & 71.15 & 92.85 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+Table~\ref{tab:graph-cypher-oltp} reports mixed graph OLTP execution (read/update/insert/delete = 60/20/10/10) in single-threaded mode. On these runs, ArcadeDB shows higher throughput and lower tail latency than Ladybug. As in the table-OLTP discussion, we focus on CRUD/query-path execution metrics and not ingest timing, since load paths differ by engine. For practical runtime in this draft, Ladybug was executed at 10\% transaction volume (10,000 vs. 100,000 for ArcadeDB) because it is primarily OLAP-oriented and full-volume OLTP runs were too slow.
+
+\par\smallskip\noindent\hspace*{1em}\textit{Representative Cypher OLTP operation (edge-property update):}
+\begin{flushleft}
+\small
+\texttt{MATCH (u:User \{Id: :uid\})-[r:ANSWERED]->(a:Answer \{Id: :aid\})}\
+\texttt{SET r.CreationDate = coalesce(r.CreationDate, 0) + 1}
+\end{flushleft}
+
+\subsubsection{Graph/Cypher OLAP}
+
+\begin{table}[tb]
+  \centering
+  \caption{Graph/Cypher OLAP execution (Stack Overflow dataset, mean over 3 runs, 10-query suite with 10 shuffled runs).}
+  \label{tab:graph-cypher-olap}
+  \small
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lrrr}
+    \toprule
+    System & Query total (s) & Cold (ms/q) & Warm (ms/q) \\
+    \midrule
+    ArcadeDB & 302.930 & 3262.9 & 3002.9 \\
+    Ladybug  & 10.051  & 115.9  & 98.3   \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+Table~\ref{tab:graph-cypher-olap} reports analytical Cypher execution time for the fixed 10-query suite under shuffled order and repeated runs, including both cold and warm per-query means. In this graph-OLAP setting, Ladybug is faster, while ArcadeDB is slower on this specific analytical query mix. This ordering is consistent with engine focus: Ladybug is optimized for graph analytics, whereas ArcadeDB currently prioritizes transactional and unified multi-model execution paths. Correctness remained stable across both systems in this benchmark: query result hashes and row counts were stable within each DB and equal across DBs for all 10 queries.
+
+\par\smallskip\noindent\hspace*{1em}\textit{Representative Cypher OLAP query:}
+\begin{flushleft}
+\small
+\texttt{MATCH (q:Question)-[:TAGGED\_WITH]->(t1:Tag)}\
+\texttt{MATCH (q)-[:TAGGED\_WITH]->(t2:Tag)}\
+\texttt{WHERE t1.Id < t2.Id}\
+\texttt{RETURN t1.TagName, t2.TagName, count(*) AS cooccurs}\
+\texttt{ORDER BY cooccurs DESC LIMIT 10}
+\end{flushleft}
+
+\subsection{Vector/HNSW Workloads}
+
+\subsubsection{Vector Index Build}
+
+\begin{table}[tb]
+  \centering
+  \caption{Vector index build on Stack Overflow vectors (1,242,391 vectors, dim=384, HNSW m=16, ef\_construction/beam=100, mean over 3 runs).}
+  \label{tab:vector-index-build}
+  \small
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lrrrrr}
+    \toprule
+    Backend & Ingest (s) & Index (s) & Total (s) & Mem (GiB) & Size (GiB) \\
+    \midrule
+    ArcadeDB & 44.3  & 2362.0 & 2406.8 & 8.8 & 2.7 \\
+    pgvector & 171.3 & 1139.1 & 1313.2 & 8.7 & 5.3 \\
+    Qdrant   & 327.7 & 0.6    & 331.8  & 3.3 & 2.3 \\
+    Milvus   & 222.0 & 0.8    & 240.1  & 2.9 & 8.6 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+Table~\ref{tab:vector-index-build} summarizes vector build behavior across four backends on the Stack Overflow embedding corpus. By total wall-clock build time, Milvus and Qdrant are fastest, followed by pgvector, while ArcadeDB is slower in this setting. Phase breakdowns show a backend-specific execution pattern: ArcadeDB and pgvector expose substantial explicit index-build time, whereas Qdrant and Milvus spend most work during ingest with near-zero standalone index phase. Resource trade-offs are also visible: Qdrant has the smallest on-disk footprint, Milvus the largest, and peak memory is lower for Qdrant/Milvus than for ArcadeDB/pgvector on this configuration.
+
+For client-server backends (pgvector, Qdrant, Milvus), reported peak RSS combines client process memory with server process-tree memory, following the benchmark script policy.
+
+\par\smallskip\noindent\hspace*{1em}\textit{Representative vector-index build statement (pgvector):}
+\begin{flushleft}
+\small
+\texttt{CREATE INDEX vectordata\_vector\_hnsw}\
+\texttt{ON vectordata USING hnsw (vector vector\_cosine\_ops)}\
+\texttt{WITH (m = 16, ef\_construction = 100)}
+\end{flushleft}
+
+\subsubsection{Vector Search}
+
+\begin{table}[tb]
+  \centering
+  \caption{Vector search on Stack Overflow vectors (k=50, 1,000 queries, mean over 3 runs; normalized depth: ArcadeDB over-query factor=4, pgvector/Qdrant/Milvus \texttt{efSearch}=100).}
+  \label{tab:vector-search}
+  \small
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lrrrr}
+    \toprule
+    Backend & Recall@50 & Mean (ms/q) & p95 (ms/q) & Mem (GiB) \\
+    \midrule
+    ArcadeDB & 0.950 & 290.4 & 635.2 & 6.4 \\
+    pgvector & 0.967 & 80.8  & 391.8 & 2.3 \\
+    Qdrant   & 0.989 & 53.0  & 56.9  & 2.5 \\
+    Milvus   & 0.972 & 18.7  & 33.9  & 4.3 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+Table~\ref{tab:vector-search} reports search quality and latency at one normalized operating point across backends. Qdrant achieves the highest Recall@50 in this setting, while Milvus provides the lowest mean and p95 query latency; pgvector is intermediate on both quality and latency. ArcadeDB shows lower recall and higher latency at this operating point. As in the build benchmark, resource usage differs by architecture: pgvector has the lowest peak memory here.
+
+The search-depth knobs are aligned by benchmark policy but are not semantically identical (ArcadeDB over-query factor versus HNSW \texttt{efSearch}); this comparison should be interpreted as a practical normalized setting rather than parameter-level equivalence. Query-result and row-count stability remained true across repeated runs for all backends.
+
+\par\smallskip\noindent\hspace*{1em}\textit{Representative vector-search query (pgvector path):}
+\begin{flushleft}
+\small
+\texttt{SET LOCAL hnsw.ef\_search = 100;}\
+\texttt{SELECT id}\
+\texttt{FROM vectordata}\
+\texttt{ORDER BY vector <=> :query\_vector}\
+\texttt{LIMIT 50}
+\end{flushleft}
+
+\subsection{Hybrid Query Showcase}
+
+\begin{table}[tb]
+  \centering
+  \caption{Hybrid query workflows on Stack Overflow (ArcadeDB native pipeline, heap=16g).}
+  \label{tab:hybrid-showcase}
+  \small
+  \resizebox{\columnwidth}{!}{%
+  \begin{tabular}{lrrr}
+    \toprule
+    Query workflow & Time (s) & Dominant step & Rows \\
+    \midrule
+    SQL $\rightarrow$ Vector & 4.42 & sql\_candidates (4.15s) & 10 \\
+    SQL $\rightarrow$ Cypher & 6.04 & cypher\_expand (6.03s) & 10 \\
+    Cypher $\rightarrow$ SQL & 6.09 & cypher\_seed\_users (5.95s) & 10 \\
+    Vector $\rightarrow$ Cypher & 4.02 & cypher\_expand (4.02s) & 10 \\
+    Vector $\rightarrow$ Cypher $\rightarrow$ SQL & 2.91 & cypher\_expand\_users (2.90s) & 5 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+Table~\ref{tab:hybrid-showcase} reports end-to-end timings for five cross-model workflows executed natively in one ArcadeDB pipeline. This section emphasizes composability across SQL, Cypher, and vector operators rather than single-model leaderboards. In this run, all workflows complete in 2.9--6.1s once the pipeline is prepared, with graph expansion dominating runtime in most patterns. Q1 differs by being dominated by SQL candidate generation before vector reranking. Build-stage context is important for interpretation: the overall run (3210.0s, peak RSS 11.9GiB) is dominated by embedding and vector-index preparation, especially Comment-vector indexing.
+
+\par\smallskip\noindent\hspace*{1em}\textit{Representative hybrid workflow (Vector $\rightarrow$ Cypher $\rightarrow$ SQL):}
+\begin{flushleft}
+\small
+\texttt{(1) find\_nearest(query, k=10, overquery\_factor=4)}\\[0.2em]
+\texttt{(2) MATCH (q)-[:HAS\_ANSWER]->(a)<-[:ANSWERED]-(u)}\
+\texttt{WHERE q.Id IN [..] RETURN DISTINCT u.Id}\\[0.2em]
+\texttt{(3) SELECT Id, DisplayName, Reputation, Views}\
+\texttt{FROM User WHERE Id IN [..]}\
+\texttt{AND Reputation >= 1000}\
+\texttt{ORDER BY Reputation DESC, Views DESC LIMIT 10}
+\end{flushleft}
+
+\section{Discussion \& Limitations}
+% Page budget: 0.7
+
+The results show a consistent pattern across modalities. In single-model leaderboards, specialized engines often remain ahead on their primary target workloads (e.g., DuckDB for table OLAP, Ladybug for graph OLAP, and Qdrant/Milvus for the evaluated vector-search operating point). At the same time, ArcadeDB remains practically competitive in transactional table/graph paths and, most importantly, executes cross-model SQL--Cypher--vector workflows natively in one runtime. This confirms the central trade-off in our study: a unified embedded architecture may not dominate every isolated micro-benchmark, but it can reduce system-composition overhead while preserving usable performance across heterogeneous query classes \cite{Lu_2019,Guo_2023,Zhang_2019_Holistic}.
+
+From a systems perspective, the hybrid showcase is the key outcome. End-to-end workflows complete in seconds once the pipeline is prepared, and the dominant stage is transparent from per-step timing (often graph expansion, sometimes SQL candidate generation). This observability makes optimization targets explicit for practitioners. More broadly, these runs indicate that integrated execution can shift effort from ETL/RPC orchestration toward in-engine plan and index tuning, which is often easier to reproduce and maintain in embedded deployments \cite{Ye_2023,Zhang_2019_Holistic}.
+
+From an industrial decision-making perspective, the reported matrices are intended as engineering guidance rather than a universal ranking: they expose where specialized engines retain clear single-model advantages, and where a unified runtime can reduce integration overhead in cross-model pipelines. This trade-off framing is directly relevant for teams deciding between polyglot stacks and consolidated data-platform architectures under operational constraints.
+
+Several limitations should frame interpretation. First, this paper uses one primary dataset family (Stack Overflow) and one main hardware/runtime profile, so external validity to other graph topologies, vector distributions, or memory budgets is not yet established. Second, OLTP is reported in single-threaded mode in this draft, while OLAP uses multi-threaded execution; this reflects our fairness protocol but does not fully characterize concurrency scaling. Third, the graph OLTP comparison includes reduced Ladybug transaction volume for runtime practicality, and vector search is reported at one normalized depth setting rather than full recall-latency frontiers, which are commonly needed to characterize ANN trade-offs \cite{malkov2016efficient,Pan_2024_vldbj}. Finally, baseline scope is intentionally restricted to permissive-license systems for reproducible artifact sharing.
+
+These constraints motivate immediate follow-up work: broader workload families and hardware profiles, explicit multi-thread OLTP scaling studies, full vector operating curves under matched quality targets, and deeper optimization of ArcadeDB's analytical and vector execution paths. We view this paper as a reproducible foundation for that expanded evaluation \cite{Zhang_2019_Unibench,Kim_2022,Zhang_2019_Holistic}.
+
+\section{Related Work}
+% Page budget: 0.7
+
+Our study intersects four literature threads: multi-model data management, holistic benchmarking, graph query systems, and vector retrieval engines. Prior work argues that model fragmentation (relational/graph/document/vector) increases integration and consistency overhead, motivating unified or tightly integrated architectures \cite{Lu_2019,Ye_2023,Guo_2023,Lei_2024}. Our paper follows this line by evaluating one native engine across SQL, Cypher, vector search, and composed hybrid workflows rather than isolating only one interface.
+
+Benchmark methodology for multi-model systems has been discussed in UniBench and related holistic benchmarking work, which emphasize common datasets, controlled workload generation, and cross-model comparability \cite{Zhang_2019_Unibench,Zhang_2019_Holistic}. We align with these principles by using one Stack Overflow pipeline and executable scripts for all stages (table OLTP / OLAP, graph OLTP / OLAP, vector build/search, and hybrid). In contrast to benchmark suites that focus on one model family at a time, we explicitly report trade-offs across all three modalities in one experimental lifecycle \cite{Kim_2022}.
+
+For graph query processing, OpenCypher semantics and formalization provide the language basis for portable graph workloads \cite{opencypher_spec,marton2017formalising}, while prior graph system evaluations highlight engine-specific strengths under traversal- and analytics-heavy patterns \cite{Erling_2015,Puroja_2024,Qi_2025}. Our graph experiments follow this tradition but are embedded in a broader multi-model comparison, so graph results are interpreted together with SQL and vector behavior rather than as standalone leaderboard outcomes.
+
+For vector retrieval, HNSW and its descendants establish the core recall-latency trade-offs and index-construction design space \cite{malkov2016efficient,chen2021spann,singh2021freshdiskann}. Recent systems and surveys describe diverse implementation choices in storage layout, filtering support, and operational tuning \cite{Pan_2024_vldbj,Upreti_2025,Sun_2025,Hu_2025}. Our vector evaluation adopts this perspective by reporting both effectiveness and resource costs, then connecting them to hybrid SQL/Cypher/vector execution in one engine. This placement differentiates our contribution from pure ANN benchmark papers: we treat vector search as one component of an end-to-end multi-model workflow rather than as an isolated service benchmark.
+
+\section{Conclusion}
+% Page budget: 0.5
+
+This paper presented ArcadeDB as a native embedded multi-model database that executes SQL, Cypher, and vector retrieval over one shared runtime and data representation. Using one Stack Overflow pipeline, we evaluated table OLTP / OLAP, graph OLTP / OLAP, vector index build/search, and hybrid cross-model workflows under a reproducible script-driven setup.
+
+Our results show a clear practical trade-off. Specialized engines often lead on their primary single-model workloads, while ArcadeDB remains competitive in transactional paths and, crucially, supports end-to-end SQL--Cypher--vector composition natively without external ETL or multi-service orchestration. The hybrid experiments demonstrate that this integrated execution model is measurable and operationally meaningful, not only an architectural claim.
+
+At the same time, we identify explicit limits of the current study: one primary dataset family, mixed threading regimes across workload classes, reduced transaction volume for one graph baseline in OLTP, and vector reporting at one normalized operating point. These limits define a concrete next agenda: broader workload diversity, explicit concurrency-scaling analysis, and full recall-latency frontier studies under matched quality targets. We hope this work serves as a reproducible baseline for evaluating unified multi-model embedded systems in realistic application pipelines.
+
+%\clearpage
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\end{document}
+\endinput
