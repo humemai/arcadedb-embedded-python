@@ -8,9 +8,9 @@ Covers JVM argument construction for the embedded runtime.
 
 - Defaults when no explicit JVM args are provided.
 - Merging custom `jvm_args` / env fallback while preserving mandatory flags:
-	- `-Djava.awt.headless=true`
-	- `--add-modules=jdk.incubator.vector`
-	- `--enable-native-access=ALL-UNNAMED`
+    - `-Djava.awt.headless=true`
+    - `--add-modules=jdk.incubator.vector`
+    - `--enable-native-access=ALL-UNNAMED`
 - Ensuring a default heap (`-Xmx4g`) is injected if the user omits it.
 - Avoiding duplicate flags when the user already provides them.
 - `ARCADEDB_JVM_ERROR_FILE` handling via `-XX:ErrorFile=...`.

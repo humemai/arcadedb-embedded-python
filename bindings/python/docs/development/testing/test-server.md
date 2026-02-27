@@ -21,7 +21,7 @@ server.start()
 db = server.create_database("mydb")
 
 # Use it
-db.schema.create_document_type("Person")  # Schema ops are auto-transactional
+db.command("sql", "CREATE DOCUMENT TYPE Person")
 with db.transaction():
     person = db.new_document("Person")
     person.set("name", "Alice").save()
@@ -62,8 +62,7 @@ with arcadedb.create_server(root_path="./databases") as server:
     # Create database through server
     db = server.create_database("testdb")
 
-    # Use Java API for operations
-    db.schema.create_document_type("Person")
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
     with db.transaction():
         person = db.new_document("Person")
         person.set("name", "Alice").save()

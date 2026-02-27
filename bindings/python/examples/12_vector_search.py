@@ -440,13 +440,43 @@ def search_arcadedb(
     latencies_ms: List[float] = []
     recalls: List[float] = []
 
+    def _extract_result_id(rec) -> int | None:
+        if rec is None:
+            return None
+
+        if isinstance(rec, dict):
+            rid = rec.get("id")
+            if rid is not None:
+                return int(rid)
+
+            inner = rec.get("record")
+            if inner is not None:
+                rec = inner
+
+        if hasattr(rec, "get"):
+            rid = rec.get("id")
+            if rid is not None:
+                return int(rid)
+
+        return None
+
     effective_overquery = max(1, int(round(overquery_factor)))
 
     for q_idx, qid in enumerate(qids):
         qvec = queries[q_idx]
         start = time.perf_counter()
 
-        if quantization.upper() == "PRODUCT":
+        if isinstance(index, dict):
+            db = index["db"]
+            index_name = index["name"]
+            qvec_literal = "[" + ", ".join(str(float(x)) for x in qvec.tolist()) + "]"
+            rs = db.query(
+                "sql",
+                f"SELECT vectorNeighbors('{index_name}', {qvec_literal}, {int(k)}) as res",
+            ).to_list()
+            neighbors = rs[0].get("res") if rs else []
+            results = [(rec, 0.0) for rec in neighbors]
+        elif quantization.upper() == "PRODUCT":
             results = index.find_nearest_approximate(
                 qvec, k=k, overquery_factor=effective_overquery
             )
@@ -461,9 +491,9 @@ def search_arcadedb(
 
         result_ids: List[int] = []
         for rec, _score in results:
-            rid = rec.get("id") if hasattr(rec, "get") else None
+            rid = _extract_result_id(rec)
             if rid is not None:
-                result_ids.append(int(rid))
+                result_ids.append(rid)
 
         gt_list = gt_full.get(qid)
         if not gt_list:
@@ -1816,13 +1846,11 @@ def main() -> None:
                 )
                 phases.append(record_phase("open_db", {}, dur, r0, r1))
 
-                index = db.schema.get_vector_index("VectorData", "vector")
-
                 (stats, dur, r0, r1) = timed_section(
                     "search",
                     lambda: run_repeated_search(
                         lambda run_queries, run_qids: search_arcadedb(
-                            index,
+                            {"db": db, "name": "VectorData[vector]"},
                             run_queries,
                             run_qids,
                             gt_full,

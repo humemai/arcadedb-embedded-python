@@ -348,9 +348,9 @@ class VertexCreator:
                     if len(batch_user_ids) >= self.batch_size:
                         with self.db.transaction():
                             for uid in batch_user_ids:
-                                vertex = self.db.new_vertex("User")
-                                vertex.set("userId", uid)
-                                vertex.save()
+                                self.db.command(
+                                    "sql", "INSERT INTO User SET userId = ?", uid
+                                )
                         user_count += len(batch_user_ids)
                         batch_count += 1
                         batch_user_ids = []
@@ -362,9 +362,9 @@ class VertexCreator:
                 if batch_user_ids:
                     with self.db.transaction():
                         for uid in batch_user_ids:
-                            vertex = self.db.new_vertex("User")
-                            vertex.set("userId", uid)
-                            vertex.save()
+                            self.db.command(
+                                "sql", "INSERT INTO User SET userId = ?", uid
+                            )
                     user_count += len(batch_user_ids)
                     batch_count += 1
         else:
@@ -526,11 +526,13 @@ class VertexCreator:
                                 if link_data["tmdbId"] is not None:
                                     props["tmdbId"] = link_data["tmdbId"]
 
-                            # Create vertex using Java API
-                            vertex = self.db.new_vertex("Movie")
-                            for key, value in props.items():
-                                vertex.set(key, value)
-                            vertex.save()
+                            assignments = ", ".join(f"{key} = ?" for key in props)
+                            values = [props[key] for key in props]
+                            self.db.command(
+                                "sql",
+                                f"INSERT INTO Movie SET {assignments}",
+                                *values,
+                            )
 
                     movie_count += len(chunk)
                     batch_count += 1
@@ -724,13 +726,14 @@ class EdgeCreator:
                             user_vertex = user_cache.get(user_id)
                             movie_vertex = movie_cache.get(movie_id)
                             if user_vertex and movie_vertex:
-                                edge = user_vertex.new_edge(
-                                    "RATED",
-                                    movie_vertex,
-                                    rating=rating,
-                                    timestamp=timestamp,
+                                user_rid = str(user_vertex.get_identity())
+                                movie_rid = str(movie_vertex.get_identity())
+                                sql = (
+                                    f"CREATE EDGE RATED "
+                                    f"FROM {user_rid} TO {movie_rid} "
+                                    f"SET rating = {rating}, timestamp = {timestamp}"
                                 )
-                                edge.save()
+                                self.db.command("sql", sql)
                                 edge_count += 1
                         else:
                             # SQL CREATE EDGE
@@ -815,13 +818,16 @@ class EdgeCreator:
                             user_vertex = user_cache.get(user_id)
                             movie_vertex = movie_cache.get(movie_id)
                             if user_vertex and movie_vertex:
-                                edge = user_vertex.new_edge(
-                                    "TAGGED",
-                                    movie_vertex,
-                                    tag=tag,
-                                    timestamp=timestamp,
+                                user_rid = str(user_vertex.get_identity())
+                                movie_rid = str(movie_vertex.get_identity())
+                                tag_escaped = escape_sql_string(tag)
+                                sql = (
+                                    f"CREATE EDGE TAGGED "
+                                    f"FROM {user_rid} TO {movie_rid} "
+                                    f"SET tag = '{tag_escaped}', "
+                                    f"timestamp = {timestamp}"
                                 )
-                                edge.save()
+                                self.db.command("sql", sql)
                                 edge_count += 1
                         else:
                             # SQL CREATE EDGE
@@ -1378,31 +1384,40 @@ def create_schema(db: Any, create_indexes: bool = True):
     print("Creating graph schema...")
     start_time = time.time()
 
-    # Create vertex types
-    db.schema.get_or_create_vertex_type("User")
-    db.schema.get_or_create_vertex_type("Movie")
-
-    # Create edge types
-    db.schema.get_or_create_edge_type("RATED")
-    db.schema.get_or_create_edge_type("TAGGED")
-
-    # Create properties
-    db.schema.get_or_create_property("User", "userId", "INTEGER")
-    db.schema.get_or_create_property("Movie", "movieId", "INTEGER")
-    db.schema.get_or_create_property("Movie", "title", "STRING")
-    db.schema.get_or_create_property("Movie", "genres", "STRING")
-    db.schema.get_or_create_property("Movie", "imdbId", "STRING")
-    db.schema.get_or_create_property("Movie", "tmdbId", "INTEGER")
-    db.schema.get_or_create_property("RATED", "rating", "FLOAT")
-    db.schema.get_or_create_property("RATED", "timestamp", "LONG")
-    db.schema.get_or_create_property("TAGGED", "tag", "STRING")
-    db.schema.get_or_create_property("TAGGED", "timestamp", "LONG")
+    # Create vertex/edge types and properties (idempotent)
+    schema_commands = [
+        "CREATE VERTEX TYPE User",
+        "CREATE VERTEX TYPE Movie",
+        "CREATE EDGE TYPE RATED",
+        "CREATE EDGE TYPE TAGGED",
+        "CREATE PROPERTY User.userId INTEGER",
+        "CREATE PROPERTY Movie.movieId INTEGER",
+        "CREATE PROPERTY Movie.title STRING",
+        "CREATE PROPERTY Movie.genres STRING",
+        "CREATE PROPERTY Movie.imdbId STRING",
+        "CREATE PROPERTY Movie.tmdbId INTEGER",
+        "CREATE PROPERTY RATED.rating FLOAT",
+        "CREATE PROPERTY RATED.timestamp LONG",
+        "CREATE PROPERTY TAGGED.tag STRING",
+        "CREATE PROPERTY TAGGED.timestamp LONG",
+    ]
+    for command in schema_commands:
+        try:
+            db.command("sql", command)
+        except Exception:
+            pass
 
     if create_indexes:
         print("Creating indexes...")
-        # Use get_or_create_index for idempotent index creation
-        db.schema.get_or_create_index("User", ["userId"], unique=True)
-        db.schema.get_or_create_index("Movie", ["movieId"], unique=True)
+        # Idempotent index creation
+        for command in (
+            "CREATE INDEX ON User (userId) UNIQUE",
+            "CREATE INDEX ON Movie (movieId) UNIQUE",
+        ):
+            try:
+                db.command("sql", command)
+            except Exception:
+                pass
         print("✓ Indexes created")
     else:
         print("⚠️  Indexes disabled (--no-index)")

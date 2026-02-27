@@ -56,8 +56,8 @@ Tests vector similarity search with NumPy arrays.
 import numpy as np
 
 # Create schema with HNSW (JVector) index
-db.schema.create_vertex_type("Document")
-db.schema.create_property("Document", "embedding", "ARRAY_OF_FLOATS")
+db.command("sql", "CREATE VERTEX TYPE Document")
+db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
 
 db.create_vector_index("Document", "embedding", dimensions=128)
 

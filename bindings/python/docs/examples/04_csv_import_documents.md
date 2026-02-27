@@ -168,7 +168,7 @@ need for explicit schema definition before import.
 ```python
 # Import with batch commits for performance
 import_options = {
-   "commitEvery": args.batch_size,  # Batch size for commits
+    "commitEvery": args.batch_size,  # Batch size for commits
 }
 stats = arcadedb.import_csv(db, movies_csv, "Movie", **import_options)
 
@@ -231,10 +231,10 @@ for query_name, query in test_queries:
 ### Step 9: Create Indexes (AFTER Import)
 
 ```python
-db.schema.create_index("Movie", ["movieId"], unique=True)
-db.schema.create_index("Rating", ["userId", "movieId"], unique=False)  # Composite!
-db.schema.create_index("Link", ["movieId"], unique=True)
-db.schema.create_index("Tag", ["movieId"], unique=False)
+db.command("sql", "CREATE INDEX ON Movie (movieId) UNIQUE")
+db.command("sql", "CREATE INDEX ON Rating (userId, movieId) NOTUNIQUE")  # Composite!
+db.command("sql", "CREATE INDEX ON Link (movieId) UNIQUE")
+db.command("sql", "CREATE INDEX ON Tag (movieId) NOTUNIQUE")
 ```
 
 **Why create indexes AFTER import?**

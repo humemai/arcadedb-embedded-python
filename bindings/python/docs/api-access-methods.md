@@ -4,7 +4,11 @@ ArcadeDB Python bindings provide **two distinct access methods** that can be use
 
 ## Java API (Embedded Mode)
 
-Direct JVM method calls via JPype - **recommended for most Python applications**.
+Direct JVM method calls via JPype for embedded/local runtime access.
+
+!!! note "DSL-first guidance"
+    Prefer SQL/OpenCypher via `db.command(...)` and `db.query(...)` for schema, CRUD, and graph operations.
+    Wrapper APIs remain available, but examples and guides are standardized on DSL usage.
 
 ### Characteristics
 
@@ -23,16 +27,13 @@ import arcadedb_embedded as arcadedb
 # Direct database access - NO server needed
 with arcadedb.create_database("./mydb") as db:
     # Create schema (auto-transactional)
-    db.schema.create_document_type("Person")
-    db.schema.create_property("Person", "name", "STRING")
-    db.schema.create_property("Person", "age", "INTEGER")
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
 
     # Insert data (requires transaction)
     with db.transaction():
-        person = db.new_document("Person")
-        person.set("name", "Alice")
-        person.set("age", 30)
-        person.save()
+        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
 
     # Query data (SQL is fine for reads)
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
@@ -54,16 +55,13 @@ try:
     db = server.create_database("mydb")
 
     # Schema operations are auto-transactional
-    db.schema.create_document_type("Person")
-    db.schema.create_property("Person", "name", "STRING")
-    db.schema.create_property("Person", "age", "INTEGER")
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
 
     # Data operations require explicit transactions
     with db.transaction():
-        person = db.new_document("Person")
-        person.set("name", "Alice")
-        person.set("age", 30)
-        person.save()
+        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
 
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
     for record in result:
@@ -130,8 +128,7 @@ try:
     if not response.ok:
         raise RuntimeError(f"Insert failed: {response.status_code} {response.text}")
     # Note: HTTP commands are auto-transactional per request. For multi-statement atomicity, use
-    # the HTTP transactional endpoints or perform batch writes with the embedded API via
-    # `with db.transaction():`.
+    # the HTTP transactional endpoints or embedded `with db.transaction():` blocks.
 
     # Query data via HTTP
     response = requests.post(
@@ -205,16 +202,13 @@ try:
     db = server.create_database("hybriddb")
 
     # Schema operations are auto-transactional
-    db.schema.create_document_type("Person")
-    db.schema.create_property("Person", "name", "STRING")
-    db.schema.create_property("Person", "age", "INTEGER")
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
 
     # Data operations require explicit transactions
     with db.transaction():
-        person = db.new_document("Person")
-        person.set("name", "Alice")
-        person.set("age", 30)
-        person.save()
+        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
 
     # Query same data using HTTP API (remote access)
     auth = HTTPBasicAuth("root", "password123")
@@ -248,11 +242,11 @@ finally:
 
 ## When to Use Each
 
-### Use Java API When:
+### Use Embedded Mode When:
 
 - Single Python process application
 - Maximum performance required
-- Complex data manipulation
+- Local SQL/OpenCypher workflows
 - Batch processing
 - Local development/testing
 
@@ -265,16 +259,16 @@ finally:
 - Microservices architecture
 - Cross-network access
 
-### Use Both When:
+### Use Hybrid Access When:
 
 - Local high-performance operations + remote monitoring
 - Hybrid applications with embedded + web components
-- Development (Java API) + production monitoring (HTTP API)
+- Development (embedded) + production monitoring (HTTP API)
 
 ## Common Misconceptions
 
-- ❌ **"Java API is only for Java"**
-    - ✅ Java API is Python calling Java via JPype (fully Pythonic)
+- ❌ **"Embedded mode is only for Java"**
+    - ✅ Embedded mode is Python calling Java via JPype (fully Pythonic)
 - ❌ **"HTTP API is inferior"**
     - ✅ HTTP API enables remote access (different purpose)
 - ❌ **"Must choose one or the other"**

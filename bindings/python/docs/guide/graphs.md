@@ -12,70 +12,58 @@ ArcadeDB's graph model consists of:
 - **Edges (Relationships)**: Connections between vertices with optional properties
 - **Types**: Schema definitions for vertices and edges
 
-## Creating Graph Schema (Python API)
+## Creating Graph Schema (SQL)
 
-Define vertex and edge types with the embedded API (no SQL needed):
+Define vertex and edge types with SQL statements:
 
 ```python
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./social") as db:
     # Create vertex types
-    db.schema.create_vertex_type("Person")
-    db.schema.create_vertex_type("Company")
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE VERTEX TYPE Company")
 
     # Create edge types
-    db.schema.create_edge_type("Knows")
-    db.schema.create_edge_type("WorksFor")
+    db.command("sql", "CREATE EDGE TYPE Knows")
+    db.command("sql", "CREATE EDGE TYPE WorksFor")
 
     # Add properties to vertices
-    db.schema.create_property("Person", "name", "STRING")
-    db.schema.create_property("Person", "age", "INTEGER")
-    db.schema.create_property("Person", "email", "STRING")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
+    db.command("sql", "CREATE PROPERTY Person.email STRING")
 
     # Add properties to edges
-    db.schema.create_property("Knows", "since", "DATE")
-    db.schema.create_property("WorksFor", "role", "STRING")
+    db.command("sql", "CREATE PROPERTY Knows.since DATE")
+    db.command("sql", "CREATE PROPERTY WorksFor.role STRING")
 
     print("✅ Graph schema created")
 ```
 
-!!! info "Prefer the embedded API"
-    SQL still works, but the Python API is safer (no string quoting issues) and keeps your code Python-first.
+!!! info "DSL-first guidance"
+    Prefer SQL/OpenCypher for schema and CRUD examples in all app-facing docs.
 
 ## Creating Vertices
 
-### Using the API (recommended)
+### Using SQL (recommended)
 
-Create vertices programmatically with `new_vertex()`:
-
-```python
-with db.transaction():
-    # Create a vertex using the API
-    vertex = db.new_vertex("Person")
-    vertex.set("name", "Charlie")
-    vertex.set("age", 35)
-    vertex.set("email", "charlie@example.com")
-    vertex.save()
-
-    print(f"✅ Created vertex with RID: {vertex.get_rid()}")
-```
-
-### Using SQL
-
-SQL is still available if you prefer declarative inserts:
+Create vertices declaratively with SQL:
 
 ```python
 with db.transaction():
-    db.command("sql", """
-        CREATE VERTEX Person
-        SET name = 'Alice', age = 30, email = 'alice@example.com'
-    """)
+    db.command(
+        "sql",
+        "INSERT INTO Person SET name = ?, age = ?, email = ?",
+        "Charlie",
+        35,
+        "charlie@example.com",
+    )
+
+    print("✅ Created vertex")
 ```
 
 !!! tip "When to Use Each Approach"
-    - **API (default)**: Programmatic control, safer than string-building
-    - **SQL**: When you’re talking to a remote/server instance (HTTP/Binary)
+    - **SQL/OpenCypher (default)**: Consistent across embedded and server modes
 
 ## Creating Edges
 
@@ -83,103 +71,61 @@ with db.transaction():
 directly. This is the proper graph model - edges represent connections between existing
 vertices.
 
-### Why No `db.new_edge()` Method?
+### Why create edges via SQL `CREATE EDGE`?
 
-Unlike `db.new_vertex()` and `db.new_document()`, there is no `db.new_edge()` method. This is by design in ArcadeDB's API:
+`CREATE EDGE ... FROM (...) TO (...)` is the recommended graph-write pattern in docs:
 
-- Edges conceptually **belong to vertices** - they represent relationships
-- You must have both vertices before creating a connection
-- Edges are created by calling `vertex.new_edge(edgeType, toVertex, **properties)`
+- Clear source/destination semantics
+- Works consistently in embedded and server modes
+- Avoids wrapper-level coupling in examples
 
-### Creating Edges with the Python Graph API (recommended)
+### Creating Edges with SQL (recommended)
 
-To create edges programmatically, you must:
-
-1. Create or retrieve both vertices
-2. Call `new_edge()` on the source vertex
-3. Save the edge
+To create edges declaratively, identify source and destination vertices in subqueries:
 
 ```python
 with db.transaction():
-    # Create vertices
-    alice = db.new_vertex("Person")
-    alice.set("name", "Alice")
-    alice.set("id", 1)
-    alice.save()
-
-    bob = db.new_vertex("Person")
-    bob.set("name", "Bob")
-    bob.set("id", 2)
-    bob.save()
-
-    # Create edge FROM alice TO bob
-    # Note: Called on the vertex, not the database!
-    edge = alice.new_edge("Knows", bob)
-    edge.set("since", "2020-01-15")
-    edge.save()
-
-    print(f"✅ Created edge: {alice.get('name')} -> {bob.get('name')}")
-```
-
-### Creating Edges with SQL
-
-You can also create edges declaratively:
-
-```python
-with db.transaction():
+    db.command("sql", "INSERT INTO Person SET id = 1, name = 'Alice'")
+    db.command("sql", "INSERT INTO Person SET id = 2, name = 'Bob'")
     db.command("sql", """
         CREATE EDGE Knows
         FROM (SELECT FROM Person WHERE id = 1)
         TO (SELECT FROM Person WHERE id = 2)
         SET since = date('2020-01-15')
     """)
+
+    print("✅ Created edge: Alice -> Bob")
 ```
 
-### Creating Edges with Retrieved Vertices
-
-Often you'll create edges between existing vertices:
+### Creating Edges with Retrieved Vertices (SQL pattern)
 
 ```python
-# Query for existing vertices
-result_alice = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
-result_bob = db.query("sql", "SELECT FROM Person WHERE name = 'Bob'")
-
-if result_alice.has_next() and result_bob.has_next():
-    alice = result_alice.next().get_vertex()
-    bob = result_bob.next().get_vertex()
-
-    with db.transaction():
-        # Create edge between existing vertices
-        edge = alice.new_edge("Knows", bob)
-        edge.set("since", "2020-01-15")
-        edge.save()
+with db.transaction():
+    db.command(
+        "sql",
+        """
+        CREATE EDGE Knows
+        FROM (SELECT FROM Person WHERE name = 'Alice')
+        TO (SELECT FROM Person WHERE name = 'Bob')
+        SET since = date('2020-01-15')
+        """,
+    )
 ```
 
-!!! warning "Vertex Must Be Saved First"
-    Before creating an edge, both vertices must be saved (have a valid RID).
-    Attempting to create an edge with unsaved vertices will raise an error:
-
-    ```
-    IllegalArgumentException: Current vertex is not persistent. Call save() first
-    ```
+!!! warning "Vertex must exist before edge creation"
+    `CREATE EDGE ... FROM (...) TO (...)` requires both endpoint subqueries to return
+    persisted vertices. If either side matches no record, the edge creation fails.
 
 ### Listing Edges from a Vertex
 
-The graph wrappers provide directional helpers with optional label filters:
+Use SQL/OpenCypher traversals for edge listing:
 
 ```python
-# Outgoing edges (optionally filter by label)
-out_edges = alice.get_out_edges()           # all labels
-knows_out = alice.get_out_edges("Knows")    # only Knows edges
-
-# Incoming edges
-in_edges = alice.get_in_edges()
-
-# Both directions
-both_edges = alice.get_both_edges()
+out_edges = db.query(
+    "sql",
+    "SELECT expand(outE('Knows')) FROM Person WHERE name = 'Alice'",
+).to_list()
 ```
-
-Each item is an `Edge` wrapper; use edge.get_out() / edge.get_in() to reach the connected vertices.
 
 ### Creating Edges with OpenCypher
 
@@ -216,43 +162,31 @@ def create_social_network():
     with arcadedb.create_database("./social_network") as db:
         # 1. Create schema
         print("Creating schema...")
-        db.schema.create_vertex_type("Person")
-        db.schema.create_edge_type("Knows")
-        db.schema.create_property("Person", "name", "STRING")
-        db.schema.create_property("Person", "age", "INTEGER")
-        db.schema.create_property("Knows", "since", "INTEGER")
+        db.command("sql", "CREATE VERTEX TYPE Person")
+        db.command("sql", "CREATE EDGE TYPE Knows")
+        db.command("sql", "CREATE PROPERTY Person.name STRING")
+        db.command("sql", "CREATE PROPERTY Person.age INTEGER")
+        db.command("sql", "CREATE PROPERTY Knows.since INTEGER")
 
         # 2. Create vertices and edges
         print("Creating graph data...")
         with db.transaction():
-            # Create people
-            alice = db.new_vertex("Person")
-            alice.set("name", "Alice")
-            alice.set("age", 30)
-            alice.save()
+            db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+            db.command("sql", "INSERT INTO Person SET name = 'Bob', age = 25")
+            db.command("sql", "INSERT INTO Person SET name = 'Charlie', age = 35")
 
-            bob = db.new_vertex("Person")
-            bob.set("name", "Bob")
-            bob.set("age", 25)
-            bob.save()
-
-            charlie = db.new_vertex("Person")
-            charlie.set("name", "Charlie")
-            charlie.set("age", 35)
-            charlie.save()
-
-            # Create relationships
-            edge1 = alice.new_edge("Knows", bob)
-            edge1.set("since", 2020)
-            edge1.save()
-
-            edge2 = bob.new_edge("Knows", charlie)
-            edge2.set("since", 2019)
-            edge2.save()
-
-            edge3 = charlie.new_edge("Knows", alice)
-            edge3.set("since", 2021)
-            edge3.save()
+            db.command(
+                "sql",
+                "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name='Alice') TO (SELECT FROM Person WHERE name='Bob') SET since = 2020",
+            )
+            db.command(
+                "sql",
+                "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name='Bob') TO (SELECT FROM Person WHERE name='Charlie') SET since = 2019",
+            )
+            db.command(
+                "sql",
+                "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name='Charlie') TO (SELECT FROM Person WHERE name='Alice') SET since = 2021",
+            )
 
         print("✅ Graph created\n")
 
@@ -291,19 +225,17 @@ if __name__ == "__main__":
 ```python
 # ✅ Good - wrapped in transaction
 with db.transaction():
-    vertex = db.new_vertex("Person")
-    vertex.set("name", "Alice")
-    vertex.save()
+    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
 
 # ❌ Bad - will fail
-vertex = db.new_vertex("Person")  # Error: No transaction!
+db.command("sql", "INSERT INTO Person SET name = 'Alice'")  # Error: No transaction!
 ```
 
 ### 2. Create Indexes for Frequent Lookups
 
 ```python
-# Index properties used in WHERE clauses (Python schema API)
-db.schema.create_index("Person", ["name", "email"], unique=False)
+# Index properties used in WHERE clauses
+db.command("sql", "CREATE INDEX ON Person (name, email) NOTUNIQUE")
 ```
 
 ### 3. Use OpenCypher for Graph Queries
@@ -318,21 +250,16 @@ result = db.query("opencypher", """
 """)
 ```
 
-### 4. Save Vertices Before Creating Edges
+### 4. Ensure Vertices Exist Before Creating Edges
 
 ```python
 with db.transaction():
-    v1 = db.new_vertex("Person")
-    v1.set("name", "Alice")
-    v1.save()  # ✅ Must save first!
-
-    v2 = db.new_vertex("Person")
-    v2.set("name", "Bob")
-    v2.save()  # ✅ Must save first!
-
-    # Now can create edge
-    edge = v1.new_edge("Knows", v2)
-    edge.save()
+    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+    db.command("sql", "INSERT INTO Person SET name = 'Bob'")
+    db.command(
+        "sql",
+        "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name='Alice') TO (SELECT FROM Person WHERE name='Bob')",
+    )
 ```
 
 ## Deleting Records
@@ -365,39 +292,9 @@ with db.transaction():
 - ✅ Batch delete multiple records
 - ✅ Best for query results
 
-#### 2. Wrapper `.delete()` Method
+#### 2. Prefer SQL DELETE for all deletion paths
 
-Use the `.delete()` method on fresh lookups:
-
-```python
-with db.transaction():
-    # Works on objects from lookup_by_rid()
-    vertex = db.lookup_by_rid("#1:0")
-    vertex.delete()
-
-    # Works on newly created objects
-    new_vertex = db.new_vertex("Person")
-    new_vertex.set("name", "Bob")
-    new_vertex.save()
-    new_vertex.delete()
-```
-
-**⚠️ Important Limitation:**
-
-- ❌ Does NOT work on query results
-- ✅ Works on fresh lookups via `lookup_by_rid()`
-- ✅ Works on newly created objects
-
-```python
-# ❌ DON'T DO THIS - delete() won't work on query results
-results = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
-for record in results:
-    record.delete()  # This is a no-op!
-
-# ✅ DO THIS INSTEAD - use SQL DELETE
-with db.transaction():
-    db.command("sql", "DELETE FROM Person WHERE name = 'Alice'")
-```
+Use `DELETE FROM ...` for consistency in docs and production code.
 
 ### Cascade Behavior
 
@@ -408,11 +305,12 @@ When you delete a vertex, **all connected edges are automatically deleted**:
 ```python
 with db.transaction():
     # Create test data
-    alice = db.new_vertex("Person").set("name", "Alice").save()
-    bob = db.new_vertex("Person").set("name", "Bob").save()
-    edge = alice.new_edge("Knows", bob).save()
-
-    alice_id = str(alice.get_identity())
+    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+    db.command("sql", "INSERT INTO Person SET name = 'Bob'")
+    db.command(
+        "sql",
+        "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name='Alice') TO (SELECT FROM Person WHERE name='Bob')",
+    )
 
 # Verify setup
 vertices_before = list(db.query("sql", "SELECT FROM Person"))
@@ -421,8 +319,7 @@ print(f"Before: {len(vertices_before)} vertices, {len(edges_before)} edges")
 
 # Delete vertex
 with db.transaction():
-    alice = db.lookup_by_rid(alice_id)
-    alice.delete()
+    db.command("sql", "DELETE FROM Person WHERE name = 'Alice'")
 
 # Check results
 vertices_after = list(db.query("sql", "SELECT FROM Person"))
@@ -438,16 +335,16 @@ When you delete an edge, **vertices remain intact**:
 ```python
 with db.transaction():
     # Create test data
-    alice = db.new_vertex("Person").set("name", "Alice").save()
-    bob = db.new_vertex("Person").set("name", "Bob").save()
-    edge = alice.new_edge("Knows", bob).save()
-
-    edge_id = str(edge.get_identity())
+    db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+    db.command("sql", "INSERT INTO Person SET name = 'Bob'")
+    db.command(
+        "sql",
+        "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name='Alice') TO (SELECT FROM Person WHERE name='Bob')",
+    )
 
 # Delete edge
 with db.transaction():
-    edge = db.lookup_by_rid(edge_id)
-    edge.delete()
+    db.command("sql", "DELETE FROM Knows")
 
 # Check results - vertices still exist
 vertices = list(db.query("sql", "SELECT FROM Person"))
@@ -460,11 +357,11 @@ print(f"Edges: {len(edges)}")        # Output: 0
 
 | Scenario | Recommended Approach | Why |
 |----------|----------------------|-----|
-| Delete from query results | SQL DELETE | `.delete()` doesn't work on query results |
-| Delete single record by RID | SQL DELETE or `.delete()` | Both work, SQL is more flexible |
-| Delete with complex WHERE clause | SQL DELETE | Much more readable and powerful |
-| Delete in loop | SQL DELETE with WHERE clause | Single operation is faster than loop |
-| Interactive/programmatic delete | `.delete()` on fresh lookup | Immediate feedback on same object |
+| Delete from query results | SQL DELETE | Works predictably |
+| Delete single record by RID | SQL DELETE | Consistent style |
+| Delete with complex WHERE clause | SQL DELETE | Readable and powerful |
+| Delete in loop | SQL DELETE with WHERE clause | Faster than per-record calls |
+| Interactive/programmatic delete | SQL DELETE | Same behavior across modes |
 
 **Summary: Use SQL DELETE by default**, except for immediate interactive deletion where you need to delete an object you just fetched.
 
@@ -478,17 +375,17 @@ ArcadeDB supports OpenCypher for declarative graph pattern matching.
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./graph_db") as db:
-    # Create schema (auto-transactional)
-    db.schema.create_vertex_type("Person")
-    db.schema.create_edge_type("Knows")
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE EDGE TYPE Knows")
 
-    # Insert data with Python API and query via OpenCypher
+    # Insert data and query via OpenCypher
     with db.transaction():
-        alice = db.new_vertex("Person").set("name", "Alice").set("age", 30)
-        bob = db.new_vertex("Person").set("name", "Bob").set("age", 25)
-        alice.save()
-        bob.save()
-        alice.new_edge("Knows", bob).save()
+        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        db.command("sql", "INSERT INTO Person SET name = 'Bob', age = 25")
+        db.command(
+            "sql",
+            "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name='Alice') TO (SELECT FROM Person WHERE name='Bob')",
+        )
 
     # Query with OpenCypher
     results = db.query("opencypher", """

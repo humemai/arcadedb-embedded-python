@@ -24,11 +24,9 @@ import arcadedb_embedded as arcadedb
 # Simple creation
 with arcadedb.create_database("./mydb") as db:
     # Use the database
-    db.schema.create_vertex_type("User")
+    db.command("sql", "CREATE VERTEX TYPE User")
     with db.transaction():
-        vertex = db.new_vertex("User")
-        vertex.set("name", "Alice")
-        vertex.save()
+        db.command("sql", "INSERT INTO User SET name = ?", "Alice")
 ```
 
 ### Open Existing Database
@@ -86,14 +84,12 @@ with arcadedb.open_database("./mydb") as db:
 ```python
 with arcadedb.open_database("./mydb") as db:
     # Create schema
-    db.schema.create_vertex_type("Person")
-    db.schema.create_property("Person", "name", "STRING")
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
 
     # Insert data
     with db.transaction():
-        person = db.new_vertex("Person")
-        person.set("name", "Bob")
-        person.save()
+        db.command("sql", "INSERT INTO Person SET name = ?", "Bob")
 
     # Query data
     result = db.query("sql", "SELECT FROM Person")
@@ -192,9 +188,7 @@ with arcadedb.open_database("./mydb") as db:
 # Open database and use transaction
 with arcadedb.open_database("./mydb") as db:
     with db.transaction():
-        vertex = db.new_vertex("User")
-        vertex.set("name", "Charlie")
-        vertex.save()
+        db.command("sql", "INSERT INTO User SET name = ?", "Charlie")
 # Transaction committed, database closed
 ```
 
@@ -304,15 +298,14 @@ def init_database(path: str):
     # Create if doesn't exist
     if not arcadedb.database_exists(path):
         with arcadedb.create_database(path) as db:
-            # Prefer Schema API for embedded usage (auto-transactional)
-            db.schema.create_vertex_type("User")
-            db.schema.create_property("User", "email", "STRING")
-            db.schema.create_index("User", ["email"], unique=True)
+            db.command("sql", "CREATE VERTEX TYPE User")
+            db.command("sql", "CREATE PROPERTY User.email STRING")
+            db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 
-            db.schema.create_vertex_type("Post")
-            db.schema.create_property("Post", "title", "STRING")
+            db.command("sql", "CREATE VERTEX TYPE Post")
+            db.command("sql", "CREATE PROPERTY Post.title STRING")
 
-            db.schema.create_edge_type("Authored")
+            db.command("sql", "CREATE EDGE TYPE Authored")
 
             print(f"Database initialized at {path}")
 
@@ -378,10 +371,9 @@ def migrate_database(old_path: str, new_path: str):
     with arcadedb.open_database(old_path) as old_db, \
          arcadedb.create_database(new_path) as new_db:
         # Copy schema
-        # Create types (Schema API is auto-transactional)
-        new_db.schema.create_vertex_type("User")
-        new_db.schema.create_vertex_type("Post")
-        new_db.schema.create_edge_type("Authored")
+        new_db.command("sql", "CREATE VERTEX TYPE User")
+        new_db.command("sql", "CREATE VERTEX TYPE Post")
+        new_db.command("sql", "CREATE EDGE TYPE Authored")
 
         # Copy data
         batch_size = 1000
@@ -395,20 +387,24 @@ def migrate_database(old_path: str, new_path: str):
             if len(users_batch) >= batch_size:
                 with new_db.transaction():
                     for u in users_batch:
-                        new_user = new_db.new_vertex("User")
-                        new_user.set("name", u.get("name"))
-                        new_user.set("email", u.get("email"))
-                        new_user.save()
+                        new_db.command(
+                            "sql",
+                            "INSERT INTO User SET name = ?, email = ?",
+                            u.get("name"),
+                            u.get("email"),
+                        )
                 users_batch = []
 
         # Flush remaining
         if users_batch:
             with new_db.transaction():
                 for u in users_batch:
-                    new_user = new_db.new_vertex("User")
-                    new_user.set("name", u.get("name"))
-                    new_user.set("email", u.get("email"))
-                    new_user.save()
+                    new_db.command(
+                        "sql",
+                        "INSERT INTO User SET name = ?, email = ?",
+                        u.get("name"),
+                        u.get("email"),
+                    )
 
         print("Migration complete")
 

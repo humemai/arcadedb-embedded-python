@@ -54,13 +54,11 @@ This pattern applies to many domains:
 Represent entities in your domain:
 
 ```python
-# Person vertex with properties (using embedded ArcadeDB)
 with db.transaction():
-    person = db.new_vertex("Person")
-    person.set("name", "Alice Johnson")
-    person.set("age", 28)
-    person.set("city", "New York")
-    person.save()
+    db.command(
+        "sql",
+        "INSERT INTO Person SET name = 'Alice Johnson', age = 28, city = 'New York'",
+    )
 ```
 
 ### Edges (Relationships)
@@ -70,13 +68,15 @@ Connect vertices with optional properties:
 ```python
 # Bidirectional friendship with relationship metadata
 with db.transaction():
-    alice = list(db.query("sql", "SELECT FROM Person WHERE name = 'Alice Johnson'"))[0].get_vertex()
-    bob = list(db.query("sql", "SELECT FROM Person WHERE name = 'Bob Smith'"))[0].get_vertex()
-
-    edge = alice.new_edge("FRIEND_OF", bob)
-    edge.set("since", "2020-05-15")
-    edge.set("closeness", "close")
-    edge.save()
+    db.command(
+        "sql",
+        """
+        CREATE EDGE FRIEND_OF
+        FROM (SELECT FROM Person WHERE name = 'Alice Johnson')
+        TO (SELECT FROM Person WHERE name = 'Bob Smith')
+        SET since = '2020-05-15', closeness = 'close'
+        """,
+    )
 ```
 
 ### Schema Definition
@@ -88,23 +88,23 @@ import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./social_network_db") as db:
     # Create vertex type with properties (schema ops are auto-transactional)
-    db.schema.create_vertex_type("Person")
-    db.schema.create_property("Person", "name", "STRING")
-    db.schema.create_property("Person", "age", "INTEGER")
-    db.schema.create_property("Person", "city", "STRING")
-    db.schema.create_property("Person", "joined_date", "DATE")
-    db.schema.create_property("Person", "email", "STRING")      # Optional (can be NULL)
-    db.schema.create_property("Person", "phone", "STRING")      # Optional (can be NULL)
-    db.schema.create_property("Person", "verified", "BOOLEAN")
-    db.schema.create_property("Person", "reputation", "FLOAT")  # Optional (can be NULL)
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
+    db.command("sql", "CREATE PROPERTY Person.city STRING")
+    db.command("sql", "CREATE PROPERTY Person.joined_date DATE")
+    db.command("sql", "CREATE PROPERTY Person.email STRING")      # Optional (can be NULL)
+    db.command("sql", "CREATE PROPERTY Person.phone STRING")      # Optional (can be NULL)
+    db.command("sql", "CREATE PROPERTY Person.verified BOOLEAN")
+    db.command("sql", "CREATE PROPERTY Person.reputation FLOAT")  # Optional (can be NULL)
 
     # Create edge type with properties
-    db.schema.create_edge_type("FRIEND_OF")
-    db.schema.create_property("FRIEND_OF", "since", "DATE")
-    db.schema.create_property("FRIEND_OF", "closeness", "STRING")
+    db.command("sql", "CREATE EDGE TYPE FRIEND_OF")
+    db.command("sql", "CREATE PROPERTY FRIEND_OF.since DATE")
+    db.command("sql", "CREATE PROPERTY FRIEND_OF.closeness STRING")
 
     # Create indexes for performance
-    db.schema.create_index("Person", ["name"], unique=False)
+    db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
 ```
 
 ## Query Examples
@@ -274,10 +274,10 @@ Create indexes on frequently queried properties:
 
 ```python
 # Index on person names for fast lookups
-db.schema.create_index("Person", ["name"], unique=False)
+db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
 
 # For unique identifiers
-db.schema.create_index("Person", ["person_id"], unique=True)
+db.command("sql", "CREATE INDEX ON Person (person_id) UNIQUE")
 ```
 
 ### Batch Operations

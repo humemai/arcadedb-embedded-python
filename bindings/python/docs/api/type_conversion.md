@@ -327,7 +327,7 @@ from decimal import Decimal
 db = arcadedb.create_database("./type_demo")
 
 # Create schema (auto-transactional)
-db.schema.create_vertex_type("Product")
+db.command("sql", "CREATE VERTEX TYPE Product")
 
 # Test all type conversions
 with db.transaction():
