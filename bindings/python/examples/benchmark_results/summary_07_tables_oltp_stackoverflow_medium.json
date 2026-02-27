@@ -1,0 +1,4493 @@
+{
+  "meta": {
+    "name": "07 tables OLTP matrix summary",
+    "generated_at_utc": "2026-02-27T12:38:09Z",
+    "input_dir": "/mnt/ssd2/repos/arcadedb-embedded-python/bindings/python/examples/my_test_databases",
+    "dataset": "stackoverflow-medium",
+    "dataset_size_profile": "medium",
+    "dataset_size_source": "dataset name suffix",
+    "label_prefix": "sweep07",
+    "total_runs": 18,
+    "datasets_found": [
+      "stackoverflow-medium"
+    ]
+  },
+  "parameter_keys": [
+    "arcadedb_version",
+    "batch_size",
+    "dataset",
+    "db",
+    "docker_image",
+    "duckdb_version",
+    "heap_size",
+    "mem_limit",
+    "run_label",
+    "seed",
+    "threads",
+    "transactions"
+  ],
+  "parameters_detected": {
+    "arcadedb_version": [
+      "26.2.1"
+    ],
+    "batch_size": [
+      "5000"
+    ],
+    "dataset": [
+      "stackoverflow-medium"
+    ],
+    "db": [
+      "arcadedb",
+      "duckdb",
+      "postgresql",
+      "sqlite"
+    ],
+    "docker_image": [
+      "python:3.12-slim"
+    ],
+    "duckdb_version": [
+      "1.4.4"
+    ],
+    "heap_size": [
+      "3276m",
+      "4g"
+    ],
+    "mem_limit": [
+      "4g"
+    ],
+    "run_label": [
+      "sweep07_t01_r01_arcadedb_s00000",
+      "sweep07_t01_r01_duckdb_s00002",
+      "sweep07_t01_r01_postgresql_s00003",
+      "sweep07_t01_r01_sqlite_s00001",
+      "sweep07_t01_r02_arcadedb_s00004",
+      "sweep07_t01_r02_duckdb_s00006",
+      "sweep07_t01_r02_postgresql_s00007",
+      "sweep07_t01_r02_sqlite_s00005",
+      "sweep07_t01_r03_arcadedb_s00008",
+      "sweep07_t01_r03_duckdb_s00010",
+      "sweep07_t01_r03_postgresql_s00011",
+      "sweep07_t01_r03_sqlite_s00009",
+      "sweep07_t08_r01_arcadedb_s00000",
+      "sweep07_t08_r01_sqlite_s00001",
+      "sweep07_t08_r02_arcadedb_s00002",
+      "sweep07_t08_r02_sqlite_s00003",
+      "sweep07_t08_r03_arcadedb_s00004",
+      "sweep07_t08_r03_sqlite_s00005"
+    ],
+    "seed": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9"
+    ],
+    "threads": [
+      "1",
+      "8"
+    ],
+    "transactions": [
+      "100000"
+    ]
+  },
+  "numeric_metric_keys": [
+    "batch_size",
+    "counts_time_s",
+    "disk_after_oltp_bytes",
+    "disk_after_preload_bytes",
+    "disk_usage.du_bytes",
+    "final_counts.Badge",
+    "final_counts.Comment",
+    "final_counts.Post",
+    "final_counts.PostHistory",
+    "final_counts.PostLink",
+    "final_counts.Tag",
+    "final_counts.User",
+    "final_counts.Vote",
+    "latency_summary.ops.delete.count",
+    "latency_summary.ops.delete.p50_ms",
+    "latency_summary.ops.delete.p95_ms",
+    "latency_summary.ops.delete.p99_ms",
+    "latency_summary.ops.insert.count",
+    "latency_summary.ops.insert.p50_ms",
+    "latency_summary.ops.insert.p95_ms",
+    "latency_summary.ops.insert.p99_ms",
+    "latency_summary.ops.read.count",
+    "latency_summary.ops.read.p50_ms",
+    "latency_summary.ops.read.p95_ms",
+    "latency_summary.ops.read.p99_ms",
+    "latency_summary.ops.update.count",
+    "latency_summary.ops.update.p50_ms",
+    "latency_summary.ops.update.p95_ms",
+    "latency_summary.ops.update.p99_ms",
+    "latency_summary.overall.count",
+    "latency_summary.overall.p50_ms",
+    "latency_summary.overall.p95_ms",
+    "latency_summary.overall.p99_ms",
+    "load_counts_time_s",
+    "preload_counts.Badge",
+    "preload_counts.Comment",
+    "preload_counts.Post",
+    "preload_counts.PostHistory",
+    "preload_counts.PostLink",
+    "preload_counts.Tag",
+    "preload_counts.User",
+    "preload_counts.Vote",
+    "preload_time_s",
+    "rss_client_peak_kb",
+    "rss_peak_kb",
+    "rss_server_peak_kb",
+    "seed",
+    "table_schema.Badge.column_count",
+    "table_schema.Comment.column_count",
+    "table_schema.Post.column_count",
+    "table_schema.PostHistory.column_count",
+    "table_schema.PostLink.column_count",
+    "table_schema.Tag.column_count",
+    "table_schema.User.column_count",
+    "table_schema.Vote.column_count",
+    "threads",
+    "throughput_ops_s",
+    "total_time_s",
+    "transactions"
+  ],
+  "boolean_metric_keys": [],
+  "run_fields": [
+    "dataset",
+    "db",
+    "run_label",
+    "seed",
+    "du_bytes",
+    "du_human",
+    "result_file",
+    "numeric_metrics",
+    "human_readable_metrics",
+    "boolean_metrics",
+    "parameters"
+  ],
+  "runs": [
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "run_label": "sweep07_t01_r01_arcadedb_s00000",
+      "seed": 0,
+      "du_bytes": 2793754624,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_arcadedb_sweep07_t01_r01_arcadedb_s00000/results_sweep07_t01_r01_arcadedb_s00000.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.002450704574584961,
+        "disk_after_oltp_bytes": 3288009873,
+        "disk_after_preload_bytes": 3302823785,
+        "final_counts.Badge": 612281,
+        "final_counts.Comment": 819617,
+        "final_counts.Post": 425719,
+        "final_counts.PostHistory": 1525679,
+        "final_counts.PostLink": 86989,
+        "final_counts.Tag": 1684,
+        "final_counts.User": 345774,
+        "final_counts.Vote": 1747167,
+        "latency_summary.ops.delete.count": 10021,
+        "latency_summary.ops.delete.p50_ms": 4.3127829558216035,
+        "latency_summary.ops.delete.p95_ms": 31.544097000733018,
+        "latency_summary.ops.delete.p99_ms": 78.97878397488967,
+        "latency_summary.ops.insert.count": 10067,
+        "latency_summary.ops.insert.p50_ms": 0.36367098800837994,
+        "latency_summary.ops.insert.p95_ms": 18.94205599091947,
+        "latency_summary.ops.insert.p99_ms": 24.284704006277025,
+        "latency_summary.ops.read.count": 60074,
+        "latency_summary.ops.read.p50_ms": 0.08193001849576831,
+        "latency_summary.ops.read.p95_ms": 1.177712983917445,
+        "latency_summary.ops.read.p99_ms": 6.828391051385552,
+        "latency_summary.ops.update.count": 19838,
+        "latency_summary.ops.update.p50_ms": 0.18805102445185184,
+        "latency_summary.ops.update.p95_ms": 3.187869966495782,
+        "latency_summary.ops.update.p99_ms": 8.522627002093941,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.18125999486073852,
+        "latency_summary.overall.p95_ms": 9.22882795566693,
+        "latency_summary.overall.p99_ms": 25.0837950152345,
+        "load_counts_time_s": 0.17798542976379395,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 290.1038091182709,
+        "rss_client_peak_kb": 3669140,
+        "rss_peak_kb": 3669140,
+        "rss_server_peak_kb": 0,
+        "seed": 0,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 569.7586716179588,
+        "total_time_s": 175.51290569396224,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2793754624
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "3.1GiB",
+        "disk_after_preload_bytes": "3.1GiB",
+        "rss_client_peak_kb": "3.5GiB",
+        "rss_peak_kb": "3.5GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "arcadedb",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "3276m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 0,
+        "run_label": "sweep07_t01_r01_arcadedb_s00000"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "run_label": "sweep07_t01_r02_arcadedb_s00004",
+      "seed": 4,
+      "du_bytes": 2793750528,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_arcadedb_sweep07_t01_r02_arcadedb_s00004/results_sweep07_t01_r02_arcadedb_s00004.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.0023682117462158203,
+        "disk_after_oltp_bytes": 3071159167,
+        "disk_after_preload_bytes": 3064340573,
+        "final_counts.Badge": 612274,
+        "final_counts.Comment": 819613,
+        "final_counts.Post": 425747,
+        "final_counts.PostHistory": 1525689,
+        "final_counts.PostLink": 86969,
+        "final_counts.Tag": 1664,
+        "final_counts.User": 345706,
+        "final_counts.Vote": 1747194,
+        "latency_summary.ops.delete.count": 10072,
+        "latency_summary.ops.delete.p50_ms": 3.8309810333885252,
+        "latency_summary.ops.delete.p95_ms": 30.136512010358274,
+        "latency_summary.ops.delete.p99_ms": 74.13614104734734,
+        "latency_summary.ops.insert.count": 10064,
+        "latency_summary.ops.insert.p50_ms": 0.3278310177847743,
+        "latency_summary.ops.insert.p95_ms": 19.038350961636752,
+        "latency_summary.ops.insert.p99_ms": 24.50624603079632,
+        "latency_summary.ops.read.count": 60037,
+        "latency_summary.ops.read.p50_ms": 0.07026997627690434,
+        "latency_summary.ops.read.p95_ms": 1.1561529827304184,
+        "latency_summary.ops.read.p99_ms": 8.710993977729231,
+        "latency_summary.ops.update.count": 19827,
+        "latency_summary.ops.update.p50_ms": 0.146319973282516,
+        "latency_summary.ops.update.p95_ms": 3.10043798526749,
+        "latency_summary.ops.update.p99_ms": 9.542454965412617,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.1311899977736175,
+        "latency_summary.overall.p95_ms": 8.651653013657779,
+        "latency_summary.overall.p99_ms": 24.841737002134323,
+        "load_counts_time_s": 0.27222609519958496,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 271.70822191238403,
+        "rss_client_peak_kb": 2919456,
+        "rss_peak_kb": 2919456,
+        "rss_server_peak_kb": 0,
+        "seed": 4,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 608.4457537349402,
+        "total_time_s": 164.35318906599423,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2793750528
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "2.9GiB",
+        "disk_after_preload_bytes": "2.9GiB",
+        "rss_client_peak_kb": "2.8GiB",
+        "rss_peak_kb": "2.8GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "arcadedb",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "3276m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 4,
+        "run_label": "sweep07_t01_r02_arcadedb_s00004"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "run_label": "sweep07_t01_r03_arcadedb_s00008",
+      "seed": 8,
+      "du_bytes": 2793758720,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_arcadedb_sweep07_t01_r03_arcadedb_s00008/results_sweep07_t01_r03_arcadedb_s00008.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.0020606517791748047,
+        "disk_after_oltp_bytes": 3168014272,
+        "disk_after_preload_bytes": 3205973945,
+        "final_counts.Badge": 612129,
+        "final_counts.Comment": 819656,
+        "final_counts.Post": 425777,
+        "final_counts.PostHistory": 1525646,
+        "final_counts.PostLink": 87035,
+        "final_counts.Tag": 1627,
+        "final_counts.User": 345842,
+        "final_counts.Vote": 1747157,
+        "latency_summary.ops.delete.count": 9953,
+        "latency_summary.ops.delete.p50_ms": 4.211091028992087,
+        "latency_summary.ops.delete.p95_ms": 30.09730001213029,
+        "latency_summary.ops.delete.p99_ms": 70.28170605190098,
+        "latency_summary.ops.insert.count": 9958,
+        "latency_summary.ops.insert.p50_ms": 0.35022100200876594,
+        "latency_summary.ops.insert.p95_ms": 19.07849096460268,
+        "latency_summary.ops.insert.p99_ms": 25.154526985716075,
+        "latency_summary.ops.read.count": 60304,
+        "latency_summary.ops.read.p50_ms": 0.07607002044096589,
+        "latency_summary.ops.read.p95_ms": 3.4904800122603774,
+        "latency_summary.ops.read.p99_ms": 8.252012019511312,
+        "latency_summary.ops.update.count": 19785,
+        "latency_summary.ops.update.p50_ms": 0.16843003686517477,
+        "latency_summary.ops.update.p95_ms": 4.623432003427297,
+        "latency_summary.ops.update.p99_ms": 10.021277004852891,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.15382003039121628,
+        "latency_summary.overall.p95_ms": 9.083904034923762,
+        "latency_summary.overall.p99_ms": 24.788376002106816,
+        "load_counts_time_s": 0.13202691078186035,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 266.05128502845764,
+        "rss_client_peak_kb": 2934452,
+        "rss_peak_kb": 2934452,
+        "rss_server_peak_kb": 0,
+        "seed": 8,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 557.2712651006602,
+        "total_time_s": 179.4458215640043,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2793758720
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "3.0GiB",
+        "disk_after_preload_bytes": "3.0GiB",
+        "rss_client_peak_kb": "2.8GiB",
+        "rss_peak_kb": "2.8GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "arcadedb",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "3276m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 8,
+        "run_label": "sweep07_t01_r03_arcadedb_s00008"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "run_label": "sweep07_t08_r01_arcadedb_s00000",
+      "seed": 0,
+      "du_bytes": 2793746432,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_arcadedb_sweep07_t08_r01_arcadedb_s00000/results_sweep07_t08_r01_arcadedb_s00000.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.001588582992553711,
+        "disk_after_oltp_bytes": 3411185383,
+        "disk_after_preload_bytes": 3168001419,
+        "final_counts.Badge": 612300,
+        "final_counts.Comment": 819593,
+        "final_counts.Post": 425759,
+        "final_counts.PostHistory": 1525747,
+        "final_counts.PostLink": 86997,
+        "final_counts.Tag": 1550,
+        "final_counts.User": 345710,
+        "final_counts.Vote": 1747256,
+        "latency_summary.ops.delete.count": 10021,
+        "latency_summary.ops.delete.p50_ms": 9.203609020914882,
+        "latency_summary.ops.delete.p95_ms": 88.69506203336641,
+        "latency_summary.ops.delete.p99_ms": 177.726807014551,
+        "latency_summary.ops.insert.count": 10067,
+        "latency_summary.ops.insert.p50_ms": 3.8367320084944367,
+        "latency_summary.ops.insert.p95_ms": 89.03112303232774,
+        "latency_summary.ops.insert.p99_ms": 225.98037001444027,
+        "latency_summary.ops.read.count": 60074,
+        "latency_summary.ops.read.p50_ms": 0.3274809569120407,
+        "latency_summary.ops.read.p95_ms": 13.150472019333392,
+        "latency_summary.ops.read.p99_ms": 27.207936975173652,
+        "latency_summary.ops.update.count": 19838,
+        "latency_summary.ops.update.p50_ms": 1.6770450165495276,
+        "latency_summary.ops.update.p95_ms": 43.964819982647896,
+        "latency_summary.ops.update.p99_ms": 115.42531801387668,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.7387319928966463,
+        "latency_summary.overall.p95_ms": 33.34367601200938,
+        "latency_summary.overall.p99_ms": 108.6519060190767,
+        "load_counts_time_s": 0.0531764030456543,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 222.45905542373657,
+        "rss_client_peak_kb": 2489552,
+        "rss_peak_kb": 2489552,
+        "rss_server_peak_kb": 0,
+        "seed": 0,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 1024.8460516968253,
+        "total_time_s": 97.57563083199784,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2793746432
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "3.2GiB",
+        "disk_after_preload_bytes": "3.0GiB",
+        "rss_client_peak_kb": "2.4GiB",
+        "rss_peak_kb": "2.4GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "arcadedb",
+        "threads": 8,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "3276m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 0,
+        "run_label": "sweep07_t08_r01_arcadedb_s00000"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "run_label": "sweep07_t08_r02_arcadedb_s00002",
+      "seed": 2,
+      "du_bytes": 2793738240,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_arcadedb_sweep07_t08_r02_arcadedb_s00002/results_sweep07_t08_r02_arcadedb_s00002.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.020756959915161133,
+        "disk_after_oltp_bytes": 3460613212,
+        "disk_after_preload_bytes": 3263731464,
+        "final_counts.Badge": 612255,
+        "final_counts.Comment": 819558,
+        "final_counts.Post": 425789,
+        "final_counts.PostHistory": 1525745,
+        "final_counts.PostLink": 86947,
+        "final_counts.Tag": 1592,
+        "final_counts.User": 345692,
+        "final_counts.Vote": 1747177,
+        "latency_summary.ops.delete.count": 10025,
+        "latency_summary.ops.delete.p50_ms": 8.505354984663427,
+        "latency_summary.ops.delete.p95_ms": 102.62647399213165,
+        "latency_summary.ops.delete.p99_ms": 214.38717399723828,
+        "latency_summary.ops.insert.count": 9916,
+        "latency_summary.ops.insert.p50_ms": 3.4367400221526623,
+        "latency_summary.ops.insert.p95_ms": 95.61013401253149,
+        "latency_summary.ops.insert.p99_ms": 213.86565297143534,
+        "latency_summary.ops.read.count": 59859,
+        "latency_summary.ops.read.p50_ms": 0.3529009991325438,
+        "latency_summary.ops.read.p95_ms": 13.30100797349587,
+        "latency_summary.ops.read.p99_ms": 28.46840099664405,
+        "latency_summary.ops.update.count": 20200,
+        "latency_summary.ops.update.p50_ms": 1.283912977669388,
+        "latency_summary.ops.update.p95_ms": 52.222640020772815,
+        "latency_summary.ops.update.p99_ms": 125.33548899227753,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.7254320080392063,
+        "latency_summary.overall.p95_ms": 31.311809027101845,
+        "latency_summary.overall.p99_ms": 120.10604498209432,
+        "load_counts_time_s": 0.06496214866638184,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 233.81021404266357,
+        "rss_client_peak_kb": 2530312,
+        "rss_peak_kb": 2530312,
+        "rss_server_peak_kb": 0,
+        "seed": 2,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 1008.5444405004179,
+        "total_time_s": 99.15279484400526,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2793738240
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "3.2GiB",
+        "disk_after_preload_bytes": "3.0GiB",
+        "rss_client_peak_kb": "2.4GiB",
+        "rss_peak_kb": "2.4GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "arcadedb",
+        "threads": 8,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "3276m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 2,
+        "run_label": "sweep07_t08_r02_arcadedb_s00002"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "run_label": "sweep07_t08_r03_arcadedb_s00004",
+      "seed": 4,
+      "du_bytes": 2793746432,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_arcadedb_sweep07_t08_r03_arcadedb_s00004/results_sweep07_t08_r03_arcadedb_s00004.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.0015954971313476562,
+        "disk_after_oltp_bytes": 3526686657,
+        "disk_after_preload_bytes": 3157546427,
+        "final_counts.Badge": 612344,
+        "final_counts.Comment": 819676,
+        "final_counts.Post": 425775,
+        "final_counts.PostHistory": 1525723,
+        "final_counts.PostLink": 86913,
+        "final_counts.Tag": 1490,
+        "final_counts.User": 345675,
+        "final_counts.Vote": 1747261,
+        "latency_summary.ops.delete.count": 10072,
+        "latency_summary.ops.delete.p50_ms": 8.033562975469977,
+        "latency_summary.ops.delete.p95_ms": 47.36275499453768,
+        "latency_summary.ops.delete.p99_ms": 86.2878059851937,
+        "latency_summary.ops.insert.count": 10064,
+        "latency_summary.ops.insert.p50_ms": 3.531189984641969,
+        "latency_summary.ops.insert.p95_ms": 49.25017000641674,
+        "latency_summary.ops.insert.p99_ms": 106.30417300853878,
+        "latency_summary.ops.read.count": 60037,
+        "latency_summary.ops.read.p50_ms": 0.2738910261541605,
+        "latency_summary.ops.read.p95_ms": 11.716422974132001,
+        "latency_summary.ops.read.p99_ms": 19.595616031438112,
+        "latency_summary.ops.update.count": 19827,
+        "latency_summary.ops.update.p50_ms": 1.5100049786269665,
+        "latency_summary.ops.update.p95_ms": 27.638678962830454,
+        "latency_summary.ops.update.p99_ms": 61.61418498959392,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.520391040481627,
+        "latency_summary.overall.p95_ms": 24.170709017198533,
+        "latency_summary.overall.p99_ms": 57.70183401182294,
+        "load_counts_time_s": 0.07874917984008789,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 211.84709429740906,
+        "rss_client_peak_kb": 2332520,
+        "rss_peak_kb": 2332520,
+        "rss_server_peak_kb": 0,
+        "seed": 4,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 1444.9193042852485,
+        "total_time_s": 69.20801715599373,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2793746432
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "3.3GiB",
+        "disk_after_preload_bytes": "2.9GiB",
+        "rss_client_peak_kb": "2.2GiB",
+        "rss_peak_kb": "2.2GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "arcadedb",
+        "threads": 8,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "3276m",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 4,
+        "run_label": "sweep07_t08_r03_arcadedb_s00004"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "duckdb",
+      "run_label": "sweep07_t01_r01_duckdb_s00002",
+      "seed": 2,
+      "du_bytes": 5893500928,
+      "du_human": "5.5G",
+      "result_file": "stackoverflow_medium_tables_oltp_duckdb_sweep07_t01_r01_duckdb_s00002/results_sweep07_t01_r01_duckdb_s00002.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 40.965463161468506,
+        "disk_after_oltp_bytes": 6529362631,
+        "disk_after_preload_bytes": 5513848856,
+        "final_counts.Badge": 612275,
+        "final_counts.Comment": 819645,
+        "final_counts.Post": 425631,
+        "final_counts.PostHistory": 1525699,
+        "final_counts.PostLink": 86898,
+        "final_counts.Tag": 1570,
+        "final_counts.User": 345824,
+        "final_counts.Vote": 1747213,
+        "latency_summary.ops.delete.count": 10025,
+        "latency_summary.ops.delete.p50_ms": 14.411618991289288,
+        "latency_summary.ops.delete.p95_ms": 39.58656796021387,
+        "latency_summary.ops.delete.p99_ms": 81.6416529705748,
+        "latency_summary.ops.insert.count": 9916,
+        "latency_summary.ops.insert.p50_ms": 13.211925979703665,
+        "latency_summary.ops.insert.p95_ms": 37.231791007798165,
+        "latency_summary.ops.insert.p99_ms": 110.97252299077809,
+        "latency_summary.ops.read.count": 59859,
+        "latency_summary.ops.read.p50_ms": 0.7444620132446289,
+        "latency_summary.ops.read.p95_ms": 5.439545027911663,
+        "latency_summary.ops.read.p99_ms": 24.999259039759636,
+        "latency_summary.ops.update.count": 20200,
+        "latency_summary.ops.update.p50_ms": 12.24246300989762,
+        "latency_summary.ops.update.p95_ms": 35.79614794580266,
+        "latency_summary.ops.update.p99_ms": 106.63785098586231,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 1.847075007390231,
+        "latency_summary.overall.p95_ms": 25.05555801326409,
+        "latency_summary.overall.p99_ms": 64.7938170004636,
+        "load_counts_time_s": 0.004285097122192383,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 132.79959797859192,
+        "rss_client_peak_kb": 3591832,
+        "rss_peak_kb": 3591832,
+        "rss_server_peak_kb": 0,
+        "seed": 2,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 116.3014801515927,
+        "total_time_s": 859.8342847370077,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 5893500928
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "6.1GiB",
+        "disk_after_preload_bytes": "5.1GiB",
+        "rss_client_peak_kb": "3.4GiB",
+        "rss_peak_kb": "3.4GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "5.5GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "duckdb",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 2,
+        "run_label": "sweep07_t01_r01_duckdb_s00002"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "duckdb",
+      "run_label": "sweep07_t01_r02_duckdb_s00006",
+      "seed": 6,
+      "du_bytes": 5893496832,
+      "du_human": "5.5G",
+      "result_file": "stackoverflow_medium_tables_oltp_duckdb_sweep07_t01_r02_duckdb_s00006/results_sweep07_t01_r02_duckdb_s00006.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 35.22884726524353,
+        "disk_after_oltp_bytes": 6501684150,
+        "disk_after_preload_bytes": 5513062424,
+        "final_counts.Badge": 612251,
+        "final_counts.Comment": 819654,
+        "final_counts.Post": 425698,
+        "final_counts.PostHistory": 1525577,
+        "final_counts.PostLink": 86859,
+        "final_counts.Tag": 1585,
+        "final_counts.User": 345719,
+        "final_counts.Vote": 1747256,
+        "latency_summary.ops.delete.count": 10180,
+        "latency_summary.ops.delete.p50_ms": 14.055731007829309,
+        "latency_summary.ops.delete.p95_ms": 33.05892599746585,
+        "latency_summary.ops.delete.p99_ms": 63.984635984525084,
+        "latency_summary.ops.insert.count": 9915,
+        "latency_summary.ops.insert.p50_ms": 12.6510169939138,
+        "latency_summary.ops.insert.p95_ms": 30.71632597129792,
+        "latency_summary.ops.insert.p99_ms": 107.74892900371924,
+        "latency_summary.ops.read.count": 59869,
+        "latency_summary.ops.read.p50_ms": 0.6733019836246967,
+        "latency_summary.ops.read.p95_ms": 5.792365991510451,
+        "latency_summary.ops.read.p99_ms": 26.785444002598524,
+        "latency_summary.ops.update.count": 20036,
+        "latency_summary.ops.update.p50_ms": 11.642373981885612,
+        "latency_summary.ops.update.p95_ms": 28.759250009898096,
+        "latency_summary.ops.update.p99_ms": 95.0547069660388,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 1.8295649788342416,
+        "latency_summary.overall.p95_ms": 21.371348993852735,
+        "latency_summary.overall.p99_ms": 57.893737975973636,
+        "load_counts_time_s": 0.0028493404388427734,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 125.55459880828857,
+        "rss_client_peak_kb": 3731012,
+        "rss_peak_kb": 3731012,
+        "rss_server_peak_kb": 0,
+        "seed": 6,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 117.94737222348367,
+        "total_time_s": 847.8357602619799,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 5893496832
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "6.1GiB",
+        "disk_after_preload_bytes": "5.1GiB",
+        "rss_client_peak_kb": "3.6GiB",
+        "rss_peak_kb": "3.6GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "5.5GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "duckdb",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 6,
+        "run_label": "sweep07_t01_r02_duckdb_s00006"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "duckdb",
+      "run_label": "sweep07_t01_r03_duckdb_s00010",
+      "seed": 10,
+      "du_bytes": 5908434944,
+      "du_human": "5.6G",
+      "result_file": "stackoverflow_medium_tables_oltp_duckdb_sweep07_t01_r03_duckdb_s00010/results_sweep07_t01_r03_duckdb_s00010.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 33.579237937927246,
+        "disk_after_oltp_bytes": 6504886469,
+        "disk_after_preload_bytes": 5528528920,
+        "final_counts.Badge": 612288,
+        "final_counts.Comment": 819659,
+        "final_counts.Post": 425702,
+        "final_counts.PostHistory": 1525686,
+        "final_counts.PostLink": 87011,
+        "final_counts.Tag": 1621,
+        "final_counts.User": 345707,
+        "final_counts.Vote": 1747204,
+        "latency_summary.ops.delete.count": 9997,
+        "latency_summary.ops.delete.p50_ms": 14.055398001801223,
+        "latency_summary.ops.delete.p95_ms": 32.139168004505336,
+        "latency_summary.ops.delete.p99_ms": 66.75278500188142,
+        "latency_summary.ops.insert.count": 10011,
+        "latency_summary.ops.insert.p50_ms": 13.109118968714029,
+        "latency_summary.ops.insert.p95_ms": 29.489721986465156,
+        "latency_summary.ops.insert.p99_ms": 106.8373349844478,
+        "latency_summary.ops.read.count": 60184,
+        "latency_summary.ops.read.p50_ms": 0.757022004108876,
+        "latency_summary.ops.read.p95_ms": 7.115037995390594,
+        "latency_summary.ops.read.p99_ms": 28.076988004613668,
+        "latency_summary.ops.update.count": 19808,
+        "latency_summary.ops.update.p50_ms": 12.053083046339452,
+        "latency_summary.ops.update.p95_ms": 29.32637103367597,
+        "latency_summary.ops.update.p99_ms": 99.96334702009335,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 2.1576060098595917,
+        "latency_summary.overall.p95_ms": 20.4530960181728,
+        "latency_summary.overall.p99_ms": 58.001570985652506,
+        "load_counts_time_s": 0.012489080429077148,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 127.42815566062927,
+        "rss_client_peak_kb": 3848396,
+        "rss_peak_kb": 3848396,
+        "rss_server_peak_kb": 0,
+        "seed": 10,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 118.72907513978222,
+        "total_time_s": 842.2536761300289,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 5908434944
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "6.1GiB",
+        "disk_after_preload_bytes": "5.1GiB",
+        "rss_client_peak_kb": "3.7GiB",
+        "rss_peak_kb": "3.7GiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "5.5GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "duckdb",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 10,
+        "run_label": "sweep07_t01_r03_duckdb_s00010"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "postgresql",
+      "run_label": "sweep07_t01_r01_postgresql_s00003",
+      "seed": 3,
+      "du_bytes": 3516280832,
+      "du_human": "3.3G",
+      "result_file": "stackoverflow_medium_tables_oltp_postgresql_sweep07_t01_r01_postgresql_s00003/results_sweep07_t01_r01_postgresql_s00003.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 1.5773615837097168,
+        "disk_after_oltp_bytes": 3515742715,
+        "disk_after_preload_bytes": 3507550715,
+        "final_counts.Badge": 612258,
+        "final_counts.Comment": 819648,
+        "final_counts.Post": 425735,
+        "final_counts.PostHistory": 1525713,
+        "final_counts.PostLink": 86919,
+        "final_counts.Tag": 1612,
+        "final_counts.User": 345754,
+        "final_counts.Vote": 1747225,
+        "latency_summary.ops.delete.count": 9763,
+        "latency_summary.ops.delete.p50_ms": 2.286567003466189,
+        "latency_summary.ops.delete.p95_ms": 14.085578033700585,
+        "latency_summary.ops.delete.p99_ms": 40.20778898848221,
+        "latency_summary.ops.insert.count": 10128,
+        "latency_summary.ops.insert.p50_ms": 0.1731209922581911,
+        "latency_summary.ops.insert.p95_ms": 0.49582100473344326,
+        "latency_summary.ops.insert.p99_ms": 1.6227939631789923,
+        "latency_summary.ops.read.count": 60134,
+        "latency_summary.ops.read.p50_ms": 0.05862000398337841,
+        "latency_summary.ops.read.p95_ms": 0.6437019910663366,
+        "latency_summary.ops.read.p99_ms": 6.819989008363336,
+        "latency_summary.ops.update.count": 19975,
+        "latency_summary.ops.update.p50_ms": 0.1397909945808351,
+        "latency_summary.ops.update.p95_ms": 3.133538004476577,
+        "latency_summary.ops.update.p99_ms": 10.3161979932338,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.09469001088291407,
+        "latency_summary.overall.p95_ms": 4.346352012362331,
+        "latency_summary.overall.p99_ms": 11.940772004891187,
+        "load_counts_time_s": 14.312913656234741,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 227.35920000076294,
+        "rss_client_peak_kb": 279292,
+        "rss_peak_kb": 1552636,
+        "rss_server_peak_kb": 1273344,
+        "seed": 3,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 1224.8517461434635,
+        "total_time_s": 81.64253373100655,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 3516280832
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "3.3GiB",
+        "disk_after_preload_bytes": "3.3GiB",
+        "rss_client_peak_kb": "272.7MiB",
+        "rss_peak_kb": "1.5GiB",
+        "rss_server_peak_kb": "1.2GiB",
+        "disk_usage.du_bytes": "3.3GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "postgresql",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 3,
+        "run_label": "sweep07_t01_r01_postgresql_s00003"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "postgresql",
+      "run_label": "sweep07_t01_r02_postgresql_s00007",
+      "seed": 7,
+      "du_bytes": 3516157952,
+      "du_human": "3.3G",
+      "result_file": "stackoverflow_medium_tables_oltp_postgresql_sweep07_t01_r02_postgresql_s00007/results_sweep07_t01_r02_postgresql_s00007.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 4.268876791000366,
+        "disk_after_oltp_bytes": 3515677179,
+        "disk_after_preload_bytes": 3792755195,
+        "final_counts.Badge": 612258,
+        "final_counts.Comment": 819648,
+        "final_counts.Post": 425735,
+        "final_counts.PostHistory": 1525713,
+        "final_counts.PostLink": 86919,
+        "final_counts.Tag": 1612,
+        "final_counts.User": 345754,
+        "final_counts.Vote": 1747225,
+        "latency_summary.ops.delete.count": 9905,
+        "latency_summary.ops.delete.p50_ms": 2.3239770089276135,
+        "latency_summary.ops.delete.p95_ms": 14.491780020762235,
+        "latency_summary.ops.delete.p99_ms": 39.778740028850734,
+        "latency_summary.ops.insert.count": 10006,
+        "latency_summary.ops.insert.p50_ms": 0.17885095439851284,
+        "latency_summary.ops.insert.p95_ms": 0.529322016518563,
+        "latency_summary.ops.insert.p99_ms": 1.6352349775843322,
+        "latency_summary.ops.read.count": 60159,
+        "latency_summary.ops.read.p50_ms": 0.05944998702034354,
+        "latency_summary.ops.read.p95_ms": 0.5059110117144883,
+        "latency_summary.ops.read.p99_ms": 7.946582045406103,
+        "latency_summary.ops.update.count": 19930,
+        "latency_summary.ops.update.p50_ms": 0.1422010245732963,
+        "latency_summary.ops.update.p95_ms": 3.467919013928622,
+        "latency_summary.ops.update.p99_ms": 13.180045993067324,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.09573099669069052,
+        "latency_summary.overall.p95_ms": 4.457902978174388,
+        "latency_summary.overall.p99_ms": 13.114686997141689,
+        "load_counts_time_s": 19.43908381462097,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 201.72077870368958,
+        "rss_client_peak_kb": 278568,
+        "rss_peak_kb": 1522576,
+        "rss_server_peak_kb": 1244008,
+        "seed": 7,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 1196.197563635049,
+        "total_time_s": 83.59823079401394,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 3516157952
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "3.3GiB",
+        "disk_after_preload_bytes": "3.5GiB",
+        "rss_client_peak_kb": "272.0MiB",
+        "rss_peak_kb": "1.5GiB",
+        "rss_server_peak_kb": "1.2GiB",
+        "disk_usage.du_bytes": "3.3GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "postgresql",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 7,
+        "run_label": "sweep07_t01_r02_postgresql_s00007"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "postgresql",
+      "run_label": "sweep07_t01_r03_postgresql_s00011",
+      "seed": 11,
+      "du_bytes": 3516321792,
+      "du_human": "3.3G",
+      "result_file": "stackoverflow_medium_tables_oltp_postgresql_sweep07_t01_r03_postgresql_s00011/results_sweep07_t01_r03_postgresql_s00011.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 3.857900857925415,
+        "disk_after_oltp_bytes": 3515783675,
+        "disk_after_preload_bytes": 3608230395,
+        "final_counts.Badge": 612258,
+        "final_counts.Comment": 819648,
+        "final_counts.Post": 425735,
+        "final_counts.PostHistory": 1525713,
+        "final_counts.PostLink": 86919,
+        "final_counts.Tag": 1612,
+        "final_counts.User": 345754,
+        "final_counts.Vote": 1747225,
+        "latency_summary.ops.delete.count": 10020,
+        "latency_summary.ops.delete.p50_ms": 2.469026017934084,
+        "latency_summary.ops.delete.p95_ms": 17.482325027231127,
+        "latency_summary.ops.delete.p99_ms": 44.75768399424851,
+        "latency_summary.ops.insert.count": 9893,
+        "latency_summary.ops.insert.p50_ms": 0.19051000708714128,
+        "latency_summary.ops.insert.p95_ms": 0.5977109540253878,
+        "latency_summary.ops.insert.p99_ms": 2.4018160183914006,
+        "latency_summary.ops.read.count": 60221,
+        "latency_summary.ops.read.p50_ms": 0.062489998526871204,
+        "latency_summary.ops.read.p95_ms": 0.5603409954346716,
+        "latency_summary.ops.read.p99_ms": 7.111898041330278,
+        "latency_summary.ops.update.count": 19866,
+        "latency_summary.ops.update.p50_ms": 0.15009002527222037,
+        "latency_summary.ops.update.p95_ms": 3.554009017534554,
+        "latency_summary.ops.update.p99_ms": 12.104601017199457,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.10237999958917499,
+        "latency_summary.overall.p95_ms": 4.777611989993602,
+        "latency_summary.overall.p99_ms": 14.217265998013318,
+        "load_counts_time_s": 20.488831281661987,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 234.58090996742249,
+        "rss_client_peak_kb": 280496,
+        "rss_peak_kb": 1605608,
+        "rss_server_peak_kb": 1325372,
+        "seed": 11,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 1086.2273368323108,
+        "total_time_s": 92.0617596419761,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 3516321792
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "3.3GiB",
+        "disk_after_preload_bytes": "3.4GiB",
+        "rss_client_peak_kb": "273.9MiB",
+        "rss_peak_kb": "1.5GiB",
+        "rss_server_peak_kb": "1.3GiB",
+        "disk_usage.du_bytes": "3.3GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "postgresql",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 11,
+        "run_label": "sweep07_t01_r03_postgresql_s00011"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "sqlite",
+      "run_label": "sweep07_t01_r01_sqlite_s00001",
+      "seed": 1,
+      "du_bytes": 2830446592,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_sqlite_sweep07_t01_r01_sqlite_s00001/results_sweep07_t01_r01_sqlite_s00001.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.12082719802856445,
+        "disk_after_oltp_bytes": 2834628304,
+        "disk_after_preload_bytes": 2834325200,
+        "final_counts.Badge": 612208,
+        "final_counts.Comment": 819632,
+        "final_counts.Post": 425692,
+        "final_counts.PostHistory": 1525706,
+        "final_counts.PostLink": 86882,
+        "final_counts.Tag": 1630,
+        "final_counts.User": 345714,
+        "final_counts.Vote": 1747268,
+        "latency_summary.ops.delete.count": 10150,
+        "latency_summary.ops.delete.p50_ms": 2.900858991779387,
+        "latency_summary.ops.delete.p95_ms": 15.714947017841041,
+        "latency_summary.ops.delete.p99_ms": 43.06076903594658,
+        "latency_summary.ops.insert.count": 10018,
+        "latency_summary.ops.insert.p50_ms": 0.05686999065801501,
+        "latency_summary.ops.insert.p95_ms": 0.1602509873919189,
+        "latency_summary.ops.insert.p99_ms": 0.3954209969379008,
+        "latency_summary.ops.read.count": 60179,
+        "latency_summary.ops.read.p50_ms": 0.01564004924148321,
+        "latency_summary.ops.read.p95_ms": 0.5756419850513339,
+        "latency_summary.ops.read.p99_ms": 6.649229966569692,
+        "latency_summary.ops.update.count": 19653,
+        "latency_summary.ops.update.p50_ms": 0.024110020603984594,
+        "latency_summary.ops.update.p95_ms": 0.6639020284637809,
+        "latency_summary.ops.update.p99_ms": 7.1903319912962615,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.02221000613644719,
+        "latency_summary.overall.p95_ms": 4.646904009860009,
+        "latency_summary.overall.p99_ms": 12.67435698537156,
+        "load_counts_time_s": 0.6125006675720215,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 767.1574990749359,
+        "rss_client_peak_kb": 266344,
+        "rss_peak_kb": 266344,
+        "rss_server_peak_kb": 0,
+        "seed": 1,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 1238.3812378010614,
+        "total_time_s": 80.75057740503689,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2830446592
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "2.6GiB",
+        "disk_after_preload_bytes": "2.6GiB",
+        "rss_client_peak_kb": "260.1MiB",
+        "rss_peak_kb": "260.1MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "sqlite",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 1,
+        "run_label": "sweep07_t01_r01_sqlite_s00001"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "sqlite",
+      "run_label": "sweep07_t01_r02_sqlite_s00005",
+      "seed": 5,
+      "du_bytes": 2830413824,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_sqlite_sweep07_t01_r02_sqlite_s00005/results_sweep07_t01_r02_sqlite_s00005.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.023011207580566406,
+        "disk_after_oltp_bytes": 2834595536,
+        "disk_after_preload_bytes": 2834325200,
+        "final_counts.Badge": 612234,
+        "final_counts.Comment": 819671,
+        "final_counts.Post": 425698,
+        "final_counts.PostHistory": 1525717,
+        "final_counts.PostLink": 86767,
+        "final_counts.Tag": 1609,
+        "final_counts.User": 345721,
+        "final_counts.Vote": 1747263,
+        "latency_summary.ops.delete.count": 10041,
+        "latency_summary.ops.delete.p50_ms": 2.6168969925493,
+        "latency_summary.ops.delete.p95_ms": 15.64578601391986,
+        "latency_summary.ops.delete.p99_ms": 40.76943901600316,
+        "latency_summary.ops.insert.count": 9857,
+        "latency_summary.ops.insert.p50_ms": 0.04653999349102378,
+        "latency_summary.ops.insert.p95_ms": 0.14816003385931253,
+        "latency_summary.ops.insert.p99_ms": 0.3906109486706555,
+        "latency_summary.ops.read.count": 60111,
+        "latency_summary.ops.read.p50_ms": 0.012770004104822874,
+        "latency_summary.ops.read.p95_ms": 0.05273998249322176,
+        "latency_summary.ops.read.p99_ms": 0.11277099838480353,
+        "latency_summary.ops.update.count": 19991,
+        "latency_summary.ops.update.p50_ms": 0.01978996442630887,
+        "latency_summary.ops.update.p95_ms": 0.07409998215734959,
+        "latency_summary.ops.update.p99_ms": 0.1634100335650146,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.017079990357160568,
+        "latency_summary.overall.p95_ms": 2.72162799956277,
+        "latency_summary.overall.p99_ms": 12.644925969652832,
+        "load_counts_time_s": 0.026813030242919922,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 719.9286463260651,
+        "rss_client_peak_kb": 267708,
+        "rss_peak_kb": 267708,
+        "rss_server_peak_kb": 0,
+        "seed": 5,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 1813.2376369071937,
+        "total_time_s": 55.14996929501649,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2830413824
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "2.6GiB",
+        "disk_after_preload_bytes": "2.6GiB",
+        "rss_client_peak_kb": "261.4MiB",
+        "rss_peak_kb": "261.4MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "sqlite",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 5,
+        "run_label": "sweep07_t01_r02_sqlite_s00005"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "sqlite",
+      "run_label": "sweep07_t01_r03_sqlite_s00009",
+      "seed": 9,
+      "du_bytes": 2830426112,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_sqlite_sweep07_t01_r03_sqlite_s00009/results_sweep07_t01_r03_sqlite_s00009.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.02541208267211914,
+        "disk_after_oltp_bytes": 2834607824,
+        "disk_after_preload_bytes": 2834325200,
+        "final_counts.Badge": 612172,
+        "final_counts.Comment": 819590,
+        "final_counts.Post": 425718,
+        "final_counts.PostHistory": 1525666,
+        "final_counts.PostLink": 86985,
+        "final_counts.Tag": 1738,
+        "final_counts.User": 345723,
+        "final_counts.Vote": 1747148,
+        "latency_summary.ops.delete.count": 9993,
+        "latency_summary.ops.delete.p50_ms": 2.7781359967775643,
+        "latency_summary.ops.delete.p95_ms": 16.13642502343282,
+        "latency_summary.ops.delete.p99_ms": 36.832822021096945,
+        "latency_summary.ops.insert.count": 9869,
+        "latency_summary.ops.insert.p50_ms": 0.04661997081711888,
+        "latency_summary.ops.insert.p95_ms": 0.14914001803845167,
+        "latency_summary.ops.insert.p99_ms": 0.3416290273889899,
+        "latency_summary.ops.read.count": 60254,
+        "latency_summary.ops.read.p50_ms": 0.012940028682351112,
+        "latency_summary.ops.read.p95_ms": 0.054040050599724054,
+        "latency_summary.ops.read.p99_ms": 0.11676998110488057,
+        "latency_summary.ops.update.count": 19884,
+        "latency_summary.ops.update.p50_ms": 0.019630009774118662,
+        "latency_summary.ops.update.p95_ms": 0.07321999873965979,
+        "latency_summary.ops.update.p99_ms": 0.16144901746883988,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.017159967683255672,
+        "latency_summary.overall.p95_ms": 2.840335015207529,
+        "latency_summary.overall.p99_ms": 12.49807100975886,
+        "load_counts_time_s": 0.03091740608215332,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 799.8384671211243,
+        "rss_client_peak_kb": 268012,
+        "rss_peak_kb": 268012,
+        "rss_server_peak_kb": 0,
+        "seed": 9,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 1,
+        "throughput_ops_s": 1751.2148346128,
+        "total_time_s": 57.10321659198962,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2830426112
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "2.6GiB",
+        "disk_after_preload_bytes": "2.6GiB",
+        "rss_client_peak_kb": "261.7MiB",
+        "rss_peak_kb": "261.7MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "sqlite",
+        "threads": 1,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 9,
+        "run_label": "sweep07_t01_r03_sqlite_s00009"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "sqlite",
+      "run_label": "sweep07_t08_r01_sqlite_s00001",
+      "seed": 1,
+      "du_bytes": 2830434304,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_sqlite_sweep07_t08_r01_sqlite_s00001/results_sweep07_t08_r01_sqlite_s00001.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.02498912811279297,
+        "disk_after_oltp_bytes": 3095363816,
+        "disk_after_preload_bytes": 2834325200,
+        "final_counts.Badge": 612278,
+        "final_counts.Comment": 819579,
+        "final_counts.Post": 425706,
+        "final_counts.PostHistory": 1525733,
+        "final_counts.PostLink": 86955,
+        "final_counts.Tag": 1610,
+        "final_counts.User": 345731,
+        "final_counts.Vote": 1747140,
+        "latency_summary.ops.delete.count": 10150,
+        "latency_summary.ops.delete.p50_ms": 3.09657899197191,
+        "latency_summary.ops.delete.p95_ms": 34.833720012102276,
+        "latency_summary.ops.delete.p99_ms": 161.6025929688476,
+        "latency_summary.ops.insert.count": 10018,
+        "latency_summary.ops.insert.p50_ms": 0.06930000381544232,
+        "latency_summary.ops.insert.p95_ms": 19.718736002687365,
+        "latency_summary.ops.insert.p99_ms": 104.0969779714942,
+        "latency_summary.ops.read.count": 60179,
+        "latency_summary.ops.read.p50_ms": 0.015489989891648293,
+        "latency_summary.ops.read.p95_ms": 0.0905310153029859,
+        "latency_summary.ops.read.p99_ms": 2.028136048465967,
+        "latency_summary.ops.update.count": 19653,
+        "latency_summary.ops.update.p50_ms": 0.026269990485161543,
+        "latency_summary.ops.update.p95_ms": 26.15636499831453,
+        "latency_summary.ops.update.p99_ms": 130.05548296496272,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.022299995180219412,
+        "latency_summary.overall.p95_ms": 8.587194024585187,
+        "latency_summary.overall.p99_ms": 49.97161298524588,
+        "load_counts_time_s": 0.02553272247314453,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 811.7357473373413,
+        "rss_client_peak_kb": 273564,
+        "rss_peak_kb": 273564,
+        "rss_server_peak_kb": 0,
+        "seed": 1,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 2119.8213469142206,
+        "total_time_s": 47.1737866710173,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2830434304
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "2.9GiB",
+        "disk_after_preload_bytes": "2.6GiB",
+        "rss_client_peak_kb": "267.2MiB",
+        "rss_peak_kb": "267.2MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "sqlite",
+        "threads": 8,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 1,
+        "run_label": "sweep07_t08_r01_sqlite_s00001"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "sqlite",
+      "run_label": "sweep07_t08_r02_sqlite_s00003",
+      "seed": 3,
+      "du_bytes": 2830467072,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_sqlite_sweep07_t08_r02_sqlite_s00003/results_sweep07_t08_r02_sqlite_s00003.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.020704269409179688,
+        "disk_after_oltp_bytes": 3091416664,
+        "disk_after_preload_bytes": 2834325200,
+        "final_counts.Badge": 612296,
+        "final_counts.Comment": 819705,
+        "final_counts.Post": 425849,
+        "final_counts.PostHistory": 1525794,
+        "final_counts.PostLink": 86902,
+        "final_counts.Tag": 1582,
+        "final_counts.User": 345791,
+        "final_counts.Vote": 1747310,
+        "latency_summary.ops.delete.count": 9763,
+        "latency_summary.ops.delete.p50_ms": 2.671397989615798,
+        "latency_summary.ops.delete.p95_ms": 21.485610981471837,
+        "latency_summary.ops.delete.p99_ms": 111.69369897106662,
+        "latency_summary.ops.insert.count": 10128,
+        "latency_summary.ops.insert.p50_ms": 0.059209996834397316,
+        "latency_summary.ops.insert.p95_ms": 13.913189002778381,
+        "latency_summary.ops.insert.p99_ms": 78.55550397653133,
+        "latency_summary.ops.read.count": 60134,
+        "latency_summary.ops.read.p50_ms": 0.01369003439322114,
+        "latency_summary.ops.read.p95_ms": 0.06006995681673288,
+        "latency_summary.ops.read.p99_ms": 1.2953440309502184,
+        "latency_summary.ops.update.count": 19975,
+        "latency_summary.ops.update.p50_ms": 0.0233100145123899,
+        "latency_summary.ops.update.p95_ms": 18.174402008298784,
+        "latency_summary.ops.update.p99_ms": 89.41624499857426,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.019320053979754448,
+        "latency_summary.overall.p95_ms": 6.865078990813345,
+        "latency_summary.overall.p99_ms": 30.219716019928455,
+        "load_counts_time_s": 0.02235102653503418,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 542.5028781890869,
+        "rss_client_peak_kb": 274672,
+        "rss_peak_kb": 274672,
+        "rss_server_peak_kb": 0,
+        "seed": 3,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 2961.471460375352,
+        "total_time_s": 33.766997703001834,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2830467072
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "2.9GiB",
+        "disk_after_preload_bytes": "2.6GiB",
+        "rss_client_peak_kb": "268.2MiB",
+        "rss_peak_kb": "268.2MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "sqlite",
+        "threads": 8,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 3,
+        "run_label": "sweep07_t08_r02_sqlite_s00003"
+      }
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "sqlite",
+      "run_label": "sweep07_t08_r03_sqlite_s00005",
+      "seed": 5,
+      "du_bytes": 2830426112,
+      "du_human": "2.7G",
+      "result_file": "stackoverflow_medium_tables_oltp_sqlite_sweep07_t08_r03_sqlite_s00005/results_sweep07_t08_r03_sqlite_s00005.json",
+      "numeric_metrics": {
+        "batch_size": 5000,
+        "counts_time_s": 0.8786149024963379,
+        "disk_after_oltp_bytes": 3097362064,
+        "disk_after_preload_bytes": 2834325200,
+        "final_counts.Badge": 612142,
+        "final_counts.Comment": 819649,
+        "final_counts.Post": 425718,
+        "final_counts.PostHistory": 1525782,
+        "final_counts.PostLink": 86949,
+        "final_counts.Tag": 1633,
+        "final_counts.User": 345664,
+        "final_counts.Vote": 1747143,
+        "latency_summary.ops.delete.count": 10041,
+        "latency_summary.ops.delete.p50_ms": 4.501211980823427,
+        "latency_summary.ops.delete.p95_ms": 42.95296303462237,
+        "latency_summary.ops.delete.p99_ms": 186.22238998068497,
+        "latency_summary.ops.insert.count": 9857,
+        "latency_summary.ops.insert.p50_ms": 0.09469996439293027,
+        "latency_summary.ops.insert.p95_ms": 26.60750603536144,
+        "latency_summary.ops.insert.p99_ms": 128.75129602616653,
+        "latency_summary.ops.read.count": 60111,
+        "latency_summary.ops.read.p50_ms": 0.02343999221920967,
+        "latency_summary.ops.read.p95_ms": 2.3898269864730537,
+        "latency_summary.ops.read.p99_ms": 11.924844002351165,
+        "latency_summary.ops.update.count": 19991,
+        "latency_summary.ops.update.p50_ms": 0.04909001290798187,
+        "latency_summary.ops.update.p95_ms": 33.45530497608706,
+        "latency_summary.ops.update.p99_ms": 153.51172699593008,
+        "latency_summary.overall.count": 100000,
+        "latency_summary.overall.p50_ms": 0.039770035073161125,
+        "latency_summary.overall.p95_ms": 16.256636008620262,
+        "latency_summary.overall.p99_ms": 68.92139604315162,
+        "load_counts_time_s": 0.4168355464935303,
+        "preload_counts.Badge": 612258,
+        "preload_counts.Comment": 819648,
+        "preload_counts.Post": 425735,
+        "preload_counts.PostHistory": 1525713,
+        "preload_counts.PostLink": 86919,
+        "preload_counts.Tag": 1612,
+        "preload_counts.User": 345754,
+        "preload_counts.Vote": 1747225,
+        "preload_time_s": 521.0588355064392,
+        "rss_client_peak_kb": 273724,
+        "rss_peak_kb": 273724,
+        "rss_server_peak_kb": 0,
+        "seed": 5,
+        "table_schema.Badge.column_count": 6,
+        "table_schema.Comment.column_count": 6,
+        "table_schema.Post.column_count": 20,
+        "table_schema.PostHistory.column_count": 10,
+        "table_schema.PostLink.column_count": 5,
+        "table_schema.Tag.column_count": 5,
+        "table_schema.User.column_count": 12,
+        "table_schema.Vote.column_count": 6,
+        "threads": 8,
+        "throughput_ops_s": 1699.6108498508306,
+        "total_time_s": 58.836997897946276,
+        "transactions": 100000,
+        "disk_usage.du_bytes": 2830426112
+      },
+      "human_readable_metrics": {
+        "disk_after_oltp_bytes": "2.9GiB",
+        "disk_after_preload_bytes": "2.6GiB",
+        "rss_client_peak_kb": "267.3MiB",
+        "rss_peak_kb": "267.3MiB",
+        "rss_server_peak_kb": "0.0B",
+        "disk_usage.du_bytes": "2.6GiB"
+      },
+      "boolean_metrics": {},
+      "parameters": {
+        "dataset": "stackoverflow-medium",
+        "db": "sqlite",
+        "threads": 8,
+        "transactions": 100000,
+        "batch_size": 5000,
+        "mem_limit": "4g",
+        "heap_size": "4g",
+        "arcadedb_version": "26.2.1",
+        "duckdb_version": "1.4.4",
+        "docker_image": "python:3.12-slim",
+        "seed": 5,
+        "run_label": "sweep07_t08_r03_sqlite_s00005"
+      }
+    }
+  ],
+  "by_db": [
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "threads": 1,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 0.002293189366658529,
+          "stddev": 0.0001678423146441287,
+          "min": 0.0020606517791748047,
+          "max": 0.002450704574584961
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 3175727770.6666665,
+          "stddev": 88696789.56773692,
+          "min": 3071159167,
+          "max": 3288009873,
+          "mean_human": "3.0GiB",
+          "min_human": "2.9GiB",
+          "max_human": "3.1GiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 3191046101,
+          "stddev": 97930897.39309546,
+          "min": 3064340573,
+          "max": 3302823785,
+          "mean_human": "3.0GiB",
+          "min_human": "2.9GiB",
+          "max_human": "3.1GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 2793754624,
+          "stddev": 3344.369995479966,
+          "min": 2793750528,
+          "max": 2793758720,
+          "mean_human": "2.6GiB",
+          "min_human": "2.6GiB",
+          "max_human": "2.6GiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 612228,
+          "stddev": 70.06187741323141,
+          "min": 612129,
+          "max": 612281
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 819628.6666666666,
+          "stddev": 19.39644870130154,
+          "min": 819613,
+          "max": 819656
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 425747.6666666667,
+          "stddev": 23.683092891108814,
+          "min": 425719,
+          "max": 425777
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525671.3333333333,
+          "stddev": 18.372685039360892,
+          "min": 1525646,
+          "max": 1525689
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 86997.66666666667,
+          "stddev": 27.632509034750274,
+          "min": 86969,
+          "max": 87035
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 1658.3333333333333,
+          "stddev": 23.612614331233118,
+          "min": 1627,
+          "max": 1684
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 345774,
+          "stddev": 55.52176750308537,
+          "min": 345706,
+          "max": 345842
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 1747172.6666666667,
+          "stddev": 15.627610892974722,
+          "min": 1747157,
+          "max": 1747194
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 10015.333333333334,
+          "stddev": 48.74650984657489,
+          "min": 9953,
+          "max": 10072
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 4.118285006067405,
+          "stddev": 0.20735314728481116,
+          "min": 3.8309810333885252,
+          "max": 4.3127829558216035
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 30.59263634107386,
+          "stddev": 0.6729747074794301,
+          "min": 30.09730001213029,
+          "max": 31.544097000733018
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 74.46554369137932,
+          "stddev": 3.558199045964661,
+          "min": 70.28170605190098,
+          "max": 78.97878397488967
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 10029.666666666666,
+          "stddev": 50.690783733885546,
+          "min": 9958,
+          "max": 10067
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 0.34724100260064006,
+          "stddev": 0.014782560981588125,
+          "min": 0.3278310177847743,
+          "max": 0.36367098800837994
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 19.01963263905297,
+          "stddev": 0.05725036949660906,
+          "min": 18.94205599091947,
+          "max": 19.07849096460268
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 24.648492340929806,
+          "stddev": 0.3690740787881665,
+          "min": 24.284704006277025,
+          "max": 25.154526985716075
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 60138.333333333336,
+          "stddev": 118.11388101696129,
+          "min": 60037,
+          "max": 60304
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.07609000507121284,
+          "stddev": 0.004760213277820445,
+          "min": 0.07026997627690434,
+          "max": 0.08193001849576831
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 1.9414486596360803,
+          "stddev": 1.0953659379320353,
+          "min": 1.1561529827304184,
+          "max": 3.4904800122603774
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 7.930465682875365,
+          "stddev": 0.8014954687010379,
+          "min": 6.828391051385552,
+          "max": 8.710993977729231
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 19816.666666666668,
+          "stddev": 22.83759084394752,
+          "min": 19785,
+          "max": 19838
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 0.1676003448665142,
+          "stddev": 0.01704672890486447,
+          "min": 0.146319973282516,
+          "max": 0.18805102445185184
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 3.6372466517301896,
+          "stddev": 0.6982512674588502,
+          "min": 3.10043798526749,
+          "max": 4.623432003427297
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 9.36211965745315,
+          "stddev": 0.6249685726311776,
+          "min": 8.522627002093941,
+          "max": 10.021277004852891
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 0.1554233410085241,
+          "stddev": 0.02047240591263853,
+          "min": 0.1311899977736175,
+          "max": 0.18125999486073852
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 8.98812833474949,
+          "stddev": 0.24516996414558445,
+          "min": 8.651653013657779,
+          "max": 9.22882795566693
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 24.90463600649188,
+          "stddev": 0.12854392735873785,
+          "min": 24.788376002106816,
+          "max": 25.0837950152345
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.19407947858174643,
+          "stddev": 0.05835647141128832,
+          "min": 0.13202691078186035,
+          "max": 0.27222609519958496
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 819648,
+          "stddev": 0.0,
+          "min": 819648,
+          "max": 819648
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 425735,
+          "stddev": 0.0,
+          "min": 425735,
+          "max": 425735
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525713,
+          "stddev": 0.0,
+          "min": 1525713,
+          "max": 1525713
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 86919,
+          "stddev": 0.0,
+          "min": 86919,
+          "max": 86919
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 1612,
+          "stddev": 0.0,
+          "min": 1612,
+          "max": 1612
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 345754,
+          "stddev": 0.0,
+          "min": 345754,
+          "max": 345754
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 1747225,
+          "stddev": 0.0,
+          "min": 1747225,
+          "max": 1747225
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 275.95443868637085,
+          "stddev": 10.268195117011452,
+          "min": 266.05128502845764,
+          "max": 290.1038091182709
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 3174349.3333333335,
+          "stddev": 349923.3943492331,
+          "min": 2919456,
+          "max": 3669140,
+          "mean_human": "3.0GiB",
+          "min_human": "2.8GiB",
+          "max_human": "3.5GiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 3174349.3333333335,
+          "stddev": 349923.3943492331,
+          "min": 2919456,
+          "max": 3669140,
+          "mean_human": "3.0GiB",
+          "min_human": "2.8GiB",
+          "max_human": "3.5GiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0,
+          "mean_human": "0.0B",
+          "min_human": "0.0B",
+          "max_human": "0.0B"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 4,
+          "stddev": 3.265986323710904,
+          "min": 0,
+          "max": 8
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 578.4918968178531,
+          "stddev": 21.78545368725142,
+          "min": 557.2712651006602,
+          "max": 608.4457537349402
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 173.10397210798692,
+          "stddev": 6.392657751735047,
+          "min": 164.35318906599423,
+          "max": 179.4458215640043
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "arcadedb",
+      "threads": 8,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 0.0079803466796875,
+          "stddev": 0.009034430300356108,
+          "min": 0.001588582992553711,
+          "max": 0.020756959915161133
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 3466161750.6666665,
+          "stddev": 47316140.902849,
+          "min": 3411185383,
+          "max": 3526686657,
+          "mean_human": "3.2GiB",
+          "min_human": "3.2GiB",
+          "max_human": "3.3GiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 3196426436.6666665,
+          "stddev": 47782854.26583875,
+          "min": 3157546427,
+          "max": 3263731464,
+          "mean_human": "3.0GiB",
+          "min_human": "2.9GiB",
+          "max_human": "3.0GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 2793743701.3333335,
+          "stddev": 3861.7458343201315,
+          "min": 2793738240,
+          "max": 2793746432,
+          "mean_human": "2.6GiB",
+          "min_human": "2.6GiB",
+          "max_human": "2.6GiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 612299.6666666666,
+          "stddev": 36.33486235314815,
+          "min": 612255,
+          "max": 612344
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 819609,
+          "stddev": 49.48400414948922,
+          "min": 819558,
+          "max": 819676
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 425774.3333333333,
+          "stddev": 12.256517540566824,
+          "min": 425759,
+          "max": 425789
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525738.3333333333,
+          "stddev": 10.873004286866728,
+          "min": 1525723,
+          "max": 1525747
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 86952.33333333333,
+          "stddev": 34.49959742116163,
+          "min": 86913,
+          "max": 86997
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 1544,
+          "stddev": 41.8568990729127,
+          "min": 1490,
+          "max": 1592
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 345692.3333333333,
+          "stddev": 14.29063407348401,
+          "min": 345675,
+          "max": 345710
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 1747231.3333333333,
+          "stddev": 38.473656210740124,
+          "min": 1747177,
+          "max": 1747261
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 10039.333333333334,
+          "stddev": 23.156472577277874,
+          "min": 10021,
+          "max": 10072
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 8.580842327016095,
+          "stddev": 0.48064241126289675,
+          "min": 8.033562975469977,
+          "max": 9.203609020914882
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 79.56143034001191,
+          "stddev": 23.46752479908699,
+          "min": 47.36275499453768,
+          "max": 102.62647399213165
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 159.46726233232766,
+          "stddev": 53.866626961245004,
+          "min": 86.2878059851937,
+          "max": 214.38717399723828
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 10015.666666666666,
+          "stddev": 70.48561713017928,
+          "min": 9916,
+          "max": 10067
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 3.601554005096356,
+          "stddev": 0.17070777919256952,
+          "min": 3.4367400221526623,
+          "max": 3.8367320084944367
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 77.96380901709199,
+          "stddev": 20.480489012650374,
+          "min": 49.25017000641674,
+          "max": 95.61013401253149
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 182.05006533147147,
+          "stddev": 53.788299502810105,
+          "min": 106.30417300853878,
+          "max": 225.98037001444027
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 59990,
+          "stddev": 93.85449731721259,
+          "min": 59859,
+          "max": 60074
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.31809099406624836,
+          "stddev": 0.032931975436195096,
+          "min": 0.2738910261541605,
+          "max": 0.3529009991325438
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 12.722634322320422,
+          "stddev": 0.7141480828190889,
+          "min": 11.716422974132001,
+          "max": 13.30100797349587
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 25.090651334418606,
+          "stddev": 3.9195027000124023,
+          "min": 19.595616031438112,
+          "max": 28.46840099664405
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 19955,
+          "stddev": 173.2993556441185,
+          "min": 19827,
+          "max": 20200
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 1.4903209909486275,
+          "stddev": 0.1610978885164848,
+          "min": 1.283912977669388,
+          "max": 1.6770450165495276
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 41.275379655417055,
+          "stddev": 10.214943376573633,
+          "min": 27.638678962830454,
+          "max": 52.222640020772815
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 100.7916639985827,
+          "stddev": 27.99653571819321,
+          "min": 61.61418498959392,
+          "max": 125.33548899227753
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 0.6615183471391598,
+          "stddev": 0.09993968151709984,
+          "min": 0.520391040481627,
+          "max": 0.7387319928966463
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 29.608731352103252,
+          "stddev": 3.9337163130455703,
+          "min": 24.170709017198533,
+          "max": 33.34367601200938
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 95.48659500433132,
+          "stddev": 27.123980131877975,
+          "min": 57.70183401182294,
+          "max": 120.10604498209432
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.06562924385070801,
+          "stddev": 0.010450693445355472,
+          "min": 0.0531764030456543,
+          "max": 0.07874917984008789
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 819648,
+          "stddev": 0.0,
+          "min": 819648,
+          "max": 819648
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 425735,
+          "stddev": 0.0,
+          "min": 425735,
+          "max": 425735
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525713,
+          "stddev": 0.0,
+          "min": 1525713,
+          "max": 1525713
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 86919,
+          "stddev": 0.0,
+          "min": 86919,
+          "max": 86919
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 1612,
+          "stddev": 0.0,
+          "min": 1612,
+          "max": 1612
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 345754,
+          "stddev": 0.0,
+          "min": 345754,
+          "max": 345754
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 1747225,
+          "stddev": 0.0,
+          "min": 1747225,
+          "max": 1747225
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 222.7054545879364,
+          "stddev": 8.968098707722687,
+          "min": 211.84709429740906,
+          "max": 233.81021404266357
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 2450794.6666666665,
+          "stddev": 85272.17983740197,
+          "min": 2332520,
+          "max": 2530312,
+          "mean_human": "2.3GiB",
+          "min_human": "2.2GiB",
+          "max_human": "2.4GiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 2450794.6666666665,
+          "stddev": 85272.17983740197,
+          "min": 2332520,
+          "max": 2530312,
+          "mean_human": "2.3GiB",
+          "min_human": "2.2GiB",
+          "max_human": "2.4GiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0,
+          "mean_human": "0.0B",
+          "min_human": "0.0B",
+          "max_human": "0.0B"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 2,
+          "stddev": 1.632993161855452,
+          "min": 0,
+          "max": 4
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 1159.4365988274972,
+          "stddev": 201.97642926590484,
+          "min": 1008.5444405004179,
+          "max": 1444.9193042852485
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 88.64548094399895,
+          "stddev": 13.759435803905705,
+          "min": 69.20801715599373,
+          "max": 99.15279484400526
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "duckdb",
+      "threads": 1,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 36.591182788213096,
+          "stddev": 3.165548854051258,
+          "min": 33.579237937927246,
+          "max": 40.965463161468506
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 6511977750,
+          "stddev": 12362288.819431484,
+          "min": 6501684150,
+          "max": 6529362631,
+          "mean_human": "6.1GiB",
+          "min_human": "6.1GiB",
+          "max_human": "6.1GiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 5518480066.666667,
+          "stddev": 7112862.002916001,
+          "min": 5513062424,
+          "max": 5528528920,
+          "mean_human": "5.1GiB",
+          "min_human": "5.1GiB",
+          "max_human": "5.1GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 5898477568,
+          "stddev": 7040928.290991939,
+          "min": 5893496832,
+          "max": 5908434944,
+          "mean_human": "5.5GiB",
+          "min_human": "5.5GiB",
+          "max_human": "5.5GiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 612271.3333333334,
+          "stddev": 15.326085243430198,
+          "min": 612251,
+          "max": 612288
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 819652.6666666666,
+          "stddev": 5.792715732327589,
+          "min": 819645,
+          "max": 819659
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 425677,
+          "stddev": 32.567877834864625,
+          "min": 425631,
+          "max": 425702
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525654,
+          "stddev": 54.705270922157645,
+          "min": 1525577,
+          "max": 1525699
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 86922.66666666667,
+          "stddev": 64.45842760174102,
+          "min": 86859,
+          "max": 87011
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 1592,
+          "stddev": 21.400934559032695,
+          "min": 1570,
+          "max": 1621
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 345750,
+          "stddev": 52.55473337388365,
+          "min": 345707,
+          "max": 345824
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 1747224.3333333333,
+          "stddev": 22.691163233490013,
+          "min": 1747204,
+          "max": 1747256
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 10067.333333333334,
+          "stddev": 80.48326258021326,
+          "min": 9997,
+          "max": 10180
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 14.17424933363994,
+          "stddev": 0.16784574962879906,
+          "min": 14.055398001801223,
+          "max": 14.411618991289288
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 34.92822065406168,
+          "stddev": 3.315281628052653,
+          "min": 32.139168004505336,
+          "max": 39.58656796021387
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 70.7930246523271,
+          "stddev": 7.753932960598644,
+          "min": 63.984635984525084,
+          "max": 81.6416529705748
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 9947.333333333334,
+          "stddev": 45.02098276236192,
+          "min": 9915,
+          "max": 10011
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 12.990687314110497,
+          "stddev": 0.2438227022435925,
+          "min": 12.6510169939138,
+          "max": 13.211925979703665
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 32.47927965518708,
+          "stddev": 3.397637654942508,
+          "min": 29.489721986465156,
+          "max": 37.231791007798165
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 108.51959565964837,
+          "stddev": 1.7739579632082985,
+          "min": 106.8373349844478,
+          "max": 110.97252299077809
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 59970.666666666664,
+          "stddev": 150.90467925886932,
+          "min": 59859,
+          "max": 60184
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.7249286669927338,
+          "stddev": 0.03686393150777749,
+          "min": 0.6733019836246967,
+          "max": 0.757022004108876
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 6.115649671604236,
+          "stddev": 0.7212042819151284,
+          "min": 5.439545027911663,
+          "max": 7.115037995390594
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 26.620563682323944,
+          "stddev": 1.2618750691690928,
+          "min": 24.999259039759636,
+          "max": 28.076988004613668
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 20014.666666666668,
+          "stddev": 160.7427205885922,
+          "min": 19808,
+          "max": 20200
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 11.979306679374227,
+          "stddev": 0.25047810899296774,
+          "min": 11.642373981885612,
+          "max": 12.24246300989762
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 31.293922996458907,
+          "stddev": 3.1919616418719405,
+          "min": 28.759250009898096,
+          "max": 35.79614794580266
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 100.55196832399815,
+          "stddev": 4.747080690666724,
+          "min": 95.0547069660388,
+          "max": 106.63785098586231
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 1.9447486653613548,
+          "stddev": 0.15068252963352838,
+          "min": 1.8295649788342416,
+          "max": 2.1576060098595917
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 22.29333434176321,
+          "stddev": 1.988836651644393,
+          "min": 20.4530960181728,
+          "max": 25.05555801326409
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 60.22970865402991,
+          "stddev": 3.227612196653882,
+          "min": 57.893737975973636,
+          "max": 64.7938170004636
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.0065411726633707685,
+          "stddev": 0.004246453767985586,
+          "min": 0.0028493404388427734,
+          "max": 0.012489080429077148
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 819648,
+          "stddev": 0.0,
+          "min": 819648,
+          "max": 819648
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 425735,
+          "stddev": 0.0,
+          "min": 425735,
+          "max": 425735
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525713,
+          "stddev": 0.0,
+          "min": 1525713,
+          "max": 1525713
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 86919,
+          "stddev": 0.0,
+          "min": 86919,
+          "max": 86919
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 1612,
+          "stddev": 0.0,
+          "min": 1612,
+          "max": 1612
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 345754,
+          "stddev": 0.0,
+          "min": 345754,
+          "max": 345754
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 1747225,
+          "stddev": 0.0,
+          "min": 1747225,
+          "max": 1747225
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 128.59411748250326,
+          "stddev": 3.07051607735842,
+          "min": 125.55459880828857,
+          "max": 132.79959797859192
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 3723746.6666666665,
+          "stddev": 104867.72724193506,
+          "min": 3591832,
+          "max": 3848396,
+          "mean_human": "3.6GiB",
+          "min_human": "3.4GiB",
+          "max_human": "3.7GiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 3723746.6666666665,
+          "stddev": 104867.72724193506,
+          "min": 3591832,
+          "max": 3848396,
+          "mean_human": "3.6GiB",
+          "min_human": "3.4GiB",
+          "max_human": "3.7GiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0,
+          "mean_human": "0.0B",
+          "min_human": "0.0B",
+          "max_human": "0.0B"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 3.265986323710904,
+          "min": 2,
+          "max": 10
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 117.65930917161953,
+          "stddev": 1.0117771816817136,
+          "min": 116.3014801515927,
+          "max": 118.72907513978222
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 849.9745737096722,
+          "stddev": 7.334863869264656,
+          "min": 842.2536761300289,
+          "max": 859.8342847370077
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "postgresql",
+      "threads": 1,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 3.234713077545166,
+          "stddev": 1.1838738066141603,
+          "min": 1.5773615837097168,
+          "max": 4.268876791000366
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 3515734523,
+          "stddev": 43861.00129576007,
+          "min": 3515677179,
+          "max": 3515783675,
+          "mean_human": "3.3GiB",
+          "min_human": "3.3GiB",
+          "max_human": "3.3GiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 3636178768.3333335,
+          "stddev": 118099484.98900446,
+          "min": 3507550715,
+          "max": 3792755195,
+          "mean_human": "3.4GiB",
+          "min_human": "3.3GiB",
+          "max_human": "3.5GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 3516253525.3333335,
+          "stddev": 69618.6130922535,
+          "min": 3516157952,
+          "max": 3516321792,
+          "mean_human": "3.3GiB",
+          "min_human": "3.3GiB",
+          "max_human": "3.3GiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 819648,
+          "stddev": 0.0,
+          "min": 819648,
+          "max": 819648
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 425735,
+          "stddev": 0.0,
+          "min": 425735,
+          "max": 425735
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525713,
+          "stddev": 0.0,
+          "min": 1525713,
+          "max": 1525713
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 86919,
+          "stddev": 0.0,
+          "min": 86919,
+          "max": 86919
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 1612,
+          "stddev": 0.0,
+          "min": 1612,
+          "max": 1612
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 345754,
+          "stddev": 0.0,
+          "min": 345754,
+          "max": 345754
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 1747225,
+          "stddev": 0.0,
+          "min": 1747225,
+          "max": 1747225
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 9896,
+          "stddev": 105.11263799689677,
+          "min": 9763,
+          "max": 10020
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 2.359856676775962,
+          "stddev": 0.07869068523372487,
+          "min": 2.286567003466189,
+          "max": 2.469026017934084
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 15.353227693897983,
+          "stddev": 1.5146048119730635,
+          "min": 14.085578033700585,
+          "max": 17.482325027231127
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 41.58140433719382,
+          "stddev": 2.2527886566512505,
+          "min": 39.778740028850734,
+          "max": 44.75768399424851
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 10009,
+          "stddev": 95.96179795453328,
+          "min": 9893,
+          "max": 10128
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 0.18082731791461507,
+          "stddev": 0.0072352824750752795,
+          "min": 0.1731209922581911,
+          "max": 0.19051000708714128
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 0.5409513250924647,
+          "stddev": 0.04240142336533073,
+          "min": 0.49582100473344326,
+          "max": 0.5977109540253878
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 1.8866149863849084,
+          "stddev": 0.364337547013091,
+          "min": 1.6227939631789923,
+          "max": 2.4018160183914006
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 60171.333333333336,
+          "stddev": 36.572606627851336,
+          "min": 60134,
+          "max": 60221
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.060186663176864386,
+          "stddev": 0.001663577122018642,
+          "min": 0.05862000398337841,
+          "max": 0.062489998526871204
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 0.5699846660718322,
+          "stddev": 0.05666473791935569,
+          "min": 0.5059110117144883,
+          "max": 0.6437019910663366
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 7.292823031699906,
+          "stddev": 0.4773910744058088,
+          "min": 6.819989008363336,
+          "max": 7.946582045406103
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 19923.666666666668,
+          "stddev": 44.723844000960185,
+          "min": 19866,
+          "max": 19975
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 0.14402734814211726,
+          "stddev": 0.004398416505141148,
+          "min": 0.1397909945808351,
+          "max": 0.15009002527222037
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 3.385155345313251,
+          "stddev": 0.18135846058291402,
+          "min": 3.133538004476577,
+          "max": 3.554009017534554
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 11.866948334500194,
+          "stddev": 1.1811760917924803,
+          "min": 10.3161979932338,
+          "max": 13.180045993067324
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 0.09760033572092652,
+          "stddev": 0.0034063472990950184,
+          "min": 0.09469001088291407,
+          "max": 0.10237999958917499
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 4.5272889935101075,
+          "stddev": 0.18276962989832768,
+          "min": 4.346352012362331,
+          "max": 4.777611989993602
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 13.09090833334873,
+          "stddev": 0.9295268666797174,
+          "min": 11.940772004891187,
+          "max": 14.217265998013318
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 18.080276250839233,
+          "stddev": 2.69817940169028,
+          "min": 14.312913656234741,
+          "max": 20.488831281661987
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 819648,
+          "stddev": 0.0,
+          "min": 819648,
+          "max": 819648
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 425735,
+          "stddev": 0.0,
+          "min": 425735,
+          "max": 425735
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525713,
+          "stddev": 0.0,
+          "min": 1525713,
+          "max": 1525713
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 86919,
+          "stddev": 0.0,
+          "min": 86919,
+          "max": 86919
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 1612,
+          "stddev": 0.0,
+          "min": 1612,
+          "max": 1612
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 345754,
+          "stddev": 0.0,
+          "min": 345754,
+          "max": 345754
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 1747225,
+          "stddev": 0.0,
+          "min": 1747225,
+          "max": 1747225
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 221.22029622395834,
+          "stddev": 14.099921071956128,
+          "min": 201.72077870368958,
+          "max": 234.58090996742249
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 279452,
+          "stddev": 795.192219948527,
+          "min": 278568,
+          "max": 280496,
+          "mean_human": "272.9MiB",
+          "min_human": "272.0MiB",
+          "max_human": "273.9MiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 1560273.3333333333,
+          "stddev": 34325.15988147599,
+          "min": 1522576,
+          "max": 1605608,
+          "mean_human": "1.5GiB",
+          "min_human": "1.5GiB",
+          "max_human": "1.5GiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 1280908,
+          "stddev": 33644.570597150836,
+          "min": 1244008,
+          "max": 1325372,
+          "mean_human": "1.2GiB",
+          "min_human": "1.2GiB",
+          "max_human": "1.3GiB"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 7,
+          "stddev": 3.265986323710904,
+          "min": 3,
+          "max": 11
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 1169.092215536941,
+          "stddev": 59.750629764358685,
+          "min": 1086.2273368323108,
+          "max": 1224.8517461434635
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 85.76750805566553,
+          "stddev": 4.521754086221684,
+          "min": 81.64253373100655,
+          "max": 92.0617596419761
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "sqlite",
+      "threads": 1,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 0.056416829427083336,
+          "stddev": 0.045555553908280005,
+          "min": 0.023011207580566406,
+          "max": 0.12082719802856445
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 2834610554.6666665,
+          "stddev": 13516.11042012046,
+          "min": 2834595536,
+          "max": 2834628304,
+          "mean_human": "2.6GiB",
+          "min_human": "2.6GiB",
+          "max_human": "2.6GiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 2834325200,
+          "stddev": 0.0,
+          "min": 2834325200,
+          "max": 2834325200,
+          "mean_human": "2.6GiB",
+          "min_human": "2.6GiB",
+          "max_human": "2.6GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 2830428842.6666665,
+          "stddev": 13516.11042012046,
+          "min": 2830413824,
+          "max": 2830446592,
+          "mean_human": "2.6GiB",
+          "min_human": "2.6GiB",
+          "max_human": "2.6GiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 612204.6666666666,
+          "stddev": 25.42090128658349,
+          "min": 612172,
+          "max": 612234
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 819631,
+          "stddev": 33.075670817082454,
+          "min": 819590,
+          "max": 819671
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 425702.6666666667,
+          "stddev": 11.115554667022044,
+          "min": 425692,
+          "max": 425718
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525696.3333333333,
+          "stddev": 21.913973218524802,
+          "min": 1525666,
+          "max": 1525717
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 86878,
+          "stddev": 89.04306074403927,
+          "min": 86767,
+          "max": 86985
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 1659,
+          "stddev": 56.515484603779164,
+          "min": 1609,
+          "max": 1738
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 345719.3333333333,
+          "stddev": 3.858612300930075,
+          "min": 345714,
+          "max": 345723
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 1747226.3333333333,
+          "stddev": 55.4276304943863,
+          "min": 1747148,
+          "max": 1747268
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 10061.333333333334,
+          "stddev": 65.68781385378028,
+          "min": 9993,
+          "max": 10150
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 2.7652973270354173,
+          "stddev": 0.11628192130120055,
+          "min": 2.6168969925493,
+          "max": 2.900858991779387
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 15.832386018397907,
+          "stddev": 0.2168341894210283,
+          "min": 15.64578601391986,
+          "max": 16.13642502343282
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 40.22101002434889,
+          "stddev": 2.5719527955892194,
+          "min": 36.832822021096945,
+          "max": 43.06076903594658
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 9914.666666666666,
+          "stddev": 73.23174782079757,
+          "min": 9857,
+          "max": 10018
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 0.050009984988719225,
+          "stddev": 0.0048508664126628,
+          "min": 0.04653999349102378,
+          "max": 0.05686999065801501
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 0.15251701309656104,
+          "stddev": 0.005483360347377198,
+          "min": 0.14816003385931253,
+          "max": 0.1602509873919189
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 0.37588699099918205,
+          "stddev": 0.024303500353121208,
+          "min": 0.3416290273889899,
+          "max": 0.3954209969379008
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 60181.333333333336,
+          "stddev": 58.40281576164705,
+          "min": 60111,
+          "max": 60254
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.013783360676219067,
+          "stddev": 0.0013147107186317673,
+          "min": 0.012770004104822874,
+          "max": 0.01564004924148321
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 0.22747400604809323,
+          "stddev": 0.2461925110513737,
+          "min": 0.05273998249322176,
+          "max": 0.5756419850513339
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 2.292923648686459,
+          "stddev": 3.0803741709287773,
+          "min": 0.11277099838480353,
+          "max": 6.649229966569692
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 19842.666666666668,
+          "stddev": 141.04924278027474,
+          "min": 19653,
+          "max": 19991
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 0.02117666493480404,
+          "stddev": 0.002075223358922213,
+          "min": 0.019630009774118662,
+          "max": 0.024110020603984594
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 0.27040733645359677,
+          "stddev": 0.2782429970042326,
+          "min": 0.07321999873965979,
+          "max": 0.6639020284637809
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 2.5050636807767055,
+          "stddev": 3.312985090776908,
+          "min": 0.16144901746883988,
+          "max": 7.1903319912962615
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 0.018816654725621145,
+          "stddev": 0.0023996839293524575,
+          "min": 0.017079990357160568,
+          "max": 0.02221000613644719
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 3.4029556748767695,
+          "stddev": 0.8809383005150443,
+          "min": 2.72162799956277,
+          "max": 4.646904009860009
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 12.605784654927751,
+          "stddev": 0.07710693089572106,
+          "min": 12.49807100975886,
+          "max": 12.67435698537156
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.22341036796569824,
+          "stddev": 0.2751334917345411,
+          "min": 0.026813030242919922,
+          "max": 0.6125006675720215
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 819648,
+          "stddev": 0.0,
+          "min": 819648,
+          "max": 819648
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 425735,
+          "stddev": 0.0,
+          "min": 425735,
+          "max": 425735
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525713,
+          "stddev": 0.0,
+          "min": 1525713,
+          "max": 1525713
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 86919,
+          "stddev": 0.0,
+          "min": 86919,
+          "max": 86919
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 1612,
+          "stddev": 0.0,
+          "min": 1612,
+          "max": 1612
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 345754,
+          "stddev": 0.0,
+          "min": 345754,
+          "max": 345754
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 1747225,
+          "stddev": 0.0,
+          "min": 1747225,
+          "max": 1747225
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 762.3082041740417,
+          "stddev": 32.80276015471358,
+          "min": 719.9286463260651,
+          "max": 799.8384671211243
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 267354.6666666667,
+          "stddev": 725.3455881317692,
+          "min": 266344,
+          "max": 268012,
+          "mean_human": "261.1MiB",
+          "min_human": "260.1MiB",
+          "max_human": "261.7MiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 267354.6666666667,
+          "stddev": 725.3455881317692,
+          "min": 266344,
+          "max": 268012,
+          "mean_human": "261.1MiB",
+          "min_human": "260.1MiB",
+          "max_human": "261.7MiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0,
+          "mean_human": "0.0B",
+          "min_human": "0.0B",
+          "max_human": "0.0B"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 3.265986323710904,
+          "min": 1,
+          "max": 9
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 1600.944569773685,
+          "stddev": 257.6183666711033,
+          "min": 1238.3812378010614,
+          "max": 1813.2376369071937
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 64.33458776401433,
+          "stddev": 11.635214671315786,
+          "min": 55.14996929501649,
+          "max": 80.75057740503689
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        }
+      },
+      "boolean_metrics": {}
+    },
+    {
+      "dataset": "stackoverflow-medium",
+      "db": "sqlite",
+      "threads": 8,
+      "runs": 3,
+      "numeric_metrics": {
+        "batch_size": {
+          "count": 3,
+          "mean": 5000,
+          "stddev": 0.0,
+          "min": 5000,
+          "max": 5000
+        },
+        "counts_time_s": {
+          "count": 3,
+          "mean": 0.3081027666727702,
+          "stddev": 0.4034167926144574,
+          "min": 0.020704269409179688,
+          "max": 0.8786149024963379
+        },
+        "disk_after_oltp_bytes": {
+          "count": 3,
+          "mean": 3094714181.3333335,
+          "stddev": 2470285.2993262853,
+          "min": 3091416664,
+          "max": 3097362064,
+          "mean_human": "2.9GiB",
+          "min_human": "2.9GiB",
+          "max_human": "2.9GiB"
+        },
+        "disk_after_preload_bytes": {
+          "count": 3,
+          "mean": 2834325200,
+          "stddev": 0.0,
+          "min": 2834325200,
+          "max": 2834325200,
+          "mean_human": "2.6GiB",
+          "min_human": "2.6GiB",
+          "max_human": "2.6GiB"
+        },
+        "disk_usage.du_bytes": {
+          "count": 3,
+          "mean": 2830442496,
+          "stddev": 17696.7426004524,
+          "min": 2830426112,
+          "max": 2830467072,
+          "mean_human": "2.6GiB",
+          "min_human": "2.6GiB",
+          "max_human": "2.6GiB"
+        },
+        "final_counts.Badge": {
+          "count": 3,
+          "mean": 612238.6666666666,
+          "stddev": 68.74752520798273,
+          "min": 612142,
+          "max": 612296
+        },
+        "final_counts.Comment": {
+          "count": 3,
+          "mean": 819644.3333333334,
+          "stddev": 51.545018080207214,
+          "min": 819579,
+          "max": 819705
+        },
+        "final_counts.Post": {
+          "count": 3,
+          "mean": 425757.6666666667,
+          "stddev": 64.76796190161375,
+          "min": 425706,
+          "max": 425849
+        },
+        "final_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525769.6666666667,
+          "stddev": 26.386023236217735,
+          "min": 1525733,
+          "max": 1525794
+        },
+        "final_counts.PostLink": {
+          "count": 3,
+          "mean": 86935.33333333333,
+          "stddev": 23.697163449568297,
+          "min": 86902,
+          "max": 86955
+        },
+        "final_counts.Tag": {
+          "count": 3,
+          "mean": 1608.3333333333333,
+          "stddev": 20.8539897594894,
+          "min": 1582,
+          "max": 1633
+        },
+        "final_counts.User": {
+          "count": 3,
+          "mean": 345728.6666666667,
+          "stddev": 51.873778432738916,
+          "min": 345664,
+          "max": 345791
+        },
+        "final_counts.Vote": {
+          "count": 3,
+          "mean": 1747197.6666666667,
+          "stddev": 79.44110327084393,
+          "min": 1747140,
+          "max": 1747310
+        },
+        "latency_summary.ops.delete.count": {
+          "count": 3,
+          "mean": 9984.666666666666,
+          "stddev": 162.93625201968476,
+          "min": 9763,
+          "max": 10150
+        },
+        "latency_summary.ops.delete.p50_ms": {
+          "count": 3,
+          "mean": 3.4230629874703786,
+          "stddev": 0.7818775096276405,
+          "min": 2.671397989615798,
+          "max": 4.501211980823427
+        },
+        "latency_summary.ops.delete.p95_ms": {
+          "count": 3,
+          "mean": 33.0907646760655,
+          "stddev": 8.850243726249989,
+          "min": 21.485610981471837,
+          "max": 42.95296303462237
+        },
+        "latency_summary.ops.delete.p99_ms": {
+          "count": 3,
+          "mean": 153.17289397353306,
+          "stddev": 31.004583690861978,
+          "min": 111.69369897106662,
+          "max": 186.22238998068497
+        },
+        "latency_summary.ops.insert.count": {
+          "count": 3,
+          "mean": 10001,
+          "stddev": 111.28641726044857,
+          "min": 9857,
+          "max": 10128
+        },
+        "latency_summary.ops.insert.p50_ms": {
+          "count": 3,
+          "mean": 0.0744033216809233,
+          "stddev": 0.014931339284728912,
+          "min": 0.059209996834397316,
+          "max": 0.09469996439293027
+        },
+        "latency_summary.ops.insert.p95_ms": {
+          "count": 3,
+          "mean": 20.079810346942395,
+          "stddev": 5.188718675645686,
+          "min": 13.913189002778381,
+          "max": 26.60750603536144
+        },
+        "latency_summary.ops.insert.p99_ms": {
+          "count": 3,
+          "mean": 103.80125932473068,
+          "stddev": 20.49341312082312,
+          "min": 78.55550397653133,
+          "max": 128.75129602616653
+        },
+        "latency_summary.ops.read.count": {
+          "count": 3,
+          "mean": 60141.333333333336,
+          "stddev": 28.241026106633512,
+          "min": 60111,
+          "max": 60179
+        },
+        "latency_summary.ops.read.p50_ms": {
+          "count": 3,
+          "mean": 0.0175400055013597,
+          "stddev": 0.004236141514962571,
+          "min": 0.01369003439322114,
+          "max": 0.02343999221920967
+        },
+        "latency_summary.ops.read.p95_ms": {
+          "count": 3,
+          "mean": 0.8468093195309242,
+          "stddev": 1.0911491219177072,
+          "min": 0.06006995681673288,
+          "max": 2.3898269864730537
+        },
+        "latency_summary.ops.read.p99_ms": {
+          "count": 3,
+          "mean": 5.08277469392245,
+          "stddev": 4.847314057031333,
+          "min": 1.2953440309502184,
+          "max": 11.924844002351165
+        },
+        "latency_summary.ops.update.count": {
+          "count": 3,
+          "mean": 19873,
+          "stddev": 155.70056732930252,
+          "min": 19653,
+          "max": 19991
+        },
+        "latency_summary.ops.update.p50_ms": {
+          "count": 3,
+          "mean": 0.032890005968511105,
+          "stddev": 0.011518695906193031,
+          "min": 0.0233100145123899,
+          "max": 0.04909001290798187
+        },
+        "latency_summary.ops.update.p95_ms": {
+          "count": 3,
+          "mean": 25.928690660900127,
+          "stddev": 6.240479446360831,
+          "min": 18.174402008298784,
+          "max": 33.45530497608706
+        },
+        "latency_summary.ops.update.p99_ms": {
+          "count": 3,
+          "mean": 124.32781831982236,
+          "stddev": 26.47844796350086,
+          "min": 89.41624499857426,
+          "max": 153.51172699593008
+        },
+        "latency_summary.overall.count": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        },
+        "latency_summary.overall.p50_ms": {
+          "count": 3,
+          "mean": 0.02713002807771166,
+          "stddev": 0.009020249258319332,
+          "min": 0.019320053979754448,
+          "max": 0.039770035073161125
+        },
+        "latency_summary.overall.p95_ms": {
+          "count": 3,
+          "mean": 10.569636341339598,
+          "stddev": 4.08231094349949,
+          "min": 6.865078990813345,
+          "max": 16.256636008620262
+        },
+        "latency_summary.overall.p99_ms": {
+          "count": 3,
+          "mean": 49.70424168277532,
+          "stddev": 15.80102580456991,
+          "min": 30.219716019928455,
+          "max": 68.92139604315162
+        },
+        "load_counts_time_s": {
+          "count": 3,
+          "mean": 0.15490643183390299,
+          "stddev": 0.18521640788915503,
+          "min": 0.02235102653503418,
+          "max": 0.4168355464935303
+        },
+        "preload_counts.Badge": {
+          "count": 3,
+          "mean": 612258,
+          "stddev": 0.0,
+          "min": 612258,
+          "max": 612258
+        },
+        "preload_counts.Comment": {
+          "count": 3,
+          "mean": 819648,
+          "stddev": 0.0,
+          "min": 819648,
+          "max": 819648
+        },
+        "preload_counts.Post": {
+          "count": 3,
+          "mean": 425735,
+          "stddev": 0.0,
+          "min": 425735,
+          "max": 425735
+        },
+        "preload_counts.PostHistory": {
+          "count": 3,
+          "mean": 1525713,
+          "stddev": 0.0,
+          "min": 1525713,
+          "max": 1525713
+        },
+        "preload_counts.PostLink": {
+          "count": 3,
+          "mean": 86919,
+          "stddev": 0.0,
+          "min": 86919,
+          "max": 86919
+        },
+        "preload_counts.Tag": {
+          "count": 3,
+          "mean": 1612,
+          "stddev": 0.0,
+          "min": 1612,
+          "max": 1612
+        },
+        "preload_counts.User": {
+          "count": 3,
+          "mean": 345754,
+          "stddev": 0.0,
+          "min": 345754,
+          "max": 345754
+        },
+        "preload_counts.Vote": {
+          "count": 3,
+          "mean": 1747225,
+          "stddev": 0.0,
+          "min": 1747225,
+          "max": 1747225
+        },
+        "preload_time_s": {
+          "count": 3,
+          "mean": 625.0991536776224,
+          "stddev": 132.26205127528974,
+          "min": 521.0588355064392,
+          "max": 811.7357473373413
+        },
+        "rss_client_peak_kb": {
+          "count": 3,
+          "mean": 273986.6666666667,
+          "stddev": 488.9862529310569,
+          "min": 273564,
+          "max": 274672,
+          "mean_human": "267.6MiB",
+          "min_human": "267.2MiB",
+          "max_human": "268.2MiB"
+        },
+        "rss_peak_kb": {
+          "count": 3,
+          "mean": 273986.6666666667,
+          "stddev": 488.9862529310569,
+          "min": 273564,
+          "max": 274672,
+          "mean_human": "267.6MiB",
+          "min_human": "267.2MiB",
+          "max_human": "268.2MiB"
+        },
+        "rss_server_peak_kb": {
+          "count": 3,
+          "mean": 0,
+          "stddev": 0.0,
+          "min": 0,
+          "max": 0,
+          "mean_human": "0.0B",
+          "min_human": "0.0B",
+          "max_human": "0.0B"
+        },
+        "seed": {
+          "count": 3,
+          "mean": 3,
+          "stddev": 1.632993161855452,
+          "min": 1,
+          "max": 5
+        },
+        "table_schema.Badge.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Comment.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "table_schema.Post.column_count": {
+          "count": 3,
+          "mean": 20,
+          "stddev": 0.0,
+          "min": 20,
+          "max": 20
+        },
+        "table_schema.PostHistory.column_count": {
+          "count": 3,
+          "mean": 10,
+          "stddev": 0.0,
+          "min": 10,
+          "max": 10
+        },
+        "table_schema.PostLink.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.Tag.column_count": {
+          "count": 3,
+          "mean": 5,
+          "stddev": 0.0,
+          "min": 5,
+          "max": 5
+        },
+        "table_schema.User.column_count": {
+          "count": 3,
+          "mean": 12,
+          "stddev": 0.0,
+          "min": 12,
+          "max": 12
+        },
+        "table_schema.Vote.column_count": {
+          "count": 3,
+          "mean": 6,
+          "stddev": 0.0,
+          "min": 6,
+          "max": 6
+        },
+        "threads": {
+          "count": 3,
+          "mean": 8,
+          "stddev": 0.0,
+          "min": 8,
+          "max": 8
+        },
+        "throughput_ops_s": {
+          "count": 3,
+          "mean": 2260.301219046801,
+          "stddev": 524.6420976590416,
+          "min": 1699.6108498508306,
+          "max": 2961.471460375352
+        },
+        "total_time_s": {
+          "count": 3,
+          "mean": 46.59259409065513,
+          "stddev": 10.243032300226647,
+          "min": 33.766997703001834,
+          "max": 58.836997897946276
+        },
+        "transactions": {
+          "count": 3,
+          "mean": 100000,
+          "stddev": 0.0,
+          "min": 100000,
+          "max": 100000
+        }
+      },
+      "boolean_metrics": {}
+    }
+  ]
+}

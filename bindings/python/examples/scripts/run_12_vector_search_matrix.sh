@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXAMPLES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PY_SCRIPT="$EXAMPLES_DIR/12_vector_search.py"
+
+# Dataset Tier  Memory  CPUs  Running   Note
+# Tiny          2GB     2     ✅
+# Small         4GB     4     ✅
+# Medium        8GB     8     ✅
+# Large         16GB    16
+# X-Large       32GB    32
+
+DATASET="stackoverflow-large"
+MEM_LIMIT="16g"
+THREADS=16
+RUNS=3
+SEED_START=0
+SERVER_FRACTION="0.8"
+K=50
+QUERY_LIMIT=1000
+QUERY_RUNS=1
+QUERY_ORDER="shuffled"
+OVERQUERY_FACTORS="4"
+
+JVM_HEAP_FRACTION="0.80"
+JVM_ARGS=""
+ARCADEDB_VERSION="26.2.1"
+DOCKER_IMAGE="python:3.12-slim"
+DB_ROOT="my_test_databases"
+
+PG_HOST="127.0.0.1"
+PG_PORT=6543
+PG_USER="postgres"
+PG_PASSWORD=""
+PG_DATABASE="bench"
+PG_SHARED_BUFFERS=""
+
+QDRANT_HOST="127.0.0.1"
+QDRANT_PORT=6333
+QDRANT_IMAGE="qdrant/qdrant:v1.11.3"
+
+MILVUS_HOST="127.0.0.1"
+MILVUS_PORT=19530
+MILVUS_COMPOSE_VERSION="v2.6.10"
+MILVUS_COLLECTION="vectordata"
+
+BACKENDS_RAW="arcadedb,pgvector,qdrant,milvus"
+BUILD_LABEL_PREFIX="sweep11"
+SEARCH_LABEL_PREFIX="sweep12"
+
+if [[ $# -gt 0 ]]; then
+    echo "This script does not accept command-line arguments." >&2
+    echo "Edit configuration values at the top of this file instead (for example DATASET)." >&2
+    exit 1
+fi
+
+IFS=',' read -r -a BACKENDS <<< "$BACKENDS_RAW"
+if [[ "${#BACKENDS[@]}" -eq 0 ]]; then
+    echo "BACKENDS_RAW cannot be empty" >&2
+    exit 1
+fi
+
+if [[ ! -f "$PY_SCRIPT" ]]; then
+    echo "Benchmark script not found: $PY_SCRIPT" >&2
+    exit 1
+fi
+
+if [[ "$QUERY_ORDER" != "fixed" && "$QUERY_ORDER" != "shuffled" ]]; then
+    echo "QUERY_ORDER must be either 'fixed' or 'shuffled'" >&2
+    exit 1
+fi
+
+if [[ "$QUERY_RUNS" -lt 1 ]]; then
+    echo "QUERY_RUNS must be >= 1" >&2
+    exit 1
+fi
+
+cd "$EXAMPLES_DIR"
+
+echo "Running matrix: runs=$RUNS backends=${BACKENDS[*]} dataset=$DATASET seed_start=$SEED_START"
+echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT k=$K query-limit=$QUERY_LIMIT query-runs=$QUERY_RUNS query-order=$QUERY_ORDER overquery=$OVERQUERY_FACTORS"
+echo "Build label prefix: $BUILD_LABEL_PREFIX"
+echo "Search label prefix: $SEARCH_LABEL_PREFIX"
+
+execution_idx=0
+for ((run = 1; run <= RUNS; run++)); do
+    for backend in "${BACKENDS[@]}"; do
+        backend="$(echo "$backend" | xargs)"
+        if [[ -z "$backend" ]]; then
+            continue
+        fi
+
+        seed=$((SEED_START + execution_idx))
+        build_run_label=$(printf "%s_r%02d_%s_s%05d" "$BUILD_LABEL_PREFIX" "$run" "$backend" "$seed")
+        search_run_label=$(printf "%s_r%02d_%s_s%05d" "$SEARCH_LABEL_PREFIX" "$run" "$backend" "$seed")
+
+        mapfile -t build_dirs < <(find "$DB_ROOT" -mindepth 1 -maxdepth 1 -type d -name "*backend=${backend}_dataset=${DATASET}_*run=${build_run_label}" | sort)
+        if [[ "${#build_dirs[@]}" -eq 0 ]]; then
+            echo "Build DB directory not found for backend=$backend run=$run seed=$seed (label=$build_run_label)" >&2
+            exit 1
+        fi
+
+        db_path="${build_dirs[0]}"
+        if [[ "${#build_dirs[@]}" -gt 1 ]]; then
+            echo "Warning: multiple build DB dirs matched for label=$build_run_label; using first: $db_path"
+        fi
+
+        cmd=(
+            python3 "$PY_SCRIPT"
+            --backend "$backend"
+            --dataset "$DATASET"
+            --db-path "$db_path"
+            --overquery-factors "$OVERQUERY_FACTORS"
+            --k "$K"
+            --query-limit "$QUERY_LIMIT"
+            --query-runs "$QUERY_RUNS"
+            --query-order "$QUERY_ORDER"
+            --seed "$seed"
+            --run-label "$search_run_label"
+            --threads "$THREADS"
+            --mem-limit "$MEM_LIMIT"
+            --jvm-heap-fraction "$JVM_HEAP_FRACTION"
+            --server-fraction "$SERVER_FRACTION"
+            --arcadedb-version "$ARCADEDB_VERSION"
+            --pg-host "$PG_HOST"
+            --pg-port "$PG_PORT"
+            --pg-user "$PG_USER"
+            --pg-database "$PG_DATABASE"
+            --qdrant-port "$QDRANT_PORT"
+            --qdrant-image "$QDRANT_IMAGE"
+            --milvus-port "$MILVUS_PORT"
+            --milvus-compose-version "$MILVUS_COMPOSE_VERSION"
+            --milvus-collection "$MILVUS_COLLECTION"
+        )
+
+        if [[ -n "$JVM_ARGS" ]]; then
+            cmd+=(--jvm-args "$JVM_ARGS")
+        fi
+
+        if [[ -n "$DOCKER_IMAGE" ]]; then
+            if [[ "$backend" != "pgvector" || "$DOCKER_IMAGE" != "python:3.12-slim" ]]; then
+                cmd+=(--docker-image "$DOCKER_IMAGE")
+            fi
+        fi
+
+        if [[ -n "$PG_SHARED_BUFFERS" ]]; then
+            cmd+=(--pg-shared-buffers "$PG_SHARED_BUFFERS")
+        fi
+
+        if [[ -n "$PG_PASSWORD" ]]; then
+            cmd+=(--pg-password "$PG_PASSWORD")
+        fi
+
+        if [[ -n "$QDRANT_HOST" && "$QDRANT_HOST" != "127.0.0.1" ]]; then
+            cmd+=(--qdrant-host "$QDRANT_HOST")
+        fi
+
+        if [[ -n "$MILVUS_HOST" && "$MILVUS_HOST" != "127.0.0.1" ]]; then
+            cmd+=(--milvus-host "$MILVUS_HOST")
+        fi
+
+        echo
+        echo "[$((execution_idx + 1))/$((RUNS * ${#BACKENDS[@]}))] backend=$backend run=$run seed=$seed build_label=$build_run_label search_label=$search_run_label"
+        echo "DB path: $db_path"
+        echo "Command: ${cmd[*]}"
+        "${cmd[@]}"
+
+        if [[ -d "$db_path" ]]; then
+            du_bytes="$(du -sB1 "$db_path" | awk '{print $1}')"
+            du_human="$(du -sh "$db_path" | awk '{print $1}')"
+            collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+            cat > "$db_path/disk_usage_du_search.txt" << EOF
+path: $db_path
+du_bytes: $du_bytes
+du_human: $du_human
+collected_at_utc: $collected_at
+search_run_label: $search_run_label
+EOF
+
+            cat > "$db_path/disk_usage_du_search.json" << EOF
+{
+  "path": "$db_path",
+  "du_bytes": $du_bytes,
+  "du_human": "$du_human",
+  "collected_at_utc": "$collected_at",
+  "search_run_label": "$search_run_label"
+}
+EOF
+
+            echo "Saved search du size: $du_human ($du_bytes bytes) -> $db_path/disk_usage_du_search.json"
+        else
+            echo "Warning: DB path not found for du capture: $db_path"
+        fi
+
+        execution_idx=$((execution_idx + 1))
+    done
+done
+
+echo
+echo "Completed all runs."

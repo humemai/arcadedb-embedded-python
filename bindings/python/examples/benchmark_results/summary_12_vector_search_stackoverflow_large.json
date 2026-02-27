@@ -1,0 +1,2117 @@
+{
+  "meta": {
+    "name": "12 vector search matrix summary",
+    "generated_at_utc": "2026-02-27T12:38:14Z",
+    "input_dir": "/mnt/ssd2/repos/arcadedb-embedded-python/bindings/python/examples/my_test_databases",
+    "dataset": "stackoverflow-large",
+    "dataset_size_profile": "large",
+    "dataset_size_source": "dataset name suffix",
+    "label_prefix": "sweep12",
+    "total_runs": 8,
+    "datasets_found": [
+      "stackoverflow-large"
+    ],
+    "backends_found": [
+      "arcadedb",
+      "milvus",
+      "pgvector",
+      "qdrant"
+    ],
+    "sweep_samples": 8
+  },
+  "parameter_keys": [
+    "arcadedb_version",
+    "backend",
+    "cpus",
+    "dataset",
+    "dataset_label",
+    "dim",
+    "docker_image",
+    "heap",
+    "k",
+    "mem_limit",
+    "milvus_version",
+    "postgres_version",
+    "qdrant_version",
+    "quantization",
+    "query_count",
+    "query_limit",
+    "query_order",
+    "query_runs",
+    "rows",
+    "run_label",
+    "seed",
+    "server_fraction",
+    "threads"
+  ],
+  "parameters_detected": {
+    "arcadedb_version": [
+      "26.2.1"
+    ],
+    "backend": [
+      "arcadedb",
+      "milvus",
+      "pgvector",
+      "qdrant"
+    ],
+    "cpus": [
+      "16"
+    ],
+    "dataset": [
+      "stackoverflow-large"
+    ],
+    "dataset_label": [
+      "all"
+    ],
+    "dim": [
+      "384"
+    ],
+    "docker_image": [
+      "pgvector/pgvector:pg16",
+      "python:3.12-slim"
+    ],
+    "heap": [
+      "13107m"
+    ],
+    "k": [
+      "50"
+    ],
+    "mem_limit": [
+      "16g"
+    ],
+    "milvus_version": [
+      "2.6.10"
+    ],
+    "postgres_version": [
+      "16.11 (Debian 16.11-1.pgdg12+1)"
+    ],
+    "qdrant_version": [
+      "1.11.3"
+    ],
+    "quantization": [
+      "NONE"
+    ],
+    "query_count": [
+      "1000"
+    ],
+    "query_limit": [
+      "1000"
+    ],
+    "query_order": [
+      "shuffled"
+    ],
+    "query_runs": [
+      "1"
+    ],
+    "rows": [
+      "5461227"
+    ],
+    "run_label": [
+      "sweep12_r01_arcadedb_s00000",
+      "sweep12_r01_milvus_s00003",
+      "sweep12_r01_pgvector_s00001",
+      "sweep12_r01_qdrant_s00002",
+      "sweep12_r02_arcadedb_s00004",
+      "sweep12_r02_milvus_s00007",
+      "sweep12_r02_pgvector_s00005",
+      "sweep12_r02_qdrant_s00006"
+    ],
+    "seed": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7"
+    ],
+    "server_fraction": [
+      "0.0",
+      "0.8"
+    ],
+    "threads": [
+      "16"
+    ]
+  },
+  "numeric_metric_keys": [
+    "budget.split.client_fraction",
+    "budget.split.server_fraction",
+    "budget.total.threads_input",
+    "dataset.dim",
+    "dataset.query_count",
+    "dataset.query_limit",
+    "dataset.rows",
+    "disk_usage_search.du_bytes",
+    "environment.hnsw_ef_normalization",
+    "environment.logical_cpu_count",
+    "environment.physical_cpu_count",
+    "environment.threads_limit",
+    "peak_rss_mb",
+    "run.total_time_s",
+    "search.k",
+    "search.query_runs",
+    "search.seed",
+    "telemetry.db_close_time_s",
+    "telemetry.db_open_time_s",
+    "telemetry.query_cold_time_s"
+  ],
+  "boolean_metric_keys": [
+    "environment.is_running_in_docker",
+    "telemetry.query_result_hash_stable",
+    "telemetry.query_row_count_stable"
+  ],
+  "sweep_numeric_metric_keys": [
+    "effective_ef_search",
+    "effective_overquery_factor",
+    "latency_ms_mean",
+    "latency_ms_mean_max",
+    "latency_ms_mean_min",
+    "latency_ms_p95",
+    "latency_ms_p95_max",
+    "latency_ms_p95_min",
+    "overquery_factor",
+    "queries",
+    "query_cold_time_s",
+    "query_runs",
+    "recall_count",
+    "recall_mean",
+    "recall_mean_max",
+    "recall_mean_min",
+    "rss_after_mb",
+    "rss_before_mb",
+    "rss_delta_mb",
+    "seed",
+    "time_sec"
+  ],
+  "sweep_boolean_metric_keys": [
+    "consistent_across_runs",
+    "query_result_hash_stable",
+    "query_row_count_stable"
+  ],
+  "run_fields": [
+    "dataset",
+    "backend",
+    "run_label",
+    "seed",
+    "du_bytes",
+    "du_human",
+    "result_file",
+    "numeric_metrics",
+    "human_readable_metrics",
+    "boolean_metrics",
+    "parameters"
+  ],
+  "runs": [
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "arcadedb",
+      "run_label": "sweep12_r01_arcadedb_s00000",
+      "seed": 0,
+      "du_bytes": 12823900160,
+      "du_human": "12G",
+      "result_file": "backend=arcadedb_dataset=stackoverflow-large_label=all_heap=26214m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=10000_count=5461227_run=sweep11_r01_arcadedb_s00000/search_results_sweep12_r01_arcadedb_s00000.json",
+      "numeric_metrics": {
+        "run.total_time_s": 360.3400119560538,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 16,
+        "environment.hnsw_ef_normalization": 0.5,
+        "budget.total.threads_input": 16,
+        "budget.split.client_fraction": 1.0,
+        "budget.split.server_fraction": 0.0,
+        "dataset.dim": 384,
+        "dataset.rows": 5461227,
+        "dataset.query_limit": 1000,
+        "dataset.query_count": 1000,
+        "search.k": 50,
+        "search.query_runs": 1,
+        "search.seed": 0,
+        "peak_rss_mb": 13417.01171875,
+        "telemetry.db_open_time_s": 10.196763777988963,
+        "telemetry.db_close_time_s": 0.035650234087370336,
+        "telemetry.query_cold_time_s": 0.34952865369594655,
+        "disk_usage_search.du_bytes": 12823900160
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "telemetry.query_result_hash_stable": true,
+        "telemetry.query_row_count_stable": true
+      },
+      "parameters": {
+        "backend": "arcadedb",
+        "dataset": "stackoverflow-large",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 5461227,
+        "query_count": 1000,
+        "query_limit": 1000,
+        "threads": 16,
+        "mem_limit": "16g",
+        "cpus": "16",
+        "server_fraction": 0.0,
+        "k": 50,
+        "query_runs": 1,
+        "query_order": "shuffled",
+        "seed": 0,
+        "run_label": "sweep12_r01_arcadedb_s00000",
+        "heap": "13107m",
+        "quantization": "NONE",
+        "docker_image": "python:3.12-slim",
+        "arcadedb_version": "26.2.1"
+      },
+      "human_readable_metrics": {
+        "peak_rss_mb": "13.1GiB",
+        "disk_usage_search.du_bytes": "11.9GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "arcadedb",
+      "run_label": "sweep12_r02_arcadedb_s00004",
+      "seed": 4,
+      "du_bytes": 12823887872,
+      "du_human": "12G",
+      "result_file": "backend=arcadedb_dataset=stackoverflow-large_label=all_heap=26214m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=10000_count=5461227_run=sweep11_r02_arcadedb_s00004/search_results_sweep12_r02_arcadedb_s00004.json",
+      "numeric_metrics": {
+        "run.total_time_s": 358.4029467770597,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 16,
+        "environment.hnsw_ef_normalization": 0.5,
+        "budget.total.threads_input": 16,
+        "budget.split.client_fraction": 1.0,
+        "budget.split.server_fraction": 0.0,
+        "dataset.dim": 384,
+        "dataset.rows": 5461227,
+        "dataset.query_limit": 1000,
+        "dataset.query_count": 1000,
+        "search.k": 50,
+        "search.query_runs": 1,
+        "search.seed": 4,
+        "peak_rss_mb": 13560.3984375,
+        "telemetry.db_open_time_s": 10.040307805989869,
+        "telemetry.db_close_time_s": 0.034304745960980654,
+        "telemetry.query_cold_time_s": 0.34776468212273903,
+        "disk_usage_search.du_bytes": 12823887872
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "telemetry.query_result_hash_stable": true,
+        "telemetry.query_row_count_stable": true
+      },
+      "parameters": {
+        "backend": "arcadedb",
+        "dataset": "stackoverflow-large",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 5461227,
+        "query_count": 1000,
+        "query_limit": 1000,
+        "threads": 16,
+        "mem_limit": "16g",
+        "cpus": "16",
+        "server_fraction": 0.0,
+        "k": 50,
+        "query_runs": 1,
+        "query_order": "shuffled",
+        "seed": 4,
+        "run_label": "sweep12_r02_arcadedb_s00004",
+        "heap": "13107m",
+        "quantization": "NONE",
+        "docker_image": "python:3.12-slim",
+        "arcadedb_version": "26.2.1"
+      },
+      "human_readable_metrics": {
+        "peak_rss_mb": "13.2GiB",
+        "disk_usage_search.du_bytes": "11.9GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "milvus",
+      "run_label": "sweep12_r01_milvus_s00003",
+      "seed": 3,
+      "du_bytes": 40017948672,
+      "du_human": "38G",
+      "result_file": "backend=milvus_dataset=stackoverflow-large_label=all_heap=26214m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=10000_count=5461227_run=sweep11_r01_milvus_s00003/search_results_sweep12_r01_milvus_s00003.json",
+      "numeric_metrics": {
+        "run.total_time_s": 90.30327956797555,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 16,
+        "environment.hnsw_ef_normalization": 0.5,
+        "budget.total.threads_input": 16,
+        "budget.split.client_fraction": 0.2,
+        "budget.split.server_fraction": 0.8,
+        "dataset.dim": 384,
+        "dataset.rows": 5461227,
+        "dataset.query_limit": 1000,
+        "dataset.query_count": 1000,
+        "search.k": 50,
+        "search.query_runs": 1,
+        "search.seed": 3,
+        "peak_rss_mb": 11152.69140625,
+        "telemetry.db_open_time_s": 0.2619724679971114,
+        "telemetry.db_close_time_s": 0.25002976309042424,
+        "telemetry.query_cold_time_s": 0.03871058325585909,
+        "disk_usage_search.du_bytes": 40017948672
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "telemetry.query_result_hash_stable": true,
+        "telemetry.query_row_count_stable": true
+      },
+      "parameters": {
+        "backend": "milvus",
+        "dataset": "stackoverflow-large",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 5461227,
+        "query_count": 1000,
+        "query_limit": 1000,
+        "threads": 16,
+        "mem_limit": "16g",
+        "cpus": "16",
+        "server_fraction": 0.8,
+        "k": 50,
+        "query_runs": 1,
+        "query_order": "shuffled",
+        "seed": 3,
+        "run_label": "sweep12_r01_milvus_s00003",
+        "quantization": "NONE",
+        "docker_image": "python:3.12-slim",
+        "milvus_version": "2.6.10"
+      },
+      "human_readable_metrics": {
+        "peak_rss_mb": "10.9GiB",
+        "disk_usage_search.du_bytes": "37.3GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "milvus",
+      "run_label": "sweep12_r02_milvus_s00007",
+      "seed": 7,
+      "du_bytes": 39818416128,
+      "du_human": "38G",
+      "result_file": "backend=milvus_dataset=stackoverflow-large_label=all_heap=26214m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=10000_count=5461227_run=sweep11_r02_milvus_s00007/search_results_sweep12_r02_milvus_s00007.json",
+      "numeric_metrics": {
+        "run.total_time_s": 131.16151746409014,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 16,
+        "environment.hnsw_ef_normalization": 0.5,
+        "budget.total.threads_input": 16,
+        "budget.split.client_fraction": 0.2,
+        "budget.split.server_fraction": 0.8,
+        "dataset.dim": 384,
+        "dataset.rows": 5461227,
+        "dataset.query_limit": 1000,
+        "dataset.query_count": 1000,
+        "search.k": 50,
+        "search.query_runs": 1,
+        "search.seed": 7,
+        "peak_rss_mb": 10461.84375,
+        "telemetry.db_open_time_s": 0.2501270290231332,
+        "telemetry.db_close_time_s": 0.43928473198320717,
+        "telemetry.query_cold_time_s": 0.03317908607528079,
+        "disk_usage_search.du_bytes": 39818416128
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "telemetry.query_result_hash_stable": true,
+        "telemetry.query_row_count_stable": true
+      },
+      "parameters": {
+        "backend": "milvus",
+        "dataset": "stackoverflow-large",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 5461227,
+        "query_count": 1000,
+        "query_limit": 1000,
+        "threads": 16,
+        "mem_limit": "16g",
+        "cpus": "16",
+        "server_fraction": 0.8,
+        "k": 50,
+        "query_runs": 1,
+        "query_order": "shuffled",
+        "seed": 7,
+        "run_label": "sweep12_r02_milvus_s00007",
+        "quantization": "NONE",
+        "docker_image": "python:3.12-slim",
+        "milvus_version": "2.6.10"
+      },
+      "human_readable_metrics": {
+        "peak_rss_mb": "10.2GiB",
+        "disk_usage_search.du_bytes": "37.1GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "pgvector",
+      "run_label": "sweep12_r01_pgvector_s00001",
+      "seed": 1,
+      "du_bytes": 21318610944,
+      "du_human": "20G",
+      "result_file": "backend=pgvector_dataset=stackoverflow-large_label=all_heap=26214m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=10000_count=5461227_run=sweep11_r01_pgvector_s00001/search_results_sweep12_r01_pgvector_s00001.json",
+      "numeric_metrics": {
+        "run.total_time_s": 102.68080534401815,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 16,
+        "environment.hnsw_ef_normalization": 0.5,
+        "budget.total.threads_input": 16,
+        "budget.split.client_fraction": 1.0,
+        "budget.split.server_fraction": 0.0,
+        "dataset.dim": 384,
+        "dataset.rows": 5461227,
+        "dataset.query_limit": 1000,
+        "dataset.query_count": 1000,
+        "search.k": 50,
+        "search.query_runs": 1,
+        "search.seed": 1,
+        "peak_rss_mb": 4470.3125,
+        "telemetry.db_open_time_s": 0.012257975991815329,
+        "telemetry.db_close_time_s": 0.0016914380248636007,
+        "telemetry.query_cold_time_s": 0.1015314904000843,
+        "disk_usage_search.du_bytes": 21318610944
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "telemetry.query_result_hash_stable": true,
+        "telemetry.query_row_count_stable": true
+      },
+      "parameters": {
+        "backend": "pgvector",
+        "dataset": "stackoverflow-large",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 5461227,
+        "query_count": 1000,
+        "query_limit": 1000,
+        "threads": 16,
+        "mem_limit": "16g",
+        "cpus": "16",
+        "server_fraction": 0.0,
+        "k": 50,
+        "query_runs": 1,
+        "query_order": "shuffled",
+        "seed": 1,
+        "run_label": "sweep12_r01_pgvector_s00001",
+        "quantization": "NONE",
+        "docker_image": "pgvector/pgvector:pg16",
+        "postgres_version": "16.11 (Debian 16.11-1.pgdg12+1)"
+      },
+      "human_readable_metrics": {
+        "peak_rss_mb": "4.4GiB",
+        "disk_usage_search.du_bytes": "19.9GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "pgvector",
+      "run_label": "sweep12_r02_pgvector_s00005",
+      "seed": 5,
+      "du_bytes": 21335326720,
+      "du_human": "20G",
+      "result_file": "backend=pgvector_dataset=stackoverflow-large_label=all_heap=26214m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=10000_count=5461227_run=sweep11_r02_pgvector_s00005/search_results_sweep12_r02_pgvector_s00005.json",
+      "numeric_metrics": {
+        "run.total_time_s": 99.37068151100539,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 16,
+        "environment.hnsw_ef_normalization": 0.5,
+        "budget.total.threads_input": 16,
+        "budget.split.client_fraction": 1.0,
+        "budget.split.server_fraction": 0.0,
+        "dataset.dim": 384,
+        "dataset.rows": 5461227,
+        "dataset.query_limit": 1000,
+        "dataset.query_count": 1000,
+        "search.k": 50,
+        "search.query_runs": 1,
+        "search.seed": 5,
+        "peak_rss_mb": 4448.53125,
+        "telemetry.db_open_time_s": 0.01039024698548019,
+        "telemetry.db_close_time_s": 0.002299800980836153,
+        "telemetry.query_cold_time_s": 0.09820375762588811,
+        "disk_usage_search.du_bytes": 21335326720
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "telemetry.query_result_hash_stable": true,
+        "telemetry.query_row_count_stable": true
+      },
+      "parameters": {
+        "backend": "pgvector",
+        "dataset": "stackoverflow-large",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 5461227,
+        "query_count": 1000,
+        "query_limit": 1000,
+        "threads": 16,
+        "mem_limit": "16g",
+        "cpus": "16",
+        "server_fraction": 0.0,
+        "k": 50,
+        "query_runs": 1,
+        "query_order": "shuffled",
+        "seed": 5,
+        "run_label": "sweep12_r02_pgvector_s00005",
+        "quantization": "NONE",
+        "docker_image": "pgvector/pgvector:pg16",
+        "postgres_version": "16.11 (Debian 16.11-1.pgdg12+1)"
+      },
+      "human_readable_metrics": {
+        "peak_rss_mb": "4.3GiB",
+        "disk_usage_search.du_bytes": "19.9GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "qdrant",
+      "run_label": "sweep12_r01_qdrant_s00002",
+      "seed": 2,
+      "du_bytes": 9282039808,
+      "du_human": "8.7G",
+      "result_file": "backend=qdrant_dataset=stackoverflow-large_label=all_heap=26214m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=10000_count=5461227_run=sweep11_r01_qdrant_s00002/search_results_sweep12_r01_qdrant_s00002.json",
+      "numeric_metrics": {
+        "run.total_time_s": 96.04481155390386,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 16,
+        "environment.hnsw_ef_normalization": 0.5,
+        "budget.total.threads_input": 16,
+        "budget.split.client_fraction": 0.2,
+        "budget.split.server_fraction": 0.8,
+        "dataset.dim": 384,
+        "dataset.rows": 5461227,
+        "dataset.query_limit": 1000,
+        "dataset.query_count": 1000,
+        "search.k": 50,
+        "search.query_runs": 1,
+        "search.seed": 2,
+        "peak_rss_mb": 9503.2578125,
+        "telemetry.db_open_time_s": 0.17196125397458673,
+        "telemetry.db_close_time_s": 0.03977887297514826,
+        "telemetry.query_cold_time_s": 0.0726697870810749,
+        "disk_usage_search.du_bytes": 9282039808
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "telemetry.query_result_hash_stable": true,
+        "telemetry.query_row_count_stable": true
+      },
+      "parameters": {
+        "backend": "qdrant",
+        "dataset": "stackoverflow-large",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 5461227,
+        "query_count": 1000,
+        "query_limit": 1000,
+        "threads": 16,
+        "mem_limit": "16g",
+        "cpus": "16",
+        "server_fraction": 0.8,
+        "k": 50,
+        "query_runs": 1,
+        "query_order": "shuffled",
+        "seed": 2,
+        "run_label": "sweep12_r01_qdrant_s00002",
+        "quantization": "NONE",
+        "docker_image": "python:3.12-slim",
+        "qdrant_version": "1.11.3"
+      },
+      "human_readable_metrics": {
+        "peak_rss_mb": "9.3GiB",
+        "disk_usage_search.du_bytes": "8.6GiB"
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "qdrant",
+      "run_label": "sweep12_r02_qdrant_s00006",
+      "seed": 6,
+      "du_bytes": 9282301952,
+      "du_human": "8.7G",
+      "result_file": "backend=qdrant_dataset=stackoverflow-large_label=all_heap=26214m_maxconn=16_beam=100_quant=none_store=off_hier=on_batch=10000_count=5461227_run=sweep11_r02_qdrant_s00006/search_results_sweep12_r02_qdrant_s00006.json",
+      "numeric_metrics": {
+        "run.total_time_s": 96.01993173500523,
+        "environment.logical_cpu_count": 32,
+        "environment.physical_cpu_count": 16,
+        "environment.threads_limit": 16,
+        "environment.hnsw_ef_normalization": 0.5,
+        "budget.total.threads_input": 16,
+        "budget.split.client_fraction": 0.2,
+        "budget.split.server_fraction": 0.8,
+        "dataset.dim": 384,
+        "dataset.rows": 5461227,
+        "dataset.query_limit": 1000,
+        "dataset.query_count": 1000,
+        "search.k": 50,
+        "search.query_runs": 1,
+        "search.seed": 6,
+        "peak_rss_mb": 9506.7578125,
+        "telemetry.db_open_time_s": 0.17523227795027196,
+        "telemetry.db_close_time_s": 0.04223770194221288,
+        "telemetry.query_cold_time_s": 0.07416264348162804,
+        "disk_usage_search.du_bytes": 9282301952
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": true,
+        "telemetry.query_result_hash_stable": true,
+        "telemetry.query_row_count_stable": true
+      },
+      "parameters": {
+        "backend": "qdrant",
+        "dataset": "stackoverflow-large",
+        "dataset_label": "all",
+        "dim": 384,
+        "rows": 5461227,
+        "query_count": 1000,
+        "query_limit": 1000,
+        "threads": 16,
+        "mem_limit": "16g",
+        "cpus": "16",
+        "server_fraction": 0.8,
+        "k": 50,
+        "query_runs": 1,
+        "query_order": "shuffled",
+        "seed": 6,
+        "run_label": "sweep12_r02_qdrant_s00006",
+        "quantization": "NONE",
+        "docker_image": "python:3.12-slim",
+        "qdrant_version": "1.11.3"
+      },
+      "human_readable_metrics": {
+        "peak_rss_mb": "9.3GiB",
+        "disk_usage_search.du_bytes": "8.6GiB"
+      }
+    }
+  ],
+  "by_backend": [
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "arcadedb",
+      "runs": 2,
+      "numeric_metrics": {
+        "budget.split.client_fraction": {
+          "count": 2,
+          "mean": 1.0,
+          "stddev": 0.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "budget.split.server_fraction": {
+          "count": 2,
+          "mean": 0.0,
+          "stddev": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "budget.total.threads_input": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "dataset.dim": {
+          "count": 2,
+          "mean": 384,
+          "stddev": 0.0,
+          "min": 384,
+          "max": 384
+        },
+        "dataset.query_count": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "dataset.query_limit": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "dataset.rows": {
+          "count": 2,
+          "mean": 5461227,
+          "stddev": 0.0,
+          "min": 5461227,
+          "max": 5461227
+        },
+        "disk_usage_search.du_bytes": {
+          "count": 2,
+          "mean": 12823894016,
+          "stddev": 6144.0,
+          "min": 12823887872,
+          "max": 12823900160,
+          "mean_human": "11.9GiB",
+          "min_human": "11.9GiB",
+          "max_human": "11.9GiB"
+        },
+        "environment.hnsw_ef_normalization": {
+          "count": 2,
+          "mean": 0.5,
+          "stddev": 0.0,
+          "min": 0.5,
+          "max": 0.5
+        },
+        "environment.logical_cpu_count": {
+          "count": 2,
+          "mean": 32,
+          "stddev": 0.0,
+          "min": 32,
+          "max": 32
+        },
+        "environment.physical_cpu_count": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "environment.threads_limit": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "peak_rss_mb": {
+          "count": 2,
+          "mean": 13488.705078125,
+          "stddev": 71.693359375,
+          "min": 13417.01171875,
+          "max": 13560.3984375,
+          "mean_human": "13.2GiB",
+          "min_human": "13.1GiB",
+          "max_human": "13.2GiB"
+        },
+        "run.total_time_s": {
+          "count": 2,
+          "mean": 359.37147936655674,
+          "stddev": 0.9685325894970447,
+          "min": 358.4029467770597,
+          "max": 360.3400119560538
+        },
+        "search.k": {
+          "count": 2,
+          "mean": 50,
+          "stddev": 0.0,
+          "min": 50,
+          "max": 50
+        },
+        "search.query_runs": {
+          "count": 2,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "search.seed": {
+          "count": 2,
+          "mean": 2,
+          "stddev": 2.0,
+          "min": 0,
+          "max": 4
+        },
+        "telemetry.db_close_time_s": {
+          "count": 2,
+          "mean": 0.034977490024175495,
+          "stddev": 0.0006727440631948411,
+          "min": 0.034304745960980654,
+          "max": 0.035650234087370336
+        },
+        "telemetry.db_open_time_s": {
+          "count": 2,
+          "mean": 10.118535791989416,
+          "stddev": 0.07822798599954695,
+          "min": 10.040307805989869,
+          "max": 10.196763777988963
+        },
+        "telemetry.query_cold_time_s": {
+          "count": 2,
+          "mean": 0.3486466679093428,
+          "stddev": 0.0008819857866037562,
+          "min": 0.34776468212273903,
+          "max": 0.34952865369594655
+        }
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "telemetry.query_result_hash_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "telemetry.query_row_count_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "milvus",
+      "runs": 2,
+      "numeric_metrics": {
+        "budget.split.client_fraction": {
+          "count": 2,
+          "mean": 0.2,
+          "stddev": 0.0,
+          "min": 0.2,
+          "max": 0.2
+        },
+        "budget.split.server_fraction": {
+          "count": 2,
+          "mean": 0.8,
+          "stddev": 0.0,
+          "min": 0.8,
+          "max": 0.8
+        },
+        "budget.total.threads_input": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "dataset.dim": {
+          "count": 2,
+          "mean": 384,
+          "stddev": 0.0,
+          "min": 384,
+          "max": 384
+        },
+        "dataset.query_count": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "dataset.query_limit": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "dataset.rows": {
+          "count": 2,
+          "mean": 5461227,
+          "stddev": 0.0,
+          "min": 5461227,
+          "max": 5461227
+        },
+        "disk_usage_search.du_bytes": {
+          "count": 2,
+          "mean": 39918182400,
+          "stddev": 99766272.0,
+          "min": 39818416128,
+          "max": 40017948672,
+          "mean_human": "37.2GiB",
+          "min_human": "37.1GiB",
+          "max_human": "37.3GiB"
+        },
+        "environment.hnsw_ef_normalization": {
+          "count": 2,
+          "mean": 0.5,
+          "stddev": 0.0,
+          "min": 0.5,
+          "max": 0.5
+        },
+        "environment.logical_cpu_count": {
+          "count": 2,
+          "mean": 32,
+          "stddev": 0.0,
+          "min": 32,
+          "max": 32
+        },
+        "environment.physical_cpu_count": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "environment.threads_limit": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "peak_rss_mb": {
+          "count": 2,
+          "mean": 10807.267578125,
+          "stddev": 345.423828125,
+          "min": 10461.84375,
+          "max": 11152.69140625,
+          "mean_human": "10.6GiB",
+          "min_human": "10.2GiB",
+          "max_human": "10.9GiB"
+        },
+        "run.total_time_s": {
+          "count": 2,
+          "mean": 110.73239851603284,
+          "stddev": 20.429118948057294,
+          "min": 90.30327956797555,
+          "max": 131.16151746409014
+        },
+        "search.k": {
+          "count": 2,
+          "mean": 50,
+          "stddev": 0.0,
+          "min": 50,
+          "max": 50
+        },
+        "search.query_runs": {
+          "count": 2,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "search.seed": {
+          "count": 2,
+          "mean": 5,
+          "stddev": 2.0,
+          "min": 3,
+          "max": 7
+        },
+        "telemetry.db_close_time_s": {
+          "count": 2,
+          "mean": 0.3446572475368157,
+          "stddev": 0.09462748444639146,
+          "min": 0.25002976309042424,
+          "max": 0.43928473198320717
+        },
+        "telemetry.db_open_time_s": {
+          "count": 2,
+          "mean": 0.2560497485101223,
+          "stddev": 0.005922719486989081,
+          "min": 0.2501270290231332,
+          "max": 0.2619724679971114
+        },
+        "telemetry.query_cold_time_s": {
+          "count": 2,
+          "mean": 0.03594483466556994,
+          "stddev": 0.0027657485902891493,
+          "min": 0.03317908607528079,
+          "max": 0.03871058325585909
+        }
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "telemetry.query_result_hash_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "telemetry.query_row_count_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "pgvector",
+      "runs": 2,
+      "numeric_metrics": {
+        "budget.split.client_fraction": {
+          "count": 2,
+          "mean": 1.0,
+          "stddev": 0.0,
+          "min": 1.0,
+          "max": 1.0
+        },
+        "budget.split.server_fraction": {
+          "count": 2,
+          "mean": 0.0,
+          "stddev": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "budget.total.threads_input": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "dataset.dim": {
+          "count": 2,
+          "mean": 384,
+          "stddev": 0.0,
+          "min": 384,
+          "max": 384
+        },
+        "dataset.query_count": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "dataset.query_limit": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "dataset.rows": {
+          "count": 2,
+          "mean": 5461227,
+          "stddev": 0.0,
+          "min": 5461227,
+          "max": 5461227
+        },
+        "disk_usage_search.du_bytes": {
+          "count": 2,
+          "mean": 21326968832,
+          "stddev": 8357888.0,
+          "min": 21318610944,
+          "max": 21335326720,
+          "mean_human": "19.9GiB",
+          "min_human": "19.9GiB",
+          "max_human": "19.9GiB"
+        },
+        "environment.hnsw_ef_normalization": {
+          "count": 2,
+          "mean": 0.5,
+          "stddev": 0.0,
+          "min": 0.5,
+          "max": 0.5
+        },
+        "environment.logical_cpu_count": {
+          "count": 2,
+          "mean": 32,
+          "stddev": 0.0,
+          "min": 32,
+          "max": 32
+        },
+        "environment.physical_cpu_count": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "environment.threads_limit": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "peak_rss_mb": {
+          "count": 2,
+          "mean": 4459.421875,
+          "stddev": 10.890625,
+          "min": 4448.53125,
+          "max": 4470.3125,
+          "mean_human": "4.4GiB",
+          "min_human": "4.3GiB",
+          "max_human": "4.4GiB"
+        },
+        "run.total_time_s": {
+          "count": 2,
+          "mean": 101.02574342751177,
+          "stddev": 1.6550619165063836,
+          "min": 99.37068151100539,
+          "max": 102.68080534401815
+        },
+        "search.k": {
+          "count": 2,
+          "mean": 50,
+          "stddev": 0.0,
+          "min": 50,
+          "max": 50
+        },
+        "search.query_runs": {
+          "count": 2,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "search.seed": {
+          "count": 2,
+          "mean": 3,
+          "stddev": 2.0,
+          "min": 1,
+          "max": 5
+        },
+        "telemetry.db_close_time_s": {
+          "count": 2,
+          "mean": 0.001995619502849877,
+          "stddev": 0.00030418147798627615,
+          "min": 0.0016914380248636007,
+          "max": 0.002299800980836153
+        },
+        "telemetry.db_open_time_s": {
+          "count": 2,
+          "mean": 0.011324111488647759,
+          "stddev": 0.0009338645031675696,
+          "min": 0.01039024698548019,
+          "max": 0.012257975991815329
+        },
+        "telemetry.query_cold_time_s": {
+          "count": 2,
+          "mean": 0.09986762401298621,
+          "stddev": 0.0016638663870980966,
+          "min": 0.09820375762588811,
+          "max": 0.1015314904000843
+        }
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "telemetry.query_result_hash_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "telemetry.query_row_count_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "qdrant",
+      "runs": 2,
+      "numeric_metrics": {
+        "budget.split.client_fraction": {
+          "count": 2,
+          "mean": 0.2,
+          "stddev": 0.0,
+          "min": 0.2,
+          "max": 0.2
+        },
+        "budget.split.server_fraction": {
+          "count": 2,
+          "mean": 0.8,
+          "stddev": 0.0,
+          "min": 0.8,
+          "max": 0.8
+        },
+        "budget.total.threads_input": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "dataset.dim": {
+          "count": 2,
+          "mean": 384,
+          "stddev": 0.0,
+          "min": 384,
+          "max": 384
+        },
+        "dataset.query_count": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "dataset.query_limit": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "dataset.rows": {
+          "count": 2,
+          "mean": 5461227,
+          "stddev": 0.0,
+          "min": 5461227,
+          "max": 5461227
+        },
+        "disk_usage_search.du_bytes": {
+          "count": 2,
+          "mean": 9282170880,
+          "stddev": 131072.0,
+          "min": 9282039808,
+          "max": 9282301952,
+          "mean_human": "8.6GiB",
+          "min_human": "8.6GiB",
+          "max_human": "8.6GiB"
+        },
+        "environment.hnsw_ef_normalization": {
+          "count": 2,
+          "mean": 0.5,
+          "stddev": 0.0,
+          "min": 0.5,
+          "max": 0.5
+        },
+        "environment.logical_cpu_count": {
+          "count": 2,
+          "mean": 32,
+          "stddev": 0.0,
+          "min": 32,
+          "max": 32
+        },
+        "environment.physical_cpu_count": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "environment.threads_limit": {
+          "count": 2,
+          "mean": 16,
+          "stddev": 0.0,
+          "min": 16,
+          "max": 16
+        },
+        "peak_rss_mb": {
+          "count": 2,
+          "mean": 9505.0078125,
+          "stddev": 1.75,
+          "min": 9503.2578125,
+          "max": 9506.7578125,
+          "mean_human": "9.3GiB",
+          "min_human": "9.3GiB",
+          "max_human": "9.3GiB"
+        },
+        "run.total_time_s": {
+          "count": 2,
+          "mean": 96.03237164445454,
+          "stddev": 0.012439909449312836,
+          "min": 96.01993173500523,
+          "max": 96.04481155390386
+        },
+        "search.k": {
+          "count": 2,
+          "mean": 50,
+          "stddev": 0.0,
+          "min": 50,
+          "max": 50
+        },
+        "search.query_runs": {
+          "count": 2,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "search.seed": {
+          "count": 2,
+          "mean": 4,
+          "stddev": 2.0,
+          "min": 2,
+          "max": 6
+        },
+        "telemetry.db_close_time_s": {
+          "count": 2,
+          "mean": 0.04100828745868057,
+          "stddev": 0.0012294144835323095,
+          "min": 0.03977887297514826,
+          "max": 0.04223770194221288
+        },
+        "telemetry.db_open_time_s": {
+          "count": 2,
+          "mean": 0.17359676596242934,
+          "stddev": 0.0016355119878426194,
+          "min": 0.17196125397458673,
+          "max": 0.17523227795027196
+        },
+        "telemetry.query_cold_time_s": {
+          "count": 2,
+          "mean": 0.07341621528135148,
+          "stddev": 0.0007464282002765735,
+          "min": 0.0726697870810749,
+          "max": 0.07416264348162804
+        }
+      },
+      "boolean_metrics": {
+        "environment.is_running_in_docker": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "telemetry.query_result_hash_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "telemetry.query_row_count_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    }
+  ],
+  "by_sweep": [
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "arcadedb",
+      "overquery_factor": 4.0,
+      "samples": 2,
+      "effective_ef_search_values": [],
+      "effective_overquery_values": [
+        "4"
+      ],
+      "numeric_metrics": {
+        "effective_overquery_factor": {
+          "count": 2,
+          "mean": 4,
+          "stddev": 0.0,
+          "min": 4,
+          "max": 4
+        },
+        "latency_ms_mean": {
+          "count": 2,
+          "mean": 348.6466679093428,
+          "stddev": 0.8819857866037637,
+          "min": 347.76468212273903,
+          "max": 349.52865369594656
+        },
+        "latency_ms_mean_max": {
+          "count": 2,
+          "mean": 348.6466679093428,
+          "stddev": 0.8819857866037637,
+          "min": 347.76468212273903,
+          "max": 349.52865369594656
+        },
+        "latency_ms_mean_min": {
+          "count": 2,
+          "mean": 348.6466679093428,
+          "stddev": 0.8819857866037637,
+          "min": 347.76468212273903,
+          "max": 349.52865369594656
+        },
+        "latency_ms_p95": {
+          "count": 2,
+          "mean": 425.48355417093256,
+          "stddev": 2.6116079476196887,
+          "min": 422.8719462233129,
+          "max": 428.09516211855225
+        },
+        "latency_ms_p95_max": {
+          "count": 2,
+          "mean": 425.48355417093256,
+          "stddev": 2.6116079476196887,
+          "min": 422.8719462233129,
+          "max": 428.09516211855225
+        },
+        "latency_ms_p95_min": {
+          "count": 2,
+          "mean": 425.48355417093256,
+          "stddev": 2.6116079476196887,
+          "min": 422.8719462233129,
+          "max": 428.09516211855225
+        },
+        "overquery_factor": {
+          "count": 2,
+          "mean": 4.0,
+          "stddev": 0.0,
+          "min": 4.0,
+          "max": 4.0
+        },
+        "queries": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "query_cold_time_s": {
+          "count": 2,
+          "mean": 0.3486466679093428,
+          "stddev": 0.0008819857866037562,
+          "min": 0.34776468212273903,
+          "max": 0.34952865369594655
+        },
+        "query_runs": {
+          "count": 2,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "recall_count": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "recall_mean": {
+          "count": 2,
+          "mean": 0.94371,
+          "stddev": 0.0008500000000000174,
+          "min": 0.94286,
+          "max": 0.9445600000000001
+        },
+        "recall_mean_max": {
+          "count": 2,
+          "mean": 0.94371,
+          "stddev": 0.0008500000000000174,
+          "min": 0.94286,
+          "max": 0.9445600000000001
+        },
+        "recall_mean_min": {
+          "count": 2,
+          "mean": 0.94371,
+          "stddev": 0.0008500000000000174,
+          "min": 0.94286,
+          "max": 0.9445600000000001
+        },
+        "rss_after_mb": {
+          "count": 2,
+          "mean": 13488.705078125,
+          "stddev": 71.693359375,
+          "min": 13417.01171875,
+          "max": 13560.3984375,
+          "mean_human": "13.2GiB",
+          "min_human": "13.1GiB",
+          "max_human": "13.2GiB"
+        },
+        "rss_before_mb": {
+          "count": 2,
+          "mean": 8781.3046875,
+          "stddev": 257.828125,
+          "min": 8523.4765625,
+          "max": 9039.1328125,
+          "mean_human": "8.6GiB",
+          "min_human": "8.3GiB",
+          "max_human": "8.8GiB"
+        },
+        "rss_delta_mb": {
+          "count": 2,
+          "mean": 4707.400390625,
+          "stddev": 186.134765625,
+          "min": 4521.265625,
+          "max": 4893.53515625,
+          "mean_human": "4.6GiB",
+          "min_human": "4.4GiB",
+          "max_human": "4.8GiB"
+        },
+        "seed": {
+          "count": 2,
+          "mean": 2,
+          "stddev": 2.0,
+          "min": 0,
+          "max": 4
+        },
+        "time_sec": {
+          "count": 2,
+          "mean": 349.10378706199117,
+          "stddev": 0.8862388689303771,
+          "min": 348.2175481930608,
+          "max": 349.99002593092155
+        }
+      },
+      "boolean_metrics": {
+        "consistent_across_runs": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "query_result_hash_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "query_row_count_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "milvus",
+      "overquery_factor": 4.0,
+      "samples": 2,
+      "effective_ef_search_values": [
+        "100"
+      ],
+      "effective_overquery_values": [],
+      "numeric_metrics": {
+        "effective_ef_search": {
+          "count": 2,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "latency_ms_mean": {
+          "count": 2,
+          "mean": 35.94483466556994,
+          "stddev": 2.7657485902891494,
+          "min": 33.17908607528079,
+          "max": 38.71058325585909
+        },
+        "latency_ms_mean_max": {
+          "count": 2,
+          "mean": 35.94483466556994,
+          "stddev": 2.7657485902891494,
+          "min": 33.17908607528079,
+          "max": 38.71058325585909
+        },
+        "latency_ms_mean_min": {
+          "count": 2,
+          "mean": 35.94483466556994,
+          "stddev": 2.7657485902891494,
+          "min": 33.17908607528079,
+          "max": 38.71058325585909
+        },
+        "latency_ms_p95": {
+          "count": 2,
+          "mean": 67.15807679574937,
+          "stddev": 1.7267011979129094,
+          "min": 65.43137559783645,
+          "max": 68.88477799366227
+        },
+        "latency_ms_p95_max": {
+          "count": 2,
+          "mean": 67.15807679574937,
+          "stddev": 1.7267011979129094,
+          "min": 65.43137559783645,
+          "max": 68.88477799366227
+        },
+        "latency_ms_p95_min": {
+          "count": 2,
+          "mean": 67.15807679574937,
+          "stddev": 1.7267011979129094,
+          "min": 65.43137559783645,
+          "max": 68.88477799366227
+        },
+        "overquery_factor": {
+          "count": 2,
+          "mean": 4.0,
+          "stddev": 0.0,
+          "min": 4.0,
+          "max": 4.0
+        },
+        "queries": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "query_cold_time_s": {
+          "count": 2,
+          "mean": 0.03594483466556994,
+          "stddev": 0.0027657485902891493,
+          "min": 0.03317908607528079,
+          "max": 0.03871058325585909
+        },
+        "query_runs": {
+          "count": 2,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "recall_count": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "recall_mean": {
+          "count": 2,
+          "mean": 0.98032,
+          "stddev": 0.0015000000000000568,
+          "min": 0.9788199999999999,
+          "max": 0.98182
+        },
+        "recall_mean_max": {
+          "count": 2,
+          "mean": 0.98032,
+          "stddev": 0.0015000000000000568,
+          "min": 0.9788199999999999,
+          "max": 0.98182
+        },
+        "recall_mean_min": {
+          "count": 2,
+          "mean": 0.98032,
+          "stddev": 0.0015000000000000568,
+          "min": 0.9788199999999999,
+          "max": 0.98182
+        },
+        "rss_after_mb": {
+          "count": 2,
+          "mean": 10806.72265625,
+          "stddev": 345.96875,
+          "min": 10460.75390625,
+          "max": 11152.69140625,
+          "mean_human": "10.6GiB",
+          "min_human": "10.2GiB",
+          "max_human": "10.9GiB"
+        },
+        "rss_before_mb": {
+          "count": 2,
+          "mean": 10785.92578125,
+          "stddev": 376.72265625,
+          "min": 10409.203125,
+          "max": 11162.6484375,
+          "mean_human": "10.5GiB",
+          "min_human": "10.2GiB",
+          "max_human": "10.9GiB"
+        },
+        "rss_delta_mb": {
+          "count": 2,
+          "mean": 20.796875,
+          "stddev": 30.75390625,
+          "min": -9.95703125,
+          "max": 51.55078125,
+          "mean_human": "20.8MiB",
+          "min_human": "-10.0MiB",
+          "max_human": "51.6MiB"
+        },
+        "seed": {
+          "count": 2,
+          "mean": 5,
+          "stddev": 2.0,
+          "min": 3,
+          "max": 7
+        },
+        "time_sec": {
+          "count": 2,
+          "mean": 36.481493725499604,
+          "stddev": 2.7303736114990897,
+          "min": 33.751120114000514,
+          "max": 39.211867336998694
+        }
+      },
+      "boolean_metrics": {
+        "consistent_across_runs": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "query_result_hash_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "query_row_count_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "pgvector",
+      "overquery_factor": 4.0,
+      "samples": 2,
+      "effective_ef_search_values": [
+        "100"
+      ],
+      "effective_overquery_values": [],
+      "numeric_metrics": {
+        "effective_ef_search": {
+          "count": 2,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "latency_ms_mean": {
+          "count": 2,
+          "mean": 99.8676240129862,
+          "stddev": 1.6638663870980963,
+          "min": 98.2037576258881,
+          "max": 101.5314904000843
+        },
+        "latency_ms_mean_max": {
+          "count": 2,
+          "mean": 99.8676240129862,
+          "stddev": 1.6638663870980963,
+          "min": 98.2037576258881,
+          "max": 101.5314904000843
+        },
+        "latency_ms_mean_min": {
+          "count": 2,
+          "mean": 99.8676240129862,
+          "stddev": 1.6638663870980963,
+          "min": 98.2037576258881,
+          "max": 101.5314904000843
+        },
+        "latency_ms_p95": {
+          "count": 2,
+          "mean": 215.6927389063639,
+          "stddev": 2.3754592955810807,
+          "min": 213.31727961078283,
+          "max": 218.068198201945
+        },
+        "latency_ms_p95_max": {
+          "count": 2,
+          "mean": 215.6927389063639,
+          "stddev": 2.3754592955810807,
+          "min": 213.31727961078283,
+          "max": 218.068198201945
+        },
+        "latency_ms_p95_min": {
+          "count": 2,
+          "mean": 215.6927389063639,
+          "stddev": 2.3754592955810807,
+          "min": 213.31727961078283,
+          "max": 218.068198201945
+        },
+        "overquery_factor": {
+          "count": 2,
+          "mean": 4.0,
+          "stddev": 0.0,
+          "min": 4.0,
+          "max": 4.0
+        },
+        "queries": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "query_cold_time_s": {
+          "count": 2,
+          "mean": 0.09986762401298621,
+          "stddev": 0.0016638663870980966,
+          "min": 0.09820375762588811,
+          "max": 0.1015314904000843
+        },
+        "query_runs": {
+          "count": 2,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "recall_count": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "recall_mean": {
+          "count": 2,
+          "mean": 0.96519,
+          "stddev": 0.0006299999999999639,
+          "min": 0.9645600000000001,
+          "max": 0.96582
+        },
+        "recall_mean_max": {
+          "count": 2,
+          "mean": 0.96519,
+          "stddev": 0.0006299999999999639,
+          "min": 0.9645600000000001,
+          "max": 0.96582
+        },
+        "recall_mean_min": {
+          "count": 2,
+          "mean": 0.96519,
+          "stddev": 0.0006299999999999639,
+          "min": 0.9645600000000001,
+          "max": 0.96582
+        },
+        "rss_after_mb": {
+          "count": 2,
+          "mean": 4457.8203125,
+          "stddev": 9.2890625,
+          "min": 4448.53125,
+          "max": 4467.109375,
+          "mean_human": "4.4GiB",
+          "min_human": "4.3GiB",
+          "max_human": "4.4GiB"
+        },
+        "rss_before_mb": {
+          "count": 2,
+          "mean": 231.73046875,
+          "stddev": 0.7890625,
+          "min": 230.94140625,
+          "max": 232.51953125,
+          "mean_human": "231.7MiB",
+          "min_human": "230.9MiB",
+          "max_human": "232.5MiB"
+        },
+        "rss_delta_mb": {
+          "count": 2,
+          "mean": 4226.08984375,
+          "stddev": 10.078125,
+          "min": 4216.01171875,
+          "max": 4236.16796875,
+          "mean_human": "4.1GiB",
+          "min_human": "4.1GiB",
+          "max_human": "4.1GiB"
+        },
+        "seed": {
+          "count": 2,
+          "mean": 3,
+          "stddev": 2.0,
+          "min": 1,
+          "max": 5
+        },
+        "time_sec": {
+          "count": 2,
+          "mean": 99.92260237055598,
+          "stddev": 1.658310259517748,
+          "min": 98.26429211103823,
+          "max": 101.58091263007373
+        }
+      },
+      "boolean_metrics": {
+        "consistent_across_runs": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "query_result_hash_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "query_row_count_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    },
+    {
+      "dataset": "stackoverflow-large",
+      "backend": "qdrant",
+      "overquery_factor": 4.0,
+      "samples": 2,
+      "effective_ef_search_values": [
+        "100"
+      ],
+      "effective_overquery_values": [],
+      "numeric_metrics": {
+        "effective_ef_search": {
+          "count": 2,
+          "mean": 100,
+          "stddev": 0.0,
+          "min": 100,
+          "max": 100
+        },
+        "latency_ms_mean": {
+          "count": 2,
+          "mean": 73.41621528135147,
+          "stddev": 0.7464282002765685,
+          "min": 72.6697870810749,
+          "max": 74.16264348162804
+        },
+        "latency_ms_mean_max": {
+          "count": 2,
+          "mean": 73.41621528135147,
+          "stddev": 0.7464282002765685,
+          "min": 72.6697870810749,
+          "max": 74.16264348162804
+        },
+        "latency_ms_mean_min": {
+          "count": 2,
+          "mean": 73.41621528135147,
+          "stddev": 0.7464282002765685,
+          "min": 72.6697870810749,
+          "max": 74.16264348162804
+        },
+        "latency_ms_p95": {
+          "count": 2,
+          "mean": 80.45417373650707,
+          "stddev": 1.4908557292073965,
+          "min": 78.96331800729968,
+          "max": 81.94502946571447
+        },
+        "latency_ms_p95_max": {
+          "count": 2,
+          "mean": 80.45417373650707,
+          "stddev": 1.4908557292073965,
+          "min": 78.96331800729968,
+          "max": 81.94502946571447
+        },
+        "latency_ms_p95_min": {
+          "count": 2,
+          "mean": 80.45417373650707,
+          "stddev": 1.4908557292073965,
+          "min": 78.96331800729968,
+          "max": 81.94502946571447
+        },
+        "overquery_factor": {
+          "count": 2,
+          "mean": 4.0,
+          "stddev": 0.0,
+          "min": 4.0,
+          "max": 4.0
+        },
+        "queries": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "query_cold_time_s": {
+          "count": 2,
+          "mean": 0.07341621528135148,
+          "stddev": 0.0007464282002765735,
+          "min": 0.0726697870810749,
+          "max": 0.07416264348162804
+        },
+        "query_runs": {
+          "count": 2,
+          "mean": 1,
+          "stddev": 0.0,
+          "min": 1,
+          "max": 1
+        },
+        "recall_count": {
+          "count": 2,
+          "mean": 1000,
+          "stddev": 0.0,
+          "min": 1000,
+          "max": 1000
+        },
+        "recall_mean": {
+          "count": 2,
+          "mean": 0.9847400000000001,
+          "stddev": 0.0005800000000000249,
+          "min": 0.98416,
+          "max": 0.9853200000000001
+        },
+        "recall_mean_max": {
+          "count": 2,
+          "mean": 0.9847400000000001,
+          "stddev": 0.0005800000000000249,
+          "min": 0.98416,
+          "max": 0.9853200000000001
+        },
+        "recall_mean_min": {
+          "count": 2,
+          "mean": 0.9847400000000001,
+          "stddev": 0.0005800000000000249,
+          "min": 0.98416,
+          "max": 0.9853200000000001
+        },
+        "rss_after_mb": {
+          "count": 2,
+          "mean": 9500.37109375,
+          "stddev": 2.88671875,
+          "min": 9497.484375,
+          "max": 9503.2578125,
+          "mean_human": "9.3GiB",
+          "min_human": "9.3GiB",
+          "max_human": "9.3GiB"
+        },
+        "rss_before_mb": {
+          "count": 2,
+          "mean": 9481.5,
+          "stddev": 25.2578125,
+          "min": 9456.2421875,
+          "max": 9506.7578125,
+          "mean_human": "9.3GiB",
+          "min_human": "9.2GiB",
+          "max_human": "9.3GiB"
+        },
+        "rss_delta_mb": {
+          "count": 2,
+          "mean": 18.87109375,
+          "stddev": 28.14453125,
+          "min": -9.2734375,
+          "max": 47.015625,
+          "mean_human": "18.9MiB",
+          "min_human": "-9.3MiB",
+          "max_human": "47.0MiB"
+        },
+        "seed": {
+          "count": 2,
+          "mean": 4,
+          "stddev": 2.0,
+          "min": 2,
+          "max": 6
+        },
+        "time_sec": {
+          "count": 2,
+          "mean": 73.5411602325621,
+          "stddev": 0.739977496501524,
+          "min": 72.80118273606058,
+          "max": 74.28113772906363
+        }
+      },
+      "boolean_metrics": {
+        "consistent_across_runs": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "query_result_hash_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        },
+        "query_row_count_stable": {
+          "count": 2,
+          "true_count": 2,
+          "false_count": 0,
+          "true_ratio": 1.0
+        }
+      }
+    }
+  ]
+}
