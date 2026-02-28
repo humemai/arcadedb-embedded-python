@@ -133,9 +133,12 @@ echo -e "${CYAN}🔍 Analyzing JARs to determine required modules (jdeps)...${NC
 DETECTED_MODULES=$(find "$JARS_DIR" -name "*.jar" | grep -v "jboss" | grep -v "wildfly" | grep -v "smallrye" | xargs jdeps --print-module-deps --ignore-missing-deps --multi-release 25 | grep -v "Warning" | tr ',' '\n' | grep -v "Warning" | grep -v ":" | grep -v "/" | sort -u | paste -sd "," -)
 
 # Manual overrides:
+# java.se: Stable baseline of standard Java SE modules needed by server/import/runtime paths
+# jdk.management: Required by server metrics integrations
 # jdk.zipfs: Required for JPype to load classes from JARs
 # jdk.unsupported: Often required for Unsafe access in libraries
-REQUIRED_MODULES="${DETECTED_MODULES},jdk.zipfs,jdk.unsupported"
+# jdk.incubator.vector: Required for vectorized execution paths
+REQUIRED_MODULES="${DETECTED_MODULES},java.se,jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector"
 
 echo -e "${CYAN}📦 Detected modules: ${YELLOW}${DETECTED_MODULES}${NC}"
 echo -e "${CYAN}📦 Final modules list: ${YELLOW}${REQUIRED_MODULES}${NC}"

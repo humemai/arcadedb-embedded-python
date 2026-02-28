@@ -247,3 +247,33 @@ def test_opencypher_subquery_with_exists(temp_db_path):
         names = [record.get("name") for record in result]
 
         assert names == ["Alice", "Bob"]
+
+
+def test_opencypher_count_non_existing_label_returns_zero(temp_db_path):
+    """Test COUNT against a non-existing label returns 0 instead of no rows/errors."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _ensure_opencypher(db)
+        _seed_graph(db)
+
+        result = db.query(
+            "opencypher",
+            "MATCH (n:DoesNotExist) RETURN count(n) AS c",
+        )
+        row = result.one()
+
+        assert row.get("c") == 0
+
+
+def test_opencypher_projection_property_order_is_preserved(temp_db_path):
+    """Test projected property order is stable and matches RETURN clause order."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _ensure_opencypher(db)
+        _seed_graph(db)
+
+        result = db.query(
+            "opencypher",
+            "MATCH (p:Person {name: 'Alice'}) RETURN p.age AS age, p.name AS name, 42 AS marker",
+        ).one()
+
+        assert result.property_names == ["age", "name", "marker"]
+        assert list(result.to_dict().keys()) == ["age", "name", "marker"]
