@@ -59,7 +59,7 @@ def sample_timeseries_csv_path():
 
 
 def _file_url(path: str) -> str:
-    return f"file://{Path(path).resolve().as_posix()}"
+    return Path(path).resolve().as_uri()
 
 
 def _resource_path(name: str) -> Path:
