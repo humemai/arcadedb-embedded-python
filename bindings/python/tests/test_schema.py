@@ -122,6 +122,12 @@ class TestTypeCreation:
         assert schema.exists_type("ExistingEdge")
 
 
+def test_index_type_enum_includes_new_java_index_types():
+    """Python IndexType should include current Java index enum values."""
+    assert IndexType.GEOSPATIAL.value == "GEOSPATIAL"
+    assert IndexType.HASH.value == "HASH"
+
+
 class TestTypeQueries:
     """Test type query methods."""
 
