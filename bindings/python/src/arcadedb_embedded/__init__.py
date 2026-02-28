@@ -35,9 +35,6 @@ from .exporter import export_database, export_to_csv
 # Import graph classes
 from .graph import Document, Edge, Vertex
 
-# Import importer classes
-from .importer import Importer, import_csv, import_xml
-
 # Import result classes
 from .results import Result, ResultSet
 
@@ -92,8 +89,4 @@ __all__ = [
     # Data export
     "export_database",
     "export_to_csv",
-    # Data import
-    "Importer",
-    "import_csv",
-    "import_xml",
 ]
