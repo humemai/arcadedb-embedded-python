@@ -2156,8 +2156,8 @@ def main():
     parser.add_argument(
         "--method",
         choices=["java", "sql"],
-        default="java",
-        help="Creation method: 'java' (Java API - RECOMMENDED) or 'sql' (SQL commands)",
+        default="sql",
+        help="Creation method: 'java' or 'sql' (default: sql)",
     )
     parser.add_argument(
         "--no-async",
