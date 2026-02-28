@@ -325,8 +325,8 @@ jobs:
                 timeout_duration=900  # 15 minutes
                 ;;
               "05_csv_import_graph.py")
-                example_args="--dataset movielens-small --method java --import-jsonl ./exports/movielens_small_db.jsonl.tgz --export"
-                example_name="$example (movielens-small dataset, embedded java method, import/export)"
+                example_args="--dataset movielens-small --method sql --import-jsonl ./exports/movielens_small_db.jsonl.tgz --export"
+                example_name="$example (movielens-small dataset, embedded sql method, import/export)"
                 timeout_duration=900  # 15 minutes
                 ;;
               "06_vector_search_recommendations.py")
