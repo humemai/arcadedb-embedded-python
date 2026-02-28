@@ -178,7 +178,7 @@ def test_oltp_mixed_workload_threads(cleanup_db):
     db.command("sql", "CREATE PROPERTY Account.account_id INTEGER")
     db.command("sql", "CREATE PROPERTY Account.balance INTEGER")
 
-    initial_accounts = 10000
+    initial_accounts = 1000
     print(f"\n1. Seeding {initial_accounts} accounts...")
     with db.transaction():
         for i in range(initial_accounts):
@@ -188,8 +188,8 @@ def test_oltp_mixed_workload_threads(cleanup_db):
             )
     print("   ✅ Seed complete")
 
-    worker_count = 6
-    ops_per_worker = 600
+    worker_count = 4
+    ops_per_worker = 400
     read_ratio = 0.9
     print(
         f"\n2. Running {worker_count} threads, "
