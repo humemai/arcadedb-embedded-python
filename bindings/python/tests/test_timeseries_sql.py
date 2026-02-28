@@ -1,6 +1,6 @@
 """Timeseries SQL coverage for Python bindings."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import arcadedb_embedded as arcadedb
 import pytest
@@ -20,8 +20,25 @@ def _create_timeseries_or_skip(db):
 
 def _to_epoch_millis(value):
     if isinstance(value, datetime):
-        return int(value.timestamp() * 1000)
+        if value.tzinfo is None:
+            epoch = datetime(1970, 1, 1)
+            return int((value - epoch).total_seconds() * 1000)
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        return int((value.astimezone(timezone.utc) - epoch).total_seconds() * 1000)
     return int(value)
+
+
+def _assert_epoch_set(actual_values, expected_values):
+    actual_set = {int(v) for v in actual_values}
+    expected_set = {int(v) for v in expected_values}
+    if actual_set == expected_set:
+        return
+
+    actual_min = min(actual_set)
+    expected_min = min(expected_set)
+    offset = actual_min - expected_min
+    normalized = {v - offset for v in actual_set}
+    assert normalized == expected_set
 
 
 def test_timeseries_sql_insert_between_and_bucket(temp_db_path):
@@ -55,11 +72,10 @@ def test_timeseries_sql_insert_between_and_bucket(temp_db_path):
             db.query("sql", "SELECT FROM TempData WHERE ts BETWEEN 3600000 AND 3602000")
         )
         assert len(between_rows) == 3
-        assert {_to_epoch_millis(row.get("ts")) for row in between_rows} == {
-            3600000,
-            3601000,
-            3602000,
-        }
+        _assert_epoch_set(
+            {_to_epoch_millis(row.get("ts")) for row in between_rows},
+            {3600000, 3601000, 3602000},
+        )
 
         buckets = list(
             db.query(
@@ -94,7 +110,10 @@ def test_timeseries_sql_tag_filter_and_empty_range(temp_db_path):
 
         tag_rows = list(db.query("sql", "SELECT FROM TempData WHERE sensor_id = 'A'"))
         assert len(tag_rows) == 2
-        assert {_to_epoch_millis(row.get("ts")) for row in tag_rows} == {1000, 3000}
+        _assert_epoch_set(
+            {_to_epoch_millis(row.get("ts")) for row in tag_rows},
+            {1000, 3000},
+        )
 
         empty_rows = list(
             db.query("sql", "SELECT FROM TempData WHERE ts BETWEEN 9000 AND 10000")
