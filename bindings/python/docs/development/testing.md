@@ -3,9 +3,9 @@
 Comprehensive testing documentation for ArcadeDB Python bindings.
 
 !!! success "Test Coverage"
-    **260 tests** across 20 test files, 100% passing
+    **271 tests** across 25 test files, 100% passing
 
-    - **Current package**: 260 passed
+    - **Current package**: 271 passed
     - All ArcadeDB features working (SQL, OpenCypher, Studio)
 
 ## Quick Navigation
