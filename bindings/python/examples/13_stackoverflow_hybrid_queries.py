@@ -1692,19 +1692,9 @@ def phase1_tables(
         schema_time = time.time() - schema_start
 
         load_start = time.time()
-        db.set_read_your_writes(False)
-        async_exec = db.async_executor()
-        async_exec.set_commit_every(max(1, batch_size))
-        async_exec.set_transaction_use_wal(False)
-        try:
-            table_stats = [
-                load_table(db, data_dir, table, batch_size) for table in table_defs
-            ]
-        finally:
-            async_exec.wait_completion()
-            async_exec.close()
-            db.set_read_your_writes(True)
-            async_exec.set_transaction_use_wal(True)
+        table_stats = [
+            load_table(db, data_dir, table, batch_size) for table in table_defs
+        ]
         load_time = time.time() - load_start
 
         index_time = create_indexes_with_retry(
@@ -1747,17 +1737,7 @@ def phase2_graph(
         schema_time = time.time() - schema_start
 
         load_start = time.time()
-        db.set_read_your_writes(False)
-        async_exec = db.async_executor()
-        async_exec.set_commit_every(max(1, batch_size))
-        async_exec.set_transaction_use_wal(False)
-        try:
-            load_stats = load_graph(db, data_dir, batch_size)
-        finally:
-            async_exec.wait_completion()
-            async_exec.close()
-            db.set_read_your_writes(True)
-            async_exec.set_transaction_use_wal(True)
+        load_stats = load_graph(db, data_dir, batch_size)
         load_time = time.time() - load_start
 
         graph_counts = count_graph(db)

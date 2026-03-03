@@ -3045,22 +3045,12 @@ def run_olap_arcadedb(
 
     print("Loading graph...")
     load_start = time.time()
-    db.set_read_your_writes(False)
-    async_exec = db.async_executor()
-    async_exec.set_commit_every(max(1, batch_size))
-    async_exec.set_transaction_use_wal(False)
-    try:
-        load_stats, _, index_time = load_graph_arcadedb(
-            db,
-            data_dir,
-            batch_size,
-            retry_config,
-        )
-    finally:
-        async_exec.wait_completion()
-        async_exec.close()
-        db.set_read_your_writes(True)
-        async_exec.set_transaction_use_wal(True)
+    load_stats, _, index_time = load_graph_arcadedb(
+        db,
+        data_dir,
+        batch_size,
+        retry_config,
+    )
     load_time_including_index = time.time() - load_start
     load_time = max(0.0, load_time_including_index - index_time)
 

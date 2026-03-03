@@ -19,11 +19,11 @@ PY_SCRIPT="$EXAMPLES_DIR/07_stackoverflow_tables_oltp.py"
 # X-Large       1,000,000     25,000  32GB    1
 # X-Large       1,000,000     25,000  32GB    8
 
-DATASET="stackoverflow-small"
-TRANSACTIONS=50000
-BATCH_SIZE=2500
-MEM_LIMIT="2g"
-THREADS=1
+DATASET="stackoverflow-medium"
+TRANSACTIONS=100000
+BATCH_SIZE=5000
+MEM_LIMIT="4g"
+THREADS=4
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"

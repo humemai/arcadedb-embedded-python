@@ -1433,30 +1433,20 @@ def run_olap_arcadedb(
     print("Loading XML tables...")
     load_stats = []
     load_start = time.time()
-    db.set_read_your_writes(False)
-    async_exec = db.async_executor()
-    async_exec.set_commit_every(batch_size)
-    async_exec.set_transaction_use_wal(False)
-    try:
-        for table in TABLE_DEFS:
-            xml_path = data_dir / table["xml"]
-            if not xml_path.exists():
-                raise FileNotFoundError(f"Missing XML file: {xml_path}")
-            print(f"  -> {table['name']} ({xml_path.name})")
-            count, elapsed = load_table(db, xml_path, table, batch_size)
-            load_stats.append(
-                {
-                    "table": table["name"],
-                    "rows": count,
-                    "elapsed_s": elapsed,
-                }
-            )
-            print(f"     {count:,} rows in {elapsed:.2f}s")
-    finally:
-        async_exec.wait_completion()
-        async_exec.close()
-        db.set_read_your_writes(True)
-        async_exec.set_transaction_use_wal(True)
+    for table in TABLE_DEFS:
+        xml_path = data_dir / table["xml"]
+        if not xml_path.exists():
+            raise FileNotFoundError(f"Missing XML file: {xml_path}")
+        print(f"  -> {table['name']} ({xml_path.name})")
+        count, elapsed = load_table(db, xml_path, table, batch_size)
+        load_stats.append(
+            {
+                "table": table["name"],
+                "rows": count,
+                "elapsed_s": elapsed,
+            }
+        )
+        print(f"     {count:,} rows in {elapsed:.2f}s")
     load_total = time.time() - load_start
 
     load_counts_start = time.time()

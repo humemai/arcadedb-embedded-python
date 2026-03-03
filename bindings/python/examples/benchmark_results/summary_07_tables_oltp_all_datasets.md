@@ -1,6 +1,6 @@
 # 07 Tables OLTP Matrix Summary — All Dataset Sizes
 
-- Generated (UTC): 2026-03-03T14:39:59Z
+- Generated (UTC): 2026-03-03T20:52:17Z
 - Dataset: all
 - Dataset size profile: all
 - Label prefix: sweep07
@@ -8,32 +8,32 @@
 - Note: `preload_time_s` is data ingest only, `index_time_s` is post-ingest index build, and `oltp_crud_time_s` / `throughput_s` measure OLTP CRUD only.
 - Note: per-op `throughput_s` is computed as `op_count / oltp_crud_time_s`.
 
-## Dataset: stackoverflow-small
+## Dataset: stackoverflow-medium
 
 | db | run_label | seed | threads | transactions | batch_size | mem_limit | preload_rows_total | preload_time_s | index_time_s | oltp_crud_time_s | throughput_s | p95_ms | rss_peak_mib | du_mib |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| arcadedb | sweep07_t01_r01_arcadedb_s00000 | 0 | 1 | 50,000 | 2,500 | 2g | 1,406,035 | 77.47 | 14.124 | 46.128 | 1,083.932 | 2.414 | 1,249.992 | 573.566 |
-| duckdb | sweep07_t01_r01_duckdb_s00002 | 2 | 1 | 50,000 | 2,500 | 2g | 1,406,035 | 56.953 | 0.24 | 155.806 | 320.911 | 6.525 | 1,804.234 | 1,134.789 |
-| postgresql | sweep07_t01_r01_postgresql_s00003 | 3 | 1 | 50,000 | 2,500 | 2g | 1,406,035 | 53.314 | 0.715 | 30.82 | 1,622.341 | 2.031 | 934.418 | 1,458.719 |
-| sqlite | sweep07_t01_r01_sqlite_s00001 | 1 | 1 | 50,000 | 2,500 | 2g | 1,406,035 | 53.467 | 0.722 | 7.582 | 6,594.942 | 0.91 | 96.633 | 573.918 |
+| arcadedb | sweep07_t01_r01_arcadedb_s00000 | 0 | 1 | 100,000 | 5,000 | 4g | 5,564,864 | 298.661 | 119.64 | 144.205 | 693.458 | 7.316 | 3,600.898 | 2,658.883 |
+| duckdb | sweep07_t01_r01_duckdb_s00002 | 2 | 1 | 100,000 | 5,000 | 4g | 5,564,864 | 185.474 | 0.933 | 358.315 | 279.084 | 10.794 | 3,901.762 | 5,265.73 |
+| postgresql | sweep07_t01_r01_postgresql_s00003 | 3 | 1 | 100,000 | 5,000 | 4g | 5,564,864 | 232.514 | 6.726 | 192.761 | 518.778 | 6.632 | 2,566.77 | 5,447.949 |
+| sqlite | sweep07_t01_r01_sqlite_s00001 | 1 | 1 | 100,000 | 5,000 | 4g | 5,564,864 | 255.25 | 3.682 | 51.601 | 1,937.945 | 3.122 | 267.707 | 2,691.809 |
 
 ### Per-operation OLTP details
 
 | db | run_label | op | count | throughput_s | p50_ms | p95_ms | p99_ms |
 |---|---|---|---|---|---|---|---|
-| arcadedb | sweep07_t01_r01_arcadedb_s00000 | read | 30,147 | 653.546 | 0.07 | 0.365 | 0.58 |
-| arcadedb | sweep07_t01_r01_arcadedb_s00000 | update | 9,884 | 214.272 | 0.149 | 2.4 | 4.741 |
-| arcadedb | sweep07_t01_r01_arcadedb_s00000 | insert | 4,984 | 108.046 | 0.392 | 18.483 | 25.087 |
-| arcadedb | sweep07_t01_r01_arcadedb_s00000 | delete | 4,985 | 108.068 | 1.49 | 22.148 | 50.088 |
-| duckdb | sweep07_t01_r01_duckdb_s00002 | read | 30,021 | 192.682 | 0.542 | 2.86 | 16.549 |
-| duckdb | sweep07_t01_r01_duckdb_s00002 | update | 10,023 | 64.33 | 3.627 | 8.493 | 23.681 |
-| duckdb | sweep07_t01_r01_duckdb_s00002 | insert | 4,979 | 31.956 | 4.518 | 8.155 | 20.932 |
-| duckdb | sweep07_t01_r01_duckdb_s00002 | delete | 4,977 | 31.944 | 4.102 | 7.109 | 8.94 |
-| postgresql | sweep07_t01_r01_postgresql_s00003 | read | 29,913 | 970.582 | 0.099 | 0.175 | 0.967 |
-| postgresql | sweep07_t01_r01_postgresql_s00003 | update | 9,942 | 322.586 | 0.931 | 2.94 | 4.879 |
-| postgresql | sweep07_t01_r01_postgresql_s00003 | insert | 5,120 | 166.128 | 1.021 | 2.849 | 4.108 |
-| postgresql | sweep07_t01_r01_postgresql_s00003 | delete | 5,025 | 163.045 | 1.444 | 3.873 | 5.941 |
-| sqlite | sweep07_t01_r01_sqlite_s00001 | read | 30,101 | 3,970.287 | 0.017 | 0.032 | 0.057 |
-| sqlite | sweep07_t01_r01_sqlite_s00001 | update | 9,731 | 1,283.508 | 0.026 | 0.05 | 0.093 |
-| sqlite | sweep07_t01_r01_sqlite_s00001 | insert | 5,060 | 667.408 | 0.048 | 0.111 | 0.175 |
-| sqlite | sweep07_t01_r01_sqlite_s00001 | delete | 5,108 | 673.739 | 0.879 | 3.815 | 5.692 |
+| arcadedb | sweep07_t01_r01_arcadedb_s00000 | read | 60,074 | 416.588 | 0.085 | 0.422 | 0.7 |
+| arcadedb | sweep07_t01_r01_arcadedb_s00000 | update | 19,838 | 137.568 | 0.219 | 2.71 | 4.378 |
+| arcadedb | sweep07_t01_r01_arcadedb_s00000 | insert | 10,067 | 69.81 | 0.399 | 19.13 | 24.001 |
+| arcadedb | sweep07_t01_r01_arcadedb_s00000 | delete | 10,021 | 69.491 | 4.352 | 26.12 | 41.768 |
+| duckdb | sweep07_t01_r01_duckdb_s00002 | read | 59,859 | 167.057 | 0.55 | 3.313 | 12.817 |
+| duckdb | sweep07_t01_r01_duckdb_s00002 | update | 20,200 | 56.375 | 3.592 | 12.834 | 33.396 |
+| duckdb | sweep07_t01_r01_duckdb_s00002 | insert | 9,916 | 27.674 | 4.755 | 11.081 | 26.138 |
+| duckdb | sweep07_t01_r01_duckdb_s00002 | delete | 10,025 | 27.978 | 6.943 | 17.905 | 22.334 |
+| postgresql | sweep07_t01_r01_postgresql_s00003 | read | 60,134 | 311.962 | 0.121 | 0.345 | 0.583 |
+| postgresql | sweep07_t01_r01_postgresql_s00003 | update | 19,975 | 103.626 | 2.724 | 9.924 | 23.95 |
+| postgresql | sweep07_t01_r01_postgresql_s00003 | insert | 10,128 | 52.542 | 2.773 | 8.001 | 17.933 |
+| postgresql | sweep07_t01_r01_postgresql_s00003 | delete | 9,763 | 50.648 | 4.583 | 13.254 | 25.926 |
+| sqlite | sweep07_t01_r01_sqlite_s00001 | read | 60,179 | 1,166.236 | 0.021 | 0.06 | 0.127 |
+| sqlite | sweep07_t01_r01_sqlite_s00001 | update | 19,653 | 380.864 | 0.031 | 0.088 | 0.166 |
+| sqlite | sweep07_t01_r01_sqlite_s00001 | insert | 10,018 | 194.143 | 0.061 | 0.16 | 0.237 |
+| sqlite | sweep07_t01_r01_sqlite_s00001 | delete | 10,150 | 196.701 | 2.998 | 16.174 | 20.708 |

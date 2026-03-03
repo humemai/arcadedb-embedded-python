@@ -999,29 +999,19 @@ def run_oltp_arcadedb(
     db = arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs)
     create_schema_arcadedb(db)
 
-    db.set_read_your_writes(False)
-    async_exec = db.async_executor()
-    async_exec.set_commit_every(batch_size)
-    async_exec.set_transaction_use_wal(False)
-    try:
-        ingest_started_at = datetime.now(timezone.utc).isoformat()
-        print(f"Ingest start (arcadedb, UTC): {ingest_started_at}")
-        id_pools, next_ids, preload_time = load_tables(
-            insert_batch_fn=insert_batch_arcadedb,
-            db_obj=db,
-            data_dir=data_dir,
-            batch_size=batch_size,
-        )
-        ingest_ended_at = datetime.now(timezone.utc).isoformat()
-        print(
-            f"Ingest end   (arcadedb, UTC): {ingest_ended_at} "
-            f"(elapsed={preload_time:.2f}s)"
-        )
-    finally:
-        async_exec.wait_completion()
-        async_exec.close()
-        db.set_read_your_writes(True)
-        async_exec.set_transaction_use_wal(True)
+    ingest_started_at = datetime.now(timezone.utc).isoformat()
+    print(f"Ingest start (arcadedb, UTC): {ingest_started_at}")
+    id_pools, next_ids, preload_time = load_tables(
+        insert_batch_fn=insert_batch_arcadedb,
+        db_obj=db,
+        data_dir=data_dir,
+        batch_size=batch_size,
+    )
+    ingest_ended_at = datetime.now(timezone.utc).isoformat()
+    print(
+        f"Ingest end   (arcadedb, UTC): {ingest_ended_at} "
+        f"(elapsed={preload_time:.2f}s)"
+    )
 
     index_start = time.time()
     create_arcadedb_id_indexes(db)
