@@ -49,7 +49,7 @@ def create_schema(db, vector_dimensions: int) -> None:
     db.command("sql", "CREATE PROPERTY Node.group_name STRING")
     db.command("sql", "CREATE INDEX ON Node (node_id) UNIQUE")
 
-    db.command("sql", "CREATE EDGE TYPE CONNECTED_TO")
+    db.command("sql", "CREATE EDGE TYPE CONNECTED_TO UNIDIRECTIONAL")
     db.command("sql", "CREATE PROPERTY CONNECTED_TO.weight INTEGER")
 
     db.command("sql", "CREATE VERTEX TYPE VectorDoc")

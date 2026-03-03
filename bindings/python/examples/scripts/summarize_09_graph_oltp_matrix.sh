@@ -22,142 +22,22 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
-if [[ -z "${DATASET// /}" ]]; then
-    mapfile -t DATASETS < <(
-        python3 - "$INPUT_DIR" "$LABEL_PREFIX" << 'PY'
-import glob
-import json
-import os
-import sys
-
-input_dir, label_prefix = sys.argv[1:]
-datasets = set()
-for path in glob.glob(os.path.join(input_dir, "**", "results_*.json"), recursive=True):
-        try:
-                with open(path, "r", encoding="utf-8") as handle:
-                        data = json.load(handle)
-        except Exception:
-                continue
-        run_label = data.get("run_label")
-        if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
-                continue
-        dataset = data.get("dataset")
-        if isinstance(dataset, str) and dataset.strip():
-                datasets.add(dataset.strip())
-for dataset in sorted(datasets):
-        print(dataset)
-PY
-    )
-
-    if [[ "${#DATASETS[@]}" -eq 0 ]]; then
-        echo "No datasets discovered for label prefix '$LABEL_PREFIX' in $INPUT_DIR" >&2
-        exit 2
-    fi
-
-    for dataset in "${DATASETS[@]}"; do
-        echo "Summarizing dataset: $dataset"
-        DATASET="$dataset" "$0"
-    done
-
-    echo
-    echo "Summary files generated in: $OUTPUT_DIR"
-    exit 0
-fi
-
 DATASET_TAG="${DATASET//-/_}"
 if [[ -z "${DATASET_TAG// /}" ]]; then
-    DATASET_TAG="all"
+    DATASET_TAG="all_datasets"
 fi
-SUMMARY_JSON="$OUTPUT_DIR/summary_09_graph_oltp_${DATASET_TAG}.json"
 SUMMARY_MD="$OUTPUT_DIR/summary_09_graph_oltp_${DATASET_TAG}.md"
 
-python3 - "$INPUT_DIR" "$SUMMARY_JSON" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" << 'PY'
+python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" << 'PY'
 import glob
 import json
 import os
-import statistics
 import sys
-from collections import defaultdict
 from datetime import datetime, timezone
 
-input_dir, summary_json, summary_md, dataset, label_prefix = sys.argv[1:]
+input_dir, summary_md, dataset, label_prefix = sys.argv[1:]
 dataset_filter = dataset.strip()
 dataset_label = dataset_filter or "all"
-
-
-def flatten_dict(obj, prefix=""):
-    flat = {}
-    if not isinstance(obj, dict):
-        return flat
-    for key, value in obj.items():
-        full_key = f"{prefix}.{key}" if prefix else key
-        if isinstance(value, dict):
-            flat.update(flatten_dict(value, full_key))
-        else:
-            flat[full_key] = value
-    return flat
-
-
-def is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def first_present(data, keys):
-    for key in keys:
-        if key in data:
-            return data.get(key)
-    return None
-
-
-def extract_parameters(data, flat_data):
-    params = {
-        "dataset": first_present(data, ["dataset"]),
-        "db": first_present(data, ["db"]),
-        "threads": first_present(data, ["threads"]),
-        "transactions": first_present(data, ["transactions"]),
-        "batch_size": first_present(data, ["batch_size"]),
-        "mem_limit": first_present(data, ["mem_limit", "memory_limit"]),
-        "heap_size": first_present(data, ["heap_size"]),
-        "arcadedb_version": first_present(data, ["arcadedb_version"]),
-        "ladybug_version": first_present(data, ["ladybug_version"]),
-        "docker_image": first_present(data, ["docker_image"]),
-        "seed": first_present(data, ["seed"]),
-        "run_label": first_present(data, ["run_label"]),
-    }
-
-    for key in ["mem_limit", "heap_size", "arcadedb_version", "ladybug_version", "docker_image"]:
-        if params.get(key) is None and key in flat_data:
-            params[key] = flat_data.get(key)
-
-    return {k: v for k, v in params.items() if v is not None}
-
-
-def format_value(value):
-    if isinstance(value, float):
-        return f"{value:.6g}"
-    if value is None:
-        return ""
-    return str(value)
-
-
-def format_bytes_binary(value):
-    value = float(value)
-    for unit in ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]:
-        if value < 1024.0:
-            return f"{value:.1f}{unit}"
-        value /= 1024.0
-    return f"{value:.1f}EiB"
-
-
-def humanize_metric(metric_name, value):
-    if value is None or not is_number(value):
-        return None
-    if metric_name.endswith("_bytes") or metric_name.endswith(".du_bytes"):
-        return format_bytes_binary(value)
-    if metric_name.endswith("_kb"):
-        return format_bytes_binary(value * 1024)
-    return None
-
 
 dataset_slug = dataset_filter.replace("-", "_")
 dir_pattern = f"{dataset_slug}_graph_oltp_*" if dataset_filter else "*_graph_oltp_*"
@@ -165,69 +45,171 @@ if label_prefix:
     dir_pattern += f"_{label_prefix}*"
 
 run_dirs = sorted(glob.glob(os.path.join(input_dir, dir_pattern)))
-result_files = []
-for run_dir in run_dirs:
-    result_files.extend(sorted(glob.glob(os.path.join(run_dir, "results_*.json"))))
 
-rows = []
-for result_path in result_files:
-    run_dir = os.path.dirname(result_path)
+
+def to_int(value):
     try:
-        with open(result_path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
+        return int(value)
     except Exception:
-        continue
+        return None
 
-    result_dataset = data.get("dataset")
-    run_label = data.get("run_label")
-    if dataset_filter and result_dataset != dataset_filter:
-        continue
-    if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
+
+def to_float(value):
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def bytes_to_mib(value):
+    fvalue = to_float(value)
+    if fvalue is None:
+        return None
+    return fvalue / (1024.0 ** 2)
+
+
+def kib_to_mib(value):
+    fvalue = to_float(value)
+    if fvalue is None:
+        return None
+    return fvalue / 1024.0
+
+
+def seconds_to_ms(value):
+    fvalue = to_float(value)
+    if fvalue is None:
+        return None
+    return fvalue * 1000.0
+
+
+def fmt(value):
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:,.3f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def resolve_db_label(data, status_for_run):
+    status_db = status_for_run.get("db") if isinstance(status_for_run, dict) else None
+    if isinstance(status_db, str) and status_db.strip():
+        return status_db.strip()
+
+    return data.get("db")
+
+
+status_rows = []
+status_by_run = {}
+rows = []
+op_rows = []
+scope_notes = set()
+
+for run_dir in run_dirs:
+    status_path = os.path.join(run_dir, "run_status.json")
+    status = None
+    if os.path.isfile(status_path):
+        try:
+            with open(status_path, "r", encoding="utf-8") as f:
+                status = json.load(f)
+        except Exception:
+            status = None
+
+    if status is not None:
+        status_rows.append(status)
+        run_label = status.get("run_label")
+        if run_label:
+            status_by_run[str(run_label)] = status
+
+    result_paths = sorted(glob.glob(os.path.join(run_dir, "results_*.json")))
+    if not result_paths:
         continue
 
     du_path = os.path.join(run_dir, "disk_usage_du.json")
-    du_bytes = None
-    du_human = ""
+    du_mib = None
     if os.path.isfile(du_path):
         try:
-            with open(du_path, "r", encoding="utf-8") as handle:
-                du_data = json.load(handle)
-            du_bytes = du_data.get("du_bytes")
-            du_human = du_data.get("du_human", "")
+            with open(du_path, "r", encoding="utf-8") as f:
+                du_mib = bytes_to_mib((json.load(f) or {}).get("du_bytes"))
         except Exception:
-            pass
+            du_mib = None
 
-    flat_data = flatten_dict(data)
-    metric_values = {}
-    bool_values = {}
-    for key, value in flat_data.items():
-        if is_number(value):
-            metric_values[key] = value
-        elif isinstance(value, bool):
-            bool_values[key] = value
+    for result_path in result_paths:
+        try:
+            with open(result_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
 
-    if is_number(du_bytes):
-        metric_values["disk_usage.du_bytes"] = du_bytes
+        result_dataset = data.get("dataset")
+        run_label = data.get("run_label")
+        if dataset_filter and result_dataset != dataset_filter:
+            continue
+        if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
+            continue
 
-    row = {
-        "dataset": result_dataset,
-        "db": data.get("db"),
-        "run_label": run_label,
-        "seed": data.get("seed"),
-        "du_bytes": du_bytes,
-        "du_human": du_human,
-        "result_file": os.path.relpath(result_path, input_dir),
-        "numeric_metrics": metric_values,
-        "boolean_metrics": bool_values,
-        "parameters": extract_parameters(data, flat_data),
-    }
-    row_human = {}
-    for metric_name, metric_value in metric_values.items():
-        human = humanize_metric(metric_name, metric_value)
-        if human is not None:
-            row_human[metric_name] = human
-    row["human_readable_metrics"] = row_human
-    rows.append(row)
+        status_for_run = status_by_run.get(str(run_label) if run_label else "", {})
+        latency_overall = (data.get("latency_summary") or {}).get("overall") or {}
+        latency_ops = (data.get("latency_summary") or {}).get("ops") or {}
+        op_counts = data.get("op_counts") or {}
+        load_stats = data.get("load_stats") or {}
+        index_stats = (load_stats.get("indexes") or {}) if isinstance(load_stats, dict) else {}
+        index_time_s = to_float(index_stats.get("id_unique"))
+
+        scope_note = data.get("benchmark_scope_note")
+        if scope_note:
+            scope_notes.add(str(scope_note))
+
+        row = {
+            "dataset": data.get("dataset"),
+            "db": resolve_db_label(data, status_for_run),
+            "run_label": run_label,
+            "seed": to_int(data.get("seed")) or to_int(status_for_run.get("seed")),
+            "threads": to_int(data.get("threads")) or to_int(status_for_run.get("threads")),
+            "transactions": to_int(data.get("transactions")) or to_int(status_for_run.get("transactions")),
+            "batch_size": to_int(data.get("batch_size")) or to_int(status_for_run.get("batch_size")),
+            "mem_limit": data.get("mem_limit"),
+            "load_node_count": to_int(data.get("load_node_count")),
+            "load_edge_count": to_int(data.get("load_edge_count")),
+            "schema_time_s": to_float(data.get("schema_time_s")),
+            "index_time_s": index_time_s,
+            "load_time_s": to_float(data.get("load_time_s")),
+            "counts_time_s": to_float(data.get("counts_time_s")),
+            "oltp_crud_time_s": to_float(data.get("total_time_s")),
+            "throughput_s": to_float(data.get("throughput_ops_s")),
+            "p95_ms": seconds_to_ms(latency_overall.get("95") or latency_overall.get(95)),
+            "rss_peak_mib": kib_to_mib(data.get("rss_peak_kb")),
+            "du_mib": du_mib,
+            "latency_ops": latency_ops,
+            "op_counts": op_counts,
+        }
+        rows.append(row)
+
+        total_time = row.get("oltp_crud_time_s")
+        op_order = ["read", "update", "insert", "delete"]
+        for op in op_order:
+            op_summary = latency_ops.get(op) or {}
+            count = to_int(op_counts.get(op))
+            throughput = None
+            if count is not None and total_time and total_time > 0:
+                throughput = count / total_time
+
+            op_rows.append(
+                {
+                    "dataset": row.get("dataset"),
+                    "db": row.get("db"),
+                    "run_label": row.get("run_label"),
+                    "op": op,
+                    "count": count,
+                    "throughput_s": throughput,
+                    "p50_ms": seconds_to_ms(op_summary.get("50") or op_summary.get(50)),
+                    "p95_ms": seconds_to_ms(op_summary.get("95") or op_summary.get(95)),
+                    "p99_ms": seconds_to_ms(op_summary.get("99") or op_summary.get(99)),
+                }
+            )
 
 if not rows:
     print("No matching results_*.json files found.", file=sys.stderr)
@@ -235,184 +217,113 @@ if not rows:
 
 rows.sort(
     key=lambda r: (
-        str(r["dataset"]),
-        str(r["db"]),
-        str(r.get("parameters", {}).get("threads")),
-        str(r["run_label"]),
+        str(r.get("dataset")),
+        str(r.get("db")),
+        str(r.get("run_label")),
+    )
+)
+op_rows.sort(
+    key=lambda r: (
+        str(r.get("dataset")),
+        str(r.get("db")),
+        str(r.get("run_label")),
+        str(r.get("op")),
     )
 )
 
-by_db = defaultdict(list)
-for row in rows:
-    by_db[
-        (
-            row["dataset"],
-            row["db"],
-            row.get("parameters", {}).get("threads"),
-        )
-    ].append(row)
+status_scoped = []
+for status in status_rows:
+    ds = status.get("dataset")
+    rl = status.get("run_label")
+    if dataset_filter and ds != dataset_filter:
+        continue
+    if label_prefix and (not rl or not str(rl).startswith(label_prefix)):
+        continue
+    status_scoped.append(status)
 
-by_db_rows = []
-for (group_dataset, db, threads), group in sorted(by_db.items()):
-    metric_keys = sorted({k for r in group for k in r.get("numeric_metrics", {}).keys()})
-    bool_metric_keys = sorted({k for r in group for k in r.get("boolean_metrics", {}).keys()})
-
-    numeric_summary = {}
-    for key in metric_keys:
-        values = [
-            r["numeric_metrics"][key]
-            for r in group
-            if key in r.get("numeric_metrics", {}) and is_number(r["numeric_metrics"][key])
-        ]
-        if not values:
-            continue
-        entry = {
-            "count": len(values),
-            "mean": statistics.mean(values),
-            "stddev": statistics.pstdev(values) if len(values) > 1 else 0.0,
-            "min": min(values),
-            "max": max(values),
-        }
-        mean_human = humanize_metric(key, entry["mean"])
-        min_human = humanize_metric(key, entry["min"])
-        max_human = humanize_metric(key, entry["max"])
-        if mean_human is not None:
-            entry["mean_human"] = mean_human
-            entry["min_human"] = min_human
-            entry["max_human"] = max_human
-        numeric_summary[key] = entry
-
-    boolean_summary = {}
-    for key in bool_metric_keys:
-        values = [r["boolean_metrics"][key] for r in group if key in r.get("boolean_metrics", {})]
-        if not values:
-            continue
-        true_count = sum(1 for value in values if value)
-        boolean_summary[key] = {
-            "count": len(values),
-            "true_count": true_count,
-            "false_count": len(values) - true_count,
-            "true_ratio": true_count / len(values),
-        }
-
-    by_db_rows.append(
-        {
-            "dataset": group_dataset,
-            "db": db,
-            "threads": threads,
-            "runs": len(group),
-            "numeric_metrics": numeric_summary,
-            "boolean_metrics": boolean_summary,
-        }
-    )
-
-all_numeric_metric_keys = sorted({
-    key
-    for row in rows
-    for key in row.get("numeric_metrics", {}).keys()
-})
-
-all_boolean_metric_keys = sorted({
-    key
-    for row in rows
-    for key in row.get("boolean_metrics", {}).keys()
-})
-
-all_parameter_keys = sorted({
-    key
-    for row in rows
-    for key in row.get("parameters", {}).keys()
-})
-
-parameters_detected = {}
-for key in all_parameter_keys:
-    values = sorted({str(row.get("parameters", {}).get(key)) for row in rows if key in row.get("parameters", {})})
-    parameters_detected[key] = values
+status_total = len(status_scoped)
+status_success = sum(1 for s in status_scoped if s.get("status") == "success")
+status_failed = sum(1 for s in status_scoped if s.get("status") == "failed")
 
 dataset_size_profile = dataset_filter.split("-")[-1] if dataset_filter and "-" in dataset_filter else (dataset_filter or "all")
+generated_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-summary = {
-    "meta": {
-        "name": "09 graph OLTP matrix summary",
-        "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "input_dir": input_dir,
-        "dataset": dataset_label,
-        "dataset_size_profile": dataset_size_profile,
-        "dataset_size_source": "dataset name suffix",
-        "label_prefix": label_prefix,
-        "total_runs": len(rows),
-        "datasets_found": sorted({str(r["dataset"]) for r in rows}),
-    },
-    "parameter_keys": all_parameter_keys,
-    "parameters_detected": parameters_detected,
-    "numeric_metric_keys": all_numeric_metric_keys,
-    "boolean_metric_keys": all_boolean_metric_keys,
-    "run_fields": [
-        "dataset", "db", "run_label", "seed", "du_bytes", "du_human", "result_file",
-        "numeric_metrics", "human_readable_metrics", "boolean_metrics", "parameters",
-    ],
-    "runs": rows,
-    "by_db": by_db_rows,
-}
+COLUMNS = [
+    "db",
+    "run_label",
+    "seed",
+    "threads",
+    "transactions",
+    "batch_size",
+    "mem_limit",
+    "load_node_count",
+    "load_edge_count",
+    "schema_time_s",
+    "index_time_s",
+    "load_time_s",
+    "counts_time_s",
+    "oltp_crud_time_s",
+    "throughput_s",
+    "p95_ms",
+    "rss_peak_mib",
+    "du_mib",
+]
 
-with open(summary_json, "w", encoding="utf-8") as handle:
-    json.dump(summary, handle, indent=2)
+OP_COLUMNS = [
+    "db",
+    "run_label",
+    "op",
+    "count",
+    "throughput_s",
+    "p50_ms",
+    "p95_ms",
+    "p99_ms",
+]
 
 lines = []
-lines.append("# 09 Graph OLTP Matrix Summary")
+title_suffix = dataset_filter if dataset_filter else "All Dataset Sizes"
+lines.append(f"# 09 Graph OLTP Matrix Summary — {title_suffix}")
 lines.append("")
-lines.append(f"- Generated (UTC): {summary['meta']['generated_at_utc']}")
+lines.append(f"- Generated (UTC): {generated_at_utc}")
 lines.append(f"- Dataset: {dataset_label}")
 lines.append(f"- Dataset size profile: {dataset_size_profile}")
 lines.append(f"- Label prefix: {label_prefix}")
 lines.append(f"- Total runs: {len(rows)}")
+if status_total > 0:
+    lines.append(f"- Run status files: total={status_total}, success={status_success}, failed={status_failed}")
+lines.append("- Note: `schema_time_s`/`index_time_s`/`load_time_s`/`counts_time_s` are setup phases; `oltp_crud_time_s` and latency metrics are OLTP workload only.")
+lines.append("- Note: per-op `throughput_s` is computed as `op_count / oltp_crud_time_s`.")
+if scope_notes:
+    for note in sorted(scope_notes):
+        lines.append(f"- Scope note: {note}")
 lines.append("")
 
-lines.append("## Parameters Used")
-lines.append("")
-lines.append("| Parameter | Values |")
-lines.append("|---|---|")
-for key in all_parameter_keys:
-    values = ", ".join(parameters_detected.get(key, []))
-    lines.append(f"| {key} | {values} |")
-lines.append("")
-
-lines.append("## Aggregated Metrics by DB + Threads")
-lines.append("")
-for entry in by_db_rows:
-    lines.append(
-        f"### DB: {entry['db']}, Threads: {entry.get('threads', '')} (runs={entry['runs']})"
-    )
+datasets = sorted({str(row.get("dataset") or "") for row in rows})
+for current_dataset in datasets:
+    lines.append(f"## Dataset: {current_dataset}")
+    lines.append("")
+    lines.append("| " + " | ".join(COLUMNS) + " |")
+    lines.append("|" + "|".join(["---"] * len(COLUMNS)) + "|")
+    for row in rows:
+        if str(row.get("dataset") or "") != current_dataset:
+            continue
+        values = [fmt(row.get(column)) for column in COLUMNS]
+        lines.append("| " + " | ".join(values) + " |")
     lines.append("")
 
-    lines.append("#### Numeric Metrics")
+    lines.append("### Per-operation OLTP details")
     lines.append("")
-    lines.append("| Metric | Count | Mean | Mean (Human) | Stddev | Min | Max |")
-    lines.append("|---|---:|---:|---|---:|---:|---:|")
-    for metric_name in sorted(entry.get("numeric_metrics", {}).keys()):
-        metric = entry["numeric_metrics"][metric_name]
-        lines.append(
-            f"| {metric_name} | {metric.get('count','')} | {format_value(metric.get('mean'))} | {metric.get('mean_human','')} | {format_value(metric.get('stddev'))} | {format_value(metric.get('min'))} | {format_value(metric.get('max'))} |"
-        )
-    lines.append("")
-
-    lines.append("#### Boolean Metrics")
-    lines.append("")
-    lines.append("| Metric | Count | True | False | True Ratio |")
-    lines.append("|---|---:|---:|---:|---:|")
-    for metric_name in sorted(entry.get("boolean_metrics", {}).keys()):
-        metric = entry["boolean_metrics"][metric_name]
-        lines.append(
-            f"| {metric_name} | {metric.get('count','')} | {metric.get('true_count','')} | {metric.get('false_count','')} | {format_value(metric.get('true_ratio'))} |"
-        )
+    lines.append("| " + " | ".join(OP_COLUMNS) + " |")
+    lines.append("|" + "|".join(["---"] * len(OP_COLUMNS)) + "|")
+    for row in op_rows:
+        if str(row.get("dataset") or "") != current_dataset:
+            continue
+        values = [fmt(row.get(column)) for column in OP_COLUMNS]
+        lines.append("| " + " | ".join(values) + " |")
     lines.append("")
 
-with open(summary_md, "w", encoding="utf-8") as handle:
-    handle.write("\n".join(lines) + "\n")
+with open(summary_md, "w", encoding="utf-8") as f:
+    f.write("\n".join(lines) + "\n")
 
-print(f"Wrote: {summary_json}")
 print(f"Wrote: {summary_md}")
 PY
-
-echo
-echo "Summary file generated in: $OUTPUT_DIR"

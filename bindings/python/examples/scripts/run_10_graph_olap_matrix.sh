@@ -7,27 +7,29 @@ PY_SCRIPT="$EXAMPLES_DIR/10_stackoverflow_graph_olap.py"
 
 # mark 🚧 for ongoing and ✅ for done
 # Dataset Tier  Batch       Memory  CPUs  Running   Note
-# Tiny          1,000       1GB     2     ✅
-# Small         2,500       2GB     4     ✅
-# Medium        5,000       4GB     8     ✅
-# Large         10,000      8GB     16    ✅
+# Tiny          1,000       1GB     2
+# Small         2,500       2GB     4
+# Medium        5,000       4GB     8
+# Large         10,000      8GB     16
 # X-Large       25,000      32GB    32
 
-DATASET="stackoverflow-large"
-BATCH_SIZE=10000
-MEM_LIMIT="8g"
-THREADS=16
-RUNS=3
+DATASET="stackoverflow-small"
+BATCH_SIZE=2500
+MEM_LIMIT="4g"
+THREADS=1
+RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
-ARCADEDB_VERSION="26.2.1"
-LADYBUG_VERSION="0.14.1"
+ARCADEDB_VERSION="26.3.1.dev1"
+LADYBUG_VERSION="0.15.1"
+GRAPHQLITE_VERSION="0.3.5"
+SQLITE_PROFILE="olap"
 DOCKER_IMAGE="python:3.12-slim"
 QUERY_RUNS=10
 QUERY_ORDER="shuffled"
 ONLY_QUERY=""
 MANUAL_CHECKS=false
-DBS_RAW="arcadedb,ladybug"
+DBS_RAW="arcadedb_cypher,ladybug,sqlite_native,python_memory"
 LABEL_PREFIX="sweep10"
 
 if [[ $# -gt 0 ]]; then
@@ -60,7 +62,7 @@ fi
 cd "$EXAMPLES_DIR"
 
 echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED_START"
-echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER"
+echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER sqlite-profile=$SQLITE_PROFILE graphqlite-version=$GRAPHQLITE_VERSION"
 
 dataset_slug="${DATASET//-/_}"
 
@@ -72,19 +74,33 @@ for ((run = 1; run <= RUNS; run++)); do
             continue
         fi
 
+        db_engine="$db"
+        case "$db" in
+            arcadedb | arcadedb_cypher | ladybug | ladybugdb | sqlite_native | graphqlite | python_memory)
+                db_engine="$db"
+                ;;
+            *)
+                echo "Unsupported DB alias in DBS_RAW: $db" >&2
+                echo "Supported values: arcadedb_cypher, arcadedb, ladybug, ladybugdb, sqlite_native, graphqlite, python_memory" >&2
+                exit 1
+                ;;
+        esac
+
         seed=$((SEED_START + execution_idx))
-        run_label=$(printf "%s_r%02d_%s_s%05d" "$LABEL_PREFIX" "$run" "$db" "$seed")
+        run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
 
         cmd=(
             python3 "$PY_SCRIPT"
             --dataset "$DATASET"
-            --db "$db"
+            --db "$db_engine"
             --threads "$THREADS"
             --batch-size "$BATCH_SIZE"
             --mem-limit "$MEM_LIMIT"
             --jvm-heap-fraction "$JVM_HEAP_FRACTION"
             --arcadedb-version "$ARCADEDB_VERSION"
             --ladybug-version "$LADYBUG_VERSION"
+            --graphqlite-version "$GRAPHQLITE_VERSION"
+            --sqlite-profile "$SQLITE_PROFILE"
             --docker-image "$DOCKER_IMAGE"
             --query-runs "$QUERY_RUNS"
             --query-order "$QUERY_ORDER"
@@ -105,7 +121,7 @@ for ((run = 1; run <= RUNS; run++)); do
         echo "Command: ${cmd[*]}"
         "${cmd[@]}"
 
-        target_dir="my_test_databases/${dataset_slug}_graph_olap_${db}_${run_label}"
+        target_dir="my_test_databases/${dataset_slug}_graph_olap_${db_engine}_${run_label}"
         if [[ -d "$target_dir" ]]; then
             du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"
             du_human="$(du -sh "$target_dir" | awk '{print $1}')"

@@ -6,16 +6,16 @@ EXAMPLES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PY_SCRIPT="$EXAMPLES_DIR/12_vector_search.py"
 
 # Dataset Tier  Memory  CPUs  Running   Note
-# Tiny          2GB     2     ✅
-# Small         4GB     4     ✅
-# Medium        8GB     8     ✅
+# Tiny          2GB     2
+# Small         4GB     4
+# Medium        8GB     8
 # Large         16GB    16
 # X-Large       32GB    32
 
-DATASET="stackoverflow-large"
-MEM_LIMIT="16g"
-THREADS=16
-RUNS=3
+DATASET="stackoverflow-small"
+MEM_LIMIT="8g"
+THREADS=4
+RUNS=1
 SEED_START=0
 SERVER_FRACTION="0.8"
 K=50
@@ -26,7 +26,9 @@ OVERQUERY_FACTORS="4"
 
 JVM_HEAP_FRACTION="0.80"
 JVM_ARGS=""
-ARCADEDB_VERSION="26.2.1"
+ARCADEDB_VERSION="26.3.1.dev1"
+FAISS_VERSION="1.13.2"
+LANCEDB_VERSION="0.29.2"
 DOCKER_IMAGE="python:3.12-slim"
 DB_ROOT="my_test_databases"
 
@@ -46,7 +48,7 @@ MILVUS_PORT=19530
 MILVUS_COMPOSE_VERSION="v2.6.10"
 MILVUS_COLLECTION="vectordata"
 
-BACKENDS_RAW="arcadedb,pgvector,qdrant,milvus"
+BACKENDS_RAW="bruteforce,milvus,faiss,lancedb,arcadedb,pgvector,qdrant"
 BUILD_LABEL_PREFIX="sweep11"
 SEARCH_LABEL_PREFIX="sweep12"
 
@@ -59,6 +61,35 @@ fi
 IFS=',' read -r -a BACKENDS <<< "$BACKENDS_RAW"
 if [[ "${#BACKENDS[@]}" -eq 0 ]]; then
     echo "BACKENDS_RAW cannot be empty" >&2
+    exit 1
+fi
+
+NORMALIZED_BACKENDS=()
+for backend in "${BACKENDS[@]}"; do
+    backend="$(echo "$backend" | xargs)"
+    case "$backend" in
+        brutceforce | bruteforce)
+            backend="bruteforce"
+            ;;
+    esac
+    if [[ -z "$backend" ]]; then
+        continue
+    fi
+    duplicate=false
+    for existing in "${NORMALIZED_BACKENDS[@]}"; do
+        if [[ "$existing" == "$backend" ]]; then
+            duplicate=true
+            break
+        fi
+    done
+    if [[ "$duplicate" == false ]]; then
+        NORMALIZED_BACKENDS+=("$backend")
+    fi
+done
+BACKENDS=("${NORMALIZED_BACKENDS[@]}")
+
+if [[ "${#BACKENDS[@]}" -eq 0 ]]; then
+    echo "BACKENDS_RAW resolved to empty backend list" >&2
     exit 1
 fi
 
@@ -87,25 +118,32 @@ echo "Search label prefix: $SEARCH_LABEL_PREFIX"
 execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
     for backend in "${BACKENDS[@]}"; do
-        backend="$(echo "$backend" | xargs)"
-        if [[ -z "$backend" ]]; then
-            continue
-        fi
+        if [[ "$backend" == "bruteforce" ]]; then
+            seed=$((SEED_START + execution_idx))
+            build_run_label=$(printf "%s_r%02d_%s_s%05d" "$BUILD_LABEL_PREFIX" "$run" "$backend" "$seed")
+            db_path="$DB_ROOT/backend=${backend}_dataset=${DATASET}_run=${build_run_label}"
+            mkdir -p "$db_path"
+        else
+            mapfile -t build_dirs < <(find "$DB_ROOT" -mindepth 1 -maxdepth 1 -type d -name "*backend=${backend}_dataset=${DATASET}_*run=${BUILD_LABEL_PREFIX}_r$(printf '%02d' "$run")_${backend}_s*" | sort)
+            if [[ "${#build_dirs[@]}" -eq 0 ]]; then
+                echo "Build DB directory not found for backend=$backend run=$run (prefix=${BUILD_LABEL_PREFIX}). Skipping..." >&2
+                execution_idx=$((execution_idx + 1))
+                continue
+            fi
 
-        seed=$((SEED_START + execution_idx))
-        build_run_label=$(printf "%s_r%02d_%s_s%05d" "$BUILD_LABEL_PREFIX" "$run" "$backend" "$seed")
+            db_path="${build_dirs[0]}"
+            if [[ "${#build_dirs[@]}" -gt 1 ]]; then
+                echo "Warning: multiple build DB dirs matched for backend=$backend run=$run; using first: $db_path"
+            fi
+
+            build_run_label="${db_path##*run=}"
+            if [[ "$build_run_label" =~ _s([0-9]{5})$ ]]; then
+                seed=$((10#${BASH_REMATCH[1]}))
+            else
+                seed=$((SEED_START + execution_idx))
+            fi
+        fi
         search_run_label=$(printf "%s_r%02d_%s_s%05d" "$SEARCH_LABEL_PREFIX" "$run" "$backend" "$seed")
-
-        mapfile -t build_dirs < <(find "$DB_ROOT" -mindepth 1 -maxdepth 1 -type d -name "*backend=${backend}_dataset=${DATASET}_*run=${build_run_label}" | sort)
-        if [[ "${#build_dirs[@]}" -eq 0 ]]; then
-            echo "Build DB directory not found for backend=$backend run=$run seed=$seed (label=$build_run_label)" >&2
-            exit 1
-        fi
-
-        db_path="${build_dirs[0]}"
-        if [[ "${#build_dirs[@]}" -gt 1 ]]; then
-            echo "Warning: multiple build DB dirs matched for label=$build_run_label; using first: $db_path"
-        fi
 
         cmd=(
             python3 "$PY_SCRIPT"
@@ -124,6 +162,8 @@ for ((run = 1; run <= RUNS; run++)); do
             --jvm-heap-fraction "$JVM_HEAP_FRACTION"
             --server-fraction "$SERVER_FRACTION"
             --arcadedb-version "$ARCADEDB_VERSION"
+            --faiss-version "$FAISS_VERSION"
+            --lancedb-version "$LANCEDB_VERSION"
             --pg-host "$PG_HOST"
             --pg-port "$PG_PORT"
             --pg-user "$PG_USER"
@@ -165,12 +205,37 @@ for ((run = 1; run <= RUNS; run++)); do
         echo "[$((execution_idx + 1))/$((RUNS * ${#BACKENDS[@]}))] backend=$backend run=$run seed=$seed build_label=$build_run_label search_label=$search_run_label"
         echo "DB path: $db_path"
         echo "Command: ${cmd[*]}"
+        set +e
         "${cmd[@]}"
+        cmd_exit=$?
+        set -e
 
-        if [[ -d "$db_path" ]]; then
+        collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        run_status="success"
+        if ((cmd_exit != 0)); then
+            run_status="failed"
+            echo "Run failed (exit=$cmd_exit). Continuing to next run..." >&2
+        fi
+
+        cat > "$db_path/search_run_status.json" << EOF
+{
+      "status": "$run_status",
+      "exit_code": $cmd_exit,
+      "backend": "$backend",
+      "dataset": "$DATASET",
+      "threads": $THREADS,
+      "query_limit": $QUERY_LIMIT,
+      "query_runs": $QUERY_RUNS,
+      "seed": $seed,
+      "build_run_label": "$build_run_label",
+      "search_run_label": "$search_run_label",
+      "collected_at_utc": "$collected_at"
+}
+EOF
+
+        if ((cmd_exit == 0)) && [[ -d "$db_path" ]]; then
             du_bytes="$(du -sB1 "$db_path" | awk '{print $1}')"
             du_human="$(du -sh "$db_path" | awk '{print $1}')"
-            collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
             cat > "$db_path/disk_usage_du_search.txt" << EOF
 path: $db_path
@@ -192,7 +257,7 @@ EOF
 
             echo "Saved search du size: $du_human ($du_bytes bytes) -> $db_path/disk_usage_du_search.json"
         else
-            echo "Warning: DB path not found for du capture: $db_path"
+            echo "Skipped search du capture because run failed or DB path missing: $db_path"
         fi
 
         execution_idx=$((execution_idx + 1))

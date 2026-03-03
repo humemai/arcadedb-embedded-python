@@ -81,7 +81,7 @@ import arcadedb_embedded as arcadedb
 with arcadedb.create_database("./mydb") as db:
     # Create graph schema (schema ops are auto-transactional)
     db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE Knows")
+    db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
     db.command("sql", "CREATE PROPERTY Person.name STRING")
 
     # Create vertices and edges

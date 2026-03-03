@@ -4,6 +4,9 @@ Example 12: Vector Search (search-only)
 
 Backends:
 - arcadedb (embedded)
+- faiss (local index file)
+- lancedb (local Lance table)
+- bruteforce (exact scan with NumPy)
 - pgvector (PostgreSQL + pgvector extension)
 - qdrant (client-server via Docker)
 - milvus (client-server via Docker Compose)
@@ -428,6 +431,35 @@ def materialize_queries(
     return queries
 
 
+def materialize_corpus_vectors(sources: List[dict], dim: int) -> np.ndarray:
+    total_rows = 0
+    for source in sources:
+        start = int(source["start"])
+        count = int(source["count"])
+        total_rows = max(total_rows, start + count)
+
+    vectors = np.zeros((total_rows, dim), dtype=np.float32)
+    for source in sorted(sources, key=lambda item: int(item["start"])):
+        start = int(source["start"])
+        count = int(source["count"])
+        mm = np.memmap(
+            source["path"],
+            mode="r",
+            dtype=np.float32,
+            shape=(count, dim),
+        )
+        vectors[start : start + count] = mm
+        del mm
+
+    return vectors
+
+
+def normalize_rows(vectors: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms = np.maximum(norms, 1e-12)
+    return vectors / norms
+
+
 def search_arcadedb(
     index,
     queries: np.ndarray,
@@ -514,6 +546,164 @@ def search_arcadedb(
         "latency_ms_p95": lat_p95,
         "recall_count": len(recalls),
     }
+
+
+def search_faiss(
+    index,
+    queries: np.ndarray,
+    qids: List[int],
+    gt_full: dict[int, List[int]],
+    k: int,
+    overquery_factor: float,
+) -> dict:
+    import faiss
+
+    latencies_ms: List[float] = []
+    recalls: List[float] = []
+
+    ef_search = overquery_to_ef_search(k, overquery_factor)
+
+    hnsw = None
+    if hasattr(index, "hnsw"):
+        hnsw = index.hnsw
+    elif hasattr(index, "index") and hasattr(index.index, "hnsw"):
+        hnsw = index.index.hnsw
+    if hnsw is not None:
+        hnsw.efSearch = int(ef_search)
+
+    for q_idx, qid in enumerate(qids):
+        qvec = np.ascontiguousarray(
+            queries[q_idx : q_idx + 1].astype("float32", copy=True)
+        )
+        faiss.normalize_L2(qvec)
+
+        start = time.perf_counter()
+        _dist, ids = index.search(qvec, int(k))
+        latencies_ms.append((time.perf_counter() - start) * 1000)
+
+        result_ids = [int(doc_id) for doc_id in ids[0].tolist() if int(doc_id) >= 0]
+
+        gt_list = gt_full.get(qid)
+        if not gt_list:
+            continue
+        recalls.append(len(set(result_ids[:k]) & set(gt_list[:k])) / k)
+
+    recall_mean = float(np.mean(recalls)) if recalls else None
+    lat_mean = float(np.mean(latencies_ms)) if latencies_ms else None
+    lat_p95 = float(np.percentile(latencies_ms, 95)) if latencies_ms else None
+
+    return {
+        "queries": len(qids),
+        "recall_mean": recall_mean,
+        "latency_ms_mean": lat_mean,
+        "latency_ms_p95": lat_p95,
+        "recall_count": len(recalls),
+    }
+
+
+def search_lancedb(
+    table,
+    queries: np.ndarray,
+    qids: List[int],
+    gt_full: dict[int, List[int]],
+    k: int,
+    overquery_factor: float,
+) -> dict:
+    latencies_ms: List[float] = []
+    recalls: List[float] = []
+
+    nprobes = max(1, int(round(overquery_factor * 4)))
+
+    for q_idx, qid in enumerate(qids):
+        start = time.perf_counter()
+        search = table.search(queries[q_idx].tolist()).metric("cosine").limit(int(k))
+        if hasattr(search, "nprobes"):
+            try:
+                search = search.nprobes(int(nprobes))
+            except Exception:
+                pass
+        rows = search.to_list()
+        latencies_ms.append((time.perf_counter() - start) * 1000)
+
+        result_ids: List[int] = []
+        for row in rows:
+            rid = row.get("id") if isinstance(row, dict) else None
+            if rid is not None:
+                result_ids.append(int(rid))
+
+        gt_list = gt_full.get(qid)
+        if not gt_list:
+            continue
+        recalls.append(len(set(result_ids[:k]) & set(gt_list[:k])) / k)
+
+    recall_mean = float(np.mean(recalls)) if recalls else None
+    lat_mean = float(np.mean(latencies_ms)) if latencies_ms else None
+    lat_p95 = float(np.percentile(latencies_ms, 95)) if latencies_ms else None
+
+    return {
+        "queries": len(qids),
+        "recall_mean": recall_mean,
+        "latency_ms_mean": lat_mean,
+        "latency_ms_p95": lat_p95,
+        "recall_count": len(recalls),
+    }
+
+
+def search_bruteforce(
+    corpus_vectors_normalized: np.ndarray,
+    queries: np.ndarray,
+    qids: List[int],
+    gt_full: dict[int, List[int]],
+    k: int,
+) -> dict:
+    latencies_ms: List[float] = []
+    recalls: List[float] = []
+
+    query_norm = np.linalg.norm(queries, axis=1, keepdims=True)
+    query_norm = np.maximum(query_norm, 1e-12)
+    queries_normalized = queries / query_norm
+
+    corpus_rows = int(corpus_vectors_normalized.shape[0])
+    topk = min(int(k), corpus_rows)
+    if topk <= 0:
+        raise SystemExit("Bruteforce backend has no corpus vectors to search")
+
+    for q_idx, qid in enumerate(qids):
+        start = time.perf_counter()
+        scores = corpus_vectors_normalized @ queries_normalized[q_idx]
+        if topk == corpus_rows:
+            ranked_idx = np.argsort(scores)[::-1][:topk]
+        else:
+            candidate_idx = np.argpartition(scores, -topk)[-topk:]
+            ranked_idx = candidate_idx[np.argsort(scores[candidate_idx])[::-1]]
+        latencies_ms.append((time.perf_counter() - start) * 1000)
+
+        result_ids = [int(doc_id) for doc_id in ranked_idx.tolist()]
+
+        gt_list = gt_full.get(qid)
+        if not gt_list:
+            continue
+        recalls.append(len(set(result_ids[:k]) & set(gt_list[:k])) / k)
+
+    recall_mean = float(np.mean(recalls)) if recalls else None
+    lat_mean = float(np.mean(latencies_ms)) if latencies_ms else None
+    lat_p95 = float(np.percentile(latencies_ms, 95)) if latencies_ms else None
+
+    return {
+        "queries": len(qids),
+        "recall_mean": recall_mean,
+        "latency_ms_mean": lat_mean,
+        "latency_ms_p95": lat_p95,
+        "recall_count": len(recalls),
+    }
+
+
+def open_lancedb_table(lancedb_dir: Path, table_name: str):
+    import lancedb
+
+    db = lancedb.connect(str(lancedb_dir))
+    table = db.open_table(table_name)
+    return db, table
 
 
 def vector_to_pg_literal(vec: np.ndarray) -> str:
@@ -1549,6 +1739,42 @@ def run_in_docker(args) -> bool:
             ]
         )
         run_user_args = ["-u", user_spec]
+    elif args.backend == "faiss":
+        inner_cmd = " && ".join(
+            [
+                "python -m venv /tmp/bench-venv",
+                ". /tmp/bench-venv/bin/activate",
+                "python -m pip install --no-cache-dir uv",
+                f"uv pip install faiss-cpu=={args.faiss_version} numpy psutil",
+                "echo 'Starting vector search benchmark...'",
+                f"python -u 12_vector_search.py {' '.join(filtered_args)}",
+            ]
+        )
+        run_user_args = ["-u", user_spec]
+    elif args.backend == "lancedb":
+        inner_cmd = " && ".join(
+            [
+                "python -m venv /tmp/bench-venv",
+                ". /tmp/bench-venv/bin/activate",
+                "python -m pip install --no-cache-dir uv",
+                f"uv pip install lancedb=={args.lancedb_version} numpy psutil",
+                "echo 'Starting vector search benchmark...'",
+                f"python -u 12_vector_search.py {' '.join(filtered_args)}",
+            ]
+        )
+        run_user_args = ["-u", user_spec]
+    elif args.backend == "bruteforce":
+        inner_cmd = " && ".join(
+            [
+                "python -m venv /tmp/bench-venv",
+                ". /tmp/bench-venv/bin/activate",
+                "python -m pip install --no-cache-dir uv",
+                "uv pip install numpy psutil",
+                "echo 'Starting vector search benchmark...'",
+                f"python -u 12_vector_search.py {' '.join(filtered_args)}",
+            ]
+        )
+        run_user_args = ["-u", user_spec]
     elif args.backend == "qdrant":
         inner_cmd = " && ".join(
             [
@@ -1664,6 +1890,8 @@ def collect_runtime_metadata(
         "docker_version": get_docker_version(),
         "backend": args.backend,
         "arcadedb_requested_version": args.arcadedb_version,
+        "faiss_requested_version": args.faiss_version,
+        "lancedb_requested_version": args.lancedb_version,
         "runtime_versions": runtime_versions,
         "is_running_in_docker": is_running_in_docker(),
         "quantization": quantization,
@@ -1677,7 +1905,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=["arcadedb", "pgvector", "qdrant", "milvus"],
+        choices=[
+            "arcadedb",
+            "faiss",
+            "lancedb",
+            "bruteforce",
+            "pgvector",
+            "qdrant",
+            "milvus",
+        ],
         default="arcadedb",
     )
     parser.add_argument("--dataset", required=True)
@@ -1734,7 +1970,9 @@ def main() -> None:
         help="JVM heap fraction of --mem-limit (default: 0.80)",
     )
     parser.add_argument("--jvm-args", default=None)
-    parser.add_argument("--arcadedb-version", type=str, default="26.2.1")
+    parser.add_argument("--arcadedb-version", type=str, default="26.3.1.dev1")
+    parser.add_argument("--faiss-version", type=str, default="1.13.2")
+    parser.add_argument("--lancedb-version", type=str, default="0.29.2")
     parser.add_argument("--docker-image", type=str, default=None)
 
     parser.add_argument("--pg-host", default="127.0.0.1")
@@ -1890,8 +2128,218 @@ def main() -> None:
                 stop_cpu.set()
 
         runtime_versions["arcadedb"] = getattr(arcadedb, "__version__", None)
+        runtime_versions["faiss"] = None
+        runtime_versions["lancedb"] = None
         runtime_versions["postgres"] = None
         runtime_versions["qdrant"] = None
+
+    elif args.backend == "faiss":
+        import faiss
+
+        index_path = db_path / "faiss.index"
+        if not index_path.exists():
+            raise SystemExit(f"FAISS index file not found: {index_path}")
+
+        stop_cpu = start_cpu_logger(2)
+        try:
+            for overquery in overqueries:
+                print("\n" + "-" * 80)
+                print(f"Overquery factor: {overquery}")
+                print(
+                    f"Effective ef_search: {overquery_to_ef_search(args.k, overquery)}"
+                )
+                print("-" * 80)
+
+                phases: List[dict] = []
+
+                (index, dur, r0, r1) = timed_section(
+                    "open_db",
+                    lambda: faiss.read_index(str(index_path)),
+                )
+                phases.append(record_phase("open_db", {}, dur, r0, r1))
+
+                (stats, dur, r0, r1) = timed_section(
+                    "search",
+                    lambda: run_repeated_search(
+                        lambda run_queries, run_qids: search_faiss(
+                            index,
+                            run_queries,
+                            run_qids,
+                            gt_full,
+                            k=args.k,
+                            overquery_factor=overquery,
+                        ),
+                        queries=queries,
+                        qids=qids,
+                        query_runs=args.query_runs,
+                        query_order=args.query_order,
+                        seed=args.seed,
+                    ),
+                )
+                phases.append(record_phase("search", stats, dur, r0, r1))
+
+                (_, dur, r0, r1) = timed_section("close_db", lambda: None)
+                phases.append(record_phase("close_db", {}, dur, r0, r1))
+
+                sweeps.append(
+                    {
+                        "overquery_factor": overquery,
+                        "effective_ef_search": overquery_to_ef_search(
+                            args.k,
+                            overquery,
+                        ),
+                        "phases": phases,
+                        "recall_mean": stats.get("recall_mean"),
+                        "recall_count": stats.get("recall_count"),
+                        "latency_ms_mean": stats.get("latency_ms_mean"),
+                        "latency_ms_p95": stats.get("latency_ms_p95"),
+                        "queries": stats.get("queries"),
+                    }
+                )
+        finally:
+            if stop_cpu is not None:
+                stop_cpu.set()
+
+        runtime_versions["faiss"] = getattr(faiss, "__version__", None)
+        runtime_versions["arcadedb"] = None
+        runtime_versions["lancedb"] = None
+        runtime_versions["postgres"] = None
+        runtime_versions["qdrant"] = None
+        runtime_versions["milvus"] = None
+
+    elif args.backend == "lancedb":
+        import lancedb
+
+        lancedb_dir = db_path / "lancedb-data"
+        if not lancedb_dir.exists():
+            raise SystemExit(f"LanceDB data dir not found: {lancedb_dir}")
+
+        table_name = "vectordata"
+        stop_cpu = start_cpu_logger(2)
+        try:
+            for overquery in overqueries:
+                print("\n" + "-" * 80)
+                print(f"Overquery factor: {overquery}")
+                print("-" * 80)
+
+                phases: List[dict] = []
+
+                ((db, table), dur, r0, r1) = timed_section(
+                    "open_db",
+                    lambda: open_lancedb_table(lancedb_dir, table_name),
+                )
+                phases.append(record_phase("open_db", {}, dur, r0, r1))
+
+                (stats, dur, r0, r1) = timed_section(
+                    "search",
+                    lambda: run_repeated_search(
+                        lambda run_queries, run_qids: search_lancedb(
+                            table,
+                            run_queries,
+                            run_qids,
+                            gt_full,
+                            k=args.k,
+                            overquery_factor=overquery,
+                        ),
+                        queries=queries,
+                        qids=qids,
+                        query_runs=args.query_runs,
+                        query_order=args.query_order,
+                        seed=args.seed,
+                    ),
+                )
+                phases.append(record_phase("search", stats, dur, r0, r1))
+
+                close_db_fn = getattr(db, "close", None)
+                (_, dur, r0, r1) = timed_section(
+                    "close_db",
+                    lambda: close_db_fn() if callable(close_db_fn) else None,
+                )
+                phases.append(record_phase("close_db", {}, dur, r0, r1))
+
+                sweeps.append(
+                    {
+                        "overquery_factor": overquery,
+                        "effective_nprobes": max(1, int(round(overquery * 4))),
+                        "phases": phases,
+                        "recall_mean": stats.get("recall_mean"),
+                        "recall_count": stats.get("recall_count"),
+                        "latency_ms_mean": stats.get("latency_ms_mean"),
+                        "latency_ms_p95": stats.get("latency_ms_p95"),
+                        "queries": stats.get("queries"),
+                    }
+                )
+        finally:
+            if stop_cpu is not None:
+                stop_cpu.set()
+
+        runtime_versions["lancedb"] = getattr(lancedb, "__version__", None)
+        runtime_versions["arcadedb"] = None
+        runtime_versions["faiss"] = None
+        runtime_versions["postgres"] = None
+        runtime_versions["qdrant"] = None
+        runtime_versions["milvus"] = None
+
+    elif args.backend == "bruteforce":
+        stop_cpu = start_cpu_logger(2)
+        try:
+            for overquery in overqueries:
+                print("\n" + "-" * 80)
+                print(f"Overquery factor: {overquery}")
+                print("-" * 80)
+
+                phases: List[dict] = []
+
+                (corpus_vectors_normalized, dur, r0, r1) = timed_section(
+                    "open_db",
+                    lambda: normalize_rows(materialize_corpus_vectors(sources, dim)),
+                )
+                phases.append(record_phase("open_db", {}, dur, r0, r1))
+
+                (stats, dur, r0, r1) = timed_section(
+                    "search",
+                    lambda: run_repeated_search(
+                        lambda run_queries, run_qids: search_bruteforce(
+                            corpus_vectors_normalized,
+                            run_queries,
+                            run_qids,
+                            gt_full,
+                            k=args.k,
+                        ),
+                        queries=queries,
+                        qids=qids,
+                        query_runs=args.query_runs,
+                        query_order=args.query_order,
+                        seed=args.seed,
+                    ),
+                )
+                phases.append(record_phase("search", stats, dur, r0, r1))
+
+                (_, dur, r0, r1) = timed_section("close_db", lambda: None)
+                phases.append(record_phase("close_db", {}, dur, r0, r1))
+
+                sweeps.append(
+                    {
+                        "overquery_factor": overquery,
+                        "effective_overquery_factor": 1,
+                        "phases": phases,
+                        "recall_mean": stats.get("recall_mean"),
+                        "recall_count": stats.get("recall_count"),
+                        "latency_ms_mean": stats.get("latency_ms_mean"),
+                        "latency_ms_p95": stats.get("latency_ms_p95"),
+                        "queries": stats.get("queries"),
+                    }
+                )
+        finally:
+            if stop_cpu is not None:
+                stop_cpu.set()
+
+        runtime_versions["arcadedb"] = None
+        runtime_versions["faiss"] = None
+        runtime_versions["lancedb"] = None
+        runtime_versions["postgres"] = None
+        runtime_versions["qdrant"] = None
+        runtime_versions["milvus"] = None
 
     elif args.backend == "qdrant":
         from qdrant_client import QdrantClient
@@ -1998,6 +2446,8 @@ def main() -> None:
             finally:
                 version_client.close()
             runtime_versions["arcadedb"] = None
+            runtime_versions["faiss"] = None
+            runtime_versions["lancedb"] = None
             runtime_versions["postgres"] = None
         finally:
             if stop_cpu is not None:
@@ -2102,6 +2552,8 @@ def main() -> None:
                 args.milvus_port,
             )
             runtime_versions["arcadedb"] = None
+            runtime_versions["faiss"] = None
+            runtime_versions["lancedb"] = None
             runtime_versions["postgres"] = None
             runtime_versions["qdrant"] = None
         finally:
@@ -2208,6 +2660,8 @@ def main() -> None:
                 runtime_versions["postgres"] = str(row[0]) if row else None
             conn_v.close()
             runtime_versions["arcadedb"] = None
+            runtime_versions["faiss"] = None
+            runtime_versions["lancedb"] = None
             runtime_versions["qdrant"] = None
             runtime_versions["milvus"] = None
         finally:
@@ -2219,6 +2673,10 @@ def main() -> None:
         runtime_versions["qdrant"] = None
     if "milvus" not in runtime_versions:
         runtime_versions["milvus"] = None
+    if "faiss" not in runtime_versions:
+        runtime_versions["faiss"] = None
+    if "lancedb" not in runtime_versions:
+        runtime_versions["lancedb"] = None
 
     rss_after_vals = [
         phase["rss_after_mb"]
@@ -2392,7 +2850,7 @@ def main() -> None:
         recall_text = f"{recall:.4f}" if recall is not None else "n/a"
         lat_text = f"{lat:.2f}" if lat is not None else "n/a"
         p95_text = f"{p95:.2f}" if p95 is not None else "n/a"
-        if args.backend in {"pgvector", "qdrant", "milvus"}:
+        if args.backend in {"pgvector", "qdrant", "milvus", "faiss"}:
             ef_text = str(sweep.get("effective_ef_search"))
             print(
                 f"factor={oq:>4} | ef_search={ef_text} | "

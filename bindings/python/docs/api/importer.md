@@ -227,7 +227,7 @@ stats = arcadedb.import_csv(
 # #1:1,#1:2,COLLEAGUE,2021
 
 # First create the schema
-db.command("sql", "CREATE EDGE TYPE Relationship")
+db.command("sql", "CREATE EDGE TYPE Relationship UNIDIRECTIONAL")
 
 # Then import (edges)
 stats = arcadedb.import_csv(
@@ -359,7 +359,7 @@ import arcadedb_embedded as arcadedb
 # Open or create database (auto-closes)
 with arcadedb.create_database("./import_demo") as db:
     db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE Knows")
+    db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
 
     # Import vertices from CSV
     stats = arcadedb.import_csv(

@@ -39,6 +39,8 @@ EXPECTED_DATASETS = {
     "stackoverflow-full",
 }
 
+SQLITE_PROFILE_CHOICES = ["fair", "perf", "olap"]
+
 
 def build_benchmark_db_name(dataset: str, db: str, run_label: Optional[str]) -> str:
     db_name = f"{dataset.replace('-', '_')}_tables_olap_{db}"
@@ -619,6 +621,42 @@ def create_schema_sqlite(conn: sqlite3.Connection):
         conn.execute(ddl)
 
 
+def configure_sqlite(conn: sqlite3.Connection, profile: str) -> Dict[str, Any]:
+    profile = (profile or "olap").lower()
+    if profile not in SQLITE_PROFILE_CHOICES:
+        raise ValueError(
+            f"Unsupported sqlite profile: {profile}. "
+            f"Expected one of: {', '.join(SQLITE_PROFILE_CHOICES)}"
+        )
+
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA temp_store=MEMORY")
+
+    if profile == "fair":
+        conn.execute("PRAGMA synchronous=FULL")
+        conn.execute("PRAGMA foreign_keys=ON")
+    elif profile == "perf":
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+    else:
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA cache_size=-200000")
+        conn.execute("PRAGMA mmap_size=268435456")
+
+    return {
+        "profile": profile,
+        "journal_mode": "WAL",
+        "synchronous": "FULL" if profile == "fair" else "NORMAL",
+        "foreign_keys": "ON",
+        "temp_store": "MEMORY",
+        "busy_timeout_ms": 30000,
+        "cache_size_kib": 200000 if profile == "olap" else None,
+        "mmap_size_bytes": 268435456 if profile == "olap" else None,
+    }
+
+
 def create_schema_duckdb(conn):
     for table in TABLE_DEFS:
         columns = []
@@ -806,6 +844,63 @@ def load_table_postgresql(
     if batch:
         insert_batch_postgresql(conn, table_def["name"], columns, batch)
         total += len(batch)
+
+    elapsed = time.time() - start
+    return total, elapsed
+
+
+def to_postgres_csv_value(field_type: str, value: Any) -> Any:
+    if value is None:
+        return None
+    if field_type == "DATETIME":
+        return serialize_datetime(value) if isinstance(value, datetime) else value
+    if field_type == "BOOLEAN":
+        return "true" if bool(value) else "false"
+    return value
+
+
+def load_table_postgresql_copy(
+    conn,
+    xml_path: Path,
+    table_def: Dict[str, Any],
+    csv_dir: Path,
+) -> Tuple[int, float]:
+    total = 0
+    fields: List[FieldDef] = table_def["fields"]
+    columns = [field_name for field_name, _, _ in fields]
+    start = time.time()
+
+    csv_path = csv_dir / f"{table_def['name']}.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+
+        for attrs in iter_xml_rows(xml_path):
+            payload: Dict[str, Any] = {}
+            for field_name, field_type, parser in fields:
+                payload[field_name] = to_postgres_csv_value(
+                    field_type,
+                    parser(attrs.get(field_name)),
+                )
+            writer.writerow(payload)
+            total += 1
+
+    quoted_table = quote_ident_pg(table_def["name"])
+    quoted_cols = ", ".join(quote_ident_pg(col) for col in columns)
+    copy_sql = (
+        f"COPY {quoted_table} ({quoted_cols}) "
+        "FROM STDIN WITH (FORMAT CSV, HEADER TRUE)"
+    )
+
+    with conn.cursor() as cur:
+        with cur.copy(copy_sql) as copy:
+            with csv_path.open("r", encoding="utf-8") as source:
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    copy.write(chunk)
+    conn.commit()
 
     elapsed = time.time() - start
     return total, elapsed
@@ -1122,6 +1217,8 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
         "query_runs": args.query_runs,
         "query_order": args.query_order,
         "sqlite_version": sqlite3.sqlite_version,
+        "sqlite_profile": summary.get("sqlite_profile"),
+        "sqlite_pragmas": summary.get("sqlite_pragmas"),
         "duckdb_runtime_version": duckdb_runtime_version,
         "postgres_version": summary.get("postgres_version"),
         "schema": summary["schema"],
@@ -1336,20 +1433,30 @@ def run_olap_arcadedb(
     print("Loading XML tables...")
     load_stats = []
     load_start = time.time()
-    for table in TABLE_DEFS:
-        xml_path = data_dir / table["xml"]
-        if not xml_path.exists():
-            raise FileNotFoundError(f"Missing XML file: {xml_path}")
-        print(f"  -> {table['name']} ({xml_path.name})")
-        count, elapsed = load_table(db, xml_path, table, batch_size)
-        load_stats.append(
-            {
-                "table": table["name"],
-                "rows": count,
-                "elapsed_s": elapsed,
-            }
-        )
-        print(f"     {count:,} rows in {elapsed:.2f}s")
+    db.set_read_your_writes(False)
+    async_exec = db.async_executor()
+    async_exec.set_commit_every(batch_size)
+    async_exec.set_transaction_use_wal(False)
+    try:
+        for table in TABLE_DEFS:
+            xml_path = data_dir / table["xml"]
+            if not xml_path.exists():
+                raise FileNotFoundError(f"Missing XML file: {xml_path}")
+            print(f"  -> {table['name']} ({xml_path.name})")
+            count, elapsed = load_table(db, xml_path, table, batch_size)
+            load_stats.append(
+                {
+                    "table": table["name"],
+                    "rows": count,
+                    "elapsed_s": elapsed,
+                }
+            )
+            print(f"     {count:,} rows in {elapsed:.2f}s")
+    finally:
+        async_exec.wait_completion()
+        async_exec.close()
+        db.set_read_your_writes(True)
+        async_exec.set_transaction_use_wal(True)
     load_total = time.time() - load_start
 
     load_counts_start = time.time()
@@ -1391,7 +1498,7 @@ def run_olap_arcadedb(
     db.close()
 
     return {
-        "ingest_mode": "sql",
+        "ingest_mode": "bulk_tuned_insert",
         "schema": {
             "total_s": schema_elapsed,
         },
@@ -1429,6 +1536,7 @@ def run_olap_sqlite(
     query_runs: int,
     query_order: str,
     seed: int,
+    sqlite_profile: str,
 ) -> dict:
     if db_path.exists():
         shutil.rmtree(db_path)
@@ -1436,6 +1544,7 @@ def run_olap_sqlite(
 
     db_file = db_path / "sqlite.db"
     conn = sqlite3.connect(db_file)
+    sqlite_pragmas = configure_sqlite(conn, sqlite_profile)
 
     print("Creating schema...")
     schema_start = time.time()
@@ -1496,6 +1605,9 @@ def run_olap_sqlite(
     conn.close()
 
     return {
+        "ingest_mode": "executemany",
+        "sqlite_profile": sqlite_profile,
+        "sqlite_pragmas": sqlite_pragmas,
         "schema": {
             "total_s": schema_elapsed,
         },
@@ -1730,6 +1842,8 @@ def run_olap_postgresql(
         schema_elapsed = time.time() - schema_start
 
         print("Loading XML tables...")
+        csv_dir = db_path / "postgres_csv_bulk"
+        csv_dir.mkdir(parents=True, exist_ok=True)
         load_stats = []
         load_start = time.time()
         for table in TABLE_DEFS:
@@ -1737,7 +1851,7 @@ def run_olap_postgresql(
             if not xml_path.exists():
                 raise FileNotFoundError(f"Missing XML file: {xml_path}")
             print(f"  -> {table['name']} ({xml_path.name})")
-            count, elapsed = load_table_postgresql(conn, xml_path, table, batch_size)
+            count, elapsed = load_table_postgresql_copy(conn, xml_path, table, csv_dir)
             load_stats.append(
                 {
                     "table": table["name"],
@@ -1784,6 +1898,7 @@ def run_olap_postgresql(
         conn.close()
 
         return {
+            "ingest_mode": "copy_from_stdin",
             "schema": {
                 "total_s": schema_elapsed,
             },
@@ -1881,8 +1996,8 @@ def main():
     parser.add_argument(
         "--arcadedb-version",
         type=str,
-        default="26.2.1",
-        help="arcadedb-embedded version to install in Docker (default: 26.2.1)",
+        default="26.3.1.dev1",
+        help="arcadedb-embedded version to install in Docker (default: 26.3.1.dev1)",
     )
     parser.add_argument(
         "--duckdb-version",
@@ -1913,6 +2028,12 @@ def main():
         type=int,
         default=42,
         help="Seed used for deterministic shuffled query order (default: 42)",
+    )
+    parser.add_argument(
+        "--sqlite-profile",
+        choices=SQLITE_PROFILE_CHOICES,
+        default="olap",
+        help="SQLite profile: fair (WAL+FULL+FK ON), perf (WAL+NORMAL+FK ON), olap (perf + large cache/mmap)",
     )
     parser.add_argument(
         "--run-label",
@@ -1967,6 +2088,8 @@ def main():
     print("=" * 80)
     print(f"Dataset: {args.dataset}")
     print(f"DB: {args.db}")
+    if args.db == "sqlite":
+        print(f"SQLite profile: {args.sqlite_profile}")
     print(f"Batch size: {args.batch_size}")
     print(f"Query runs: {args.query_runs}")
     print(f"Query order: {args.query_order}")
@@ -2007,6 +2130,7 @@ def main():
             query_runs=args.query_runs,
             query_order=args.query_order,
             seed=args.seed,
+            sqlite_profile=args.sqlite_profile,
         )
         total_time = time.perf_counter() - start_time
         stop_event.set()
