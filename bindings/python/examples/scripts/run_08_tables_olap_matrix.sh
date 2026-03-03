@@ -13,10 +13,10 @@ PY_SCRIPT="$EXAMPLES_DIR/08_stackoverflow_tables_olap.py"
 # Large         10,000  8GB     16
 # X-Large       25,000  32GB    32
 
-DATASET="stackoverflow-small"
-BATCH_SIZE=2500
-MEM_LIMIT="2g"
-THREADS=1
+DATASET="stackoverflow-medium"
+BATCH_SIZE=5000
+MEM_LIMIT="4g"
+THREADS=4
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"

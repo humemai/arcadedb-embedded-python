@@ -25,8 +25,7 @@ Measured ingest times:
 - Async SQL INSERT: 182.663s
 - IMPORT DATABASE: 90.354s
 
-In this shape, IMPORT DATABASE was faster than both Async SQL and
-Transactional INSERT.
+In this shape, IMPORT DATABASE was faster than both Async SQL and Transactional INSERT.
 
 Known limitation:
 On some ArcadeDB import code paths, `IMPORT DATABASE` with CSV documents may not
