@@ -2400,17 +2400,7 @@ def run_graph_oltp_arcadedb(
 
     print("Loading graph...")
     load_start = time.time()
-    db.set_read_your_writes(False)
-    async_exec = db.async_executor()
-    async_exec.set_commit_every(batch_size)
-    async_exec.set_transaction_use_wal(False)
-    try:
-        load_stats, load_info = load_graph_arcadedb(db, data_dir, batch_size)
-    finally:
-        async_exec.wait_completion()
-        async_exec.close()
-        db.set_read_your_writes(True)
-        async_exec.set_transaction_use_wal(True)
+    load_stats, load_info = load_graph_arcadedb(db, data_dir, batch_size)
     load_time = time.time() - load_start
 
     disk_after_load = get_dir_size_bytes(db_path)

@@ -1810,10 +1810,6 @@ def main() -> None:
             lambda: arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs),
         )
         record("create_db", {"db_path": str(db_path)}, dur, r0, r1)
-        db.set_read_your_writes(False)
-        async_exec = db.async_executor()
-        async_exec.set_commit_every(max(1, args.batch_size))
-        async_exec.set_transaction_use_wal(False)
 
         try:
             to_java_float_array = getattr(arcadedb, "to_java_float_array", None)
@@ -1851,10 +1847,6 @@ def main() -> None:
             )
             record("create_index", {}, dur, r0, r1)
         finally:
-            async_exec.wait_completion()
-            async_exec.close()
-            db.set_read_your_writes(True)
-            async_exec.set_transaction_use_wal(True)
             try:
                 (_, dur, r0, r1) = timed_section("close_db", db.close)
                 record("close_db", {}, dur, r0, r1)
