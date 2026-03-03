@@ -579,23 +579,23 @@ def create_graph_schema(db) -> None:
     db.command("sql", "CREATE PROPERTY Comment.Score INTEGER")
     db.command("sql", "CREATE PROPERTY Comment.CreationDate INTEGER")
 
-    db.command("sql", "CREATE EDGE TYPE ASKED")
+    db.command("sql", "CREATE EDGE TYPE ASKED UNIDIRECTIONAL")
     db.command("sql", "CREATE PROPERTY ASKED.CreationDate INTEGER")
-    db.command("sql", "CREATE EDGE TYPE ANSWERED")
+    db.command("sql", "CREATE EDGE TYPE ANSWERED UNIDIRECTIONAL")
     db.command("sql", "CREATE PROPERTY ANSWERED.CreationDate INTEGER")
-    db.command("sql", "CREATE EDGE TYPE HAS_ANSWER")
-    db.command("sql", "CREATE EDGE TYPE ACCEPTED_ANSWER")
-    db.command("sql", "CREATE EDGE TYPE TAGGED_WITH")
-    db.command("sql", "CREATE EDGE TYPE COMMENTED_ON")
+    db.command("sql", "CREATE EDGE TYPE HAS_ANSWER UNIDIRECTIONAL")
+    db.command("sql", "CREATE EDGE TYPE ACCEPTED_ANSWER UNIDIRECTIONAL")
+    db.command("sql", "CREATE EDGE TYPE TAGGED_WITH UNIDIRECTIONAL")
+    db.command("sql", "CREATE EDGE TYPE COMMENTED_ON UNIDIRECTIONAL")
     db.command("sql", "CREATE PROPERTY COMMENTED_ON.CreationDate INTEGER")
     db.command("sql", "CREATE PROPERTY COMMENTED_ON.Score INTEGER")
-    db.command("sql", "CREATE EDGE TYPE COMMENTED_ON_ANSWER")
+    db.command("sql", "CREATE EDGE TYPE COMMENTED_ON_ANSWER UNIDIRECTIONAL")
     db.command("sql", "CREATE PROPERTY COMMENTED_ON_ANSWER.CreationDate INTEGER")
     db.command("sql", "CREATE PROPERTY COMMENTED_ON_ANSWER.Score INTEGER")
-    db.command("sql", "CREATE EDGE TYPE EARNED")
+    db.command("sql", "CREATE EDGE TYPE EARNED UNIDIRECTIONAL")
     db.command("sql", "CREATE PROPERTY EARNED.Date INTEGER")
     db.command("sql", "CREATE PROPERTY EARNED.Class INTEGER")
-    db.command("sql", "CREATE EDGE TYPE LINKED_TO")
+    db.command("sql", "CREATE EDGE TYPE LINKED_TO UNIDIRECTIONAL")
     db.command("sql", "CREATE PROPERTY LINKED_TO.LinkTypeId INTEGER")
     db.command("sql", "CREATE PROPERTY LINKED_TO.CreationDate INTEGER")
 
@@ -618,15 +618,40 @@ def insert_vertices(db, vertex_type: str, rows: List[Dict[str, Any]]) -> None:
             db.command("sql", f"INSERT INTO {vertex_type} SET {assignments}", *values)
 
 
-def insert_edges(db, edge_type: str, rows: List[Dict[str, Any]]) -> None:
+def build_rid_lookup(db, vertex_type: str) -> Dict[int, str]:
+    rows = db.query(
+        "sql",
+        f"SELECT Id AS id, @rid AS rid FROM {vertex_type} WHERE Id IS NOT NULL",
+    ).to_list()
+    lookup: Dict[int, str] = {}
+    for row in rows:
+        entity_id = row.get("id")
+        rid = row.get("rid")
+        if entity_id is None or rid is None:
+            continue
+        lookup[int(entity_id)] = str(rid)
+    return lookup
+
+
+def insert_edges(
+    db,
+    edge_type: str,
+    rows: List[Dict[str, Any]],
+    rid_lookups: Dict[str, Dict[int, str]],
+) -> None:
     from arcadedb_embedded.type_conversion import convert_python_to_java
 
     with db.transaction():
         for row in rows:
             from_type = row["from_type"]
             to_type = row["to_type"]
-            from_id = convert_python_to_java(row["from_id"])
-            to_id = convert_python_to_java(row["to_id"])
+            from_id = row["from_id"]
+            to_id = row["to_id"]
+
+            from_rid = rid_lookups.get(from_type, {}).get(int(from_id))
+            to_rid = rid_lookups.get(to_type, {}).get(int(to_id))
+            if from_rid is None or to_rid is None:
+                continue
 
             props = {
                 key: value
@@ -638,35 +663,19 @@ def insert_edges(db, edge_type: str, rows: List[Dict[str, Any]]) -> None:
             if props:
                 assignments = ", ".join(f"{col} = ?" for col in props)
                 values = [convert_python_to_java(props[col]) for col in props]
-                try:
-                    db.command(
-                        "sql",
-                        f"CREATE EDGE {edge_type} "
-                        f"FROM (SELECT FROM {from_type} WHERE Id = ?) "
-                        f"TO (SELECT FROM {to_type} WHERE Id = ?) "
-                        f"SET {assignments}",
-                        from_id,
-                        to_id,
-                        *values,
-                    )
-                except Exception as exc:
-                    if "NoSuchElementException" in str(exc):
-                        continue
-                    raise
+                db.command(
+                    "sql",
+                    f"CREATE EDGE {edge_type} "
+                    f"FROM {from_rid} "
+                    f"TO {to_rid} "
+                    f"SET {assignments}",
+                    *values,
+                )
             else:
-                try:
-                    db.command(
-                        "sql",
-                        f"CREATE EDGE {edge_type} "
-                        f"FROM (SELECT FROM {from_type} WHERE Id = ?) "
-                        f"TO (SELECT FROM {to_type} WHERE Id = ?)",
-                        from_id,
-                        to_id,
-                    )
-                except Exception as exc:
-                    if "NoSuchElementException" in str(exc):
-                        continue
-                    raise
+                db.command(
+                    "sql",
+                    f"CREATE EDGE {edge_type} " f"FROM {from_rid} " f"TO {to_rid}",
+                )
 
 
 def load_graph(db, data_dir: Path, batch_size: int) -> Dict[str, Any]:
@@ -816,28 +825,46 @@ def load_graph(db, data_dir: Path, batch_size: int) -> Dict[str, Any]:
         insert_vertices(db, "Comment", batch)
     stats["nodes"]["Comment"] = time.time() - start
 
-    stats["edges"]["ASKED"] = create_edge_asked(db, data_dir, batch_size)
-    stats["edges"]["ANSWERED"] = create_edge_answered(db, data_dir, batch_size)
-    stats["edges"]["HAS_ANSWER"] = create_edge_has_answer(db, data_dir, batch_size)
+    rid_lookups = {
+        "User": build_rid_lookup(db, "User"),
+        "Question": build_rid_lookup(db, "Question"),
+        "Answer": build_rid_lookup(db, "Answer"),
+        "Tag": build_rid_lookup(db, "Tag"),
+        "Badge": build_rid_lookup(db, "Badge"),
+        "Comment": build_rid_lookup(db, "Comment"),
+    }
+
+    stats["edges"]["ASKED"] = create_edge_asked(db, data_dir, batch_size, rid_lookups)
+    stats["edges"]["ANSWERED"] = create_edge_answered(
+        db, data_dir, batch_size, rid_lookups
+    )
+    stats["edges"]["HAS_ANSWER"] = create_edge_has_answer(
+        db, data_dir, batch_size, rid_lookups
+    )
     stats["edges"]["ACCEPTED_ANSWER"] = create_edge_accepted_answer(
-        db, data_dir, batch_size
+        db, data_dir, batch_size, rid_lookups
     )
     stats["edges"]["TAGGED_WITH"] = create_edge_tagged_with(
-        db, data_dir, tag_map, batch_size
+        db, data_dir, tag_map, batch_size, rid_lookups
     )
     comments_stats = create_edge_commented_on(
-        db, data_dir, question_ids, answer_ids, batch_size
+        db, data_dir, question_ids, answer_ids, batch_size, rid_lookups
     )
     stats["edges"].update(comments_stats)
-    stats["edges"]["EARNED"] = create_edge_earned(db, data_dir, batch_size)
+    stats["edges"]["EARNED"] = create_edge_earned(db, data_dir, batch_size, rid_lookups)
     stats["edges"]["LINKED_TO"] = create_edge_linked_to(
-        db, data_dir, question_ids, answer_ids, batch_size
+        db, data_dir, question_ids, answer_ids, batch_size, rid_lookups
     )
 
     return stats
 
 
-def create_edge_asked(db, data_dir: Path, batch_size: int) -> float:
+def create_edge_asked(
+    db,
+    data_dir: Path,
+    batch_size: int,
+    rid_lookups: Dict[str, Dict[int, str]],
+) -> float:
     start = time.time()
     batch: List[Dict[str, Any]] = []
     for attrs in iter_xml_rows(data_dir / "Posts.xml"):
@@ -859,14 +886,19 @@ def create_edge_asked(db, data_dir: Path, batch_size: int) -> float:
             }
         )
         if len(batch) >= batch_size:
-            insert_edges(db, "ASKED", batch)
+            insert_edges(db, "ASKED", batch, rid_lookups)
             batch = []
     if batch:
-        insert_edges(db, "ASKED", batch)
+        insert_edges(db, "ASKED", batch, rid_lookups)
     return time.time() - start
 
 
-def create_edge_answered(db, data_dir: Path, batch_size: int) -> float:
+def create_edge_answered(
+    db,
+    data_dir: Path,
+    batch_size: int,
+    rid_lookups: Dict[str, Dict[int, str]],
+) -> float:
     start = time.time()
     batch: List[Dict[str, Any]] = []
     for attrs in iter_xml_rows(data_dir / "Posts.xml"):
@@ -888,14 +920,19 @@ def create_edge_answered(db, data_dir: Path, batch_size: int) -> float:
             }
         )
         if len(batch) >= batch_size:
-            insert_edges(db, "ANSWERED", batch)
+            insert_edges(db, "ANSWERED", batch, rid_lookups)
             batch = []
     if batch:
-        insert_edges(db, "ANSWERED", batch)
+        insert_edges(db, "ANSWERED", batch, rid_lookups)
     return time.time() - start
 
 
-def create_edge_has_answer(db, data_dir: Path, batch_size: int) -> float:
+def create_edge_has_answer(
+    db,
+    data_dir: Path,
+    batch_size: int,
+    rid_lookups: Dict[str, Dict[int, str]],
+) -> float:
     start = time.time()
     batch: List[Dict[str, Any]] = []
     for attrs in iter_xml_rows(data_dir / "Posts.xml"):
@@ -914,14 +951,19 @@ def create_edge_has_answer(db, data_dir: Path, batch_size: int) -> float:
             }
         )
         if len(batch) >= batch_size:
-            insert_edges(db, "HAS_ANSWER", batch)
+            insert_edges(db, "HAS_ANSWER", batch, rid_lookups)
             batch = []
     if batch:
-        insert_edges(db, "HAS_ANSWER", batch)
+        insert_edges(db, "HAS_ANSWER", batch, rid_lookups)
     return time.time() - start
 
 
-def create_edge_accepted_answer(db, data_dir: Path, batch_size: int) -> float:
+def create_edge_accepted_answer(
+    db,
+    data_dir: Path,
+    batch_size: int,
+    rid_lookups: Dict[str, Dict[int, str]],
+) -> float:
     start = time.time()
     batch: List[Dict[str, Any]] = []
     for attrs in iter_xml_rows(data_dir / "Posts.xml"):
@@ -940,15 +982,19 @@ def create_edge_accepted_answer(db, data_dir: Path, batch_size: int) -> float:
             }
         )
         if len(batch) >= batch_size:
-            insert_edges(db, "ACCEPTED_ANSWER", batch)
+            insert_edges(db, "ACCEPTED_ANSWER", batch, rid_lookups)
             batch = []
     if batch:
-        insert_edges(db, "ACCEPTED_ANSWER", batch)
+        insert_edges(db, "ACCEPTED_ANSWER", batch, rid_lookups)
     return time.time() - start
 
 
 def create_edge_tagged_with(
-    db, data_dir: Path, tag_map: Dict[str, int], batch_size: int
+    db,
+    data_dir: Path,
+    tag_map: Dict[str, int],
+    batch_size: int,
+    rid_lookups: Dict[str, Dict[int, str]],
 ) -> float:
     start = time.time()
     batch: List[Dict[str, Any]] = []
@@ -971,10 +1017,10 @@ def create_edge_tagged_with(
                 }
             )
             if len(batch) >= batch_size:
-                insert_edges(db, "TAGGED_WITH", batch)
+                insert_edges(db, "TAGGED_WITH", batch, rid_lookups)
                 batch = []
     if batch:
-        insert_edges(db, "TAGGED_WITH", batch)
+        insert_edges(db, "TAGGED_WITH", batch, rid_lookups)
     return time.time() - start
 
 
@@ -984,6 +1030,7 @@ def create_edge_commented_on(
     question_ids: set[int],
     answer_ids: set[int],
     batch_size: int,
+    rid_lookups: Dict[str, Dict[int, str]],
 ) -> Dict[str, float]:
     start = time.time()
     question_batch: List[Dict[str, Any]] = []
@@ -1022,22 +1069,27 @@ def create_edge_commented_on(
             answer_batch.append(payload)
 
         if len(question_batch) >= batch_size:
-            insert_edges(db, "COMMENTED_ON", question_batch)
+            insert_edges(db, "COMMENTED_ON", question_batch, rid_lookups)
             question_batch = []
         if len(answer_batch) >= batch_size:
-            insert_edges(db, "COMMENTED_ON_ANSWER", answer_batch)
+            insert_edges(db, "COMMENTED_ON_ANSWER", answer_batch, rid_lookups)
             answer_batch = []
 
     if question_batch:
-        insert_edges(db, "COMMENTED_ON", question_batch)
+        insert_edges(db, "COMMENTED_ON", question_batch, rid_lookups)
     if answer_batch:
-        insert_edges(db, "COMMENTED_ON_ANSWER", answer_batch)
+        insert_edges(db, "COMMENTED_ON_ANSWER", answer_batch, rid_lookups)
 
     elapsed = time.time() - start
     return {"COMMENTED_ON": elapsed, "COMMENTED_ON_ANSWER": elapsed}
 
 
-def create_edge_earned(db, data_dir: Path, batch_size: int) -> float:
+def create_edge_earned(
+    db,
+    data_dir: Path,
+    batch_size: int,
+    rid_lookups: Dict[str, Dict[int, str]],
+) -> float:
     start = time.time()
     batch: List[Dict[str, Any]] = []
     for attrs in iter_xml_rows(data_dir / "Badges.xml"):
@@ -1056,10 +1108,10 @@ def create_edge_earned(db, data_dir: Path, batch_size: int) -> float:
             }
         )
         if len(batch) >= batch_size:
-            insert_edges(db, "EARNED", batch)
+            insert_edges(db, "EARNED", batch, rid_lookups)
             batch = []
     if batch:
-        insert_edges(db, "EARNED", batch)
+        insert_edges(db, "EARNED", batch, rid_lookups)
     return time.time() - start
 
 
@@ -1069,6 +1121,7 @@ def create_edge_linked_to(
     question_ids: set[int],
     answer_ids: set[int],
     batch_size: int,
+    rid_lookups: Dict[str, Dict[int, str]],
 ) -> float:
     start = time.time()
     batch: List[Dict[str, Any]] = []
@@ -1108,11 +1161,11 @@ def create_edge_linked_to(
         )
 
         if len(batch) >= batch_size:
-            insert_edges(db, "LINKED_TO", batch)
+            insert_edges(db, "LINKED_TO", batch, rid_lookups)
             batch = []
 
     if batch:
-        insert_edges(db, "LINKED_TO", batch)
+        insert_edges(db, "LINKED_TO", batch, rid_lookups)
 
     return time.time() - start
 
@@ -1639,9 +1692,19 @@ def phase1_tables(
         schema_time = time.time() - schema_start
 
         load_start = time.time()
-        table_stats = [
-            load_table(db, data_dir, table, batch_size) for table in table_defs
-        ]
+        db.set_read_your_writes(False)
+        async_exec = db.async_executor()
+        async_exec.set_commit_every(max(1, batch_size))
+        async_exec.set_transaction_use_wal(False)
+        try:
+            table_stats = [
+                load_table(db, data_dir, table, batch_size) for table in table_defs
+            ]
+        finally:
+            async_exec.wait_completion()
+            async_exec.close()
+            db.set_read_your_writes(True)
+            async_exec.set_transaction_use_wal(True)
         load_time = time.time() - load_start
 
         index_time = create_indexes_with_retry(
@@ -1684,7 +1747,17 @@ def phase2_graph(
         schema_time = time.time() - schema_start
 
         load_start = time.time()
-        load_stats = load_graph(db, data_dir, batch_size)
+        db.set_read_your_writes(False)
+        async_exec = db.async_executor()
+        async_exec.set_commit_every(max(1, batch_size))
+        async_exec.set_transaction_use_wal(False)
+        try:
+            load_stats = load_graph(db, data_dir, batch_size)
+        finally:
+            async_exec.wait_completion()
+            async_exec.close()
+            db.set_read_your_writes(True)
+            async_exec.set_transaction_use_wal(True)
         load_time = time.time() - load_start
 
         graph_counts = count_graph(db)

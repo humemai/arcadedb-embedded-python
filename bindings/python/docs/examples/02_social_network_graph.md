@@ -99,7 +99,7 @@ with arcadedb.create_database("./social_network_db") as db:
     db.command("sql", "CREATE PROPERTY Person.reputation FLOAT")  # Optional (can be NULL)
 
     # Create edge type with properties
-    db.command("sql", "CREATE EDGE TYPE FRIEND_OF")
+    db.command("sql", "CREATE EDGE TYPE FRIEND_OF UNIDIRECTIONAL")
     db.command("sql", "CREATE PROPERTY FRIEND_OF.since DATE")
     db.command("sql", "CREATE PROPERTY FRIEND_OF.closeness STRING")
 

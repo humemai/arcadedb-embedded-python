@@ -22,164 +22,111 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
-if [[ -z "${DATASET// /}" ]]; then
-    mapfile -t DATASETS < <(
-        python3 - "$INPUT_DIR" "$LABEL_PREFIX" << 'PY'
-import glob
-import json
-import os
-import sys
-
-input_dir, label_prefix = sys.argv[1:]
-datasets = set()
-for path in glob.glob(os.path.join(input_dir, "**", "results_*.json"), recursive=True):
-        try:
-                with open(path, "r", encoding="utf-8") as handle:
-                        data = json.load(handle)
-        except Exception:
-                continue
-        run_label = data.get("run_label")
-        if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
-                continue
-        dataset = data.get("dataset")
-        if isinstance(dataset, str) and dataset.strip():
-                datasets.add(dataset.strip())
-for dataset in sorted(datasets):
-        print(dataset)
-PY
-    )
-
-    if [[ "${#DATASETS[@]}" -eq 0 ]]; then
-        echo "No datasets discovered for label prefix '$LABEL_PREFIX' in $INPUT_DIR" >&2
-        exit 2
-    fi
-
-    for dataset in "${DATASETS[@]}"; do
-        echo "Summarizing dataset: $dataset"
-        DATASET="$dataset" "$0"
-    done
-
-    echo
-    echo "Summary files generated in: $OUTPUT_DIR"
-    exit 0
-fi
-
 DATASET_TAG="${DATASET//-/_}"
 if [[ -z "${DATASET_TAG// /}" ]]; then
-    DATASET_TAG="all"
+    DATASET_TAG="all_datasets"
 fi
-SUMMARY_JSON="$OUTPUT_DIR/summary_10_graph_olap_${DATASET_TAG}.json"
 SUMMARY_MD="$OUTPUT_DIR/summary_10_graph_olap_${DATASET_TAG}.md"
 
-python3 - "$INPUT_DIR" "$SUMMARY_JSON" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" << 'PY'
+python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" << 'PY'
 import glob
 import json
 import os
+import re
 import statistics
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 
-input_dir, summary_json, summary_md, dataset, label_prefix = sys.argv[1:]
+input_dir, summary_md, dataset, label_prefix = sys.argv[1:]
 dataset_filter = dataset.strip()
 dataset_label = dataset_filter or "all"
 
 
-def flatten_dict(obj, prefix=""):
-    flat = {}
-    if not isinstance(obj, dict):
-        return flat
-    for key, value in obj.items():
-        full_key = f"{prefix}.{key}" if prefix else key
-        if isinstance(value, dict):
-            flat.update(flatten_dict(value, full_key))
-        else:
-            flat[full_key] = value
-    return flat
+def to_int(value):
+    try:
+        return int(value)
+    except Exception:
+        return None
 
 
-def is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+def to_float(value):
+    try:
+        return float(value)
+    except Exception:
+        return None
 
 
-def metric_buckets(flat_data):
-    numeric = {}
-    boolean = {}
-    for key, value in flat_data.items():
-        if is_number(value):
-            numeric[key] = value
-        elif isinstance(value, bool):
-            boolean[key] = value
-    return numeric, boolean
-
-
-def first_present(data, keys):
-    for key in keys:
-        if key in data:
-            return data.get(key)
+def first_not_none(*values):
+    for value in values:
+        if value is not None:
+            return value
     return None
 
 
-def extract_parameters(data, flat_data):
-    params = {
-        "dataset": first_present(data, ["dataset"]),
-        "db": first_present(data, ["db"]),
-        "threads": first_present(data, ["threads"]),
-        "batch_size": first_present(data, ["batch_size"]),
-        "query_runs": first_present(data, ["query_runs"]),
-        "query_order": first_present(data, ["query_order"]),
-        "only_query": first_present(data, ["only_query"]),
-        "manual_checks": first_present(data, ["manual_checks"]),
-        "mem_limit": first_present(data, ["mem_limit", "memory_limit"]),
-        "heap_size": first_present(data, ["heap_size"]),
-        "arcadedb_version": first_present(data, ["arcadedb_version"]),
-        "ladybug_version": first_present(data, ["ladybug_version"]),
-        "docker_image": first_present(data, ["docker_image"]),
-        "seed": first_present(data, ["seed"]),
-        "run_label": first_present(data, ["run_label"]),
-    }
-
-    for key in [
-        "mem_limit",
-        "heap_size",
-        "arcadedb_version",
-        "ladybug_version",
-        "docker_image",
-        "query_order",
-        "only_query",
-        "manual_checks",
-    ]:
-        if params.get(key) is None and key in flat_data:
-            params[key] = flat_data.get(key)
-
-    return {k: v for k, v in params.items() if v is not None}
+def parse_threads_from_run_label(run_label):
+    if not run_label:
+        return None
+    match = re.search(r"_t(\d+)_", str(run_label))
+    if not match:
+        return None
+    return to_int(match.group(1))
 
 
-def format_value(value):
-    if isinstance(value, float):
-        return f"{value:.6g}"
+def bytes_to_mib(value):
+    fvalue = to_float(value)
+    if fvalue is None:
+        return None
+    return fvalue / (1024.0 ** 2)
+
+
+def kib_to_mib(value):
+    fvalue = to_float(value)
+    if fvalue is None:
+        return None
+    return fvalue / 1024.0
+
+
+def fmt(value):
     if value is None:
         return ""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:,.3f}".rstrip("0").rstrip(".")
     return str(value)
 
 
-def format_bytes_binary(value):
-    value = float(value)
-    for unit in ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]:
-        if value < 1024.0:
-            return f"{value:.1f}{unit}"
-        value /= 1024.0
-    return f"{value:.1f}EiB"
-
-
-def humanize_metric(metric_name, value):
-    if value is None or not is_number(value):
+def percentile(values, p):
+    if not values:
         return None
-    if metric_name.endswith("_bytes") or metric_name.endswith(".du_bytes"):
-        return format_bytes_binary(value)
-    if metric_name.endswith("_kb"):
-        return format_bytes_binary(value * 1024)
-    return None
+    if len(values) == 1:
+        return values[0]
+    values = sorted(values)
+    k = (len(values) - 1) * p
+    f = int(k)
+    c = min(f + 1, len(values) - 1)
+    if f == c:
+        return values[f]
+    d0 = values[f] * (c - k)
+    d1 = values[c] * (k - f)
+    return d0 + d1
+
+
+def resolve_db_label(db, arcadedb_olap_language, run_label=None):
+    label = str(db or "")
+    run_label_s = str(run_label or "")
+
+    if "_arcadedb_cypher_" in run_label_s:
+        return "arcadedb_cypher"
+
+    if label == "arcadedb":
+        lang = str(arcadedb_olap_language or "").strip().lower()
+        if lang in ("sql", "cypher"):
+            return f"arcadedb_{lang}"
+    return label
 
 
 dataset_slug = dataset_filter.replace("-", "_")
@@ -188,487 +135,314 @@ if label_prefix:
     dir_pattern += f"_{label_prefix}*"
 
 run_dirs = sorted(glob.glob(os.path.join(input_dir, dir_pattern)))
-result_files = []
-for run_dir in run_dirs:
-    result_files.extend(sorted(glob.glob(os.path.join(run_dir, "results_*.json"))))
-
-runs = []
+status_rows = []
+status_by_run = {}
+result_rows = []
 query_rows = []
 
-for result_path in result_files:
-    run_dir = os.path.dirname(result_path)
-    try:
-        with open(result_path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except Exception:
-        continue
-
-    result_dataset = data.get("dataset")
-    run_label = data.get("run_label")
-    if dataset_filter and result_dataset != dataset_filter:
-        continue
-    if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
-        continue
-
-    du_path = os.path.join(run_dir, "disk_usage_du.json")
-    du_bytes = None
-    du_human = ""
-    if os.path.isfile(du_path):
+for run_dir in run_dirs:
+    status_path = os.path.join(run_dir, "run_status.json")
+    status = None
+    if os.path.isfile(status_path):
         try:
-            with open(du_path, "r", encoding="utf-8") as handle:
-                du_data = json.load(handle)
-            du_bytes = du_data.get("du_bytes")
-            du_human = du_data.get("du_human", "")
+            with open(status_path, "r", encoding="utf-8") as f:
+                status = json.load(f)
         except Exception:
-            pass
+            status = None
 
-    flat_run = flatten_dict(data)
-    run_numeric, run_boolean = metric_buckets(flat_run)
-    params = extract_parameters(data, flat_run)
-    if is_number(du_bytes):
-        run_numeric["disk_usage.du_bytes"] = du_bytes
+    if status is not None:
+        status_rows.append(status)
+        run_label = status.get("run_label")
+        if run_label:
+            status_by_run[str(run_label)] = status
 
-    run_row = {
-        "dataset": result_dataset,
-        "db": data.get("db"),
-        "run_label": run_label,
-        "seed": data.get("seed"),
-        "du_bytes": du_bytes,
-        "du_human": du_human,
-        "result_file": os.path.relpath(result_path, input_dir),
-        "numeric_metrics": run_numeric,
-        "boolean_metrics": run_boolean,
-        "parameters": params,
-    }
-    run_human = {}
-    for metric_name, metric_value in run_numeric.items():
-        human = humanize_metric(metric_name, metric_value)
-        if human is not None:
-            run_human[metric_name] = human
-    run_row["human_readable_metrics"] = run_human
-    runs.append(run_row)
+    result_paths = sorted(glob.glob(os.path.join(run_dir, "results_*.json")))
+    if not result_paths:
+        continue
 
-    query_items = data.get("queries")
-    if isinstance(query_items, dict):
-        query_items = query_items.get("items", [])
-    if not isinstance(query_items, list):
-        query_items = []
-
-    for query in query_items:
-        if not isinstance(query, dict):
+    for result_path in result_paths:
+        try:
+            with open(result_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
             continue
-        flat_query = flatten_dict(query)
-        query_numeric, query_boolean = metric_buckets(flat_query)
 
-        query_rows.append(
+        result_dataset = data.get("dataset")
+        run_label = data.get("run_label")
+        if dataset_filter and result_dataset != dataset_filter:
+            continue
+        if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
+            continue
+
+        resolved_db = resolve_db_label(
+            data.get("db"),
+            data.get("arcadedb_olap_language"),
+            data.get("run_label"),
+        )
+
+        status_for_run = status_by_run.get(str(run_label) if run_label else "", {})
+
+        du_path = os.path.join(run_dir, "disk_usage_du.json")
+        du_mib = None
+        if os.path.isfile(du_path):
+            try:
+                with open(du_path, "r", encoding="utf-8") as f:
+                    du_mib = bytes_to_mib((json.load(f) or {}).get("du_bytes"))
+            except Exception:
+                du_mib = None
+
+        result_rows.append(
             {
-                "dataset": result_dataset,
-                "db": data.get("db"),
-                "run_label": run_label,
-                "query_name": query.get("name"),
-                "numeric_metrics": query_numeric,
-                "boolean_metrics": query_boolean,
-                "row_count": query.get("row_count"),
-                "result_hash": query.get("result_hash"),
+                "dataset": data.get("dataset"),
+                "db": resolved_db,
+                "source_db": data.get("db"),
+                "run_label": data.get("run_label"),
+                "seed": first_not_none(
+                    to_int(data.get("seed")),
+                    to_int(status_for_run.get("seed")),
+                ),
+                "threads": to_int(data.get("threads"))
+                or to_int(status_for_run.get("threads"))
+                or parse_threads_from_run_label(data.get("run_label")),
+                "batch_size": to_int(data.get("batch_size")),
+                "query_runs": to_int(data.get("query_runs")),
+                "query_order": data.get("query_order"),
+                "load_time_s": to_float(data.get("load_time_s")),
+                "index_time_s": to_float(data.get("index_time_s")),
+                "query_time_s": to_float(data.get("query_time_s")),
+                "rss_peak_mib": kib_to_mib(data.get("rss_peak_kb")),
+                "du_mib": du_mib,
             }
         )
 
-if not runs:
+        for query in data.get("queries") or []:
+            elapsed_runs_s = query.get("elapsed_runs_s")
+            if isinstance(elapsed_runs_s, list) and elapsed_runs_s:
+                for sample_idx, sample_s in enumerate(elapsed_runs_s, start=1):
+                    sample_s_float = to_float(sample_s)
+                    if sample_s_float is None:
+                        continue
+                    query_rows.append(
+                        {
+                            "dataset": data.get("dataset"),
+                            "db": resolved_db,
+                            "threads": to_int(data.get("threads"))
+                            or to_int(status_for_run.get("threads"))
+                            or parse_threads_from_run_label(data.get("run_label")),
+                            "run_label": data.get("run_label"),
+                            "query_name": query.get("name"),
+                            "run": sample_idx,
+                            "elapsed_ms": sample_s_float * 1000.0,
+                            "row_count": to_int(query.get("row_count")),
+                            "result_hash": query.get("result_hash"),
+                        }
+                    )
+            else:
+                elapsed_s = to_float(query.get("elapsed_s"))
+                query_rows.append(
+                    {
+                        "dataset": data.get("dataset"),
+                        "db": resolved_db,
+                        "threads": to_int(data.get("threads"))
+                        or to_int(status_for_run.get("threads"))
+                        or parse_threads_from_run_label(data.get("run_label")),
+                        "run_label": data.get("run_label"),
+                        "query_name": query.get("name"),
+                        "run": to_int(query.get("run")),
+                        "elapsed_ms": (elapsed_s * 1000.0) if elapsed_s is not None else None,
+                        "row_count": to_int(query.get("row_count")),
+                        "result_hash": query.get("result_hash"),
+                    }
+                )
+
+if not result_rows:
     print("No matching results_*.json files found.", file=sys.stderr)
     sys.exit(2)
 
-runs.sort(key=lambda r: (str(r["dataset"]), str(r["db"]), str(r["run_label"])))
-
-by_db = defaultdict(list)
-for row in runs:
-    by_db[(row["dataset"], row["db"])].append(row)
-
-by_db_rows = []
-for (group_dataset, db), group in sorted(by_db.items()):
-    metric_keys = sorted({k for r in group for k in r.get("numeric_metrics", {}).keys()})
-    bool_metric_keys = sorted({k for r in group for k in r.get("boolean_metrics", {}).keys()})
-
-    numeric_summary = {}
-    for key in metric_keys:
-        values = [
-            r["numeric_metrics"][key]
-            for r in group
-            if key in r.get("numeric_metrics", {}) and is_number(r["numeric_metrics"][key])
-        ]
-        if not values:
-            continue
-        entry = {
-            "count": len(values),
-            "mean": statistics.mean(values),
-            "stddev": statistics.pstdev(values) if len(values) > 1 else 0.0,
-            "min": min(values),
-            "max": max(values),
-        }
-        mean_human = humanize_metric(key, entry["mean"])
-        min_human = humanize_metric(key, entry["min"])
-        max_human = humanize_metric(key, entry["max"])
-        if mean_human is not None:
-            entry["mean_human"] = mean_human
-            entry["min_human"] = min_human
-            entry["max_human"] = max_human
-        numeric_summary[key] = entry
-
-    boolean_summary = {}
-    for key in bool_metric_keys:
-        values = [r["boolean_metrics"][key] for r in group if key in r.get("boolean_metrics", {})]
-        if not values:
-            continue
-        true_count = sum(1 for value in values if value)
-        boolean_summary[key] = {
-            "count": len(values),
-            "true_count": true_count,
-            "false_count": len(values) - true_count,
-            "true_ratio": true_count / len(values),
-        }
-
-    by_db_rows.append(
-        {
-            "dataset": group_dataset,
-            "db": db,
-            "runs": len(group),
-            "numeric_metrics": numeric_summary,
-            "boolean_metrics": boolean_summary,
-        }
+result_rows.sort(key=lambda r: (str(r["dataset"]), str(r["db"]), str(r["run_label"])))
+query_rows.sort(
+    key=lambda r: (
+        str(r["dataset"]),
+        str(r["query_name"]),
+        str(r["db"]),
+        str(r["run_label"]),
+        r["run"] or 0,
     )
+)
 
-by_query_group = defaultdict(list)
+load_col = "load_s"
+index_col = "index_s"
+query_col = "query_s"
+rss_col = "rss_peak_mib"
+du_col = "du_mib"
+
+by_query_db = defaultdict(list)
 for row in query_rows:
-    by_query_group[(row["dataset"], row["db"], row["query_name"])].append(row)
+    by_query_db[(row["dataset"], row["db"], row.get("threads"), row["query_name"])].append(row)
 
-by_query_rows = []
-for (group_dataset, db, query_name), group in sorted(by_query_group.items()):
-    metric_keys = sorted({k for r in group for k in r.get("numeric_metrics", {}).keys()})
-    bool_metric_keys = sorted({k for r in group for k in r.get("boolean_metrics", {}).keys()})
+query_agg_rows = []
+for (dataset_name, db, threads, query_name), rows in sorted(by_query_db.items()):
+    elapsed_vals = [r["elapsed_ms"] for r in rows if r["elapsed_ms"] is not None]
+    row_counts = sorted({r["row_count"] for r in rows if r["row_count"] is not None})
+    hashes = sorted({str(r["result_hash"]) for r in rows if r["result_hash"] is not None})
 
-    numeric_summary = {}
-    for key in metric_keys:
-        values = [
-            r["numeric_metrics"][key]
-            for r in group
-            if key in r.get("numeric_metrics", {}) and is_number(r["numeric_metrics"][key])
-        ]
-        if not values:
-            continue
-        entry = {
-            "count": len(values),
-            "mean": statistics.mean(values),
-            "stddev": statistics.pstdev(values) if len(values) > 1 else 0.0,
-            "min": min(values),
-            "max": max(values),
-        }
-        mean_human = humanize_metric(key, entry["mean"])
-        min_human = humanize_metric(key, entry["min"])
-        max_human = humanize_metric(key, entry["max"])
-        if mean_human is not None:
-            entry["mean_human"] = mean_human
-            entry["min_human"] = min_human
-            entry["max_human"] = max_human
-        numeric_summary[key] = entry
-
-    boolean_summary = {}
-    for key in bool_metric_keys:
-        values = [r["boolean_metrics"][key] for r in group if key in r.get("boolean_metrics", {})]
-        if not values:
-            continue
-        true_count = sum(1 for value in values if value)
-        boolean_summary[key] = {
-            "count": len(values),
-            "true_count": true_count,
-            "false_count": len(values) - true_count,
-            "true_ratio": true_count / len(values),
-        }
-
-    row_counts = sorted({r.get("row_count") for r in group})
-    hashes = sorted({str(r.get("result_hash")) for r in group if r.get("result_hash") is not None})
-
-    by_query_rows.append(
+    query_agg_rows.append(
         {
-            "dataset": group_dataset,
+            "dataset": dataset_name,
             "db": db,
-            "query_name": query_name,
-            "samples": len(group),
-            "numeric_metrics": numeric_summary,
-            "boolean_metrics": boolean_summary,
+            "threads": threads,
+            "query": query_name,
+            "samples": len(rows),
+            "elapsed_mean_ms": statistics.mean(elapsed_vals) if elapsed_vals else None,
+            "elapsed_p95_ms": percentile(elapsed_vals, 0.95) if elapsed_vals else None,
             "row_counts": row_counts,
-            "result_hashes": hashes,
-            "hash_stable": len(hashes) <= 1,
+            "hash_stable_within_db": len(hashes) <= 1,
+            "hashes": hashes,
         }
     )
 
-
-all_dbs = sorted({str(r.get("db")) for r in runs if r.get("db") is not None})
-
-by_query_cross_db_group = defaultdict(list)
+by_query_cross = defaultdict(list)
 for row in query_rows:
-    by_query_cross_db_group[(row["dataset"], row["query_name"])].append(row)
+    by_query_cross[(row["dataset"], row["query_name"])].append(row)
 
-by_query_cross_db_rows = []
-for (group_dataset, query_name), group in sorted(by_query_cross_db_group.items()):
-    db_hashes = {}
-    db_row_counts = {}
+cross_rows = []
+for (dataset_name, query_name), rows in sorted(by_query_cross.items()):
+    db_hashes = defaultdict(set)
+    db_rows = defaultdict(set)
+    for row in rows:
+        if row["db"]:
+            if row["result_hash"] is not None:
+                db_hashes[str(row["db"])].add(str(row["result_hash"]))
+            if row["row_count"] is not None:
+                db_rows[str(row["db"])].add(int(row["row_count"]))
 
-    for db in sorted({str(r.get("db")) for r in group if r.get("db") is not None}):
-        hashes = sorted({
-            str(r.get("result_hash"))
-            for r in group
-            if r.get("db") == db and r.get("result_hash") is not None
-        })
-        row_counts = sorted({
-            r.get("row_count")
-            for r in group
-            if r.get("db") == db
-        })
-        db_hashes[db] = hashes
-        db_row_counts[db] = row_counts
+    all_hashes = sorted({h for hs in db_hashes.values() for h in hs})
+    all_row_counts = sorted({c for cs in db_rows.values() for c in cs})
 
-    hashes_by_db_stable = {
-        db: len(hashes) <= 1
-        for db, hashes in db_hashes.items()
-    }
-
-    row_counts_by_db_stable = {
-        db: len(row_counts) <= 1
-        for db, row_counts in db_row_counts.items()
-    }
-
-    all_hashes = sorted({
-        hash_value
-        for hashes in db_hashes.values()
-        for hash_value in hashes
-    })
-
-    all_row_counts = sorted({
-        row_count
-        for row_counts in db_row_counts.values()
-        for row_count in row_counts
-    })
-
-    present_dbs = sorted(db_hashes.keys())
-    missing_dbs = sorted(set(all_dbs) - set(present_dbs))
-
-    hash_equal_across_dbs = len(all_hashes) <= 1 and len(missing_dbs) == 0
-    row_counts_equal_across_dbs = len(all_row_counts) <= 1 and len(missing_dbs) == 0
-
-    by_query_cross_db_rows.append(
+    cross_rows.append(
         {
-            "dataset": group_dataset,
-            "query_name": query_name,
-            "samples": len(group),
-            "dbs_present": present_dbs,
-            "dbs_missing": missing_dbs,
-            "db_hashes": db_hashes,
-            "db_row_counts": db_row_counts,
-            "hashes_by_db_stable": hashes_by_db_stable,
-            "row_counts_by_db_stable": row_counts_by_db_stable,
+            "dataset": dataset_name,
+            "query": query_name,
+            "dbs": sorted(set(list(db_hashes.keys()) + list(db_rows.keys()))),
+            "hash_equal_across_dbs": len(all_hashes) <= 1,
+            "row_counts_equal_across_dbs": len(all_row_counts) <= 1,
+            "all_values_equal_across_dbs": len(all_hashes) <= 1 and len(all_row_counts) <= 1,
             "all_hashes": all_hashes,
             "all_row_counts": all_row_counts,
-            "hash_equal_across_dbs": hash_equal_across_dbs,
-            "row_counts_equal_across_dbs": row_counts_equal_across_dbs,
-            "all_values_equal_across_dbs": hash_equal_across_dbs and row_counts_equal_across_dbs,
         }
     )
 
-cross_db_parity = {
-    "enabled": True,
-    "dbs_expected": all_dbs,
-    "queries_compared": len(by_query_cross_db_rows),
-    "mismatch_count": sum(
-        1
-        for row in by_query_cross_db_rows
-        if not row.get("all_values_equal_across_dbs")
-    ),
-    "all_queries_match": all(
-        row.get("all_values_equal_across_dbs")
-        for row in by_query_cross_db_rows
-    ) if by_query_cross_db_rows else True,
-}
-
-all_numeric_metric_keys = sorted({
-    key
-    for row in runs
-    for key in row.get("numeric_metrics", {}).keys()
-})
-
-all_boolean_metric_keys = sorted({
-    key
-    for row in runs
-    for key in row.get("boolean_metrics", {}).keys()
-})
-
-all_parameter_keys = sorted({
-    key
-    for row in runs
-    for key in row.get("parameters", {}).keys()
-})
-
-parameters_detected = {}
-for key in all_parameter_keys:
-    values = sorted({str(row.get("parameters", {}).get(key)) for row in runs if key in row.get("parameters", {})})
-    parameters_detected[key] = values
-
-query_numeric_metric_keys = sorted({
-    key
-    for row in query_rows
-    for key in row.get("numeric_metrics", {}).keys()
-})
-
-query_boolean_metric_keys = sorted({
-    key
-    for row in query_rows
-    for key in row.get("boolean_metrics", {}).keys()
-})
-
-dataset_size_profile = dataset_filter.split("-")[-1] if dataset_filter and "-" in dataset_filter else (dataset_filter or "all")
-
-summary = {
-    "meta": {
-        "name": "10 graph OLAP matrix summary",
-        "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "input_dir": input_dir,
-        "dataset": dataset_label,
-        "dataset_size_profile": dataset_size_profile,
-        "dataset_size_source": "dataset name suffix",
-        "label_prefix": label_prefix,
-        "total_runs": len(runs),
-        "datasets_found": sorted({str(r["dataset"]) for r in runs}),
-        "query_samples": len(query_rows),
-    },
-    "parameter_keys": all_parameter_keys,
-    "parameters_detected": parameters_detected,
-    "numeric_metric_keys": all_numeric_metric_keys,
-    "boolean_metric_keys": all_boolean_metric_keys,
-    "query_numeric_metric_keys": query_numeric_metric_keys,
-    "query_boolean_metric_keys": query_boolean_metric_keys,
-    "cross_db_parity": cross_db_parity,
-    "run_fields": [
-        "dataset", "db", "run_label", "seed", "du_bytes", "du_human", "result_file",
-        "numeric_metrics", "human_readable_metrics", "boolean_metrics", "parameters",
-    ],
-    "runs": runs,
-    "by_db": by_db_rows,
-    "by_query": by_query_rows,
-    "by_query_cross_db": by_query_cross_db_rows,
-}
-
-with open(summary_json, "w", encoding="utf-8") as handle:
-    json.dump(summary, handle, indent=2)
+dataset_size_profile = (
+    dataset_filter.split("-")[-1]
+    if dataset_filter and "-" in dataset_filter
+    else (dataset_filter or "all")
+)
+generated_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 lines = []
-lines.append("# 10 Graph OLAP Matrix Summary")
+title_suffix = dataset_filter if dataset_filter else "All Dataset Sizes"
+lines.append(f"# 10 Graph OLAP Matrix Summary — {title_suffix}")
 lines.append("")
-lines.append(f"- Generated (UTC): {summary['meta']['generated_at_utc']}")
+lines.append(f"- Generated (UTC): {generated_at_utc}")
 lines.append(f"- Dataset: {dataset_label}")
 lines.append(f"- Dataset size profile: {dataset_size_profile}")
 lines.append(f"- Label prefix: {label_prefix}")
-lines.append(f"- Total runs: {len(runs)}")
-lines.append(f"- Query samples: {len(query_rows)}")
-lines.append(f"- Cross-DB parity: {cross_db_parity['all_queries_match']}")
+lines.append(f"- Total result files: {len(result_rows)}")
+lines.append(
+    "- Note: `load_*` is ingest only, `index_*` is post-ingest index build, and `query_*` is OLAP query-suite execution."
+)
+lines.append("- DB summary timing/memory/disk columns are single-run values (no averaging).")
+lines.append("- Query parity is evaluated via `result_hash` and `row_count` across DBs.")
 lines.append("")
 
-lines.append("## Parameters Used")
-lines.append("")
-lines.append("| Parameter | Values |")
-lines.append("|---|---|")
-for key in all_parameter_keys:
-    values = ", ".join(parameters_detected.get(key, []))
-    lines.append(f"| {key} | {values} |")
-lines.append("")
-
-lines.append("## Aggregated Metrics by DB")
-lines.append("")
-for entry in by_db_rows:
-    lines.append(f"### DB: {entry['db']} (runs={entry['runs']})")
+datasets = sorted({str(row.get("dataset") or "") for row in result_rows})
+for current_dataset in datasets:
+    lines.append(f"## Dataset: {current_dataset}")
     lines.append("")
 
-    lines.append("#### Numeric Metrics")
+    lines.append("### DB summary")
     lines.append("")
-    lines.append("| Metric | Count | Mean | Mean (Human) | Stddev | Min | Max |")
-    lines.append("|---|---:|---:|---|---:|---:|---:|")
-    for metric_name in sorted(entry.get("numeric_metrics", {}).keys()):
-        metric = entry["numeric_metrics"][metric_name]
-        lines.append(
-            f"| {metric_name} | {metric.get('count','')} | {format_value(metric.get('mean'))} | {metric.get('mean_human','')} | {format_value(metric.get('stddev'))} | {format_value(metric.get('min'))} | {format_value(metric.get('max'))} |"
-        )
-    lines.append("")
-
-    lines.append("#### Boolean Metrics")
-    lines.append("")
-    lines.append("| Metric | Count | True | False | True Ratio |")
-    lines.append("|---|---:|---:|---:|---:|")
-    for metric_name in sorted(entry.get("boolean_metrics", {}).keys()):
-        metric = entry["boolean_metrics"][metric_name]
-        lines.append(
-            f"| {metric_name} | {metric.get('count','')} | {metric.get('true_count','')} | {metric.get('false_count','')} | {format_value(metric.get('true_ratio'))} |"
-        )
-    lines.append("")
-
-lines.append("## Aggregated Query Metrics")
-lines.append("")
-for entry in by_query_rows:
-    lines.append(f"### DB: {entry['db']} | Query: {entry['query_name']} (samples={entry['samples']})")
-    lines.append("")
-    lines.append(f"- Row counts: {', '.join(str(v) for v in entry.get('row_counts', []))}")
-    lines.append(f"- Hash stable: {entry.get('hash_stable')}")
-    lines.append("")
-
-    lines.append("#### Numeric Metrics")
-    lines.append("")
-    lines.append("| Metric | Count | Mean | Mean (Human) | Stddev | Min | Max |")
-    lines.append("|---|---:|---:|---|---:|---:|---:|")
-    for metric_name in sorted(entry.get("numeric_metrics", {}).keys()):
-        metric = entry["numeric_metrics"][metric_name]
-        lines.append(
-            f"| {metric_name} | {metric.get('count','')} | {format_value(metric.get('mean'))} | {metric.get('mean_human','')} | {format_value(metric.get('stddev'))} | {format_value(metric.get('min'))} | {format_value(metric.get('max'))} |"
-        )
-    lines.append("")
-
-    lines.append("#### Boolean Metrics")
-    lines.append("")
-    lines.append("| Metric | Count | True | False | True Ratio |")
-    lines.append("|---|---:|---:|---:|---:|")
-    for metric_name in sorted(entry.get("boolean_metrics", {}).keys()):
-        metric = entry["boolean_metrics"][metric_name]
-        lines.append(
-            f"| {metric_name} | {metric.get('count','')} | {metric.get('true_count','')} | {metric.get('false_count','')} | {format_value(metric.get('true_ratio'))} |"
-        )
-    lines.append("")
-
-lines.append("## Cross-DB Query Result Checks")
-lines.append("")
-lines.append("| Query | Samples | DBs Present | DBs Missing | Hash Equal Across DBs | Row Counts Equal Across DBs | All Values Equal Across DBs |")
-lines.append("|---|---:|---|---|---|---|---|")
-for entry in by_query_cross_db_rows:
-    dbs_present = ", ".join(entry.get("dbs_present", []))
-    dbs_missing = ", ".join(entry.get("dbs_missing", []))
     lines.append(
-        f"| {entry.get('query_name','')} | {entry.get('samples','')} | {dbs_present} | {dbs_missing} | {entry.get('hash_equal_across_dbs')} | {entry.get('row_counts_equal_across_dbs')} | {entry.get('all_values_equal_across_dbs')} |"
+        f"| db | run_label | seed | threads | query_runs | query_order | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
     )
-lines.append("")
-
-for entry in by_query_cross_db_rows:
-    lines.append(f"### {entry.get('query_name','')}")
+    lines.append("|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|")
+    for row in result_rows:
+        if str(row["dataset"] or "") != current_dataset:
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    fmt(row["db"]),
+                    fmt(row["run_label"]),
+                    fmt(row["seed"]),
+                    fmt(row["threads"]),
+                    fmt(row["query_runs"]),
+                    fmt(row["query_order"]),
+                    fmt(row["load_time_s"]),
+                    fmt(row["index_time_s"]),
+                    fmt(row["query_time_s"]),
+                    fmt(row["rss_peak_mib"]),
+                    fmt(row["du_mib"]),
+                ]
+            )
+            + " |"
+        )
     lines.append("")
-    lines.append("| DB | Hashes | Row Counts | Hash Stable Within DB | Row Count Stable Within DB |")
+
+    lines.append("### Per-query latency (aggregated)")
+    lines.append("")
+    lines.append(
+        "| db | threads | query | samples | elapsed_mean_ms | elapsed_p95_ms | row_counts | hash_stable_within_db |"
+    )
+    lines.append("|---|---:|---|---:|---:|---:|---|---|")
+    for row in query_agg_rows:
+        if str(row["dataset"] or "") != current_dataset:
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    fmt(row["db"]),
+                    fmt(row["threads"]),
+                    fmt(row["query"]),
+                    fmt(row["samples"]),
+                    fmt(row["elapsed_mean_ms"]),
+                    fmt(row["elapsed_p95_ms"]),
+                    fmt(", ".join(str(v) for v in row["row_counts"])),
+                    fmt(row["hash_stable_within_db"]),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+
+    lines.append("### Cross-DB query parity checks")
+    lines.append("")
+    lines.append(
+        "| query | dbs | hash_equal_across_dbs | row_counts_equal_across_dbs | all_values_equal_across_dbs |"
+    )
     lines.append("|---|---|---|---|---|")
-    for db in sorted(entry.get("db_hashes", {}).keys()):
-        db_hashes = ", ".join(entry["db_hashes"].get(db, []))
-        db_row_counts = ", ".join(str(value) for value in entry["db_row_counts"].get(db, []))
-        hash_stable = entry.get("hashes_by_db_stable", {}).get(db)
-        row_count_stable = entry.get("row_counts_by_db_stable", {}).get(db)
-        lines.append(f"| {db} | {db_hashes} | {db_row_counts} | {hash_stable} | {row_count_stable} |")
+    for row in cross_rows:
+        if str(row["dataset"] or "") != current_dataset:
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    fmt(row["query"]),
+                    fmt(", ".join(row["dbs"])),
+                    fmt(row["hash_equal_across_dbs"]),
+                    fmt(row["row_counts_equal_across_dbs"]),
+                    fmt(row["all_values_equal_across_dbs"]),
+                ]
+            )
+            + " |"
+        )
     lines.append("")
 
-with open(summary_md, "w", encoding="utf-8") as handle:
-    handle.write("\n".join(lines) + "\n")
+with open(summary_md, "w", encoding="utf-8") as f:
+    f.write("\n".join(lines) + "\n")
 
-print(f"Wrote: {summary_json}")
 print(f"Wrote: {summary_md}")
 PY
-
-echo
-echo "Summary file generated in: $OUTPUT_DIR"

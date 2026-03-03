@@ -7,6 +7,8 @@ Backends:
 - pgvector (PostgreSQL + pgvector extension)
 - qdrant (client-server via Docker)
 - milvus (client-server via Docker Compose)
+- faiss (in-process index)
+- lancedb (local LanceDB)
 
 Datasets:
 - MSMARCO: data/MSMARCO-*/
@@ -453,6 +455,101 @@ def create_index_arcadedb(
         store_vectors_in_graph=store_vectors_in_graph,
         add_hierarchy=add_hierarchy,
         build_graph_now=True,
+    )
+
+
+def create_index_faiss(dim: int, max_connections: int, beam_width: int):
+    import faiss
+
+    index_hnsw = faiss.IndexHNSWFlat(
+        int(dim),
+        int(max_connections),
+        faiss.METRIC_INNER_PRODUCT,
+    )
+    index_hnsw.hnsw.efConstruction = int(beam_width)
+    return faiss.IndexIDMap2(index_hnsw)
+
+
+def ingest_vectors_faiss(
+    index,
+    sources: List[dict],
+    dim: int,
+    count: int,
+    batch_size: int,
+) -> int:
+    import faiss
+
+    ingested = 0
+    for base_id, batch in stream_shards(
+        sources,
+        dim=dim,
+        batch_size=batch_size,
+        max_rows=count,
+    ):
+        vectors = np.ascontiguousarray(batch.astype("float32", copy=True))
+        faiss.normalize_L2(vectors)
+        ids = np.arange(base_id, base_id + vectors.shape[0], dtype=np.int64)
+        index.add_with_ids(vectors, ids)
+        ingested += int(vectors.shape[0])
+    return ingested
+
+
+def persist_faiss_index(index, db_path: Path) -> Path:
+    import faiss
+
+    index_path = db_path / "faiss.index"
+    faiss.write_index(index, str(index_path))
+    return index_path
+
+
+def ingest_vectors_lancedb(
+    db,
+    table_name: str,
+    sources: List[dict],
+    dim: int,
+    count: int,
+    batch_size: int,
+):
+    table = None
+    ingested = 0
+    for base_id, batch in stream_shards(
+        sources,
+        dim=dim,
+        batch_size=batch_size,
+        max_rows=count,
+    ):
+        rows = [
+            {"id": int(idx), "vector": vec.tolist()}
+            for idx, vec in enumerate(batch, start=base_id)
+        ]
+        if not rows:
+            continue
+        if table is None:
+            table = db.create_table(table_name, rows, mode="overwrite")
+        else:
+            table.add(rows)
+        ingested += len(rows)
+    if table is None:
+        table = db.create_table(
+            table_name, [{"id": 0, "vector": [0.0] * dim}], mode="overwrite"
+        )
+        table.delete("id = 0")
+    return table, ingested
+
+
+def create_index_lancedb(
+    table,
+    max_connections: int,
+    beam_width: int,
+) -> None:
+    partitions = max(1, min(256, int(max_connections) * 8))
+    table.create_index(
+        metric="cosine",
+        vector_column_name="vector",
+        index_type="IVF_HNSW_SQ",
+        num_partitions=partitions,
+        m=int(max_connections),
+        ef_construction=int(beam_width),
     )
 
 
@@ -1329,6 +1426,30 @@ def run_in_docker(args) -> bool:
             ]
         )
         run_user_args = ["-u", user_spec]
+    elif args.backend == "faiss":
+        inner_cmd = " && ".join(
+            [
+                "python -m venv /tmp/bench-venv",
+                ". /tmp/bench-venv/bin/activate",
+                "python -m pip install --no-cache-dir uv",
+                f"uv pip install faiss-cpu=={args.faiss_version} numpy psutil",
+                "echo 'Starting vector build benchmark...'",
+                f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
+            ]
+        )
+        run_user_args = ["-u", user_spec]
+    elif args.backend == "lancedb":
+        inner_cmd = " && ".join(
+            [
+                "python -m venv /tmp/bench-venv",
+                ". /tmp/bench-venv/bin/activate",
+                "python -m pip install --no-cache-dir uv",
+                f"uv pip install lancedb=={args.lancedb_version} numpy psutil",
+                "echo 'Starting vector build benchmark...'",
+                f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
+            ]
+        )
+        run_user_args = ["-u", user_spec]
     elif args.backend == "qdrant":
         inner_cmd = " && ".join(
             [
@@ -1455,6 +1576,8 @@ def collect_runtime_metadata(
         "docker_version": get_docker_version(),
         "backend": args.backend,
         "arcadedb_requested_version": args.arcadedb_version,
+        "faiss_requested_version": args.faiss_version,
+        "lancedb_requested_version": args.lancedb_version,
         "runtime_versions": runtime_versions,
         "is_running_in_docker": is_running_in_docker(),
     }
@@ -1466,7 +1589,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=["arcadedb", "pgvector", "qdrant", "milvus"],
+        choices=["arcadedb", "pgvector", "qdrant", "milvus", "faiss", "lancedb"],
         default="arcadedb",
         help="Vector backend (default: arcadedb)",
     )
@@ -1545,7 +1668,9 @@ def main() -> None:
         help="JVM heap fraction of --mem-limit (default: 0.80)",
     )
     parser.add_argument("--jvm-args", default=None)
-    parser.add_argument("--arcadedb-version", type=str, default="26.2.1")
+    parser.add_argument("--arcadedb-version", type=str, default="26.3.1.dev1")
+    parser.add_argument("--faiss-version", type=str, default="1.13.2")
+    parser.add_argument("--lancedb-version", type=str, default="0.29.2")
     parser.add_argument(
         "--docker-image",
         type=str,
@@ -1685,9 +1810,15 @@ def main() -> None:
             lambda: arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs),
         )
         record("create_db", {"db_path": str(db_path)}, dur, r0, r1)
+        db.set_read_your_writes(False)
+        async_exec = db.async_executor()
+        async_exec.set_commit_every(max(1, args.batch_size))
+        async_exec.set_transaction_use_wal(False)
 
         try:
             to_java_float_array = getattr(arcadedb, "to_java_float_array", None)
+            ingest_started_at = datetime.now(timezone.utc).isoformat()
+            print(f"Ingest start (arcadedb, UTC): {ingest_started_at}")
             (ingested, dur, r0, r1) = timed_section(
                 "ingest",
                 lambda: ingest_vectors_arcadedb(
@@ -1698,6 +1829,11 @@ def main() -> None:
                     batch_size=args.batch_size,
                     to_java_float_array=to_java_float_array,
                 ),
+            )
+            ingest_ended_at = datetime.now(timezone.utc).isoformat()
+            print(
+                f"Ingest end   (arcadedb, UTC): {ingest_ended_at} "
+                f"(elapsed={dur:.2f}s)"
             )
             record("ingest", {"ingested": int(ingested)}, dur, r0, r1)
 
@@ -1715,6 +1851,10 @@ def main() -> None:
             )
             record("create_index", {}, dur, r0, r1)
         finally:
+            async_exec.wait_completion()
+            async_exec.close()
+            db.set_read_your_writes(True)
+            async_exec.set_transaction_use_wal(True)
             try:
                 (_, dur, r0, r1) = timed_section("close_db", db.close)
                 record("close_db", {}, dur, r0, r1)
@@ -1726,6 +1866,111 @@ def main() -> None:
 
         runtime_versions["arcadedb"] = getattr(arcadedb, "__version__", None)
         runtime_versions["postgres"] = None
+        runtime_versions["faiss"] = None
+        runtime_versions["lancedb"] = None
+
+    elif args.backend == "faiss":
+        import faiss
+
+        stop_cpu = start_cpu_logger(2)
+
+        (index, dur, r0, r1) = timed_section(
+            "create_db",
+            lambda: {"index": None},
+        )
+        record("create_db", {"db_path": str(db_path)}, dur, r0, r1)
+
+        try:
+            (index_obj, dur, r0, r1) = timed_section(
+                "create_index",
+                lambda: create_index_faiss(
+                    dim=dim,
+                    max_connections=args.max_connections,
+                    beam_width=args.beam_width,
+                ),
+            )
+            record("create_index", {}, dur, r0, r1)
+
+            (ingested, dur, r0, r1) = timed_section(
+                "ingest",
+                lambda: ingest_vectors_faiss(
+                    index=index_obj,
+                    sources=sources,
+                    dim=dim,
+                    count=count,
+                    batch_size=args.batch_size,
+                ),
+            )
+            record("ingest", {"ingested": int(ingested)}, dur, r0, r1)
+
+            (_, dur, r0, r1) = timed_section(
+                "close_db",
+                lambda: persist_faiss_index(index_obj, db_path),
+            )
+            record("close_db", {}, dur, r0, r1)
+        finally:
+            if stop_cpu is not None:
+                stop_cpu.set()
+
+        runtime_versions["faiss"] = getattr(faiss, "__version__", None)
+        runtime_versions["arcadedb"] = None
+        runtime_versions["postgres"] = None
+        runtime_versions["qdrant"] = None
+        runtime_versions["milvus"] = None
+        runtime_versions["lancedb"] = None
+
+    elif args.backend == "lancedb":
+        import lancedb
+
+        stop_cpu = start_cpu_logger(2)
+
+        (db, dur, r0, r1) = timed_section(
+            "create_db",
+            lambda: lancedb.connect(str(db_path / "lancedb-data")),
+        )
+        record("create_db", {"db_path": str(db_path)}, dur, r0, r1)
+
+        table_name = "vectordata"
+        try:
+            ((table, ingested), dur, r0, r1) = timed_section(
+                "ingest",
+                lambda: ingest_vectors_lancedb(
+                    db=db,
+                    table_name=table_name,
+                    sources=sources,
+                    dim=dim,
+                    count=count,
+                    batch_size=args.batch_size,
+                ),
+            )
+            record("ingest", {"ingested": int(ingested)}, dur, r0, r1)
+
+            (_, dur, r0, r1) = timed_section(
+                "create_index",
+                lambda: create_index_lancedb(
+                    table,
+                    max_connections=args.max_connections,
+                    beam_width=args.beam_width,
+                ),
+            )
+            record("create_index", {}, dur, r0, r1)
+
+            close_db_fn = getattr(db, "close", None)
+            (_, dur, r0, r1) = timed_section(
+                "close_db",
+                lambda: close_db_fn() if callable(close_db_fn) else None,
+            )
+            record("close_db", {}, dur, r0, r1)
+        finally:
+            if stop_cpu is not None:
+                stop_cpu.set()
+
+        runtime_versions["lancedb"] = getattr(lancedb, "__version__", None)
+        runtime_versions["arcadedb"] = None
+        runtime_versions["postgres"] = None
+        runtime_versions["qdrant"] = None
+        runtime_versions["milvus"] = None
+        runtime_versions["faiss"] = None
 
     elif args.backend == "qdrant":
         from qdrant_client import QdrantClient
@@ -1792,6 +2037,8 @@ def main() -> None:
             runtime_versions["qdrant"] = get_qdrant_version(client)
             runtime_versions["arcadedb"] = None
             runtime_versions["postgres"] = None
+            runtime_versions["faiss"] = None
+            runtime_versions["lancedb"] = None
         finally:
             try:
                 (_, dur, r0, r1) = timed_section(
@@ -1908,6 +2155,8 @@ def main() -> None:
             runtime_versions["arcadedb"] = None
             runtime_versions["postgres"] = None
             runtime_versions["qdrant"] = None
+            runtime_versions["faiss"] = None
+            runtime_versions["lancedb"] = None
         finally:
             try:
                 (_, dur, r0, r1) = timed_section(
@@ -1997,6 +2246,8 @@ def main() -> None:
             runtime_versions["arcadedb"] = None
             runtime_versions["qdrant"] = None
             runtime_versions["milvus"] = None
+            runtime_versions["faiss"] = None
+            runtime_versions["lancedb"] = None
         finally:
             if conn is not None:
                 try:
@@ -2018,6 +2269,10 @@ def main() -> None:
         runtime_versions["qdrant"] = None
     if "milvus" not in runtime_versions:
         runtime_versions["milvus"] = None
+    if "faiss" not in runtime_versions:
+        runtime_versions["faiss"] = None
+    if "lancedb" not in runtime_versions:
+        runtime_versions["lancedb"] = None
 
     rss_after_vals = [
         phase.get("rss_after_mb")
@@ -2088,6 +2343,22 @@ def main() -> None:
                 "compose_version": args.milvus_compose_version,
                 "compose_file": str(db_path / "milvus-compose" / "docker-compose.yml"),
                 "collection": args.milvus_collection,
+                "hnsw_m": args.max_connections,
+                "hnsw_ef_construct": args.beam_width,
+            },
+            "faiss": {
+                "index_file": str(db_path / "faiss.index"),
+                "requested_version": args.faiss_version,
+                "metric": "cosine_via_inner_product_normalized",
+                "hnsw_m": args.max_connections,
+                "hnsw_ef_construct": args.beam_width,
+            },
+            "lancedb": {
+                "data_dir": str(db_path / "lancedb-data"),
+                "table": "vectordata",
+                "requested_version": args.lancedb_version,
+                "metric": "cosine",
+                "index_type": "IVF_HNSW_SQ",
                 "hnsw_m": args.max_connections,
                 "hnsw_ef_construct": args.beam_width,
             },

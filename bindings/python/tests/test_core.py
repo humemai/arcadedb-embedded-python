@@ -363,7 +363,7 @@ def test_graph_operations(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph schema
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE Knows")
+        db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
 
         # Create vertices using SQL
         with db.transaction():
@@ -446,7 +446,7 @@ def test_opencypher_queries(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph schema
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE FRIEND_OF")
+        db.command("sql", "CREATE EDGE TYPE FRIEND_OF UNIDIRECTIONAL")
 
         # Insert data using OpenCypher (if available)
         try:
@@ -541,7 +541,7 @@ def test_schema_queries(temp_db_path):
         db.command("sql", "CREATE VERTEX TYPE Company")
         db.command("sql", "CREATE PROPERTY Company.name STRING")
 
-        db.command("sql", "CREATE EDGE TYPE WorksFor")
+        db.command("sql", "CREATE EDGE TYPE WorksFor UNIDIRECTIONAL")
 
         # Query schema:types to get type information
         result = db.query("sql", "SELECT FROM schema:types WHERE name = 'Person'")
@@ -677,8 +677,8 @@ def test_complex_graph_traversal(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create social network graph
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE Follows")
-        db.command("sql", "CREATE EDGE TYPE Likes")
+        db.command("sql", "CREATE EDGE TYPE Follows UNIDIRECTIONAL")
+        db.command("sql", "CREATE EDGE TYPE Likes UNIDIRECTIONAL")
 
         # Create vertices using SQL
         with db.transaction():
@@ -732,19 +732,21 @@ def test_complex_graph_traversal(temp_db_path):
         names = [r.get("value") for r in result]
         assert "Diana" in names
 
-        # Test: Find who follows Bob
+        # Test: Find who Bob follows
         result = db.query(
-            "sql", "SELECT expand(in('Follows').name) FROM Person " "WHERE name = 'Bob'"
+            "sql",
+            "SELECT expand(out('Follows').name) FROM Person " "WHERE name = 'Bob'",
         )
         names = [r.get("value") for r in result]
-        assert "Alice" in names
+        assert "Diana" in names
 
-        # Test: Mixed edge types
+        # Test: Mixed edge types with direction-aware traversal
         result = db.query(
-            "sql", "SELECT expand(in('Likes').name) FROM Person " "WHERE name = 'Bob'"
+            "sql",
+            "SELECT expand(out('Likes').name) FROM Person " "WHERE name = 'Charlie'",
         )
         names = [r.get("value") for r in result]
-        assert "Charlie" in names
+        assert "Bob" in names
 
 
 def test_lookup_by_rid(temp_db_path):

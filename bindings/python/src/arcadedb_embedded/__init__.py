@@ -11,9 +11,6 @@ from ._version import __version__
 # Import async execution
 from .async_executor import AsyncExecutor
 
-# Import batch processing
-from .batch import BatchContext
-
 # Import citation helper
 from .citation import cite
 
@@ -77,8 +74,6 @@ __all__ = [
     "TransactionContext",
     # Async execution
     "AsyncExecutor",
-    # Batch processing
-    "BatchContext",
     # Type conversion
     "convert_java_to_python",
     "convert_python_to_java",
