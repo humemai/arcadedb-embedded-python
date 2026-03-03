@@ -206,6 +206,7 @@ EXPECTED_DATASETS = {
 }
 
 DEFAULT_OLTP_MIX = {"read": 0.60, "update": 0.20, "insert": 0.10, "delete": 0.10}
+SQLITE_PROFILE_CHOICES = ["fair", "perf", "olap"]
 
 
 def build_benchmark_db_name(dataset: str, db: str, run_label: Optional[str]) -> str:
@@ -527,6 +528,10 @@ def create_schema_arcadedb(db):
             db.command(
                 "sql", f"CREATE PROPERTY {table['name']}.{field_name} {arc_type}"
             )
+
+
+def create_arcadedb_id_indexes(db):
+    for table in TABLE_DEFS:
         db.command("sql", f"CREATE INDEX ON {table['name']} (Id) UNIQUE")
 
 
@@ -535,15 +540,16 @@ def create_schema_sqlite(conn: sqlite3.Connection):
         cols = []
         for field_name, field_type, _ in table["fields"]:
             col_type = sqlite_type(field_type)
-            if field_name == "Id":
-                cols.append(f'"{field_name}" {col_type} PRIMARY KEY')
-            else:
-                cols.append(f'"{field_name}" {col_type}')
+            cols.append(f'"{field_name}" {col_type}')
         conn.execute(
             f'CREATE TABLE IF NOT EXISTS "{table["name"]}" ({", ".join(cols)})'
         )
+
+
+def create_sqlite_id_indexes(conn: sqlite3.Connection):
+    for table in TABLE_DEFS:
         conn.execute(
-            f'CREATE INDEX IF NOT EXISTS idx_{table["name"].lower()}_id ON "{table["name"]}"("Id")'
+            f'CREATE UNIQUE INDEX IF NOT EXISTS idx_{table["name"].lower()}_id ON "{table["name"]}"("Id")'
         )
 
 
@@ -552,10 +558,7 @@ def create_schema_duckdb(conn):
         cols = []
         for field_name, field_type, _ in table["fields"]:
             col_type = duckdb_type(field_type)
-            if field_name == "Id":
-                cols.append(f'"{field_name}" {col_type} PRIMARY KEY')
-            else:
-                cols.append(f'"{field_name}" {col_type}')
+            cols.append(f'"{field_name}" {col_type}')
         conn.execute(
             f'CREATE TABLE IF NOT EXISTS "{table["name"]}" ({", ".join(cols)})'
         )
@@ -573,15 +576,16 @@ def create_schema_postgresql(conn):
         cols = []
         for field_name, field_type, _ in table["fields"]:
             col_type = postgres_type(field_type)
-            if field_name == "Id":
-                cols.append(f"{quote_ident_pg(field_name)} {col_type} PRIMARY KEY")
-            else:
-                cols.append(f"{quote_ident_pg(field_name)} {col_type}")
+            cols.append(f"{quote_ident_pg(field_name)} {col_type}")
         conn.execute(
             f"CREATE TABLE IF NOT EXISTS {quote_ident_pg(table['name'])} ({', '.join(cols)})"
         )
+
+
+def create_postgresql_id_indexes(conn):
+    for table in TABLE_DEFS:
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS "
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
             f"idx_{table['name'].lower()}_id ON {quote_ident_pg(table['name'])} ({quote_ident_pg('Id')})"
         )
 
@@ -674,6 +678,16 @@ def to_duckdb_csv_value(field_type: str, value: Any) -> Any:
         return serialize_datetime(value) if isinstance(value, datetime) else value
     if field_type == "BOOLEAN":
         return "true" if bool(value) else "false"
+    return value
+
+
+def to_arcadedb_csv_value(field_type: str, value: Any) -> Any:
+    if value is None:
+        return None
+    if field_type == "DATETIME":
+        return serialize_datetime(value) if isinstance(value, datetime) else value
+    if field_type == "BOOLEAN":
+        return "1" if bool(value) else "0"
     return value
 
 
@@ -774,13 +788,132 @@ def load_tables_duckdb_copy(
     return id_pools, next_ids, time.time() - start
 
 
-def choose_ops(count: int, mix: Dict[str, float], seed: int) -> List[str]:
+def to_postgres_csv_value(field_type: str, value: Any) -> Any:
+    if value is None:
+        return None
+    if field_type == "DATETIME":
+        return serialize_datetime(value) if isinstance(value, datetime) else value
+    if field_type == "BOOLEAN":
+        return "true" if bool(value) else "false"
+    return value
+
+
+def load_tables_postgresql_copy(
+    conn,
+    data_dir: Path,
+    db_dir: Path,
+) -> Tuple[Dict[str, List[int]], Dict[str, int], float]:
+    id_pools: Dict[str, List[int]] = {table["name"]: [] for table in TABLE_DEFS}
+    next_ids: Dict[str, int] = {table["name"]: 1 for table in TABLE_DEFS}
+
+    csv_dir = db_dir / "postgres_csv_bulk"
+    if csv_dir.exists():
+        shutil.rmtree(csv_dir)
+    csv_dir.mkdir(parents=True, exist_ok=True)
+
+    start = time.time()
+    for table in TABLE_DEFS:
+        table_name = table["name"]
+        xml_path = data_dir / table["xml"]
+        if not xml_path.exists():
+            raise FileNotFoundError(f"Missing XML file: {xml_path}")
+
+        csv_path = csv_dir / f"{table_name}.csv"
+        field_names = [field[0] for field in table["fields"]]
+
+        max_id = 0
+        row_count = 0
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=field_names)
+            writer.writeheader()
+
+            for attrs in iter_xml_rows(xml_path):
+                row = parse_row(attrs, table)
+                if row is None:
+                    continue
+
+                row_id = int(row["Id"])
+                id_pools[table_name].append(row_id)
+                if row_id > max_id:
+                    max_id = row_id
+
+                payload = {}
+                for field_name, field_type, _ in table["fields"]:
+                    payload[field_name] = to_postgres_csv_value(
+                        field_type,
+                        row.get(field_name),
+                    )
+                writer.writerow(payload)
+                row_count += 1
+
+        columns_sql = ", ".join(quote_ident_pg(name) for name in field_names)
+        copy_sql = (
+            f"COPY {quote_ident_pg(table_name)} ({columns_sql}) "
+            "FROM STDIN WITH (FORMAT CSV, HEADER TRUE)"
+        )
+        print(f"  COPY {table_name}: {row_count:,} rows")
+        with conn.cursor() as cur:
+            with cur.copy(copy_sql) as copy:
+                with csv_path.open("r", encoding="utf-8") as source:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        copy.write(chunk)
+
+        next_ids[table_name] = max_id + 1
+
+    return id_pools, next_ids, time.time() - start
+
+
+def build_operation_plan(
+    count: int,
+    mix: Dict[str, float],
+    seed: int,
+    table_names: List[str],
+) -> List[Tuple[str, str]]:
     rng = random.Random(seed)
-    return rng.choices(
+    ops = rng.choices(
         population=["read", "update", "insert", "delete"],
         weights=[mix["read"], mix["update"], mix["insert"], mix["delete"]],
         k=count,
     )
+    return [(op, rng.choice(table_names)) for op in ops]
+
+
+def simulate_expected_counts_single_thread(
+    preload_counts: Dict[str, int],
+    op_plan: List[Tuple[str, str]],
+) -> Dict[str, int]:
+    counts = {name: int(value) for name, value in preload_counts.items()}
+
+    for op, table_name in op_plan:
+        if op == "insert":
+            counts[table_name] = counts.get(table_name, 0) + 1
+        elif op == "delete":
+            current = counts.get(table_name, 0)
+            if current > 0:
+                counts[table_name] = current - 1
+
+    return counts
+
+
+def assert_counts_match(
+    expected: Dict[str, int], actual: Dict[str, int], db_label: str
+):
+    diffs = []
+    all_tables = sorted(set(expected.keys()) | set(actual.keys()))
+    for table_name in all_tables:
+        exp = int(expected.get(table_name, 0))
+        got = int(actual.get(table_name, 0))
+        if exp != got:
+            diffs.append(f"{table_name}: expected={exp}, actual={got}")
+
+    if diffs:
+        raise RuntimeError(
+            f"Deterministic single-thread CRUD verification failed for {db_label}:\n- "
+            + "\n- ".join(diffs)
+        )
 
 
 def run_with_retry(
@@ -852,6 +985,7 @@ def run_oltp_arcadedb(
     threads: int,
     seed: int,
     jvm_kwargs: dict,
+    verify_single_thread_series: bool = False,
 ) -> dict:
     arcadedb, arcade_error = get_arcadedb_module()
     if arcadedb is None or arcade_error is None:
@@ -865,12 +999,33 @@ def run_oltp_arcadedb(
     db = arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs)
     create_schema_arcadedb(db)
 
-    id_pools, next_ids, preload_time = load_tables(
-        insert_batch_fn=insert_batch_arcadedb,
-        db_obj=db,
-        data_dir=data_dir,
-        batch_size=batch_size,
-    )
+    db.set_read_your_writes(False)
+    async_exec = db.async_executor()
+    async_exec.set_commit_every(batch_size)
+    async_exec.set_transaction_use_wal(False)
+    try:
+        ingest_started_at = datetime.now(timezone.utc).isoformat()
+        print(f"Ingest start (arcadedb, UTC): {ingest_started_at}")
+        id_pools, next_ids, preload_time = load_tables(
+            insert_batch_fn=insert_batch_arcadedb,
+            db_obj=db,
+            data_dir=data_dir,
+            batch_size=batch_size,
+        )
+        ingest_ended_at = datetime.now(timezone.utc).isoformat()
+        print(
+            f"Ingest end   (arcadedb, UTC): {ingest_ended_at} "
+            f"(elapsed={preload_time:.2f}s)"
+        )
+    finally:
+        async_exec.wait_completion()
+        async_exec.close()
+        db.set_read_your_writes(True)
+        async_exec.set_transaction_use_wal(True)
+
+    index_start = time.time()
+    create_arcadedb_id_indexes(db)
+    index_time = time.time() - index_start
 
     load_counts_start = time.time()
     preload_counts = count_table_rows_arcadedb(db)
@@ -881,13 +1036,14 @@ def run_oltp_arcadedb(
     table_names = [table["name"] for table in TABLE_DEFS]
     id_lock = threading.Lock()
 
-    def worker(ops: List[str], worker_id: int) -> Dict[str, List[float]]:
+    def worker(
+        op_plan_chunk: List[Tuple[str, str]], worker_id: int
+    ) -> Dict[str, List[float]]:
         rng = random.Random(seed + worker_id)
         latencies = {"read": [], "update": [], "insert": [], "delete": []}
 
-        for op in ops:
+        for op, table_name in op_plan_chunk:
             start = time.perf_counter()
-            table_name = rng.choice(table_names)
             meta = table_meta[table_name]
             table = meta["table"]
             update_col = meta["update_col"]
@@ -963,8 +1119,14 @@ def run_oltp_arcadedb(
 
         return latencies
 
-    ops = choose_ops(transactions, DEFAULT_OLTP_MIX, seed)
-    chunks = [ops[i::threads] for i in range(threads)]
+    op_plan = build_operation_plan(transactions, DEFAULT_OLTP_MIX, seed, table_names)
+    expected_counts = None
+    if verify_single_thread_series:
+        expected_counts = simulate_expected_counts_single_thread(
+            preload_counts,
+            op_plan,
+        )
+    chunks = [op_plan[i::threads] for i in range(threads)]
 
     stop_event, rss_state, rss_thread = start_rss_sampler()
     start_time = time.perf_counter()
@@ -987,6 +1149,9 @@ def run_oltp_arcadedb(
     final_counts = count_table_rows_arcadedb(db)
     counts_time = time.time() - counts_start
 
+    if verify_single_thread_series and expected_counts is not None:
+        assert_counts_match(expected_counts, final_counts, "arcadedb")
+
     db.close()
 
     total_ops = sum(len(v) for v in results.values())
@@ -996,8 +1161,9 @@ def run_oltp_arcadedb(
         "total_ops": total_ops,
         "total_time_s": total_time,
         "throughput_ops_s": throughput,
-        "ingest_mode": "sql",
+        "ingest_mode": "bulk_tuned_insert",
         "preload_time_s": preload_time,
+        "index_time_s": index_time,
         "load_counts_time_s": load_counts_time,
         "preload_counts": preload_counts,
         "counts_time_s": counts_time,
@@ -1009,10 +1175,40 @@ def run_oltp_arcadedb(
     }
 
 
-def configure_sqlite(conn: sqlite3.Connection):
+def configure_sqlite(conn: sqlite3.Connection, profile: str) -> Dict[str, Any]:
+    profile = (profile or "perf").lower()
+    if profile not in SQLITE_PROFILE_CHOICES:
+        raise ValueError(
+            f"Unsupported sqlite profile: {profile}. "
+            f"Expected one of: {', '.join(SQLITE_PROFILE_CHOICES)}"
+        )
+
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA temp_store=MEMORY")
+
+    if profile == "fair":
+        conn.execute("PRAGMA synchronous=FULL")
+        conn.execute("PRAGMA foreign_keys=ON")
+    elif profile == "perf":
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+    else:
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA cache_size=-200000")
+        conn.execute("PRAGMA mmap_size=268435456")
+
+    return {
+        "profile": profile,
+        "journal_mode": "WAL",
+        "synchronous": "FULL" if profile == "fair" else "NORMAL",
+        "foreign_keys": "ON",
+        "temp_store": "MEMORY",
+        "busy_timeout_ms": 30000,
+        "cache_size_kib": 200000 if profile == "olap" else None,
+        "mmap_size_bytes": 268435456 if profile == "olap" else None,
+    }
 
 
 def run_oltp_sqlite(
@@ -1022,6 +1218,8 @@ def run_oltp_sqlite(
     batch_size: int,
     threads: int,
     seed: int,
+    sqlite_profile: str = "perf",
+    verify_single_thread_series: bool = False,
 ) -> dict:
     if db_dir.exists():
         shutil.rmtree(db_dir)
@@ -1029,15 +1227,29 @@ def run_oltp_sqlite(
     db_file = db_dir / "sqlite.db"
 
     conn = sqlite3.connect(db_file, isolation_level=None)
-    configure_sqlite(conn)
+    sqlite_pragmas = configure_sqlite(conn, sqlite_profile)
     create_schema_sqlite(conn)
 
+    # SQLite note: we intentionally keep preload as transaction-batched
+    # executemany inserts for portability and stable semantics in this Python
+    # benchmark. The sqlite shell's .import path is CLI-specific and would add
+    # extra external tooling complexity here.
+    ingest_started_at = datetime.now(timezone.utc).isoformat()
+    print(f"Ingest start (sqlite, UTC): {ingest_started_at}")
     id_pools, next_ids, preload_time = load_tables(
         insert_batch_fn=insert_batch_sqlite,
         db_obj=conn,
         data_dir=data_dir,
         batch_size=batch_size,
     )
+    ingest_ended_at = datetime.now(timezone.utc).isoformat()
+    print(
+        f"Ingest end   (sqlite, UTC): {ingest_ended_at} "
+        f"(elapsed={preload_time:.2f}s)"
+    )
+    index_start = time.time()
+    create_sqlite_id_indexes(conn)
+    index_time = time.time() - index_start
 
     load_counts_start = time.time()
     preload_counts = count_table_rows_sql(conn)
@@ -1048,17 +1260,18 @@ def run_oltp_sqlite(
     table_names = [table["name"] for table in TABLE_DEFS]
     id_lock = threading.Lock()
 
-    def worker(ops: List[str], worker_id: int) -> Dict[str, List[float]]:
+    def worker(
+        op_plan_chunk: List[Tuple[str, str]], worker_id: int
+    ) -> Dict[str, List[float]]:
         rng = random.Random(seed + worker_id)
         latencies = {"read": [], "update": [], "insert": [], "delete": []}
         local_conn = sqlite3.connect(
             db_file, isolation_level=None, check_same_thread=False, timeout=5.0
         )
-        configure_sqlite(local_conn)
+        configure_sqlite(local_conn, sqlite_profile)
 
-        for op in ops:
+        for op, table_name in op_plan_chunk:
             start = time.perf_counter()
-            table_name = rng.choice(table_names)
             meta = table_meta[table_name]
             table = meta["table"]
             update_col = meta["update_col"]
@@ -1125,8 +1338,14 @@ def run_oltp_sqlite(
         local_conn.close()
         return latencies
 
-    ops = choose_ops(transactions, DEFAULT_OLTP_MIX, seed)
-    chunks = [ops[i::threads] for i in range(threads)]
+    op_plan = build_operation_plan(transactions, DEFAULT_OLTP_MIX, seed, table_names)
+    expected_counts = None
+    if verify_single_thread_series:
+        expected_counts = simulate_expected_counts_single_thread(
+            preload_counts,
+            op_plan,
+        )
+    chunks = [op_plan[i::threads] for i in range(threads)]
 
     stop_event, rss_state, rss_thread = start_rss_sampler()
     start_time = time.perf_counter()
@@ -1149,6 +1368,9 @@ def run_oltp_sqlite(
     final_counts = count_table_rows_sql(conn)
     counts_time = time.time() - counts_start
 
+    if verify_single_thread_series and expected_counts is not None:
+        assert_counts_match(expected_counts, final_counts, "sqlite")
+
     conn.close()
 
     total_ops = sum(len(v) for v in results.values())
@@ -1159,6 +1381,7 @@ def run_oltp_sqlite(
         "total_time_s": total_time,
         "throughput_ops_s": throughput,
         "preload_time_s": preload_time,
+        "index_time_s": index_time,
         "load_counts_time_s": load_counts_time,
         "preload_counts": preload_counts,
         "counts_time_s": counts_time,
@@ -1167,6 +1390,8 @@ def run_oltp_sqlite(
         "disk_after_oltp_bytes": disk_after_oltp,
         "rss_peak_kb": rss_state["max_kb"],
         "latencies": results,
+        "sqlite_profile": sqlite_profile,
+        "sqlite_pragmas": sqlite_pragmas,
     }
 
 
@@ -1181,6 +1406,7 @@ def run_oltp_duckdb(
     batch_size: int,
     threads: int,
     seed: int,
+    verify_single_thread_series: bool = False,
 ) -> dict:
     duckdb = get_duckdb_module()
     if duckdb is None:
@@ -1195,12 +1421,21 @@ def run_oltp_duckdb(
     configure_duckdb(conn)
     create_schema_duckdb(conn)
 
+    ingest_started_at = datetime.now(timezone.utc).isoformat()
+    print(f"Ingest start (duckdb, UTC): {ingest_started_at}")
     id_pools, next_ids, preload_time = load_tables_duckdb_copy(
         conn=conn,
         data_dir=data_dir,
         db_dir=db_dir,
     )
+    ingest_ended_at = datetime.now(timezone.utc).isoformat()
+    print(
+        f"Ingest end   (duckdb, UTC): {ingest_ended_at} "
+        f"(elapsed={preload_time:.2f}s)"
+    )
+    index_start = time.time()
     create_duckdb_id_indexes(conn)
+    index_time = time.time() - index_start
 
     load_counts_start = time.time()
     preload_counts = count_table_rows_sql(conn)
@@ -1211,15 +1446,16 @@ def run_oltp_duckdb(
     table_names = [table["name"] for table in TABLE_DEFS]
     id_lock = threading.Lock()
 
-    def worker(ops: List[str], worker_id: int) -> Dict[str, List[float]]:
+    def worker(
+        op_plan_chunk: List[Tuple[str, str]], worker_id: int
+    ) -> Dict[str, List[float]]:
         rng = random.Random(seed + worker_id)
         latencies = {"read": [], "update": [], "insert": [], "delete": []}
         local_conn = duckdb.connect(str(db_file))
         configure_duckdb(local_conn)
 
-        for op in ops:
+        for op, table_name in op_plan_chunk:
             start = time.perf_counter()
-            table_name = rng.choice(table_names)
             meta = table_meta[table_name]
             table = meta["table"]
             update_col = meta["update_col"]
@@ -1286,8 +1522,14 @@ def run_oltp_duckdb(
         local_conn.close()
         return latencies
 
-    ops = choose_ops(transactions, DEFAULT_OLTP_MIX, seed)
-    chunks = [ops[i::threads] for i in range(threads)]
+    op_plan = build_operation_plan(transactions, DEFAULT_OLTP_MIX, seed, table_names)
+    expected_counts = None
+    if verify_single_thread_series:
+        expected_counts = simulate_expected_counts_single_thread(
+            preload_counts,
+            op_plan,
+        )
+    chunks = [op_plan[i::threads] for i in range(threads)]
 
     stop_event, rss_state, rss_thread = start_rss_sampler()
     start_time = time.perf_counter()
@@ -1310,6 +1552,9 @@ def run_oltp_duckdb(
     final_counts = count_table_rows_sql(conn)
     counts_time = time.time() - counts_start
 
+    if verify_single_thread_series and expected_counts is not None:
+        assert_counts_match(expected_counts, final_counts, "duckdb")
+
     conn.close()
 
     total_ops = sum(len(v) for v in results.values())
@@ -1321,6 +1566,7 @@ def run_oltp_duckdb(
         "total_time_s": total_time,
         "throughput_ops_s": throughput,
         "preload_time_s": preload_time,
+        "index_time_s": index_time,
         "load_counts_time_s": load_counts_time,
         "preload_counts": preload_counts,
         "counts_time_s": counts_time,
@@ -1339,6 +1585,7 @@ def run_oltp_postgresql(
     batch_size: int,
     threads: int,
     seed: int,
+    verify_single_thread_series: bool = False,
 ) -> dict:
     psycopg = get_psycopg_module()
     if psycopg is None:
@@ -1411,13 +1658,22 @@ def run_oltp_postgresql(
         create_schema_postgresql(conn)
         conn.commit()
 
-        id_pools, next_ids, preload_time = load_tables(
-            insert_batch_fn=insert_batch_postgresql,
-            db_obj=conn,
+        ingest_started_at = datetime.now(timezone.utc).isoformat()
+        print(f"Ingest start (postgresql, UTC): {ingest_started_at}")
+        id_pools, next_ids, preload_time = load_tables_postgresql_copy(
+            conn=conn,
             data_dir=data_dir,
-            batch_size=batch_size,
+            db_dir=db_dir,
         )
+        ingest_ended_at = datetime.now(timezone.utc).isoformat()
+        print(
+            f"Ingest end   (postgresql, UTC): {ingest_ended_at} "
+            f"(elapsed={preload_time:.2f}s)"
+        )
+        index_start = time.time()
+        create_postgresql_id_indexes(conn)
         conn.commit()
+        index_time = time.time() - index_start
 
         load_counts_start = time.time()
         preload_counts = count_table_rows_postgres(conn)
@@ -1439,14 +1695,16 @@ def run_oltp_postgresql(
                     delay *= 1.0 + (random.random() * 0.1)
                     time.sleep(delay)
 
-        def worker(ops_chunk: List[str], worker_id: int) -> Dict[str, List[float]]:
+        def worker(
+            op_plan_chunk: List[Tuple[str, str]], worker_id: int
+        ) -> Dict[str, List[float]]:
             rng = random.Random(seed + worker_id)
             latencies = {"read": [], "update": [], "insert": [], "delete": []}
             local_conn = psycopg.connect("dbname=bench user=postgres host=127.0.0.1")
+            local_conn.autocommit = True
 
-            for op in ops_chunk:
+            for op, table_name in op_plan_chunk:
                 start_time = time.perf_counter()
-                table_name = rng.choice(table_names)
                 meta = table_meta[table_name]
                 table = meta["table"]
                 update_col = meta["update_col"]
@@ -1527,8 +1785,16 @@ def run_oltp_postgresql(
             local_conn.close()
             return latencies
 
-        ops = choose_ops(transactions, DEFAULT_OLTP_MIX, seed)
-        chunks = [ops[i::threads] for i in range(threads)]
+        op_plan = build_operation_plan(
+            transactions, DEFAULT_OLTP_MIX, seed, table_names
+        )
+        expected_counts = None
+        if verify_single_thread_series:
+            expected_counts = simulate_expected_counts_single_thread(
+                preload_counts,
+                op_plan,
+            )
+        chunks = [op_plan[i::threads] for i in range(threads)]
 
         def pid_provider() -> List[int]:
             return list_postgres_pids(pgdata)
@@ -1558,16 +1824,21 @@ def run_oltp_postgresql(
         final_counts = count_table_rows_postgres(conn)
         counts_time = time.time() - counts_start
 
+        if verify_single_thread_series and expected_counts is not None:
+            assert_counts_match(expected_counts, final_counts, "postgresql")
+
         conn.close()
 
         total_ops = sum(len(v) for v in results.values())
         throughput = total_ops / total_time if total_time > 0 else 0
 
         return {
+            "ingest_mode": "copy",
             "total_ops": total_ops,
             "total_time_s": total_time,
             "throughput_ops_s": throughput,
             "preload_time_s": preload_time,
+            "index_time_s": index_time,
             "load_counts_time_s": load_counts_time,
             "preload_counts": preload_counts,
             "counts_time_s": counts_time,
@@ -1661,6 +1932,8 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
         "duckdb_version": args.duckdb_version,
         "docker_image": args.docker_image,
         "sqlite_version": sqlite3.sqlite_version,
+        "sqlite_profile": summary.get("sqlite_profile"),
+        "sqlite_pragmas": summary.get("sqlite_pragmas"),
         "duckdb_runtime_version": duckdb_version,
         "postgres_version": summary.get("postgres_version"),
         "seed": args.seed,
@@ -1669,6 +1942,7 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
         "throughput_ops_s": summary["throughput_ops_s"],
         "total_time_s": summary["total_time_s"],
         "preload_time_s": summary["preload_time_s"],
+        "index_time_s": summary.get("index_time_s", 0.0),
         "load_counts_time_s": summary.get("load_counts_time_s", 0.0),
         "preload_counts": summary.get("preload_counts"),
         "counts_time_s": summary.get("counts_time_s", 0.0),
@@ -1780,14 +2054,19 @@ def run_in_docker(args):
     inner_cmd_parts.append(f"{python_cmd} -m pip install --no-cache-dir uv")
     inner_cmd_parts.append(f"uv pip install {packages_str}")
     inner_cmd_parts.append("echo 'Starting benchmark...'")
-    inner_cmd_parts.append(
-        f"{python_cmd} -u 07_stackoverflow_tables_oltp.py {' '.join(filtered_args)}"
-    )
     if args.db == "postgresql":
         db_name = build_benchmark_db_name(args.dataset, args.db, args.run_label)
         inner_cmd_parts.append(
+            "status=0; "
+            f"{python_cmd} -u 07_stackoverflow_tables_oltp.py {' '.join(filtered_args)} "
+            "|| status=$?; "
             "chown -R $HOST_UID:$HOST_GID "
-            f"/workspace/bindings/python/examples/my_test_databases/{db_name}"
+            f"/workspace/bindings/python/examples/my_test_databases/{db_name} || true; "
+            "exit $status"
+        )
+    else:
+        inner_cmd_parts.append(
+            f"{python_cmd} -u 07_stackoverflow_tables_oltp.py {' '.join(filtered_args)}"
         )
 
     inner_cmd = " && ".join(inner_cmd_parts)
@@ -1869,7 +2148,7 @@ def main():
     parser.add_argument(
         "--arcadedb-version",
         type=str,
-        default="26.2.1",
+        default="26.3.1.dev1",
         help="arcadedb-embedded version to install in Docker",
     )
     parser.add_argument(
@@ -1880,7 +2159,18 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
+        "--verify-single-thread-series",
+        action="store_true",
+        help="For threads=1 only, assert final table counts match deterministic CRUD simulation",
+    )
+    parser.add_argument(
         "--run-label", type=str, default=None, help="Optional run label"
+    )
+    parser.add_argument(
+        "--sqlite-profile",
+        choices=SQLITE_PROFILE_CHOICES,
+        default="perf",
+        help="SQLite profile: fair (WAL+FULL+FK ON), perf (WAL+NORMAL+FK ON), olap (perf + large cache/mmap)",
     )
 
     args = parser.parse_args()
@@ -1888,6 +2178,8 @@ def main():
         args.run_label = args.run_label.strip().replace("/", "-").replace(" ", "_")
     if args.jvm_heap_fraction <= 0 or args.jvm_heap_fraction > 1:
         parser.error("--jvm-heap-fraction must be > 0 and <= 1")
+    if args.verify_single_thread_series and args.threads != 1:
+        parser.error("--verify-single-thread-series requires --threads 1")
 
     ran = run_in_docker(args)
     if ran:
@@ -1917,6 +2209,8 @@ def main():
     print("=" * 80)
     print(f"Dataset: {args.dataset}")
     print(f"DB: {args.db}")
+    if args.db == "sqlite":
+        print(f"SQLite profile: {args.sqlite_profile}")
     print(f"Threads: {args.threads}")
     print(f"Transactions: {args.transactions:,}")
     if args.db == "arcadedb":
@@ -1933,6 +2227,7 @@ def main():
             threads=args.threads,
             seed=args.seed,
             jvm_kwargs=jvm_kwargs,
+            verify_single_thread_series=args.verify_single_thread_series,
         )
     elif args.db == "sqlite":
         summary = run_oltp_sqlite(
@@ -1942,6 +2237,8 @@ def main():
             batch_size=args.batch_size,
             threads=args.threads,
             seed=args.seed,
+            sqlite_profile=args.sqlite_profile,
+            verify_single_thread_series=args.verify_single_thread_series,
         )
     elif args.db == "duckdb":
         summary = run_oltp_duckdb(
@@ -1951,6 +2248,7 @@ def main():
             batch_size=args.batch_size,
             threads=args.threads,
             seed=args.seed,
+            verify_single_thread_series=args.verify_single_thread_series,
         )
     elif args.db == "postgresql":
         summary = run_oltp_postgresql(
@@ -1960,6 +2258,7 @@ def main():
             batch_size=args.batch_size,
             threads=args.threads,
             seed=args.seed,
+            verify_single_thread_series=args.verify_single_thread_series,
         )
     else:
         raise NotImplementedError("Unsupported DB")

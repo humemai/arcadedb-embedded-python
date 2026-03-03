@@ -6,17 +6,17 @@ EXAMPLES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PY_SCRIPT="$EXAMPLES_DIR/11_vector_index_build.py"
 
 # Dataset Tier  Batch   Memory  CPUs  Running   Note
-# Tiny          1,000   2GB     2     ✅
-# Small         2,500   4GB     4     ✅
-# Medium        5,000   16GB    8     ✅
-# Large         10,000  32GB    16    🚧
+# Tiny          1,000   2GB     2
+# Small         2,500   4GB     4
+# Medium        5,000   16GB    8
+# Large         10,000  32GB    16
 # X-Large       25,000  64GB    32
 
-DATASET="stackoverflow-large"
-BATCH_SIZE=10000
-MEM_LIMIT="32g"
-THREADS=16
-RUNS=3
+DATASET="stackoverflow-small"
+BATCH_SIZE=2500
+MEM_LIMIT="4g"
+THREADS=4
+RUNS=1
 SEED_START=0
 SERVER_FRACTION="0.8"
 MAX_CONNECTIONS=16
@@ -26,7 +26,9 @@ STORE_VECTORS_IN_GRAPH=false
 ADD_HIERARCHY=true
 JVM_HEAP_FRACTION="0.80"
 JVM_ARGS=""
-ARCADEDB_VERSION="26.2.1"
+ARCADEDB_VERSION="26.3.1.dev1"
+FAISS_VERSION="1.13.2"
+LANCEDB_VERSION="0.29.2"
 DOCKER_IMAGE="python:3.12-slim"
 DB_ROOT="my_test_databases"
 
@@ -46,7 +48,7 @@ MILVUS_PORT=19530
 MILVUS_COMPOSE_VERSION="v2.6.10"
 MILVUS_COLLECTION="vectordata"
 
-BACKENDS_RAW="arcadedb,pgvector,qdrant,milvus"
+BACKENDS_RAW="faiss,lancedb,arcadedb,pgvector,qdrant,milvus"
 LABEL_PREFIX="sweep11"
 
 if [[ $# -gt 0 ]]; then
@@ -122,6 +124,8 @@ for ((run = 1; run <= RUNS; run++)); do
             --jvm-heap-fraction "$JVM_HEAP_FRACTION"
             --server-fraction "$SERVER_FRACTION"
             --arcadedb-version "$ARCADEDB_VERSION"
+            --faiss-version "$FAISS_VERSION"
+            --lancedb-version "$LANCEDB_VERSION"
             --docker-image "$DOCKER_IMAGE"
             --add-hierarchy "$ADD_HIERARCHY"
             --pg-host "$PG_HOST"
@@ -162,7 +166,10 @@ for ((run = 1; run <= RUNS; run++)); do
         echo
         echo "[$((execution_idx + 1))/$((RUNS * ${#BACKENDS[@]}))] backend=$backend run=$run seed=$seed label=$run_label"
         echo "Command: ${cmd[*]}"
+        set +e
         "${cmd[@]}"
+        cmd_exit=$?
+        set -e
 
         mapfile -t target_dirs < <(find "$DB_ROOT" -mindepth 1 -maxdepth 1 -type d -name "*run=${run_label}" | sort)
 
@@ -171,9 +178,33 @@ for ((run = 1; run <= RUNS; run++)); do
         fi
 
         for target_dir in "${target_dirs[@]}"; do
+            collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            run_status="success"
+            if ((cmd_exit != 0)); then
+                run_status="failed"
+            fi
+
+            cat > "$target_dir/run_status.json" << EOF
+{
+  "status": "$run_status",
+  "exit_code": $cmd_exit,
+  "backend": "$backend",
+  "dataset": "$DATASET",
+  "threads": $THREADS,
+  "batch_size": $BATCH_SIZE,
+  "seed": $seed,
+  "run_label": "$run_label",
+  "collected_at_utc": "$collected_at"
+}
+EOF
+
+            if ((cmd_exit != 0)); then
+                echo "Skipped du capture because run failed: $target_dir"
+                continue
+            fi
+
             du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"
             du_human="$(du -sh "$target_dir" | awk '{print $1}')"
-            collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
             cat > "$target_dir/disk_usage_du.txt" << EOF
 path: $target_dir
@@ -193,6 +224,10 @@ EOF
 
             echo "Saved du size: $du_human ($du_bytes bytes) -> $target_dir/disk_usage_du.json"
         done
+
+        if ((cmd_exit != 0)); then
+            echo "Run failed (exit=$cmd_exit). Continuing to next run..." >&2
+        fi
 
         execution_idx=$((execution_idx + 1))
     done

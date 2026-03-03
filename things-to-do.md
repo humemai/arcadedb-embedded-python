@@ -1,0 +1,167 @@
+## Things to do for python bindings
+
+Underlying java code base (`/mnt/ssd2/repos/arcadedb-embedded-python/`) has been changed. Python (`/mnt/ssd2/repos/arcadedb-embedded-python/bindings/python`) might need some changes.
+
+Lesson learned for bulk ingest strategy:
+- For ArcadeDB in these Python examples, do **not** use `IMPORT DATABASE` for large bulk loads for now.
+- Use the transactional ingest path with `readYourWrites=false` and WAL disabled during ingest, then restore both to `true` after ingest.
+- For other databases, keep using each engine's native bulk ingest when available (e.g., DuckDB `COPY`, PostgreSQL `COPY FROM STDIN`).
+
+Recent hard-cut API direction (implemented):
+- SQL/Cypher-first surface for write/query examples and tests.
+- Removed legacy batch/object-oriented convenience layer from the Python package surface.
+- No backward-compatibility shim was kept for removed batch APIs.
+
+- [x] prioritize SQL / Cypher query guidance in docs and examples
+  - Even the docs are updated to reflect this.
+- [x] **Query execution + result behavior (highest risk)**
+  - `f5af28801`, `bc38243ca`, `69e28460f`, `aa6ddb71c`, `c32356db5`, `5f1d381fb`, `783cbdd78`, `0945df6d1`, `2f73554da`, `22414c48c`, `69105fe62`, `00626c5c6`, `d0b927fdb`
+  - Why: can change query planning/semantics/result ordering, which can break Python tests/assertions and conversion logic.
+    - No changes needed on the python side.
+- [x] **Result/serialization and type-conversion edge cases**
+  - `834cc841c`, `7f2d45f72`, `241a7f3fb`, `0a2dddfcf`, `3e851683e`, `6adc225ce`
+  - Why: anything around console/JSON/result formatting often maps to Python `Result` wrappers and type conversion expectations.
+    - No changes needed on the python side.
+- [x] **Storage/cache lifecycle correctness (embedded mode sensitivity)**
+  - `73bc31f8e`, `cd9a218cd`, `818792206`, `fda39d21e` (+ tests `ecc559315`, `93f718487`, `f1983bf4f`)
+  - Why: embedded bindings are directly affected by page-cache/flush/close behavior; re-run transaction/open-close regression tests.
+    - No changes needed on the python side.
+- [x] **New engine features you may want Python API/docs coverage for**
+  - `52805a33f`, `4cb4c7a51`, `c03bf2450`, `db36a752b`…`5d7e12f3a`, `d14e0634a`
+  - Why: hash index, geo functions, timeseries, graph algorithms, materialized views may need Python examples/helpers/docs/tests (even if SQL passthrough already works).
+  - Progress: added and expanded feature-specific tests for materialized views, timeseries, geo predicates, hash index, and graph algorithms (`shortestPath`, `dijkstra`, `astar`) including edge-case scenarios.
+  - Examples will be added in the below todo points.
+- [x] better `import database` support in python?
+  - Progress: redesigned to SQL-first import flow using direct `db.command("sql", "IMPORT DATABASE ...")`; removed legacy Python importer module/API surface and migrated example usage to SQL commands.
+  - Tests: replaced legacy `test_importer.py`/`test_importer_dsl.py` with `test_import_database.py`, covering SQL import scenarios (CSV documents, CSV graph vertices/edges, XML, Neo4j, Word2Vec vectors, RDF, timeseries target import) and verified locally.
+  - Known limitation (current Java importer behavior): for some CSV document-heavy import paths, `commitEvery` may not split transactions as expected; very large single-file imports can still hit transaction-buffer limits.
+- [x] hard-cut batch/object API from Python surface
+  - Removed source/module/API exposure:
+    - deleted `bindings/python/src/arcadedb_embedded/batch.py`
+    - removed `Database.batch_context(...)` from `bindings/python/src/arcadedb_embedded/core.py`
+    - removed `BatchContext` export from `bindings/python/src/arcadedb_embedded/__init__.py`
+  - Removed/rewrote tests:
+    - deleted `bindings/python/tests/test_batch_context.py`
+    - rewrote `bindings/python/tests/test_async_executor.py` to SQL/Cypher-first async coverage
+  - Updated examples:
+    - migrated `bindings/python/examples/05_csv_import_graph.py` off BatchContext to async SQL command flow
+- [x] align async executor usage to SQL/Cypher-first and verify
+  - `bindings/python/src/arcadedb_embedded/async_executor.py` now emphasizes async SQL/Cypher command/query flows for examples/tests.
+  - Example 15 and 16 now compare 3 methods with strict parity checks:
+    - transactional SQL path
+    - async SQL path
+    - SQL `IMPORT DATABASE` path
+  - Added separate async worker option (`--async-parallel`) and kept importer workers (`--parallel`) independent for benchmark stability.
+- [x] Add example 15
+  - Added `bindings/python/examples/15_import_database_vs_transactional_table_ingest.py`.
+  - Scope: table/document ingest benchmark comparing:
+    - transactional INSERT batching
+    - async SQL INSERT via async executor
+    - SQL `IMPORT DATABASE`
+  - Inputs: configurable table count, rows/table, column width, string payload size, batch size, async parallelism, importer parallelism, heap size.
+  - Fairness choice: ingest-focused comparison path (no pre-ingest index build in benchmark flow); strict parity check requires equal final row counts across all 3 methods.
+  - Validation: local compile/smoke runs completed.
+- [x] Add example 16
+  - Added `bindings/python/examples/16_import_database_vs_transactional_graph_ingest.py`.
+  - Scope: graph ingest benchmark comparing:
+    - transactional vertex+edge creation
+    - async SQL vertex+edge creation
+    - SQL `IMPORT DATABASE` with vertices/edges CSV
+  - Inputs: configurable vertices, edges, vertex/edge property widths, string payload size, batch size, async parallelism, importer parallelism, heap size.
+  - Correctness guard: strict parity check enforces identical final vertex/edge counts across all 3 methods.
+  - Important runtime setup captured in-file: explicitly sets `readYourWrites`, async parallel level, async commit frequency, and WAL behavior before import in Python-opened DB flow.
+  - Validation: local compile/smoke and larger runs completed.
+  - Note: documentation updates intentionally deferred.
+- [x] normalize ArcadeDB edge-type declarations to `UNIDIRECTIONAL` across `bindings/python` (`*.py` + `*.md`).
+  - Completed sweep: updated all `CREATE EDGE TYPE ...` declarations to include `UNIDIRECTIONAL` where missing.
+  - Validation: follow-up scan found no remaining missing declarations; direction-sensitive graph tests were adjusted and re-run successfully.
+- [x] revisit example 07
+  - [x] use `import database` for arcadedb, and see if the other dbs can have a similar thing.
+    - Implemented: ArcadeDB preload path in `07_stackoverflow_tables_oltp.py` now uses SQL `IMPORT DATABASE` with staged CSV per table.
+    - Similar/native bulk paths in this example: DuckDB uses staged CSV + `COPY`; PostgreSQL now uses staged CSV + `COPY FROM STDIN`; SQLite intentionally stays transaction-batched `executemany` for portability/simple in-process semantics.
+    - Update: Example 07 ArcadeDB preload was switched to manual bulk-tuned batched inserts due to current `IMPORT DATABASE` transaction-splitting issues on very large CSV tables.
+    - Known limitation: `IMPORT DATABASE` with CSV documents may ignore practical `commitEvery` tx splitting in this path and can fail with transaction-buffer overflow on large single-table files.
+  - [x] if possible, see if we can fix a random CRUD series and assert if all the dbs result in the same.
+    - Implemented: deterministic operation planning (`op + table`) shared by execution and verifier in `07_stackoverflow_tables_oltp.py`, with `--verify-single-thread-series` guard for `--threads 1`.
+    - Validation: smoke runs passed for ArcadeDB, SQLite, DuckDB, and PostgreSQL in single-thread mode (same seeded CRUD plan, final table counts asserted).
+  - [x] make the summarize shell file only save import stuff
+  - Fairness note: for Example 07 ingest benchmarking, async data ingest was intentionally not enabled in the final comparison path, to keep ingest strategy alignment fair with the other DBs in this benchmark.
+- [x] revisit example 08
+  - [x] align bulk ingest strategy: ArcadeDB uses bulk-tuned transactional ingest (no `IMPORT DATABASE`), while other DBs use native bulk loaders where available.
+    - Implemented: `08_stackoverflow_tables_olap.py` keeps ArcadeDB on bulk-tuned transactional ingest; DuckDB uses `COPY`; PostgreSQL uses `COPY FROM STDIN`; SQLite remains `executemany`.
+    - Implemented: index build happens post-ingest across DB paths for fair phase separation.
+  - [x] make the summarize shell file only save import stuff
+    - Implemented in `scripts/summarize_08_tables_olap_matrix.sh`: single consolidated summary output (`Wrote: ...`) with no extra trailing status line.
+    - Updated DB summary shape for 07-style traceability: includes `run_label`, `seed`, and populated `threads` fallback from `run_status.json`.
+    - Removed misleading DB-level `query_p95_s`; retained `query_s` as suite total and moved statistical latency focus to per-query `elapsed_mean_ms` / `elapsed_p95_ms` from real `elapsed_runs_s` samples.
+- [x] revisit example 09
+  - [x] align bulk ingest strategy: ArcadeDB uses bulk-tuned transactional ingest (no `IMPORT DATABASE`), while other DBs use native bulk loaders where available.
+    - Implemented in `09_stackoverflow_graph_oltp.py`: ArcadeDB ingest path switched to SQL insert/create-edge batches wrapped in explicit transactions; Ladybug remains on native bulk loader path.
+  - [x] if possible, see if we can fix a random CRUD series and assert if all the dbs result in the same.
+    - Implemented deterministic single-thread verification in `09_stackoverflow_graph_oltp.py` via `--verify-single-thread-series`.
+    - Verification stores/reads DB-scoped baselines in `benchmark_results/verify_09_graph_oltp_<db>_<dataset>_tx<transactions>_seed<seed>.json` and asserts deterministic repeatability for `node_count`, `edge_count`, `node_counts_by_type`, `edge_counts_by_type`, and `op_counts`.
+    - Wired `scripts/run_09_graph_oltp_matrix.sh` to auto-enable this check when `THREADS=1`.
+  - [x] make the summarize shell file only save import stuff
+    - Implemented in `scripts/summarize_09_graph_oltp_matrix.sh`: switched to single consolidated Markdown summary output (`Wrote: ...`) with no trailing "Summary file generated in..." message.
+    - Summary format aligned to 07/08 style with run-level table columns (`run_label`, `seed`, `threads`, `transactions`, timings, RSS, `du`) and per-operation OLTP latency details.
+    - Follow-up fix: parser now matches Example 09 result schema (`latency_summary.ops.{50,95,99}` in seconds + `op_counts`), converts latency to milliseconds, derives ArcadeDB `index_time_s` from `load_stats.indexes.id_unique`, and removes unsupported `index_in_schema` output.
+    - Added run-status awareness (`run_status.json` counts for total/success/failed) and fallback metadata sourcing from status files.
+  - [x] align 09 matrix runner behavior with 07/08 script style
+    - Implemented in `scripts/run_09_graph_oltp_matrix.sh`: continue-on-failure execution, per-run `run_status.json` emission, and `du` capture only for successful runs.
+  - [x] simplify 09 benchmark code path
+    - Removed obsolete SQL-only ArcadeDB OLTP branch and related dead toggles/lists.
+    - Simplified node-delete handling in ArcadeDB/Ladybug workers with explicit kind→label/list mappings (same behavior, clearer code).
+    - Updated benchmark scope note wording to reflect logical parity (schema/indexing/ingest/CRUD) with engine-native query paths.
+  - [x] evaluate SQLite graph-layer packages for OLTP Cypher-style comparison in Docker:
+    - `graphqlite` (`https://github.com/colliery-io/graphqlite`)
+    - run both in Docker containers (same benchmark harness style as other engines) and compare against ArcadeDB OLTP graph workload behavior.
+    - Outcome note: in Example 09 OLTP runs, GraphQLite was consistently heavily underperforming vs other engines (practically "kinda shit" for this specific workload/setup).
+  - [x] add `python_memory` in 09 matrix as a baseline in-memory Python graph implementation (adjacency list with dicts/lists, no indexing) to provide a reference point for OLTP performance without storage overhead.
+  - [x] add SQLite profile modes (`fair`/`perf`/`olap`) for 09 SQLite-backed paths (`sqlite_native`, `graphqlite`) and persist selected profile/PRAGMAs into results payload.
+  - [x] persist `python_memory` graph state to disk at load/end-of-run so `du` and disk metrics reflect stored footprint.
+- [x] revisit example 10
+  - [x] align bulk ingest strategy: ArcadeDB uses bulk-tuned transactional ingest (no `IMPORT DATABASE`), while other DBs use native bulk loaders where available.
+    - Implemented in `10_stackoverflow_graph_olap.py`: ArcadeDB uses the transactional ingest path with `readYourWrites=false` and WAL disabled during ingest, then restores both settings; no `IMPORT DATABASE` path is used.
+    - Ladybug remains on native bulk-loader path (staged CSV + `COPY`), and SQLite-backed paths keep their engine-native practical loaders.
+  - [x] evaluate SQLite graph-layer packages for OLTP Cypher-style comparison in Docker:
+    - `graphqlite` (`https://github.com/colliery-io/graphqlite`)
+    - run both in Docker containers (same benchmark harness style as other engines) and compare against ArcadeDB OLTP graph workload behavior.
+    - Progress/update for Example 10 (OLAP): `graphqlite` is wired into the matrix runner and summarizer, and runs in the same Docker harness as other engines.
+  - [x] make the summarize shell file only save import stuff
+    - Implemented in `scripts/summarize_10_graph_olap_matrix.sh`: single consolidated summary output (`Wrote: ...`) and import/load-focused reporting aligned with the 07/08/09 style.
+  - Additional updates (recent):
+    - Removed `arcadedb_sql` mode from Example 10 runner/summarizer flow; ArcadeDB is cypher-only now.
+    - Made Example 10 standalone (removed runtime dependency on Example 09 helper module).
+    - Enforced strict query fairness between ArcadeDB and Ladybug for OLAP: both now execute the same raw Cypher query text for all benchmark queries (no ArcadeDB query-specific fast-path overrides).
+    - Edge ingest alignment: ArcadeDB edge creation now uses RID-based endpoints in this example path.
+- [x] revisit example 11
+  - [x] align bulk ingest strategy: ArcadeDB uses bulk-tuned transactional ingest (no `IMPORT DATABASE`), while other DBs use native bulk loaders where available.
+    - Example 11 keeps ArcadeDB on transactional ingest + explicit index build; other backends use engine-native index build flows.
+  - [x] add lancedb and faiss to example 11
+    - Implemented in `11_vector_index_build.py` with backend-specific ingest/index build paths and Docker dependency bootstrapping.
+    - Updated matrix runner defaults in `scripts/run_11_vector_index_build_matrix.sh` to include `faiss` and `lancedb`.
+  - [x] make the summarize shell file only save import stuff
+- [x] revisit example 12
+  - [x] align bulk ingest strategy: ArcadeDB uses bulk-tuned transactional ingest (no `IMPORT DATABASE`), while other DBs use native bulk loaders where available.
+  - [x] add lancedb and faiss to example 12
+  - [x] make the summarize shell file only save import stuff
+- [x] revisit example 13
+  - [x] align bulk ingest strategy: ArcadeDB uses bulk-tuned transactional ingest (no `IMPORT DATABASE`)
+    - Implemented in `13_stackoverflow_hybrid_queries.py`: both table and graph load phases now run with `readYourWrites=false` and WAL disabled during ingest, then restore both to `true` immediately after load.
+    - Graph edge creation now uses RID-based endpoints (`CREATE EDGE ... FROM <rid> TO <rid>`) instead of `SELECT ... WHERE Id` lookups.
+- [ ] update README/docs + documentation catch-up (do not forget)
+  - Refresh stated test coverage counts (currently says 271 tests across 25 files; re-verify and update).
+  - Document removed `BatchContext` / `batch_context` APIs and SQL/Cypher-first async guidance.
+  - Document Example 15/16 3-method benchmark structure and parity-check behavior.
+  - Reconcile top-level ingest strategy notes with latest observed benchmark outcomes and caveats.
+  - Add a short migration note in docs/examples: graph schemas now explicitly use `CREATE EDGE TYPE ... UNIDIRECTIONAL`.
+  - Update graph examples docs (`02`, `05`, `10`, `13`, `14`) to clarify traversal direction expectations under `UNIDIRECTIONAL` edges.
+  - Add a benchmark note for Example 09 summarization: `du_mib` is real post-run filesystem usage; `disk_after_*` are benchmark-reported logical sizes.
+  - Add a benchmark note for Example 09 summary parser fields: per-op latency comes from `latency_summary.ops.{50,95,99}` (seconds converted to ms) and op counts from `op_counts`.
+  - Add a small “verification semantics” note for Example 09: `--verify-single-thread-series` uses DB-scoped baselines for deterministic repeatability, not strict cross-DB equality.
+- [ ] add example 16: time series end-to-end (create type, insert tagged points, range query, bucket aggregation)
+- [ ] add example 17: geo predicates (within/intersects with WKT points/polygons)
+- [ ] add example 18: hash index exact-match lookup workflow
+- [ ] add example 19: materialized view lifecycle (create, alter refresh mode, refresh, inspect metadata, drop)
+- [ ] add example 20: graph algorithms (shortestPath, dijkstra, astar)
+- [ ] better support for client-server in python? Make it as an example 21?

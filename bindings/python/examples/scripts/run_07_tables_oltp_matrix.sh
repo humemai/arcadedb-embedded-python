@@ -8,26 +8,26 @@ PY_SCRIPT="$EXAMPLES_DIR/07_stackoverflow_tables_oltp.py"
 # mark 🚧 for ongoing and ✅ for done
 # multi-threading only works well with arcadedb and sqlite for this OLTP
 # Dataset Tier  Transactions  Batch   Memory  CPUs  Running   Note
-# Tiny          10,000        1,000   1GB     1     ✅
-# Tiny          10,000        1,000   1GB     8     ✅
-# Small         50,000        2,500   2GB     1     ✅
-# Small         50,000        2,500   2GB     8     ✅
-# Medium        100,000       5,000   4GB     1     ✅
-# Medium        100,000       5,000   4GB     8     ✅
-# Large         250,000       10,000  8GB     1     🚧
-# Large         250,000       10,000  8GB     8     😵        concurrency is tough
+# Tiny          10,000        1,000   1GB     1
+# Tiny          10,000        1,000   1GB     8
+# Small         50,000        2,500   2GB     1
+# Small         50,000        2,500   2GB     8
+# Medium        100,000       5,000   4GB     1
+# Medium        100,000       5,000   4GB     8
+# Large         250,000       10,000  8GB     1
+# Large         250,000       10,000  8GB     8
 # X-Large       1,000,000     25,000  32GB    1
 # X-Large       1,000,000     25,000  32GB    8
 
-DATASET="stackoverflow-large"
-TRANSACTIONS=250000
-BATCH_SIZE=10000
-MEM_LIMIT="8g"
+DATASET="stackoverflow-small"
+TRANSACTIONS=50000
+BATCH_SIZE=2500
+MEM_LIMIT="2g"
 THREADS=1
-RUNS=3
+RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
-ARCADEDB_VERSION="26.2.1"
+ARCADEDB_VERSION="26.3.1.dev1"
 DUCKDB_VERSION="1.4.4"
 DOCKER_IMAGE="python:3.12-slim"
 DBS_RAW="arcadedb,sqlite,duckdb,postgresql"
@@ -47,12 +47,6 @@ fi
 if ! [[ "$THREADS" =~ ^[0-9]+$ ]] || ((THREADS < 1)); then
     echo "THREADS must be a positive integer (current: $THREADS)" >&2
     exit 1
-fi
-
-if ((THREADS == 1)); then
-    DBS_RAW="arcadedb,sqlite,duckdb,postgresql"
-else
-    DBS_RAW="arcadedb,sqlite"
 fi
 
 IFS=',' read -r -a DBS <<< "$DBS_RAW"
@@ -99,16 +93,48 @@ for ((run = 1; run <= RUNS; run++)); do
             --run-label "$run_label"
         )
 
+        if ((THREADS == 1)); then
+            cmd+=(--verify-single-thread-series)
+        fi
+
         echo
         echo "[$((execution_idx + 1))/$((RUNS * ${#DBS[@]}))] db=$db run=$run seed=$seed label=$run_label"
         echo "Command: ${cmd[*]}"
+        set +e
         "${cmd[@]}"
+        cmd_exit=$?
+        set -e
 
         target_dir="my_test_databases/${dataset_slug}_tables_oltp_${db}_${run_label}"
-        if [[ -d "$target_dir" ]]; then
+        if [[ ! -d "$target_dir" ]]; then
+            mkdir -p "$target_dir"
+        fi
+
+        collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        run_status="success"
+        if ((cmd_exit != 0)); then
+            run_status="failed"
+            echo "Run failed (exit=$cmd_exit). Continuing to next run..." >&2
+        fi
+
+        cat > "$target_dir/run_status.json" << EOF
+{
+  "status": "$run_status",
+  "exit_code": $cmd_exit,
+  "db": "$db",
+  "dataset": "$DATASET",
+  "threads": $THREADS,
+  "transactions": $TRANSACTIONS,
+  "batch_size": $BATCH_SIZE,
+  "seed": $seed,
+  "run_label": "$run_label",
+  "collected_at_utc": "$collected_at"
+}
+EOF
+
+        if ((cmd_exit == 0)); then
             du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"
             du_human="$(du -sh "$target_dir" | awk '{print $1}')"
-            collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
             cat > "$target_dir/disk_usage_du.txt" << EOF
 path: $target_dir
@@ -128,7 +154,7 @@ EOF
 
             echo "Saved du size: $du_human ($du_bytes bytes) -> $target_dir/disk_usage_du.json"
         else
-            echo "Warning: target directory not found for du capture: $target_dir"
+            echo "Skipped du capture because run failed: $target_dir"
         fi
 
         execution_idx=$((execution_idx + 1))

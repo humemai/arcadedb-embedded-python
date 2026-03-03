@@ -16,8 +16,8 @@ def _ensure_opencypher(db) -> None:
 def _seed_graph(db) -> None:
     db.command("sql", "CREATE VERTEX TYPE Person")
     db.command("sql", "CREATE VERTEX TYPE Company")
-    db.command("sql", "CREATE EDGE TYPE KNOWS")
-    db.command("sql", "CREATE EDGE TYPE WORKS_FOR")
+    db.command("sql", "CREATE EDGE TYPE KNOWS UNIDIRECTIONAL")
+    db.command("sql", "CREATE EDGE TYPE WORKS_FOR UNIDIRECTIONAL")
 
     with db.transaction():
         db.command(

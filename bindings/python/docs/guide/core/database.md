@@ -305,7 +305,7 @@ def init_database(path: str):
             db.command("sql", "CREATE VERTEX TYPE Post")
             db.command("sql", "CREATE PROPERTY Post.title STRING")
 
-            db.command("sql", "CREATE EDGE TYPE Authored")
+            db.command("sql", "CREATE EDGE TYPE Authored UNIDIRECTIONAL")
 
             print(f"Database initialized at {path}")
 
@@ -373,7 +373,7 @@ def migrate_database(old_path: str, new_path: str):
         # Copy schema
         new_db.command("sql", "CREATE VERTEX TYPE User")
         new_db.command("sql", "CREATE VERTEX TYPE Post")
-        new_db.command("sql", "CREATE EDGE TYPE Authored")
+        new_db.command("sql", "CREATE EDGE TYPE Authored UNIDIRECTIONAL")
 
         # Copy data
         batch_size = 1000

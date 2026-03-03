@@ -74,7 +74,7 @@ with arcadedb.create_database(temp_db_path) as db:
 ```python
 with arcadedb.create_database(temp_db_path) as db:
     db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE Knows")
+    db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
 
     with db.transaction():
         db.command("sql", "INSERT INTO Person SET name = 'Alice'")

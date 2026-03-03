@@ -53,7 +53,7 @@ def test_new_edge_pythonic_method(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Schema operations are auto-transactional
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE Knows")
+        db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
 
         with db.transaction():
             alice = db.new_vertex("Person")
@@ -73,11 +73,11 @@ def test_new_edge_pythonic_method(temp_db_path):
 
 
 def test_edge_direction_helpers(temp_db_path):
-    """Test get_out_edges, get_in_edges, and get_both_edges with optional label filters."""
+    """Test edge helper behavior with UNIDIRECTIONAL edge types."""
     with arcadedb.create_database(temp_db_path) as db:
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE Knows")
-        db.command("sql", "CREATE EDGE TYPE Likes")
+        db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
+        db.command("sql", "CREATE EDGE TYPE Likes UNIDIRECTIONAL")
 
         with db.transaction():
             alice = db.new_vertex("Person").set("name", "Alice").save()
@@ -104,22 +104,18 @@ def test_edge_direction_helpers(temp_db_path):
         knows_out = alice.get_out_edges("Knows")
         assert {e.get_in().get("name") for e in knows_out} == {"Bob"}
 
-        # Incoming edges (all)
+        # Incoming edges are not materialized for UNIDIRECTIONAL schema edges
         in_edges = alice.get_in_edges()
-        assert {e.get_out().get("name") for e in in_edges} == {"Bob", "Carol"}
+        assert in_edges == []
 
-        # Both directions (all)
+        # BOTH resolves to available directional records for UNIDIRECTIONAL schema
         both_edges = alice.get_both_edges()
-        assert len(both_edges) == 4
+        assert len(both_edges) == 2
 
-        # Both directions filtered by label
+        # BOTH with label filter
         knows_both = alice.get_both_edges("Knows")
-        assert {e.get_out().get("name") for e in knows_both} == {
-            "Alice",
-            "Bob",
-            "Carol",
-        }
-        assert {e.get_in().get("name") for e in knows_both} == {"Alice", "Bob"}
+        assert {e.get_out().get("name") for e in knows_both} == {"Alice"}
+        assert {e.get_in().get("name") for e in knows_both} == {"Bob"}
 
 
 def test_get_vertex_from_query_results(temp_db_path):
@@ -159,7 +155,7 @@ def test_get_edge_from_query_results(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Schema operations are auto-transactional
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE Friends")
+        db.command("sql", "CREATE EDGE TYPE Friends UNIDIRECTIONAL")
 
         with db.transaction():
             alice = db.new_vertex("Person")
@@ -239,7 +235,7 @@ def test_document_wrap_static_method(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Schema operations are auto-transactional
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE Knows")
+        db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
         db.command("sql", "CREATE DOCUMENT TYPE Note")
 
         with db.transaction():
@@ -330,7 +326,7 @@ def test_no_bidirectional_parameter(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Schema operations are auto-transactional
         db.command("sql", "CREATE VERTEX TYPE Node")
-        db.command("sql", "CREATE EDGE TYPE Link")
+        db.command("sql", "CREATE EDGE TYPE Link UNIDIRECTIONAL")
 
         with db.transaction():
             node1 = db.new_vertex("Node").set("id", 1).save()
@@ -408,7 +404,7 @@ def test_vertex_delete_cascade(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Schema operations are auto-transactional
         db.command("sql", "CREATE VERTEX TYPE Node")
-        db.command("sql", "CREATE EDGE TYPE Links")
+        db.command("sql", "CREATE EDGE TYPE Links UNIDIRECTIONAL")
 
         # Create vertices and edge
         with db.transaction():
@@ -440,7 +436,7 @@ def test_edge_delete_leaves_vertices(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Schema operations are auto-transactional
         db.command("sql", "CREATE VERTEX TYPE Node")
-        db.command("sql", "CREATE EDGE TYPE Links")
+        db.command("sql", "CREATE EDGE TYPE Links UNIDIRECTIONAL")
 
         # Create vertices and edge
         with db.transaction():
