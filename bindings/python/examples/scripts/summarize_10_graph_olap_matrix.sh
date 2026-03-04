@@ -129,6 +129,88 @@ def resolve_db_label(db, arcadedb_olap_language, run_label=None):
     return label
 
 
+def add_version(version_sets, key, value):
+    if key in (None, "", "collected_at_utc"):
+        return
+    if value in (None, ""):
+        return
+    version_sets.setdefault(str(key), set()).add(str(value))
+
+
+def collect_version_metadata(version_sets, data, run_dir):
+    add_version(version_sets, "sqlite_version", data.get("sqlite_version"))
+
+    wheel_meta = data.get("arcadedb_wheel_metadata")
+    if isinstance(wheel_meta, dict):
+        for key, value in wheel_meta.items():
+            add_version(version_sets, key, value)
+
+    runtime_versions = data.get("runtime_versions")
+    if not isinstance(runtime_versions, dict):
+        env_obj = data.get("environment")
+        if isinstance(env_obj, dict):
+            runtime_versions = env_obj.get("runtime_versions")
+    if isinstance(runtime_versions, dict):
+        for key, value in runtime_versions.items():
+            add_version(version_sets, key, value)
+
+    dep_path = os.path.join(run_dir, "dependency_versions.json")
+    if os.path.isfile(dep_path):
+        try:
+            with open(dep_path, "r", encoding="utf-8") as f:
+                dep_data = json.load(f)
+            if isinstance(dep_data, dict):
+                for key, value in dep_data.items():
+                    add_version(version_sets, key, value)
+        except Exception:
+            pass
+
+    wheel_path = os.path.join(run_dir, "arcadedb_wheel_build.json")
+    if os.path.isfile(wheel_path):
+        try:
+            with open(wheel_path, "r", encoding="utf-8") as f:
+                wheel_data = json.load(f)
+            if isinstance(wheel_data, dict):
+                for key, value in wheel_data.items():
+                    add_version(version_sets, key, value)
+        except Exception:
+            pass
+
+
+def format_version_summary_lines(version_sets, max_values=3):
+    out = []
+    for key in sorted(version_sets.keys()):
+        if key in ("sqlite", "sqlite_native") and (version_sets.get("sqlite_version") or set()):
+            continue
+        values = sorted(version_sets.get(key) or [])
+        if not values:
+            continue
+        shown = ", ".join(values[:max_values])
+        extra = len(values) - max_values
+        if extra > 0:
+            shown += f", ... (+{extra} more)"
+        out.append(f"{key}: {shown}")
+    return out
+
+
+def ensure_versions_for_db_set(version_sets, db_values):
+    expected = set()
+    db_values = {str(v or "").strip() for v in db_values}
+    if any(v in db_values for v in ("arcadedb", "arcadedb_sql", "arcadedb_cypher")):
+        expected.add("arcadedb_embedded")
+    if any(v in db_values for v in ("ladybug", "ladybugdb")):
+        expected.add("real_ladybug")
+    if "graphqlite" in db_values:
+        expected.add("graphqlite")
+    if "sqlite_native" in db_values:
+        expected.add("sqlite_native")
+    if "python_memory" in db_values:
+        expected.add("python_memory")
+    for key in expected:
+        if key not in version_sets or not version_sets[key]:
+            version_sets[key] = {"unknown"}
+
+
 dataset_slug = dataset_filter.replace("-", "_")
 dir_pattern = f"{dataset_slug}_graph_olap_*" if dataset_filter else "*_graph_olap_*"
 if label_prefix:
@@ -139,6 +221,7 @@ status_rows = []
 status_by_run = {}
 result_rows = []
 query_rows = []
+version_sets = {}
 
 for run_dir in run_dirs:
     status_path = os.path.join(run_dir, "run_status.json")
@@ -173,6 +256,8 @@ for run_dir in run_dirs:
             continue
         if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
             continue
+
+        collect_version_metadata(version_sets, data, run_dir)
 
         resolved_db = resolve_db_label(
             data.get("db"),
@@ -338,6 +423,8 @@ dataset_size_profile = (
     else (dataset_filter or "all")
 )
 generated_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+ensure_versions_for_db_set(version_sets, {row.get("db") for row in result_rows})
+version_summary_lines = format_version_summary_lines(version_sets)
 
 lines = []
 title_suffix = dataset_filter if dataset_filter else "All Dataset Sizes"
@@ -348,6 +435,10 @@ lines.append(f"- Dataset: {dataset_label}")
 lines.append(f"- Dataset size profile: {dataset_size_profile}")
 lines.append(f"- Label prefix: {label_prefix}")
 lines.append(f"- Total result files: {len(result_rows)}")
+if version_summary_lines:
+    lines.append("- Versions/digest observed:")
+    for item in version_summary_lines:
+        lines.append(f"  - {item}")
 lines.append(
     "- Note: `load_*` is ingest only, `index_*` is post-ingest index build, and `query_*` is OLAP query-suite execution."
 )

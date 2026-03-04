@@ -68,8 +68,87 @@ def fmt(value):
         return f"{value:,.3f}".rstrip("0").rstrip(".")
     return str(value)
 
+def add_version(version_sets, key, value):
+    if key in (None, "", "collected_at_utc"):
+        return
+    if value in (None, ""):
+        return
+    version_sets.setdefault(str(key), set()).add(str(value))
+
+def collect_version_metadata(version_sets, data, run_dir):
+    wheel_meta = data.get("arcadedb_wheel_metadata")
+    if isinstance(wheel_meta, dict):
+        for key, value in wheel_meta.items():
+            add_version(version_sets, key, value)
+
+    runtime_versions = data.get("runtime_versions")
+    if not isinstance(runtime_versions, dict):
+        env_obj = data.get("environment")
+        if isinstance(env_obj, dict):
+            runtime_versions = env_obj.get("runtime_versions")
+    if isinstance(runtime_versions, dict):
+        for key, value in runtime_versions.items():
+            add_version(version_sets, key, value)
+
+    dep_path = os.path.join(run_dir, "dependency_versions.json")
+    if os.path.isfile(dep_path):
+        try:
+            with open(dep_path, "r", encoding="utf-8") as f:
+                dep_data = json.load(f)
+            if isinstance(dep_data, dict):
+                for key, value in dep_data.items():
+                    add_version(version_sets, key, value)
+        except Exception:
+            pass
+
+    wheel_path = os.path.join(run_dir, "arcadedb_wheel_build.json")
+    if os.path.isfile(wheel_path):
+        try:
+            with open(wheel_path, "r", encoding="utf-8") as f:
+                wheel_data = json.load(f)
+            if isinstance(wheel_data, dict):
+                for key, value in wheel_data.items():
+                    add_version(version_sets, key, value)
+        except Exception:
+            pass
+
+def format_version_summary_lines(version_sets, max_values=3):
+    out = []
+    for key in sorted(version_sets.keys()):
+        values = sorted(version_sets.get(key) or [])
+        if not values:
+            continue
+        shown = ", ".join(values[:max_values])
+        extra = len(values) - max_values
+        if extra > 0:
+            shown += f", ... (+{extra} more)"
+        out.append(f"{key}: {shown}")
+    return out
+
+def ensure_versions_for_backend_set(version_sets, backend_values):
+    expected = set()
+    backend_values = {str(v or "").strip() for v in backend_values}
+    if "arcadedb" in backend_values:
+        expected.add("arcadedb_embedded")
+    if "faiss" in backend_values:
+        expected.add("faiss_cpu")
+    if "lancedb" in backend_values:
+        expected.add("lancedb")
+    if "pgvector" in backend_values:
+        expected.add("pgvector_image")
+    if "qdrant" in backend_values:
+        expected.add("qdrant_image")
+    if "milvus" in backend_values:
+        expected.add("milvus_compose_version")
+    if "bruteforce" in backend_values:
+        expected.add("bruteforce")
+    for key in expected:
+        if key not in version_sets or not version_sets[key]:
+            version_sets[key] = {"unknown"}
+
 rows = []
 status_rows = []
+version_sets = {}
 
 for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results_*.json"))):
     run_dir = os.path.dirname(result_path)
@@ -93,6 +172,8 @@ for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results
         continue
     if dataset_filter and dataset_name != dataset_filter:
         continue
+
+    collect_version_metadata(version_sets, data, run_dir)
 
     status_path = os.path.join(run_dir, "search_run_status.json")
     status_obj = None
@@ -181,6 +262,8 @@ status_failed = sum(1 for s in status_scoped if s.get("status") == "failed")
 
 dataset_size_profile = dataset_filter.split("-")[-1] if dataset_filter and "-" in dataset_filter else (dataset_filter or "all")
 generated_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+ensure_versions_for_backend_set(version_sets, {row.get("backend") for row in rows})
+version_summary_lines = format_version_summary_lines(version_sets)
 
 COLUMNS = [
     "backend",
@@ -214,6 +297,10 @@ lines.append(f"- Dataset: {dataset_label}")
 lines.append(f"- Dataset size profile: {dataset_size_profile}")
 lines.append(f"- Label prefix: {label_prefix}")
 lines.append(f"- Total sweep rows: {len(rows)}")
+if version_summary_lines:
+    lines.append("- Versions/digest observed:")
+    for item in version_summary_lines:
+        lines.append(f"  - {item}")
 if status_total > 0:
     lines.append(f"- Search run status files: total={status_total}, success={status_success}, failed={status_failed}")
 lines.append("- Note: one row = one backend run + one overquery sweep point.")

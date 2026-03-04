@@ -1351,10 +1351,16 @@ def run_in_docker(args) -> bool:
 
     docker = shutil.which("docker")
     if not docker:
-        raise RuntimeError("docker not found in PATH")
+        return False
 
     repo_root = Path(__file__).resolve().parents[3]
-    user_spec = f"{os.getuid()}:{os.getgid()}"
+    host_uid = os.getuid() if hasattr(os, "getuid") else None
+    host_gid = os.getgid() if hasattr(os, "getgid") else None
+    user_spec = (
+        f"{host_uid}:{host_gid}"
+        if host_uid is not None and host_gid is not None
+        else None
+    )
     workspace_mount_src = str(repo_root)
     workspace_mount_dst = "/workspace"
     work_dir = "/workspace/bindings/python/examples"
@@ -1425,7 +1431,7 @@ def run_in_docker(args) -> bool:
                 f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
             ]
         )
-        run_user_args = ["-u", user_spec]
+        run_user_args = ["-u", user_spec] if user_spec is not None else []
     elif args.backend == "faiss":
         inner_cmd = " && ".join(
             [
@@ -1437,7 +1443,7 @@ def run_in_docker(args) -> bool:
                 f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
             ]
         )
-        run_user_args = ["-u", user_spec]
+        run_user_args = ["-u", user_spec] if user_spec is not None else []
     elif args.backend == "lancedb":
         inner_cmd = " && ".join(
             [
@@ -1449,7 +1455,7 @@ def run_in_docker(args) -> bool:
                 f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
             ]
         )
-        run_user_args = ["-u", user_spec]
+        run_user_args = ["-u", user_spec] if user_spec is not None else []
     elif args.backend == "qdrant":
         inner_cmd = " && ".join(
             [
@@ -1490,6 +1496,8 @@ def run_in_docker(args) -> bool:
             )
         run_user_args = []
     else:
+        if host_uid is None or host_gid is None:
+            return False
         bench_user = "benchusr"
         user_inner_cmd = " && ".join(
             [

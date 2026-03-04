@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXAMPLES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PY_SCRIPT="$EXAMPLES_DIR/11_vector_index_build.py"
+HELPERS_SH="$SCRIPT_DIR/_matrix_helpers.sh"
+
+source "$HELPERS_SH"
 
 # Dataset Tier  Batch   Memory  CPUs  Running   Note
 # Tiny          1,000   2GB     2
@@ -12,10 +15,10 @@ PY_SCRIPT="$EXAMPLES_DIR/11_vector_index_build.py"
 # Large         10,000  32GB    16
 # X-Large       25,000  64GB    32
 
-DATASET="stackoverflow-small"
-BATCH_SIZE=2500
-MEM_LIMIT="4g"
-THREADS=4
+DATASET="stackoverflow-medium"
+BATCH_SIZE=5000
+MEM_LIMIT="16g"
+THREADS=1
 RUNS=1
 SEED_START=0
 SERVER_FRACTION="0.8"
@@ -26,10 +29,11 @@ STORE_VECTORS_IN_GRAPH=false
 ADD_HIERARCHY=true
 JVM_HEAP_FRACTION="0.80"
 JVM_ARGS=""
-ARCADEDB_VERSION="26.3.1.dev1"
-FAISS_VERSION="1.13.2"
-LANCEDB_VERSION="0.29.2"
+ARCADEDB_VERSION="latest"
+FAISS_VERSION="latest"
+LANCEDB_VERSION="latest"
 DOCKER_IMAGE="python:3.12-slim"
+PGVECTOR_IMAGE="pgvector/pgvector:pg18-trixie"
 DB_ROOT="my_test_databases"
 
 PG_HOST="127.0.0.1"
@@ -66,6 +70,14 @@ fi
 if [[ ! -f "$PY_SCRIPT" ]]; then
     echo "Benchmark script not found: $PY_SCRIPT" >&2
     exit 1
+fi
+
+FAISS_VERSION="$(matrix_resolve_version "$FAISS_VERSION" "faiss-cpu")"
+LANCEDB_VERSION="$(matrix_resolve_version "$LANCEDB_VERSION" "lancedb")"
+
+matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
+if [[ -n "${MATRIX_WHEEL_VERSION:-}" ]]; then
+    ARCADEDB_VERSION="$MATRIX_WHEEL_VERSION"
 fi
 
 case "$QUANTIZATION" in
@@ -107,6 +119,10 @@ for ((run = 1; run <= RUNS; run++)); do
 
         seed=$((SEED_START + execution_idx))
         run_label=$(printf "%s_r%02d_%s_s%05d" "$LABEL_PREFIX" "$run" "$backend" "$seed")
+        run_docker_image="$DOCKER_IMAGE"
+        if [[ "$backend" == "pgvector" ]]; then
+            run_docker_image="$PGVECTOR_IMAGE"
+        fi
 
         cmd=(
             python3 "$PY_SCRIPT"
@@ -126,7 +142,7 @@ for ((run = 1; run <= RUNS; run++)); do
             --arcadedb-version "$ARCADEDB_VERSION"
             --faiss-version "$FAISS_VERSION"
             --lancedb-version "$LANCEDB_VERSION"
-            --docker-image "$DOCKER_IMAGE"
+            --docker-image "$run_docker_image"
             --add-hierarchy "$ADD_HIERARCHY"
             --pg-host "$PG_HOST"
             --pg-port "$PG_PORT"
@@ -197,6 +213,22 @@ for ((run = 1; run <= RUNS; run++)); do
   "collected_at_utc": "$collected_at"
 }
 EOF
+
+            wheel_artifacts_for_dir="false"
+            if [[ "$backend" == "arcadedb" ]]; then
+                wheel_artifacts_for_dir="true"
+            fi
+            matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"
+            matrix_embed_wheel_metadata_in_results "$target_dir" "$collected_at"
+            matrix_write_dependency_versions \
+                "$target_dir" \
+                "$collected_at" \
+                "arcadedb_embedded" "$ARCADEDB_VERSION" \
+                "faiss_cpu" "$FAISS_VERSION" \
+                "lancedb" "$LANCEDB_VERSION" \
+                "pgvector_image" "$PGVECTOR_IMAGE" \
+                "qdrant_image" "$QDRANT_IMAGE" \
+                "milvus_compose_version" "$MILVUS_COMPOSE_VERSION"
 
             if ((cmd_exit != 0)); then
                 echo "Skipped du capture because run failed: $target_dir"
