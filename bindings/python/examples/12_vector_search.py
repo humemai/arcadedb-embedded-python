@@ -1734,6 +1734,25 @@ def run_in_docker(args) -> bool:
         if not has_qdrant_host:
             filtered_args.extend(["--qdrant-host", "host.docker.internal"])
 
+    arcadedb_wheel_mount_path = None
+    if args.backend == "arcadedb":
+        wheel_candidates = sorted(
+            (repo_root / "bindings/python/dist").glob("*embed*.whl")
+        )
+        if not wheel_candidates:
+            if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+                raise RuntimeError(
+                    "ArcadeDB wheel not found in bindings/python/dist during GitHub Actions run"
+                )
+            print(
+                "[info] No local ArcadeDB wheel found in bindings/python/dist; "
+                "skipping Docker wrapper and running natively."
+            )
+            return False
+        arcadedb_wheel_mount_path = (
+            f"/workspace/bindings/python/dist/{wheel_candidates[0].name}"
+        )
+
     image = args.docker_image or default_docker_image(args.backend)
 
     if args.backend == "arcadedb":
@@ -1742,7 +1761,8 @@ def run_in_docker(args) -> bool:
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
                 "python -m pip install --no-cache-dir uv",
-                f"uv pip install arcadedb-embedded=={args.arcadedb_version} numpy psutil",
+                "uv pip install numpy psutil",
+                f'uv pip install "{arcadedb_wheel_mount_path}"',
                 "echo 'Starting vector search benchmark...'",
                 f"python -u 12_vector_search.py {' '.join(filtered_args)}",
             ]
