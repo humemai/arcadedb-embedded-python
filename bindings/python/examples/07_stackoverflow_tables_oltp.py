@@ -2063,7 +2063,7 @@ def run_in_docker(args):
 
     docker_image = args.docker_image
     if args.db == "postgresql" and docker_image == "python:3.12-slim":
-        docker_image = "postgres:16"
+        docker_image = "postgres:latest"
 
     cmd = [docker, "run", "--rm"]
     if args.db != "postgresql":
