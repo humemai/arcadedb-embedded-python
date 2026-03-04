@@ -7709,6 +7709,9 @@ def resolve_arcadedb_heap_size(
 
 
 def run_in_docker(args) -> bool:
+    if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        return False
+
     if os.name == "nt":
         return False
 
@@ -7783,6 +7786,10 @@ def run_in_docker(args) -> bool:
 
     inner_cmd = " && ".join(inner_cmd_parts)
 
+    docker_image = args.docker_image
+    if arcadedb_wheel_mount_path is not None and docker_image == "python:3.12-slim":
+        docker_image = f"python:{sys.version_info.major}.{sys.version_info.minor}-slim"
+
     cmd = [
         docker,
         "run",
@@ -7799,7 +7806,7 @@ def run_in_docker(args) -> bool:
         f"{repo_root}:/workspace",
         "-w",
         "/workspace/bindings/python/examples",
-        args.docker_image,
+        docker_image,
         "sh",
         "-lc",
         inner_cmd,
