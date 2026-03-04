@@ -114,10 +114,105 @@ def percentile(values, p):
     return d0 + d1
 
 
+def add_version(version_sets, key, value):
+    if key in (None, "", "collected_at_utc"):
+        return
+    if value in (None, ""):
+        return
+    version_sets.setdefault(str(key), set()).add(str(value))
+
+
+def postgres_version_number(value):
+    if value in (None, ""):
+        return None
+    text = str(value)
+    marker = "PostgreSQL "
+    if marker in text:
+        text = text.split(marker, 1)[1]
+    return text.split(" ", 1)[0]
+
+
+def collect_version_metadata(version_sets, data, run_dir):
+    add_version(version_sets, "postgresql_version", postgres_version_number(data.get("postgres_version")))
+    add_version(version_sets, "sqlite_version", data.get("sqlite_version"))
+    add_version(version_sets, "duckdb_runtime_version", data.get("duckdb_runtime_version"))
+
+    wheel_meta = data.get("arcadedb_wheel_metadata")
+    if isinstance(wheel_meta, dict):
+        for key, value in wheel_meta.items():
+            add_version(version_sets, key, value)
+
+    runtime_versions = data.get("runtime_versions")
+    if not isinstance(runtime_versions, dict):
+        env_obj = data.get("environment")
+        if isinstance(env_obj, dict):
+            runtime_versions = env_obj.get("runtime_versions")
+    if isinstance(runtime_versions, dict):
+        for key, value in runtime_versions.items():
+            add_version(version_sets, key, value)
+
+    dep_path = os.path.join(run_dir, "dependency_versions.json")
+    if os.path.isfile(dep_path):
+        try:
+            with open(dep_path, "r", encoding="utf-8") as f:
+                dep_data = json.load(f)
+            if isinstance(dep_data, dict):
+                for key, value in dep_data.items():
+                    add_version(version_sets, key, value)
+        except Exception:
+            pass
+
+    wheel_path = os.path.join(run_dir, "arcadedb_wheel_build.json")
+    if os.path.isfile(wheel_path):
+        try:
+            with open(wheel_path, "r", encoding="utf-8") as f:
+                wheel_data = json.load(f)
+            if isinstance(wheel_data, dict):
+                for key, value in wheel_data.items():
+                    add_version(version_sets, key, value)
+        except Exception:
+            pass
+
+
+def format_version_summary_lines(version_sets, max_values=3):
+    out = []
+    for key in sorted(version_sets.keys()):
+        if key == "postgresql_image" and (version_sets.get("postgresql_version") or set()):
+            continue
+        if key in ("sqlite", "sqlite_native") and (version_sets.get("sqlite_version") or set()):
+            continue
+        values = sorted(version_sets.get(key) or [])
+        if not values:
+            continue
+        shown = ", ".join(values[:max_values])
+        extra = len(values) - max_values
+        if extra > 0:
+            shown += f", ... (+{extra} more)"
+        out.append(f"{key}: {shown}")
+    return out
+
+
+def ensure_versions_for_db_set(version_sets, db_values):
+    expected = set()
+    db_values = {str(v or "").strip() for v in db_values}
+    if "arcadedb" in db_values:
+        expected.add("arcadedb_embedded")
+    if "duckdb" in db_values:
+        expected.add("duckdb")
+    if "postgresql" in db_values:
+        expected.add("postgresql_image")
+    if "sqlite" in db_values:
+        expected.add("sqlite")
+    for key in expected:
+        if key not in version_sets or not version_sets[key]:
+            version_sets[key] = {"unknown"}
+
+
 status_rows = []
 result_rows = []
 query_rows = []
 status_by_run = {}
+version_sets = {}
 
 for run_dir in run_dirs:
     status_path = os.path.join(run_dir, "run_status.json")
@@ -152,6 +247,8 @@ for run_dir in run_dirs:
             continue
         if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
             continue
+
+        collect_version_metadata(version_sets, data, run_dir)
 
         du_path = os.path.join(run_dir, "disk_usage_du.json")
         du_mib = None
@@ -355,6 +452,8 @@ for (dataset_name, query_name), rows in sorted(by_query_cross.items()):
 
 dataset_size_profile = dataset_filter.split("-")[-1] if dataset_filter and "-" in dataset_filter else (dataset_filter or "all")
 generated_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+ensure_versions_for_db_set(version_sets, {row.get("db") for row in result_rows})
+version_summary_lines = format_version_summary_lines(version_sets)
 
 lines = []
 title_suffix = dataset_filter if dataset_filter else "All Dataset Sizes"
@@ -365,6 +464,10 @@ lines.append(f"- Dataset: {dataset_label}")
 lines.append(f"- Dataset size profile: {dataset_size_profile}")
 lines.append(f"- Label prefix: {label_prefix}")
 lines.append(f"- Total result files: {len(result_rows)}")
+if version_summary_lines:
+    lines.append("- Versions/digest observed:")
+    for item in version_summary_lines:
+        lines.append(f"  - {item}")
 if status_total > 0:
     lines.append(f"- Run status files: total={status_total}, success={status_success}, failed={status_failed}")
 lines.append("- Note: `load_*` is ingest only, `index_*` is post-ingest index build, and `query_*` is OLAP query-suite execution.")

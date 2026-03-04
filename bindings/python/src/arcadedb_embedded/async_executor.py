@@ -190,7 +190,16 @@ class AsyncExecutor:
         return int(self._java_async.getThreadCount())
 
     def is_processing(self) -> bool:
-        return bool(self._java_async.isProcessing())
+        try:
+            if bool(self._java_async.isProcessing()):
+                return True
+        except Exception:
+            pass
+
+        try:
+            return not bool(self._java_async.waitCompletion(0))
+        except Exception:
+            return False
 
     def kill(self):
         self._java_async.kill()
@@ -536,7 +545,10 @@ class AsyncExecutor:
             >>> if async_exec.is_pending():
             ...     print("Still processing...")
         """
-        return self.is_processing()
+        try:
+            return not bool(self._java_async.waitCompletion(0))
+        except Exception:
+            return self.is_processing()
 
     def close(self):
         """

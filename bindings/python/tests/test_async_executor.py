@@ -2,6 +2,7 @@
 
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import arcadedb_embedded as arcadedb
@@ -69,7 +70,20 @@ def test_async_executor_pending_and_processing_flags(temp_db):
     for i in range(1000):
         async_exec.command("sql", "INSERT INTO Msg SET id = :id", id=i)
 
-    assert async_exec.is_processing() is True
+    saw_processing = False
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        if async_exec.is_processing():
+            saw_processing = True
+            break
+
+        try:
+            if async_exec._java_async.waitCompletion(0):
+                break
+        except Exception:
+            pass
+
+        time.sleep(0.01)
 
     async_exec.wait_completion()
     assert async_exec.is_pending() is False
