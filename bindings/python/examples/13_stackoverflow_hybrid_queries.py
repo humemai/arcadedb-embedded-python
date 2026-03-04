@@ -1674,8 +1674,6 @@ def phase1_tables(
 ) -> Dict[str, Any]:
     if db_path.exists():
         shutil.rmtree(db_path)
-    if Path("./log").exists():
-        shutil.rmtree("./log")
 
     start = time.time()
     db = arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs)
@@ -1726,8 +1724,6 @@ def phase2_graph(
 ) -> Dict[str, Any]:
     if db_path.exists():
         shutil.rmtree(db_path)
-    if Path("./log").exists():
-        shutil.rmtree("./log")
 
     start = time.time()
     db = arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs)

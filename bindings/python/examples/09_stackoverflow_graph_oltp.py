@@ -2388,8 +2388,6 @@ def run_graph_oltp_arcadedb(
 
     if db_path.exists():
         shutil.rmtree(db_path)
-    if Path("./log").exists():
-        shutil.rmtree("./log")
 
     db = arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs)
 
