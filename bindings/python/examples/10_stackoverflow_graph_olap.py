@@ -3032,8 +3032,6 @@ def run_olap_arcadedb(
 
     if db_path.exists():
         shutil.rmtree(db_path)
-    if Path("./log").exists():
-        shutil.rmtree("./log")
 
     db = arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs)
     retry_config = get_retry_config(dataset_name)

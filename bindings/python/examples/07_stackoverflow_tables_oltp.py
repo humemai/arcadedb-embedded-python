@@ -993,8 +993,6 @@ def run_oltp_arcadedb(
 
     if db_path.exists():
         shutil.rmtree(db_path)
-    if Path("./log").exists():
-        shutil.rmtree("./log")
 
     db = arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs)
     create_schema_arcadedb(db)
@@ -2190,7 +2188,7 @@ def main():
     heap_size = (
         resolve_arcadedb_heap_size(args.mem_limit, args.jvm_heap_fraction)
         if args.db == "arcadedb"
-        else args.mem_limit
+        else None
     )
     args.heap_size_effective = heap_size
     jvm_kwargs = {"heap_size": heap_size}
