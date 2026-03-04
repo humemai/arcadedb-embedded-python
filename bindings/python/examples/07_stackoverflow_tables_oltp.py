@@ -1999,6 +1999,9 @@ def resolve_arcadedb_heap_size(mem_limit: str, heap_fraction: float) -> str:
 
 
 def run_in_docker(args):
+    if os.name == "nt":
+        return False
+
     if is_running_in_docker():
         return False
 
