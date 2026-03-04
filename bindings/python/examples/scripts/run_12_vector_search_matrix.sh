@@ -52,7 +52,7 @@ MILVUS_PORT=19530
 MILVUS_COMPOSE_VERSION="v2.6.10"
 MILVUS_COLLECTION="vectordata"
 
-BACKENDS_RAW="bruteforce,milvus,faiss,lancedb,arcadedb,pgvector,qdrant"
+BACKENDS_RAW="arcadedb"
 BUILD_LABEL_PREFIX="sweep11"
 SEARCH_LABEL_PREFIX="sweep12"
 
