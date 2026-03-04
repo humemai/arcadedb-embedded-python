@@ -1307,6 +1307,9 @@ def resolve_arcadedb_heap_size(
 
 
 def run_in_docker(args):
+    if os.name == "nt":
+        return False
+
     if is_running_in_docker():
         return False
 
