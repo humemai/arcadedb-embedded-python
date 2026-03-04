@@ -4926,9 +4926,26 @@ def run_in_docker(args) -> bool:
             continue
         filtered_args.append(arg)
 
-    packages = ["lxml"]
+    arcadedb_wheel_mount_path = None
     if args.db in ("arcadedb", "arcadedb_cypher"):
-        packages.append(f"arcadedb-embedded=={args.arcadedb_version}")
+        wheel_candidates = sorted(
+            (repo_root / "bindings/python/dist").glob("*embed*.whl")
+        )
+        if not wheel_candidates:
+            if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+                raise RuntimeError(
+                    "ArcadeDB wheel not found in bindings/python/dist during GitHub Actions run"
+                )
+            print(
+                "[info] No local ArcadeDB wheel found in bindings/python/dist; "
+                "skipping Docker wrapper and running natively."
+            )
+            return False
+        arcadedb_wheel_mount_path = (
+            f"/workspace/bindings/python/dist/{wheel_candidates[0].name}"
+        )
+
+    packages = ["lxml"]
     if args.db in ("ladybug", "ladybugdb"):
         if args.ladybug_version:
             packages.append(f"real_ladybug=={args.ladybug_version}")
@@ -4948,6 +4965,8 @@ def run_in_docker(args) -> bool:
     inner_cmd_parts.append(". /tmp/bench-venv/bin/activate")
     inner_cmd_parts.append(f"{python_cmd} -m pip install --no-cache-dir uv")
     inner_cmd_parts.append(f"uv pip install {packages_str}")
+    if arcadedb_wheel_mount_path is not None:
+        inner_cmd_parts.append(f'uv pip install "{arcadedb_wheel_mount_path}"')
     inner_cmd_parts.append("echo 'Starting benchmark...'")
     inner_cmd_parts.append(
         f"{python_cmd} -u 10_stackoverflow_graph_olap.py {' '.join(filtered_args)}"
