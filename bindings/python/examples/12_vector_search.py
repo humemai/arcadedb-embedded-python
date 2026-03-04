@@ -1662,6 +1662,9 @@ def best_effort_sync_outputs(args, docker_bin: str) -> None:
 
 
 def run_in_docker(args) -> bool:
+    if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        return False
+
     if os.name == "nt":
         return False
 

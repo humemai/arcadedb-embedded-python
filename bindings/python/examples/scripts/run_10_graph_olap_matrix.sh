@@ -18,7 +18,7 @@ source "$HELPERS_SH"
 
 DATASET="stackoverflow-medium"
 BATCH_SIZE=5000
-MEM_LIMIT="8g"
+MEM_LIMIT="4g"
 THREADS=1
 RUNS=1
 SEED_START=0

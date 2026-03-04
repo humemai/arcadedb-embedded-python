@@ -1307,6 +1307,9 @@ def resolve_arcadedb_heap_size(
 
 
 def run_in_docker(args):
+    if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+        return False
+
     if os.name == "nt":
         return False
 
@@ -1392,6 +1395,8 @@ def run_in_docker(args):
     inner_cmd = " && ".join(inner_cmd_parts)
 
     docker_image = args.docker_image
+    if arcadedb_wheel_mount_path is not None and docker_image == "python:3.12-slim":
+        docker_image = f"python:{sys.version_info.major}.{sys.version_info.minor}-slim"
     if args.db == "postgresql" and docker_image == "python:3.12-slim":
         docker_image = "postgres:latest"
 
