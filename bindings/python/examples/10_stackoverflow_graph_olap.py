@@ -4906,7 +4906,13 @@ def run_in_docker(args) -> bool:
         return False
 
     repo_root = Path(__file__).resolve().parents[3]
-    user_spec = f"{os.getuid()}:{os.getgid()}"
+    host_uid = os.getuid() if hasattr(os, "getuid") else None
+    host_gid = os.getgid() if hasattr(os, "getgid") else None
+    user_spec = (
+        f"{host_uid}:{host_gid}"
+        if host_uid is not None and host_gid is not None
+        else None
+    )
 
     filtered_args = []
     skip_next = False
@@ -4952,8 +4958,6 @@ def run_in_docker(args) -> bool:
         docker,
         "run",
         "--rm",
-        "-u",
-        user_spec,
         "--memory",
         args.mem_limit,
         "--cpus",
@@ -4971,6 +4975,9 @@ def run_in_docker(args) -> bool:
         "-lc",
         inner_cmd,
     ]
+
+    if user_spec is not None:
+        cmd[3:3] = ["-u", user_spec]
 
     print("Launching Docker container...")
     subprocess.run(cmd, check=True)

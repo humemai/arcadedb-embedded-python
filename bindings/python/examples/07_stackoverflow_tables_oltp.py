@@ -2004,10 +2004,16 @@ def run_in_docker(args):
 
     docker = shutil.which("docker")
     if not docker:
-        raise RuntimeError("docker not found in PATH")
+        return False
 
     repo_root = Path(__file__).resolve().parents[3]
-    user_spec = f"{os.getuid()}:{os.getgid()}"
+    host_uid = os.getuid() if hasattr(os, "getuid") else None
+    host_gid = os.getgid() if hasattr(os, "getgid") else None
+    user_spec = (
+        f"{host_uid}:{host_gid}"
+        if host_uid is not None and host_gid is not None
+        else None
+    )
 
     filtered_args = []
     skip_next = False
@@ -2066,10 +2072,13 @@ def run_in_docker(args):
         docker_image = "postgres:latest"
 
     cmd = [docker, "run", "--rm"]
-    if args.db != "postgresql":
+    if args.db != "postgresql" and user_spec is not None:
         cmd.extend(["--user", user_spec])
-    else:
-        cmd.extend(["-e", f"HOST_UID={os.getuid()}", "-e", f"HOST_GID={os.getgid()}"])
+    elif args.db == "postgresql":
+        if host_uid is not None:
+            cmd.extend(["-e", f"HOST_UID={host_uid}"])
+        if host_gid is not None:
+            cmd.extend(["-e", f"HOST_GID={host_gid}"])
 
     cmd.extend(
         [

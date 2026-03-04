@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXAMPLES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PY_SCRIPT="$EXAMPLES_DIR/09_stackoverflow_graph_oltp.py"
+HELPERS_SH="$SCRIPT_DIR/_matrix_helpers.sh"
+
+source "$HELPERS_SH"
 
 # mark 🚧 for ongoing and ✅ for done
 # Ladybug uses a reduced transaction budget for OLTP matrix fairness/stability.
@@ -21,19 +24,19 @@ PY_SCRIPT="$EXAMPLES_DIR/09_stackoverflow_graph_oltp.py"
 # X-Large       1,000,000     25,000  32GB    1
 # X-Large       1,000,000     25,000  32GB    8
 
-DATASET="stackoverflow-small"
-ARCADEDB_TRANSACTIONS=50000
+DATASET="stackoverflow-medium"
+ARCADEDB_TRANSACTIONS=100000
 LADYBUG_TRANSACTIONS_FRACTION=0.1
 GRAPHQLITE_TRANSACTIONS_FRACTION=0.1
-BATCH_SIZE=2500
-MEM_LIMIT="2g"
+BATCH_SIZE=5000
+MEM_LIMIT="8g"
 THREADS=1
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
-ARCADEDB_VERSION="26.3.1.dev1"
-LADYBUG_VERSION="0.15.1"
-GRAPHQLITE_VERSION="0.3.5"
+ARCADEDB_VERSION="latest"
+LADYBUG_VERSION="latest"
+GRAPHQLITE_VERSION="latest"
 DOCKER_IMAGE="python:3.12-slim"
 # DBS_RAW="python_memory"
 DBS_RAW="arcadedb_sql,arcadedb_cypher,ladybug,sqlite_native,python_memory"
@@ -68,6 +71,14 @@ fi
 if [[ ! -f "$PY_SCRIPT" ]]; then
     echo "Benchmark script not found: $PY_SCRIPT" >&2
     exit 1
+fi
+
+LADYBUG_VERSION="$(matrix_resolve_version "$LADYBUG_VERSION" "real_ladybug")"
+GRAPHQLITE_VERSION="$(matrix_resolve_version "$GRAPHQLITE_VERSION" "graphqlite")"
+
+matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
+if [[ -n "${MATRIX_WHEEL_VERSION:-}" ]]; then
+    ARCADEDB_VERSION="$MATRIX_WHEEL_VERSION"
 fi
 
 cd "$EXAMPLES_DIR"
@@ -190,6 +201,21 @@ for ((run = 1; run <= RUNS; run++)); do
   "collected_at_utc": "$collected_at"
 }
 EOF
+
+        wheel_artifacts_for_dir="false"
+        if [[ "$db_engine" == "arcadedb" ]]; then
+            wheel_artifacts_for_dir="true"
+        fi
+        matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"
+        matrix_embed_wheel_metadata_in_results "$target_dir" "$collected_at"
+        matrix_write_dependency_versions \
+            "$target_dir" \
+            "$collected_at" \
+            "arcadedb_embedded" "$ARCADEDB_VERSION" \
+            "real_ladybug" "$LADYBUG_VERSION" \
+            "graphqlite" "$GRAPHQLITE_VERSION" \
+            "sqlite_native" "builtin" \
+            "python_memory" "builtin"
 
         if ((cmd_exit == 0)); then
             du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"

@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXAMPLES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PY_SCRIPT="$EXAMPLES_DIR/08_stackoverflow_tables_olap.py"
+HELPERS_SH="$SCRIPT_DIR/_matrix_helpers.sh"
+
+source "$HELPERS_SH"
 
 # mark 🚧 for ongoing and ✅ for done
 # Dataset Tier  Batch   Memory  CPUs    Running   Note
@@ -14,15 +17,16 @@ PY_SCRIPT="$EXAMPLES_DIR/08_stackoverflow_tables_olap.py"
 # X-Large       25,000  32GB    32
 
 DATASET="stackoverflow-medium"
-BATCH_SIZE=5000
-MEM_LIMIT="4g"
-THREADS=4
+BATCH_SIZE=4000
+MEM_LIMIT="8g"
+THREADS=1
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
-ARCADEDB_VERSION="26.3.1.dev1"
-DUCKDB_VERSION="1.4.4"
+ARCADEDB_VERSION="latest"
+DUCKDB_VERSION="latest"
 DOCKER_IMAGE="python:3.12-slim"
+POSTGRESQL_IMAGE="postgres:latest"
 QUERY_RUNS=10
 QUERY_ORDER="shuffled"
 ARCADEDB_QUERY_MAX_HEAP_ELEMENTS=-1
@@ -46,6 +50,13 @@ if [[ ! -f "$PY_SCRIPT" ]]; then
     exit 1
 fi
 
+DUCKDB_VERSION="$(matrix_resolve_version "$DUCKDB_VERSION" "duckdb")"
+
+matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
+if [[ -n "${MATRIX_WHEEL_VERSION:-}" ]]; then
+    ARCADEDB_VERSION="$MATRIX_WHEEL_VERSION"
+fi
+
 cd "$EXAMPLES_DIR"
 
 echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED_START"
@@ -63,6 +74,10 @@ for ((run = 1; run <= RUNS; run++)); do
 
         seed=$((SEED_START + execution_idx))
         run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
+        run_docker_image="$DOCKER_IMAGE"
+        if [[ "$db" == "postgresql" ]]; then
+            run_docker_image="$POSTGRESQL_IMAGE"
+        fi
 
         cmd=(
             python3 "$PY_SCRIPT"
@@ -74,7 +89,7 @@ for ((run = 1; run <= RUNS; run++)); do
             --jvm-heap-fraction "$JVM_HEAP_FRACTION"
             --arcadedb-version "$ARCADEDB_VERSION"
             --duckdb-version "$DUCKDB_VERSION"
-            --docker-image "$DOCKER_IMAGE"
+            --docker-image "$run_docker_image"
             --query-runs "$QUERY_RUNS"
             --query-order "$QUERY_ORDER"
             --arcadedb-query-max-heap-elements "$ARCADEDB_QUERY_MAX_HEAP_ELEMENTS"
@@ -110,6 +125,7 @@ for ((run = 1; run <= RUNS; run++)); do
   "dataset": "$DATASET",
   "threads": $THREADS,
   "batch_size": $BATCH_SIZE,
+    "docker_image": "$run_docker_image",
   "query_runs": $QUERY_RUNS,
   "query_order": "$QUERY_ORDER",
   "seed": $seed,
@@ -117,6 +133,20 @@ for ((run = 1; run <= RUNS; run++)); do
   "collected_at_utc": "$collected_at"
 }
 EOF
+
+        wheel_artifacts_for_dir="false"
+        if [[ "$db" == "arcadedb" ]]; then
+            wheel_artifacts_for_dir="true"
+        fi
+        matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"
+        matrix_embed_wheel_metadata_in_results "$target_dir" "$collected_at"
+        matrix_write_dependency_versions \
+            "$target_dir" \
+            "$collected_at" \
+            "arcadedb_embedded" "$ARCADEDB_VERSION" \
+            "duckdb" "$DUCKDB_VERSION" \
+            "postgresql_image" "$POSTGRESQL_IMAGE" \
+            "sqlite" "builtin"
 
         if ((cmd_exit == 0)); then
             du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"

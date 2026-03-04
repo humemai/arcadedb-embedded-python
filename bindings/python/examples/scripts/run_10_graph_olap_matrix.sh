@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXAMPLES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PY_SCRIPT="$EXAMPLES_DIR/10_stackoverflow_graph_olap.py"
+HELPERS_SH="$SCRIPT_DIR/_matrix_helpers.sh"
+
+source "$HELPERS_SH"
 
 # mark 🚧 for ongoing and ✅ for done
 # Dataset Tier  Batch       Memory  CPUs  Running   Note
@@ -13,16 +16,16 @@ PY_SCRIPT="$EXAMPLES_DIR/10_stackoverflow_graph_olap.py"
 # Large         10,000      8GB     16
 # X-Large       25,000      32GB    32
 
-DATASET="stackoverflow-small"
-BATCH_SIZE=2500
-MEM_LIMIT="4g"
+DATASET="stackoverflow-medium"
+BATCH_SIZE=5000
+MEM_LIMIT="8g"
 THREADS=1
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
-ARCADEDB_VERSION="26.3.1.dev1"
-LADYBUG_VERSION="0.15.1"
-GRAPHQLITE_VERSION="0.3.5"
+ARCADEDB_VERSION="latest"
+LADYBUG_VERSION="latest"
+GRAPHQLITE_VERSION="latest"
 SQLITE_PROFILE="olap"
 DOCKER_IMAGE="python:3.12-slim"
 QUERY_RUNS=10
@@ -47,6 +50,14 @@ fi
 if [[ ! -f "$PY_SCRIPT" ]]; then
     echo "Benchmark script not found: $PY_SCRIPT" >&2
     exit 1
+fi
+
+LADYBUG_VERSION="$(matrix_resolve_version "$LADYBUG_VERSION" "real_ladybug")"
+GRAPHQLITE_VERSION="$(matrix_resolve_version "$GRAPHQLITE_VERSION" "graphqlite")"
+
+matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
+if [[ -n "${MATRIX_WHEEL_VERSION:-}" ]]; then
+    ARCADEDB_VERSION="$MATRIX_WHEEL_VERSION"
 fi
 
 if [[ "$QUERY_ORDER" != "fixed" && "$QUERY_ORDER" != "shuffled" ]]; then
@@ -123,9 +134,24 @@ for ((run = 1; run <= RUNS; run++)); do
 
         target_dir="my_test_databases/${dataset_slug}_graph_olap_${db_engine}_${run_label}"
         if [[ -d "$target_dir" ]]; then
+            collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            wheel_artifacts_for_dir="false"
+            if [[ "$db_engine" == "arcadedb" || "$db_engine" == "arcadedb_cypher" ]]; then
+                wheel_artifacts_for_dir="true"
+            fi
+            matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"
+            matrix_embed_wheel_metadata_in_results "$target_dir" "$collected_at"
+            matrix_write_dependency_versions \
+                "$target_dir" \
+                "$collected_at" \
+                "arcadedb_embedded" "$ARCADEDB_VERSION" \
+                "real_ladybug" "$LADYBUG_VERSION" \
+                "graphqlite" "$GRAPHQLITE_VERSION" \
+                "sqlite_native" "builtin" \
+                "python_memory" "builtin"
+
             du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"
             du_human="$(du -sh "$target_dir" | awk '{print $1}')"
-            collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
             cat > "$target_dir/disk_usage_du.txt" << EOF
 path: $target_dir

@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXAMPLES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PY_SCRIPT="$EXAMPLES_DIR/12_vector_search.py"
+HELPERS_SH="$SCRIPT_DIR/_matrix_helpers.sh"
+
+source "$HELPERS_SH"
 
 # Dataset Tier  Memory  CPUs  Running   Note
 # Tiny          2GB     2
@@ -12,9 +15,9 @@ PY_SCRIPT="$EXAMPLES_DIR/12_vector_search.py"
 # Large         16GB    16
 # X-Large       32GB    32
 
-DATASET="stackoverflow-small"
+DATASET="stackoverflow-medium"
 MEM_LIMIT="8g"
-THREADS=4
+THREADS=1
 RUNS=1
 SEED_START=0
 SERVER_FRACTION="0.8"
@@ -26,10 +29,11 @@ OVERQUERY_FACTORS="4"
 
 JVM_HEAP_FRACTION="0.80"
 JVM_ARGS=""
-ARCADEDB_VERSION="26.3.1.dev1"
-FAISS_VERSION="1.13.2"
-LANCEDB_VERSION="0.29.2"
+ARCADEDB_VERSION="latest"
+FAISS_VERSION="latest"
+LANCEDB_VERSION="latest"
 DOCKER_IMAGE="python:3.12-slim"
+PGVECTOR_IMAGE="pgvector/pgvector:pg18-trixie"
 DB_ROOT="my_test_databases"
 
 PG_HOST="127.0.0.1"
@@ -98,6 +102,14 @@ if [[ ! -f "$PY_SCRIPT" ]]; then
     exit 1
 fi
 
+FAISS_VERSION="$(matrix_resolve_version "$FAISS_VERSION" "faiss-cpu")"
+LANCEDB_VERSION="$(matrix_resolve_version "$LANCEDB_VERSION" "lancedb")"
+
+matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
+if [[ -n "${MATRIX_WHEEL_VERSION:-}" ]]; then
+    ARCADEDB_VERSION="$MATRIX_WHEEL_VERSION"
+fi
+
 if [[ "$QUERY_ORDER" != "fixed" && "$QUERY_ORDER" != "shuffled" ]]; then
     echo "QUERY_ORDER must be either 'fixed' or 'shuffled'" >&2
     exit 1
@@ -144,6 +156,10 @@ for ((run = 1; run <= RUNS; run++)); do
             fi
         fi
         search_run_label=$(printf "%s_r%02d_%s_s%05d" "$SEARCH_LABEL_PREFIX" "$run" "$backend" "$seed")
+        run_docker_image="$DOCKER_IMAGE"
+        if [[ "$backend" == "pgvector" ]]; then
+            run_docker_image="$PGVECTOR_IMAGE"
+        fi
 
         cmd=(
             python3 "$PY_SCRIPT"
@@ -179,10 +195,8 @@ for ((run = 1; run <= RUNS; run++)); do
             cmd+=(--jvm-args "$JVM_ARGS")
         fi
 
-        if [[ -n "$DOCKER_IMAGE" ]]; then
-            if [[ "$backend" != "pgvector" || "$DOCKER_IMAGE" != "python:3.12-slim" ]]; then
-                cmd+=(--docker-image "$DOCKER_IMAGE")
-            fi
+        if [[ -n "$run_docker_image" ]]; then
+            cmd+=(--docker-image "$run_docker_image")
         fi
 
         if [[ -n "$PG_SHARED_BUFFERS" ]]; then
@@ -232,6 +246,23 @@ for ((run = 1; run <= RUNS; run++)); do
       "collected_at_utc": "$collected_at"
 }
 EOF
+
+        wheel_artifacts_for_dir="false"
+        if [[ "$backend" == "arcadedb" ]]; then
+            wheel_artifacts_for_dir="true"
+        fi
+        matrix_write_wheel_metadata "$db_path" "$collected_at" "$wheel_artifacts_for_dir"
+        matrix_embed_wheel_metadata_in_results "$db_path" "$collected_at"
+        matrix_write_dependency_versions \
+            "$db_path" \
+            "$collected_at" \
+            "arcadedb_embedded" "$ARCADEDB_VERSION" \
+            "faiss_cpu" "$FAISS_VERSION" \
+            "lancedb" "$LANCEDB_VERSION" \
+            "pgvector_image" "$PGVECTOR_IMAGE" \
+            "qdrant_image" "$QDRANT_IMAGE" \
+            "milvus_compose_version" "$MILVUS_COMPOSE_VERSION" \
+            "bruteforce" "builtin"
 
         if ((cmd_exit == 0)) && [[ -d "$db_path" ]]; then
             du_bytes="$(du -sB1 "$db_path" | awk '{print $1}')"
