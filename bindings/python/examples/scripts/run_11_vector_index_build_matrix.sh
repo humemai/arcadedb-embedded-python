@@ -11,13 +11,13 @@ source "$HELPERS_SH"
 # Dataset Tier  Batch   Memory  CPUs  Running   Note
 # Tiny          1,000   2GB     2
 # Small         2,500   4GB     4
-# Medium        5,000   16GB    8
+# Medium        5,000   8GB     8
 # Large         10,000  32GB    16
 # X-Large       25,000  64GB    32
 
 DATASET="stackoverflow-medium"
 BATCH_SIZE=5000
-MEM_LIMIT="16g"
+MEM_LIMIT="8g"
 THREADS=1
 RUNS=1
 SEED_START=0
@@ -29,9 +29,6 @@ STORE_VECTORS_IN_GRAPH=false
 ADD_HIERARCHY=true
 JVM_HEAP_FRACTION="0.80"
 JVM_ARGS=""
-ARCADEDB_VERSION="latest"
-FAISS_VERSION="latest"
-LANCEDB_VERSION="latest"
 DOCKER_IMAGE="python:3.12-slim"
 PGVECTOR_IMAGE="pgvector/pgvector:pg18-trixie"
 DB_ROOT="my_test_databases"
@@ -72,13 +69,7 @@ if [[ ! -f "$PY_SCRIPT" ]]; then
     exit 1
 fi
 
-FAISS_VERSION="$(matrix_resolve_version "$FAISS_VERSION" "faiss-cpu")"
-LANCEDB_VERSION="$(matrix_resolve_version "$LANCEDB_VERSION" "lancedb")"
-
 matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
-if [[ -n "${MATRIX_WHEEL_VERSION:-}" ]]; then
-    ARCADEDB_VERSION="$MATRIX_WHEEL_VERSION"
-fi
 
 case "$QUANTIZATION" in
     NONE | INT8 | BINARY | PRODUCT) ;;
@@ -139,9 +130,6 @@ for ((run = 1; run <= RUNS; run++)); do
             --mem-limit "$MEM_LIMIT"
             --jvm-heap-fraction "$JVM_HEAP_FRACTION"
             --server-fraction "$SERVER_FRACTION"
-            --arcadedb-version "$ARCADEDB_VERSION"
-            --faiss-version "$FAISS_VERSION"
-            --lancedb-version "$LANCEDB_VERSION"
             --docker-image "$run_docker_image"
             --add-hierarchy "$ADD_HIERARCHY"
             --pg-host "$PG_HOST"
@@ -223,9 +211,9 @@ EOF
             matrix_write_dependency_versions \
                 "$target_dir" \
                 "$collected_at" \
-                "arcadedb_embedded" "$ARCADEDB_VERSION" \
-                "faiss_cpu" "$FAISS_VERSION" \
-                "lancedb" "$LANCEDB_VERSION" \
+                "arcadedb_embedded" "auto" \
+                "faiss_cpu" "auto" \
+                "lancedb" "auto" \
                 "pgvector_image" "$PGVECTOR_IMAGE" \
                 "qdrant_image" "$QDRANT_IMAGE" \
                 "milvus_compose_version" "$MILVUS_COMPOSE_VERSION"

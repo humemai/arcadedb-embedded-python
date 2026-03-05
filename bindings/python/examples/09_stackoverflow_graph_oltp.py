@@ -7607,6 +7607,9 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
         results_path = db_path / f"results_{args.run_label}.json"
     else:
         results_path = db_path / "results.json"
+    arcadedb_module, _ = get_arcadedb_module()
+    ladybug_module = get_ladybug_module()
+    graphqlite_module = get_graphqlite_module()
     payload = {
         "dataset": args.dataset,
         "db": args.db,
@@ -7615,9 +7618,21 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
         "batch_size": args.batch_size,
         "mem_limit": args.mem_limit,
         "heap_size": args.heap_size_effective,
-        "arcadedb_version": args.arcadedb_version,
-        "ladybug_version": args.ladybug_version,
-        "graphqlite_version": args.graphqlite_version,
+        "arcadedb_version": (
+            getattr(arcadedb_module, "__version__", None)
+            if arcadedb_module is not None
+            else None
+        ),
+        "ladybug_version": (
+            getattr(ladybug_module, "__version__", None)
+            if ladybug_module is not None
+            else None
+        ),
+        "graphqlite_version": (
+            getattr(graphqlite_module, "__version__", None)
+            if graphqlite_module is not None
+            else None
+        ),
         "sqlite_profile": summary.get("sqlite_profile"),
         "sqlite_pragmas": summary.get("sqlite_pragmas"),
         "sqlite_version": sqlite3.sqlite_version,
@@ -7762,12 +7777,9 @@ def run_in_docker(args) -> bool:
 
     packages = ["lxml"]
     if args.db in ("ladybug", "ladybugdb"):
-        if args.ladybug_version:
-            packages.append(f"real_ladybug=={args.ladybug_version}")
-        else:
-            packages.append("real_ladybug")
+        packages.append("real_ladybug")
     if args.db == "graphqlite":
-        packages.append(f"graphqlite=={args.graphqlite_version}")
+        packages.append("graphqlite")
 
     packages_str = " ".join(packages)
 
@@ -7872,24 +7884,6 @@ def main():
         type=float,
         default=0.80,
         help="JVM heap fraction of --mem-limit (default: 0.80)",
-    )
-    parser.add_argument(
-        "--arcadedb-version",
-        type=str,
-        default="26.3.1.dev1",
-        help="arcadedb-embedded version to install in Docker (default: 26.3.1.dev1)",
-    )
-    parser.add_argument(
-        "--ladybug-version",
-        type=str,
-        default="0.15.1",
-        help="real_ladybug version to install in Docker (default: 0.15.1)",
-    )
-    parser.add_argument(
-        "--graphqlite-version",
-        type=str,
-        default="0.3.5",
-        help="graphqlite version to install in Docker (default: 0.3.5)",
     )
     parser.add_argument(
         "--docker-image",

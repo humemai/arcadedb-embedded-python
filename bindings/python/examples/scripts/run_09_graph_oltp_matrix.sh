@@ -26,7 +26,7 @@ source "$HELPERS_SH"
 
 DATASET="stackoverflow-medium"
 ARCADEDB_TRANSACTIONS=100000
-LADYBUG_TRANSACTIONS_FRACTION=0.1
+LADYBUG_TRANSACTIONS_FRACTION=1
 GRAPHQLITE_TRANSACTIONS_FRACTION=0.1
 BATCH_SIZE=5000
 MEM_LIMIT="4g"
@@ -34,9 +34,6 @@ THREADS=1
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
-ARCADEDB_VERSION="latest"
-LADYBUG_VERSION="latest"
-GRAPHQLITE_VERSION="latest"
 DOCKER_IMAGE="python:3.12-slim"
 # DBS_RAW="python_memory"
 DBS_RAW="arcadedb_sql,arcadedb_cypher,ladybug,sqlite_native,python_memory"
@@ -73,18 +70,12 @@ if [[ ! -f "$PY_SCRIPT" ]]; then
     exit 1
 fi
 
-LADYBUG_VERSION="$(matrix_resolve_version "$LADYBUG_VERSION" "real_ladybug")"
-GRAPHQLITE_VERSION="$(matrix_resolve_version "$GRAPHQLITE_VERSION" "graphqlite")"
-
 matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
-if [[ -n "${MATRIX_WHEEL_VERSION:-}" ]]; then
-    ARCADEDB_VERSION="$MATRIX_WHEEL_VERSION"
-fi
 
 cd "$EXAMPLES_DIR"
 
 echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED_START"
-echo "Profile: threads=$THREADS arcadedb-transactions=$ARCADEDB_TRANSACTIONS ladybug-transactions-fraction=$LADYBUG_TRANSACTIONS_FRACTION graphqlite-transactions-fraction=$GRAPHQLITE_TRANSACTIONS_FRACTION mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE graphqlite-version=$GRAPHQLITE_VERSION"
+echo "Profile: threads=$THREADS arcadedb-transactions=$ARCADEDB_TRANSACTIONS ladybug-transactions-fraction=$LADYBUG_TRANSACTIONS_FRACTION graphqlite-transactions-fraction=$GRAPHQLITE_TRANSACTIONS_FRACTION mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE"
 
 dataset_slug="${DATASET//-/_}"
 
@@ -151,9 +142,6 @@ for ((run = 1; run <= RUNS; run++)); do
             --batch-size "$BATCH_SIZE"
             --mem-limit "$MEM_LIMIT"
             --jvm-heap-fraction "$JVM_HEAP_FRACTION"
-            --arcadedb-version "$ARCADEDB_VERSION"
-            --ladybug-version "$LADYBUG_VERSION"
-            --graphqlite-version "$GRAPHQLITE_VERSION"
             --docker-image "$DOCKER_IMAGE"
             --seed "$seed"
             --run-label "$run_label"
@@ -211,9 +199,9 @@ EOF
         matrix_write_dependency_versions \
             "$target_dir" \
             "$collected_at" \
-            "arcadedb_embedded" "$ARCADEDB_VERSION" \
-            "real_ladybug" "$LADYBUG_VERSION" \
-            "graphqlite" "$GRAPHQLITE_VERSION" \
+            "arcadedb_embedded" "auto" \
+            "real_ladybug" "auto" \
+            "graphqlite" "auto" \
             "sqlite_native" "builtin" \
             "python_memory" "builtin"
 

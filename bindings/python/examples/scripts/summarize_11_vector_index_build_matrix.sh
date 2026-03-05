@@ -120,6 +120,8 @@ def format_version_summary_lines(version_sets, max_values=3):
     out = []
     for key in sorted(version_sets.keys()):
         values = sorted(version_sets.get(key) or [])
+        if len(values) > 1 and "auto" in values:
+            values = [value for value in values if value != "auto"]
         if not values:
             continue
         shown = ", ".join(values[:max_values])
