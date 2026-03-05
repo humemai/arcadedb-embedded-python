@@ -83,8 +83,7 @@ PY
         uv pip install --python "$(command -v python3)" --user --force-reinstall "$wheel_path"
     fi
 
-    matrix_log "Removing local wheel artifact after install: $wheel_name"
-    rm -f "$wheel_path"
+    matrix_log "Keeping local wheel artifact for Docker-wrapped example runs: $wheel_name"
 
     local arcadedb_tag
     arcadedb_tag="$(python3 "$py_bindings_dir/extract_version.py" --format=docker)"
@@ -103,7 +102,7 @@ print(getattr(arcadedb_embedded, '__version__', 'unknown'))
 PY
     )"
 
-    export MATRIX_WHEEL_PATH=""
+    export MATRIX_WHEEL_PATH="$wheel_path"
     export MATRIX_WHEEL_FILE="$wheel_name"
     export MATRIX_WHEEL_VERSION="$wheel_version"
     export MATRIX_ARCADEDB_DOCKER_TAG="$arcadedb_tag"
