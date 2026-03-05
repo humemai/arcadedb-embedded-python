@@ -1906,6 +1906,12 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
     )
     duckdb_module = get_duckdb_module()
     duckdb_version = duckdb_module.__version__ if duckdb_module is not None else None
+    arcadedb_module, _ = get_arcadedb_module()
+    arcadedb_version = (
+        getattr(arcadedb_module, "__version__", None)
+        if arcadedb_module is not None
+        else None
+    )
 
     payload = {
         "dataset": args.dataset,
@@ -1916,8 +1922,8 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
         "batch_size": args.batch_size,
         "mem_limit": args.mem_limit,
         "heap_size": args.heap_size_effective,
-        "arcadedb_version": args.arcadedb_version,
-        "duckdb_version": args.duckdb_version,
+        "arcadedb_version": arcadedb_version,
+        "duckdb_version": duckdb_version,
         "docker_image": args.docker_image,
         "sqlite_version": sqlite3.sqlite_version,
         "sqlite_profile": summary.get("sqlite_profile"),
@@ -2053,7 +2059,7 @@ def run_in_docker(args):
 
     packages = ["lxml"]
     if args.db == "duckdb":
-        packages.append(f"duckdb=={args.duckdb_version}")
+        packages.append("duckdb")
     if args.db == "postgresql":
         packages.append("psycopg[binary]")
 
@@ -2168,15 +2174,6 @@ def main():
         type=float,
         default=0.80,
         help="JVM heap fraction of --mem-limit (default: 0.80)",
-    )
-    parser.add_argument(
-        "--arcadedb-version",
-        type=str,
-        default="26.3.1.dev1",
-        help="arcadedb-embedded version to install in Docker",
-    )
-    parser.add_argument(
-        "--duckdb-version", type=str, default="1.4.4", help="duckdb version"
     )
     parser.add_argument(
         "--docker-image", type=str, default="python:3.12-slim", help="Docker image"

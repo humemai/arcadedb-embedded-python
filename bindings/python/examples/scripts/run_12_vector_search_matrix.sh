@@ -11,12 +11,12 @@ source "$HELPERS_SH"
 # Dataset Tier  Memory  CPUs  Running   Note
 # Tiny          2GB     2
 # Small         4GB     4
-# Medium        8GB     8
+# Medium        4GB     8
 # Large         16GB    16
 # X-Large       32GB    32
 
 DATASET="stackoverflow-medium"
-MEM_LIMIT="8g"
+MEM_LIMIT="4g"
 THREADS=1
 RUNS=1
 SEED_START=0
@@ -29,9 +29,6 @@ OVERQUERY_FACTORS="4"
 
 JVM_HEAP_FRACTION="0.80"
 JVM_ARGS=""
-ARCADEDB_VERSION="latest"
-FAISS_VERSION="latest"
-LANCEDB_VERSION="latest"
 DOCKER_IMAGE="python:3.12-slim"
 PGVECTOR_IMAGE="pgvector/pgvector:pg18-trixie"
 DB_ROOT="my_test_databases"
@@ -52,7 +49,7 @@ MILVUS_PORT=19530
 MILVUS_COMPOSE_VERSION="v2.6.10"
 MILVUS_COLLECTION="vectordata"
 
-BACKENDS_RAW="arcadedb"
+BACKENDS_RAW="bruteforce,milvus,faiss,lancedb,arcadedb,pgvector,qdrant"
 BUILD_LABEL_PREFIX="sweep11"
 SEARCH_LABEL_PREFIX="sweep12"
 
@@ -102,13 +99,7 @@ if [[ ! -f "$PY_SCRIPT" ]]; then
     exit 1
 fi
 
-FAISS_VERSION="$(matrix_resolve_version "$FAISS_VERSION" "faiss-cpu")"
-LANCEDB_VERSION="$(matrix_resolve_version "$LANCEDB_VERSION" "lancedb")"
-
 matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
-if [[ -n "${MATRIX_WHEEL_VERSION:-}" ]]; then
-    ARCADEDB_VERSION="$MATRIX_WHEEL_VERSION"
-fi
 
 if [[ "$QUERY_ORDER" != "fixed" && "$QUERY_ORDER" != "shuffled" ]]; then
     echo "QUERY_ORDER must be either 'fixed' or 'shuffled'" >&2
@@ -177,9 +168,6 @@ for ((run = 1; run <= RUNS; run++)); do
             --mem-limit "$MEM_LIMIT"
             --jvm-heap-fraction "$JVM_HEAP_FRACTION"
             --server-fraction "$SERVER_FRACTION"
-            --arcadedb-version "$ARCADEDB_VERSION"
-            --faiss-version "$FAISS_VERSION"
-            --lancedb-version "$LANCEDB_VERSION"
             --pg-host "$PG_HOST"
             --pg-port "$PG_PORT"
             --pg-user "$PG_USER"
@@ -256,9 +244,9 @@ EOF
         matrix_write_dependency_versions \
             "$db_path" \
             "$collected_at" \
-            "arcadedb_embedded" "$ARCADEDB_VERSION" \
-            "faiss_cpu" "$FAISS_VERSION" \
-            "lancedb" "$LANCEDB_VERSION" \
+            "arcadedb_embedded" "auto" \
+            "faiss_cpu" "auto" \
+            "lancedb" "auto" \
             "pgvector_image" "$PGVECTOR_IMAGE" \
             "qdrant_image" "$QDRANT_IMAGE" \
             "milvus_compose_version" "$MILVUS_COMPOSE_VERSION" \

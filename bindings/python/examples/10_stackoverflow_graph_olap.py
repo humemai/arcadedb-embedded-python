@@ -4781,13 +4781,20 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
     else:
         results_path = db_path / "results.json"
     query_telemetry = build_query_telemetry(summary.get("queries", []))
+    arcadedb_module, _ = get_arcadedb_module()
+    ladybug_module = get_ladybug_module()
+    graphqlite_module = get_graphqlite_module()
     payload = {
         "dataset": args.dataset,
         "db": args.db,
         "batch_size": args.batch_size,
         "mem_limit": args.mem_limit,
         "heap_size": args.heap_size_effective,
-        "arcadedb_version": args.arcadedb_version,
+        "arcadedb_version": (
+            getattr(arcadedb_module, "__version__", None)
+            if arcadedb_module is not None
+            else None
+        ),
         "arcadedb_olap_language": summary.get(
             "arcadedb_olap_language",
             (
@@ -4796,8 +4803,16 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
                 else None
             ),
         ),
-        "ladybug_version": args.ladybug_version,
-        "graphqlite_version": args.graphqlite_version,
+        "ladybug_version": (
+            getattr(ladybug_module, "__version__", None)
+            if ladybug_module is not None
+            else None
+        ),
+        "graphqlite_version": (
+            getattr(graphqlite_module, "__version__", None)
+            if graphqlite_module is not None
+            else None
+        ),
         "sqlite_profile": args.sqlite_profile,
         "docker_image": args.docker_image,
         "threads": args.threads,
@@ -4950,15 +4965,9 @@ def run_in_docker(args) -> bool:
 
     packages = ["lxml"]
     if args.db in ("ladybug", "ladybugdb"):
-        if args.ladybug_version:
-            packages.append(f"real_ladybug=={args.ladybug_version}")
-        else:
-            packages.append("real_ladybug")
+        packages.append("real_ladybug")
     if args.db == "graphqlite":
-        if args.graphqlite_version:
-            packages.append(f"graphqlite=={args.graphqlite_version}")
-        else:
-            packages.append("graphqlite")
+        packages.append("graphqlite")
 
     packages_str = " ".join(packages)
 
@@ -5058,24 +5067,6 @@ def main():
         type=float,
         default=0.80,
         help="JVM heap fraction of --mem-limit (default: 0.80)",
-    )
-    parser.add_argument(
-        "--arcadedb-version",
-        type=str,
-        default="26.3.1.dev1",
-        help="arcadedb-embedded version to install in Docker (default: 26.3.1.dev1)",
-    )
-    parser.add_argument(
-        "--ladybug-version",
-        type=str,
-        default="0.15.1",
-        help="real_ladybug version to install in Docker (default: 0.15.1)",
-    )
-    parser.add_argument(
-        "--graphqlite-version",
-        type=str,
-        default="0.3.5",
-        help="graphqlite version to install in Docker (default: 0.3.5)",
     )
     parser.add_argument(
         "--sqlite-profile",
