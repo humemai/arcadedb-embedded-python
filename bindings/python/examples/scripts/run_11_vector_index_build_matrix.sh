@@ -49,7 +49,7 @@ MILVUS_PORT=19530
 MILVUS_COMPOSE_VERSION="v2.6.10"
 MILVUS_COLLECTION="vectordata"
 
-BACKENDS_RAW="faiss,lancedb,arcadedb,pgvector,qdrant,milvus"
+BACKENDS_RAW="arcadedb,faiss,lancedb,pgvector,qdrant,milvus"
 LABEL_PREFIX="sweep11"
 
 if [[ $# -gt 0 ]]; then
