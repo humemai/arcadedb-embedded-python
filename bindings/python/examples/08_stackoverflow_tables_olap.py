@@ -1201,6 +1201,12 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
         results_path = db_path / "results.json"
     duckdb_module = get_duckdb_module()
     duckdb_runtime_version = duckdb_module.__version__ if duckdb_module else None
+    arcadedb_module, _ = get_arcadedb_module()
+    arcadedb_runtime_version = (
+        getattr(arcadedb_module, "__version__", None)
+        if arcadedb_module is not None
+        else None
+    )
     query_telemetry = build_query_telemetry(summary.get("queries", {}).get("items", []))
     payload = {
         "dataset": args.dataset,
@@ -1209,8 +1215,8 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
         "batch_size": args.batch_size,
         "mem_limit": args.mem_limit,
         "heap_size": args.heap_size_effective,
-        "arcadedb_version": args.arcadedb_version,
-        "duckdb_version": args.duckdb_version,
+        "arcadedb_version": arcadedb_runtime_version,
+        "duckdb_version": duckdb_runtime_version,
         "docker_image": args.docker_image,
         "seed": args.seed,
         "run_label": args.run_label,
@@ -1363,7 +1369,7 @@ def run_in_docker(args):
 
     packages = ["lxml"]
     if args.db == "duckdb":
-        packages.append(f"duckdb=={args.duckdb_version}")
+        packages.append("duckdb")
     if args.db == "postgresql":
         packages.append("psycopg[binary]")
     packages_str = " ".join(packages)
@@ -2016,18 +2022,6 @@ def main():
         type=float,
         default=0.80,
         help="JVM heap fraction of --mem-limit (default: 0.80)",
-    )
-    parser.add_argument(
-        "--arcadedb-version",
-        type=str,
-        default="26.3.1.dev1",
-        help="arcadedb-embedded version to install in Docker (default: 26.3.1.dev1)",
-    )
-    parser.add_argument(
-        "--duckdb-version",
-        type=str,
-        default="1.4.4",
-        help="duckdb version to install in Docker (default: 1.4.4)",
     )
     parser.add_argument(
         "--docker-image",

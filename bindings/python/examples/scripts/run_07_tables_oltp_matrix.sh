@@ -30,8 +30,6 @@ THREADS=1
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
-ARCADEDB_VERSION="latest"
-DUCKDB_VERSION="latest"
 DOCKER_IMAGE="python:3.12-slim"
 POSTGRESQL_IMAGE="postgres:latest"
 DBS_RAW="arcadedb,sqlite,duckdb,postgresql"
@@ -64,12 +62,7 @@ if [[ ! -f "$PY_SCRIPT" ]]; then
     exit 1
 fi
 
-DUCKDB_VERSION="$(matrix_resolve_version "$DUCKDB_VERSION" "duckdb")"
-
 matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
-if [[ -n "${MATRIX_WHEEL_VERSION:-}" ]]; then
-    ARCADEDB_VERSION="$MATRIX_WHEEL_VERSION"
-fi
 
 cd "$EXAMPLES_DIR"
 
@@ -101,8 +94,6 @@ for ((run = 1; run <= RUNS; run++)); do
             --batch-size "$BATCH_SIZE"
             --mem-limit "$MEM_LIMIT"
             --jvm-heap-fraction "$JVM_HEAP_FRACTION"
-            --arcadedb-version "$ARCADEDB_VERSION"
-            --duckdb-version "$DUCKDB_VERSION"
             --docker-image "$run_docker_image"
             --seed "$seed"
             --run-label "$run_label"
@@ -157,8 +148,8 @@ EOF
         matrix_write_dependency_versions \
             "$target_dir" \
             "$collected_at" \
-            "arcadedb_embedded" "$ARCADEDB_VERSION" \
-            "duckdb" "$DUCKDB_VERSION" \
+            "arcadedb_embedded" "auto" \
+            "duckdb" "auto" \
             "postgresql_image" "$POSTGRESQL_IMAGE" \
             "sqlite" "builtin"
 

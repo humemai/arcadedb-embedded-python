@@ -23,9 +23,6 @@ THREADS=1
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
-ARCADEDB_VERSION="latest"
-LADYBUG_VERSION="latest"
-GRAPHQLITE_VERSION="latest"
 SQLITE_PROFILE="olap"
 DOCKER_IMAGE="python:3.12-slim"
 QUERY_RUNS=10
@@ -52,13 +49,7 @@ if [[ ! -f "$PY_SCRIPT" ]]; then
     exit 1
 fi
 
-LADYBUG_VERSION="$(matrix_resolve_version "$LADYBUG_VERSION" "real_ladybug")"
-GRAPHQLITE_VERSION="$(matrix_resolve_version "$GRAPHQLITE_VERSION" "graphqlite")"
-
 matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
-if [[ -n "${MATRIX_WHEEL_VERSION:-}" ]]; then
-    ARCADEDB_VERSION="$MATRIX_WHEEL_VERSION"
-fi
 
 if [[ "$QUERY_ORDER" != "fixed" && "$QUERY_ORDER" != "shuffled" ]]; then
     echo "QUERY_ORDER must be either 'fixed' or 'shuffled'" >&2
@@ -73,7 +64,7 @@ fi
 cd "$EXAMPLES_DIR"
 
 echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED_START"
-echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER sqlite-profile=$SQLITE_PROFILE graphqlite-version=$GRAPHQLITE_VERSION"
+echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER sqlite-profile=$SQLITE_PROFILE"
 
 dataset_slug="${DATASET//-/_}"
 
@@ -108,9 +99,6 @@ for ((run = 1; run <= RUNS; run++)); do
             --batch-size "$BATCH_SIZE"
             --mem-limit "$MEM_LIMIT"
             --jvm-heap-fraction "$JVM_HEAP_FRACTION"
-            --arcadedb-version "$ARCADEDB_VERSION"
-            --ladybug-version "$LADYBUG_VERSION"
-            --graphqlite-version "$GRAPHQLITE_VERSION"
             --sqlite-profile "$SQLITE_PROFILE"
             --docker-image "$DOCKER_IMAGE"
             --query-runs "$QUERY_RUNS"
@@ -144,9 +132,9 @@ for ((run = 1; run <= RUNS; run++)); do
             matrix_write_dependency_versions \
                 "$target_dir" \
                 "$collected_at" \
-                "arcadedb_embedded" "$ARCADEDB_VERSION" \
-                "real_ladybug" "$LADYBUG_VERSION" \
-                "graphqlite" "$GRAPHQLITE_VERSION" \
+                "arcadedb_embedded" "auto" \
+                "real_ladybug" "auto" \
+                "graphqlite" "auto" \
                 "sqlite_native" "builtin" \
                 "python_memory" "builtin"
 

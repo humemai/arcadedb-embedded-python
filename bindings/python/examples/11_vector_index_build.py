@@ -1389,7 +1389,7 @@ def run_in_docker(args) -> bool:
 
     filtered_args: list[str] = []
     skip_next = False
-    hidden_args = {"--docker-image", "--arcadedb-version"}
+    hidden_args = {"--docker-image"}
     custom_docker_image = False
     for arg in sys.argv[1:]:
         if skip_next:
@@ -1400,9 +1400,8 @@ def run_in_docker(args) -> bool:
                 custom_docker_image = True
             skip_next = True
             continue
-        if arg.startswith("--docker-image=") or arg.startswith("--arcadedb-version="):
-            if arg.startswith("--docker-image="):
-                custom_docker_image = True
+        if arg.startswith("--docker-image="):
+            custom_docker_image = True
             continue
         filtered_args.append(arg)
 
@@ -1463,7 +1462,7 @@ def run_in_docker(args) -> bool:
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
                 "python -m pip install --no-cache-dir uv",
-                f"uv pip install faiss-cpu=={args.faiss_version} numpy psutil",
+                "uv pip install faiss-cpu numpy psutil",
                 "echo 'Starting vector build benchmark...'",
                 f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
             ]
@@ -1475,7 +1474,7 @@ def run_in_docker(args) -> bool:
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
                 "python -m pip install --no-cache-dir uv",
-                f"uv pip install lancedb=={args.lancedb_version} numpy psutil",
+                "uv pip install lancedb numpy psutil",
                 "echo 'Starting vector build benchmark...'",
                 f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
             ]
@@ -1608,9 +1607,6 @@ def collect_runtime_metadata(
         "docker_image": args.docker_image or default_docker_image(args.backend),
         "docker_version": get_docker_version(),
         "backend": args.backend,
-        "arcadedb_requested_version": args.arcadedb_version,
-        "faiss_requested_version": args.faiss_version,
-        "lancedb_requested_version": args.lancedb_version,
         "runtime_versions": runtime_versions,
         "is_running_in_docker": is_running_in_docker(),
     }
@@ -1701,9 +1697,6 @@ def main() -> None:
         help="JVM heap fraction of --mem-limit (default: 0.80)",
     )
     parser.add_argument("--jvm-args", default=None)
-    parser.add_argument("--arcadedb-version", type=str, default="26.3.1.dev1")
-    parser.add_argument("--faiss-version", type=str, default="1.13.2")
-    parser.add_argument("--lancedb-version", type=str, default="0.29.2")
     parser.add_argument(
         "--docker-image",
         type=str,
@@ -2373,7 +2366,6 @@ def main() -> None:
             },
             "faiss": {
                 "index_file": str(db_path / "faiss.index"),
-                "requested_version": args.faiss_version,
                 "metric": "cosine_via_inner_product_normalized",
                 "hnsw_m": args.max_connections,
                 "hnsw_ef_construct": args.beam_width,
@@ -2381,7 +2373,6 @@ def main() -> None:
             "lancedb": {
                 "data_dir": str(db_path / "lancedb-data"),
                 "table": "vectordata",
-                "requested_version": args.lancedb_version,
                 "metric": "cosine",
                 "index_type": "IVF_HNSW_SQ",
                 "hnsw_m": args.max_connections,
