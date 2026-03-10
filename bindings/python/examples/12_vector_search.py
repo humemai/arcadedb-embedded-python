@@ -1737,7 +1737,7 @@ def run_in_docker(args) -> bool:
             filtered_args.extend(["--qdrant-host", "host.docker.internal"])
 
     arcadedb_wheel_mount_path = None
-    if args.backend == "arcadedb":
+    if args.backend == "arcadedb_sql":
         wheel_candidates = sorted(
             (repo_root / "bindings/python/dist").glob("*embed*.whl")
         )
@@ -1757,7 +1757,7 @@ def run_in_docker(args) -> bool:
 
     image = args.docker_image or default_docker_image(args.backend)
 
-    if args.backend == "arcadedb":
+    if args.backend == "arcadedb_sql":
         inner_cmd = " && ".join(
             [
                 "python -m venv /tmp/bench-venv",
@@ -1936,7 +1936,7 @@ def main() -> None:
     parser.add_argument(
         "--backend",
         choices=[
-            "arcadedb",
+            "arcadedb_sql",
             "faiss",
             "lancedb",
             "bruteforce",
@@ -1944,7 +1944,7 @@ def main() -> None:
             "qdrant",
             "milvus",
         ],
-        default="arcadedb",
+        default="arcadedb_sql",
     )
     parser.add_argument("--dataset", required=True)
     parser.add_argument(
@@ -2088,7 +2088,7 @@ def main() -> None:
 
     runtime_versions: dict[str, str | None] = {}
 
-    if args.backend == "arcadedb":
+    if args.backend == "arcadedb_sql":
         import arcadedb_embedded as arcadedb
 
         stop_cpu = start_cpu_logger(2)
@@ -2725,7 +2725,7 @@ def main() -> None:
             quantization,
             runtime_versions,
             effective_heap_size=(
-                arcadedb_heap_size if args.backend == "arcadedb" else None
+                arcadedb_heap_size if args.backend == "arcadedb_sql" else None
             ),
         ),
         "budget": budget_allocation_report(args),
@@ -2747,7 +2747,7 @@ def main() -> None:
                 pg_shared_buffers if args.backend == "pgvector" else None
             ),
             "arcadedb_heap_size_effective": (
-                arcadedb_heap_size if args.backend == "arcadedb" else None
+                arcadedb_heap_size if args.backend == "arcadedb_sql" else None
             ),
             "build_config": build_config,
         },

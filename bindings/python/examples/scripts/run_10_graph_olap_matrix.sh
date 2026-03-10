@@ -78,12 +78,12 @@ for ((run = 1; run <= RUNS; run++)); do
 
         db_engine="$db"
         case "$db" in
-            arcadedb | arcadedb_cypher | ladybug | ladybugdb | sqlite_native | graphqlite | python_memory)
+            arcadedb_sql | arcadedb_cypher | ladybug | ladybugdb | sqlite_native | graphqlite | python_memory)
                 db_engine="$db"
                 ;;
             *)
                 echo "Unsupported DB alias in DBS_RAW: $db" >&2
-                echo "Supported values: arcadedb_cypher, arcadedb, ladybug, ladybugdb, sqlite_native, graphqlite, python_memory" >&2
+                echo "Supported values: arcadedb_sql, arcadedb_cypher, ladybug, ladybugdb, sqlite_native, graphqlite, python_memory" >&2
                 exit 1
                 ;;
         esac
@@ -124,7 +124,7 @@ for ((run = 1; run <= RUNS; run++)); do
         if [[ -d "$target_dir" ]]; then
             collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             wheel_artifacts_for_dir="false"
-            if [[ "$db_engine" == "arcadedb" || "$db_engine" == "arcadedb_cypher" ]]; then
+            if [[ "$db_engine" == "arcadedb_sql" || "$db_engine" == "arcadedb_cypher" ]]; then
                 wheel_artifacts_for_dir="true"
             fi
             matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"

@@ -1349,7 +1349,7 @@ def run_in_docker(args):
         filtered_args.append(arg)
 
     arcadedb_wheel_mount_path = None
-    if args.db == "arcadedb":
+    if args.db == "arcadedb_sql":
         wheel_candidates = sorted(
             (repo_root / "bindings/python/dist").glob("*embed*.whl")
         )
@@ -1995,9 +1995,9 @@ def main():
     )
     parser.add_argument(
         "--db",
-        choices=["arcadedb", "sqlite", "duckdb", "postgresql"],
-        default="arcadedb",
-        help="Database to test (default: arcadedb)",
+        choices=["arcadedb_sql", "sqlite", "duckdb", "postgresql"],
+        default="arcadedb_sql",
+        help="Database to test (default: arcadedb_sql)",
     )
     parser.add_argument(
         "--batch-size",
@@ -2084,12 +2084,12 @@ def main():
             args.mem_limit,
             args.jvm_heap_fraction,
         )
-        if args.db == "arcadedb"
+        if args.db == "arcadedb_sql"
         else args.mem_limit
     )
     args.heap_size_effective = heap_size
     jvm_kwargs = {"heap_size": heap_size}
-    if args.db == "arcadedb":
+    if args.db == "arcadedb_sql":
         jvm_kwargs["jvm_args"] = (
             "-Darcadedb.queryMaxHeapElementsAllowedPerOp="
             f"{args.arcadedb_query_max_heap_elements}"
@@ -2112,7 +2112,7 @@ def main():
     print(f"Query runs: {args.query_runs}")
     print(f"Query order: {args.query_order}")
     print(f"Seed: {args.seed}")
-    if args.db == "arcadedb":
+    if args.db == "arcadedb_sql":
         print(f"JVM heap size: {heap_size}")
         print(
             "ArcadeDB query max heap elements/op: "
@@ -2123,7 +2123,7 @@ def main():
 
     start_time = time.perf_counter()
 
-    if args.db == "arcadedb":
+    if args.db == "arcadedb_sql":
         stop_event, rss_state, rss_thread = start_rss_sampler()
         summary = run_olap_arcadedb(
             db_path=db_path,
@@ -2180,7 +2180,7 @@ def main():
         total_time = time.perf_counter() - start_time
     else:
         raise NotImplementedError(
-            "Only arcadedb, sqlite, duckdb, and postgresql are supported for now"
+            "Only arcadedb_sql, sqlite, duckdb, and postgresql are supported for now"
         )
 
     summary["total_time_s"] = total_time

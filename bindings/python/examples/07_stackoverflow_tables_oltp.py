@@ -2039,7 +2039,7 @@ def run_in_docker(args):
         filtered_args.append(arg)
 
     arcadedb_wheel_mount_path = None
-    if args.db == "arcadedb":
+    if args.db == "arcadedb_sql":
         wheel_candidates = sorted(
             (repo_root / "bindings/python/dist").glob("*embed*.whl")
         )
@@ -2147,9 +2147,9 @@ def main():
     )
     parser.add_argument(
         "--db",
-        choices=["arcadedb", "sqlite", "duckdb", "postgresql"],
-        default="arcadedb",
-        help="Database to test (default: arcadedb)",
+        choices=["arcadedb_sql", "sqlite", "duckdb", "postgresql"],
+        default="arcadedb_sql",
+        help="Database to test (default: arcadedb_sql)",
     )
     parser.add_argument(
         "--threads", type=int, default=4, help="Number of worker threads (default: 4)"
@@ -2208,7 +2208,7 @@ def main():
 
     heap_size = (
         resolve_arcadedb_heap_size(args.mem_limit, args.jvm_heap_fraction)
-        if args.db == "arcadedb"
+        if args.db == "arcadedb_sql"
         else None
     )
     args.heap_size_effective = heap_size
@@ -2234,12 +2234,12 @@ def main():
         print(f"SQLite profile: {args.sqlite_profile}")
     print(f"Threads: {args.threads}")
     print(f"Transactions: {args.transactions:,}")
-    if args.db == "arcadedb":
+    if args.db == "arcadedb_sql":
         print(f"JVM heap size: {heap_size}")
     print(f"DB path: {db_path}")
     print()
 
-    if args.db == "arcadedb":
+    if args.db == "arcadedb_sql":
         summary = run_oltp_arcadedb(
             db_path=db_path,
             data_dir=data_dir,
