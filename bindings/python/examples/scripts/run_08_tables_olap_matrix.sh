@@ -16,9 +16,9 @@ source "$HELPERS_SH"
 # Large         10,000  8GB     16
 # X-Large       25,000  32GB    32
 
-DATASET="stackoverflow-tiny"
-BATCH_SIZE=1000
-MEM_LIMIT="1g"
+DATASET="stackoverflow-medium"
+BATCH_SIZE=5000
+MEM_LIMIT="4g"
 THREADS=1
 RUNS=1
 SEED_START=0
@@ -56,6 +56,7 @@ echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED
 echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER arcadedb-query-max-heap-elements=$ARCADEDB_QUERY_MAX_HEAP_ELEMENTS"
 
 dataset_slug="${DATASET//-/_}"
+mem_tag="mem$(printf '%s' "$MEM_LIMIT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
 
 execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
@@ -96,7 +97,7 @@ for ((run = 1; run <= RUNS; run++)); do
         cmd_exit=$?
         set -e
 
-        target_dir="my_test_databases/${dataset_slug}_tables_olap_${db}_${run_label}"
+        target_dir="my_test_databases/${dataset_slug}_tables_olap_${db}_${mem_tag}_${run_label}"
         if [[ ! -d "$target_dir" ]]; then
             mkdir -p "$target_dir"
         fi

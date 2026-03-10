@@ -246,6 +246,11 @@ def heap_tag_from_args(heap_size: str | None, jvm_args: str | None) -> str:
     return "default"
 
 
+def size_tag(value: str) -> str:
+    normalized = re.sub(r"[^0-9a-z]+", "", value.lower())
+    return normalized or "default"
+
+
 def _match_label(pattern: re.Pattern[str], name: str) -> str | None:
     m = pattern.match(name)
     if m:
@@ -1770,6 +1775,7 @@ def main() -> None:
             f"backend={args.backend}",
             f"dataset={args.dataset}",
             f"label={label}",
+            f"mem={size_tag(args.mem_limit)}",
             f"heap={heap_tag}",
             f"maxconn={args.max_connections}",
             f"beam={args.beam_width}",

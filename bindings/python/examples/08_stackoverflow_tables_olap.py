@@ -42,8 +42,20 @@ EXPECTED_DATASETS = {
 SQLITE_PROFILE_CHOICES = ["fair", "perf", "olap"]
 
 
-def build_benchmark_db_name(dataset: str, db: str, run_label: Optional[str]) -> str:
+def mem_limit_tag(mem_limit: str) -> str:
+    normalized = re.sub(r"[^0-9a-z]+", "", mem_limit.lower())
+    return f"mem{normalized}" if normalized else "memdefault"
+
+
+def build_benchmark_db_name(
+    dataset: str,
+    db: str,
+    run_label: Optional[str],
+    mem_limit: Optional[str] = None,
+) -> str:
     db_name = f"{dataset.replace('-', '_')}_tables_olap_{db}"
+    if mem_limit:
+        db_name = f"{db_name}_{mem_limit_tag(mem_limit)}"
     if run_label:
         db_name = f"{db_name}_{run_label}"
     return db_name
@@ -1392,7 +1404,12 @@ def run_in_docker(args):
         f"{python_cmd} -u 08_stackoverflow_tables_olap.py {' '.join(filtered_args)}"
     )
     if args.db == "postgresql":
-        db_name = build_benchmark_db_name(args.dataset, args.db, args.run_label)
+        db_name = build_benchmark_db_name(
+            args.dataset,
+            args.db,
+            args.run_label,
+            args.mem_limit,
+        )
         inner_cmd_parts.append(
             "chown -R $HOST_UID:$HOST_GID "
             f"/workspace/bindings/python/examples/my_test_databases/{db_name}"
@@ -2098,7 +2115,12 @@ def main():
     data_dir = Path(__file__).parent / "data" / args.dataset
     ensure_dataset(data_dir)
 
-    db_name = build_benchmark_db_name(args.dataset, args.db, args.run_label)
+    db_name = build_benchmark_db_name(
+        args.dataset,
+        args.db,
+        args.run_label,
+        args.mem_limit,
+    )
     db_path = Path("./my_test_databases") / db_name
 
     print("=" * 80)

@@ -167,6 +167,7 @@ for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results
     run_obj = data.get("run") if isinstance(data.get("run"), dict) else {}
     search_obj = data.get("search") if isinstance(data.get("search"), dict) else {}
     db_obj = data.get("db") if isinstance(data.get("db"), dict) else {}
+    env_obj = data.get("environment") if isinstance(data.get("environment"), dict) else {}
     telemetry_obj = data.get("telemetry") if isinstance(data.get("telemetry"), dict) else {}
 
     run_label = run_obj.get("run_label") or search_obj.get("run_label")
@@ -215,6 +216,7 @@ for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results
                 "backend": db_obj.get("backend"),
                 "run_label": run_label,
                 "seed": to_int(search_obj.get("seed")),
+                "mem_limit": env_obj.get("mem_limit") or search_obj.get("mem_limit") or data.get("mem_limit") or (status_obj or {}).get("mem_limit"),
                 "query_runs": to_int(search_obj.get("query_runs")),
                 "query_order": search_obj.get("query_order"),
                 "k": to_int(search_obj.get("k")),
@@ -271,6 +273,7 @@ COLUMNS = [
     "backend",
     "run_label",
     "seed",
+    "mem_limit",
     "k",
     "query_runs",
     "query_order",

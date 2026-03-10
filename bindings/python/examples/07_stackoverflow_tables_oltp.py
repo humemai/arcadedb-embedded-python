@@ -209,8 +209,20 @@ DEFAULT_OLTP_MIX = {"read": 0.60, "update": 0.20, "insert": 0.10, "delete": 0.10
 SQLITE_PROFILE_CHOICES = ["fair", "perf", "olap"]
 
 
-def build_benchmark_db_name(dataset: str, db: str, run_label: Optional[str]) -> str:
+def mem_limit_tag(mem_limit: str) -> str:
+    normalized = re.sub(r"[^0-9a-z]+", "", mem_limit.lower())
+    return f"mem{normalized}" if normalized else "memdefault"
+
+
+def build_benchmark_db_name(
+    dataset: str,
+    db: str,
+    run_label: Optional[str],
+    mem_limit: Optional[str] = None,
+) -> str:
     db_name = f"{dataset.replace('-', '_')}_tables_oltp_{db}"
+    if mem_limit:
+        db_name = f"{db_name}_{mem_limit_tag(mem_limit)}"
     if run_label:
         db_name = f"{db_name}_{run_label}"
     return db_name
@@ -2080,7 +2092,12 @@ def run_in_docker(args):
         inner_cmd_parts.append(f'uv pip install "{arcadedb_wheel_mount_path}"')
     inner_cmd_parts.append("echo 'Starting benchmark...'")
     if args.db == "postgresql":
-        db_name = build_benchmark_db_name(args.dataset, args.db, args.run_label)
+        db_name = build_benchmark_db_name(
+            args.dataset,
+            args.db,
+            args.run_label,
+            args.mem_limit,
+        )
         inner_cmd_parts.append(
             "status=0; "
             f"{python_cmd} -u 07_stackoverflow_tables_oltp.py {' '.join(filtered_args)} "
@@ -2222,7 +2239,12 @@ def main():
         if not xml_path.exists():
             raise FileNotFoundError(f"{table['xml']} not found in {data_dir}")
 
-    db_name = build_benchmark_db_name(args.dataset, args.db, args.run_label)
+    db_name = build_benchmark_db_name(
+        args.dataset,
+        args.db,
+        args.run_label,
+        args.mem_limit,
+    )
     db_path = Path("./my_test_databases") / db_name
 
     print("=" * 80)

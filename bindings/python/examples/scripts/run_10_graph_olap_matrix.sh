@@ -67,6 +67,7 @@ echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED
 echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER sqlite-profile=$SQLITE_PROFILE"
 
 dataset_slug="${DATASET//-/_}"
+mem_tag="mem$(printf '%s' "$MEM_LIMIT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
 
 execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
@@ -120,7 +121,7 @@ for ((run = 1; run <= RUNS; run++)); do
         echo "Command: ${cmd[*]}"
         "${cmd[@]}"
 
-        target_dir="my_test_databases/${dataset_slug}_graph_olap_${db_engine}_${run_label}"
+        target_dir="my_test_databases/${dataset_slug}_graph_olap_${db_engine}_${mem_tag}_${run_label}"
         if [[ -d "$target_dir" ]]; then
             collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             wheel_artifacts_for_dir="false"

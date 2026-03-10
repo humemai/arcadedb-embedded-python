@@ -22,11 +22,11 @@ source "$HELPERS_SH"
 # X-Large       1,000,000     25,000  32GB    1
 # X-Large       1,000,000     25,000  32GB    8
 
-DATASET="stackoverflow-tiny"
-TRANSACTIONS=10000
-BATCH_SIZE=1000
-MEM_LIMIT="1g"
-THREADS=1
+DATASET="stackoverflow-medium"
+TRANSACTIONS=100000
+BATCH_SIZE=5000
+MEM_LIMIT="4g"
+THREADS=8
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
@@ -70,6 +70,7 @@ echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED
 echo "Profile: threads=$THREADS transactions=$TRANSACTIONS mem-limit=$MEM_LIMIT"
 
 dataset_slug="${DATASET//-/_}"
+mem_tag="mem$(printf '%s' "$MEM_LIMIT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
 
 execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
@@ -111,7 +112,7 @@ for ((run = 1; run <= RUNS; run++)); do
         cmd_exit=$?
         set -e
 
-        target_dir="my_test_databases/${dataset_slug}_tables_oltp_${db}_${run_label}"
+        target_dir="my_test_databases/${dataset_slug}_tables_oltp_${db}_${mem_tag}_${run_label}"
         if [[ ! -d "$target_dir" ]]; then
             mkdir -p "$target_dir"
         fi

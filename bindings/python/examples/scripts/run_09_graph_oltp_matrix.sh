@@ -78,6 +78,7 @@ echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED
 echo "Profile: threads=$THREADS arcadedb-transactions=$ARCADEDB_TRANSACTIONS ladybug-transactions-fraction=$LADYBUG_TRANSACTIONS_FRACTION graphqlite-transactions-fraction=$GRAPHQLITE_TRANSACTIONS_FRACTION mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE"
 
 dataset_slug="${DATASET//-/_}"
+mem_tag="mem$(printf '%s' "$MEM_LIMIT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
 
 execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
@@ -159,7 +160,7 @@ for ((run = 1; run <= RUNS; run++)); do
         cmd_exit=$?
         set -e
 
-        target_dir="my_test_databases/${dataset_slug}_graph_oltp_${db_engine}_${run_label}"
+        target_dir="my_test_databases/${dataset_slug}_graph_oltp_${db_engine}_${mem_tag}_${run_label}"
         if [[ ! -d "$target_dir" ]]; then
             mkdir -p "$target_dir"
         fi

@@ -17,7 +17,7 @@ source "$HELPERS_SH"
 
 DATASET="stackoverflow-tiny"
 BATCH_SIZE=1000
-MEM_LIMIT="1g"
+MEM_LIMIT="2g"
 THREADS=1
 RUNS=1
 SEED_START=0

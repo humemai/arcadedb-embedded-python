@@ -43,6 +43,12 @@ EXPECTED_DATASETS = {
 
 SQLITE_PROFILE_CHOICES = ["fair", "perf", "olap"]
 
+
+def mem_limit_tag(mem_limit: str) -> str:
+    normalized = re.sub(r"[^0-9a-z]+", "", mem_limit.lower())
+    return f"mem{normalized}" if normalized else "memdefault"
+
+
 BENCHMARK_SCOPE_NOTE = (
     "Scope: OLAP query fairness on a common query suite. "
     "Ingestion paths differ by engine (ArcadeDB uses Cypher inserts, Ladybug uses staged CSV + COPY), "
@@ -5145,7 +5151,10 @@ def main():
             f"Dataset not found: {data_dir}. Run download_data.py first."
         )
 
-    db_name = f"{args.dataset.replace('-', '_')}_graph_olap_{args.db}"
+    db_name = (
+        f"{args.dataset.replace('-', '_')}_graph_olap_{args.db}_"
+        f"{mem_limit_tag(args.mem_limit)}"
+    )
     if args.run_label:
         db_name = f"{db_name}_{args.run_label}"
     db_path = Path("./my_test_databases") / db_name

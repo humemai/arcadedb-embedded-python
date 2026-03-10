@@ -294,6 +294,10 @@ for run_dir in run_dirs:
                 "batch_size": to_int(data.get("batch_size")),
                 "query_runs": to_int(data.get("query_runs")),
                 "query_order": data.get("query_order"),
+                "mem_limit": first_not_none(
+                    data.get("mem_limit"),
+                    status_for_run.get("mem_limit"),
+                ),
                 "load_time_s": to_float(data.get("load_time_s")),
                 "index_time_s": to_float(data.get("index_time_s")),
                 "query_time_s": to_float(data.get("query_time_s")),
@@ -456,9 +460,9 @@ for current_dataset in datasets:
     lines.append("### DB summary")
     lines.append("")
     lines.append(
-        f"| db | run_label | seed | threads | query_runs | query_order | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
+        f"| db | run_label | seed | mem_limit | threads | query_runs | query_order | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
     )
-    lines.append("|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|")
+    lines.append("|---|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|")
     for row in result_rows:
         if str(row["dataset"] or "") != current_dataset:
             continue
@@ -469,6 +473,7 @@ for current_dataset in datasets:
                     fmt(row["db"]),
                     fmt(row["run_label"]),
                     fmt(row["seed"]),
+                    fmt(row["mem_limit"]),
                     fmt(row["threads"]),
                     fmt(row["query_runs"]),
                     fmt(row["query_order"]),

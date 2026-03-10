@@ -1,22 +1,22 @@
 # 08 Tables OLAP Matrix Summary — All Dataset Sizes
 
-- Generated (UTC): 2026-03-10T20:52:42Z
+- Generated (UTC): 2026-03-10T21:52:43Z
 - Dataset: all
 - Dataset size profile: all
 - Label prefix: sweep08
-- Total result files: 12
+- Total result files: 16
 - Versions/digest observed:
-  - arcadedb_docker_digest: arcadedata/arcadedb@sha256:c1db044c71db11c553065dc9fcccfceae444df12210bf352b12bfc18bae68790
-  - arcadedb_docker_tag: 26.3.1
+  - arcadedb_docker_digest: arcadedata/arcadedb@sha256:5606b0f9f7f6d1f5d91ee5c62046074e230aaa73fa4984e8d303ad82038b5204, arcadedata/arcadedb@sha256:c1db044c71db11c553065dc9fcccfceae444df12210bf352b12bfc18bae68790
+  - arcadedb_docker_tag: 26.3.1, 26.4.1-SNAPSHOT
   - arcadedb_embedded: auto
   - duckdb: auto
-  - duckdb_runtime_version: 1.4.4
+  - duckdb_runtime_version: 1.4.4, 1.5.0
   - postgresql_version: 18.3
   - sqlite_version: 3.46.1
-  - wheel_file: arcadedb_embedded-26.3.1-cp312-cp312-manylinux_2_35_x86_64.whl
+  - wheel_file: arcadedb_embedded-26.3.1-cp312-cp312-manylinux_2_35_x86_64.whl, arcadedb_embedded-26.4.1.dev0-cp312-cp312-manylinux_2_35_x86_64.whl
   - wheel_source: local_bindings_source
-  - wheel_version: 26.3.1
-- Run status files: total=12, success=12, failed=0
+  - wheel_version: 26.3.1, 26.4.1.dev0
+- Run status files: total=16, success=16, failed=0
 - Note: `load_*` is ingest only, `index_*` is post-ingest index build, and `query_*` is OLAP query-suite execution.
 - DB summary timing/memory/disk columns are single-run values (no averaging).
 - `run_label` identifies the benchmark run(s) included in each DB summary row.
@@ -25,20 +25,20 @@
 
 ### DB summary
 
-| db | run_label | seed | runs | threads | query_runs | query_order | ingest_mode | load_s | index_s | query_s | rss_peak_mib | du_mib |
-|---|---|---|---:|---:|---:|---|---|---:|---:|---:|---:|---:|
-| arcadedb_sql | sweep08_t01_r01_arcadedb_sql_s00000_m8g | 0 | 1 | 1 | 10 | shuffled | bulk_tuned_insert | 721.757 | 1,397.427 | 1,778.791 | 6,792.742 | 8,908.938 |
-| arcadedb_sql | sweep08_t04_r01_arcadedb_sql_s00000_m8g | 0 | 1 | 4 | 10 | shuffled | bulk_tuned_insert | 682.592 | 1,403.51 | 1,322.387 | 5,961.371 | 8,908.941 |
-| arcadedb_sql | sweep08_t08_r01_arcadedb_sql_s00000_m8g | 0 | 1 | 8 | 10 | shuffled | bulk_tuned_insert | 680.008 | 1,411.462 | 1,324.07 | 5,939.211 | 8,908.938 |
-| duckdb | sweep08_t01_r01_duckdb_s00002_m8g | 2 | 1 | 1 | 10 | shuffled | copy_csv | 484.272 | 11.319 | 1.334 | 6,557.051 | 18,354.637 |
-| duckdb | sweep08_t04_r01_duckdb_s00002_m8g | 2 | 1 | 4 | 10 | shuffled | copy_csv | 456.705 | 10.336 | 0.498 | 6,492.137 | 18,348.895 |
-| duckdb | sweep08_t08_r01_duckdb_s00002_m8g | 2 | 1 | 8 | 10 | shuffled | copy_csv | 438.186 | 9.235 | 0.309 | 6,984.016 | 18,350.641 |
-| postgresql | sweep08_t01_r01_postgresql_s00003_m8g | 3 | 1 | 1 | 10 | shuffled | copy_from_stdin | 769.943 | 52.57 | 46.508 | 3,495.68 | 16,129.785 |
-| postgresql | sweep08_t04_r01_postgresql_s00003_m8g | 3 | 1 | 4 | 10 | shuffled | copy_from_stdin | 672.932 | 43.453 | 34.748 | 3,491.449 | 16,129.844 |
-| postgresql | sweep08_t08_r01_postgresql_s00003_m8g | 3 | 1 | 8 | 10 | shuffled | copy_from_stdin | 655.053 | 41.755 | 33.196 | 3,509.691 | 16,129.832 |
-| sqlite | sweep08_t01_r01_sqlite_s00001_m8g | 1 | 1 | 1 | 10 | shuffled | executemany | 216.601 | 39.863 | 25.365 | 847.82 | 8,921.906 |
-| sqlite | sweep08_t04_r01_sqlite_s00001_m8g | 1 | 1 | 4 | 10 | shuffled | executemany | 212.829 | 36.267 | 23.857 | 848.617 | 8,921.91 |
-| sqlite | sweep08_t08_r01_sqlite_s00001_m8g | 1 | 1 | 8 | 10 | shuffled | executemany | 219.932 | 50.293 | 25.463 | 842.527 | 8,921.91 |
+| db | run_label | seed | runs | mem_limit | threads | query_runs | query_order | ingest_mode | load_s | index_s | query_s | rss_peak_mib | du_mib |
+|---|---|---|---:|---|---:|---:|---|---|---:|---:|---:|---:|---:|
+| arcadedb_sql | sweep08_t01_r01_arcadedb_sql_s00000_m8g | 0 | 1 | 8g | 1 | 10 | shuffled | bulk_tuned_insert | 721.757 | 1,397.427 | 1,778.791 | 6,792.742 | 8,908.938 |
+| arcadedb_sql | sweep08_t04_r01_arcadedb_sql_s00000_m8g | 0 | 1 | 8g | 4 | 10 | shuffled | bulk_tuned_insert | 682.592 | 1,403.51 | 1,322.387 | 5,961.371 | 8,908.941 |
+| arcadedb_sql | sweep08_t08_r01_arcadedb_sql_s00000_m8g | 0 | 1 | 8g | 8 | 10 | shuffled | bulk_tuned_insert | 680.008 | 1,411.462 | 1,324.07 | 5,939.211 | 8,908.938 |
+| duckdb | sweep08_t01_r01_duckdb_s00002_m8g | 2 | 1 | 8g | 1 | 10 | shuffled | copy_csv | 484.272 | 11.319 | 1.334 | 6,557.051 | 18,354.637 |
+| duckdb | sweep08_t04_r01_duckdb_s00002_m8g | 2 | 1 | 8g | 4 | 10 | shuffled | copy_csv | 456.705 | 10.336 | 0.498 | 6,492.137 | 18,348.895 |
+| duckdb | sweep08_t08_r01_duckdb_s00002_m8g | 2 | 1 | 8g | 8 | 10 | shuffled | copy_csv | 438.186 | 9.235 | 0.309 | 6,984.016 | 18,350.641 |
+| postgresql | sweep08_t01_r01_postgresql_s00003_m8g | 3 | 1 | 8g | 1 | 10 | shuffled | copy_from_stdin | 769.943 | 52.57 | 46.508 | 3,495.68 | 16,129.785 |
+| postgresql | sweep08_t04_r01_postgresql_s00003_m8g | 3 | 1 | 8g | 4 | 10 | shuffled | copy_from_stdin | 672.932 | 43.453 | 34.748 | 3,491.449 | 16,129.844 |
+| postgresql | sweep08_t08_r01_postgresql_s00003_m8g | 3 | 1 | 8g | 8 | 10 | shuffled | copy_from_stdin | 655.053 | 41.755 | 33.196 | 3,509.691 | 16,129.832 |
+| sqlite | sweep08_t01_r01_sqlite_s00001_m8g | 1 | 1 | 8g | 1 | 10 | shuffled | executemany | 216.601 | 39.863 | 25.365 | 847.82 | 8,921.906 |
+| sqlite | sweep08_t04_r01_sqlite_s00001_m8g | 1 | 1 | 8g | 4 | 10 | shuffled | executemany | 212.829 | 36.267 | 23.857 | 848.617 | 8,921.91 |
+| sqlite | sweep08_t08_r01_sqlite_s00001_m8g | 1 | 1 | 8g | 8 | 10 | shuffled | executemany | 219.932 | 50.293 | 25.463 | 842.527 | 8,921.91 |
 
 ### Per-query latency (aggregated)
 
@@ -179,3 +179,74 @@
 | top_tags_by_count | arcadedb_sql, duckdb, postgresql, sqlite | True | 48c33c107b024bde76cd98d99e706868256011a64763946bb65aaa00e331baec |
 | top_users_by_reputation | arcadedb_sql, duckdb, postgresql, sqlite | True | 9c6a96d5e2a2100a7c55e402fbe285fea8d999613ed0712fa87739d32c177d14 |
 | votes_by_type | arcadedb_sql, duckdb, postgresql, sqlite | True | bf98e4b1c5d18244c411d7afcab3dd496ec0251aa9f59a6699d0c59d57d0d33e |
+
+## Dataset: stackoverflow-tiny
+
+### DB summary
+
+| db | run_label | seed | runs | mem_limit | threads | query_runs | query_order | ingest_mode | load_s | index_s | query_s | rss_peak_mib | du_mib |
+|---|---|---|---:|---|---:|---:|---|---|---:|---:|---:|---:|---:|
+| arcadedb_sql | sweep08_t01_r01_arcadedb_sql_s00000 | 0 | 1 | 1g | 1 | 10 | shuffled | bulk_tuned_insert | 4.72 | 1.975 | 3.362 | 234.766 | 33.383 |
+| duckdb | sweep08_t01_r01_duckdb_s00002 | 2 | 1 | 1g | 1 | 10 | shuffled | copy_csv | 5.318 | 0.131 | 0.056 | 150.234 | 66.047 |
+| postgresql | sweep08_t01_r01_postgresql_s00003 | 3 | 1 | 1g | 1 | 10 | shuffled | copy_from_stdin | 3.027 | 0.053 | 0.146 | 204.859 | 132.754 |
+| sqlite | sweep08_t01_r01_sqlite_s00001 | 1 | 1 | 1g | 1 | 10 | shuffled | executemany | 0.739 | 0.051 | 0.047 | 94.965 | 30.828 |
+
+### Per-query latency (aggregated)
+
+| db | threads | query | samples | elapsed_mean_ms | elapsed_p95_ms | row_counts | hash_stable_within_db |
+|---|---:|---|---:|---:|---:|---|---|
+| arcadedb_sql | 1 | most_commented_posts | 10 | 25.955 | 75.305 | 10 | True |
+| arcadedb_sql | 1 | post_type_counts | 10 | 55.967 | 98.125 | 5 | True |
+| arcadedb_sql | 1 | posthistory_by_type | 10 | 62.095 | 107.517 | 22 | True |
+| arcadedb_sql | 1 | postlinks_by_type | 10 | 39.992 | 146.108 | 2 | True |
+| arcadedb_sql | 1 | top_answers_by_score | 10 | 13.169 | 24.559 | 10 | True |
+| arcadedb_sql | 1 | top_badges | 10 | 26.366 | 70.033 | 2 | True |
+| arcadedb_sql | 1 | top_questions_by_score | 10 | 19.955 | 62.73 | 10 | True |
+| arcadedb_sql | 1 | top_tags_by_count | 10 | 1.459 | 2.173 | 10 | True |
+| arcadedb_sql | 1 | top_users_by_reputation | 10 | 52.443 | 127.896 | 10 | True |
+| arcadedb_sql | 1 | votes_by_type | 10 | 38.004 | 88.303 | 10 | True |
+| duckdb | 1 | most_commented_posts | 10 | 0.64 | 1.057 | 10 | True |
+| duckdb | 1 | post_type_counts | 10 | 0.347 | 0.387 | 5 | True |
+| duckdb | 1 | posthistory_by_type | 10 | 0.357 | 0.392 | 22 | True |
+| duckdb | 1 | postlinks_by_type | 10 | 0.349 | 0.454 | 2 | True |
+| duckdb | 1 | top_answers_by_score | 10 | 0.763 | 1.016 | 10 | True |
+| duckdb | 1 | top_badges | 10 | 0.466 | 0.6 | 2 | True |
+| duckdb | 1 | top_questions_by_score | 10 | 0.728 | 0.833 | 10 | True |
+| duckdb | 1 | top_tags_by_count | 10 | 0.262 | 0.374 | 10 | True |
+| duckdb | 1 | top_users_by_reputation | 10 | 0.856 | 0.895 | 10 | True |
+| duckdb | 1 | votes_by_type | 10 | 0.428 | 0.81 | 10 | True |
+| postgresql | 1 | most_commented_posts | 10 | 2.21 | 3.361 | 10 | True |
+| postgresql | 1 | post_type_counts | 10 | 1.928 | 2.252 | 5 | True |
+| postgresql | 1 | posthistory_by_type | 10 | 2.222 | 3.892 | 22 | True |
+| postgresql | 1 | postlinks_by_type | 10 | 1.01 | 1.192 | 2 | True |
+| postgresql | 1 | top_answers_by_score | 10 | 2.475 | 5.172 | 10 | True |
+| postgresql | 1 | top_badges | 10 | 1.154 | 1.378 | 2 | True |
+| postgresql | 1 | top_questions_by_score | 10 | 1.514 | 1.847 | 10 | True |
+| postgresql | 1 | top_tags_by_count | 10 | 0.248 | 0.366 | 10 | True |
+| postgresql | 1 | top_users_by_reputation | 10 | 0.318 | 0.798 | 10 | True |
+| postgresql | 1 | votes_by_type | 10 | 1.105 | 1.669 | 10 | True |
+| sqlite | 1 | most_commented_posts | 10 | 0.53 | 0.591 | 10 | True |
+| sqlite | 1 | post_type_counts | 10 | 0.276 | 0.303 | 5 | True |
+| sqlite | 1 | posthistory_by_type | 10 | 0.29 | 0.31 | 22 | True |
+| sqlite | 1 | postlinks_by_type | 10 | 0.302 | 0.429 | 2 | True |
+| sqlite | 1 | top_answers_by_score | 10 | 1.449 | 1.917 | 10 | True |
+| sqlite | 1 | top_badges | 10 | 0.315 | 0.374 | 2 | True |
+| sqlite | 1 | top_questions_by_score | 10 | 0.941 | 1.264 | 10 | True |
+| sqlite | 1 | top_tags_by_count | 10 | 0.053 | 0.069 | 10 | True |
+| sqlite | 1 | top_users_by_reputation | 10 | 0.031 | 0.049 | 10 | True |
+| sqlite | 1 | votes_by_type | 10 | 0.311 | 0.428 | 10 | True |
+
+### Cross-DB hash checks
+
+| query | dbs | hash_equal_across_dbs | all_hashes |
+|---|---|---|---|
+| most_commented_posts | arcadedb_sql, duckdb, postgresql, sqlite | True | 1f31efc2ffdf18a35bc728191464347f52a4ff5d7273427c7ea1595e6c12ec28 |
+| post_type_counts | arcadedb_sql, duckdb, postgresql, sqlite | True | 5197185908bb61e8b36679ffa296bd9cb2ad1b60463fb2f31da078c406b49c36 |
+| posthistory_by_type | arcadedb_sql, duckdb, postgresql, sqlite | True | ead380b3805f89f4725e904f8382d8c5b54ab8acaa8dc3aff099b4a8adbf551c |
+| postlinks_by_type | arcadedb_sql, duckdb, postgresql, sqlite | True | bf2cc559992e5b14a7a44a2ddb484cc69a123fe6f0a4dc0f189e920d0e13d4a7 |
+| top_answers_by_score | arcadedb_sql, duckdb, postgresql, sqlite | True | b1f424cdd67a017d973078f2ac7e259dc9b60da8b0fefb60cced29c4edb0002c |
+| top_badges | arcadedb_sql, duckdb, postgresql, sqlite | True | d45eba9b94c67b2cd37e9c58712c5aac9490f6c1ace927d6f19a2544cddfd421 |
+| top_questions_by_score | arcadedb_sql, duckdb, postgresql, sqlite | True | 5cf45e02296e343567ce9ee943ed7c48e879090af05954a6ab8cc2719bb6d89f |
+| top_tags_by_count | arcadedb_sql, duckdb, postgresql, sqlite | True | ca7a21ae6b26cb8a1ad8a10043a681497762ad30c8220a6ebdbe0a63b6f87bd8 |
+| top_users_by_reputation | arcadedb_sql, duckdb, postgresql, sqlite | True | eea3eaa10ee67607c73e22808ecba38364b000fdb6c125b5c8c46174bc885f26 |
+| votes_by_type | arcadedb_sql, duckdb, postgresql, sqlite | True | a680e3e9d76bce7e4e0083ae56d75ff2735692dd8193deb46e1867606ed165c7 |

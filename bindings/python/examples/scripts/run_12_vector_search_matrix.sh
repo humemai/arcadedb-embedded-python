@@ -16,7 +16,7 @@ source "$HELPERS_SH"
 # X-Large       32GB    32
 
 DATASET="stackoverflow-tiny"
-MEM_LIMIT="1g"
+MEM_LIMIT="4g"
 THREADS=1
 RUNS=1
 SEED_START=0
@@ -49,7 +49,15 @@ MILVUS_PORT=19530
 MILVUS_COMPOSE_VERSION="v2.6.10"
 MILVUS_COLLECTION="vectordata"
 
-BACKENDS_RAW="arcadedb_sql,faiss,lancedb,pgvector,qdrant,milvus,bruteforce"
+# BACKENDS_RAW="arcadedb_sql,faiss,lancedb,pgvector,qdrant,milvus,bruteforce"
+# BACKENDS_RAW="arcadedb_sql"
+# BACKENDS_RAW="lancedb"
+# BACKENDS_RAW="pgvector"
+# BACKENDS_RAW="faiss"
+# BACKENDS_RAW="qdrant"
+# BACKENDS_RAW="bruteforce"
+BACKENDS_RAW="milvus"
+
 BUILD_LABEL_PREFIX="sweep11"
 SEARCH_LABEL_PREFIX="sweep12"
 
@@ -113,6 +121,8 @@ fi
 
 cd "$EXAMPLES_DIR"
 
+mem_tag="$(printf '%s' "$MEM_LIMIT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
+
 echo "Running matrix: runs=$RUNS backends=${BACKENDS[*]} dataset=$DATASET seed_start=$SEED_START"
 echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT k=$K query-limit=$QUERY_LIMIT query-runs=$QUERY_RUNS query-order=$QUERY_ORDER overquery=$OVERQUERY_FACTORS"
 echo "Build label prefix: $BUILD_LABEL_PREFIX"
@@ -124,7 +134,7 @@ for ((run = 1; run <= RUNS; run++)); do
         if [[ "$backend" == "bruteforce" ]]; then
             seed=$((SEED_START + execution_idx))
             build_run_label=$(printf "%s_r%02d_%s_s%05d" "$BUILD_LABEL_PREFIX" "$run" "$backend" "$seed")
-            db_path="$DB_ROOT/backend=${backend}_dataset=${DATASET}_run=${build_run_label}"
+            db_path="$DB_ROOT/backend=${backend}_dataset=${DATASET}_mem=${mem_tag}_run=${build_run_label}"
             mkdir -p "$db_path"
         else
             mapfile -t build_dirs < <(find "$DB_ROOT" -mindepth 1 -maxdepth 1 -type d -name "*backend=${backend}_dataset=${DATASET}_*run=${BUILD_LABEL_PREFIX}_r$(printf '%02d' "$run")_${backend}_s*" | sort)

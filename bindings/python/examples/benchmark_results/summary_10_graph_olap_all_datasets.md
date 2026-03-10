@@ -1,21 +1,22 @@
 # 10 Graph OLAP Matrix Summary — All Dataset Sizes
 
-- Generated (UTC): 2026-03-10T20:52:42Z
+- Generated (UTC): 2026-03-10T21:52:44Z
 - Dataset: all
 - Dataset size profile: all
 - Label prefix: sweep10
-- Total result files: 6
+- Total result files: 10
 - Versions/digest observed:
-  - arcadedb_docker_digest: arcadedata/arcadedb@sha256:c1db044c71db11c553065dc9fcccfceae444df12210bf352b12bfc18bae68790
-  - arcadedb_docker_tag: 26.3.1
+  - arcadedb_docker_digest: arcadedata/arcadedb@sha256:5606b0f9f7f6d1f5d91ee5c62046074e230aaa73fa4984e8d303ad82038b5204, arcadedata/arcadedb@sha256:c1db044c71db11c553065dc9fcccfceae444df12210bf352b12bfc18bae68790
+  - arcadedb_docker_tag: 26.3.1, 26.4.1-SNAPSHOT
   - arcadedb_embedded: auto
   - graphqlite: auto
   - python_memory: builtin
   - real_ladybug: auto
+  - sqlite_native: builtin
   - sqlite_version: 3.46.1
-  - wheel_file: arcadedb_embedded-26.3.1-cp312-cp312-manylinux_2_35_x86_64.whl
+  - wheel_file: arcadedb_embedded-26.3.1-cp312-cp312-manylinux_2_35_x86_64.whl, arcadedb_embedded-26.4.1.dev0-cp312-cp312-manylinux_2_35_x86_64.whl
   - wheel_source: local_bindings_source
-  - wheel_version: 26.3.1
+  - wheel_version: 26.3.1, 26.4.1.dev0
 - Note: `load_*` is ingest only, `index_*` is post-ingest index build, and `query_*` is OLAP query-suite execution.
 - DB summary timing/memory/disk columns are single-run values (no averaging).
 - Query parity is evaluated via `result_hash` and `row_count` across DBs.
@@ -24,14 +25,14 @@
 
 ### DB summary
 
-| db | run_label | seed | threads | query_runs | query_order | load_s | index_s | query_s | rss_peak_mib | du_mib |
-|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|
-| ladybug | sweep10_t01_r01_ladybug_s00000_m8g | 0 | 1 | 10 | shuffled | 422.884 | 0 | 96.807 | 5,489.176 | 5,828.965 |
-| ladybug | sweep10_t04_r01_ladybug_s00000_m8g | 0 | 4 | 10 | shuffled | 356.625 | 0 | 26.637 | 5,458.129 | 5,828.953 |
-| ladybug | sweep10_t08_r01_ladybug_s00000_m8g | 0 | 8 | 10 | shuffled | 339.706 | 0 | 16.797 | 5,532.594 | 5,829.074 |
-| sqlite | sweep10_t01_r01_sqlite_s00001_m8g | 1 | 1 | 10 | shuffled | 229.738 | 0.001 | 123.993 | 1,239.809 | 3,465.574 |
-| sqlite | sweep10_t04_r01_sqlite_s00001_m8g | 1 | 4 | 10 | shuffled | 213.838 | 0 | 111.305 | 1,239.883 | 3,465.574 |
-| sqlite | sweep10_t08_r01_sqlite_s00001_m8g | 1 | 8 | 10 | shuffled | 215.737 | 0.001 | 111.169 | 1,239.664 | 3,465.574 |
+| db | run_label | seed | mem_limit | threads | query_runs | query_order | load_s | index_s | query_s | rss_peak_mib | du_mib |
+|---|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|
+| ladybug | sweep10_t01_r01_ladybug_s00000_m8g | 0 | 8g | 1 | 10 | shuffled | 422.884 | 0 | 96.807 | 5,489.176 | 5,828.965 |
+| ladybug | sweep10_t04_r01_ladybug_s00000_m8g | 0 | 8g | 4 | 10 | shuffled | 356.625 | 0 | 26.637 | 5,458.129 | 5,828.953 |
+| ladybug | sweep10_t08_r01_ladybug_s00000_m8g | 0 | 8g | 8 | 10 | shuffled | 339.706 | 0 | 16.797 | 5,532.594 | 5,829.074 |
+| sqlite_native | sweep10_t01_r01_sqlite_native_s00001_m8g | 1 | 8g | 1 | 10 | shuffled | 229.738 | 0.001 | 123.993 | 1,239.809 | 3,465.574 |
+| sqlite_native | sweep10_t04_r01_sqlite_native_s00001_m8g | 1 | 8g | 4 | 10 | shuffled | 213.838 | 0 | 111.305 | 1,239.883 | 3,465.574 |
+| sqlite_native | sweep10_t08_r01_sqlite_native_s00001_m8g | 1 | 8g | 8 | 10 | shuffled | 215.737 | 0.001 | 111.169 | 1,239.664 | 3,465.574 |
 
 ### Per-query latency (aggregated)
 
@@ -67,48 +68,119 @@
 | ladybug | 8 | top_questions_by_score | 10 | 3.874 | 8.298 | 10 | True |
 | ladybug | 8 | top_questions_by_total_comments | 10 | 500.045 | 552.727 | 10 | True |
 | ladybug | 8 | top_tags_by_questions | 10 | 44.956 | 59.771 | 10 | True |
-| sqlite | 1 | asker_answerer_pairs | 10 | 4,328.865 | 4,650.484 | 10 | True |
-| sqlite | 1 | questions_with_most_answers | 10 | 143.216 | 151.709 | 10 | True |
-| sqlite | 1 | tag_cooccurrence | 10 | 2,138.416 | 2,405.425 | 10 | True |
-| sqlite | 1 | top_accepted_answerers | 10 | 824.501 | 1,005.691 | 10 | True |
-| sqlite | 1 | top_answerers | 10 | 187.65 | 198.931 | 10 | True |
-| sqlite | 1 | top_askers | 10 | 137.73 | 150.921 | 10 | True |
-| sqlite | 1 | top_badges | 10 | 246.737 | 268.06 | 2 | True |
-| sqlite | 1 | top_questions_by_score | 10 | 415.474 | 469.998 | 10 | True |
-| sqlite | 1 | top_questions_by_total_comments | 10 | 3,625.928 | 3,887.891 | 10 | True |
-| sqlite | 1 | top_tags_by_questions | 10 | 77.341 | 85.348 | 10 | True |
-| sqlite | 4 | asker_answerer_pairs | 10 | 3,675.076 | 3,949.574 | 10 | True |
-| sqlite | 4 | questions_with_most_answers | 10 | 146.683 | 176.581 | 10 | True |
-| sqlite | 4 | tag_cooccurrence | 10 | 2,023.366 | 2,125.062 | 10 | True |
-| sqlite | 4 | top_accepted_answerers | 10 | 655.921 | 725.523 | 10 | True |
-| sqlite | 4 | top_answerers | 10 | 188.579 | 196.243 | 10 | True |
-| sqlite | 4 | top_askers | 10 | 133.462 | 142.483 | 10 | True |
-| sqlite | 4 | top_badges | 10 | 206.662 | 233.038 | 2 | True |
-| sqlite | 4 | top_questions_by_score | 10 | 392.526 | 452.99 | 10 | True |
-| sqlite | 4 | top_questions_by_total_comments | 10 | 3,389.559 | 3,665.277 | 10 | True |
-| sqlite | 4 | top_tags_by_questions | 10 | 76.63 | 90.94 | 10 | True |
-| sqlite | 8 | asker_answerer_pairs | 10 | 3,649.531 | 3,901.04 | 10 | True |
-| sqlite | 8 | questions_with_most_answers | 10 | 143.369 | 149.106 | 10 | True |
-| sqlite | 8 | tag_cooccurrence | 10 | 2,027.874 | 2,211.635 | 10 | True |
-| sqlite | 8 | top_accepted_answerers | 10 | 682.95 | 784.02 | 10 | True |
-| sqlite | 8 | top_answerers | 10 | 188.864 | 198.447 | 10 | True |
-| sqlite | 8 | top_askers | 10 | 133.557 | 138.106 | 10 | True |
-| sqlite | 8 | top_badges | 10 | 207.102 | 233.49 | 2 | True |
-| sqlite | 8 | top_questions_by_score | 10 | 409.254 | 470.625 | 10 | True |
-| sqlite | 8 | top_questions_by_total_comments | 10 | 3,354.416 | 3,516.767 | 10 | True |
-| sqlite | 8 | top_tags_by_questions | 10 | 79.061 | 85.764 | 10 | True |
+| sqlite_native | 1 | asker_answerer_pairs | 10 | 4,328.865 | 4,650.484 | 10 | True |
+| sqlite_native | 1 | questions_with_most_answers | 10 | 143.216 | 151.709 | 10 | True |
+| sqlite_native | 1 | tag_cooccurrence | 10 | 2,138.416 | 2,405.425 | 10 | True |
+| sqlite_native | 1 | top_accepted_answerers | 10 | 824.501 | 1,005.691 | 10 | True |
+| sqlite_native | 1 | top_answerers | 10 | 187.65 | 198.931 | 10 | True |
+| sqlite_native | 1 | top_askers | 10 | 137.73 | 150.921 | 10 | True |
+| sqlite_native | 1 | top_badges | 10 | 246.737 | 268.06 | 2 | True |
+| sqlite_native | 1 | top_questions_by_score | 10 | 415.474 | 469.998 | 10 | True |
+| sqlite_native | 1 | top_questions_by_total_comments | 10 | 3,625.928 | 3,887.891 | 10 | True |
+| sqlite_native | 1 | top_tags_by_questions | 10 | 77.341 | 85.348 | 10 | True |
+| sqlite_native | 4 | asker_answerer_pairs | 10 | 3,675.076 | 3,949.574 | 10 | True |
+| sqlite_native | 4 | questions_with_most_answers | 10 | 146.683 | 176.581 | 10 | True |
+| sqlite_native | 4 | tag_cooccurrence | 10 | 2,023.366 | 2,125.062 | 10 | True |
+| sqlite_native | 4 | top_accepted_answerers | 10 | 655.921 | 725.523 | 10 | True |
+| sqlite_native | 4 | top_answerers | 10 | 188.579 | 196.243 | 10 | True |
+| sqlite_native | 4 | top_askers | 10 | 133.462 | 142.483 | 10 | True |
+| sqlite_native | 4 | top_badges | 10 | 206.662 | 233.038 | 2 | True |
+| sqlite_native | 4 | top_questions_by_score | 10 | 392.526 | 452.99 | 10 | True |
+| sqlite_native | 4 | top_questions_by_total_comments | 10 | 3,389.559 | 3,665.277 | 10 | True |
+| sqlite_native | 4 | top_tags_by_questions | 10 | 76.63 | 90.94 | 10 | True |
+| sqlite_native | 8 | asker_answerer_pairs | 10 | 3,649.531 | 3,901.04 | 10 | True |
+| sqlite_native | 8 | questions_with_most_answers | 10 | 143.369 | 149.106 | 10 | True |
+| sqlite_native | 8 | tag_cooccurrence | 10 | 2,027.874 | 2,211.635 | 10 | True |
+| sqlite_native | 8 | top_accepted_answerers | 10 | 682.95 | 784.02 | 10 | True |
+| sqlite_native | 8 | top_answerers | 10 | 188.864 | 198.447 | 10 | True |
+| sqlite_native | 8 | top_askers | 10 | 133.557 | 138.106 | 10 | True |
+| sqlite_native | 8 | top_badges | 10 | 207.102 | 233.49 | 2 | True |
+| sqlite_native | 8 | top_questions_by_score | 10 | 409.254 | 470.625 | 10 | True |
+| sqlite_native | 8 | top_questions_by_total_comments | 10 | 3,354.416 | 3,516.767 | 10 | True |
+| sqlite_native | 8 | top_tags_by_questions | 10 | 79.061 | 85.764 | 10 | True |
 
 ### Cross-DB query parity checks
 
 | query | dbs | hash_equal_across_dbs | row_counts_equal_across_dbs | all_values_equal_across_dbs |
 |---|---|---|---|---|
-| asker_answerer_pairs | ladybug, sqlite | True | True | True |
-| questions_with_most_answers | ladybug, sqlite | True | True | True |
-| tag_cooccurrence | ladybug, sqlite | True | True | True |
-| top_accepted_answerers | ladybug, sqlite | True | True | True |
-| top_answerers | ladybug, sqlite | True | True | True |
-| top_askers | ladybug, sqlite | True | True | True |
-| top_badges | ladybug, sqlite | True | True | True |
-| top_questions_by_score | ladybug, sqlite | True | True | True |
-| top_questions_by_total_comments | ladybug, sqlite | True | True | True |
-| top_tags_by_questions | ladybug, sqlite | True | True | True |
+| asker_answerer_pairs | ladybug, sqlite_native | True | True | True |
+| questions_with_most_answers | ladybug, sqlite_native | True | True | True |
+| tag_cooccurrence | ladybug, sqlite_native | True | True | True |
+| top_accepted_answerers | ladybug, sqlite_native | True | True | True |
+| top_answerers | ladybug, sqlite_native | True | True | True |
+| top_askers | ladybug, sqlite_native | True | True | True |
+| top_badges | ladybug, sqlite_native | True | True | True |
+| top_questions_by_score | ladybug, sqlite_native | True | True | True |
+| top_questions_by_total_comments | ladybug, sqlite_native | True | True | True |
+| top_tags_by_questions | ladybug, sqlite_native | True | True | True |
+
+## Dataset: stackoverflow-tiny
+
+### DB summary
+
+| db | run_label | seed | mem_limit | threads | query_runs | query_order | load_s | index_s | query_s | rss_peak_mib | du_mib |
+|---|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|
+| arcadedb_cypher | sweep10_t01_r01_arcadedb_cypher_s00000 | 0 | 1g | 1 | 10 | shuffled | 38.295 | 0.486 | 6.519 | 644.945 | 22.062 |
+| ladybug | sweep10_t01_r01_ladybug_s00001 | 1 | 1g | 1 | 10 | shuffled | 13.258 | 0 | 5.097 | 760.902 | 46.75 |
+| python_memory | sweep10_t01_r01_python_memory_s00003 | 3 | 1g | 1 | 10 | shuffled | 0.44 | 0 | 0.843 | 87.984 | 15.438 |
+| sqlite | sweep10_t01_r01_sqlite_s00002 | 2 | 1g | 1 | 10 | shuffled | 4.199 | 0.001 | 0.309 | 80.848 | 17.742 |
+
+### Per-query latency (aggregated)
+
+| db | threads | query | samples | elapsed_mean_ms | elapsed_p95_ms | row_counts | hash_stable_within_db |
+|---|---:|---|---:|---:|---:|---|---|
+| arcadedb_cypher | 1 | asker_answerer_pairs | 10 | 64.164 | 151.041 | 0 | True |
+| arcadedb_cypher | 1 | questions_with_most_answers | 10 | 57.231 | 153.711 | 10 | True |
+| arcadedb_cypher | 1 | tag_cooccurrence | 10 | 267.107 | 400.355 | 10 | True |
+| arcadedb_cypher | 1 | top_accepted_answerers | 10 | 19.843 | 57.266 | 0 | True |
+| arcadedb_cypher | 1 | top_answerers | 10 | 54.946 | 101.926 | 10 | True |
+| arcadedb_cypher | 1 | top_askers | 10 | 43.431 | 75.078 | 10 | True |
+| arcadedb_cypher | 1 | top_badges | 10 | 32.933 | 78.603 | 2 | True |
+| arcadedb_cypher | 1 | top_questions_by_score | 10 | 23.239 | 63.547 | 10 | True |
+| arcadedb_cypher | 1 | top_questions_by_total_comments | 10 | 29.397 | 70.673 | 10 | True |
+| arcadedb_cypher | 1 | top_tags_by_questions | 10 | 52.627 | 97.548 | 10 | True |
+| ladybug | 1 | asker_answerer_pairs | 10 | 107.206 | 148.616 | 10 | True |
+| ladybug | 1 | questions_with_most_answers | 10 | 48.258 | 91.307 | 10 | True |
+| ladybug | 1 | tag_cooccurrence | 10 | 76.658 | 97.69 | 10 | True |
+| ladybug | 1 | top_accepted_answerers | 10 | 42.221 | 94.941 | 10 | True |
+| ladybug | 1 | top_answerers | 10 | 56.949 | 93.51 | 10 | True |
+| ladybug | 1 | top_askers | 10 | 14.763 | 47.622 | 10 | True |
+| ladybug | 1 | top_badges | 10 | 31.238 | 90.727 | 2 | True |
+| ladybug | 1 | top_questions_by_score | 10 | 1.289 | 1.501 | 10 | True |
+| ladybug | 1 | top_questions_by_total_comments | 10 | 96.837 | 102.859 | 10 | True |
+| ladybug | 1 | top_tags_by_questions | 10 | 31.793 | 89.734 | 10 | True |
+| python_memory | 1 | asker_answerer_pairs | 10 | 19.308 | 23.333 | 10 | True |
+| python_memory | 1 | questions_with_most_answers | 10 | 4.895 | 6.01 | 10 | True |
+| python_memory | 1 | tag_cooccurrence | 10 | 16.453 | 24.699 | 10 | True |
+| python_memory | 1 | top_accepted_answerers | 10 | 8.63 | 12.675 | 10 | True |
+| python_memory | 1 | top_answerers | 10 | 4.46 | 5.657 | 10 | True |
+| python_memory | 1 | top_askers | 10 | 4.827 | 6.61 | 10 | True |
+| python_memory | 1 | top_badges | 10 | 1.859 | 2.618 | 2 | True |
+| python_memory | 1 | top_questions_by_score | 10 | 3.859 | 9.815 | 10 | True |
+| python_memory | 1 | top_questions_by_total_comments | 10 | 13.222 | 20.368 | 10 | True |
+| python_memory | 1 | top_tags_by_questions | 10 | 5.047 | 6.708 | 10 | True |
+| sqlite | 1 | asker_answerer_pairs | 10 | 3.858 | 5.248 | 10 | True |
+| sqlite | 1 | questions_with_most_answers | 10 | 0.567 | 0.707 | 10 | True |
+| sqlite | 1 | tag_cooccurrence | 10 | 10.095 | 12.3 | 10 | True |
+| sqlite | 1 | top_accepted_answerers | 10 | 1.754 | 2.185 | 10 | True |
+| sqlite | 1 | top_answerers | 10 | 1.33 | 1.955 | 10 | True |
+| sqlite | 1 | top_askers | 10 | 1.244 | 1.462 | 10 | True |
+| sqlite | 1 | top_badges | 10 | 1.241 | 1.492 | 2 | True |
+| sqlite | 1 | top_questions_by_score | 10 | 0.821 | 1.149 | 10 | True |
+| sqlite | 1 | top_questions_by_total_comments | 10 | 7.717 | 9.124 | 10 | True |
+| sqlite | 1 | top_tags_by_questions | 10 | 0.652 | 0.7 | 10 | True |
+
+### Cross-DB query parity checks
+
+| query | dbs | hash_equal_across_dbs | row_counts_equal_across_dbs | all_values_equal_across_dbs |
+|---|---|---|---|---|
+| asker_answerer_pairs | arcadedb_cypher, ladybug, python_memory, sqlite | False | False | False |
+| questions_with_most_answers | arcadedb_cypher, ladybug, python_memory, sqlite | True | True | True |
+| tag_cooccurrence | arcadedb_cypher, ladybug, python_memory, sqlite | True | True | True |
+| top_accepted_answerers | arcadedb_cypher, ladybug, python_memory, sqlite | False | False | False |
+| top_answerers | arcadedb_cypher, ladybug, python_memory, sqlite | True | True | True |
+| top_askers | arcadedb_cypher, ladybug, python_memory, sqlite | True | True | True |
+| top_badges | arcadedb_cypher, ladybug, python_memory, sqlite | True | True | True |
+| top_questions_by_score | arcadedb_cypher, ladybug, python_memory, sqlite | True | True | True |
+| top_questions_by_total_comments | arcadedb_cypher, ladybug, python_memory, sqlite | False | True | False |
+| top_tags_by_questions | arcadedb_cypher, ladybug, python_memory, sqlite | True | True | True |

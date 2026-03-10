@@ -350,6 +350,7 @@ for row in result_rows:
         (
             row["dataset"],
             row["db"],
+            row.get("mem_limit"),
             row.get("threads"),
             row.get("query_runs"),
             row.get("query_order"),
@@ -361,6 +362,7 @@ db_agg_rows = []
 for (
     dataset_name,
     db,
+    mem_limit,
     threads,
     query_runs,
     query_order,
@@ -379,6 +381,7 @@ for (
             "runs": len(rows),
             "run_labels": sorted({str(r.get("run_label") or "") for r in rows if r.get("run_label")}),
             "seeds": sorted({r.get("seed") for r in rows if r.get("seed") is not None}),
+            "mem_limit": mem_limit,
             "threads": threads,
             "query_runs": query_runs,
             "query_order": query_order,
@@ -488,9 +491,9 @@ for current_dataset in datasets:
     lines.append("### DB summary")
     lines.append("")
     lines.append(
-        f"| db | run_label | seed | runs | threads | query_runs | query_order | ingest_mode | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
+        f"| db | run_label | seed | runs | mem_limit | threads | query_runs | query_order | ingest_mode | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
     )
-    lines.append("|---|---|---|---:|---:|---:|---|---|---:|---:|---:|---:|---:|")
+    lines.append("|---|---|---|---:|---|---:|---:|---|---|---:|---:|---:|---:|---:|")
     for row in db_agg_rows:
         if str(row["dataset"] or "") != current_dataset:
             continue
@@ -506,6 +509,7 @@ for current_dataset in datasets:
                     fmt(run_label_value),
                     fmt(seed_value),
                     fmt(row["runs"]),
+                    fmt(row["mem_limit"]),
                     fmt(row["threads"]),
                     fmt(row["query_runs"]),
                     fmt(row["query_order"]),
