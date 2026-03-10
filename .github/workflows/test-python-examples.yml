@@ -330,19 +330,19 @@ jobs:
                 example_jvm_args=""
                 ;;
               "07_stackoverflow_tables_oltp.py")
-                example_args="--dataset stackoverflow-tiny --db arcadedb --threads 1 --transactions 1000 --batch-size 500 --mem-limit 2g --run-label ci07"
-                example_name="$example (stackoverflow-tiny, arcadedb, minimal oltp)"
+                example_args="--dataset stackoverflow-tiny --db arcadedb_sql --threads 1 --transactions 1000 --batch-size 500 --mem-limit 2g --run-label ci07"
+                example_name="$example (stackoverflow-tiny, arcadedb_sql, minimal oltp)"
                 timeout_duration=900
                 example_jvm_args=""
                 ;;
               "08_stackoverflow_tables_olap.py")
-                example_args="--dataset stackoverflow-tiny --db arcadedb --threads 1 --batch-size 500 --query-runs 1 --query-order fixed --mem-limit 2g --run-label ci08"
-                example_name="$example (stackoverflow-tiny, arcadedb, minimal olap)"
+                example_args="--dataset stackoverflow-tiny --db arcadedb_sql --threads 1 --batch-size 500 --query-runs 1 --query-order fixed --mem-limit 2g --run-label ci08"
+                example_name="$example (stackoverflow-tiny, arcadedb_sql, minimal olap)"
                 timeout_duration=900
                 example_jvm_args=""
                 ;;
               "09_stackoverflow_graph_oltp.py")
-                example_args="--dataset stackoverflow-tiny --db arcadedb --arcadedb-oltp-language cypher --threads 1 --transactions 1000 --batch-size 500 --mem-limit 2g --run-label ci09"
+                example_args="--dataset stackoverflow-tiny --db arcadedb_cypher --threads 1 --transactions 1000 --batch-size 500 --mem-limit 2g --run-label ci09"
                 example_name="$example (stackoverflow-tiny graph oltp, arcadedb cypher, minimal)"
                 timeout_duration=900
                 example_jvm_args=""
@@ -354,21 +354,21 @@ jobs:
                 example_jvm_args=""
                 ;;
               "11_vector_index_build.py")
-                example_args="--backend arcadedb --dataset stackoverflow-tiny --threads 1 --mem-limit 2g --batch-size 500 --max-connections 16 --beam-width 100 --quantization NONE --run-label ci11_arcadedb"
-                example_name="$example (vector build, arcadedb backend, minimal)"
+                example_args="--backend arcadedb_sql --dataset stackoverflow-tiny --threads 1 --mem-limit 2g --batch-size 500 --max-connections 16 --beam-width 100 --quantization NONE --run-label ci11_arcadedb_sql"
+                example_name="$example (vector build, arcadedb_sql backend, minimal)"
                 timeout_duration=1200
                 example_jvm_args=""
                 ;;
               "12_vector_search.py")
-                db_path=$(find ./my_test_databases -maxdepth 1 -type d -name 'backend=arcadedb_dataset=stackoverflow-tiny_*run=ci11_arcadedb' | head -n 1)
+                db_path=$(find ./my_test_databases -maxdepth 1 -type d -name 'backend=arcadedb_sql_dataset=stackoverflow-tiny_*run=ci11_arcadedb_sql' | head -n 1)
                 if [ -z "$db_path" ]; then
                   echo "❌ Missing build output for 12_vector_search.py. Ensure 11_vector_index_build.py ran first." | tee -a $results_file
                   failed=$((failed + 1))
                   echo ""
                   continue
                 fi
-                example_args="--backend arcadedb --dataset stackoverflow-tiny --db-path $db_path --overquery-factors 1 --k 10 --query-limit 100 --query-runs 1 --query-order fixed --threads 1 --mem-limit 2g --run-label ci12_arcadedb"
-                example_name="$example (vector search, arcadedb backend, minimal)"
+                example_args="--backend arcadedb_sql --dataset stackoverflow-tiny --db-path $db_path --overquery-factors 1 --k 10 --query-limit 100 --query-runs 1 --query-order fixed --threads 1 --mem-limit 2g --run-label ci12_arcadedb_sql"
+                example_name="$example (vector search, arcadedb_sql backend, minimal)"
                 timeout_duration=1200
                 example_jvm_args=""
                 ;;
