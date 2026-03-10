@@ -1,0 +1,204 @@
+name: Build and Release Python Packages to PyPI
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+*'  # Matches: 25.10.1, 25.10.1.dev0, 25.10.1.post1, etc.
+
+jobs:
+  # Validate version compatibility between tag and pom.xml
+  validate-version:
+    name: Validate Version Compatibility
+    runs-on: ubuntu-24.04
+    outputs:
+      python-version: ${{ steps.validate.outputs.python-version }}
+      base-version: ${{ steps.validate.outputs.base-version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Validate version compatibility
+        id: validate
+        run: |
+          cd bindings/python
+
+          # Get version from git tag
+          TAG_VERSION="${{ github.ref_name }}"
+          echo "📌 Git tag version: $TAG_VERSION"
+
+          # Extract base version from tag (remove .dev0, .post1, etc.)
+          TAG_BASE=$(echo "$TAG_VERSION" | sed -E 's/\.(dev|post|rc|a|b)[0-9]+$//')
+          echo "📌 Tag base version: $TAG_BASE"
+
+          # Get version from pom.xml
+          POM_VERSION=$(python3 extract_version.py --format=docker)
+          echo "📌 pom.xml version: $POM_VERSION"
+
+          # Extract base version from pom.xml (remove -SNAPSHOT, etc.)
+          POM_BASE=$(echo "$POM_VERSION" | sed 's/-SNAPSHOT$//' | sed 's/-RC.*//')
+          echo "📌 pom.xml base version: $POM_BASE"
+
+          # Compare base versions
+          if [ "$TAG_BASE" != "$POM_BASE" ]; then
+            echo "❌ Version mismatch!"
+            echo "   Tag base version: $TAG_BASE"
+            echo "   pom.xml base version: $POM_BASE"
+            echo ""
+            echo "This prevents accidentally releasing the wrong version."
+            echo "For example, tagging 25.9.1.dev0 when pom.xml says 25.10.1-SNAPSHOT"
+            exit 1
+          fi
+
+          echo "✅ Version compatibility check passed!"
+          echo "   Base version: $TAG_BASE"
+          echo "   Full tag version: $TAG_VERSION"
+
+          # Output for later jobs
+          echo "python-version=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "base-version=$TAG_BASE" >> $GITHUB_OUTPUT
+
+  # Run example tests before building (workflow_call)
+  test-examples:
+    name: Run Example Tests
+    needs: validate-version
+    uses: ./.github/workflows/test-python-examples.yml
+    with:
+      build-version: ${{ needs.validate-version.outputs.python-version }}
+    secrets: inherit
+
+  # Run unit tests before building
+  test:
+    name: Run Unit Tests
+    needs: validate-version
+    uses: ./.github/workflows/test-python-bindings.yml
+    with:
+      build-version: ${{ needs.validate-version.outputs.python-version }}
+    secrets: inherit
+
+  publish:
+    name: Publish arcadedb-embedded to PyPI (4 platforms)
+    needs: [validate-version, test, test-examples]
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Don't block GitHub Release if PyPI upload fails (size limit)
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download wheels for all tested Python versions
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: wheel-*-py*
+          path: dist/
+          merge-multiple: true
+
+      - name: Verify wheels
+        run: |
+          ls -lh dist/
+          echo "📦 Wheels for PyPI (current platforms):"
+          ls dist/*.whl
+
+          # Count wheels (should be 16: 4 platforms x 4 Python versions)
+          WHEEL_COUNT=$(ls dist/*.whl | wc -l)
+          echo "📊 Wheel count: $WHEEL_COUNT (expected: 16)"
+
+          echo ""
+          echo "ℹ️  Current PyPI platforms: linux x86_64, linux arm64, macOS Apple Silicon, windows x86_64"
+
+          if [ "$WHEEL_COUNT" -ne 16 ]; then
+            echo "❌ Expected 16 wheels (4 platforms x 4 Python versions), got $WHEEL_COUNT"
+            exit 1
+          fi
+
+          # Show checksums to verify wheels are different
+          echo ""
+          echo "🔐 Wheel checksums (SHA256):"
+          sha256sum dist/*.whl
+
+          # Report wheel sizes with actual component breakdown
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Built Wheels" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Wheel Size | JRE Size | JARs Size | Installed Size | SHA256 (first 8 chars) |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------------|----------|-----------|----------------|------------------------|" >> $GITHUB_STEP_SUMMARY
+
+          for WHEEL_FILE in dist/*.whl; do
+            WHEEL_NAME=$(basename "$WHEEL_FILE")
+            WHEEL_SIZE_BYTES=$(stat -c%s "$WHEEL_FILE")
+            WHEEL_SIZE_MB=$(echo "scale=1; $WHEEL_SIZE_BYTES / 1024 / 1024" | bc)
+
+            # Extract platform from filename
+            if [[ "$WHEEL_NAME" == *"manylinux"*"x86_64"* ]]; then
+              PLATFORM="linux/amd64"
+            elif [[ "$WHEEL_NAME" == *"manylinux"*"aarch64"* ]]; then
+              PLATFORM="linux/arm64"
+            elif [[ "$WHEEL_NAME" == *"macosx"*"arm64"* ]]; then
+              PLATFORM="darwin/arm64"
+            # elif [[ "$WHEEL_NAME" == *"macosx"*"x86_64"* ]]; then
+            #   PLATFORM="darwin/amd64"
+            elif [[ "$WHEEL_NAME" == *"win_amd64"* ]]; then
+              PLATFORM="windows/amd64"
+            else
+              PLATFORM="unknown"
+            fi
+
+            # Analyze wheel contents
+            TEMP_DIR=$(mktemp -d)
+            unzip -q "$WHEEL_FILE" -d "$TEMP_DIR"
+
+            # Calculate component sizes (find jre directory anywhere)
+            JRE_DIR=$(find "$TEMP_DIR" -type d -name "jre" | head -n1)
+            if [ -n "$JRE_DIR" ] && [ -d "$JRE_DIR" ]; then
+              JRE_SIZE_BYTES=$(du -sb "$JRE_DIR" | cut -f1)
+              JRE_SIZE_MB=$(echo "scale=1; $JRE_SIZE_BYTES / 1024 / 1024" | bc)
+            else
+              JRE_SIZE_MB="N/A"
+            fi
+
+            JAR_SIZE_BYTES=$(find "$TEMP_DIR" -name "*.jar" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
+            if [ -n "$JAR_SIZE_BYTES" ] && [ "$JAR_SIZE_BYTES" != "0" ]; then
+              JAR_SIZE_MB=$(echo "scale=1; $JAR_SIZE_BYTES / 1024 / 1024" | bc)
+            else
+              JAR_SIZE_MB="N/A"
+            fi
+
+            INSTALLED_SIZE_BYTES=$(du -sb "$TEMP_DIR" | cut -f1)
+            INSTALLED_SIZE_MB=$(echo "scale=0; $INSTALLED_SIZE_BYTES / 1024 / 1024" | bc)
+
+            # Calculate SHA256 checksum
+            CHECKSUM=$(sha256sum "$WHEEL_FILE" | cut -d' ' -f1 | cut -c1-8)
+
+            rm -rf "$TEMP_DIR"
+
+            echo "| $PLATFORM | ${WHEEL_SIZE_MB}M | ${JRE_SIZE_MB}M | ${JAR_SIZE_MB}M | ~${INSTALLED_SIZE_MB}M | \`$CHECKSUM\` |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note**: Sizes are uncompressed except for Wheel Size (compressed)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Verify wheel versions
+        run: |
+          TAG_VERSION="${{ needs.validate-version.outputs.python-version }}"
+          EXPECTED_VERSION="$TAG_VERSION"
+
+          for WHEEL_FILE in dist/*.whl; do
+            echo "📦 Checking: $WHEEL_FILE"
+            # Extract version from wheel filename
+            WHEEL_VERSION=$(echo "$WHEEL_FILE" | grep -oP '\d+\.\d+\.\d+(\.(dev|post|rc|a|b)\d+)?')
+            echo "   Version: $WHEEL_VERSION"
+
+            if [ "$WHEEL_VERSION" != "$EXPECTED_VERSION" ]; then
+              echo "❌ Wheel version mismatch in $WHEEL_FILE!"
+              echo "   Expected: $EXPECTED_VERSION"
+              exit 1
+            fi
+          done
+          echo "✅ All wheel versions match expected version ($EXPECTED_VERSION)"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1

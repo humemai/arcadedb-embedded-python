@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXAMPLES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PY_SCRIPT="$EXAMPLES_DIR/10_stackoverflow_graph_olap.py"
+HELPERS_SH="$SCRIPT_DIR/_matrix_helpers.sh"
+
+source "$HELPERS_SH"
+
+# Dataset Tier  Batch       Memory
+# Tiny          1,000       1GB
+# Small         2,500       2GB
+# Medium        5,000       4GB
+# Large         10,000      8GB
+# X-Large       25,000      32GB
+
+DATASET="stackoverflow-large"
+BATCH_SIZE=10000
+MEM_LIMIT="8g"
+THREADS=8
+RUNS=1
+SEED_START=0
+JVM_HEAP_FRACTION="0.80"
+SQLITE_PROFILE="olap"
+DOCKER_IMAGE="python:3.12-slim"
+QUERY_RUNS=10
+QUERY_ORDER="shuffled"
+ONLY_QUERY=""
+MANUAL_CHECKS=false
+DBS_RAW="arcadedb_cypher,ladybugdb,sqlite_native,python_memory"
+# I ran all with 8g with all 3 thread variants. only ladybug and sqlite_native worked.
+LABEL_PREFIX="sweep10"
+
+if [[ $# -gt 0 ]]; then
+    echo "This script does not accept command-line arguments." >&2
+    echo "Edit configuration values at the top of this file instead (for example DATASET)." >&2
+    exit 1
+fi
+
+IFS=',' read -r -a DBS <<< "$DBS_RAW"
+if [[ "${#DBS[@]}" -eq 0 ]]; then
+    echo "DBS_RAW cannot be empty" >&2
+    exit 1
+fi
+
+if [[ ! -f "$PY_SCRIPT" ]]; then
+    echo "Benchmark script not found: $PY_SCRIPT" >&2
+    exit 1
+fi
+
+matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
+
+if [[ "$QUERY_ORDER" != "fixed" && "$QUERY_ORDER" != "shuffled" ]]; then
+    echo "QUERY_ORDER must be either 'fixed' or 'shuffled'" >&2
+    exit 1
+fi
+
+if [[ "$QUERY_RUNS" -lt 1 ]]; then
+    echo "QUERY_RUNS must be >= 1" >&2
+    exit 1
+fi
+
+cd "$EXAMPLES_DIR"
+
+echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED_START"
+echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER sqlite-profile=$SQLITE_PROFILE"
+
+dataset_slug="${DATASET//-/_}"
+mem_tag="${MEM_LIMIT//[^[:alnum:]]/}"
+
+execution_idx=0
+for ((run = 1; run <= RUNS; run++)); do
+    for db in "${DBS[@]}"; do
+        db="$(echo "$db" | xargs)"
+        if [[ -z "$db" ]]; then
+            continue
+        fi
+
+        db_engine="$db"
+        case "$db" in
+            arcadedb_cypher | ladybug | ladybugdb | sqlite_native | graphqlite | python_memory)
+                db_engine="$db"
+                ;;
+            *)
+                echo "Unsupported DB alias in DBS_RAW: $db" >&2
+                echo "Supported values: arcadedb_cypher, ladybug, ladybugdb, sqlite_native, graphqlite, python_memory" >&2
+                exit 1
+                ;;
+        esac
+
+        seed=$((SEED_START + execution_idx))
+        run_label=$(printf "%s_t%02d_r%02d_%s_s%05d_m%s" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed" "$mem_tag")
+
+        cmd=(
+            python3 "$PY_SCRIPT"
+            --dataset "$DATASET"
+            --db "$db_engine"
+            --threads "$THREADS"
+            --batch-size "$BATCH_SIZE"
+            --mem-limit "$MEM_LIMIT"
+            --jvm-heap-fraction "$JVM_HEAP_FRACTION"
+            --sqlite-profile "$SQLITE_PROFILE"
+            --docker-image "$DOCKER_IMAGE"
+            --query-runs "$QUERY_RUNS"
+            --query-order "$QUERY_ORDER"
+            --seed "$seed"
+            --run-label "$run_label"
+        )
+
+        if [[ -n "$ONLY_QUERY" ]]; then
+            cmd+=(--only-query "$ONLY_QUERY")
+        fi
+
+        if [[ "$MANUAL_CHECKS" == true ]]; then
+            cmd+=(--manual-checks)
+        fi
+
+        echo
+        echo "[$((execution_idx + 1))/$((RUNS * ${#DBS[@]}))] db=$db run=$run seed=$seed label=$run_label"
+        echo "Command: ${cmd[*]}"
+        set +e
+        "${cmd[@]}"
+        cmd_exit=$?
+        set -e
+
+        target_dir="my_test_databases/${dataset_slug}_graph_olap_${db_engine}_mem${mem_tag}_${run_label}"
+        if [[ ! -d "$target_dir" ]]; then
+            mkdir -p "$target_dir"
+        fi
+
+        collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        run_status="success"
+        if ((cmd_exit != 0)); then
+            run_status="failed"
+            echo "Run failed (exit=$cmd_exit). Continuing to next run..." >&2
+        fi
+
+        cat > "$target_dir/run_status.json" << EOF
+{
+  "status": "$run_status",
+  "exit_code": $cmd_exit,
+  "db": "$db",
+  "db_engine": "$db_engine",
+  "dataset": "$DATASET",
+  "threads": $THREADS,
+  "batch_size": $BATCH_SIZE,
+  "mem_limit": "$MEM_LIMIT",
+  "query_runs": $QUERY_RUNS,
+  "query_order": "$QUERY_ORDER",
+  "seed": $seed,
+  "run_label": "$run_label",
+  "collected_at_utc": "$collected_at"
+}
+EOF
+
+        if ((cmd_exit == 0)); then
+            wheel_artifacts_for_dir="false"
+            if [[ "$db_engine" == "arcadedb_cypher" ]]; then
+                wheel_artifacts_for_dir="true"
+            fi
+            matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"
+            matrix_embed_wheel_metadata_in_results "$target_dir" "$collected_at"
+            matrix_write_dependency_versions \
+                "$target_dir" \
+                "$collected_at" \
+                "arcadedb_embedded" "auto" \
+                "real_ladybug" "auto" \
+                "graphqlite" "auto" \
+                "sqlite_native" "builtin" \
+                "python_memory" "builtin"
+
+            du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"
+            du_human="$(du -sh "$target_dir" | awk '{print $1}')"
+
+            cat > "$target_dir/disk_usage_du.txt" << EOF
+path: $target_dir
+du_bytes: $du_bytes
+du_human: $du_human
+collected_at_utc: $collected_at
+EOF
+
+            cat > "$target_dir/disk_usage_du.json" << EOF
+{
+  "path": "$target_dir",
+  "du_bytes": $du_bytes,
+  "du_human": "$du_human",
+  "collected_at_utc": "$collected_at"
+}
+EOF
+
+            echo "Saved du size: $du_human ($du_bytes bytes) -> $target_dir/disk_usage_du.json"
+        else
+            echo "Skipped du capture because run failed: $target_dir"
+        fi
+
+        execution_idx=$((execution_idx + 1))
+    done
+done
+
+echo
+echo "Completed all runs."

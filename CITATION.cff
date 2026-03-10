@@ -16,20 +16,72 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 cff-version: 1.2.0
-title: ArcadeDB
+title: ArcadeDB Embedded for Python
 message: If you use this software, please cite it using the metadata from this file.
 type: software
 authors:
-  - given-names: Luca
-    family-names: Garulli
-repository-code: "https://github.com/ArcadeData/arcadedb"
-url: "https://arcadedb.com"
-abstract: Play With Data!
+  - name: 'Roberto Franchini'
+  - name: 'lvca'
+  - name: 'Taewoon Kim'
+  - name: 'Luca Garulli'
+  - name: 'github-actions[bot]'
+  - name: 'Christian Himpe'
+  - name: 'arcade-player'
+  - name: 'Antarctic Giraffe'
+  - name: 'Oleg Cohen'
+  - name: 'dependabot[bot]'
+  - name: 'Copilot'
+  - name: 'Claude'
+  - name: 'robfrank'
+  - name: 'copilot-swe-agent[bot]'
+  - name: 'ExtReMLapin'
+  - name: 'hr.stoyanov'
+  - name: 'claude[bot]'
+  - name: 'GitHub Actions'
+  - name: 'Greg Lincoln'
+  - name: 'Miles Granger'
+  - name: 'carlos-rodrigues-8x8'
+  - name: 'Gregor Frey'
+  - name: 'Roman Heinrich'
+  - name: 'Pawel Maslej'
+  - name: 'Lucian Musca'
+  - name: 'Erick J'
+  - name: 'Josh Soref'
+  - name: 'Aleš Najmann'
+  - name: 'bennelli'
+  - name: 'Matteo Baccan'
+  - name: 'odysseaspenta'
+  - name: 'Pierre F'
+  - name: 'Luke'
+  - name: 'T. H. Soh'
+  - name: 'Dominik Bergen'
+  - name: 'Christoph Thelen'
+  - name: 'Szabi'
+  - name: 'Rene Leonhardt'
+  - name: 'Ilia Naryzhny'
+  - name: 'Claudio'
+  - name: 'Snyk bot'
+  - name: 'psytron'
+  - name: 'snyk-bot'
+  - name: 'Eric Le Goff'
+  - name: 'Jonathan Leitschuh'
+  - name: 'Sam Stowers'
+  - name: 'Shasaur'
+  - name: 'The Codacy Badger'
+  - name: 'giastfader'
+  - name: 'mergify[bot]'
+repository-code: "https://github.com/humemai/arcadedb-embedded-python"
+url: "https://docs.humem.ai/arcadedb/latest/"
+abstract: Embedded ArcadeDB Python bindings with a bundled JRE, enabling in-process multi-model database access (graph, document, key/value, vector, time series) via SQL, OpenCypher, and MongoDB query languages.
 license: Apache-2.0
-copyright: Copyright (c) 2021 Arcade Data Ltd
+copyright: Copyright (c) 2021–present Arcade Data Ltd; 2025–present HumemAI
 keywords:
+  - ArcadeDB
+  - Python
+  - Embedded
+  - Bindings
   - Multi-Model
-  - NoSQL
+  - Graph
+  - Vector
   - SQL
-  - Database
-  - DBMS
+  - NoSQL

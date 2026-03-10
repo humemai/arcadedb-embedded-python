@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 260 Passing | **Platforms**: 4 Supported
+**Status**: ✅ Production Ready | **Tests**: 271 Passing | **Platforms**: 4 Supported
 
 ---
 
@@ -35,10 +35,10 @@ import arcadedb_embedded as arcadedb
 
 # Create database (context manager for automatic open and close)
 with arcadedb.create_database("./mydb") as db:
-  # Create schema (schema ops are auto-transactional)
-  db.schema.create_document_type("Person")
-  db.schema.create_property("Person", "name", "STRING")
-  db.schema.create_property("Person", "age", "INTEGER")
+    # Create schema (DDL)
+    db.command("sql", "CREATE DOCUMENT TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
 
     # Insert data (requires transaction)
     with db.transaction():
@@ -48,9 +48,6 @@ with arcadedb.create_database("./mydb") as db:
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
     for record in result:
         print(f"Name: {record.get('name')}")
-
-  # SQL also works (useful when talking to a remote server),
-  # but the embedded API above is preferred for local use.
 ```
 
 **[👉 See full tutorial](https://docs.humem.ai/arcadedb/latest/getting-started/quickstart/)**
@@ -92,7 +89,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 260 tests + example scripts passing on all 4 platforms
+**Status**: 271 tests + example scripts passing on all 4 platforms
 
 ```bash
 # Run all tests

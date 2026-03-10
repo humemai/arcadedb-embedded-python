@@ -122,6 +122,12 @@ class TestTypeCreation:
         assert schema.exists_type("ExistingEdge")
 
 
+def test_index_type_enum_includes_new_java_index_types():
+    """Python IndexType should include current Java index enum values."""
+    assert IndexType.GEOSPATIAL.value == "GEOSPATIAL"
+    assert IndexType.HASH.value == "HASH"
+
+
 class TestTypeQueries:
     """Test type query methods."""
 
@@ -664,9 +670,11 @@ class TestLSMVectorIndexSchemaOps:
 
         # Add data
         with test_db.transaction():
-            v = test_db.new_vertex("Doc")
-            v.set("embedding", arcadedb.to_java_float_array([1.0, 0.0, 0.0]))
-            v.save()
+            test_db.command(
+                "sql",
+                "INSERT INTO Doc SET embedding = ?",
+                arcadedb.to_java_float_array([1.0, 0.0, 0.0]),
+            )
 
         # Retrieve
         index = schema.get_vector_index("Doc", "embedding")
