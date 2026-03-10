@@ -173,6 +173,20 @@ class TestTypeQueries:
         assert "Vertex1" in type_names
         assert "Edge1" in type_names
 
+    def test_get_types_has_no_duplicates_across_repeated_calls(self, test_db):
+        """Test get_types remains stable and duplicate-free across repeated calls."""
+        schema = test_db.schema
+        schema.create_document_type("Doc1")
+        schema.create_vertex_type("Vertex1")
+        schema.create_edge_type("Edge1")
+
+        first_names = [type_obj.getName() for type_obj in schema.get_types()]
+        second_names = [type_obj.getName() for type_obj in schema.get_types()]
+
+        assert len(first_names) == len(set(first_names))
+        assert len(second_names) == len(set(second_names))
+        assert set(first_names) == set(second_names)
+
 
 class TestTypeDeletion:
     """Test type deletion methods."""

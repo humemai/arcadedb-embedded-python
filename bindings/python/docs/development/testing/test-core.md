@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_core.py){ .md-button }
 
-There are **15 tests** covering fundamental database operations.
+There are **16 tests** covering fundamental database operations.
 
 ## Overview
 
@@ -15,6 +15,7 @@ Tests validate:
 - Query result handling and iteration
 - Error handling
 - OpenCypher queries (when available)
+- SQL aggregate behavior on empty types
 - Vector search with HNSW indexes
 - Unicode/international character support
 - Schema introspection and metadata
@@ -48,6 +49,7 @@ Tests validate:
 
 - **cypher_queries**: Tests OpenCypher CREATE statements, MATCH queries, property access (when OpenCypher available)
 - **sql_queries**: Tests SQL queries, aggregation, filtering, joins
+- **sql_count_on_empty_type_returns_zero**: Tests `count(*)` on an empty type returns a row with `0`
 
 ### Advanced Features
 

@@ -212,6 +212,24 @@ def test_opencypher_collect_and_unwind(temp_db_path):
         assert rows == [("Acme", "Alice"), ("Acme", "Bob")]
 
 
+def test_opencypher_unwind_where_uses_unwind_variable(temp_db_path):
+    """Test WHERE predicates can reference variables introduced by UNWIND."""
+    with arcadedb.create_database(temp_db_path) as db:
+        _ensure_opencypher(db)
+        _seed_graph(db)
+
+        result = db.query(
+            "opencypher",
+            "UNWIND ['Alice', 'Bob', 'Nobody'] AS expected_name "
+            "MATCH (p:Person) "
+            "WHERE p.name = expected_name "
+            "RETURN p.name AS name ORDER BY name",
+        )
+        names = [record.get("name") for record in result]
+
+        assert names == ["Alice", "Bob"]
+
+
 def test_opencypher_pattern_comprehension(temp_db_path):
     """Test pattern comprehension to derive relationship values."""
     with arcadedb.create_database(temp_db_path) as db:
