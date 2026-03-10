@@ -195,11 +195,10 @@ assert db.count_type("User") == 100
 2. Tune `set_commit_every()` and `set_parallel_level()` per workload (tests use 25/50/100/250 and 2–4 workers).
 3. Prefer per-operation callbacks; global callbacks hit JPype proxy issues (documented in tests).
 4. `is_pending()` is checked after completion to ensure queues are empty.
-5. Performance test prints async vs sync timings but does not enforce a speedup assertion.
+5. For application code, prefer async SQL/OpenCypher command/query flows; record helpers remain useful for low-level tests and wrappers.
 
 ## See Also
 
 - **[AsyncExecutor API](../../api/async_executor.md)**
-- **[BatchContext Tests](test-batch-context.md)**
 - **[Example 05: CSV Import](../../examples/05_csv_import_graph.md)**
 - **[Testing Overview](overview.md)**

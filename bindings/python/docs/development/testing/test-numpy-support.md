@@ -240,7 +240,7 @@ for i, vec in enumerate(dense_vectors):
 ## Performance Tips
 
 1. **Use float32** - Faster and smaller than float64
-2. **Batch inserts** - Use BatchContext for many vectors
+2. **Batch inserts** - Use chunked transactions for many vectors
 3. **Convert once** - `.tolist()` only when storing
 4. **Numpy for math** - Use NumPy for vector operations
 5. **HNSW (JVector) for search** - Enable similarity search

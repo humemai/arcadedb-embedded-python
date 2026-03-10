@@ -290,12 +290,11 @@ import arcadedb_embedded as arcadedb
 with arcadedb.create_server() as server:
     # Server automatically started
     db = server.create_database("temp_db")
+    db.command("sql", "CREATE DOCUMENT TYPE Test")
 
     # Use database
     with db.transaction():
-        doc = db.new_document("Test")
-        doc.set("value", 42)
-        doc.save()
+        db.command("sql", "INSERT INTO Test SET value = ?", 42)
 
     db.close()
 
@@ -512,14 +511,10 @@ with arcadedb.create_server() as server:
 
     # Use databases
     with users_db.transaction():
-        user = users_db.new_vertex("User")
-        user.set("email", "alice@example.com")
-        user.save()
+        users_db.command("sql", "INSERT INTO User SET email = ?", "alice@example.com")
 
     with products_db.transaction():
-        product = products_db.new_document("Product")
-        product.set("sku", "PROD-001")
-        product.save()
+        products_db.command("sql", "INSERT INTO Product SET sku = ?", "PROD-001")
 
     # Query different databases
     print("Users:")

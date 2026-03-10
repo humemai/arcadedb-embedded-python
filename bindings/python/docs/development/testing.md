@@ -3,9 +3,9 @@
 Comprehensive testing documentation for ArcadeDB Python bindings.
 
 !!! success "Test Coverage"
-    **271 tests** across 25 test files, 100% passing
+    **260 tests** across 24 test files, passing in the current bindings suite
 
-    - **Current package**: 271 passed
+    - **Current package**: 260 passed
     - All ArcadeDB features working (SQL, OpenCypher, Studio)
 
 ## Quick Navigation
@@ -46,7 +46,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
     ---
 
-    CSV import with type inference (16 tests)
+    SQL `IMPORT DATABASE` and importer-adjacent scenarios
 
 -   :material-graph: **[OpenCypher Tests](testing/test-opencypher.md)**
 
@@ -152,7 +152,7 @@ tests/
 ├── test_server.py            # Server mode (6 tests)
 ├── test_concurrency.py       # Concurrency (4 tests)
 ├── test_server_patterns.py   # Patterns (4 tests)
-├── test_importer.py          # Import (13 tests)
+├── test_import_database.py   # Import database tests
 ├── test_cypher.py            # OpenCypher (tests)
 └── conftest.py               # Shared fixtures
 ```

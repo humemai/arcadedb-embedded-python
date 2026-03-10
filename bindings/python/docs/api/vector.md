@@ -55,10 +55,13 @@ java_vec = to_java_float_array(vec_list)
 vec_np = np.array([0.5, 0.6, 0.7, 0.8], dtype=np.float32)
 java_vec = to_java_float_array(vec_np)
 
-# Use with vertex
-vertex = db.new_vertex("Document")
-vertex.set("embedding", java_vec)
-vertex.save()
+# Use with SQL parameter binding
+with db.transaction():
+    db.command(
+        "sql",
+        "INSERT INTO Document SET embedding = ?",
+        java_vec,
+    )
 ```
 
 ---

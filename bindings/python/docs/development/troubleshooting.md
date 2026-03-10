@@ -306,18 +306,15 @@ arcadedb.start_jvm(
 
 1. **Use Correct Types**:
     ```python
-    # Integer
-    vertex.set("age", 25)
-
-    # String
-    vertex.set("name", "Alice")
-
-    # List
-    vertex.set("tags", ["python", "database"])
-
-    # DateTime
-    from datetime import datetime
-    vertex.set("created", datetime.now())
+    with db.transaction():
+        db.command(
+            "sql",
+            "INSERT INTO User SET age = ?, name = ?, tags = ?, created = ?",
+            25,
+            "Alice",
+            ["python", "database"],
+            datetime.now(),
+        )
     ```
 
 2. **Convert NumPy Arrays**:
@@ -326,7 +323,12 @@ arcadedb.start_jvm(
     import numpy as np
 
     arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    vertex.set("embedding", to_java_float_array(arr))
+    with db.transaction():
+        db.command(
+            "sql",
+            "INSERT INTO EmbeddingDoc SET embedding = ?",
+            to_java_float_array(arr),
+        )
     ```
 ---
 
@@ -562,18 +564,14 @@ db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 # Bad: Many small transactions
 for record in records:
     with db.transaction():
-        vertex = db.new_vertex("Data")
-        vertex.set("data", record)
-        vertex.save()
+        db.command("sql", "INSERT INTO Data SET data = ?", record)
 
 # Good: Batch in larger transactions
 batch_size = 10000
 for i in range(0, len(records), batch_size):
     with db.transaction():
         for record in records[i:i+batch_size]:
-            vertex = db.new_vertex("Data")
-            vertex.set("data", record)
-            vertex.save()
+            db.command("sql", "INSERT INTO Data SET data = ?", record)
 ```
 
 ---
@@ -633,16 +631,14 @@ for batch in large_dataset:
 # Bad: Huge transaction
 with db.transaction():
     for i in range(1000000):
-        vertex = db.new_vertex("Data")
-        vertex.save()
+        db.command("sql", "INSERT INTO Data SET id = ?", i)
 
 # Good: Batch transactions
 batch_size = 10000
 for i in range(0, 1000000, batch_size):
     with db.transaction():
         for j in range(batch_size):
-            vertex = db.new_vertex("Data")
-            vertex.save()
+            db.command("sql", "INSERT INTO Data SET id = ?", i + j)
 ```
 
 ## Server Mode Issues
@@ -924,9 +920,7 @@ class DebugTransaction:
 
 # Usage
 with DebugTransaction(db):
-    vertex = db.new_vertex("User")
-    vertex.set("name", "Alice")
-    vertex.save()
+    db.command("sql", "INSERT INTO User SET name = ?", "Alice")
 ```
 
 ---
@@ -962,13 +956,14 @@ results = debug_query(db, "sql", "SELECT FROM User WHERE name = :name", {"name":
 **Solution:**
 ```python
 # Check if property exists
-if vertex.has_property("name"):
-    name = vertex.get("name")
+row = db.query("sql", "SELECT name FROM User LIMIT 1").first()
+if row.has_property("name"):
+    name = row.get("name")
 else:
     name = "Unknown"
 
 # Or use default
-name = vertex.get("name") or "Unknown"
+name = row.get("name") or "Unknown"
 ```
 
 ---
@@ -984,9 +979,9 @@ result = db.query("sql", "SELECT FROM schema:types WHERE name = 'User'")
 if not result.has_next():
     db.command("sql", "CREATE VERTEX TYPE User")
 
-# Then create vertex
+# Then insert data
 with db.transaction():
-    vertex = db.new_vertex("User")
+    db.command("sql", "INSERT INTO User SET name = ?", "Alice")
 ```
 
 ---
@@ -1019,17 +1014,22 @@ db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 result = db.query("sql", "SELECT FROM User WHERE email = :email", {"email": "alice@example.com"})
 
 if result.has_next():
-    vertex = result.next()
-    # Update existing
-    vertex.set("name", "Alice")
-    vertex.save()
+    with db.transaction():
+        db.command(
+            "sql",
+            "UPDATE User SET name = ? WHERE email = ?",
+            "Alice",
+            "alice@example.com",
+        )
 else:
     # Create new
     with db.transaction():
-        vertex = db.new_vertex("User")
-        vertex.set("email", "alice@example.com")
-        vertex.set("name", "Alice")
-        vertex.save()
+        db.command(
+            "sql",
+            "INSERT INTO User SET email = ?, name = ?",
+            "alice@example.com",
+            "Alice",
+        )
 ```
 
 ## Getting Help

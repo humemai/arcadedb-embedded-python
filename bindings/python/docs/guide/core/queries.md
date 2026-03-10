@@ -57,8 +57,8 @@ for start in range(0, len(people_data), chunk_size):
                 city,
             )
 
-# If you specifically need wrapper-level Java batching APIs,
-# you can still use db.batch_context(...), but DSL remains the default path.
+# Prefer SQL/OpenCypher chunked transactions for embedded bulk work.
+# There is no separate high-level batch context API in the current Python surface.
 ```
 
 ## SQL for Queries

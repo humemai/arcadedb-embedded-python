@@ -15,12 +15,12 @@ protocol, server plugins, clustering) that are not typically used from Python.
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Core Database | ✅ Supported | `DatabaseFactory`, `Database`, transactions, lookups, batch helpers |
+| Core Database | ✅ Supported | `DatabaseFactory`, `Database`, transactions, lookups, async helpers |
 | Query Execution | ✅ Supported | SQL, OpenCypher, MongoDB, GraphQL passthrough |
 | Schema & Indexes | ✅ Supported | Types, properties, LSM/FULL_TEXT/Vector indexes |
-| Graph API | ✅ Supported | `Document`, `Vertex`, `Edge` wrappers + query traversal |
+| Graph API | ✅ Supported | SQL/OpenCypher graph workflows plus `Document`/`Vertex`/`Edge` wrapper compatibility |
 | Vector Search | ✅ Supported | JVector indexes + NumPy conversion helpers |
-| Async & Batch | ✅ Supported | `AsyncExecutor`, `BatchContext` |
+| Async Execution | ✅ Supported | `AsyncExecutor` plus record-level and SQL/Cypher async flows |
 | Data Import | ✅ Supported | CSV/TSV, XML, and ArcadeDB JSONL import |
 | Data Export | ✅ Supported | JSONL/GraphML/GraphSON + CSV for query results |
 | Server Mode | ✅ Supported | Embedded server lifecycle + Studio access |
@@ -41,7 +41,7 @@ protocol, server plugins, clustering) that are not typically used from Python.
 - ✅ Records: `new_document()`, `new_vertex()`, `lookup_by_rid()`, `lookup_by_key()`
 - ✅ Utilities: `count_type()`, `drop()`, `get_name()`, `get_database_path()`, `is_open()`, `close()`
 - ✅ Configuration: `set_auto_transaction()`, `set_read_your_writes()`
-- ✅ Async/batch: `async_executor()` and `batch_context()`
+- ✅ Async execution: `async_executor()`
 - ✅ Export helpers: `export_database()` and `export_to_csv()`
 
 **Not directly exposed:** bucket scans, WAL internals, low-level binary protocol
@@ -65,9 +65,10 @@ All query languages supported by the underlying ArcadeDB engine can be used via
 
 #### 3. Graph API
 
-**Hybrid approach: Pythonic object manipulation + query languages**
+**Recommended approach: SQL/OpenCypher for graph writes and traversals, with wrapper
+APIs available when you explicitly need record objects**
 
-**Vertex & Edge Manipulation (Pythonic):**
+**Wrapper/record APIs available:**
 
 - ✅ `db.new_vertex(type)` / `db.new_document(type)`
 - ✅ `record.set(name, value)` / `record.save()` / `record.delete()` / `record.modify()`
@@ -83,39 +84,33 @@ All query languages supported by the underlying ArcadeDB engine can be used via
 
 **Not exposed:** event listeners/callback hooks, low-level graph internals
 
-**Object-Oriented Approach (Recommended):**
+**Recommended query-first approach:**
 
 ```python
-# Create vertices with fluent Python API
-alice = db.new_vertex("Person").set("name", "Alice").save()
-bob = db.new_vertex("Person").set("name", "Bob").save()
+# Create vertices via SQL
+with db.transaction():
+    db.command("sql", "INSERT INTO User SET id = 1, name = 'Alice'")
+    db.command("sql", "INSERT INTO User SET id = 2, name = 'Bob'")
+    db.command("sql", """
+        CREATE EDGE Follows
+        FROM (SELECT FROM User WHERE id = 1)
+        TO (SELECT FROM User WHERE id = 2)
+    """)
 
-# Create edge with properties (bidirectionality determined by EdgeType schema)
-edge = alice.new_edge("Follows", bob, since=date.today())
-edge.save()
-```
-
-**Query-Based Approach (Also Supported):**
-
-```python
-# Create edges via SQL
-db.command("sql", """
-    CREATE EDGE Follows
-    FROM (SELECT FROM User WHERE id = 1)
-    TO (SELECT FROM User WHERE id = 2)
-""")
-
-# Or via Cypher
-db.command("cypher", """
-    MATCH (a:User {id: 1}), (b:User {id: 2})
-    CREATE (a)-[:FOLLOWS]->(b)
-""")
-
-# Traverse via Cypher
-result = db.query("cypher", """
+# Traverse via OpenCypher
+result = db.query("opencypher", """
     MATCH (user:User {name: 'Alice'})-[:FOLLOWS]->(friend)
     RETURN friend.name
 """)
+```
+
+**Wrapper/object APIs still available:**
+
+```python
+with db.transaction():
+    alice = db.new_vertex("Person").set("name", "Alice").save()
+    bob = db.new_vertex("Person").set("name", "Bob").save()
+    alice.new_edge("Follows", bob, since=date.today()).save()
 ```
 
 #### 4. Schema & Index API
@@ -193,8 +188,8 @@ for Python developers. Instead of exposing every Java object, operations are ena
 through:
 
 - **SQL DDL** for schema management
-- **Cypher/SQL** for graph operations
-- **High-level wrappers** for common tasks (transactions, vector search)
+- **SQL/OpenCypher** for graph and document operations
+- **Thin helper APIs** for transactions, vector search, and targeted record access
 
 This approach is actually **cleaner and more maintainable** than direct API exposure:
 
@@ -220,7 +215,7 @@ index = index_builder.withUnique(true).create()
 | Vector similarity search | ✅ Excellent | JVector + NumPy integration |
 | Development with Studio UI | ✅ Excellent | Server mode included |
 | Data migration (CSV/XML/JSONL import) | ✅ Good | CSV/XML importers + JSONL via SQL |
-| Async bulk ingestion | ✅ Good | `AsyncExecutor` and `BatchContext` |
+| Async bulk ingestion | ✅ Good | `AsyncExecutor` |
 | Multi-master replication | ❌ Not supported | Java server only |
 | Custom query language | ❌ Not supported | Use built-in languages |
 

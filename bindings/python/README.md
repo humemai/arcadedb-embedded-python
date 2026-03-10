@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 271 Passing | **Platforms**: 4 Supported
+**Status**: ✅ Production Ready | **Tests**: 260 Passing Across 24 Test Files | **Platforms**: 4 Supported
 
 ---
 
@@ -89,7 +89,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 271 tests + example scripts passing on all 4 platforms
+**Status**: 260 tests passing across 24 test files
 
 ```bash
 # Run all tests
@@ -148,11 +148,10 @@ arcadedb_embedded/
 ├── transactions.py      # TransactionContext manager
 ├── schema.py            # Schema management API
 ├── vector.py            # Vector search and HNSW (JVector) indexing
-├── importer.py          # Data import (CSV, JSONL)
+├── graph.py             # Graph wrappers
+├── importer.py          # Data import helpers (CSV/XML) + SQL import guidance
 ├── exporter.py          # Data export (JSONL, GraphML, GraphSON, CSV)
-├── graph.py             # Graph API helpers
-├── batch.py             # Batch operations context
-├── async_executor.py    # Asynchronous query execution
+├── async_executor.py    # Asynchronous command/query + record execution
 ├── type_conversion.py   # Python-Java type conversion utilities
 ├── exceptions.py        # ArcadeDBError exception
 ├── jvm.py               # JVM lifecycle management

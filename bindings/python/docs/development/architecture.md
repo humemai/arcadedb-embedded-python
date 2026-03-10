@@ -21,9 +21,8 @@ arcadedb_embedded/
 ├── graph.py             # Document, Vertex, Edge wrappers
 ├── schema.py            # Schema/Index/Property helpers
 ├── type_conversion.py   # Java ↔ Python value conversion
-├── async_executor.py    # Async bulk executor wrapper
-├── batch.py             # BatchContext (async-powered bulk helper)
-├── importer.py          # Importer (CSV/XML)
+├── async_executor.py    # Async command/query + record wrapper
+├── importer.py          # Importer (CSV/XML helpers)
 ├── exporter.py          # Export (JSONL/GraphML/GraphSON + CSV helper)
 ├── vector.py            # VectorIndex + array helpers
 ├── results.py           # ResultSet, Result (query results)
@@ -36,7 +35,7 @@ arcadedb_embedded/
 
 **`__init__.py`**
 
-- Central export surface (Database, AsyncExecutor, BatchContext, Schema, Importer, Exporter, VectorIndex, converters)
+- Central export surface (Database, AsyncExecutor, Schema, Importer, Exporter, VectorIndex, converters)
 - Version metadata
 
 **`jvm.py`**
@@ -50,7 +49,7 @@ arcadedb_embedded/
 
 - `DatabaseFactory`: create/open databases
 - `Database`: queries/commands, transactions, lookups, vector index builder
-- Convenience: `async_executor()`, `batch_context()`, `schema`, export helpers
+- Convenience: `async_executor()`, `schema`, export helpers
 
 **`graph.py`**
 
@@ -69,11 +68,7 @@ arcadedb_embedded/
 
 **`async_executor.py`**
 
-- `AsyncExecutor`: parallel record creation, commitEvery, WAL tuning
-
-**`batch.py`**
-
-- `BatchContext`: high-level bulk helper on top of `AsyncExecutor`
+- `AsyncExecutor`: async SQL/OpenCypher command/query flows plus parallel record helpers, commitEvery, WAL tuning
 
 **`importer.py`**
 
@@ -252,7 +247,6 @@ Database (core.py)
     ├─ lookup_by_key()/lookup_by_rid()
     ├─ create_vector_index() → VectorIndex
     ├─ async_executor() → AsyncExecutor (async_executor.py)
-    ├─ batch_context() → BatchContext (batch.py)
     ├─ schema → Schema (schema.py)
     ├─ export_database()/export_to_csv()
     └─ close()/is_open()
@@ -266,11 +260,6 @@ AsyncExecutor (async_executor.py)
     ├─ set_parallel_level()/set_commit_every()/set_back_pressure()
     ├─ create_record()/update_record()/delete_record()/create_edge_between()
     └─ wait_completion()/close()
-
-BatchContext (batch.py)
-    ├─ create_vertex()/create_document()/create_edge()
-    ├─ set_total()/get_errors()
-    └─ context-managed wait/cleanup
 
 Record wrappers (graph.py)
     ├─ Vertex → new_edge(), modify(), get_out_edges() (todo), property helpers
@@ -297,10 +286,9 @@ Result (results.py)
 - Each thread needs its own `Database` instance
 - Transactions are thread-local
 
-**Async executor & batch:**
+**Async executor:**
 
 - `AsyncExecutor` is thread-safe; it runs callbacks on Java worker threads
-- `BatchContext` wraps a single `Database` + `AsyncExecutor`, so do not share it across threads
 
 **Example:**
 

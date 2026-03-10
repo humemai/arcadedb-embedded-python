@@ -109,7 +109,7 @@ with arcadedb.create_database("./test_db") as db:
 1. JVector is fully Java-native and LSM-backed; no legacy hnswlib path remains.
 2. Use `allowed_rids` for pre-filtered searches and `overquery_factor` for recall/speed trade-offs.
 3. `max_connections` and `beam_width` map to JVector graph degree and search beam; tune per workload.
-4. Prefer chunked `db.transaction()` inserts for embedded workloads; reserve `batch_context` for legacy/tests that explicitly need it.
+4. Prefer chunked `db.transaction()` inserts for embedded workloads rather than a separate batching abstraction.
 
 ## See Also
 

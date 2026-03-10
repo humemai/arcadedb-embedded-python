@@ -126,8 +126,8 @@
     - Implemented in `13_stackoverflow_hybrid_queries.py`: both table and graph load phases run in synchronous transaction-batched ingest mode for preload fairness.
     - Graph edge creation now uses RID-based endpoints (`CREATE EDGE ... FROM <rid> TO <rid>`) instead of `SELECT ... WHERE Id` lookups.
 - [ ] update README/docs + documentation catch-up (do not forget)
-  - Refresh stated test coverage counts (currently says 271 tests across 25 files; re-verify and update).
-  - Document removed `BatchContext` / `batch_context` APIs and SQL/Cypher-first async guidance.
+  - [x] Refresh stated test coverage counts (currently 260 passed across 24 test files in `bindings/python/tests`; doc wording now avoids hard-coding environment-specific skip counts).
+  - [x] Document removed `BatchContext` / `batch_context` APIs and SQL/Cypher-first async guidance.
   - Document Example 15/16 3-method benchmark structure and parity-check behavior.
   - Reconcile top-level ingest strategy notes with latest observed benchmark outcomes and caveats.
   - Add a short migration note in docs/examples: graph schemas now explicitly use `CREATE EDGE TYPE ... UNIDIRECTIONAL`.

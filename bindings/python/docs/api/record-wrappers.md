@@ -1,8 +1,12 @@
 # Record Wrappers (Document, Vertex, Edge)
 
-The Python API provides Pythonic wrapper classes for database records: `Document`,
-`Vertex`, and `Edge`. These wrappers hide the underlying Java implementation and provide
-a clean Python interface.
+The Python API provides wrapper classes for database records: `Document`, `Vertex`, and
+`Edge`.
+
+!!! note "Compatibility-oriented API"
+    Prefer SQL/OpenCypher via `db.command(...)` and `db.query(...)` for normal schema,
+    CRUD, and graph workflows. This page documents the wrapper layer for compatibility,
+    targeted record manipulation, and wrapper-specific traversal helpers.
 
 ## Overview
 
@@ -18,6 +22,9 @@ The `Document` class is the base wrapper for all record types. Use it for docume
 as the base class for `Vertex` and `Edge`.
 
 ### Creating Documents
+
+For application code, prefer `INSERT INTO ...` statements. Use `db.new_document(...)`
+when you explicitly need the wrapper object in hand.
 
 ```python
 import arcadedb_embedded as arcadedb
@@ -184,10 +191,13 @@ wrapped = Document.wrap(java_object)
 
 ## Vertex Wrapper
 
-The `Vertex` class extends `Document` with graph-specific methods for creating and
-traversing edges.
+The `Vertex` class extends `Document` with graph-specific methods for wrapper-based edge
+creation and traversal.
 
 ### Creating Vertices
+
+For most app code, prefer SQL/OpenCypher vertex creation and graph writes. Use
+`db.new_vertex(...)` when you need direct wrapper manipulation.
 
 ```python
 db.command("sql", "CREATE VERTEX TYPE Person")
@@ -299,7 +309,24 @@ print(f"Target: {target.get('name')}")
 
 ## Best Practices
 
-### 1. Always Save After Set
+### 1. Prefer SQL/OpenCypher for set-based CRUD
+
+```python
+with db.transaction():
+    db.command(
+        "sql",
+        "INSERT INTO Note SET title = ?, content = ?",
+        "My Note",
+        "Content",
+    )
+
+results = db.query("sql", "SELECT FROM Note WHERE flagged = true")
+```
+
+Use wrappers when you specifically need object-style mutation, wrapper traversal, or a
+single looked-up record.
+
+### 2. Always Save After Set
 
 ```python
 # ❌ Bad - changes not persisted
@@ -313,7 +340,7 @@ with db.transaction():
     doc.save()
 ```
 
-### 2. Use Fresh Lookups for Delete (Python-first)
+### 3. Prefer SQL DELETE unless you already have a looked-up wrapper
 
 ```python
 # ❌ Don't delete query results directly
@@ -321,7 +348,7 @@ results = db.query("sql", "SELECT FROM Note")
 for doc in results:
     doc.delete()  # No-op
 
-# ✅ Pythonic single-record delete by RID
+# ✅ Wrapper delete on an explicitly looked-up record
 with db.transaction():
     doc = db.lookup_by_rid("#1:0")
     doc.delete()
@@ -332,18 +359,18 @@ with db.transaction():
     for rid in rids:
         db.lookup_by_rid(rid).delete()
 
-# ✅ Set-based delete (when you really want bulk SQL)
+# ✅ Default pattern for bulk or query-based delete
 with db.transaction():
     db.command("sql", "DELETE FROM Note WHERE flagged = true")
 ```
 
-### 3. Create Indexes for Frequent Lookups
+### 4. Create Indexes for Frequent Lookups
 
 ```python
 db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
 ```
 
-### 4. Chain Methods for Brevity
+### 5. Chain Methods for Brevity
 
 ```python
 # Chaining

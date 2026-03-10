@@ -67,9 +67,9 @@ with db.transaction():
 
 ## Creating Edges
 
-**Important**: In ArcadeDB, edges are created **from vertices**, not from the database
-directly. This is the proper graph model - edges represent connections between existing
-vertices.
+**Important**: In ArcadeDB, edges connect existing vertices. In these docs, the
+recommended write path is SQL/OpenCypher so graph creation looks the same across
+embedded and server usage.
 
 ### Why create edges via SQL `CREATE EDGE`?
 

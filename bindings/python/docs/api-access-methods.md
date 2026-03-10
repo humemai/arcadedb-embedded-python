@@ -8,7 +8,7 @@ Direct JVM method calls via JPype for embedded/local runtime access.
 
 !!! note "DSL-first guidance"
     Prefer SQL/OpenCypher via `db.command(...)` and `db.query(...)` for schema, CRUD, and graph operations.
-    Wrapper APIs remain available, but examples and guides are standardized on DSL usage.
+    Wrapper APIs remain available as compatibility/reference features, but examples and guides are standardized on DSL usage.
 
 ### Characteristics
 

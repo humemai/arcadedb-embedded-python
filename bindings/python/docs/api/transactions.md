@@ -25,7 +25,7 @@ It is important to distinguish between operations that require explicit transact
 | Operation Type | Examples | Transaction Requirement |
 | :--- | :--- | :--- |
 | **Schema Operations** | `create_vertex_type()`, `create_property()`, `create_index()`, `db.command("sql", "DROP INDEX...")` | **Auto-transactional** (Do NOT wrap in `with db.transaction():`) |
-| **Data Write** | `vertex.save()`, `edge.save()`, `db.command("sql", "INSERT...")`, `db.command("sql", "UPDATE...")`, `db.command("sql", "DELETE...")` | **Required** (Wrap in `with db.transaction():`) |
+| **Data Write** | `db.command("sql", "INSERT...")`, `db.command("sql", "UPDATE...")`, `db.command("sql", "DELETE...")`, `db.command("opencypher", "CREATE ...")` | **Required** (Wrap in `with db.transaction():`) |
 | **Bulk Operations** | `db.command("sql", "IMPORT DATABASE...")` | **Auto-transactional** (Built-in transaction management) |
 | **Data Read** | `db.query()`, `db.command("sql", "SELECT...")`, `db.lookup_by_rid()` | **Optional** (Can run outside transaction for better performance) |
 | **Vector Operations** | `db.create_vector_index()` | **Auto-transactional** (Do NOT wrap) |
@@ -49,13 +49,10 @@ for result in results:
 
 # ✅ CORRECT: Write operations inside transaction
 with db.transaction():
-    doc = db.new_document("Person")
-    doc.set("name", "Alice")
-    doc.save()  # Safe, within transaction
+    db.command("sql", "INSERT INTO Person SET name = ?", "Alice")
 
 # ❌ INCORRECT: Write operation without transaction
-doc = db.new_document("Person")
-doc.save()  # Will fail - requires transaction
+db.command("sql", "INSERT INTO Person SET name = ?", "Alice")  # Will fail
 ```
 
 ## Transaction Methods
@@ -80,10 +77,12 @@ db = arcadedb.open_database("./mydb")
 # Context manager handles begin/commit/rollback
 with db.transaction():
     # All operations in this block are transactional
-    doc = db.new_document("Person")
-    doc.set("name", "Alice")
-    doc.set("age", 30)
-    doc.save()
+    db.command(
+        "sql",
+        "INSERT INTO Person SET name = ?, age = ?",
+        "Alice",
+        30,
+    )
 
 # Automatically commits on successful exit
 # Automatically rolls back on exception
@@ -105,9 +104,7 @@ Manually begin a transaction.
 db.begin()
 
 try:
-    doc = db.new_document("Person")
-    doc.set("name", "Bob")
-    doc.save()
+    db.command("sql", "INSERT INTO Person SET name = ?", "Bob")
 
     db.commit()
 except Exception as e:
@@ -132,9 +129,7 @@ Commit the current transaction and persist changes.
 ```python
 db.begin()
 
-doc = db.new_document("Item")
-doc.set("value", 42)
-doc.save()
+db.command("sql", "INSERT INTO Item SET value = ?", 42)
 
 db.commit()  # Changes persisted
 ```
@@ -154,9 +149,7 @@ Roll back the current transaction and discard all changes.
 ```python
 db.begin()
 
-doc = db.new_document("Test")
-doc.set("data", "temporary")
-doc.save()
+db.command("sql", "INSERT INTO Test SET data = ?", "temporary")
 
 # Oops, need to undo
 db.rollback()  # Changes discarded
@@ -215,10 +208,12 @@ db.command("sql", "CREATE PROPERTY Account.balance DECIMAL")
 
 # Insert data
 with db.transaction():
-    account = db.new_document("Account")
-    account.set("name", "Alice")
-    account.set("balance", 1000.00)
-    account.save()
+    db.command(
+        "sql",
+        "INSERT INTO Account SET name = ?, balance = ?",
+        "Alice",
+        1000.00,
+    )
 
 db.close()
 ```
@@ -233,10 +228,12 @@ with db.transaction():
 
     # Create multiple records
     for i in range(10):
-        doc = db.new_document("Item")
-        doc.set("id", f"item_{i}")
-        doc.set("value", i * 10)
-        doc.save()
+        db.command(
+            "sql",
+            "INSERT INTO Item SET id = ?, value = ?",
+            f"item_{i}",
+            i * 10,
+        )
 
     # Query within transaction (sees uncommitted changes)
     result = db.query("sql", "SELECT COUNT(*) as cnt FROM Item")
@@ -262,10 +259,13 @@ with db.transaction():
     withdrawal = 500.00
 
     if current_balance >= withdrawal:
-        # Update balance via document API
         new_balance = current_balance - withdrawal
-        account_doc.set("balance", new_balance)
-        account_doc.save()
+        db.command(
+            "sql",
+            "UPDATE Account SET balance = ? WHERE name = ?",
+            new_balance,
+            "Alice",
+        )
         print(f"Withdrawal successful. New balance: {new_balance}")
     else:
         # Raise exception to trigger rollback
@@ -281,16 +281,12 @@ with db.transaction():
 ```python
 # This uses ONE transaction
 with db.transaction():
-    doc1 = db.new_document("Outer")
-    doc1.set("layer", "outer")
-    doc1.save()
+    db.command("sql", "INSERT INTO Outer SET layer = ?", "outer")
 
     # This does NOT create a new transaction
     # It uses the same transaction as above
     with db.transaction():
-        doc2 = db.new_document("Inner")
-        doc2.set("layer", "inner")
-        doc2.save()
+        db.command("sql", "INSERT INTO Inner SET layer = ?", "inner")
 
     # Both doc1 and doc2 commit together
 
@@ -310,9 +306,7 @@ db.begin()
 
 try:
     # Operation 1
-    doc = db.new_document("Step1")
-    doc.set("status", "processing")
-    doc.save()
+    db.command("sql", "INSERT INTO Step1 SET status = ?", "processing")
 
     # Operation 2 (may fail)
     result = db.command("sql", "UPDATE Step1 SET status = 'complete'")
@@ -340,9 +334,7 @@ except Exception as e:
 ```python
 try:
     with db.transaction():
-        doc = db.new_document("Test")
-        doc.set("value", "data")
-        doc.save()
+        db.command("sql", "INSERT INTO Test SET value = ?", "data")
 
         # Simulate error
         raise ValueError("Something went wrong!")
@@ -376,10 +368,12 @@ records = [
 for record in records:
     try:
         with db.transaction():
-            doc = db.new_document("Person")
-            doc.set("name", record["name"])
-            doc.set("age", record["age"])
-            doc.save()
+            db.command(
+                "sql",
+                "INSERT INTO Person SET name = ?, age = ?",
+                record["name"],
+                record["age"],
+            )
 
         success_count += 1
 
@@ -396,14 +390,13 @@ print(f"Success: {success_count}, Errors: {error_count}")
 
 ```python
 with db.transaction():
-    # Create records
-    items = []
     for i in range(5):
-        doc = db.new_document("Product")
-        doc.set("sku", f"PROD-{i:03d}")
-        doc.set("price", i * 10.0)
-        doc.save()
-        items.append(doc)
+        db.command(
+            "sql",
+            "INSERT INTO Product SET sku = ?, price = ?",
+            f"PROD-{i:03d}",
+            i * 10.0,
+        )
 
     # Validation check
     result = db.query("sql", "SELECT COUNT(*) as cnt FROM Product")
@@ -510,9 +503,7 @@ t2.join()
 ```python
 # Changes survive process crash
 with db.transaction():
-    doc = db.new_document("Critical")
-    doc.set("data", "important")
-    doc.save()
+    db.command("sql", "INSERT INTO Critical SET data = ?", "important")
 
 # After commit, data is on disk
 # Even if process crashes here, data is safe
@@ -538,17 +529,13 @@ print("Data survived!")
 # Inefficient: Many small transactions
 for i in range(1000):
     with db.transaction():
-        doc = db.new_document("Item")
-        doc.set("value", i)
-        doc.save()
+        db.command("sql", "INSERT INTO Item SET value = ?", i)
 # 1000 commits = slow
 
 # Efficient: One large transaction
 with db.transaction():
     for i in range(1000):
-        doc = db.new_document("Item")
-        doc.set("value", i)
-        doc.save()
+        db.command("sql", "INSERT INTO Item SET value = ?", i)
 # 1 commit = fast
 ```
 
@@ -566,9 +553,7 @@ count = 0
 db.begin()
 try:
     for i in range(100000):
-        doc = db.new_document("BigData")
-        doc.set("index", i)
-        doc.save()
+        db.command("sql", "INSERT INTO BigData SET `index` = ?", i)
 
         count += 1
         if count >= batch_size:
@@ -621,10 +606,12 @@ with db.transaction():
         print("User already exists")
     else:
         # Create if not exists
-        user = db.new_document("User")
-        user.set("email", "alice@example.com")
-        user.set("name", "Alice")
-        user.save()
+        db.command(
+            "sql",
+            "INSERT INTO User SET email = ?, name = ?",
+            "alice@example.com",
+            "Alice",
+        )
         print("User created")
 ```
 

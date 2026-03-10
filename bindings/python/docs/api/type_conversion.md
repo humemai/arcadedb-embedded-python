@@ -149,11 +149,11 @@ java_int = convert_python_to_java(42)          # Java Integer
 # Large integers → Long
 java_long = convert_python_to_java(2**40)     # Java Long
 
-# Reading integers (requires an active transaction)
+# Reading integers with SQL parameter binding
 with db.transaction():
-    vertex = db.new_vertex("User")
-    vertex.set("age", 30)                      # Python int → Java Integer
-    age = vertex.get("age")                    # Java Integer → Python int
+    db.command("sql", "INSERT INTO User SET age = ?", 30)  # Python int → Java Integer
+
+age = db.query("sql", "SELECT age FROM User LIMIT 1").first().get("age")
 ```
 
 ---
@@ -170,14 +170,18 @@ java_double = convert_python_to_java(3.14159)
 # Decimal → BigDecimal (for precision)
 java_decimal = convert_python_to_java(Decimal("123.456789"))
 
-# Reading (requires an active transaction)
+# Reading with SQL parameter binding
 with db.transaction():
-    vertex = db.new_vertex("Product")
-    vertex.set("price", 19.99)                 # float → Double
-    vertex.set("tax", Decimal("1.23"))         # Decimal → BigDecimal
+    db.command(
+        "sql",
+        "INSERT INTO Product SET price = ?, tax = ?",
+        19.99,
+        Decimal("1.23"),
+    )
 
-    price = vertex.get("price")                # Double → float
-    tax = vertex.get("tax")                    # BigDecimal → Decimal
+row = db.query("sql", "SELECT price, tax FROM Product LIMIT 1").first()
+price = row.get("price")                       # Double → float
+tax = row.get("tax")                           # BigDecimal → Decimal
 ```
 
 ---
@@ -185,15 +189,18 @@ with db.transaction():
 ### Strings
 
 ```python
-# String conversion (requires an active transaction)
+# String conversion with SQL parameter binding
 with db.transaction():
-    vertex = db.new_vertex("User")
-    vertex.set("name", "Alice")                # str → String
-    name = vertex.get("name")                  # String → str
+    db.command(
+        "sql",
+        "INSERT INTO User SET name = ?, emoji = ?",
+        "Alice",
+        "Hello 👋 World 🌍",
+    )
 
-    # Unicode handling
-    vertex.set("emoji", "Hello 👋 World 🌍")
-    emoji = vertex.get("emoji")                # Full Unicode support
+row = db.query("sql", "SELECT name, emoji FROM User LIMIT 1").first()
+name = row.get("name")                         # String → str
+emoji = row.get("emoji")                       # Full Unicode support
 ```
 
 ---
@@ -203,24 +210,28 @@ with db.transaction():
 ```python
 from datetime import datetime, date, time
 
-# datetime → LocalDateTime (requires an active transaction)
+# datetime/date/time with SQL parameter binding
 with db.transaction():
-    vertex = db.new_vertex("Event")
-    vertex.set("timestamp", datetime.now())
+    db.command(
+        "sql",
+        "INSERT INTO Event SET timestamp = ?, birthDate = ?, startTime = ?",
+        datetime.now(),
+        date(1990, 1, 15),
+        time(14, 30, 0),
+    )
 
-    # date → LocalDate
-    vertex.set("birthDate", date(1990, 1, 15))
-
-    # time → LocalTime
-    vertex.set("startTime", time(14, 30, 0))
-
-    # Reading back
-    timestamp = vertex.get("timestamp")        # datetime
-    birth_date = vertex.get("birthDate")       # date
-    start_time = vertex.get("startTime")       # time
+row = db.query("sql", "SELECT timestamp, birthDate, startTime FROM Event LIMIT 1").first()
+timestamp = row.get("timestamp")               # datetime
+birth_date = row.get("birthDate")              # date
+start_time = row.get("startTime")              # time
 ```
 
 ---
+
+!!! note "Why some examples use `set()`"
+    This page documents record property conversion behavior directly, so some examples use
+    wrapper/property APIs to make the conversion boundary explicit. For normal application
+    CRUD, prefer SQL/OpenCypher with bound parameters.
 
 ### Binary Data
 

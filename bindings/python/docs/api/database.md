@@ -108,7 +108,13 @@ else:
 
 ## Database Class
 
-The main database interface for executing queries, managing transactions, and creating records.
+The main database interface for executing queries, managing transactions, and issuing
+schema/data commands.
+
+!!! note "Recommended usage"
+    Treat `db.command(...)` and `db.query(...)` as the default application-facing API.
+    The record-wrapper helpers documented below are available for compatibility and
+    targeted low-level workflows, but the docs standardize on SQL/OpenCypher for CRUD.
 
 ### Constructor
 
@@ -313,7 +319,7 @@ Rollback the current transaction.
 db.new_vertex(type_name: str) -> MutableVertex
 ```
 
-Create a new vertex (graph node). **Requires a transaction.**
+Create a new vertex (graph node) through the wrapper API. **Requires a transaction.**
 
 **Parameters:**
 
@@ -327,7 +333,7 @@ Create a new vertex (graph node). **Requires a transaction.**
 
 - `ArcadeDBError`: If type doesn't exist or transaction not active
 
-**Example:**
+**Compatibility example:**
 
 ```python
 with db.transaction():
@@ -339,12 +345,27 @@ with db.transaction():
     print(f"Created: {vertex.get_rid()}")
 ```
 
+**Preferred application pattern:**
+
+```python
+with db.transaction():
+    db.command(
+        "sql",
+        "INSERT INTO Person SET name = ?, age = ?",
+        "Alice",
+        30,
+    )
+```
+
 !!! info "Creating Edges"
-    There is no `db.new_edge()` method. Edges are created **from vertices**:
+    There is no `db.new_edge()` method. For application code, prefer SQL/OpenCypher edge
+    creation instead of wrapper-level `vertex.new_edge(...)` calls:
 
     ```python
-    edge = vertex1.new_edge("Knows", vertex2)
-    edge.save()
+    db.command(
+        "sql",
+        "CREATE EDGE Knows FROM (SELECT FROM Person WHERE name = 'Alice') TO (SELECT FROM Person WHERE name = 'Bob')",
+    )
     ```
     See [Graph Operations](../guide/graphs.md) for details.
 
@@ -356,7 +377,7 @@ with db.transaction():
 db.new_document(type_name: str) -> MutableDocument
 ```
 
-Create a new document (non-graph record). **Requires a transaction.**
+Create a new document (non-graph record) through the wrapper API. **Requires a transaction.**
 
 **Parameters:**
 
@@ -366,7 +387,7 @@ Create a new document (non-graph record). **Requires a transaction.**
 
 - `MutableDocument`: Java document object
 
-**Example:**
+**Compatibility example:**
 
 ```python
 with db.transaction():
@@ -374,6 +395,18 @@ with db.transaction():
     doc.set("name", "Alice")
     doc.set("email", "alice@example.com")
     doc.save()
+```
+
+**Preferred application pattern:**
+
+```python
+with db.transaction():
+    db.command(
+        "sql",
+        "INSERT INTO Person SET name = ?, email = ?",
+        "Alice",
+        "alice@example.com",
+    )
 ```
 
 ---

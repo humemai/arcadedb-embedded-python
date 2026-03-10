@@ -92,10 +92,10 @@ arcadedb/bindings/python/
 │       ├── results.py             # Query result handling
 │       ├── transactions.py        # Transaction management
 │       ├── vector.py              # Vector search support
-│       ├── importer.py            # Data import (CSV)
+│       ├── graph.py               # Graph wrappers
+│       ├── importer.py            # Data import helpers (CSV/XML)
 │       ├── exporter.py            # Data export (JSONL, GraphML, etc.)
-│       ├── batch.py               # Batch operations
-│       ├── async_executor.py      # Async query execution
+│       ├── async_executor.py      # Async command/query execution
 │       ├── type_conversion.py     # Python-Java type conversion
 │       ├── exceptions.py          # Exception classes
 │       ├── jvm.py                 # JVM startup logic
@@ -109,12 +109,11 @@ arcadedb/bindings/python/
 │   ├── test_server.py             # Server tests
 │   ├── test_schema.py             # Schema tests
 │   ├── test_resultset.py          # Result handling tests
-│   ├── test_importer.py           # Importer tests
+│   ├── test_import_database.py    # Import database tests
 │   ├── test_exporter.py           # Exporter tests
 │   ├── test_vector.py             # Vector search tests
 │   ├── test_vector_sql.py         # Vector SQL tests
 │   ├── test_cypher.py             # OpenCypher tests
-│   ├── test_batch_context.py      # Batch operations tests
 │   ├── test_async_executor.py     # Async execution tests
 │   ├── test_type_conversion.py    # Type conversion tests
 │   ├── test_transaction_config.py # Transaction tests
@@ -217,8 +216,8 @@ pytest tests/test_core.py
 # Server mode
 pytest tests/test_server.py
 
-# Importer
-pytest tests/test_importer.py
+# Import database coverage
+pytest tests/test_import_database.py
 
 # OpenCypher tests
 pytest tests/test_cypher.py -k cypher
@@ -269,8 +268,7 @@ def test_transaction_rollback(tmp_path):
         # Should rollback
         with pytest.raises(Exception):
             with db.transaction():
-                user = db.new_vertex("User")
-                user.set("name", "Alice").save()
+                db.command("sql", "INSERT INTO User SET name = ?", "Alice")
                 raise Exception("Force rollback")
 
         # Verify rollback
@@ -305,10 +303,12 @@ def create_user(db, name: str, email: str) -> dict:
         User vertex as dict
     """
     with db.transaction():
-        user = db.new_vertex("User")
-        user.set("name", name)
-        user.set("email", email)
-        user.save()
+        db.command(
+            "sql",
+            "INSERT INTO User SET name = ?, email = ?",
+            name,
+            email,
+        )
 
     return {
         "name": name,
@@ -317,9 +317,8 @@ def create_user(db, name: str, email: str) -> dict:
 
 # Bad
 def create_user(db,name,email):
-    user=db.new_vertex('User')  # No spaces, single quotes
-    user.set('name',name)
-    return user
+    db.command('sql',f"INSERT INTO User SET name = '{name}', email = '{email}'")
+    return {"name": name, "email": email}
 ```
 
 ### Formatting Tools

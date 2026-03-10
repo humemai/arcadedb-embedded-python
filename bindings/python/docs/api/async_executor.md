@@ -1,11 +1,12 @@
 # AsyncExecutor API
 
-!!! warning "Experimental"
-    `async_executor()` is experimental and not advised for production use yet. Prefer
-    standard transactions and synchronous workflows unless you are explicitly testing
-    or benchmarking.
+!!! note "Recommended usage"
+    For application code, prefer async SQL/OpenCypher via `async_exec.command(...)`
+    and `async_exec.query(...)`. Record-level helpers remain available for lower-level
+    workflows and tests.
 
-The AsyncExecutor provides low-level async operations for parallel processing, automatic batching, and optimized WAL operations.
+The AsyncExecutor provides low-level async operations for parallel processing,
+automatic batching, and optimized WAL operations.
 
 !!! tip "Using Context Managers"
     For automatic resource cleanup, prefer using context managers:
@@ -45,11 +46,15 @@ async_exec.set_parallel_level(8)       # 8 worker threads
 async_exec.set_commit_every(5000)      # Auto-commit every 5K ops
 async_exec.set_back_pressure(75)       # Queue back-pressure at 75%
 
-# Use for bulk operations
+# Use for bulk SQL operations
 for i in range(100000):
-    vertex = db.new_vertex("User")
-    vertex.set("userId", i)
-    async_exec.create_record(vertex)
+    async_exec.command(
+        "sql",
+        "INSERT INTO User SET userId = :id, name = :name",
+        callback=lambda rs: None,
+        id=i,
+        name=f"User {i}",
+    )
 
 # Wait for completion
 async_exec.wait_completion()
@@ -209,6 +214,10 @@ async_exec.create_record(
 ```
 
 Schedule asynchronous record creation.
+
+!!! note "Wrapper-specific API"
+    `AsyncExecutor.create_record()` and `update_record()` operate on record wrapper
+    objects. For non-async CRUD examples elsewhere in the docs, prefer SQL/OpenCypher.
 
 **Parameters:**
 
@@ -578,26 +587,6 @@ cpu_count = os.cpu_count() or 4
 async_exec.set_parallel_level(min(cpu_count, 16))
 ```
 
-## Comparison with BatchContext
-
-| Feature | AsyncExecutor | BatchContext |
-|---------|---------------|-------------|
-| **Control** | ✅ Full control | ⚠️ High-level API |
-| **Complexity** | ⚠️ More complex | ✅ Simple |
-| **Progress Bar** | ❌ Manual | ✅ Built-in |
-| **Error Handling** | ⚠️ Callbacks | ✅ Automatic collection |
-| **Use Case** | Advanced tuning | Most bulk ops |
-
-**When to use AsyncExecutor:**
-- Need fine-grained control
-- Custom callbacks required
-- Performance tuning critical
-
-**When to use BatchContext:**
-- Standard bulk operations
-- Want progress tracking
-- Prefer simple API
-
 ## Troubleshooting
 
 ### Out of Memory Errors
@@ -636,7 +625,6 @@ if async_exec.is_pending():
 
 ## See Also
 
-- **[BatchContext API](batch.md)** - High-level batch processing
 - **[Transactions API](transactions.md)** - Transaction management
 - **[Database API](database.md)** - Database operations
 - **[Example 05: CSV Import](../examples/05_csv_import_graph.md)** - Real-world usage

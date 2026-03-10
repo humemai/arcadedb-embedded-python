@@ -5,8 +5,8 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 ## Quick Statistics
 
 !!! success "Test Results"
-    - **Current package**: ✅ 271 passed
-    - All features available (SQL, OpenCypher, Studio UI, Vector search)
+    - **Current package**: ✅ 260 passed across 24 test files
+    - Environment-specific skips may vary depending on optional components
 
 ## What's Tested
 
@@ -73,7 +73,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_server.py`](test-server.md) | Server mode, HTTP API, configuration |
 | [`test_concurrency.py`](test-concurrency.md) | File locking, thread safety, multi-process behavior |
 | [`test_server_patterns.py`](test-server-patterns.md) | Best practices for embedded + server mode |
-| [`test_importer.py`](test-importer.md) | CSV import with type inference |
+| [`test_import_database.py`](test-importer.md) | SQL `IMPORT DATABASE` scenarios and importer-adjacent flows |
 | [`test_cypher.py`](test-opencypher.md) | OpenCypher query language |
 | [`test_jvm_args.py`](test-jvm-args.md) | JVM args handling |
 | [`test_vector_params_verification.py`](test-vector-params-verification.md) | Vector param validation |
@@ -126,10 +126,10 @@ pytest -m "not slow"
 
 ## Expected Output
 
-When all tests pass, you should see:
+When the current bindings test suite passes, you should see a clean all-green summary.
 
 ```
-======================== 271 passed in 126.69s =========================
+======================== 260 passed ========================
 ```
 
 

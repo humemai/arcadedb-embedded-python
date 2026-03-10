@@ -27,6 +27,11 @@ class ArcadeDBError(Exception):
 
 **Usage:**
 
+!!! note "CRUD style in this page"
+    Prefer SQL/OpenCypher for normal application writes. Where this page still shows
+    wrapper objects, it is to discuss exception behavior around record-level APIs or
+    to keep examples close to the API being documented.
+
 ```python
 from arcadedb_embedded import ArcadeDBError
 
@@ -77,13 +82,8 @@ except ArcadeDBError as e:
 # Assuming User.email has UNIQUE constraint
 try:
     with db.transaction():
-        user1 = db.new_document("User")
-        user1.set("email", "alice@example.com")
-        user1.save()
-
-        user2 = db.new_document("User")
-        user2.set("email", "alice@example.com")  # Duplicate!
-        user2.save()
+    db.command("sql", "INSERT INTO User SET email = ?", "alice@example.com")
+    db.command("sql", "INSERT INTO User SET email = ?", "alice@example.com")
 
 except ArcadeDBError as e:
     print(f"Constraint violation: {e}")
@@ -100,9 +100,7 @@ except ArcadeDBError as e:
 # Assuming Person.age is INTEGER
 try:
     with db.transaction():
-        person = db.new_document("Person")
-        person.set("age", "not a number")  # Wrong type!
-        person.save()
+    db.command("sql", "INSERT INTO Person SET age = ?", "not a number")
 
 except ArcadeDBError as e:
     print(f"Type error: {e}")
@@ -120,9 +118,7 @@ try:
     # Start transaction
     db.begin()
 
-    doc = db.new_document("Test")
-    doc.set("data", "value")
-    doc.save()
+    db.command("sql", "INSERT INTO Test SET data = ?", "value")
 
     # Try to start another (not allowed)
     db.begin()  # Error!
@@ -236,10 +232,12 @@ def safe_insert(db, record_data):
     for attempt in range(max_retries):
         try:
             with db.transaction():
-                doc = db.new_document("Record")
-                for key, value in record_data.items():
-                    doc.set(key, value)
-                doc.save()
+                assignments = ", ".join(f"{key} = ?" for key in record_data)
+                db.command(
+                    "sql",
+                    f"INSERT INTO Record SET {assignments}",
+                    *record_data.values(),
+                )
 
             return True  # Success
 
@@ -313,9 +311,7 @@ try:
 
     # Do work
     with db.transaction():
-        doc = db.new_document("Test")
-        doc.set("data", "value")
-        doc.save()
+        db.command("sql", "INSERT INTO Test SET data = ?", "value")
 
 except ArcadeDBError as e:
     print(f"Error: {e}")
@@ -396,10 +392,12 @@ def safe_database_operation():
         for person in people:
             try:
                 with db.transaction():
-                    doc = db.new_document("Person")
-                    doc.set("name", person["name"])
-                    doc.set("email", person["email"])
-                    doc.save()
+                    db.command(
+                        "sql",
+                        "INSERT INTO Person SET name = ?, email = ?",
+                        person["name"],
+                        person["email"],
+                    )
 
                 success_count += 1
                 logger.info(f"Inserted: {person['name']}")
@@ -518,10 +516,12 @@ def validate_schema(db, type_name, properties):
 if validate_schema(db, "Person", ["name", "email"]):
     # Safe to proceed
     with db.transaction():
-        person = db.new_document("Person")
-        person.set("name", "Alice")
-        person.set("email", "alice@example.com")
-        person.save()
+        db.command(
+            "sql",
+            "INSERT INTO Person SET name = ?, email = ?",
+            "Alice",
+            "alice@example.com",
+        )
 ```
 
 ---

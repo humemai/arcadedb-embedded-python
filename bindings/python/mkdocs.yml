@@ -169,7 +169,6 @@ nav:
   - Transactions: api/transactions.md
   - Vector: api/vector.md
   - Importer: api/importer.md
-  - Batch Context: api/batch.md
   - Async Executor: api/async_executor.md
   - Schema: api/schema.md
   - Exporter: api/exporter.md
@@ -188,7 +187,6 @@ nav:
     - Server Tests: development/testing/test-server.md
     - API Tests:
       - AsyncExecutor: development/testing/test-async-executor.md
-      - BatchContext: development/testing/test-batch-context.md
       - Schema: development/testing/test-schema.md
       - Exporter: development/testing/test-exporter.md
       - JVM Args: development/testing/test-jvm-args.md
