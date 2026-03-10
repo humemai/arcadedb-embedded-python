@@ -197,7 +197,7 @@ def format_version_summary_lines(version_sets, max_values=3):
 def ensure_versions_for_db_set(version_sets, db_values):
     expected = set()
     db_values = {str(v or "").strip() for v in db_values}
-    if "arcadedb" in db_values:
+    if any(v in db_values for v in ("arcadedb", "arcadedb_sql", "arcadedb_cypher")):
         expected.add("arcadedb_embedded")
     if "duckdb" in db_values:
         expected.add("duckdb")

@@ -22,17 +22,17 @@ source "$HELPERS_SH"
 # X-Large       1,000,000     25,000  32GB    1
 # X-Large       1,000,000     25,000  32GB    8
 
-DATASET="stackoverflow-medium"
-TRANSACTIONS=100000
-BATCH_SIZE=5000
-MEM_LIMIT="4g"
+DATASET="stackoverflow-tiny"
+TRANSACTIONS=10000
+BATCH_SIZE=1000
+MEM_LIMIT="1g"
 THREADS=1
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
 DOCKER_IMAGE="python:3.12-slim"
 POSTGRESQL_IMAGE="postgres:latest"
-DBS_RAW="arcadedb,sqlite,duckdb,postgresql"
+DBS_RAW="arcadedb_sql,sqlite,duckdb,postgresql"
 LABEL_PREFIX="sweep07"
 
 if [[ $# -gt 0 ]]; then
@@ -140,7 +140,7 @@ for ((run = 1; run <= RUNS; run++)); do
 EOF
 
         wheel_artifacts_for_dir="false"
-        if [[ "$db" == "arcadedb" ]]; then
+        if [[ "$db" == "arcadedb_sql" || "$db" == "arcadedb_cypher" ]]; then
             wheel_artifacts_for_dir="true"
         fi
         matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"

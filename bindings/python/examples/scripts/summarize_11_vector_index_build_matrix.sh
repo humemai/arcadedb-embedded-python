@@ -134,7 +134,7 @@ def format_version_summary_lines(version_sets, max_values=3):
 def ensure_versions_for_backend_set(version_sets, backend_values):
     expected = set()
     backend_values = {str(v or "").strip() for v in backend_values}
-    if "arcadedb" in backend_values:
+    if any(v in backend_values for v in ("arcadedb_sql", "arcadedb_cypher")):
         expected.add("arcadedb_embedded")
     if "faiss" in backend_values:
         expected.add("faiss_cpu")

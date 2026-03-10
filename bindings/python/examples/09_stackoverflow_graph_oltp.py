@@ -548,13 +548,9 @@ def verify_single_thread_series(
     verify_dir = db_path
     verify_dir.mkdir(parents=True, exist_ok=True)
     dataset_tag = args.dataset.replace("-", "_")
-    arcadedb_oltp_language = (
-        args.arcadedb_oltp_language if db_label == "arcadedb" else None
-    )
-    language_suffix = f"_{arcadedb_oltp_language}" if arcadedb_oltp_language else ""
     baseline_path = (
         verify_dir
-        / f"verify_09_graph_oltp_{db_label}{language_suffix}_{dataset_tag}_tx{args.transactions}_seed{args.seed}.json"
+        / f"verify_09_graph_oltp_{db_label}_{dataset_tag}_tx{args.transactions}_seed{args.seed}.json"
     )
 
     current_payload = {
@@ -563,7 +559,6 @@ def verify_single_thread_series(
         "transactions": int(args.transactions),
         "seed": int(args.seed),
         "threads": int(args.threads),
-        "arcadedb_oltp_language": arcadedb_oltp_language,
         "node_count": int(summary.get("node_count") or 0),
         "edge_count": int(summary.get("edge_count") or 0),
         "node_counts_by_type": normalize_count_dict(summary.get("node_counts_by_type")),
@@ -578,7 +573,6 @@ def verify_single_thread_series(
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
                 "source_db": db_label,
-                "source_oltp_language": arcadedb_oltp_language,
             },
             "baseline": current_payload,
         }
@@ -2435,7 +2429,7 @@ def run_graph_oltp_arcadedb(
     next_answer_id = load_info["max_ids"]["answer"] + 1
     next_badge_id = load_info["max_ids"]["badge"] + 1
     next_comment_id = load_info["max_ids"]["comment"] + 1
-    arcadedb_oltp_language = (oltp_language or "cypher").strip().lower()
+    arcadedb_mode = (oltp_language or "cypher").strip().lower()
 
     def worker(ops: List[str], worker_id: int) -> Dict[str, List[float]]:
         rng = random.Random(seed + worker_id)
@@ -2449,7 +2443,7 @@ def run_graph_oltp_arcadedb(
         for op in ops:
             start_time = time.perf_counter()
 
-            if arcadedb_oltp_language == "sql":
+            if arcadedb_mode == "sql":
                 try:
                     if op == "read":
                         read_kind = rng.choice(READ_TARGET_KINDS)
@@ -3640,7 +3634,6 @@ def run_graph_oltp_arcadedb(
         "edge_count": edge_count,
         "node_counts_by_type": node_counts_by_type,
         "edge_counts_by_type": edge_counts_by_type,
-        "arcadedb_oltp_language": arcadedb_oltp_language,
     }
 
 
@@ -7673,10 +7666,6 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
         "query_result_hash_stable": summary.get("query_result_hash_stable"),
         "query_row_count_stable": summary.get("query_row_count_stable"),
         "benchmark_scope_note": summary.get("benchmark_scope_note"),
-        "arcadedb_oltp_language": summary.get(
-            "arcadedb_oltp_language",
-            args.arcadedb_oltp_language if args.db == "arcadedb" else None,
-        ),
     }
     results_path.parent.mkdir(parents=True, exist_ok=True)
     with open(results_path, "w", encoding="utf-8") as handle:
@@ -7757,7 +7746,7 @@ def run_in_docker(args) -> bool:
         filtered_args.append(arg)
 
     arcadedb_wheel_mount_path = None
-    if args.db == "arcadedb":
+    if args.db.startswith("arcadedb_"):
         wheel_candidates = sorted(
             (repo_root / "bindings/python/dist").glob("*embed*.whl")
         )
@@ -7845,15 +7834,16 @@ def main():
     parser.add_argument(
         "--db",
         choices=[
-            "arcadedb",
+            "arcadedb_sql",
+            "arcadedb_cypher",
             "ladybug",
             "ladybugdb",
             "graphqlite",
             "sqlite_native",
             "python_memory",
         ],
-        default="arcadedb",
-        help="Database to test (default: arcadedb)",
+        default="arcadedb_cypher",
+        help="Database to test (default: arcadedb_cypher)",
     )
     parser.add_argument(
         "--threads",
@@ -7909,12 +7899,6 @@ def main():
         help="For threads=1 only, assert final graph counts match deterministic single-thread baseline",
     )
     parser.add_argument(
-        "--arcadedb-oltp-language",
-        choices=["cypher", "sql"],
-        default="cypher",
-        help="ArcadeDB OLTP CRUD language (default: cypher)",
-    )
-    parser.add_argument(
         "--sqlite-profile",
         choices=SQLITE_PROFILE_CHOICES,
         default="perf",
@@ -7928,8 +7912,6 @@ def main():
         parser.error("--jvm-heap-fraction must be > 0 and <= 1")
     if args.verify_single_thread_series and args.threads != 1:
         parser.error("--verify-single-thread-series requires --threads 1")
-    if args.db not in ("arcadedb",) and args.arcadedb_oltp_language != "cypher":
-        parser.error("--arcadedb-oltp-language is only applicable when --db arcadedb")
 
     ran = run_in_docker(args)
     if ran:
@@ -7940,7 +7922,7 @@ def main():
             args.mem_limit,
             args.jvm_heap_fraction,
         )
-        if args.db == "arcadedb"
+        if args.db.startswith("arcadedb_")
         else args.mem_limit
     )
     args.heap_size_effective = heap_size
@@ -7967,14 +7949,14 @@ def main():
     print(f"Threads: {args.threads}")
     print(f"Operations: {args.transactions:,}")
     print(f"Batch size: {args.batch_size}")
-    if args.db == "arcadedb":
+    if args.db.startswith("arcadedb_"):
         print(f"JVM heap size: {heap_size}")
-        print(f"ArcadeDB OLTP language: {args.arcadedb_oltp_language}")
+        print(f"ArcadeDB OLTP language: {args.db.removeprefix('arcadedb_')}")
     print(f"DB path: {db_path}")
     print(BENCHMARK_SCOPE_NOTE)
     print()
 
-    if args.db == "arcadedb":
+    if args.db.startswith("arcadedb_"):
         summary = run_graph_oltp_arcadedb(
             db_path=db_path,
             data_dir=data_dir,
@@ -7983,7 +7965,7 @@ def main():
             threads=args.threads,
             seed=args.seed,
             jvm_kwargs=jvm_kwargs,
-            oltp_language=args.arcadedb_oltp_language,
+            oltp_language=args.db.removeprefix("arcadedb_"),
         )
     elif args.db in ("ladybug", "ladybugdb"):
         summary = run_graph_oltp_ladybug(

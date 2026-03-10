@@ -56,7 +56,7 @@ if ! [[ "$THREADS" =~ ^[0-9]+$ ]] || ((THREADS < 1)); then
 fi
 
 # if ((THREADS > 1)); then
-#     DBS_RAW="arcadedb"
+#     DBS_RAW="arcadedb_sql,arcadedb_cypher"
 # fi
 
 IFS=',' read -r -a DBS <<< "$DBS_RAW"
@@ -88,15 +88,12 @@ for ((run = 1; run <= RUNS; run++)); do
         fi
 
         db_engine="$db"
-        arcadedb_oltp_language=""
         case "$db" in
             arcadedb_sql)
-                db_engine="arcadedb"
-                arcadedb_oltp_language="sql"
+                db_engine="$db"
                 ;;
             arcadedb_cypher)
-                db_engine="arcadedb"
-                arcadedb_oltp_language="cypher"
+                db_engine="$db"
                 ;;
             ladybug | ladybugdb)
                 db_engine="$db"
@@ -117,6 +114,11 @@ for ((run = 1; run <= RUNS; run++)); do
                 ;;
         esac
 
+        arcadedb_mode=""
+        if [[ "$db" == arcadedb_* ]]; then
+            arcadedb_mode="${db#arcadedb_}"
+        fi
+
         seed=$((SEED_START + execution_idx))
         run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
 
@@ -136,7 +138,7 @@ for ((run = 1; run <= RUNS; run++)); do
         cmd=(
             python3 "$PY_SCRIPT"
             --dataset "$DATASET"
-            --db "$db_engine"
+            --db "$db"
             --threads "$THREADS"
             --transactions "$transactions_for_db"
             --batch-size "$BATCH_SIZE"
@@ -149,10 +151,6 @@ for ((run = 1; run <= RUNS; run++)); do
         if ((THREADS == 1)); then
             cmd+=(--verify-single-thread-series)
         fi
-        if [[ "$db_engine" == "arcadedb" ]]; then
-            cmd+=(--arcadedb-oltp-language "$arcadedb_oltp_language")
-        fi
-
         echo
         echo "[$((execution_idx + 1))/$((RUNS * ${#DBS[@]}))] db=$db run=$run seed=$seed tx=$transactions_for_db label=$run_label"
         echo "Command: ${cmd[*]}"
@@ -179,7 +177,7 @@ for ((run = 1; run <= RUNS; run++)); do
   "exit_code": $cmd_exit,
   "db": "$db",
     "db_engine": "$db_engine",
-    "arcadedb_oltp_language": "$arcadedb_oltp_language",
+        "arcadedb_mode": "$arcadedb_mode",
   "dataset": "$DATASET",
   "threads": $THREADS,
   "transactions": $transactions_for_db,
@@ -191,7 +189,7 @@ for ((run = 1; run <= RUNS; run++)); do
 EOF
 
         wheel_artifacts_for_dir="false"
-        if [[ "$db_engine" == "arcadedb" ]]; then
+        if [[ "$db" == "arcadedb_sql" || "$db" == "arcadedb_cypher" ]]; then
             wheel_artifacts_for_dir="true"
         fi
         matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"

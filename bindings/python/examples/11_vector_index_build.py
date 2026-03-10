@@ -1421,7 +1421,7 @@ def run_in_docker(args) -> bool:
             filtered_args.extend(["--qdrant-host", "host.docker.internal"])
 
     arcadedb_wheel_mount_path = None
-    if args.backend == "arcadedb":
+    if args.backend == "arcadedb_sql":
         wheel_candidates = sorted(
             (repo_root / "bindings/python/dist").glob("*embed*.whl")
         )
@@ -1443,7 +1443,7 @@ def run_in_docker(args) -> bool:
     if args.backend == "pgvector" and image == "python:3.12-slim":
         image = default_docker_image(args.backend)
 
-    if args.backend == "arcadedb":
+    if args.backend == "arcadedb_sql":
         inner_cmd = " && ".join(
             [
                 "python -m venv /tmp/bench-venv",
@@ -1618,9 +1618,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=["arcadedb", "pgvector", "qdrant", "milvus", "faiss", "lancedb"],
-        default="arcadedb",
-        help="Vector backend (default: arcadedb)",
+        choices=["arcadedb_sql", "pgvector", "qdrant", "milvus", "faiss", "lancedb"],
+        default="arcadedb_sql",
+        help="Vector backend (default: arcadedb_sql)",
     )
     parser.add_argument(
         "--dataset",
@@ -1820,7 +1820,7 @@ def main() -> None:
 
     runtime_versions: dict[str, str | None] = {}
 
-    if args.backend == "arcadedb":
+    if args.backend == "arcadedb_sql":
         stop_cpu = start_cpu_logger(2)
         import arcadedb_embedded as arcadedb
 
@@ -2307,7 +2307,7 @@ def main() -> None:
         },
         "environment": collect_runtime_metadata(
             args,
-            heap_size=(arcadedb_heap_size if args.backend == "arcadedb" else None),
+            heap_size=(arcadedb_heap_size if args.backend == "arcadedb_sql" else None),
             runtime_versions=runtime_versions,
         ),
         "budget": budget_allocation_report(args),
@@ -2346,7 +2346,7 @@ def main() -> None:
             },
             "arcadedb": {
                 "heap_size_effective": (
-                    arcadedb_heap_size if args.backend == "arcadedb" else None
+                    arcadedb_heap_size if args.backend == "arcadedb_sql" else None
                 ),
             },
             "qdrant": {

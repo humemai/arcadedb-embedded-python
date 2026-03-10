@@ -4799,7 +4799,7 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
             "arcadedb_olap_language",
             (
                 args.arcadedb_olap_language
-                if args.db in ("arcadedb", "arcadedb_cypher")
+                if args.db in ("arcadedb_sql", "arcadedb_cypher")
                 else None
             ),
         ),
@@ -4945,7 +4945,7 @@ def run_in_docker(args) -> bool:
         filtered_args.append(arg)
 
     arcadedb_wheel_mount_path = None
-    if args.db in ("arcadedb", "arcadedb_cypher"):
+    if args.db in ("arcadedb_sql", "arcadedb_cypher"):
         wheel_candidates = sorted(
             (repo_root / "bindings/python/dist").glob("*embed*.whl")
         )
@@ -5033,7 +5033,7 @@ def main():
     parser.add_argument(
         "--db",
         choices=[
-            "arcadedb",
+            "arcadedb_sql",
             "arcadedb_cypher",
             "ladybug",
             "ladybugdb",
@@ -5041,8 +5041,8 @@ def main():
             "sqlite_native",
             "python_memory",
         ],
-        default="arcadedb",
-        help="Database to test (default: arcadedb)",
+        default="arcadedb_cypher",
+        help="Database to test (default: arcadedb_cypher)",
     )
     parser.add_argument(
         "--batch-size",
@@ -5122,7 +5122,9 @@ def main():
     if args.jvm_heap_fraction <= 0 or args.jvm_heap_fraction > 1:
         parser.error("--jvm-heap-fraction must be > 0 and <= 1")
 
-    args.arcadedb_olap_language = "cypher"
+    args.arcadedb_olap_language = None
+    if args.db.startswith("arcadedb_"):
+        args.arcadedb_olap_language = args.db.removeprefix("arcadedb_")
 
     ran = run_in_docker(args)
     if ran:
@@ -5133,7 +5135,7 @@ def main():
             args.mem_limit,
             args.jvm_heap_fraction,
         )
-        if args.db in ("arcadedb", "arcadedb_cypher")
+        if args.db in ("arcadedb_sql", "arcadedb_cypher")
         else args.mem_limit
     )
     args.heap_size_effective = heap_size
@@ -5155,7 +5157,7 @@ def main():
     print("=" * 80)
     print(f"Dataset: {args.dataset}")
     print(f"DB: {args.db}")
-    if args.db in ("arcadedb", "arcadedb_cypher"):
+    if args.db in ("arcadedb_sql", "arcadedb_cypher"):
         print(f"ArcadeDB OLAP language: {args.arcadedb_olap_language}")
     if args.db in ("sqlite_native", "graphqlite", "python_memory"):
         print(f"SQLite profile: {args.sqlite_profile}")
@@ -5171,7 +5173,7 @@ def main():
     stop_event, rss_state, rss_thread = start_rss_sampler()
     start_time = time.perf_counter()
 
-    if args.db in ("arcadedb", "arcadedb_cypher"):
+    if args.db in ("arcadedb_sql", "arcadedb_cypher"):
         summary = run_olap_arcadedb(
             db_path=db_path,
             data_dir=data_dir,

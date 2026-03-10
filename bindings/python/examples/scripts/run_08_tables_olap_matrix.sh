@@ -28,7 +28,7 @@ POSTGRESQL_IMAGE="postgres:latest"
 QUERY_RUNS=10
 QUERY_ORDER="shuffled"
 ARCADEDB_QUERY_MAX_HEAP_ELEMENTS=-1
-DBS_RAW="arcadedb,sqlite,duckdb,postgresql"
+DBS_RAW="arcadedb_sql,sqlite,duckdb,postgresql"
 LABEL_PREFIX="sweep08"
 
 if [[ $# -gt 0 ]]; then
@@ -126,7 +126,7 @@ for ((run = 1; run <= RUNS; run++)); do
 EOF
 
         wheel_artifacts_for_dir="false"
-        if [[ "$db" == "arcadedb" ]]; then
+        if [[ "$db" == "arcadedb_sql" || "$db" == "arcadedb_cypher" ]]; then
             wheel_artifacts_for_dir="true"
         fi
         matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"
