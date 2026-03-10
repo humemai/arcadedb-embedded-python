@@ -16,9 +16,9 @@ source "$HELPERS_SH"
 # Large         10,000      8GB     16
 # X-Large       25,000      32GB    32
 
-DATASET="stackoverflow-medium"
-BATCH_SIZE=5000
-MEM_LIMIT="4g"
+DATASET="stackoverflow-tiny"
+BATCH_SIZE=1000
+MEM_LIMIT="1g"
 THREADS=1
 RUNS=1
 SEED_START=0
@@ -29,7 +29,7 @@ QUERY_RUNS=10
 QUERY_ORDER="shuffled"
 ONLY_QUERY=""
 MANUAL_CHECKS=false
-DBS_RAW="arcadedb_cypher,ladybug,sqlite_native,python_memory"
+DBS_RAW="arcadedb_cypher,ladybug,sqlite,python_memory"
 LABEL_PREFIX="sweep10"
 
 if [[ $# -gt 0 ]]; then
@@ -78,12 +78,12 @@ for ((run = 1; run <= RUNS; run++)); do
 
         db_engine="$db"
         case "$db" in
-            arcadedb_sql | arcadedb_cypher | ladybug | ladybugdb | sqlite_native | graphqlite | python_memory)
+            arcadedb_sql | arcadedb_cypher | ladybug | ladybugdb | sqlite | graphqlite | python_memory)
                 db_engine="$db"
                 ;;
             *)
                 echo "Unsupported DB alias in DBS_RAW: $db" >&2
-                echo "Supported values: arcadedb_sql, arcadedb_cypher, ladybug, ladybugdb, sqlite_native, graphqlite, python_memory" >&2
+                echo "Supported values: arcadedb_sql, arcadedb_cypher, ladybug, ladybugdb, sqlite, graphqlite, python_memory" >&2
                 exit 1
                 ;;
         esac
@@ -135,7 +135,7 @@ for ((run = 1; run <= RUNS; run++)); do
                 "arcadedb_embedded" "auto" \
                 "real_ladybug" "auto" \
                 "graphqlite" "auto" \
-                "sqlite_native" "builtin" \
+                "sqlite" "builtin" \
                 "python_memory" "builtin"
 
             du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"

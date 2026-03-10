@@ -155,7 +155,7 @@ def format_version_summary_lines(version_sets, max_values=3):
     for key in sorted(version_sets.keys()):
         if key == "postgresql_image" and (version_sets.get("postgresql_version") or set()):
             continue
-        if key in ("sqlite", "sqlite_native") and (version_sets.get("sqlite_version") or set()):
+        if key == "sqlite" and (version_sets.get("sqlite_version") or set()):
             continue
         values = sorted(version_sets.get(key) or [])
         if len(values) > 1 and "auto" in values:

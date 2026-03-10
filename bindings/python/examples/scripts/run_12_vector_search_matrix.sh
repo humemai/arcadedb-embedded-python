@@ -15,8 +15,8 @@ source "$HELPERS_SH"
 # Large         16GB    16
 # X-Large       32GB    32
 
-DATASET="stackoverflow-medium"
-MEM_LIMIT="4g"
+DATASET="stackoverflow-tiny"
+MEM_LIMIT="1g"
 THREADS=1
 RUNS=1
 SEED_START=0
@@ -49,7 +49,7 @@ MILVUS_PORT=19530
 MILVUS_COMPOSE_VERSION="v2.6.10"
 MILVUS_COLLECTION="vectordata"
 
-BACKENDS_RAW="arcadedb_sql,faiss,lancedb,pgvector,,qdrant,milvus,bruteforce"
+BACKENDS_RAW="arcadedb_sql,faiss,lancedb,pgvector,qdrant,milvus,bruteforce"
 BUILD_LABEL_PREFIX="sweep11"
 SEARCH_LABEL_PREFIX="sweep12"
 

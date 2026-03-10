@@ -24,19 +24,19 @@ source "$HELPERS_SH"
 # X-Large       1,000,000     25,000  32GB    1
 # X-Large       1,000,000     25,000  32GB    8
 
-DATASET="stackoverflow-medium"
-ARCADEDB_TRANSACTIONS=100000
+DATASET="stackoverflow-tiny"
+ARCADEDB_TRANSACTIONS=10000
 LADYBUG_TRANSACTIONS_FRACTION=1
 GRAPHQLITE_TRANSACTIONS_FRACTION=0.1
-BATCH_SIZE=5000
-MEM_LIMIT="4g"
+BATCH_SIZE=1000
+MEM_LIMIT="1g"
 THREADS=1
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
 DOCKER_IMAGE="python:3.12-slim"
 # DBS_RAW="python_memory"
-DBS_RAW="arcadedb_sql,arcadedb_cypher,ladybug,sqlite_native,python_memory"
+DBS_RAW="arcadedb_sql,arcadedb_cypher,ladybug,sqlite,python_memory"
 LABEL_PREFIX="sweep09"
 
 if [[ $# -gt 0 ]]; then
@@ -101,7 +101,7 @@ for ((run = 1; run <= RUNS; run++)); do
             graphqlite)
                 db_engine="$db"
                 ;;
-            sqlite_native)
+            sqlite)
                 db_engine="$db"
                 ;;
             python_memory)
@@ -109,7 +109,7 @@ for ((run = 1; run <= RUNS; run++)); do
                 ;;
             *)
                 echo "Unsupported DB alias in DBS_RAW: $db" >&2
-                echo "Supported values: arcadedb_cypher, arcadedb_sql, ladybug, ladybugdb, graphqlite, sqlite_native, python_memory" >&2
+                echo "Supported values: arcadedb_cypher, arcadedb_sql, ladybug, ladybugdb, graphqlite, sqlite, python_memory" >&2
                 exit 1
                 ;;
         esac
@@ -200,7 +200,7 @@ EOF
             "arcadedb_embedded" "auto" \
             "real_ladybug" "auto" \
             "graphqlite" "auto" \
-            "sqlite_native" "builtin" \
+            "sqlite" "builtin" \
             "python_memory" "builtin"
 
         if ((cmd_exit == 0)); then
