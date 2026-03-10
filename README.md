@@ -13,23 +13,10 @@ Native Python bindings for ArcadeDB (forked from the official Java project).
 
 ## ✨ What this repo provides
 
-<p align="center">
-	<a href="https://github.com/arcadedata/arcadedb"><img height="25" src="studio/src/main/resources/static/images/social/github.svg" alt="Github"></a>
-	&nbsp;
-  <a href="https://www.linkedin.com/company/arcadedb/"><img height="25" src="studio/src/main/resources/static/images/social/linkedin.svg" alt="LinkedIn"></a>
-  &nbsp;
-  <a href="https://bsky.app/profile/arcadedb.bsky.social"><img height="25" src="studio/src/main/resources/static/images/social/bluesky.svg" alt="Bluesky"></a>
-  &nbsp;
-  <a href="https://twitter.com/arcade_db"><img height="25" src="studio/src/main/resources/static/images/social/twitter.svg" alt="Twitter"></a>
-  &nbsp;
-  <a href="https://www.youtube.com/@ArcadeDB"><img height="25" src="studio/src/main/resources/static/images/social/youtube.svg" alt="Youtube"></a>
-  &nbsp;
-  <a href="https://discord.gg/w2Npx2B7hZ"><img height="25" src="studio/src/main/resources/static/images/social/discord.svg" alt="Discord"></a>
-  &nbsp;
-  <a href="https://stackoverflow.com/questions/tagged/arcadedb"><img height="25" src="studio/src/main/resources/static/images/social/stack-overflow.svg" alt="StackOverflow"></a>
-	&nbsp;
-	<a href="https://arcadedb.com/blog/"><img height="25" src="studio/src/main/resources/static/images/social/blog.svg" alt="Blog"></a>
-</p>
+- Native Python bindings for ArcadeDB with a bundled JRE (no local Java required).
+- Wheels for Linux x86_64, Linux ARM64, and macOS Apple Silicon.
+- Embedded usage (in-process) with optional server mode.
+- Tests and examples validated in CI across supported platforms.
 
 The Python bindings and packaging live under bindings/python. The upstream Java project remains the source of the core database.
 
@@ -39,14 +26,7 @@ The Python bindings and packaging live under bindings/python. The upstream Java 
 - docs site: https://docs.humem.ai/arcadedb/
 - CI: Build/test workflows for bindings and examples (badges above).
 
-- [Graph Database](https://docs.arcadedb.com#graph-model) (compatible with Neo4j Cypher, Apache Tinkerpop Gremlin and OrientDB SQL)
-- [Document Database](https://docs.arcadedb.com#document-model) (compatible with the MongoDB driver + MongoDB queries and OrientDB
-  SQL)
-- [Key/Value](https://docs.arcadedb.com#keyvalue-model) (compatible with the Redis driver)
-- [Search Engine](https://docs.arcadedb.com/#searchengine-model)
-- [Time Series](https://docs.arcadedb.com/#timeseries-model) (with InfluxDB Line Protocol, Prometheus remote_write/read, and PromQL support)
-- [Vector Embedding](https://docs.arcadedb.com/#vector-model)
-- [Geospatial](https://docs.arcadedb.com/#geospatial-model)
+## ✅ Typical use cases
 
 - Local embedded analytics without a separate server process.
 - Vector search and graph workloads from Python.
@@ -54,44 +34,17 @@ The Python bindings and packaging live under bindings/python. The upstream Java 
 
 ## 🧠 ArcadeDB at a glance
 
-ArcadeDB key capabilities:
+- Multi-model database built for performance.
+- Document + Graph + Key/Value + Vector + Time Series in one engine.
+- Supports SQL, OpenCypher, and MongoDB query language.
 
-- **70+ Built-in Graph Algorithms** — Pathfinding, centrality, community detection, link prediction, graph embeddings, and more — all available out of the box
-- **Parallel Query Execution** — SQL queries leverage multiple CPU cores for faster execution on large datasets
-- **Materialized Views** — Pre-computed query results stored and automatically maintained
-- **MCP Server** — Built-in [Model Context Protocol](https://docs.arcadedb.com/#mcp) server for AI assistant and LLM integration
-- **AI Assistant** — Integrated AI assistant in Studio (Beta) for query help and database management
-- **Geospatial Indexing** — Native spatial queries and proximity searches with `geo.*` SQL functions
-- **TimeSeries** — Columnar storage with Gorilla/Delta-of-Delta compression, InfluxDB/Prometheus ingestion, PromQL queries, Grafana integration
-- **Hash Indexes** — Extendible hashing for faster exact-match lookups alongside LSM-Tree indexes
-
-ArcadeDB can be used as:
-
-- Embedded from any language on top of the Java Virtual Machine
-- Embedded from Python via bindings: [arcadedb-embedded-python](https://github.com/humemai/arcadedb-embedded-python)
-- Remotely by using [HTTP/JSON](https://docs.arcadedb.com#http-json-api)
-- Remotely by using a [Postgres driver](https://docs.arcadedb.com#postgres-driver) (ArcadeDB implements Postgres Wire protocol)
-- Remotely by using a [Redis driver](https://docs.arcadedb.com#redis-query-language) (only a subset of the operations are implemented)
-- Remotely by using a [MongoDB driver](https://docs.arcadedb.com#mongodb-query-language) (only a subset of the operations are implemented)
-- By AI assistants via the built-in [MCP Server](https://docs.arcadedb.com/#mcp) (Model Context Protocol)
+## 📦 What the wheel includes
 
 - Lightweight Java 25 runtime (jlink) bundled per platform.
 - ArcadeDB JARs required for the embedded engine.
 - Python bindings and source modules.
 
-### Use Cases
-
-Explore real-world examples in the [arcadedb-usecases](https://github.com/ArcadeData/arcadedb-usecases) repository — self-contained projects with Docker Compose, SQL schemas, and runnable demos covering:
-
-- **Recommendation Engine** — graph traversal + vector similarity + time-series
-- **Knowledge Graphs** — co-authorship and citation networks with full-text search
-- **Graph RAG** — retrieval-augmented generation with LangChain4j and Neo4j Bolt
-- **Fraud Detection** — graph, vector, and time-series signals with Cypher
-- **Real-time Analytics** — IoT and service monitoring with time-series
-- **Social Network Analytics** — materialized view dashboards with polyglot queries
-- **Supply Chain** — multi-tier visibility with PostgreSQL protocol and JavaScript
-
-### Getting started in 5 minutes
+## ✨ ArcadeDB capabilities (via Python)
 
 - Multi-model: Graph, Document, Key/Value, Vector, Time Series.
 - Query languages: SQL, OpenCypher, MongoDB.
@@ -114,17 +67,15 @@ See [the Python README](https://github.com/humemai/arcadedb-embedded-python/blob
 
 This repo is a fork of ArcadeDB Java. For the server, Java API, and core database docs:
 
-There are four variants of (about monthly) releases:
+- Upstream repo: https://github.com/ArcadeData/arcadedb
+- Docs: https://docs.arcadedb.com
 
-- `full` - this is the complete package including all modules
-- `minimal` - this package excludes the `gremlin`, `redisw`, `mongodbw`, `graphql` modules
-- `headless` - this package excludes the `gremlin`, `redisw`, `mongodbw`, `graphql`, `studio` modules
-- `base` - core engine, server, and network only — excludes all optional modules (`console`, `gremlin`, `studio`, `redisw`, `mongodbw`, `postgresw`, `grpcw`, `graphql`, `metrics`)
+## 💬 Support & community
 
 - Issues (Python bindings): https://github.com/humemai/arcadedb-embedded-python/issues
 - ArcadeDB Discord: https://discord.gg/w2Npx2B7hZ
 
-You can also build a **custom distribution** with only the modules you need using the [Custom Package Builder](https://docs.arcadedb.com/#custom-package-builder):
+## 📄 License
 
 ```bash
 curl -fsSL https://github.com/ArcadeData/arcadedb/releases/download/26.3.1/arcadedb-builder.sh | \
