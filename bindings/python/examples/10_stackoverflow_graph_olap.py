@@ -2576,7 +2576,7 @@ def query_name_from_cypher(cypher: str) -> str:
     raise ValueError("Unsupported query for this backend")
 
 
-def execute_sqlite_native_olap_query(
+def execute_sqlite_olap_query(
     conn: sqlite3.Connection, query_name: str
 ) -> List[Dict[str, Any]]:
     sql_by_name = {
@@ -2692,7 +2692,7 @@ def execute_sqlite_native_olap_query(
     }
     sql = sql_by_name.get(query_name)
     if not sql:
-        raise ValueError(f"Unsupported sqlite-native query: {query_name}")
+        raise ValueError(f"Unsupported sqlite query: {query_name}")
     cursor = conn.execute(sql)
     cols = [desc[0] for desc in cursor.description]
     return [dict(zip(cols, row)) for row in cursor.fetchall()]
@@ -3224,7 +3224,7 @@ def _clean_props(props: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in props.items() if value is not None}
 
 
-def _connect_sqlite_native(
+def _connect_sqlite(
     db_file: Path,
     sqlite_profile: str,
 ) -> Tuple[sqlite3.Connection, Dict[str, Any]]:
@@ -3233,7 +3233,7 @@ def _connect_sqlite_native(
     return conn, pragma_config
 
 
-def _create_sqlite_native_schema(conn: sqlite3.Connection) -> float:
+def _create_sqlite_schema(conn: sqlite3.Connection) -> float:
     statements = [
         "CREATE TABLE IF NOT EXISTS User(Id INTEGER PRIMARY KEY, DisplayName TEXT, Reputation INTEGER, CreationDate INTEGER, Views INTEGER, UpVotes INTEGER, DownVotes INTEGER)",
         "CREATE TABLE IF NOT EXISTS Question(Id INTEGER PRIMARY KEY, Title TEXT, Body TEXT, Score INTEGER, ViewCount INTEGER, CreationDate INTEGER, AnswerCount INTEGER, CommentCount INTEGER, FavoriteCount INTEGER)",
@@ -3279,7 +3279,7 @@ def _create_sqlite_native_schema(conn: sqlite3.Connection) -> float:
     return index_time_s
 
 
-def _load_stackoverflow_sqlite_native(
+def _load_stackoverflow_sqlite(
     conn: sqlite3.Connection,
     data_dir: Path,
     batch_size: int,
@@ -3704,7 +3704,7 @@ def _load_stackoverflow_sqlite_native(
     return load_info, load_stats
 
 
-def _count_sqlite_native_by_type(
+def _count_sqlite_by_type(
     conn: sqlite3.Connection,
     vertex_types: List[str],
     edge_types: List[str],
@@ -4428,7 +4428,7 @@ def _load_stackoverflow_python_memory(
     return load_info, load_stats
 
 
-def run_olap_sqlite_native(
+def run_olap_sqlite(
     db_path: Path,
     data_dir: Path,
     batch_size: int,
@@ -4442,19 +4442,19 @@ def run_olap_sqlite_native(
     if db_path.exists():
         shutil.rmtree(db_path)
     db_path.mkdir(parents=True, exist_ok=True)
-    db_file = db_path / "sqlite_native.sqlite"
+    db_file = db_path / "sqlite.sqlite"
 
-    conn, sqlite_pragmas = _connect_sqlite_native(db_file, sqlite_profile)
+    conn, sqlite_pragmas = _connect_sqlite(db_file, sqlite_profile)
 
     print("Creating schema...")
     schema_start = time.time()
-    index_time = _create_sqlite_native_schema(conn)
+    index_time = _create_sqlite_schema(conn)
     schema_total_time = time.time() - schema_start
     schema_time = max(0.0, schema_total_time - index_time)
 
     print("Loading graph...")
     load_start = time.time()
-    _, load_stats = _load_stackoverflow_sqlite_native(
+    _, load_stats = _load_stackoverflow_sqlite(
         conn,
         data_dir,
         batch_size=max(1, batch_size),
@@ -4463,7 +4463,7 @@ def run_olap_sqlite_native(
     load_time = load_time_including_index
 
     load_counts_start = time.time()
-    load_node_counts_by_type, load_edge_counts_by_type = _count_sqlite_native_by_type(
+    load_node_counts_by_type, load_edge_counts_by_type = _count_sqlite_by_type(
         conn,
         VERTEX_TYPES,
         EDGE_TYPES,
@@ -4478,9 +4478,7 @@ def run_olap_sqlite_native(
 
     print("Running OLAP queries...")
     query_results, query_time = run_queries(
-        lambda cypher: execute_sqlite_native_olap_query(
-            conn, query_name_from_cypher(cypher)
-        ),
+        lambda cypher: execute_sqlite_olap_query(conn, query_name_from_cypher(cypher)),
         only_query=only_query,
         query_runs=query_runs,
         query_order=query_order,
@@ -4490,7 +4488,7 @@ def run_olap_sqlite_native(
     if manual_checks:
         manual_results = [
             compute_manual_total_comments(
-                lambda cypher: execute_sqlite_native_olap_query(
+                lambda cypher: execute_sqlite_olap_query(
                     conn, query_name_from_cypher(cypher)
                 )
             )
@@ -4499,7 +4497,7 @@ def run_olap_sqlite_native(
     disk_after_queries = get_dir_size_bytes(db_path)
 
     counts_start = time.time()
-    node_counts_by_type, edge_counts_by_type = _count_sqlite_native_by_type(
+    node_counts_by_type, edge_counts_by_type = _count_sqlite_by_type(
         conn,
         VERTEX_TYPES,
         EDGE_TYPES,
@@ -5038,7 +5036,7 @@ def main():
             "ladybug",
             "ladybugdb",
             "graphqlite",
-            "sqlite_native",
+            "sqlite",
             "python_memory",
         ],
         default="arcadedb_cypher",
@@ -5072,7 +5070,7 @@ def main():
         "--sqlite-profile",
         choices=SQLITE_PROFILE_CHOICES,
         default="olap",
-        help="SQLite profile for sqlite-native/graphqlite backends (default: olap)",
+        help="SQLite profile for sqlite/graphqlite backends (default: olap)",
     )
     parser.add_argument(
         "--docker-image",
@@ -5159,7 +5157,7 @@ def main():
     print(f"DB: {args.db}")
     if args.db in ("arcadedb_sql", "arcadedb_cypher"):
         print(f"ArcadeDB OLAP language: {args.arcadedb_olap_language}")
-    if args.db in ("sqlite_native", "graphqlite", "python_memory"):
+    if args.db in ("sqlite", "graphqlite", "python_memory"):
         print(f"SQLite profile: {args.sqlite_profile}")
     print(f"Batch size: {args.batch_size}")
     print(f"Query runs: {args.query_runs}")
@@ -5198,8 +5196,8 @@ def main():
             query_order=args.query_order,
             seed=args.seed,
         )
-    elif args.db == "sqlite_native":
-        summary = run_olap_sqlite_native(
+    elif args.db == "sqlite":
+        summary = run_olap_sqlite(
             db_path=db_path,
             data_dir=data_dir,
             batch_size=args.batch_size,

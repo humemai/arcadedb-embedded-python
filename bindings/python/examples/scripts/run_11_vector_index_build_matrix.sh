@@ -15,9 +15,9 @@ source "$HELPERS_SH"
 # Large         10,000  32GB    16
 # X-Large       25,000  64GB    32
 
-DATASET="stackoverflow-medium"
-BATCH_SIZE=5000
-MEM_LIMIT="8g"
+DATASET="stackoverflow-tiny"
+BATCH_SIZE=1000
+MEM_LIMIT="1g"
 THREADS=1
 RUNS=1
 SEED_START=0

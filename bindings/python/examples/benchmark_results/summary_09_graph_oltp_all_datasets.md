@@ -29,9 +29,9 @@
 | arcadedb_cypher | sweep09_t08_r01_arcadedb_cypher_s00000_m16g | 0 | 8 | 250,000 | 10,000 | 16g | 7,782,816 | 9,770,001 | 0.187 | 136.272 | 6,441.466 | 0.001 | 392.245 | 637.357 | 34.938 | 13,287.195 | 4,057.117 |
 | ladybug | sweep09_t01_r01_ladybug_s00002_m16g | 2 | 1 | 250,000 | 10,000 | 16g | 7,782,816 | 9,770,001 | 0.082 |  | 350.137 | 1.09 | 5,028.21 | 49.719 | 84.881 | 11,859.805 | 6,104.633 |
 | python_memory | sweep09_t01_r01_python_memory_s00003_m16g | 3 | 1 | 250,000 | 10,000 | 16g | 7,782,816 | 9,770,001 | 0 | 0 | 158.887 | 1.419 | 13,752.43 | 18.179 | 181.45 | 9,033.387 | 3,002.098 |
-| sqlite_native | sweep09_t01_r01_sqlite_native_s00003_m8g | 3 | 1 | 250,000 | 10,000 | 8g | 7,782,816 | 9,770,001 | 0.006 | 0.001 | 324.433 | 4.797 | 176.24 | 1,418.523 | 0.117 | 730.355 | 3,465.57 |
-| sqlite_native | sweep09_t04_r01_sqlite_native_s00003_m8g | 3 | 4 | 250,000 | 10,000 | 8g | 7,782,816 | 9,770,001 | 0.979 | 0.001 | 272.435 | 0.951 | 141.632 | 1,765.143 | 1.112 | 739.402 | 3,465.59 |
-| sqlite_native | sweep09_t08_r01_sqlite_native_s00003_m8g | 3 | 8 | 250,000 | 10,000 | 8g | 7,782,816 | 9,770,001 | 0.013 | 0.001 | 248.3 | 0.791 | 127.271 | 1,964.32 | 3.2 | 748.355 | 3,465.574 |
+| sqlite | sweep09_t01_r01_sqlite_s00003_m8g | 3 | 1 | 250,000 | 10,000 | 8g | 7,782,816 | 9,770,001 | 0.006 | 0.001 | 324.433 | 4.797 | 176.24 | 1,418.523 | 0.117 | 730.355 | 3,465.57 |
+| sqlite | sweep09_t04_r01_sqlite_s00003_m8g | 3 | 4 | 250,000 | 10,000 | 8g | 7,782,816 | 9,770,001 | 0.979 | 0.001 | 272.435 | 0.951 | 141.632 | 1,765.143 | 1.112 | 739.402 | 3,465.59 |
+| sqlite | sweep09_t08_r01_sqlite_s00003_m8g | 3 | 8 | 250,000 | 10,000 | 8g | 7,782,816 | 9,770,001 | 0.013 | 0.001 | 248.3 | 0.791 | 127.271 | 1,964.32 | 3.2 | 748.355 | 3,465.574 |
 
 ### Per-operation OLTP details
 
@@ -53,15 +53,15 @@
 | python_memory | sweep09_t01_r01_python_memory_s00003_m16g | insert | 25,102 | 1.825 | 0.015 | 0.025 | 0.03 |
 | python_memory | sweep09_t01_r01_python_memory_s00003_m16g | read | 149,761 | 10.89 | 42.695 | 171.426 | 203.898 |
 | python_memory | sweep09_t01_r01_python_memory_s00003_m16g | update | 50,062 | 3.64 | 0.008 | 0.016 | 0.02 |
-| sqlite_native | sweep09_t01_r01_sqlite_native_s00003_m8g | delete | 25,075 | 142.278 | 0.014 | 17.148 | 24.015 |
-| sqlite_native | sweep09_t01_r01_sqlite_native_s00003_m8g | insert | 25,102 | 142.431 | 0.03 | 0.101 | 0.163 |
-| sqlite_native | sweep09_t01_r01_sqlite_native_s00003_m8g | read | 149,761 | 849.758 | 0.011 | 0.055 | 0.115 |
-| sqlite_native | sweep09_t01_r01_sqlite_native_s00003_m8g | update | 50,062 | 284.056 | 0.01 | 0.026 | 0.096 |
-| sqlite_native | sweep09_t04_r01_sqlite_native_s00003_m8g | delete | 25,075 | 177.044 | 0.018 | 23.349 | 40.331 |
-| sqlite_native | sweep09_t04_r01_sqlite_native_s00003_m8g | insert | 25,102 | 177.234 | 0.02 | 0.159 | 13.099 |
-| sqlite_native | sweep09_t04_r01_sqlite_native_s00003_m8g | read | 149,761 | 1,057.398 | 0.013 | 0.073 | 7.885 |
-| sqlite_native | sweep09_t04_r01_sqlite_native_s00003_m8g | update | 50,062 | 353.466 | 0.008 | 0.043 | 0.141 |
-| sqlite_native | sweep09_t08_r01_sqlite_native_s00003_m8g | delete | 25,075 | 197.021 | 0.018 | 19.096 | 31.176 |
-| sqlite_native | sweep09_t08_r01_sqlite_native_s00003_m8g | insert | 25,102 | 197.233 | 0.022 | 0.146 | 12.888 |
-| sqlite_native | sweep09_t08_r01_sqlite_native_s00003_m8g | read | 149,761 | 1,176.714 | 0.015 | 0.099 | 13.004 |
-| sqlite_native | sweep09_t08_r01_sqlite_native_s00003_m8g | update | 50,062 | 393.351 | 0.008 | 0.045 | 1.575 |
+| sqlite | sweep09_t01_r01_sqlite_s00003_m8g | delete | 25,075 | 142.278 | 0.014 | 17.148 | 24.015 |
+| sqlite | sweep09_t01_r01_sqlite_s00003_m8g | insert | 25,102 | 142.431 | 0.03 | 0.101 | 0.163 |
+| sqlite | sweep09_t01_r01_sqlite_s00003_m8g | read | 149,761 | 849.758 | 0.011 | 0.055 | 0.115 |
+| sqlite | sweep09_t01_r01_sqlite_s00003_m8g | update | 50,062 | 284.056 | 0.01 | 0.026 | 0.096 |
+| sqlite | sweep09_t04_r01_sqlite_s00003_m8g | delete | 25,075 | 177.044 | 0.018 | 23.349 | 40.331 |
+| sqlite | sweep09_t04_r01_sqlite_s00003_m8g | insert | 25,102 | 177.234 | 0.02 | 0.159 | 13.099 |
+| sqlite | sweep09_t04_r01_sqlite_s00003_m8g | read | 149,761 | 1,057.398 | 0.013 | 0.073 | 7.885 |
+| sqlite | sweep09_t04_r01_sqlite_s00003_m8g | update | 50,062 | 353.466 | 0.008 | 0.043 | 0.141 |
+| sqlite | sweep09_t08_r01_sqlite_s00003_m8g | delete | 25,075 | 197.021 | 0.018 | 19.096 | 31.176 |
+| sqlite | sweep09_t08_r01_sqlite_s00003_m8g | insert | 25,102 | 197.233 | 0.022 | 0.146 | 12.888 |
+| sqlite | sweep09_t08_r01_sqlite_s00003_m8g | read | 149,761 | 1,176.714 | 0.015 | 0.099 | 13.004 |
+| sqlite | sweep09_t08_r01_sqlite_s00003_m8g | update | 50,062 | 393.351 | 0.008 | 0.045 | 1.575 |

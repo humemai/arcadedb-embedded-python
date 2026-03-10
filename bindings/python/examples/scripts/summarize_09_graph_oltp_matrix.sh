@@ -150,7 +150,7 @@ def collect_version_metadata(version_sets, data, run_dir):
 def format_version_summary_lines(version_sets, max_values=3):
     out = []
     for key in sorted(version_sets.keys()):
-        if key in ("sqlite", "sqlite_native") and (version_sets.get("sqlite_version") or set()):
+        if key == "sqlite" and (version_sets.get("sqlite_version") or set()):
             continue
         values = sorted(version_sets.get(key) or [])
         if len(values) > 1 and "auto" in values:
@@ -173,8 +173,8 @@ def ensure_versions_for_db_set(version_sets, db_values):
         expected.add("real_ladybug")
     if "graphqlite" in db_values:
         expected.add("graphqlite")
-    if "sqlite_native" in db_values:
-        expected.add("sqlite_native")
+    if "sqlite" in db_values:
+        expected.add("sqlite")
     if "python_memory" in db_values:
         expected.add("python_memory")
     for key in expected:

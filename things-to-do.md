@@ -93,7 +93,7 @@
     - run both in Docker containers (same benchmark harness style as other engines) and compare against ArcadeDB OLTP graph workload behavior.
     - Outcome note: in Example 09 OLTP runs, GraphQLite was consistently heavily underperforming vs other engines (practically "kinda shit" for this specific workload/setup).
   - [x] add `python_memory` in 09 matrix as a baseline in-memory Python graph implementation (adjacency list with dicts/lists, no indexing) to provide a reference point for OLTP performance without storage overhead.
-  - [x] add SQLite profile modes (`fair`/`perf`/`olap`) for 09 SQLite-backed paths (`sqlite_native`, `graphqlite`) and persist selected profile/PRAGMAs into results payload.
+  - [x] add SQLite profile modes (`fair`/`perf`/`olap`) for 09 SQLite-backed paths (`sqlite`, `graphqlite`) and persist selected profile/PRAGMAs into results payload.
   - [x] persist `python_memory` graph state to disk at load/end-of-run so `du` and disk metrics reflect stored footprint.
 - [x] revisit example 10
   - [x] align bulk ingest strategy: ArcadeDB uses bulk-tuned transactional ingest (no `IMPORT DATABASE`), while other DBs use native bulk loaders where available.

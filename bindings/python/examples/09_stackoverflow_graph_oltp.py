@@ -4834,7 +4834,7 @@ def _configure_sqlite_connection(
     }
 
 
-def _connect_sqlite_native(
+def _connect_sqlite(
     db_file: Path,
     sqlite_profile: str,
 ) -> Tuple[sqlite3.Connection, Dict[str, Any]]:
@@ -4843,7 +4843,7 @@ def _connect_sqlite_native(
     return conn, pragma_config
 
 
-def _create_sqlite_native_schema(conn: sqlite3.Connection) -> float:
+def _create_sqlite_schema(conn: sqlite3.Connection) -> float:
     statements = [
         "CREATE TABLE IF NOT EXISTS User(Id INTEGER PRIMARY KEY, DisplayName TEXT, Reputation INTEGER, CreationDate INTEGER, Views INTEGER, UpVotes INTEGER, DownVotes INTEGER)",
         "CREATE TABLE IF NOT EXISTS Question(Id INTEGER PRIMARY KEY, Title TEXT, Body TEXT, Score INTEGER, ViewCount INTEGER, CreationDate INTEGER, AnswerCount INTEGER, CommentCount INTEGER, FavoriteCount INTEGER)",
@@ -4889,7 +4889,7 @@ def _create_sqlite_native_schema(conn: sqlite3.Connection) -> float:
     return index_time_s
 
 
-def _load_stackoverflow_sqlite_native(
+def _load_stackoverflow_sqlite(
     conn: sqlite3.Connection,
     data_dir: Path,
     batch_size: int,
@@ -5314,7 +5314,7 @@ def _load_stackoverflow_sqlite_native(
     return load_info, load_stats
 
 
-def _count_sqlite_native_by_type(
+def _count_sqlite_by_type(
     conn: sqlite3.Connection,
     vertex_types: List[str],
     edge_types: List[str],
@@ -6239,7 +6239,7 @@ def run_graph_oltp_python_memory(
     }
 
 
-def run_graph_oltp_sqlite_native(
+def run_graph_oltp_sqlite(
     db_path: Path,
     data_dir: Path,
     batch_size: int,
@@ -6252,18 +6252,18 @@ def run_graph_oltp_sqlite_native(
         shutil.rmtree(db_path)
     db_path.mkdir(parents=True, exist_ok=True)
 
-    db_file = db_path / "sqlite_native.sqlite"
-    conn, sqlite_pragmas = _connect_sqlite_native(db_file, sqlite_profile)
+    db_file = db_path / "sqlite.sqlite"
+    conn, sqlite_pragmas = _connect_sqlite(db_file, sqlite_profile)
 
     print("Creating schema...")
     schema_start = time.time()
-    index_time_s = _create_sqlite_native_schema(conn)
+    index_time_s = _create_sqlite_schema(conn)
     schema_total_time = time.time() - schema_start
     schema_time = max(0.0, schema_total_time - index_time_s)
 
     print("Loading graph...")
     load_start = time.time()
-    load_info, load_stats = _load_stackoverflow_sqlite_native(
+    load_info, load_stats = _load_stackoverflow_sqlite(
         conn,
         data_dir,
         batch_size=max(1, batch_size),
@@ -6286,7 +6286,7 @@ def run_graph_oltp_sqlite_native(
     )
     load_counts_time = time.time() - load_counts_start
 
-    load_node_counts_by_type, load_edge_counts_by_type = _count_sqlite_native_by_type(
+    load_node_counts_by_type, load_edge_counts_by_type = _count_sqlite_by_type(
         conn,
         ARCADE_VERTEX_TYPES,
         ARCADE_EDGE_TYPES,
@@ -6313,7 +6313,7 @@ def run_graph_oltp_sqlite_native(
         nonlocal next_answer_id
         nonlocal next_badge_id
         nonlocal next_comment_id
-        local_conn, _ = _connect_sqlite_native(db_file, sqlite_profile)
+        local_conn, _ = _connect_sqlite(db_file, sqlite_profile)
 
         def safe_execute(statement: str, params: Tuple[Any, ...] = ()) -> None:
             try:
@@ -6871,7 +6871,7 @@ def run_graph_oltp_sqlite_native(
     )
     counts_time = time.time() - counts_start
 
-    node_counts_by_type, edge_counts_by_type = _count_sqlite_native_by_type(
+    node_counts_by_type, edge_counts_by_type = _count_sqlite_by_type(
         conn,
         ARCADE_VERTEX_TYPES,
         ARCADE_EDGE_TYPES,
@@ -7839,7 +7839,7 @@ def main():
             "ladybug",
             "ladybugdb",
             "graphqlite",
-            "sqlite_native",
+            "sqlite",
             "python_memory",
         ],
         default="arcadedb_cypher",
@@ -7944,7 +7944,7 @@ def main():
     print("=" * 80)
     print(f"Dataset: {args.dataset}")
     print(f"DB: {args.db}")
-    if args.db in ("sqlite_native", "graphqlite"):
+    if args.db in ("sqlite", "graphqlite"):
         print(f"SQLite profile: {args.sqlite_profile}")
     print(f"Threads: {args.threads}")
     print(f"Operations: {args.transactions:,}")
@@ -7987,8 +7987,8 @@ def main():
             seed=args.seed,
             sqlite_profile=args.sqlite_profile,
         )
-    elif args.db == "sqlite_native":
-        summary = run_graph_oltp_sqlite_native(
+    elif args.db == "sqlite":
+        summary = run_graph_oltp_sqlite(
             db_path=db_path,
             data_dir=data_dir,
             batch_size=args.batch_size,
@@ -8008,7 +8008,7 @@ def main():
         )
     else:
         raise NotImplementedError(
-            "Only arcadedb, ladybugdb, graphqlite, sqlite_native, and python_memory are supported"
+            "Only arcadedb, ladybugdb, graphqlite, sqlite, and python_memory are supported"
         )
 
     print("\nResults")
