@@ -8,6 +8,7 @@ Schema tests cover:
 
 - ✅ **Type Creation** - Vertex, edge, and document types
 - ✅ **Type Queries** - Getting types and checking existence
+- ✅ **Type Query Stability** - Repeated `get_types()` calls stay duplicate-free
 - ✅ **Type Deletion** - Removing types from schema
 - ✅ **Property Creation** - Adding properties to types
 - ✅ **Property Deletion** - Removing properties
@@ -52,6 +53,7 @@ Tests querying schema for types.
 - `test_get_type()` - Get type by name
 - `test_exists_type()` - Check if type exists
 - `test_get_types()` - List all types
+- `test_get_types_has_no_duplicates_across_repeated_calls()` - Repeated calls stay stable and duplicate-free
 - `test_get_type_properties()` - List type properties
 
 **Pattern:**

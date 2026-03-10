@@ -4,6 +4,10 @@
 
 The tests validate OpenCypher query support and common graph patterns.
 
+They also include regression coverage for planner behavior that matters to the
+Python bindings, such as `UNWIND` variables being usable inside `WHERE`
+predicates.
+
 ## OpenCypher
 
 OpenCypher is a declarative graph query language for pattern matching and traversal.
@@ -39,6 +43,12 @@ with arcadedb.create_database("./opencypher_test_db") as db:
 ```bash
 pytest tests/test_cypher.py -v
 ```
+
+## Notable Regression Coverage
+
+- `UNWIND` variables can be referenced from `WHERE` clauses during `MATCH`
+- Aggregations on missing labels still return a single row with `0`
+- Result property order remains stable for projected OpenCypher values
 
 ## OpenCypher vs SQL MATCH
 

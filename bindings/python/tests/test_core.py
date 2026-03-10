@@ -37,6 +37,17 @@ def test_database_operations(temp_db_path):
         assert record.get("value") == 42
 
 
+def test_sql_count_on_empty_type_returns_zero(temp_db_path):
+    """Test SQL count(*) returns a zero row for an empty type."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE EmptyDoc")
+
+        result = db.query("sql", "SELECT count(*) as total FROM EmptyDoc")
+        row = result.one()
+
+        assert row.get("total") == 0
+
+
 def test_rich_data_types(temp_db_path):
     """Test ArcadeDB's rich data type support with comprehensive CRUD operations.
 

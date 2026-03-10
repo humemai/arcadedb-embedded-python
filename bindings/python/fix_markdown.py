@@ -8,6 +8,8 @@ Rules:
    separates them (space between ':' and first bullet point).
 3) List item indentation must be a multiple of 4 spaces (0,4,8,...). Normalize to the next
    multiple of 4 for indented lists.
+4) In Python fenced code blocks, clamp accidental over-indentation after block openers such as
+    `with`, `if`, and `for` to a single additional indentation level.
 """
 from __future__ import annotations
 
@@ -51,6 +53,15 @@ def _parse_fence(line: str) -> Optional[Tuple[str, int]]:
     return fence[0], len(fence)
 
 
+def _is_python_fence(line: str) -> bool:
+    stripped = line.lstrip()
+    match = FENCE_RE.match(stripped)
+    if not match:
+        return False
+    info = match.group(2).strip().lower()
+    return info.startswith("python")
+
+
 def _is_fence_close(line: str, fence_char: str, fence_len: int) -> bool:
     stripped = line.lstrip()
     if not stripped.startswith(fence_char * fence_len):
@@ -67,11 +78,24 @@ def _is_fence_close(line: str, fence_char: str, fence_len: int) -> bool:
 
 def process_file(
     path: Path,
-) -> Optional[Tuple[int, int, int, List[int], List[int], List[int]]]:
+) -> Optional[
+    Tuple[
+        int,
+        int,
+        int,
+        int,
+        List[int],
+        List[int],
+        List[int],
+        List[int],
+        List[int],
+    ]
+]:
     original = path.read_text(encoding="utf-8")
     lines = original.splitlines()
     new_lines: list[str] = []
     in_fence = False
+    in_python_fence = False
     fence_char: Optional[str] = None
     fence_len: Optional[int] = None
     changed = False
@@ -79,13 +103,17 @@ def process_file(
     blank_lines = 0
     heading_blank_lines = 0
     list_indent_fixes = 0
+    code_indent_fixes = 0
     header_lines: List[int] = []
     blank_lines_at: List[int] = []
     heading_blank_lines_at: List[int] = []
     list_indent_lines: List[int] = []
+    code_indent_lines: List[int] = []
 
     last_list_indent_len: Optional[int] = None
     last_list_fixed_len: Optional[int] = None
+    last_code_indent_len: Optional[int] = None
+    last_code_line: Optional[str] = None
 
     i = 0
     while i < len(lines):
@@ -95,8 +123,34 @@ def process_file(
             if fence_char is not None and fence_len is not None:
                 if _is_fence_close(line, fence_char, fence_len):
                     in_fence = False
+                    in_python_fence = False
                     fence_char = None
                     fence_len = None
+                    last_code_indent_len = None
+                    last_code_line = None
+                    new_lines.append(line)
+                    i += 1
+                    continue
+
+            if in_python_fence and line.strip():
+                indent_len = len(line) - len(line.lstrip(" "))
+                if (
+                    last_code_indent_len is not None
+                    and last_code_line is not None
+                    and last_code_line.rstrip().endswith(":")
+                    and indent_len > last_code_indent_len + 4
+                ):
+                    line = " " * (last_code_indent_len + 4) + line.lstrip(" ")
+                    changed = True
+                    code_indent_fixes += 1
+                    code_indent_lines.append(i + 1)
+
+                last_code_indent_len = len(line) - len(line.lstrip(" "))
+                last_code_line = line
+            elif in_python_fence:
+                last_code_indent_len = None
+                last_code_line = None
+
             new_lines.append(line)
             i += 1
             continue
@@ -104,7 +158,10 @@ def process_file(
         fence = _parse_fence(line)
         if fence:
             in_fence = True
+            in_python_fence = _is_python_fence(line)
             fence_char, fence_len = fence
+            last_code_indent_len = None
+            last_code_line = None
             new_lines.append(line)
             i += 1
             continue
@@ -187,9 +244,11 @@ def process_file(
             header_fixes,
             blank_lines,
             list_indent_fixes,
+            code_indent_fixes,
             header_lines,
             blank_lines_at,
             list_indent_lines,
+            code_indent_lines,
             heading_blank_lines,
             heading_blank_lines_at,
         )
@@ -215,6 +274,7 @@ def main() -> int:
     total_header = 0
     total_blank = 0
     total_indent = 0
+    total_code_indent = 0
     for md_file in iter_md_files(docs_root):
         result = process_file(md_file)
         if result:
@@ -222,9 +282,11 @@ def main() -> int:
                 header_fixes,
                 blank_lines,
                 list_indent_fixes,
+                code_indent_fixes,
                 header_lines,
                 blank_lines_at,
                 list_indent_lines,
+                code_indent_lines,
                 heading_blank_lines,
                 heading_blank_lines_at,
             ) = result
@@ -234,9 +296,11 @@ def main() -> int:
                     header_fixes,
                     blank_lines,
                     list_indent_fixes,
+                    code_indent_fixes,
                     header_lines,
                     blank_lines_at,
                     list_indent_lines,
+                    code_indent_lines,
                     heading_blank_lines,
                     heading_blank_lines_at,
                 )
@@ -244,6 +308,7 @@ def main() -> int:
             total_header += header_fixes
             total_blank += blank_lines
             total_indent += list_indent_fixes
+            total_code_indent += code_indent_fixes
             total_blank += heading_blank_lines
 
     print(f"Updated {len(changed_files)} files")
@@ -251,7 +316,8 @@ def main() -> int:
         "Totals: "
         f"headers fixed={total_header}, "
         f"blank lines inserted={total_blank}, "
-        f"list indents normalized={total_indent}"
+        f"list indents normalized={total_indent}, "
+        f"python code indents normalized={total_code_indent}"
     )
 
     for (
@@ -259,9 +325,11 @@ def main() -> int:
         header_fixes,
         blank_lines,
         list_indent_fixes,
+        code_indent_fixes,
         header_lines,
         blank_lines_at,
         list_indent_lines,
+        code_indent_lines,
         heading_blank_lines,
         heading_blank_lines_at,
     ) in changed_files:
@@ -278,6 +346,9 @@ def main() -> int:
         if list_indent_fixes:
             print(f"  List indents normalized: {list_indent_fixes}")
             print(f"    Lines: {_format_line_list(list_indent_lines)}")
+        if code_indent_fixes:
+            print(f"  Python code indents normalized: {code_indent_fixes}")
+            print(f"    Lines: {_format_line_list(code_indent_lines)}")
 
     return 0
 

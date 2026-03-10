@@ -63,7 +63,7 @@ access methods**:
     ```python
     db.command("sql", "CREATE DOCUMENT TYPE Person")
     with db.transaction():
-            db.command("sql", "INSERT INTO Person SET name = 'Alice'")
+        db.command("sql", "INSERT INTO Person SET name = 'Alice'")
     ```
 
 ### HTTP API (Server Mode)
