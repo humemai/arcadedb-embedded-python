@@ -577,7 +577,7 @@ def demonstrate_opencypher_queries(db):
             "opencypher",
             """
             MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF]->(friend:Person)
-                  -[:FRIEND_OF]->(fof:Person)
+            MATCH (friend)-[:FRIEND_OF]->(fof:Person)
             WHERE fof.name <> 'Alice Johnson'
             RETURN DISTINCT fof.name as name, friend.name as through_friend
             ORDER BY name

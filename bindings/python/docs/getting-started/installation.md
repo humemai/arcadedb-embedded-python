@@ -99,12 +99,17 @@ uv pip install dist/arcadedb_embedded-*.whl
 Prefer configuring the bundled JVM **inside Python** before the first database/importer is created:
 
 ```python
+from arcadedb_embedded.jvm import start_jvm
+
+# Configure JVM explicitly once per process
+start_jvm(heap_size="8g", jvm_args="-XX:MaxDirectMemorySize=8g")
+```
+
+Or pass JVM options when creating/opening the database:
+
+```python
 import arcadedb_embedded as arcadedb
 
-# Option A: configure JVM explicitly once per process
-arcadedb.start_jvm(heap_size="8g", jvm_args="-XX:MaxDirectMemorySize=8g")
-
-# Option B: pass JVM config when creating/opening the database
 with arcadedb.create_database("./db", jvm_kwargs={"heap_size": "8g"}) as db:
     pass
 ```

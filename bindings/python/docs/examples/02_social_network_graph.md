@@ -179,12 +179,11 @@ ORDER BY friend.name
 
 ```cypher
 -- 2. Find friends of friends of Alice
-MATCH (alice:Person {name: 'Alice Johnson'})
-      -[:FRIEND_OF]->(friend:Person)
-      -[:FRIEND_OF]->(fof:Person)
+MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF]->(friend:Person)
+MATCH (friend)-[:FRIEND_OF]->(fof:Person)
 WHERE fof.name <> 'Alice Johnson'
 RETURN DISTINCT fof.name as name, friend.name as through_friend
-ORDER BY fof.name
+ORDER BY name
 ```
 
 ```cypher

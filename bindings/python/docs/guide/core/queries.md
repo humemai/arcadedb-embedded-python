@@ -158,7 +158,9 @@ script = """
     ALTER TYPE SqlScriptVertex ALIASES ss;
 """
 
-result = db.command("sqlscript", script)
+with db.transaction():
+    result = db.command("sqlscript", script)
+
 last = result.first()
 assert last.get("operation") == "ALTER TYPE"
 assert last.get("typeName") == "SqlScriptVertex"
@@ -195,7 +197,10 @@ ArcadeDB supports `UPDATE ... CONTENT` with JSON arrays to update multiple
 documents in one statement.
 
 {% raw %}
+
 ```python
+db.command("sql", "CREATE DOCUMENT TYPE JsonArrayDoc")
+
 with db.transaction():
     db.command(
         "sql",
@@ -220,6 +225,7 @@ with db.transaction():
 rows = result.to_list()
 assert {row["status"] for row in rows} == {"updated"}
 ```
+
 {% endraw %}
 
 #### TRUNCATE BUCKET
@@ -232,7 +238,7 @@ bucket-level maintenance.
 db.command("sql", "CREATE DOCUMENT TYPE BucketDoc BUCKETS 1")
 bucket_info = db.query(
     "sql",
-    "SELECT name FROM schema:buckets WHERE type = 'BucketDoc' LIMIT 1",
+    "SELECT name FROM schema:buckets WHERE name LIKE 'BucketDoc_%' LIMIT 1",
 ).first()
 bucket_name = bucket_info.get("name")
 
