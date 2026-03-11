@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 260 Passing Across 24 Test Files | **Platforms**: 4 Supported
+**Status**: ✅ Production Ready | **Tests**: 267 Passed Across 25 Test Files | **Platforms**: 4 Supported
 
 ---
 
@@ -89,7 +89,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 260 tests passing across 24 test files
+**Status**: 267 passed across 25 test files
 
 ```bash
 # Run all tests

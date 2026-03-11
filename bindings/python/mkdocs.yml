@@ -203,6 +203,7 @@ nav:
       - Concurrency: development/testing/test-concurrency.md
       - Server Patterns: development/testing/test-server-patterns.md
       - Data Import: development/testing/test-importer.md
+      - Documentation Examples: development/testing/test-docs-examples.md
       - OpenCypher Queries: development/testing/test-opencypher.md
     - Best Practices: development/testing/best-practices.md
   - Release Workflow: development/release.md

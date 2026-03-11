@@ -219,6 +219,9 @@ pytest tests/test_server.py
 # Import database coverage
 pytest tests/test_import_database.py
 
+# Documentation examples coverage
+pytest tests/test_docs_examples.py
+
 # OpenCypher tests
 pytest tests/test_cypher.py -k cypher
 ```

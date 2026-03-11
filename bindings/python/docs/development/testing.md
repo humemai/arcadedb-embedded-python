@@ -3,9 +3,9 @@
 Comprehensive testing documentation for ArcadeDB Python bindings.
 
 !!! success "Test Coverage"
-    **260 tests** across 24 test files, passing in the current bindings suite
+    **25 test files** in the current bindings suite
 
-    - **Current package**: 260 passed
+    - **Current package**: 267 passed
     - All ArcadeDB features working (SQL, OpenCypher, Studio)
 
 ## Quick Navigation
@@ -28,19 +28,19 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
     ---
 
-    HTTP API, Studio, configuration (6 tests)
+    HTTP API, Studio, configuration
 
 -   :material-lock: **[Concurrency Tests](testing/test-concurrency.md)**
 
     ---
 
-    File locking, thread safety, multi-process (4 tests)
+    File locking, thread safety, multi-process
 
 -   :material-swap-horizontal: **[Server Patterns](testing/test-server-patterns.md)**
 
     ---
 
-    Embedded + HTTP best practices (4 tests)
+    Embedded + HTTP best practices
 
 -   :material-import: **[Data Import Tests](testing/test-importer.md)**
 
@@ -48,11 +48,17 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
     SQL `IMPORT DATABASE` and importer-adjacent scenarios
 
+-   :material-file-document-multiple: **[Docs Example Tests](testing/test-docs-examples.md)**
+
+    ---
+
+    Executable coverage for representative Python snippets in the MkDocs docs tree
+
 -   :material-graph: **[OpenCypher Tests](testing/test-opencypher.md)**
 
     ---
 
-    Graph traversal language (1 test)
+    Graph traversal language
 
 -   :material-check-all: **[Best Practices](testing/best-practices.md)**
 
@@ -153,6 +159,7 @@ tests/
 ├── test_concurrency.py       # Concurrency (4 tests)
 ├── test_server_patterns.py   # Patterns (4 tests)
 ├── test_import_database.py   # Import database tests
+├── test_docs_examples.py     # Validates runnable docs examples
 ├── test_cypher.py            # OpenCypher (tests)
 └── conftest.py               # Shared fixtures
 ```
@@ -168,5 +175,7 @@ tests/
 **Setting up a server?** Check [Server Patterns](testing/test-server-patterns.md)
 
 **Importing data?** See [Data Import Tests](testing/test-importer.md)
+
+**Checking docs examples?** See [Docs Example Tests](testing/test-docs-examples.md)
 
 **Want best practices?** Read [Best Practices Summary](testing/best-practices.md)
