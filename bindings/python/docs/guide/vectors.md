@@ -58,9 +58,14 @@ with arcadedb.create_database("./vector_demo") as db:
 
 ## Distance Functions (scoring behavior)
 
-- `cosine` (default): returns distance in [0,1]; lower is better.
+- `cosine` (default): returns cosine distance in [0,2]; lower is better.
 - `euclidean`: returns similarity score $1 / (1 + d^2)$; higher is better.
 - `inner_product`: returns negative dot product; lower is better.
+
+Important:
+
+- `find_nearest()` / vector-index search exposes cosine as distance: $1 - \cos(\theta)$.
+- SQL `vectorCosineSimilarity(...)` exposes raw cosine similarity, so its values follow cosine similarity semantics rather than vector-index distance semantics.
 
 ## Tuning Knobs
 

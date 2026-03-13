@@ -664,7 +664,7 @@ class TestLSMVectorIndex:
             assert len(rs[0].get("res")) == 1
 
     def test_lsm_cosine_distance_orthogonal_vectors(self, test_db):
-        """Test that orthogonal vectors have cosine distance = 0.5 (JVector)."""
+        """Test that orthogonal vectors have cosine distance = 1.0."""
         try:
             import numpy as np
 
@@ -704,9 +704,10 @@ class TestLSMVectorIndex:
                     arcadedb.to_java_float_array(vector),
                 )
 
-        # Query with [1,0] - should find [0,1] with distance ~0.5 (JVector normalized)
-        # Note: JVector cosine distance = (1 - cos(theta)) / 2
-        # Orthogonal: cos(90) = 0 -> distance = 0.5
+        # Query with [1,0] - should find [0,1] with cosine distance ~1.0.
+        # Current upstream scoring returns cosine score = (1 + cos(theta)) / 2,
+        # and the Python API exposes distance = 1 - cos(theta).
+        # Orthogonal: cos(90) = 0 -> distance = 1.0
         query = [1.0, 0.0] if not use_numpy else np.array([1.0, 0.0])
         neighbors = index.find_nearest(query, k=2)
 
@@ -715,10 +716,10 @@ class TestLSMVectorIndex:
         assert len(orthogonal) == 1, "Should find orthogonal vector"
         distance = orthogonal[0][1]
 
-        print(f"\\n  Orthogonal vectors distance: {distance:.6f} (expected: 0.5)")
+        print(f"\\n  Orthogonal vectors distance: {distance:.6f} (expected: 1.0)")
         assert (
-            abs(distance - 0.5) < 0.01
-        ), f"Orthogonal distance should be ~0.5, got {distance}"
+            abs(distance - 1.0) < 0.01
+        ), f"Orthogonal distance should be ~1.0, got {distance}"
 
     def test_lsm_euclidean_distance(self, test_db):
         """Test Euclidean distance metric (JVector implementation)."""
@@ -852,9 +853,8 @@ class TestLSMVectorIndex:
             ), f"Parallel vector {name} distance should be ~0.0, got {distance}"
 
     def test_lsm_cosine_distance_opposite_vectors(self, test_db):
-        """Test that opposite vectors (180° apart) have cosine distance = 1.0 (JVector)."""
-        # Note: JVector cosine distance = (1 - cos(theta)) / 2
-        # Opposite: cos(180) = -1 -> distance = (1 - (-1))/2 = 1.0
+        """Test that opposite vectors (180° apart) have cosine distance = 2.0."""
+        # Opposite: cos(180) = -1 -> distance = 1 - (-1) = 2.0
         try:
             import numpy as np
 
@@ -899,15 +899,14 @@ class TestLSMVectorIndex:
         assert len(opposite) == 1, "Should find opposite vector"
         distance = opposite[0][1]
 
-        print(f"\\n  Opposite vectors distance: {distance:.6f} (expected: 1.0)")
+        print(f"\\n  Opposite vectors distance: {distance:.6f} (expected: 2.0)")
         assert (
-            abs(distance - 1.0) < 0.01
-        ), f"Opposite distance should be ~1.0, got {distance}"
+            abs(distance - 2.0) < 0.01
+        ), f"Opposite distance should be ~2.0, got {distance}"
 
     def test_lsm_cosine_distance_45_degree_vectors(self, test_db):
         """Test vectors at 45° angle have expected cosine distance."""
-        # Note: JVector cosine distance = (1 - cos(theta)) / 2
-        # 45 deg: cos(45) = 0.707 -> distance = (1 - 0.707)/2 = 0.146
+        # 45 deg: cos(45) = 0.707 -> distance = 1 - 0.707 = 0.2929
         try:
             import numpy as np
 
@@ -948,7 +947,7 @@ class TestLSMVectorIndex:
         assert len(diagonal) == 1, "Should find diagonal vector"
         distance = diagonal[0][1]
 
-        expected = (1.0 - (1.0 / (2.0**0.5))) / 2.0
+        expected = 1.0 - (1.0 / (2.0**0.5))
         print(f"\\n  45° vectors distance: {distance:.6f} (expected: {expected:.6f})")
         assert (
             abs(distance - expected) < 0.01
@@ -1004,11 +1003,11 @@ class TestLSMVectorIndex:
             print(f"    {name}: {distance:.6f}")
             if name != "x_axis":
                 assert (
-                    abs(distance - 0.5) < 0.01
-                ), f"3D orthogonal distance should be ~0.5, got {distance}"
+                    abs(distance - 1.0) < 0.01
+                ), f"3D orthogonal distance should be ~1.0, got {distance}"
 
     def test_lsm_cosine_distance_3d_parallel_and_opposite(self, test_db):
-        """Test 3D parallel (distance=0) and opposite (distance=1.0) vectors."""
+        """Test 3D parallel (distance=0) and opposite (distance=2.0) vectors."""
         try:
             import numpy as np
 
@@ -1062,8 +1061,8 @@ class TestLSMVectorIndex:
                 ), f"Parallel should have distance ~0, got {distance}"
             elif "opposite" in name:
                 assert (
-                    abs(distance - 1.0) < 0.01
-                ), f"Opposite should have distance ~1.0, got {distance}"
+                    abs(distance - 2.0) < 0.01
+                ), f"Opposite should have distance ~2.0, got {distance}"
 
     def test_lsm_cosine_distance_high_dimensional(self, test_db):
         """Test cosine distance in high dimensions (128D)."""
@@ -1120,12 +1119,12 @@ class TestLSMVectorIndex:
                 ), f"Parallel should have distance ~0, got {distance}"
             elif name == "opposite":
                 assert (
-                    abs(distance - 1.0) < 0.01
-                ), f"Opposite should have distance ~1.0, got {distance}"
+                    abs(distance - 2.0) < 0.01
+                ), f"Opposite should have distance ~2.0, got {distance}"
             elif name == "orthogonal":
                 assert (
-                    abs(distance - 0.5) < 0.1
-                ), f"Orthogonal should have distance ~0.5, got {distance}"
+                    abs(distance - 1.0) < 0.1
+                ), f"Orthogonal should have distance ~1.0, got {distance}"
 
     def test_lsm_vector_search_comprehensive(self, test_db):
         """Test vector embeddings with LSM similarity search (comprehensive)."""

@@ -21,6 +21,8 @@ NC='\033[0m' # No Color
 
 PROTECTED_PATHS=(".github/workflows" "bindings/python" "README.md" "CLAUDE.md")
 
+PROTECTED_BACKUP_DIR=""
+
 try_auto_resolve() {
     local conflicts resolved
     conflicts=$(git status --porcelain | awk '$1 ~ /U/ {print $2}')
@@ -31,7 +33,7 @@ try_auto_resolve() {
     for path in $conflicts; do
         for prefix in "${PROTECTED_PATHS[@]}"; do
             if [[ "$path" == "$prefix"* ]]; then
-                git checkout --ours -- "$path"
+                git checkout --theirs -- "$path"
                 git add "$path"
                 resolved=1
                 break
@@ -42,6 +44,39 @@ try_auto_resolve() {
         return 0
     fi
     return 1
+}
+
+backup_protected_paths() {
+    local path backup_path
+
+    PROTECTED_BACKUP_DIR=$(mktemp -d -t arcadedb_protected.XXXXXX)
+    for path in "${PROTECTED_PATHS[@]}"; do
+        if [ -e "$path" ]; then
+            backup_path="$PROTECTED_BACKUP_DIR/$path"
+            mkdir -p "$(dirname "$backup_path")"
+            cp -a "$path" "$backup_path"
+        fi
+    done
+}
+
+restore_protected_paths() {
+    local path backup_path
+
+    for path in "${PROTECTED_PATHS[@]}"; do
+        backup_path="$PROTECTED_BACKUP_DIR/$path"
+
+        if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+            git rm -r --cached --ignore-unmatch --quiet "$path" >/dev/null 2>&1 || true
+        fi
+        rm -rf "$path"
+
+        if [ -e "$backup_path" ]; then
+            mkdir -p "$(dirname "$path")"
+            cp -a "$backup_path" "$path"
+        fi
+
+        git add -A -- "$path"
+    done
 }
 
 # Show help
@@ -77,7 +112,7 @@ ${YELLOW}Troubleshooting:${NC}
 
 ${YELLOW}Conflict Resolution:${NC}
   For README.md conflicts (common):
-    git checkout --ours README.md    # Keep your version
+        git checkout --theirs README.md    # Keep your fork version during rebase
     git add README.md
     git rebase --continue
 
@@ -159,19 +194,14 @@ echo -e "${YELLOW}📊 Checking current branch...${NC}"
 CURRENT_BRANCH=$(git branch --show-current)
 START_BRANCH="$CURRENT_BRANCH"
 
-# 2b. Backup fork main README so it never gets overwritten during rebase
-README_BACKUP=""
-README_SOURCE_BRANCH="main"
+# 2b. Backup protected fork paths so they cannot be overwritten during rebase
 cleanup() {
-    if [ -n "$README_BACKUP" ] && [ -f "$README_BACKUP" ]; then
-        rm -f "$README_BACKUP"
+    if [ -n "$PROTECTED_BACKUP_DIR" ] && [ -d "$PROTECTED_BACKUP_DIR" ]; then
+        rm -rf "$PROTECTED_BACKUP_DIR"
     fi
 }
 trap cleanup EXIT
-if git show "${README_SOURCE_BRANCH}:README.md" >/dev/null 2>&1; then
-    README_BACKUP=$(mktemp -t arcadedb_readme.XXXXXX)
-    git show "${README_SOURCE_BRANCH}:README.md" > "$README_BACKUP"
-fi
+backup_protected_paths
 
 # 3. Check for uncommitted changes
 if ! git diff-index --quiet HEAD --; then
@@ -223,7 +253,7 @@ git reset --hard upstream/main
 # 9. Rebase fork main onto upstream-main
 echo -e "${YELLOW}🔄 Rebasing main onto upstream-main...${NC}"
 git checkout main
-if git rebase -X ours upstream-main; then
+if git rebase upstream-main; then
     echo -e "${GREEN}✅ Rebase successful!${NC}"
 else
     while try_auto_resolve; do
@@ -242,25 +272,15 @@ else
         echo -e "   4. Or abort: ${BLUE}git rebase --abort${NC}"
         echo ""
         echo -e "${YELLOW}💡 Common fixes:${NC}"
-        echo -e "   README.md conflict: ${BLUE}git checkout --ours README.md && git add README.md${NC}"
+        echo -e "   README.md conflict: ${BLUE}git checkout --theirs README.md && git add README.md${NC}"
         echo ""
         echo -e "${CYAN}Run './sync-upstream.sh --help' for more troubleshooting tips${NC}"
         exit 1
     fi
 fi
 
-# 9b. Restore fork README and enforce CLAUDE.md absence
-if [ -n "$README_BACKUP" ] && [ -f "$README_BACKUP" ]; then
-    cp "$README_BACKUP" README.md
-    git add README.md
-fi
-
-# Keep CLAUDE.md out of this fork even if present upstream
-if git ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1; then
-    git rm -f --quiet --ignore-unmatch CLAUDE.md
-elif [ -f CLAUDE.md ]; then
-    rm -f CLAUDE.md
-fi
+# 9b. Restore protected fork paths exactly as they were before the rebase
+restore_protected_paths
 
 # Commit fork-specific preservation changes only when needed
 if ! git diff --cached --quiet; then

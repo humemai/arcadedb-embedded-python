@@ -147,7 +147,7 @@ import arcadedb_embedded as arcadedb
 with arcadedb.open_database("./vector_demo") as db:
     query_vector = [0.5] * 384  # Example embedding
 
-    # Cosine similarity (0-2, lower = more similar)
+    # Raw cosine similarity (-1 to 1, higher = more similar)
     results = db.query(
         "sql",
         """
