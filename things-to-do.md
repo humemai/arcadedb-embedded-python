@@ -128,15 +128,51 @@
 - [ ] update README/docs + documentation catch-up (do not forget)
   - [x] Refresh stated test coverage counts (currently 260 passed across 24 test files in `bindings/python/tests`; doc wording now avoids hard-coding environment-specific skip counts).
   - [x] Document removed `BatchContext` / `batch_context` APIs and SQL/Cypher-first async guidance.
-  - Document Example 15/16 3-method benchmark structure and parity-check behavior.
-  - Reconcile top-level ingest strategy notes with latest observed benchmark outcomes and caveats.
-  - Add a short migration note in docs/examples: graph schemas now explicitly use `CREATE EDGE TYPE ... UNIDIRECTIONAL`.
-  - Update graph examples docs (`02`, `05`, `10`, `13`, `14`) to clarify traversal direction expectations under `UNIDIRECTIONAL` edges.
-  - Add a benchmark note for Example 09 summarization: `du_mib` is real post-run filesystem usage; `disk_after_*` are benchmark-reported logical sizes.
-  - Add a benchmark note for Example 09 summary parser fields: per-op latency comes from `latency_summary.ops.{50,95,99}` (seconds converted to ms) and op counts from `op_counts`.
-  - Add a small “verification semantics” note for Example 09: `--verify-single-thread-series` uses DB-scoped baselines for deterministic repeatability, not strict cross-DB equality.
+  - [ ] Document Example 15/16 3-method benchmark structure and parity-check behavior.
+  - [ ] Reconcile top-level ingest strategy notes with latest observed benchmark outcomes and caveats.
+  - [ ] Add a short migration note in docs/examples: graph schemas now zzexplicitly use `CREATE EDGE TYPE ... UNIDIRECTIONAL`.
+  - [ ] Update graph examples docs (`02`, `05`, `10`, `13`, `14`) to clarify traversal direction expectations under `UNIDIRECTIONAL` edges.
+  - [ ] Add a benchmark note for Example 09 summarization: `du_mib` is real post-run filesystem usage; `disk_after_*` are benchmark-reported logical sizes.
+  - [ ] Add a benchmark note for Example 09 summary parser fields: per-op latency comes from `latency_summary.ops.{50,95,99}` (seconds converted to ms) and op counts from `op_counts`.
+  - [ ] Add a small “verification semantics” note for Example 09: `--verify-single-thread-series` uses DB-scoped baselines for deterministic repeatability, not strict cross-DB equality.
 
 ## Visit later (not so urgent)
+
+- [ ] evaluate `GraphBatchImporter` exposure in Python
+  - Why it might be worth it:
+    - unlike SQL `IMPORT DATABASE`, this is a dedicated engine-side bulk graph ingest API
+    - it may fit the current Python direction better than encouraging `IMPORT DATABASE` for heavy ingest
+    - it could become the proper high-throughput graph-loading path if the wrapper shape is clean enough
+  - Step 1: read the current Java surface carefully
+    - inspect `engine/src/main/java/com/arcadedb/graph/GraphBatchImporter.java`
+    - list the minimal Python-relevant operations to expose first: builder config, vertex creation, edge creation, flush/close lifecycle
+  - Step 2: decide whether the Python API should expose it at all
+    - check whether it matches the SQL/Cypher-first direction or would just reintroduce another object-heavy API surface
+    - if exposed, keep it clearly positioned as a specialized bulk graph ingest tool, not the default graph API
+  - Step 3: design the smallest Python wrapper
+    - likely a thin context-manager wrapper around the Java builder/importer lifecycle
+    - prefer RID-based graph ingest first
+    - decide whether vertex creation should be included in v1 or whether v1 should only handle buffered edge creation between already-created vertices
+  - Step 4: define the first supported configuration set
+    - batch size
+    - light edges
+    - bidirectional vs unidirectional behavior
+    - commit cadence
+    - WAL toggle
+    - parallel flush
+  - Step 5: add narrow correctness tests before benchmarking
+    - vertex creation flow if supported
+    - light-edge graph ingest
+    - edge properties path
+    - correctness of OUT/IN connectivity after close
+    - behavior under `UNIDIRECTIONAL` schemas
+  - Step 6: benchmark it against the current Python graph ingest paths
+    - compare against synchronous transactional SQL ingest
+    - compare against async SQL ingest
+    - do not assume it is better until measured from Python
+  - Step 7: only document/recommend it if it actually wins cleanly
+    - if it performs well and the wrapper stays simple, document it as an advanced bulk graph ingest path
+    - if not, keep the investigation notes and do not broaden the public API unnecessarily
 
 - [ ] add example 16: time series end-to-end (create type, insert tagged points, range query, bucket aggregation)
 - [ ] add example 17: geo predicates (within/intersects with WKT points/polygons)
