@@ -47,14 +47,12 @@ try_auto_resolve() {
 }
 
 backup_protected_paths() {
-    local path backup_path
+    local path
 
     PROTECTED_BACKUP_DIR=$(mktemp -d -t arcadedb_protected.XXXXXX)
     for path in "${PROTECTED_PATHS[@]}"; do
-        if [ -e "$path" ]; then
-            backup_path="$PROTECTED_BACKUP_DIR/$path"
-            mkdir -p "$(dirname "$backup_path")"
-            cp -a "$path" "$backup_path"
+        if git rev-parse --verify --quiet "HEAD:$path" >/dev/null; then
+            git archive --format=tar HEAD -- "$path" | tar -xf - -C "$PROTECTED_BACKUP_DIR"
         fi
     done
 }
@@ -194,14 +192,13 @@ echo -e "${YELLOW}📊 Checking current branch...${NC}"
 CURRENT_BRANCH=$(git branch --show-current)
 START_BRANCH="$CURRENT_BRANCH"
 
-# 2b. Backup protected fork paths so they cannot be overwritten during rebase
+# 2b. Set cleanup for protected path backup
 cleanup() {
     if [ -n "$PROTECTED_BACKUP_DIR" ] && [ -d "$PROTECTED_BACKUP_DIR" ]; then
         rm -rf "$PROTECTED_BACKUP_DIR"
     fi
 }
 trap cleanup EXIT
-backup_protected_paths
 
 # 3. Check for uncommitted changes
 if ! git diff-index --quiet HEAD --; then
@@ -210,6 +207,9 @@ if ! git diff-index --quiet HEAD --; then
     git status --short
     exit 1
 fi
+
+# 3b. Backup tracked protected fork paths so they cannot be overwritten during rebase
+backup_protected_paths
 
 # 4. Ensure upstream-main exists
 if ! git show-ref --verify --quiet refs/heads/upstream-main; then
