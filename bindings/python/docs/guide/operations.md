@@ -110,7 +110,7 @@ ArcadeDB has **three distinct types of logs** stored in **two different location
 ```python
 import arcadedb_embedded as arcadedb
 
-# Set before the first database/importer/server is created
+# Set before the first database or server is created
 arcadedb.start_jvm(jvm_args="-Djava.util.logging.level=DEBUG -Darcadedb.log.level=FINE")
 ```
 

@@ -123,15 +123,14 @@ server = arcadedb.create_server(...)
 
 ## Data Import
 
-### ✅ Adjust Batch Size for Performance
+### ✅ Use SQL Import Deliberately
 
 ```python
-# Large files: bigger batches
-arcadedb.import_csv(
-    db,
-    "huge.csv",
-    type_name="Data",
-    commit_every=10000  # Larger batches
+# SQL import is supported for file-driven loads, but do not default to it for the
+# largest Python-side bulk ingest benchmarks in this repo.
+db.command(
+    "sql",
+    "IMPORT DATABASE file:///data/sample.csv WITH documentType = 'Data', commitEvery = 10000",
 )
 ```
 
@@ -144,8 +143,13 @@ db.command("sql", "CREATE PROPERTY Person.age INTEGER")
 db.command("sql", "CREATE PROPERTY Person.name STRING")
 db.command("sql", "CREATE INDEX ON Person (name)")
 
-# Then import
-arcadedb.import_csv(db, "people.csv", type_name="Person")
+# Then import if this workflow genuinely fits the use case
+db.command(
+    "sql",
+    "IMPORT DATABASE file:///data/people.csv WITH documentType = 'Person'",
+)
+
+# For the largest Python benchmark ingest paths, prefer transactional or async SQL.
 ```
 
 ## Query Handling

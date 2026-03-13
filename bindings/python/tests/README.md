@@ -48,7 +48,7 @@ pytest -k "transaction" -v
 - **[Server Tests](https://docs.humem.ai/arcadedb/latest/development/testing/test-server/)** - HTTP API
 - **[Concurrency Tests](https://docs.humem.ai/arcadedb/latest/development/testing/test-concurrency/)** - Multi-process, threads
 - **[Server Patterns](https://docs.humem.ai/arcadedb/latest/development/testing/test-server-patterns/)** - Best practices
-- **[Data Import Tests](https://docs.humem.ai/arcadedb/latest/development/testing/test-importer/)** - CSV, JSON import
+- **[Data Import Tests](https://docs.humem.ai/arcadedb/latest/development/testing/test-importer/)** - SQL import workflows and format coverage
 - **[OpenCypher Tests](https://docs.humem.ai/arcadedb/latest/development/testing/test-opencypher/)** - Graph queries
 - **[Best Practices](https://docs.humem.ai/arcadedb/latest/development/testing/best-practices/)** - Summary checklist
 

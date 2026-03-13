@@ -101,9 +101,9 @@ def test_import_database_csv_documents(temp_db_path, sample_csv_path):
 
 
 def test_import_database_csv_graph_vertices_and_edges(temp_db_path):
-    vertices = _resource_path("importer-vertices.csv")
-    edges = _resource_path("importer-edges.csv")
-    if not vertices.exists() or not edges.exists():
+    vertices_csv = _resource_path("importer-vertices.csv")
+    edges_csv = _resource_path("importer-edges.csv")
+    if not vertices_csv.exists() or not edges_csv.exists():
         pytest.skip("Graph CSV fixtures not available")
 
     with arcadedb.create_database(temp_db_path) as db:
@@ -111,7 +111,7 @@ def test_import_database_csv_graph_vertices_and_edges(temp_db_path):
             "sql",
             (
                 "IMPORT DATABASE WITH "
-                f"vertices = '{_file_url(str(vertices))}', "
+                f"vertices = '{_file_url(str(vertices_csv))}', "
                 "vertexType = 'Node', "
                 "typeIdProperty = 'Id', "
                 "typeIdType = 'Long', "
@@ -124,7 +124,7 @@ def test_import_database_csv_graph_vertices_and_edges(temp_db_path):
             "sql",
             (
                 "IMPORT DATABASE WITH "
-                f"edges = '{_file_url(str(edges))}', "
+                f"edges = '{_file_url(str(edges_csv))}', "
                 "edgeType = 'Relationship', "
                 "typeIdProperty = 'Id', "
                 "typeIdType = 'Long', "
@@ -165,7 +165,7 @@ def test_import_database_xml_vertices(temp_db_path, sample_xml_path):
                 )
             ):
                 pytest.skip(
-                    "XML importer path currently fails on Windows runtime "
+                    "XML import path currently fails on Windows runtime "
                     f"(engine-side): {e}"
                 )
             raise
@@ -201,8 +201,8 @@ def test_import_database_neo4j_fixture(temp_db_path):
 
 
 def test_import_database_word2vec_vectors(temp_db_path):
-    vectors_file = _resource_path("importer-word2vec.txt")
-    if not vectors_file.exists():
+    word2vec_file = _resource_path("importer-word2vec.txt")
+    if not word2vec_file.exists():
         pytest.skip("Word2Vec fixture not available")
 
     with arcadedb.create_database(temp_db_path) as db:
@@ -210,7 +210,7 @@ def test_import_database_word2vec_vectors(temp_db_path):
             result = db.command(
                 "sql",
                 (
-                    f"IMPORT DATABASE {_file_url(str(vectors_file))} WITH "
+                    f"IMPORT DATABASE {_file_url(str(word2vec_file))} WITH "
                     "distanceFunction = cosine, "
                     "m = 16, "
                     "beamWidth = 100, "
@@ -230,13 +230,13 @@ def test_import_database_word2vec_vectors(temp_db_path):
 
 
 def test_import_database_rdf_fixture(temp_db_path):
-    rdf_file = _resource_path("importer-rdf.xml")
-    if not rdf_file.exists():
+    rdf_source = _resource_path("importer-rdf.xml")
+    if not rdf_source.exists():
         pytest.skip("RDF fixture not available")
 
     with arcadedb.create_database(temp_db_path) as db:
         try:
-            result = db.command("sql", f"IMPORT DATABASE {_file_url(str(rdf_file))}")
+            result = db.command("sql", f"IMPORT DATABASE {_file_url(str(rdf_source))}")
         except arcadedb.ArcadeDBError as e:
             message = _exception_chain_text(e)
             if "rdf" in message or "cannot determine the file type" in message:
@@ -250,7 +250,7 @@ def test_import_database_rdf_fixture(temp_db_path):
                 )
             ):
                 pytest.skip(
-                    "RDF importer path currently fails on Windows runtime "
+                    "RDF import path currently fails on Windows runtime "
                     f"(engine-side): {e}"
                 )
             raise

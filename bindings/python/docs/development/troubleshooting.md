@@ -140,7 +140,7 @@ rm ./mydb/.lock
 
 #### JVM Memory Configuration
 
-Configure JVM memory in Python **before the first database/importer is created**:
+Configure JVM memory in Python **before the first database or server is created**:
 
 **Basic Configuration (preferred):**
 
@@ -244,7 +244,7 @@ arcadedb.start_jvm(
 
 !!! warning "Configuration Timing"
     JVM options are locked after the JVM starts. Configure `start_jvm(...)` or pass
-    `jvm_kwargs` before the first database/importer is created. To change settings,
+    `jvm_kwargs` before the first database or server is created. To change settings,
     start a new Python process.
 
 !!! tip "Alternative: ARCADEDB_JVM_ERROR_FILE"
@@ -529,16 +529,11 @@ Importing data is very slow.
 
 **Solutions:**
 
-1. **Increase batch size (commitEvery):**
+1. **Increase batch size (`commitEvery`):**
 ```python
-from arcadedb_embedded import Importer
-importer = Importer(db)
-stats = importer.import_file(
-    file_path="users.csv",
-    import_type="vertices",
-    type_name="User",
-    typeIdProperty="id",
-    commitEvery=10000,  # Default is 5000
+db.command(
+    "sql",
+    "IMPORT DATABASE file:///data/users.csv WITH documentType = 'User', commitEvery = 10000",
 )
 ```
 
@@ -547,12 +542,10 @@ stats = importer.import_file(
 # Drop indexes
 db.command("sql", "DROP INDEX `User[email]`")
 
-# Import data (vertices)
-stats = importer.import_file(
-    file_path="users.csv",
-    import_type="vertices",
-    type_name="User",
-    typeIdProperty="id",
+# Import data
+db.command(
+    "sql",
+    "IMPORT DATABASE file:///data/users.csv WITH documentType = 'User'",
 )
 
 # Recreate indexes

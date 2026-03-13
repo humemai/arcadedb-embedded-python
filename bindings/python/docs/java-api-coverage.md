@@ -21,7 +21,7 @@ protocol, server plugins, clustering) that are not typically used from Python.
 | Graph API | ✅ Supported | SQL/OpenCypher graph workflows plus `Document`/`Vertex`/`Edge` wrapper compatibility |
 | Vector Search | ✅ Supported | JVector indexes + NumPy conversion helpers |
 | Async Execution | ✅ Supported | `AsyncExecutor` plus record-level and SQL/Cypher async flows |
-| Data Import | ✅ Supported | CSV/TSV, XML, and ArcadeDB JSONL import |
+| Data Import | ✅ Supported | SQL import workflows for CSV, XML, JSONL, RDF, Neo4j, Word2Vec, and timeseries |
 | Data Export | ✅ Supported | JSONL/GraphML/GraphSON + CSV for query results |
 | Server Mode | ✅ Supported | Embedded server lifecycle + Studio access |
 | Advanced/Low-level | ❌ Not exposed | WAL internals, binary protocol, HA/replication, plugins |
@@ -139,20 +139,12 @@ Full Pythonic Schema API available via `db.schema`:
 
 **Supported:**
 
-- ✅ CSV/TSV - `import_csv()` (documents/vertices/edges, FK resolution)
-- ✅ XML - `import_xml()` (documents/vertices)
-- ✅ ArcadeDB JSONL exports - `IMPORT DATABASE file://...` via SQL
-- ✅ Edge import with foreign key resolution
-- ✅ Batch processing and parallel import
-- ✅ Automatic type inference
-
-**Not Implemented:**
-
-- ❌ RDF/OrientDB/GloVe/Word2Vec importers
-- ❌ Direct JSON array import (use JSONL instead)
-
-**Note:** The supported formats (CSV, XML, ArcadeDB JSONL export/import) cover most
-real-world data migration scenarios.
+- ✅ SQL `IMPORT DATABASE` for CSV/TSV documents
+- ✅ SQL `IMPORT DATABASE` for CSV graph vertices and edges with ID resolution
+- ✅ SQL `IMPORT DATABASE` for XML
+- ✅ SQL `IMPORT DATABASE` for ArcadeDB JSONL exports
+- ✅ SQL `IMPORT DATABASE` for RDF, Neo4j, Word2Vec, and timeseries scenarios covered by tests
+- ✅ Batch processing and automatic type inference where supported by the Java importer
 
 #### 7. Data Export
 
@@ -214,7 +206,7 @@ index = index_builder.withUnique(true).create()
 | Document store | ✅ Excellent | SQL and schema APIs |
 | Vector similarity search | ✅ Excellent | JVector + NumPy integration |
 | Development with Studio UI | ✅ Excellent | Server mode included |
-| Data migration (CSV/XML/JSONL import) | ✅ Good | CSV/XML importers + JSONL via SQL |
+| Data migration (CSV/XML/JSONL import) | ✅ Good | SQL import workflows exercised by tests |
 | Async bulk ingestion | ✅ Good | `AsyncExecutor` |
 | Multi-master replication | ❌ Not supported | Java server only |
 | Custom query language | ❌ Not supported | Use built-in languages |

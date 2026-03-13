@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/04_csv_import_documents.py){ .md-button }
 
-**Production-ready CSV import with automatic type inference, NULL handling, and index
+**Production-ready CSV import with SQL import, automatic type inference, NULL handling, and index
 optimization**
 
 ## Overview
@@ -11,7 +11,7 @@ This example demonstrates importing real-world CSV data from the MovieLens datas
 ArcadeDB documents. You'll learn production-ready patterns for:
 
 - **Automatic type inference** - Java analyzes CSV and infers optimal ArcadeDB types
-- **Schema-on-write** - Database creates schema automatically during import
+- **SQL import workflow** - Python drives import through `IMPORT DATABASE`
 - **NULL value handling** - Import and query missing data across all types
 - **Batch processing** - Optimize import performance with commit batching
 - **Index optimization** - Create indexes AFTER import for maximum throughput
@@ -20,8 +20,8 @@ ArcadeDB documents. You'll learn production-ready patterns for:
 
 ## What You'll Learn
 
-- Automatic type inference by Java CSV importer (LONG, DOUBLE, STRING)
-- Schema-on-write during import (no manual schema creation needed)
+- Automatic type inference by the Java-side SQL import path (LONG, DOUBLE, STRING)
+- SQL-driven import from Python via `db.command("sql", "IMPORT DATABASE ...")`
 - NULL value import from empty CSV cells
 - Query performance measurement (10 runs with statistics)
 - Index creation timing (before vs after import)
@@ -112,7 +112,7 @@ python 04_csv_import_documents.py --help
 
 ## Type Inference by Java
 
-The example uses **automatic type inference** by the Java CSV importer, which analyzes
+The example uses **automatic type inference** by the Java-side SQL import path, which analyzes
 the data and selects optimal ArcadeDB types:
 
 ### Example Inference Results (movielens-large)
@@ -154,14 +154,14 @@ if not data_dir.exists():
     exit(1)
 ```
 
-### Step 2: Let Java Infer Types Automatically
+### Step 2: Let the SQL Import Path Infer Types Automatically
 
-The Java CSV importer automatically analyzes the CSV data and infers optimal ArcadeDB
-types (LONG, DOUBLE, STRING). No manual type inference code is needed - the importer
-handles this intelligently based on the actual data values.
+The Java-side import path behind SQL `IMPORT DATABASE` automatically analyzes the CSV data
+and infers optimal ArcadeDB types (LONG, DOUBLE, STRING). No manual type inference code
+is needed.
 
-The schema is created automatically during import (schema-on-write), eliminating the
-need for explicit schema definition before import.
+This example still creates the target schema intentionally so the import target and
+index plan stay explicit.
 
 ### Step 3: Import CSV Files Directly
 
@@ -170,7 +170,7 @@ need for explicit schema definition before import.
 import_options = {
     "commitEvery": args.batch_size,  # Batch size for commits
 }
-stats = arcadedb.import_csv(db, movies_csv, "Movie", **import_options)
+stats = import_csv_documents_via_sql(db, movies_csv, "Movie", **import_options)
 
 # Check for NULL values (using .first() for efficiency)
 null_genres = (
@@ -447,7 +447,7 @@ LIMIT 10
 
 ### ✅ Type Inference by Java
 
-- Java CSV importer automatically analyzes data and selects optimal types
+- Java-side SQL import path automatically analyzes data and selects optimal types
 - Handles LONG, DOUBLE, STRING intelligently based on actual values
 - No manual type inference code needed
 - Schema-on-write simplifies development

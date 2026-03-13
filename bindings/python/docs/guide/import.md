@@ -1,573 +1,245 @@
 # Data Import Guide
 
-This guide covers strategies, best practices, and patterns for importing data into
-ArcadeDB efficiently and reliably.
+This guide covers the currently available import workflows in the Python bindings.
+
+The current bindings are SQL-first. The legacy high-level Python `Importer`,
+`import_csv()`, and `import_xml()` surface is intentionally not part of the current
+public API. The remaining import path is SQL `IMPORT DATABASE`, but it is not currently
+something this repository encourages people to lean on heavily from Python.
+
+Use it when you need its supported file-import behavior or a full
+`EXPORT DATABASE` + `IMPORT DATABASE` restore flow. For large Python-side ingest, prefer
+transactional or async SQL patterns for now. This recommendation may change later.
 
 ## Overview
 
-ArcadeDB's Importer supports multiple data formats:
+The remaining Python import path is ArcadeDB's native SQL importer.
 
-- **CSV**: Tabular data with headers
-- **ArcadeDB JSONL export/import**: Full database export/restore via `IMPORT DATABASE`
++ CSV document imports
++ CSV graph imports for vertices and edges
++ XML imports
++ Neo4j imports
++ Word2Vec imports for vector workflows
++ RDF imports
++ Timeseries imports
++ Full ArcadeDB JSONL restore
 
-**Key Features:**
+All of these are exercised through `db.command("sql", "IMPORT DATABASE ...")` in
+the current test suite, but test coverage should not be read as a recommendation to make
+this your default Python ingest path.
 
-- Automatic type inference
-- Batch processing for performance
-- Relationship/edge mapping
-- Schema validation
-- Error handling and recovery
+## Bulk Ingest Recommendation
+
+`IMPORT DATABASE` is available, but it is not the recommended path for very large
+Python-side bulk ingest workloads in this repository right now, and more broadly it is
+not something we currently encourage as the default Python import story.
+
++ For Example 15 and 16 style ingest benchmarks, prefer async SQL insert flows.
++ For Example 07 through 13 preload phases, use synchronous batch transactional ingest
+    for cross-database fairness.
++ Reserve `IMPORT DATABASE` for supported import formats, restore flows, and cases where
+    you explicitly need that importer behavior from Python.
++ This is a current-state recommendation, not a promise about the future.
 
 ## Quick Start
 
-### CSV Import
+### Import CSV as Documents
 
 ```python
+from pathlib import Path
+
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded import Importer
+
+
+def file_url(path: str) -> str:
+    return Path(path).resolve().as_uri()
+
 
 with arcadedb.create_database("./mydb") as db:
-    db.command("sql", "CREATE VERTEX TYPE Product")
+    db.command("sql", "CREATE DOCUMENT TYPE Movie")
+    db.command(
+        "sql",
+        f"IMPORT DATABASE {file_url('./movies.csv')} WITH documentType = 'Movie', commitEvery = 5000",
+    )
+```
 
-    importer = Importer(db)
-    stats = importer.import_file(
-        file_path="products.csv",
-        format_type="csv",
-        import_type="vertices",   # create vertices
-        type_name="Product",
-        typeIdProperty="id",      # REQUIRED for vertices/edges
-        commitEvery=5000,         # batch size (default ~5000)
+### Import CSV as Vertices and Edges
+
+```python
+from pathlib import Path
+
+import arcadedb_embedded as arcadedb
+
+
+def file_url(path: str) -> str:
+    return Path(path).resolve().as_uri()
+
+
+with arcadedb.create_database("./graphdb") as db:
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE EDGE TYPE Follows UNIDIRECTIONAL")
+
+    db.command(
+        "sql",
+        (
+            "IMPORT DATABASE WITH "
+            f"vertices = '{file_url('./people.csv')}', "
+            "vertexType = 'Person', "
+            "typeIdProperty = 'id', "
+            "typeIdType = 'Long', "
+            "typeIdUnique = true"
+        ),
     )
 
-    print("Import complete!", stats)
-
-# Convenience helper (same importer under the hood, tested in bindings):
-# arcadedb.import_csv(db, "products.csv", "Product", import_type="vertices", typeIdProperty="id")
+    db.command(
+        "sql",
+        (
+            "IMPORT DATABASE WITH "
+            f"edges = '{file_url('./follows.csv')}', "
+            "edgeType = 'Follows', "
+            "typeIdProperty = 'id', "
+            "typeIdType = 'Long', "
+            "edgeFromField = 'from', "
+            "edgeToField = 'to'"
+        ),
+    )
 ```
 
-### ArcadeDB JSONL Import (full database)
+### Restore an ArcadeDB Export
 
 ```python
-# Import ArcadeDB JSONL export (schema + data)
-db.command("sql", "IMPORT DATABASE file:///exports/mydb.jsonl.tgz WITH commitEvery = 50000")
+with arcadedb.create_database("./restored") as db:
+    db.command(
+        "sql",
+        "IMPORT DATABASE file:///exports/mydb.jsonl.tgz WITH commitEvery = 50000",
+    )
 ```
 
-## Format Selection
+## Choosing the Right Import Mode
 
-### CSV - Tabular Data
+### CSV
 
-**Best For:**
+Use CSV imports for flat tabular data, graph vertex/edge feeds, and time-series style
+ingestion.
 
-- Spreadsheet data
-- Relational database exports
-- Time-series data
-- Simple structured data
+Best fit:
 
-**Advantages:**
++ spreadsheet-style datasets
++ relational exports
++ graph nodes and edges split across files
++ moderate-size file imports and format-driven imports
 
-- Simple format
-- Excel/LibreOffice compatible
-- Wide tool support
-- Human readable
+### ArcadeDB JSONL Export
 
-**Disadvantages:**
+Use JSONL exports when you want a full database restore with schema and data intact.
 
-- No nested structures
-- Limited type information
-- Relationships require separate files
+Best fit:
 
-**Example:**
++ environment-to-environment migration
++ backups and restore drills
++ reproducible benchmark datasets
 
-```csv
-id,name,email,age
-1,Alice,alice@example.com,30
-2,Bob,bob@example.com,25
-```
+### XML, RDF, Neo4j, Word2Vec
 
----
+These formats are also driven through SQL `IMPORT DATABASE`. See the import tests for
+working examples of the exact option sets used in the bindings.
 
-### ArcadeDB JSONL - Full Database Restore
+## Schema Strategy
 
-**Best For:**
+### Recommended: Pre-create the Schema
 
-- Re-importing ArcadeDB `EXPORT DATABASE` outputs
-- Moving databases between environments
-- Backups and restores with schema + data
-
-**Advantages:**
-
-- Preserves full database (schema, indexes, data)
-- Single command: `IMPORT DATABASE file://...`
-- Works with compressed `.jsonl.tgz` exports
-
-**Disadvantages:**
-
-- Full-database scope (not selective)
-- Requires access to ArcadeDB server or embedded instance
-
-## Schema Design
-
-### Pre-create Schema
-
-**Recommended:** Define schema before importing for better control and validation.
+Create types, properties, and indexes before importing when you care about data types,
+constraints, and predictable query plans.
 
 ```python
 with arcadedb.create_database("./mydb") as db:
-    db.command("sql", "CREATE VERTEX TYPE User")
-    db.command("sql", "CREATE PROPERTY User.id STRING")
-    db.command("sql", "CREATE PROPERTY User.name STRING")
+    db.command("sql", "CREATE DOCUMENT TYPE User")
+    db.command("sql", "CREATE PROPERTY User.id LONG")
     db.command("sql", "CREATE PROPERTY User.email STRING")
-    db.command("sql", "CREATE PROPERTY User.age INTEGER")
     db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
     db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 
-    importer = Importer(db)
-    importer.import_file(
-        file_path="users.csv",
-        format_type="csv",
-        import_type="vertices",
-        type_name="User",
-        typeIdProperty="id",
+    db.command(
+        "sql",
+        "IMPORT DATABASE file:///data/users.csv WITH documentType = 'User', commitEvery = 10000",
     )
 ```
 
-**Benefits:**
+### Fast Start: Let the Import Create the Target Type
 
-- Type safety
-- Validation
-- Better performance
-- Prevents errors
+For exploratory work, you can import into a new type with minimal setup. This is quick,
+but you give up explicit control over schema shape and validation.
 
----
+## Performance Guidance
 
-### Let Importer Infer
+### Tune `commitEvery`
 
-**Quick Start:** Let importer create schema automatically.
+Use larger commit batches for throughput and smaller ones for lower memory pressure when
+you do choose the SQL import path.
 
-```python
-# No schema definition needed
-from arcadedb_embedded import Importer
+| Dataset Size | Recommended `commitEvery` |
+| --- | --- |
+| < 100K rows | 1,000 to 10,000 |
+| 100K to 1M rows | 10,000 to 50,000 |
+| > 1M rows | 50,000 to 100,000 |
 
-with arcadedb.create_database("./mydb") as db:
-    importer = Importer(db)
-    importer.import_file(
-        file_path="users.csv",
-        import_type="vertices",
-        type_name="User",
-        typeIdProperty="id",
-    )
-```
+### Drop Heavy Indexes Before Bulk Loads
 
-**Auto-inference:**
-
-- Creates vertex type if missing
-- Infers property types from data
-- Creates properties as needed
-
-**Trade-offs:**
-
-- Quick to start
-- Less control
-- Types may be wrong
-- No validation
-
----
-
-### Hybrid Approach
-
-**Best of Both:** Define critical fields, allow others to be inferred.
+For large one-shot imports, remove expensive indexes first and recreate them afterward.
+For the largest Python benchmark ingest paths in this repo, prefer transactional or async
+SQL ingestion instead of leaning on `IMPORT DATABASE`.
 
 ```python
-with arcadedb.create_database("./mydb") as db:
-    # Define only the critical parts; importer will add the rest
-    db.command("sql", "CREATE VERTEX TYPE User")
-    db.command("sql", "CREATE PROPERTY User.id STRING")
-    db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
-
-    importer = Importer(db)
-    importer.import_file(
-        file_path="users.csv",
-        format_type="csv",
-        import_type="vertices",
-        type_name="User",
-        typeIdProperty="id",
-    )
-```
-
-## Performance Optimization
-
-### Batch Size (`commitEvery`)
-
-Control transaction batch size for memory vs. speed trade-off via the `commitEvery` option:
-
-```python
-from arcadedb_embedded import Importer
-importer = Importer(db)
-
-# Small batches: lower memory, more transactions
-importer.import_file(
-    file_path="large_file.csv",
-    import_type="documents",
-    type_name="Data",
-    commitEvery=1000,
-)
-
-# Medium batches: balanced (default ~5000)
-importer.import_file(
-    file_path="large_file.csv",
-    import_type="documents",
-    type_name="Data",
-    commitEvery=10000,
-)
-
-# Large batches: higher memory, fewer transactions
-importer.import_file(
-    file_path="large_file.csv",
-    import_type="documents",
-    type_name="Data",
-    commitEvery=100000,
-)
-```
-
-**Guidelines:**
-
-| Dataset Size | Recommended Batch Size |
-|--------------|------------------------|
-| < 100K rows  | 1,000 - 10,000        |
-| 100K - 1M    | 10,000 - 50,000       |
-| > 1M rows    | 50,000 - 100,000      |
-
-**Consider:**
-
-- Available memory
-- Record size
-- Concurrent operations
-- Disk I/O
-
----
-
-### Parallel Processing
-
-**Java Importer Uses Multi-threading by Default:**
-
-The Java CSV importer automatically uses parallel processing with multiple threads:
-
-```python
-# Default: Uses (CPU count / 2) - 1 threads (minimum 1)
-# Example: 8 CPU cores → 3 threads
-stats = importer.import_file('large_file.csv', type_name='Data')
-
-# Specify custom thread count
-stats = importer.import_file(
-    'large_file.csv',
-    type_name='Data',
-    parallel=8  # Use 8 threads
-)
-
-# Disable parallelism (single-threaded)
-stats = importer.import_file(
-    'large_file.csv',
-    type_name='Data',
-    parallel=1
-)
-```
-
-**Important Notes:**
-
-- The Java importer handles parallelism internally using native Java threads
-- You don't need to split files manually for parallel processing
-- The `parallel` parameter controls Java's internal thread pool
-- Default is conservative: `(CPU_COUNT / 2) - 1` with minimum of 1
-- For large imports, consider increasing to match your CPU cores
-
-**Manual File Splitting (Advanced):**
-
-For very large files or special requirements, you can split files and import chunks:
-
-```python
-import concurrent.futures
-import os
-
-def split_csv(input_file, chunk_size=100000):
-    """Split large CSV into chunks."""
-    chunks = []
-    chunk_num = 0
-
-    with open(input_file, 'r') as f:
-        header = f.readline()
-
-        chunk_file = f"chunk_{chunk_num}.csv"
-        chunk_writer = open(chunk_file, 'w')
-        chunk_writer.write(header)
-        chunks.append(chunk_file)
-
-        line_count = 0
-        for line in f:
-            chunk_writer.write(line)
-            line_count += 1
-
-            if line_count >= chunk_size:
-                chunk_writer.close()
-                chunk_num += 1
-                chunk_file = f"chunk_{chunk_num}.csv"
-                chunk_writer = open(chunk_file, 'w')
-                chunk_writer.write(header)
-                chunks.append(chunk_file)
-                line_count = 0
-
-        chunk_writer.close()
-
-    return chunks
-
-def import_chunk(db_path, chunk_file, vertex_type, type_id_property="id"):
-    """Import single chunk as vertices."""
-    from arcadedb_embedded import Importer
-    with arcadedb.open_database(db_path) as db:
-        importer = Importer(db)
-        importer.import_file(
-            file_path=chunk_file,
-            import_type="vertices",
-            type_name=vertex_type,
-            typeIdProperty=type_id_property,
-            commitEvery=10000,
-        )
-    os.remove(chunk_file)
-
-# Split file
-chunks = split_csv("large_data.csv", chunk_size=100000)
-
-# Import in parallel
-with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-    futures = [
-        executor.submit(import_chunk, "./mydb", chunk, "Data", "id")
-        for chunk in chunks
-    ]
-
-    for future in concurrent.futures.as_completed(futures):
-        future.result()
-
-print(f"Imported {len(chunks)} chunks")
-```
-
----
-
-### Disable Indexes During Import
-
-For massive imports, temporarily disable indexes:
-
-```python
-# 1. Drop indexes
 db.command("sql", "DROP INDEX `User[email]`")
-db.command("sql", "DROP INDEX `User[id]`")
 
-# 2. Import data (vertices)
-stats = importer.import_file(
-    file_path="huge_file.csv",
-    import_type="vertices",
-    type_name="User",
-    typeIdProperty="id",
-    commitEvery=100000,
+db.command(
+    "sql",
+    "IMPORT DATABASE file:///data/users.csv WITH documentType = 'User', commitEvery = 50000",
 )
 
-# 3. Recreate indexes
-db.command("sql", "CREATE INDEX ON User (id) UNIQUE")
 db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 ```
 
-**Speed Improvement:** 2-5x faster for large imports
+### Validate the Input Up Front
 
----
-
-## Error Handling
-
-### Validation Before Import
-
-```python
-import csv
-
-def validate_csv(file_path, required_columns):
-    """Validate CSV before importing."""
-    errors = []
-
-    try:
-        with open(file_path, 'r') as f:
-            reader = csv.DictReader(f)
-
-            # Check headers
-            missing = set(required_columns) - set(reader.fieldnames)
-            if missing:
-                errors.append(f"Missing columns: {missing}")
-                return False, errors
-
-            # Check data
-            for i, row in enumerate(reader, start=2):
-                # Validate required fields
-                for col in required_columns:
-                    if not row.get(col):
-                        errors.append(f"Line {i}: Missing {col}")
-
-                # Validate types (example)
-                if row.get('age') and not row['age'].isdigit():
-                    errors.append(f"Line {i}: Invalid age '{row['age']}'")
-
-                # Stop after 100 errors
-                if len(errors) >= 100:
-                    errors.append("... more errors found")
-                    return False, errors
-
-        return len(errors) == 0, errors
-
-    except Exception as e:
-        return False, [f"File error: {e}"]
-
-# Validate before import
-valid, errors = validate_csv("users.csv", ["id", "name", "email"])
-if valid:
-    stats = importer.import_file(
-        file_path="users.csv",
-        import_type="vertices",
-        type_name="User",
-        typeIdProperty="id",
-    )
-    print("Imported:", stats)
-else:
-    print("Validation errors:")
-    for error in errors:
-        print(f"  - {error}")
-```
-
----
+Check required columns and data cleanliness before starting a long import run. The SQL
+importer will fail fast on malformed configurations, but it is still cheaper to catch
+obvious CSV issues before JVM work starts.
 
 ## Relationship Mapping
 
-### CSV with Relationships
-
-Import entities and relationships from separate CSV files:
+For graph imports, load vertices first, then edges, and use matching ID fields.
 
 ```python
-# Step 1: Import users
-stats = importer.import_file(
-    file_path="users.csv",
-    import_type="vertices",
-    type_name="User",
-    typeIdProperty="id",
+db.command(
+    "sql",
+    (
+        "IMPORT DATABASE WITH "
+        "vertices = 'file:///data/users.csv', "
+        "vertexType = 'User', "
+        "typeIdProperty = 'id', "
+        "typeIdType = 'Long', "
+        "typeIdUnique = true"
+    ),
 )
 
-# Step 2: Import products
-stats = importer.import_file(
-    file_path="products.csv",
-    import_type="vertices",
-    type_name="Product",
-    typeIdProperty="id",
+db.command(
+    "sql",
+    (
+        "IMPORT DATABASE WITH "
+        "edges = 'file:///data/follows.csv', "
+        "edgeType = 'Follows', "
+        "typeIdProperty = 'id', "
+        "typeIdType = 'Long', "
+        "edgeFromField = 'from', "
+        "edgeToField = 'to'"
+    ),
 )
-
-# Step 3: Import relationships from CSV
-# purchases.csv:
-# user_id,product_id,date,amount
-# 1,101,2024-01-15,29.99
-
-import csv
-
-with open("purchases.csv", 'r') as f:
-    reader = csv.DictReader(f)
-
-    with db.transaction():
-        for row in reader:
-            # Find vertices
-            user_result = db.query("sql",
-                f"SELECT FROM User WHERE id = '{row['user_id']}'")
-            product_result = db.query("sql",
-                f"SELECT FROM Product WHERE id = '{row['product_id']}'")
-
-            if user_result.has_next() and product_result.has_next():
-                db.command(
-                    "sql",
-                    """
-                    CREATE EDGE Purchased
-                    FROM (SELECT FROM User WHERE id = ?)
-                    TO (SELECT FROM Product WHERE id = ?)
-                    SET date = ?, amount = ?
-                    """,
-                    row["user_id"],
-                    row["product_id"],
-                    row["date"],
-                    float(row["amount"]),
-                )
-```
-
----
-
-### JSON with Embedded Relationships
-
-```python
-# orders.json structure:
-# [
-#   {
-#     "order_id": "ORD123",
-#     "customer": {"id": "CUST1", "name": "Alice"},
-#     "items": [
-#       {"product_id": "PROD1", "qty": 2},
-#       {"product_id": "PROD2", "qty": 1}
-#     ]
-#   }
-# ]
-
-import json
-
-with open("orders.json", 'r') as f:
-    orders = json.load(f)
-
-with db.transaction():
-    for order in orders:
-        # Create or find customer
-        customer_id = order['customer']['id']
-        customer_result = db.query("sql",
-            f"SELECT FROM Customer WHERE id = '{customer_id}'")
-
-        if customer_result.has_next():
-            customer = customer_result.next()
-        else:
-            db.command(
-                "sql",
-                "INSERT INTO Customer SET id = ?, name = ?",
-                customer_id,
-                order["customer"]["name"],
-            )
-
-        # Create order vertex
-        db.command("sql", "INSERT INTO Order SET order_id = ?", order["order_id"])
-
-        # Link customer to order
-        db.command(
-            "sql",
-            "CREATE EDGE Placed FROM (SELECT FROM Customer WHERE id = ?) TO (SELECT FROM Order WHERE order_id = ?)",
-            customer_id,
-            order["order_id"],
-        )
-
-        # Link order to products
-        for item in order['items']:
-            product_result = db.query("sql",
-                f"SELECT FROM Product WHERE id = '{item['product_id']}'")
-
-            if product_result.has_next():
-                db.command(
-                    "sql",
-                    """
-                    CREATE EDGE Contains
-                    FROM (SELECT FROM Order WHERE order_id = ?)
-                    TO (SELECT FROM Product WHERE id = ?)
-                    SET quantity = ?
-                    """,
-                    order["order_id"],
-                    item["product_id"],
-                    item["qty"],
-                )
 ```
 
 ## See Also
 
-- [Importer API Reference](../api/importer.md) - Complete API documentation
-- [Import Examples](../examples/import.md) - Practical code examples
-- [Database API](../api/database.md) - Database operations
-- [Transactions](../api/transactions.md) - Transaction management
++ [Import Workflow Reference](../api/importer.md) - Supported SQL import surface
++ [Import Examples](../examples/import.md) - Practical examples
++ [Database API](../api/database.md) - Database operations
++ [Transactions](../api/transactions.md) - Transaction management

@@ -22,7 +22,6 @@ arcadedb_embedded/
 ├── schema.py            # Schema/Index/Property helpers
 ├── type_conversion.py   # Java ↔ Python value conversion
 ├── async_executor.py    # Async command/query + record wrapper
-├── importer.py          # Importer (CSV/XML helpers)
 ├── exporter.py          # Export (JSONL/GraphML/GraphSON + CSV helper)
 ├── vector.py            # VectorIndex + array helpers
 ├── results.py           # ResultSet, Result (query results)
@@ -35,7 +34,7 @@ arcadedb_embedded/
 
 **`__init__.py`**
 
-- Central export surface (Database, AsyncExecutor, Schema, Importer, Exporter, VectorIndex, converters)
+- Central export surface (Database, AsyncExecutor, Schema, Exporter, VectorIndex, converters)
 - Version metadata
 
 **`jvm.py`**
@@ -69,11 +68,6 @@ arcadedb_embedded/
 **`async_executor.py`**
 
 - `AsyncExecutor`: async SQL/OpenCypher command/query flows plus parallel record helpers, commitEvery, WAL tuning
-
-**`importer.py`**
-
-- `Importer`: CSV/XML imports (documents/vertices/edges), FK resolution, commitEvery
-- `import_csv` / `import_xml` convenience wrappers
 
 **`exporter.py`**
 
@@ -130,12 +124,12 @@ def start_jvm(heap_size="4g", disable_xml_limits=True, jvm_args=None):
 
 1. Uses the bundled JRE inside the wheel (no system JVM required)
 2. Loads packaged ArcadeDB JARs from `arcadedb_embedded/jars`
-3. Configurable via Python API before first database/importer creation (`start_jvm`, `jvm_kwargs`)
+3. Configurable via Python API before first database or server creation (`start_jvm`, `jvm_kwargs`)
 4. JVM stays live for the process lifetime and cannot be restarted
 
 **Implications:**
 
-- Set JVM options _before_ creating the first database/importer in a process
+- Set JVM options _before_ creating the first database or server in a process
 - Tests that need different JVM args must run in separate processes
 - Server and embedded modes share the same in-process JVM
 
@@ -523,17 +517,17 @@ class CustomVertex:
 # Usage with wrapped database
 ```
 
-### Custom Importers
+### Custom Loaders
 
 ```python
-class CustomImporter:
-    """Custom import format handler."""
+class CustomXmlLoader:
+    """Custom XML loading helper."""
 
     def __init__(self, db):
         self.db = db
 
-    def import_xml(self, file_path, vertex_type):
-        """Import XML format."""
+    def load_xml(self, file_path, vertex_type):
+        """Load XML records into a vertex type."""
         import xml.etree.ElementTree as ET
 
         tree = ET.parse(file_path)
@@ -547,8 +541,8 @@ class CustomImporter:
                 vertex.save()
 
 # Usage
-importer = CustomImporter(db)
-importer.import_xml("data.xml", "Data")
+xml_loader = CustomXmlLoader(db)
+xml_loader.load_xml("data.xml", "Data")
 ```
 
 ## Testing

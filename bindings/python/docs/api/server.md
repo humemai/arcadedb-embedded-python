@@ -393,7 +393,7 @@ server = arcadedb.create_server()
 # Crash logs will go to /var/log/arcade/errors.log
 ```
 
-**Important:** Must be set before the first server/database/importer is created.
+**Important:** Must be set before the first server or database is created.
 
 ---
 

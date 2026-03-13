@@ -141,21 +141,20 @@ Versions are automatically extracted from the main ArcadeDB `pom.xml`. See [vers
 
 ```bash
 arcadedb_embedded/
-├── __init__.py          # Public API exports
-├── core.py              # Database and DatabaseFactory
-├── server.py            # ArcadeDBServer for HTTP mode
-├── results.py           # ResultSet and Result wrappers
-├── transactions.py      # TransactionContext manager
-├── schema.py            # Schema management API
-├── vector.py            # Vector search and HNSW (JVector) indexing
-├── graph.py             # Graph wrappers
-├── importer.py          # Data import helpers (CSV/XML) + SQL import guidance
-├── exporter.py          # Data export (JSONL, GraphML, GraphSON, CSV)
 ├── async_executor.py    # Asynchronous command/query + record execution
-├── type_conversion.py   # Python-Java type conversion utilities
+├── citation.py          # Citation helper
+├── core.py              # Database and DatabaseFactory
 ├── exceptions.py        # ArcadeDBError exception
+├── exporter.py          # Data export (JSONL, GraphML, GraphSON, CSV)
+├── graph.py             # Graph wrappers
+├── __init__.py          # Public API exports
 ├── jvm.py               # JVM lifecycle management
-└── _version.py          # Package version info
+├── results.py           # ResultSet and Result wrappers
+├── schema.py            # Schema management API
+├── server.py            # ArcadeDBServer for HTTP mode
+├── transactions.py      # TransactionContext manager
+├── type_conversion.py   # Python-Java type conversion utilities
+└── vector.py            # Vector search and HNSW (JVector) indexing
 ```
 
 **[Architecture details](https://docs.humem.ai/arcadedb/latest/development/architecture/)**

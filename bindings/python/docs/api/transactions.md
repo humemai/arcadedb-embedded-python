@@ -666,4 +666,4 @@ def update_with_retry(db, rid, new_value, max_retries=3):
 - [Database API](database.md) - Database operations
 - [Getting Started](../index.md) - Basic transaction examples
 - [Graph Operations Guide](../guide/graphs.md) - Transactions with graphs
-- [Importer API](importer.md) - Bulk import with transactions
+- [Import Workflow Reference](importer.md) - Bulk import with transactions

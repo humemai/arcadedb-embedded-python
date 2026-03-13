@@ -96,7 +96,7 @@ uv pip install dist/arcadedb_embedded-*.whl
 
 ## JVM Configuration
 
-Prefer configuring the bundled JVM **inside Python** before the first database/importer is created:
+Prefer configuring the bundled JVM **inside Python** before the first database or server is created:
 
 ```python
 from arcadedb_embedded.jvm import start_jvm
@@ -129,7 +129,7 @@ JVM arguments use two flag types:
     - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: Mutations threshold before rebuilding JVector
 
 !!! warning "One JVM configuration per process"
-    JVM options are locked after the JVM starts. Set `start_jvm(...)` or pass `jvm_kwargs` **before** the first database/importer is created. To change JVM settings, start a new Python process.
+    JVM options are locked after the JVM starts. Set `start_jvm(...)` or pass `jvm_kwargs` **before** the first database or server is created. To change JVM settings, start a new Python process.
 
 !!! tip "Environment fallback (optional)"
     If you must configure JVM flags externally (CI, shell scripts), `ARCADEDB_JVM_ARGS` is still supported, but in-code configuration is preferred.

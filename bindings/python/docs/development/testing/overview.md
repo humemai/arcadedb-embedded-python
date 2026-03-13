@@ -73,7 +73,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_server.py`](test-server.md) | Server mode, HTTP API, configuration |
 | [`test_concurrency.py`](test-concurrency.md) | File locking, thread safety, multi-process behavior |
 | [`test_server_patterns.py`](test-server-patterns.md) | Best practices for embedded + server mode |
-| [`test_import_database.py`](test-importer.md) | SQL `IMPORT DATABASE` scenarios and importer-adjacent flows |
+| [`test_import_database.py`](test-importer.md) | SQL `IMPORT DATABASE` scenarios and format coverage |
 | [`test_docs_examples.py`](test-docs-examples.md) | Executes representative Python snippets from the documentation site |
 | [`test_cypher.py`](test-opencypher.md) | OpenCypher query language |
 | [`test_jvm_args.py`](test-jvm-args.md) | JVM args handling |

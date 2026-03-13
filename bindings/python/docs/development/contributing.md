@@ -93,7 +93,6 @@ arcadedb/bindings/python/
 │       ├── transactions.py        # Transaction management
 │       ├── vector.py              # Vector search support
 │       ├── graph.py               # Graph wrappers
-│       ├── importer.py            # Data import helpers (CSV/XML)
 │       ├── exporter.py            # Data export (JSONL, GraphML, etc.)
 │       ├── async_executor.py      # Async command/query execution
 │       ├── type_conversion.py     # Python-Java type conversion
@@ -359,35 +358,27 @@ def query_users(
 Use Google-style docstrings:
 
 ```python
-def import_csv(
+def import_database(
     db: Database,
-    file_path: str,
-    type_name: str,
-    batch_size: int = 1000
-) -> int:
+    source_url: str,
+    options: str = ""
+) -> None:
     """
-    Import CSV file into database.
+    Import data into the database through SQL.
 
     Args:
         db: Database instance
-        file_path: Path to CSV file
-        type_name: Vertex or document type name
-        batch_size: Records per transaction (default: 1000)
+        source_url: File URL to import from
+        options: Additional SQL import options fragment
 
     Returns:
-        Number of records imported
-
-    Raises:
-        FileNotFoundError: If CSV file doesn't exist
-        ArcadeDBError: If import fails
+        None
 
     Example:
         >>> db = arcadedb.open_database("./mydb")
-        >>> count = import_csv(db, "users.csv", "User", batch_size=5000)
-        >>> print(f"Imported {count} users")
+        >>> import_database(db, "file:///tmp/users.csv", "WITH documentType = 'User'")
     """
-    # Implementation
-    pass
+    db.command("sql", f"IMPORT DATABASE {source_url} {options}".strip())
 ```
 
 ### Error Handling

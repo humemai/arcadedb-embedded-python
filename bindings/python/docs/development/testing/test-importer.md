@@ -57,10 +57,10 @@ pytest tests/test_import_database.py -v -s
 ## Notes
 
 - For full database restores, the recommended Python surface is SQL `IMPORT DATABASE`, not a separate high-level Python importer DSL.
-- CSV/XML helper APIs still exist for targeted imports, but the main regression coverage now lives in `test_import_database.py`.
+- The maintained regression coverage for imports now lives in `test_import_database.py`.
 
 ## Related Documentation
 
-- [Importer API Reference](../../api/importer.md)
+- [Import Workflow Reference](../../api/importer.md)
 - [Data Import Guide](../../guide/import.md)
 - [Import Examples](../../examples/import.md)

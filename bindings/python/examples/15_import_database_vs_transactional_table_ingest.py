@@ -414,7 +414,7 @@ def main() -> None:
         "--parallel",
         type=int,
         default=8,
-        help="Parallel workers for importer path",
+        help="Parallel workers for SQL import path",
     )
     parser.add_argument("--heap-size", type=str, default="4g", help="JVM heap size")
     parser.add_argument(

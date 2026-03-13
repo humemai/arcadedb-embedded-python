@@ -1,176 +1,131 @@
 # Data Import Examples
 
-This page covers examples for importing data into ArcadeDB from various sources.
+This page covers the current import examples for the Python bindings.
 
-Before running any import example, download the datasets using **[Dataset Downloader](download_data.md)**.
+Before running any example, download the datasets using **[Dataset Downloader](download_data.md)**.
 
 ## CSV Import Examples
 
-### Import Tabular Data (Documents)
+### Import Tabular Data as Documents
 
 **[Example 04 - CSV Import: Documents](04_csv_import_documents.md)**
 
-Learn how to import CSV files as documents:
+Learn how to:
 
-- Using the Importer API
-- Defining schema mappings
-- Handling data transformations
-- Performance optimization
+- create a target document type with SQL
+- import CSV data through `IMPORT DATABASE`
+- validate NULL handling and inferred types
+- benchmark query performance before and after indexes
 
 ### Import Graph Data
 
 **[Example 05 - CSV Import: Graph Database](05_csv_import_graph.md)**
 
-Learn how to import CSV files as graph vertices and edges:
+Learn how to:
 
-- Creating vertices from CSV
-- Creating edges from relationships
-- Bulk import optimization
-- Real-world graph migration
+- import vertices from CSV
+- import edges from CSV using matching IDs
+- create graph schema up front
+- bulk-load graph data with SQL import commands
 
-## Importer API
+## SQL Import Workflow
 
-The ArcadeDB Python bindings provide a powerful `Importer` class for efficient data loading.
+The current bindings expose SQL `IMPORT DATABASE` rather than a separate high-level
+Python import API.
+
+For very large Python-side bulk ingest workloads in this repository, do not treat
+`IMPORT DATABASE` as the default choice. Example 15 and 16 exist partly to show that
+async SQL insert flows can be the better ingest path, while Example 07 through 13 keep
+ArcadeDB on synchronous batch transactional ingest for benchmark fairness.
+
+More broadly, this repository does not currently encourage `IMPORT DATABASE` as the main
+Python-side ingest recommendation. It remains available for the supported file-driven
+workflows and may become a stronger recommendation later if behavior improves.
 
 ### Basic CSV Import
 
 ```python
+from pathlib import Path
+
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded import import_csv
+
+
+def file_url(path: str) -> str:
+    return Path(path).resolve().as_uri()
+
 
 with arcadedb.create_database("./import_demo") as db:
-    # Convenience helper: auto-detect CSV, create schema on-the-fly
-    stats = import_csv(
-        db,
-        file_path="data.csv",
-        type_name="MyType",
-        commitEvery=5000,
+    db.command("sql", "CREATE DOCUMENT TYPE MyType")
+    db.command(
+        "sql",
+        f"IMPORT DATABASE {file_url('./data.csv')} WITH documentType = 'MyType', commitEvery = 5000",
     )
-    print(stats)
 ```
 
-### Import with Schema Types
+### Import with Predefined Schema
 
 ```python
-import arcadedb_embedded as arcadedb
-from arcadedb_embedded import import_csv
-
 with arcadedb.create_database("./import_demo") as db:
-    # Define schema up front so imports get typed correctly
-    with db.transaction():
-        db.command("sql", "CREATE DOCUMENT TYPE Product")
-        db.command("sql", "CREATE PROPERTY Product.id INTEGER")
-        db.command("sql", "CREATE PROPERTY Product.name STRING")
-        db.command("sql", "CREATE PROPERTY Product.price FLOAT")
-        db.command("sql", "CREATE PROPERTY Product.inStock BOOLEAN")
+    db.command("sql", "CREATE DOCUMENT TYPE Product")
+    db.command("sql", "CREATE PROPERTY Product.id INTEGER")
+    db.command("sql", "CREATE PROPERTY Product.name STRING")
+    db.command("sql", "CREATE PROPERTY Product.price DOUBLE")
 
-    stats = import_csv(
-        db,
-        file_path="products.csv",
-        type_name="Product",
-        commitEvery=5000,
+    db.command(
+        "sql",
+        f"IMPORT DATABASE {file_url('./products.csv')} WITH documentType = 'Product', commitEvery = 5000",
     )
-    print(stats)
 ```
 
-### Bulk Import for Performance
+### Import Graph Vertices and Edges
 
 ```python
-import arcadedb_embedded as arcadedb
-from arcadedb_embedded import import_csv
-
-with arcadedb.create_database("./import_demo") as db:
-    # Import in batches (import_csv handles commitEvery internally)
-    stats = import_csv(
-        db,
-        file_path="large_dataset.csv",
-        type_name="LargeType",
-        commitEvery=10000,  # Commit every 10k records
-        parallel=4,  # Optional: parallel importer threads
-    )
-    print(stats)
-```
-
-## Import Graph Data
-
-### Create Vertices from CSV
-
-```python
-import arcadedb_embedded as arcadedb
-
 with arcadedb.create_database("./graph_import_demo") as db:
-    # Import vertices (CSV columns become properties)
-    stats = arcadedb.import_csv(
-        db,
-        file_path="users.csv",
-        type_name="User",
-        import_type="vertices",
-        typeIdProperty="userId",
-        commitEvery=5000,
+    db.command("sql", "CREATE VERTEX TYPE User")
+    db.command("sql", "CREATE EDGE TYPE Follows UNIDIRECTIONAL")
+
+    db.command(
+        "sql",
+        (
+            "IMPORT DATABASE WITH "
+            f"vertices = '{file_url('./users.csv')}', "
+            "vertexType = 'User', "
+            "typeIdProperty = 'userId', "
+            "typeIdType = 'Long', "
+            "typeIdUnique = true"
+        ),
     )
-    print(stats)
-```
 
-### Create Edges from CSV
-
-```python
-import arcadedb_embedded as arcadedb
-
-with arcadedb.open_database("./graph_import_demo") as db:
-    # Import edges (FK resolution using typeIdProperty)
-    stats = arcadedb.import_csv(
-        db,
-        file_path="follows.csv",
-        type_name="Follows",
-        import_type="edges",
-        edgeFromField="follower_id",
-        edgeToField="following_id",
-        typeIdProperty="userId",
-        commitEvery=5000,
+    db.command(
+        "sql",
+        (
+            "IMPORT DATABASE WITH "
+            f"edges = '{file_url('./follows.csv')}', "
+            "edgeType = 'Follows', "
+            "typeIdProperty = 'userId', "
+            "typeIdType = 'Long', "
+            "edgeFromField = 'follower_id', "
+            "edgeToField = 'following_id'"
+        ),
     )
-    print(stats)
 ```
 
 ## Performance Tips
 
-### Optimize Import Speed
-
-1. **Use Transactions**: Batch multiple inserts in one transaction
-2. **Disable Indexes**: Temporarily disable indexes during bulk import
-3. **Use Parallel Processing**: Split large files and import in parallel
-4. **Tune commitEvery**: Adjust commitEvery (e.g., 1000-10000) for performance vs. transaction size
-
-```python
-import arcadedb_embedded as arcadedb
-from arcadedb_embedded import Importer
-
-with arcadedb.create_database("./import_demo") as db:
-    # Example: Optimized bulk import
-    # Drop heavy indexes before bulk insert (replace with your index names)
-    db.command("sql", "DROP INDEX `MyType[id]`")
-
-    importer = Importer(db)
-
-    # Bulk import (importer handles transactions internally)
-    importer.import_file(
-        file_path="huge_file.csv",
-        type_name="MyType",
-        commitEvery=5000
-    )
-
-    # Recreate indexes after import (schema ops are auto-transactional)
-    db.command("sql", "CREATE INDEX ON MyType (id) UNIQUE")
-```
+1. Pre-create critical schema and unique indexes.
+2. Use a larger `commitEvery` value when you intentionally choose the SQL import path.
+3. Drop expensive secondary indexes before a one-shot import and recreate them afterward.
+4. Validate source files before starting long-running jobs.
 
 ## Additional Resources
 
-- **[Importer API Documentation](../api/importer.md)** - Complete API reference
-- **[Import Guide](../guide/import.md)** - In-depth import strategies
-- **[Performance Guide](../guide/operations.md)** - Optimization techniques
+- **[Import Workflow Reference](../api/importer.md)** - Supported SQL import surface
+- **[Import Guide](../guide/import.md)** - Import strategies and patterns
+- **[Performance Guide](../guide/operations.md)** - JVM and bulk-load tuning
 
 ## Source Code
 
-View the complete import example source code:
+View the complete example source code:
 
 - [`examples/04_csv_import_documents.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/04_csv_import_documents.py)
 - [`examples/05_csv_import_graph.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/05_csv_import_graph.py)
