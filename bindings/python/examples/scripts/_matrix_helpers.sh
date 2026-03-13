@@ -5,6 +5,143 @@ matrix_log() {
     echo "[matrix] $*"
 }
 
+matrix_normalize_mem_tag() {
+    local raw="${1:-}"
+    raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
+    if [[ -z "$raw" ]]; then
+        return 1
+    fi
+
+    if [[ "$raw" == mem* ]]; then
+        printf '%s\n' "$raw"
+        return 0
+    fi
+
+    if [[ "$raw" == m[0-9]* ]]; then
+        printf 'mem%s\n' "${raw#m}"
+        return 0
+    fi
+
+    printf 'mem%s\n' "$raw"
+}
+
+matrix_build_summary_run_label() {
+    local internal_run_label="$1"
+    local mem_limit="$2"
+    local mem_tag
+    mem_tag="$(matrix_normalize_mem_tag "$mem_limit")" || return 1
+
+    local base_label="$internal_run_label"
+    # Ensure idempotent normalization: if label already has trailing mem tokens
+    # (possibly duplicated by previous runs), strip them before appending.
+    while [[ "$base_label" =~ _((mem|m)[[:alnum:]]+|memory)$ ]]; do
+        base_label="${base_label%_${BASH_REMATCH[1]}}"
+    done
+
+    printf '%s_%s\n' "$base_label" "$mem_tag"
+}
+
+matrix_rewrite_json_run_label() {
+    local target_dir="$1"
+    local old_label="$2"
+    local new_label="$3"
+
+    if [[ ! -d "$target_dir" || -z "$old_label" || -z "$new_label" || "$old_label" == "$new_label" ]]; then
+        return 0
+    fi
+
+    python3 - "$target_dir" "$old_label" "$new_label" << 'PY'
+import glob
+import json
+import pathlib
+import sys
+
+target_dir = pathlib.Path(sys.argv[1])
+old_label = sys.argv[2]
+new_label = sys.argv[3]
+label_keys = {"run_label", "search_run_label"}
+
+
+def rewrite_labels(value):
+    changed = False
+
+    if isinstance(value, dict):
+        updated = {}
+        for key, item in value.items():
+            if key in label_keys and item == old_label:
+                updated[key] = new_label
+                changed = True
+            else:
+                updated_item, item_changed = rewrite_labels(item)
+                updated[key] = updated_item
+                changed = changed or item_changed
+        return updated, changed
+
+    if isinstance(value, list):
+        updated = []
+        for item in value:
+            updated_item, item_changed = rewrite_labels(item)
+            updated.append(updated_item)
+            changed = changed or item_changed
+        return updated, changed
+
+    return value, False
+
+
+for pattern in ("results_*.json", "search_results_*.json"):
+    for path_str in sorted(glob.glob(str(target_dir / pattern))):
+        path = pathlib.Path(path_str)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        payload, changed = rewrite_labels(payload)
+        if not changed:
+            continue
+
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
+matrix_rename_result_artifacts() {
+    local target_dir="$1"
+    local old_label="$2"
+    local new_label="$3"
+
+    if [[ ! -d "$target_dir" || -z "$old_label" || -z "$new_label" || "$old_label" == "$new_label" ]]; then
+        return 0
+    fi
+
+    local old_results="$target_dir/results_${old_label}.json"
+    local new_results="$target_dir/results_${new_label}.json"
+    if [[ -f "$old_results" && ! -e "$new_results" ]]; then
+        mv "$old_results" "$new_results"
+    fi
+
+    local old_search_results="$target_dir/search_results_${old_label}.json"
+    local new_search_results="$target_dir/search_results_${new_label}.json"
+    if [[ -f "$old_search_results" && ! -e "$new_search_results" ]]; then
+        mv "$old_search_results" "$new_search_results"
+    fi
+}
+
+matrix_move_dir_if_needed() {
+    local old_dir="$1"
+    local new_dir="$2"
+
+    if [[ -z "$old_dir" || -z "$new_dir" || "$old_dir" == "$new_dir" || ! -d "$old_dir" ]]; then
+        return 0
+    fi
+
+    if [[ -e "$new_dir" ]]; then
+        echo "Refusing to rename '$old_dir' to existing path '$new_dir'" >&2
+        return 1
+    fi
+
+    mv "$old_dir" "$new_dir"
+}
+
 matrix_resolve_latest_pypi_version() {
     local package_name="$1"
     python3 - "$package_name" << 'PY'

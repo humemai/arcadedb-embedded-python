@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quick benchmark: transactional INSERT vs SQL IMPORT DATABASE.
+Example 15: Import Database vs Transactional Table Ingest.
 
 This script generates synthetic multi-table CSV datasets with configurable row
 and column counts, then loads them into separate ArcadeDB databases using:
@@ -376,7 +376,9 @@ def run_import_database_load(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Dummy ingest benchmark")
+    parser = argparse.ArgumentParser(
+        description="Example 15: Import Database vs Transactional Table Ingest"
+    )
     parser.add_argument(
         "--rows-per-table",
         type=int,

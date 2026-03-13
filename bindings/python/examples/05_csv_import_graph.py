@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Graph Creation Benchmark - Clean Architecture
+Example 05: Graph Creation Benchmark - Clean Architecture
 
 This benchmark compares graph creation strategies with multiple options:
 - Method: Java API vs SQL
@@ -2152,7 +2152,7 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Graph Creation Benchmark")
+    parser = argparse.ArgumentParser(description="Example 05: Graph Creation Benchmark")
     parser.add_argument(
         "--dataset",
         choices=["movielens-small", "movielens-large"],
@@ -2231,7 +2231,7 @@ def main():
         db_name = args.db_name
 
     print("=" * 70)
-    print("🚀 Graph Creation Benchmark")
+    print("🚀 Example 05: Graph Creation Benchmark")
     print("=" * 70)
     print(f"Dataset: {args.dataset}")
     print(f"Batch size: {args.batch_size:,}")

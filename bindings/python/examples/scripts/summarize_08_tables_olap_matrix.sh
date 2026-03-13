@@ -28,16 +28,21 @@ if [[ -z "${DATASET_TAG// /}" ]]; then
 fi
 SUMMARY_MD="$OUTPUT_DIR/summary_08_tables_olap_${DATASET_TAG}.md"
 
-python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" << 'PY'
+python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" "$SCRIPT_DIR" << 'PY'
 import glob
 import json
 import os
+import re
 import statistics
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 
-input_dir, summary_md, dataset, label_prefix = sys.argv[1:]
+input_dir, summary_md, dataset, label_prefix, script_dir = sys.argv[1:]
+sys.path.insert(0, script_dir)
+
+from _summary_helpers import normalize_run_label, normalized_run_key
+
 dataset_filter = dataset.strip()
 dataset_label = dataset_filter or "all"
 
@@ -112,6 +117,38 @@ def percentile(values, p):
     d0 = values[f] * (c - k)
     d1 = values[c] * (k - f)
     return d0 + d1
+
+
+def shorten_hash(value, width=12):
+    text = str(value or "")
+    if len(text) <= width:
+        return text
+    return text[:width]
+
+
+def format_groups(group_map):
+    if not group_map:
+        return ""
+    parts = []
+    for key in sorted(group_map.keys()):
+        dbs = ", ".join(sorted(group_map[key]))
+        parts.append(f"{key}: {dbs}")
+    return "; ".join(parts)
+
+
+def split_majority_group(group_map):
+    if not group_map:
+        return "", "none"
+    ordered = sorted(
+        ((key, sorted(values)) for key, values in group_map.items()),
+        key=lambda item: (-len(item[1]), item[0]),
+    )
+    majority_key, majority_dbs = ordered[0]
+    differing = []
+    for _key, dbs in ordered[1:]:
+        differing.extend(dbs)
+    differing_value = ", ".join(sorted(differing)) if differing else "none"
+    return ", ".join(majority_dbs), differing_value
 
 
 def add_version(version_sets, key, value):
@@ -227,10 +264,21 @@ for run_dir in run_dirs:
             status = None
 
     if status is not None:
+        normalized_status_label = normalize_run_label(
+            status.get("run_label"),
+            mem_limit=status.get("mem_limit"),
+            run_dir=run_dir,
+        )
+        if normalized_status_label:
+            status["run_label"] = normalized_status_label
         status_rows.append(status)
-        run_label = status.get("run_label")
-        if run_label:
-            status_by_run[str(run_label)] = status
+        run_key = normalized_run_key(
+            status.get("run_label"),
+            mem_limit=status.get("mem_limit"),
+            run_dir=run_dir,
+        )
+        if run_key[0]:
+            status_by_run[run_key] = status
 
     result_paths = sorted(glob.glob(os.path.join(run_dir, "results_*.json")))
     if not result_paths:
@@ -250,6 +298,17 @@ for run_dir in run_dirs:
         if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
             continue
 
+        normalized_run_label = normalize_run_label(
+            run_label,
+            mem_limit=data.get("mem_limit"),
+            run_dir=run_dir,
+        )
+        run_key = normalized_run_key(
+            run_label,
+            mem_limit=data.get("mem_limit"),
+            run_dir=run_dir,
+        )
+
         collect_version_metadata(version_sets, data, run_dir)
 
         du_path = os.path.join(run_dir, "disk_usage_du.json")
@@ -264,17 +323,17 @@ for run_dir in run_dirs:
         row = {
             "dataset": data.get("dataset"),
             "db": data.get("db"),
-            "run_label": data.get("run_label"),
+            "run_label": normalized_run_label,
             "seed": to_int(data.get("seed")),
             "threads": to_int(data.get("threads"))
-            or to_int((status_by_run.get(str(data.get("run_label")) or "") or {}).get("threads"))
-            or parse_threads_from_run_label(data.get("run_label")),
+            or to_int((status_by_run.get(run_key) or {}).get("threads"))
+            or parse_threads_from_run_label(normalized_run_label),
             "batch_size": to_int(data.get("batch_size"))
-            or to_int((status_by_run.get(str(data.get("run_label")) or "") or {}).get("batch_size")),
+            or to_int((status_by_run.get(run_key) or {}).get("batch_size")),
             "query_runs": to_int(data.get("query_runs"))
-            or to_int((status_by_run.get(str(data.get("run_label")) or "") or {}).get("query_runs")),
+            or to_int((status_by_run.get(run_key) or {}).get("query_runs")),
             "query_order": data.get("query_order")
-            or (status_by_run.get(str(data.get("run_label")) or "") or {}).get("query_order"),
+            or (status_by_run.get(run_key) or {}).get("query_order"),
             "mem_limit": data.get("mem_limit"),
             "ingest_mode": data.get("ingest_mode") or "xml_batch",
             "load_time_s": to_float((data.get("load") or {}).get("total_s")),
@@ -381,6 +440,7 @@ for (
             "runs": len(rows),
             "run_labels": sorted({str(r.get("run_label") or "") for r in rows if r.get("run_label")}),
             "seeds": sorted({r.get("seed") for r in rows if r.get("seed") is not None}),
+            "batch_sizes": sorted({r.get("batch_size") for r in rows if r.get("batch_size") is not None}),
             "mem_limit": mem_limit,
             "threads": threads,
             "query_runs": query_runs,
@@ -405,7 +465,13 @@ du_col = "du_mean_mib" if has_multi_runs else "du_mib"
 by_query_db = defaultdict(list)
 for row in query_rows:
     threads_for_run = None
-    run_status = status_by_run.get(str(row.get("run_label")) or "") or {}
+    run_status = status_by_run.get(
+        normalized_run_key(
+            row.get("run_label"),
+            mem_limit=row.get("mem_limit"),
+            run_dir=None,
+        )
+    ) or {}
     threads_for_run = to_int(run_status.get("threads")) or parse_threads_from_run_label(
         row.get("run_label")
     )
@@ -445,6 +511,10 @@ for (dataset_name, query_name), rows in sorted(by_query_cross.items()):
             db_hashes[str(row["db"])].add(str(row["result_hash"]))
 
     all_hashes = sorted({h for hs in db_hashes.values() for h in hs})
+    hash_groups = defaultdict(list)
+    for db, hashes in sorted(db_hashes.items()):
+        label = " / ".join(shorten_hash(h) for h in sorted(hashes)) if hashes else "missing"
+        hash_groups[label].append(db)
     cross_hash_rows.append(
         {
             "dataset": dataset_name,
@@ -452,6 +522,7 @@ for (dataset_name, query_name), rows in sorted(by_query_cross.items()):
             "dbs": sorted(db_hashes.keys()),
             "hash_equal_across_dbs": len(all_hashes) <= 1,
             "all_hashes": all_hashes,
+            "hash_groups": dict(hash_groups),
         }
     )
 
@@ -491,9 +562,9 @@ for current_dataset in datasets:
     lines.append("### DB summary")
     lines.append("")
     lines.append(
-        f"| db | run_label | seed | runs | mem_limit | threads | query_runs | query_order | ingest_mode | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
+        f"| db | run_label | seed | runs | batch_size | mem_limit | threads | query_runs | query_order | ingest_mode | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
     )
-    lines.append("|---|---|---|---:|---|---:|---:|---|---|---:|---:|---:|---:|---:|")
+    lines.append("|---|---|---|---:|---:|---|---:|---:|---|---|---:|---:|---:|---:|---:|")
     for row in db_agg_rows:
         if str(row["dataset"] or "") != current_dataset:
             continue
@@ -501,6 +572,8 @@ for current_dataset in datasets:
         run_label_value = labels[0] if len(labels) == 1 else ", ".join(labels)
         seeds = row.get("seeds") or []
         seed_value = seeds[0] if len(seeds) == 1 else ", ".join(str(seed) for seed in seeds)
+        batch_sizes = row.get("batch_sizes") or []
+        batch_size_value = batch_sizes[0] if len(batch_sizes) == 1 else ", ".join(str(batch_size) for batch_size in batch_sizes)
         lines.append(
             "| "
             + " | ".join(
@@ -509,6 +582,7 @@ for current_dataset in datasets:
                     fmt(run_label_value),
                     fmt(seed_value),
                     fmt(row["runs"]),
+                    fmt(batch_size_value),
                     fmt(row["mem_limit"]),
                     fmt(row["threads"]),
                     fmt(row["query_runs"]),
@@ -552,8 +626,8 @@ for current_dataset in datasets:
 
     lines.append("### Cross-DB hash checks")
     lines.append("")
-    lines.append("| query | dbs | hash_equal_across_dbs | all_hashes |")
-    lines.append("|---|---|---|---|")
+    lines.append("| query | dbs | hash_equal_across_dbs | hash_groups | all_hashes |")
+    lines.append("|---|---|---|---|---|")
     for row in cross_hash_rows:
         if str(row["dataset"] or "") != current_dataset:
             continue
@@ -564,12 +638,40 @@ for current_dataset in datasets:
                     fmt(row["query"]),
                     fmt(", ".join(row["dbs"])),
                     fmt(row["hash_equal_across_dbs"]),
+                    fmt(format_groups(row["hash_groups"])),
                     fmt(", ".join(row["all_hashes"])),
                 ]
             )
             + " |"
         )
     lines.append("")
+
+    mismatch_rows = [
+        row
+        for row in cross_hash_rows
+        if str(row["dataset"] or "") == current_dataset
+        and not row["hash_equal_across_dbs"]
+    ]
+    if mismatch_rows:
+        lines.append("### Cross-DB mismatches only")
+        lines.append("")
+        lines.append("| query | majority_dbs | differing_dbs | hash_groups |")
+        lines.append("|---|---|---|---|")
+        for row in mismatch_rows:
+            majority_dbs, differing_dbs = split_majority_group(row["hash_groups"])
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        fmt(row["query"]),
+                        fmt(majority_dbs),
+                        fmt(differing_dbs),
+                        fmt(format_groups(row["hash_groups"])),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
 
 with open(summary_md, "w", encoding="utf-8") as f:
     f.write("\n".join(lines) + "\n")

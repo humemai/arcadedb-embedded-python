@@ -1931,7 +1931,7 @@ def collect_runtime_metadata(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Example 14: vector search-only benchmark"
+        description="Example 12: vector search-only benchmark"
     )
     parser.add_argument(
         "--backend",
@@ -1950,7 +1950,7 @@ def main() -> None:
     parser.add_argument(
         "--db-path",
         required=True,
-        help="Path to existing benchmark output directory from Example 13",
+        help="Path to existing benchmark output directory from Example 11",
     )
     parser.add_argument(
         "--overquery-factors",

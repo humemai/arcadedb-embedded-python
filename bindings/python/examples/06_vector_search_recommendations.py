@@ -425,7 +425,9 @@ def vector_based_recommendations(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Vector Search Movie Recommendations")
+    parser = argparse.ArgumentParser(
+        description="Example 06: Vector Search Movie Recommendations"
+    )
 
     parser.add_argument(
         "--db-path",

@@ -48,7 +48,9 @@ import arcadedb_embedded as arcadedb
 import numpy as np
 
 # Parse command line arguments
-parser = argparse.ArgumentParser(description="Vector Search Example")
+parser = argparse.ArgumentParser(
+    description="Example 03: Vector Search - Semantic Similarity"
+)
 args = parser.parse_args()
 
 print("=" * 70)

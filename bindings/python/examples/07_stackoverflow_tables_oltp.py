@@ -577,10 +577,8 @@ def create_schema_duckdb(conn):
 
 
 def create_duckdb_id_indexes(conn):
-    for table in TABLE_DEFS:
-        conn.execute(
-            f'CREATE INDEX IF NOT EXISTS idx_{table["name"].lower()}_id ON "{table["name"]}"("Id")'
-        )
+    print("Skipping manual DuckDB secondary indexes for this benchmark.")
+    return 0.0
 
 
 def create_schema_postgresql(conn):
@@ -1433,9 +1431,7 @@ def run_oltp_duckdb(
         f"Ingest end   (duckdb, UTC): {ingest_ended_at} "
         f"(elapsed={preload_time:.2f}s)"
     )
-    index_start = time.time()
-    create_duckdb_id_indexes(conn)
-    index_time = time.time() - index_start
+    index_time = create_duckdb_id_indexes(conn)
 
     load_counts_start = time.time()
     preload_counts = count_table_rows_sql(conn)
@@ -2155,7 +2151,9 @@ def run_in_docker(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Stack Overflow Tables (OLTP)")
+    parser = argparse.ArgumentParser(
+        description="Example 07: Stack Overflow Tables (OLTP)"
+    )
     parser.add_argument(
         "--dataset",
         choices=sorted(EXPECTED_DATASETS),

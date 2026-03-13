@@ -207,7 +207,9 @@ def run_single_iteration(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="ArcadeDB lifecycle timing benchmark")
+    parser = argparse.ArgumentParser(
+        description="Example 14: Lifecycle Timing Benchmark"
+    )
     parser.add_argument(
         "--db-path",
         default="",

@@ -28,14 +28,18 @@ if [[ -z "${DATASET_TAG// /}" ]]; then
 fi
 SUMMARY_MD="$OUTPUT_DIR/summary_12_vector_search_${DATASET_TAG}.md"
 
-python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" << 'PY'
+python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" "$SCRIPT_DIR" << 'PY'
 import glob
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-input_dir, summary_md, dataset, label_prefix = sys.argv[1:]
+input_dir, summary_md, dataset, label_prefix, script_dir = sys.argv[1:]
+sys.path.insert(0, script_dir)
+
+from _summary_helpers import normalize_run_label
+
 dataset_filter = dataset.strip()
 dataset_label = dataset_filter or "all"
 
@@ -176,6 +180,12 @@ for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results
     if dataset_filter and dataset_name != dataset_filter:
         continue
 
+    normalized_run_label = normalize_run_label(
+        run_label,
+        mem_limit=env_obj.get("mem_limit") or search_obj.get("mem_limit") or data.get("mem_limit") or (status_obj or {}).get("mem_limit"),
+        run_dir=run_dir,
+    )
+
     collect_version_metadata(version_sets, data, run_dir)
 
     status_path = os.path.join(run_dir, "search_run_status.json")
@@ -214,7 +224,7 @@ for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results
             {
                 "dataset": dataset_name,
                 "backend": db_obj.get("backend"),
-                "run_label": run_label,
+                "run_label": normalized_run_label,
                 "seed": to_int(search_obj.get("seed")),
                 "mem_limit": env_obj.get("mem_limit") or search_obj.get("mem_limit") or data.get("mem_limit") or (status_obj or {}).get("mem_limit"),
                 "query_runs": to_int(search_obj.get("query_runs")),
@@ -252,7 +262,11 @@ rows.sort(
 
 status_scoped = []
 for status in status_rows:
-    rl = status.get("search_run_label") or status.get("run_label")
+    rl = normalize_run_label(
+        status.get("search_run_label") or status.get("run_label"),
+        mem_limit=status.get("mem_limit"),
+        run_dir=None,
+    )
     ds = status.get("dataset")
     if dataset_filter and ds != dataset_filter:
         continue

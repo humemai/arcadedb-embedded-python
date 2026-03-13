@@ -896,7 +896,7 @@ def check_dataset_exists(data_dir):
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(
-    description="Import MovieLens dataset into ArcadeDB",
+    description="Example 04: Import MovieLens dataset into ArcadeDB",
     formatter_class=argparse.RawDescriptionHelpFormatter,
     epilog="""
 Examples:

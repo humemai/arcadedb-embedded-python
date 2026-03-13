@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quick benchmark: transactional graph ingest vs SQL IMPORT DATABASE.
+Example 16: Import Database vs Transactional Graph Ingest.
 
 This script generates synthetic graph CSV datasets (vertices + edges) and then
 loads them into separate ArcadeDB databases using:
@@ -571,7 +571,9 @@ def validate_parity_or_fail(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Graph ingest benchmark")
+    parser = argparse.ArgumentParser(
+        description="Example 16: Import Database vs Transactional Graph Ingest"
+    )
     parser.add_argument(
         "--vertices", type=int, default=100_000, help="Number of vertices"
     )

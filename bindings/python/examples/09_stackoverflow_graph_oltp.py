@@ -27,7 +27,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 try:
     from lxml import etree
@@ -168,6 +168,14 @@ def get_graphqlite_module():
     except ImportError:
         return None
     return graphqlite
+
+
+def get_duckdb_module():
+    try:
+        import duckdb
+    except ImportError:
+        return None
+    return duckdb
 
 
 def parse_int(value: Optional[str]) -> Optional[int]:
@@ -1450,10 +1458,48 @@ def create_edges_arcadedb_linked_to(
     return time.time() - start
 
 
-def copy_csv_table(conn, table_name: str, csv_path: Path, row_count: int) -> float:
+EDGE_COPY_COLUMNS = {
+    "ASKED": ["from_id", "to_id", "CreationDate"],
+    "ANSWERED": ["from_id", "to_id", "CreationDate"],
+    "HAS_ANSWER": ["from_id", "to_id"],
+    "ACCEPTED_ANSWER": ["from_id", "to_id"],
+    "TAGGED_WITH": ["from_id", "to_id"],
+    "COMMENTED_ON": ["from_id", "to_id", "CreationDate", "Score"],
+    "COMMENTED_ON_ANSWER": ["from_id", "to_id", "CreationDate", "Score"],
+    "EARNED": ["from_id", "to_id", "Date", "Class"],
+    "LINKED_TO": ["from_id", "to_id", "LinkTypeId", "CreationDate"],
+}
+
+
+def copy_csv_table(
+    conn,
+    table_name: str,
+    csv_path: Path,
+    row_count: int,
+    columns: Optional[List[str]] = None,
+) -> float:
     print(f"  COPY {table_name}: {row_count:,} rows")
     start = time.time()
     conn.execute(f"COPY {table_name} FROM '{csv_path.as_posix()}'")
+    elapsed = time.time() - start
+    print(f"  COPY {table_name} done in {elapsed:.2f}s")
+    return elapsed
+
+
+def copy_csv_table_duckdb(
+    conn,
+    table_name: str,
+    csv_path: Path,
+    row_count: int,
+    columns: Optional[List[str]] = None,
+) -> float:
+    print(f"  COPY {table_name}: {row_count:,} rows")
+    start = time.time()
+    column_sql = f" ({', '.join(columns)})" if columns else ""
+    conn.execute(
+        f"COPY {table_name}{column_sql} FROM '{csv_path.as_posix()}' "
+        "(FORMAT CSV, HEADER TRUE)"
+    )
     elapsed = time.time() - start
     print(f"  COPY {table_name} done in {elapsed:.2f}s")
     return elapsed
@@ -1464,6 +1510,10 @@ def load_graph_ladybug(
     db_path: Path,
     data_dir: Path,
     batch_size: int,
+    copy_fn: Callable[
+        [Any, str, Path, int, Optional[List[str]]], float
+    ] = copy_csv_table,
+    csv_dir_name: str = "ladybug_csv_bulk",
 ) -> Tuple[dict, dict]:
     # Default to native bulk ingest path for Ladybug: staged CSV + COPY.
     stats = {"nodes": {}, "edges": {}}
@@ -1490,7 +1540,7 @@ def load_graph_ladybug(
     badge_ids: set[int] = set()
     comment_ids: set[int] = set()
 
-    csv_dir = db_path / "ladybug_csv_bulk"
+    csv_dir = db_path / csv_dir_name
     if csv_dir.exists():
         shutil.rmtree(csv_dir)
     csv_dir.mkdir(parents=True, exist_ok=True)
@@ -1900,25 +1950,25 @@ def load_graph_ladybug(
     for writer in writers.values():
         writer.close()
 
-    stats["nodes"]["Tag"] = copy_csv_table(
+    stats["nodes"]["Tag"] = copy_fn(
         conn, "Tag", writers["Tag"].path, writers["Tag"].row_count
     )
-    stats["nodes"]["User"] = copy_csv_table(
+    stats["nodes"]["User"] = copy_fn(
         conn, "User", writers["User"].path, writers["User"].row_count
     )
-    stats["nodes"]["Question"] = copy_csv_table(
+    stats["nodes"]["Question"] = copy_fn(
         conn,
         "Question",
         writers["Question"].path,
         writers["Question"].row_count,
     )
-    stats["nodes"]["Answer"] = copy_csv_table(
+    stats["nodes"]["Answer"] = copy_fn(
         conn, "Answer", writers["Answer"].path, writers["Answer"].row_count
     )
-    stats["nodes"]["Badge"] = copy_csv_table(
+    stats["nodes"]["Badge"] = copy_fn(
         conn, "Badge", writers["Badge"].path, writers["Badge"].row_count
     )
-    stats["nodes"]["Comment"] = copy_csv_table(
+    stats["nodes"]["Comment"] = copy_fn(
         conn,
         "Comment",
         writers["Comment"].path,
@@ -1926,53 +1976,68 @@ def load_graph_ladybug(
     )
     stats["nodes"]["Post"] = stats["nodes"]["Question"] + stats["nodes"]["Answer"]
 
-    stats["edges"]["ASKED"] = copy_csv_table(
-        conn, "ASKED", writers["ASKED"].path, writers["ASKED"].row_count
+    stats["edges"]["ASKED"] = copy_fn(
+        conn,
+        "ASKED",
+        writers["ASKED"].path,
+        writers["ASKED"].row_count,
+        EDGE_COPY_COLUMNS["ASKED"],
     )
-    stats["edges"]["ANSWERED"] = copy_csv_table(
+    stats["edges"]["ANSWERED"] = copy_fn(
         conn,
         "ANSWERED",
         writers["ANSWERED"].path,
         writers["ANSWERED"].row_count,
+        EDGE_COPY_COLUMNS["ANSWERED"],
     )
-    stats["edges"]["HAS_ANSWER"] = copy_csv_table(
+    stats["edges"]["HAS_ANSWER"] = copy_fn(
         conn,
         "HAS_ANSWER",
         writers["HAS_ANSWER"].path,
         writers["HAS_ANSWER"].row_count,
+        EDGE_COPY_COLUMNS["HAS_ANSWER"],
     )
-    stats["edges"]["ACCEPTED_ANSWER"] = copy_csv_table(
+    stats["edges"]["ACCEPTED_ANSWER"] = copy_fn(
         conn,
         "ACCEPTED_ANSWER",
         writers["ACCEPTED_ANSWER"].path,
         writers["ACCEPTED_ANSWER"].row_count,
+        EDGE_COPY_COLUMNS["ACCEPTED_ANSWER"],
     )
-    stats["edges"]["TAGGED_WITH"] = copy_csv_table(
+    stats["edges"]["TAGGED_WITH"] = copy_fn(
         conn,
         "TAGGED_WITH",
         writers["TAGGED_WITH"].path,
         writers["TAGGED_WITH"].row_count,
+        EDGE_COPY_COLUMNS["TAGGED_WITH"],
     )
-    stats["edges"]["COMMENTED_ON"] = copy_csv_table(
+    stats["edges"]["COMMENTED_ON"] = copy_fn(
         conn,
         "COMMENTED_ON",
         writers["COMMENTED_ON"].path,
         writers["COMMENTED_ON"].row_count,
+        EDGE_COPY_COLUMNS["COMMENTED_ON"],
     )
-    stats["edges"]["COMMENTED_ON_ANSWER"] = copy_csv_table(
+    stats["edges"]["COMMENTED_ON_ANSWER"] = copy_fn(
         conn,
         "COMMENTED_ON_ANSWER",
         writers["COMMENTED_ON_ANSWER"].path,
         writers["COMMENTED_ON_ANSWER"].row_count,
+        EDGE_COPY_COLUMNS["COMMENTED_ON_ANSWER"],
     )
-    stats["edges"]["EARNED"] = copy_csv_table(
-        conn, "EARNED", writers["EARNED"].path, writers["EARNED"].row_count
+    stats["edges"]["EARNED"] = copy_fn(
+        conn,
+        "EARNED",
+        writers["EARNED"].path,
+        writers["EARNED"].row_count,
+        EDGE_COPY_COLUMNS["EARNED"],
     )
-    stats["edges"]["LINKED_TO"] = copy_csv_table(
+    stats["edges"]["LINKED_TO"] = copy_fn(
         conn,
         "LINKED_TO",
         writers["LINKED_TO"].path,
         writers["LINKED_TO"].row_count,
+        EDGE_COPY_COLUMNS["LINKED_TO"],
     )
 
     return stats, {"ids": ids, "max_ids": max_ids}
@@ -4849,6 +4914,34 @@ def _connect_sqlite(
     return conn, pragma_config
 
 
+def _connect_duckdb(db_file: Path) -> Tuple[Any, Dict[str, Any]]:
+    duckdb_module = get_duckdb_module()
+    if duckdb_module is None:
+        raise ImportError("duckdb is required for the duckdb backend")
+    conn = duckdb_module.connect(str(db_file))
+    return conn, {
+        "duckdb_version": getattr(duckdb_module, "__version__", None),
+        "duckdb_runtime_version": getattr(duckdb_module, "__version__", None),
+    }
+
+
+def _load_stackoverflow_duckdb(
+    conn,
+    db_path: Path,
+    data_dir: Path,
+    batch_size: int,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    load_stats, load_info = load_graph_ladybug(
+        conn,
+        db_path,
+        data_dir,
+        batch_size,
+        copy_fn=copy_csv_table_duckdb,
+        csv_dir_name="duckdb_csv_bulk",
+    )
+    return load_info, load_stats
+
+
 def _create_sqlite_schema(conn: sqlite3.Connection) -> float:
     statements = [
         "CREATE TABLE IF NOT EXISTS User(Id INTEGER PRIMARY KEY, DisplayName TEXT, Reputation INTEGER, CreationDate INTEGER, Views INTEGER, UpVotes INTEGER, DownVotes INTEGER)",
@@ -4893,6 +4986,31 @@ def _create_sqlite_schema(conn: sqlite3.Connection) -> float:
             index_time_s += time.perf_counter() - started
     conn.commit()
     return index_time_s
+
+
+def _create_duckdb_schema(conn) -> float:
+    statements = [
+        "CREATE TABLE IF NOT EXISTS User(Id BIGINT PRIMARY KEY, DisplayName TEXT, Reputation BIGINT, CreationDate BIGINT, Views BIGINT, UpVotes BIGINT, DownVotes BIGINT)",
+        "CREATE TABLE IF NOT EXISTS Question(Id BIGINT PRIMARY KEY, Title TEXT, Body TEXT, Score BIGINT, ViewCount BIGINT, CreationDate BIGINT, AnswerCount BIGINT, CommentCount BIGINT, FavoriteCount BIGINT)",
+        "CREATE TABLE IF NOT EXISTS Answer(Id BIGINT PRIMARY KEY, Body TEXT, Score BIGINT, CreationDate BIGINT, CommentCount BIGINT)",
+        "CREATE TABLE IF NOT EXISTS Tag(Id BIGINT PRIMARY KEY, TagName TEXT, Count BIGINT)",
+        "CREATE TABLE IF NOT EXISTS Badge(Id BIGINT PRIMARY KEY, Name TEXT, Date BIGINT, Class BIGINT)",
+        "CREATE TABLE IF NOT EXISTS Comment(Id BIGINT PRIMARY KEY, Text TEXT, Score BIGINT, CreationDate BIGINT)",
+        "CREATE TABLE IF NOT EXISTS ASKED(from_id BIGINT, to_id BIGINT, CreationDate BIGINT)",
+        "CREATE TABLE IF NOT EXISTS ANSWERED(from_id BIGINT, to_id BIGINT, CreationDate BIGINT)",
+        "CREATE TABLE IF NOT EXISTS HAS_ANSWER(from_id BIGINT, to_id BIGINT)",
+        "CREATE TABLE IF NOT EXISTS ACCEPTED_ANSWER(from_id BIGINT, to_id BIGINT)",
+        "CREATE TABLE IF NOT EXISTS TAGGED_WITH(from_id BIGINT, to_id BIGINT)",
+        "CREATE TABLE IF NOT EXISTS COMMENTED_ON(from_id BIGINT, to_id BIGINT, CreationDate BIGINT, Score BIGINT)",
+        "CREATE TABLE IF NOT EXISTS COMMENTED_ON_ANSWER(from_id BIGINT, to_id BIGINT, CreationDate BIGINT, Score BIGINT)",
+        "CREATE TABLE IF NOT EXISTS EARNED(from_id BIGINT, to_id BIGINT, Date BIGINT, Class BIGINT)",
+        "CREATE TABLE IF NOT EXISTS LINKED_TO(from_id BIGINT, to_id BIGINT, LinkTypeId BIGINT, CreationDate BIGINT)",
+    ]
+    print("Skipping manual DuckDB secondary indexes for this benchmark.")
+    for statement in statements:
+        conn.execute(statement)
+    conn.commit()
+    return 0.0
 
 
 def _load_stackoverflow_sqlite(
@@ -6245,35 +6363,35 @@ def run_graph_oltp_python_memory(
     }
 
 
-def run_graph_oltp_sqlite(
+def _run_graph_oltp_relational(
     db_path: Path,
     data_dir: Path,
     batch_size: int,
     transactions: int,
     threads: int,
     seed: int,
-    sqlite_profile: str = "perf",
+    db_file_name: str,
+    connect_fn: Callable[[Path], Tuple[Any, Dict[str, Any]]],
+    create_schema_fn: Callable[[Any], float],
+    load_fn: Callable[[Any], Tuple[Dict[str, Any], Dict[str, Any]]],
+    build_summary_extras: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
 ) -> dict:
     if db_path.exists():
         shutil.rmtree(db_path)
     db_path.mkdir(parents=True, exist_ok=True)
 
-    db_file = db_path / "sqlite.sqlite"
-    conn, sqlite_pragmas = _connect_sqlite(db_file, sqlite_profile)
+    db_file = db_path / db_file_name
+    conn, backend_meta = connect_fn(db_file)
 
     print("Creating schema...")
     schema_start = time.time()
-    index_time_s = _create_sqlite_schema(conn)
+    index_time_s = create_schema_fn(conn)
     schema_total_time = time.time() - schema_start
     schema_time = max(0.0, schema_total_time - index_time_s)
 
     print("Loading graph...")
     load_start = time.time()
-    load_info, load_stats = _load_stackoverflow_sqlite(
-        conn,
-        data_dir,
-        batch_size=max(1, batch_size),
-    )
+    load_info, load_stats = load_fn(conn)
     load_stats["indexes"] = {"id_unique": index_time_s}
     load_time = time.time() - load_start
 
@@ -6319,7 +6437,7 @@ def run_graph_oltp_sqlite(
         nonlocal next_answer_id
         nonlocal next_badge_id
         nonlocal next_comment_id
-        local_conn, _ = _connect_sqlite(db_file, sqlite_profile)
+        local_conn, _ = connect_fn(db_file)
 
         def safe_execute(statement: str, params: Tuple[Any, ...] = ()) -> None:
             try:
@@ -6890,6 +7008,8 @@ def run_graph_oltp_sqlite(
     total_ops = sum(op_counts.values())
     throughput = total_ops / total_time if total_time > 0 else 0
 
+    summary_extras = build_summary_extras(backend_meta) if build_summary_extras else {}
+
     return {
         "total_ops": total_ops,
         "total_time_s": total_time,
@@ -6912,10 +7032,71 @@ def run_graph_oltp_sqlite(
         "edge_count": edge_count,
         "node_counts_by_type": node_counts_by_type,
         "edge_counts_by_type": edge_counts_by_type,
-        "sqlite_profile": sqlite_profile,
-        "sqlite_pragmas": sqlite_pragmas,
         "benchmark_scope_note": BENCHMARK_SCOPE_NOTE,
+        **summary_extras,
     }
+
+
+def run_graph_oltp_sqlite(
+    db_path: Path,
+    data_dir: Path,
+    batch_size: int,
+    transactions: int,
+    threads: int,
+    seed: int,
+    sqlite_profile: str = "perf",
+) -> dict:
+    return _run_graph_oltp_relational(
+        db_path=db_path,
+        data_dir=data_dir,
+        batch_size=batch_size,
+        transactions=transactions,
+        threads=threads,
+        seed=seed,
+        db_file_name="sqlite.sqlite",
+        connect_fn=lambda db_file: _connect_sqlite(db_file, sqlite_profile),
+        create_schema_fn=_create_sqlite_schema,
+        load_fn=lambda conn: _load_stackoverflow_sqlite(
+            conn,
+            data_dir,
+            batch_size=max(1, batch_size),
+        ),
+        build_summary_extras=lambda meta: {
+            "sqlite_profile": sqlite_profile,
+            "sqlite_pragmas": meta,
+        },
+    )
+
+
+def run_graph_oltp_duckdb(
+    db_path: Path,
+    data_dir: Path,
+    batch_size: int,
+    transactions: int,
+    threads: int,
+    seed: int,
+) -> dict:
+    return _run_graph_oltp_relational(
+        db_path=db_path,
+        data_dir=data_dir,
+        batch_size=batch_size,
+        transactions=transactions,
+        threads=threads,
+        seed=seed,
+        db_file_name="duckdb.duckdb",
+        connect_fn=_connect_duckdb,
+        create_schema_fn=_create_duckdb_schema,
+        load_fn=lambda conn: _load_stackoverflow_duckdb(
+            conn,
+            db_path,
+            data_dir,
+            batch_size=max(1, batch_size),
+        ),
+        build_summary_extras=lambda meta: {
+            "duckdb_version": meta.get("duckdb_version"),
+            "duckdb_runtime_version": meta.get("duckdb_runtime_version"),
+        },
+    )
 
 
 def run_graph_oltp_sqlite_layer(
@@ -7609,6 +7790,7 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
     arcadedb_module, _ = get_arcadedb_module()
     ladybug_module = get_ladybug_module()
     graphqlite_module = get_graphqlite_module()
+    duckdb_module = get_duckdb_module()
     payload = {
         "dataset": args.dataset,
         "db": args.db,
@@ -7632,9 +7814,25 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
             if graphqlite_module is not None
             else None
         ),
+        "duckdb_version": summary.get(
+            "duckdb_version",
+            (
+                getattr(duckdb_module, "__version__", None)
+                if duckdb_module is not None
+                else None
+            ),
+        ),
         "sqlite_profile": summary.get("sqlite_profile"),
         "sqlite_pragmas": summary.get("sqlite_pragmas"),
         "sqlite_version": sqlite3.sqlite_version,
+        "duckdb_runtime_version": summary.get(
+            "duckdb_runtime_version",
+            (
+                getattr(duckdb_module, "__version__", None)
+                if duckdb_module is not None
+                else None
+            ),
+        ),
         "docker_image": args.docker_image,
         "seed": args.seed,
         "run_label": args.run_label,
@@ -7775,6 +7973,8 @@ def run_in_docker(args) -> bool:
         packages.append("real_ladybug")
     if args.db == "graphqlite":
         packages.append("graphqlite")
+    if args.db == "duckdb":
+        packages.append("duckdb")
 
     packages_str = " ".join(packages)
 
@@ -7829,7 +8029,7 @@ def run_in_docker(args) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Stack Overflow Graph (OLTP)",
+        description="Example 09: Stack Overflow Graph (OLTP)",
     )
     parser.add_argument(
         "--dataset",
@@ -7845,6 +8045,7 @@ def main():
             "ladybug",
             "ladybugdb",
             "graphqlite",
+            "duckdb",
             "sqlite",
             "python_memory",
         ],
@@ -8006,6 +8207,15 @@ def main():
             seed=args.seed,
             sqlite_profile=args.sqlite_profile,
         )
+    elif args.db == "duckdb":
+        summary = run_graph_oltp_duckdb(
+            db_path=db_path,
+            data_dir=data_dir,
+            batch_size=args.batch_size,
+            transactions=args.transactions,
+            threads=args.threads,
+            seed=args.seed,
+        )
     elif args.db == "python_memory":
         summary = run_graph_oltp_python_memory(
             db_path=db_path,
@@ -8017,7 +8227,7 @@ def main():
         )
     else:
         raise NotImplementedError(
-            "Only arcadedb, ladybugdb, graphqlite, sqlite, and python_memory are supported"
+            "Only arcadedb, ladybugdb, graphqlite, duckdb, sqlite, and python_memory are supported"
         )
 
     print("\nResults")

@@ -15,9 +15,9 @@ source "$HELPERS_SH"
 # Large         16GB    16
 # X-Large       32GB    32
 
-DATASET="stackoverflow-tiny"
-MEM_LIMIT="4g"
-THREADS=1
+DATASET="stackoverflow-large"
+MEM_LIMIT="8g"
+THREADS=4
 RUNS=1
 SEED_START=0
 SERVER_FRACTION="0.8"
@@ -50,13 +50,7 @@ MILVUS_COMPOSE_VERSION="v2.6.10"
 MILVUS_COLLECTION="vectordata"
 
 # BACKENDS_RAW="arcadedb_sql,faiss,lancedb,pgvector,qdrant,milvus,bruteforce"
-# BACKENDS_RAW="arcadedb_sql"
-# BACKENDS_RAW="lancedb"
-# BACKENDS_RAW="pgvector"
-# BACKENDS_RAW="faiss"
-# BACKENDS_RAW="qdrant"
-# BACKENDS_RAW="bruteforce"
-BACKENDS_RAW="milvus"
+BACKENDS_RAW="lancedb"
 
 BUILD_LABEL_PREFIX="sweep11"
 SEARCH_LABEL_PREFIX="sweep12"
@@ -121,7 +115,7 @@ fi
 
 cd "$EXAMPLES_DIR"
 
-mem_tag="$(printf '%s' "$MEM_LIMIT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
+mem_tag="$(matrix_normalize_mem_tag "$MEM_LIMIT")"
 
 echo "Running matrix: runs=$RUNS backends=${BACKENDS[*]} dataset=$DATASET seed_start=$SEED_START"
 echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT k=$K query-limit=$QUERY_LIMIT query-runs=$QUERY_RUNS query-order=$QUERY_ORDER overquery=$OVERQUERY_FACTORS"
@@ -131,13 +125,15 @@ echo "Search label prefix: $SEARCH_LABEL_PREFIX"
 execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
     for backend in "${BACKENDS[@]}"; do
+        normalized_build_run_label=""
         if [[ "$backend" == "bruteforce" ]]; then
             seed=$((SEED_START + execution_idx))
             build_run_label=$(printf "%s_r%02d_%s_s%05d" "$BUILD_LABEL_PREFIX" "$run" "$backend" "$seed")
-            db_path="$DB_ROOT/backend=${backend}_dataset=${DATASET}_mem=${mem_tag}_run=${build_run_label}"
+            normalized_build_run_label="$(matrix_build_summary_run_label "$build_run_label" "$MEM_LIMIT")"
+            db_path="$DB_ROOT/backend=${backend}_dataset=${DATASET}_mem=${mem_tag}_run=${normalized_build_run_label}"
             mkdir -p "$db_path"
         else
-            mapfile -t build_dirs < <(find "$DB_ROOT" -mindepth 1 -maxdepth 1 -type d -name "*backend=${backend}_dataset=${DATASET}_*run=${BUILD_LABEL_PREFIX}_r$(printf '%02d' "$run")_${backend}_s*" | sort)
+            mapfile -t build_dirs < <(find "$DB_ROOT" -mindepth 1 -maxdepth 1 -type d -name "*backend=${backend}_dataset=${DATASET}_*run=${BUILD_LABEL_PREFIX}_r$(printf '%02d' "$run")_${backend}_*s*" | sort)
             if [[ "${#build_dirs[@]}" -eq 0 ]]; then
                 echo "Build DB directory not found for backend=$backend run=$run (prefix=${BUILD_LABEL_PREFIX}). Skipping..." >&2
                 execution_idx=$((execution_idx + 1))
@@ -155,8 +151,19 @@ for ((run = 1; run <= RUNS; run++)); do
             else
                 seed=$((SEED_START + execution_idx))
             fi
+
+            normalized_build_run_label="$(matrix_build_summary_run_label "$build_run_label" "$MEM_LIMIT")"
+            final_db_path="${db_path%run=${build_run_label}}run=${normalized_build_run_label}"
+            if [[ -d "$db_path" ]]; then
+                matrix_move_dir_if_needed "$db_path" "$final_db_path"
+                db_path="$final_db_path"
+            elif [[ -d "$final_db_path" ]]; then
+                db_path="$final_db_path"
+            fi
         fi
-        search_run_label=$(printf "%s_r%02d_%s_s%05d" "$SEARCH_LABEL_PREFIX" "$run" "$backend" "$seed")
+
+        internal_search_run_label=$(printf "%s_r%02d_%s_s%05d" "$SEARCH_LABEL_PREFIX" "$run" "$backend" "$seed")
+        search_run_label="$(matrix_build_summary_run_label "$internal_search_run_label" "$MEM_LIMIT")"
         run_docker_image="$DOCKER_IMAGE"
         if [[ "$backend" == "pgvector" ]]; then
             run_docker_image="$PGVECTOR_IMAGE"
@@ -239,11 +246,15 @@ for ((run = 1; run <= RUNS; run++)); do
       "query_limit": $QUERY_LIMIT,
       "query_runs": $QUERY_RUNS,
       "seed": $seed,
-      "build_run_label": "$build_run_label",
+    "build_run_label": "$normalized_build_run_label",
       "search_run_label": "$search_run_label",
+            "internal_search_run_label": "$internal_search_run_label",
       "collected_at_utc": "$collected_at"
 }
 EOF
+
+        matrix_rename_result_artifacts "$db_path" "$internal_search_run_label" "$search_run_label"
+        matrix_rewrite_json_run_label "$db_path" "$internal_search_run_label" "$search_run_label"
 
         wheel_artifacts_for_dir="false"
         if [[ "$backend" == "arcadedb_sql" ]]; then

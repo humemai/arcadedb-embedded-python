@@ -998,17 +998,8 @@ def create_indexes_sqlite(conn: sqlite3.Connection) -> float:
 
 
 def create_indexes_duckdb(conn) -> float:
-    start = time.time()
-    for table, props, unique in INDEX_DEFS:
-        suffix = "_".join(props)
-        index_name = f"idx_{table}_{suffix}"
-        unique_sql = "UNIQUE " if unique else ""
-        ddl = (
-            f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} "
-            f"ON {table} ({', '.join(props)})"
-        )
-        conn.execute(ddl)
-    return time.time() - start
+    print("Skipping manual DuckDB secondary indexes for this benchmark.", flush=True)
+    return 0.0
 
 
 def create_indexes_postgresql(conn) -> float:
@@ -1561,10 +1552,7 @@ def run_olap_arcadedb(
         },
         "index": {
             "total_s": index_elapsed,
-            "indexes": [
-                {"table": t, "properties": props, "unique": unique}
-                for t, props, unique in INDEX_DEFS
-            ],
+            "indexes": [],
         },
         "queries": {
             "total_s": query_elapsed,
@@ -2002,7 +1990,7 @@ def run_olap_postgresql(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Stack Overflow Tables (OLAP)",
+        description="Example 08: Stack Overflow Tables (OLAP)",
     )
     parser.add_argument(
         "--dataset",

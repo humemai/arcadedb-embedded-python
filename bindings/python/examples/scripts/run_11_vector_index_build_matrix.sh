@@ -15,10 +15,10 @@ source "$HELPERS_SH"
 # Large         10,000  32GB    16
 # X-Large       25,000  64GB    32
 
-DATASET="stackoverflow-tiny"
-BATCH_SIZE=1000
-MEM_LIMIT="2g"
-THREADS=1
+DATASET="stackoverflow-large"
+BATCH_SIZE=10000
+MEM_LIMIT="32g"
+THREADS=4
 RUNS=1
 SEED_START=0
 SERVER_FRACTION="0.8"
@@ -49,7 +49,8 @@ MILVUS_PORT=19530
 MILVUS_COMPOSE_VERSION="v2.6.10"
 MILVUS_COLLECTION="vectordata"
 
-BACKENDS_RAW="arcadedb_sql,faiss,lancedb,pgvector,qdrant,milvus"
+# BACKENDS_RAW="arcadedb_sql,lancedb,faiss,pgvector,qdrant,milvus"
+BACKENDS_RAW="lancedb"
 LABEL_PREFIX="sweep11"
 
 if [[ $# -gt 0 ]]; then
@@ -109,7 +110,8 @@ for ((run = 1; run <= RUNS; run++)); do
         fi
 
         seed=$((SEED_START + execution_idx))
-        run_label=$(printf "%s_r%02d_%s_s%05d" "$LABEL_PREFIX" "$run" "$backend" "$seed")
+        internal_run_label=$(printf "%s_r%02d_%s_s%05d" "$LABEL_PREFIX" "$run" "$backend" "$seed")
+        run_label="$(matrix_build_summary_run_label "$internal_run_label" "$MEM_LIMIT")"
         run_docker_image="$DOCKER_IMAGE"
         if [[ "$backend" == "pgvector" ]]; then
             run_docker_image="$PGVECTOR_IMAGE"
@@ -198,9 +200,13 @@ for ((run = 1; run <= RUNS; run++)); do
   "batch_size": $BATCH_SIZE,
   "seed": $seed,
   "run_label": "$run_label",
+    "internal_run_label": "$internal_run_label",
   "collected_at_utc": "$collected_at"
 }
 EOF
+
+            matrix_rename_result_artifacts "$target_dir" "$internal_run_label" "$run_label"
+            matrix_rewrite_json_run_label "$target_dir" "$internal_run_label" "$run_label"
 
             wheel_artifacts_for_dir="false"
             if [[ "$backend" == "arcadedb_sql" ]]; then

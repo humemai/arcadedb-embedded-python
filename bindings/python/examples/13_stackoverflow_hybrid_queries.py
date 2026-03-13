@@ -1858,7 +1858,7 @@ def write_results(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Standalone Stack Overflow hybrid pipeline"
+        description="Example 13: Stack Overflow Hybrid Queries (Standalone)"
     )
     parser.add_argument(
         "--dataset", choices=sorted(EXPECTED_DATASETS), default="stackoverflow-tiny"

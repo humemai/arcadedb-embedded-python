@@ -16,20 +16,21 @@ source "$HELPERS_SH"
 # Large         10,000      8GB     16
 # X-Large       25,000      32GB    32
 
-DATASET="stackoverflow-tiny"
-BATCH_SIZE=1000
-MEM_LIMIT="1g"
-THREADS=1
+DATASET="stackoverflow-large"
+BATCH_SIZE=10000
+MEM_LIMIT="32g"
+THREADS=8
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
 SQLITE_PROFILE="olap"
 DOCKER_IMAGE="python:3.12-slim"
-QUERY_RUNS=10
+QUERY_RUNS=100
 QUERY_ORDER="shuffled"
 ONLY_QUERY=""
 MANUAL_CHECKS=false
-DBS_RAW="arcadedb_cypher,ladybug,sqlite,python_memory"
+# DBS_RAW="duckdb,sqlite,ladybug,python_memory,arcadedb_cypher"
+DBS_RAW="arcadedb_cypher"
 LABEL_PREFIX="sweep10"
 
 if [[ $# -gt 0 ]]; then
@@ -67,7 +68,7 @@ echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED
 echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER sqlite-profile=$SQLITE_PROFILE"
 
 dataset_slug="${DATASET//-/_}"
-mem_tag="mem$(printf '%s' "$MEM_LIMIT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
+mem_tag="$(matrix_normalize_mem_tag "$MEM_LIMIT")"
 
 execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
@@ -79,18 +80,19 @@ for ((run = 1; run <= RUNS; run++)); do
 
         db_engine="$db"
         case "$db" in
-            arcadedb_sql | arcadedb_cypher | ladybug | ladybugdb | sqlite | graphqlite | python_memory)
+            arcadedb_sql | arcadedb_cypher | ladybug | ladybugdb | duckdb | sqlite | graphqlite | python_memory)
                 db_engine="$db"
                 ;;
             *)
                 echo "Unsupported DB alias in DBS_RAW: $db" >&2
-                echo "Supported values: arcadedb_sql, arcadedb_cypher, ladybug, ladybugdb, sqlite, graphqlite, python_memory" >&2
+                echo "Supported values: arcadedb_sql, arcadedb_cypher, ladybug, ladybugdb, duckdb, sqlite, graphqlite, python_memory" >&2
                 exit 1
                 ;;
         esac
 
         seed=$((SEED_START + execution_idx))
-        run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
+        internal_run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
+        run_label="$(matrix_build_summary_run_label "$internal_run_label" "$MEM_LIMIT")"
 
         cmd=(
             python3 "$PY_SCRIPT"
@@ -124,6 +126,8 @@ for ((run = 1; run <= RUNS; run++)); do
         target_dir="my_test_databases/${dataset_slug}_graph_olap_${db_engine}_${mem_tag}_${run_label}"
         if [[ -d "$target_dir" ]]; then
             collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            matrix_rename_result_artifacts "$target_dir" "$internal_run_label" "$run_label"
+            matrix_rewrite_json_run_label "$target_dir" "$internal_run_label" "$run_label"
             wheel_artifacts_for_dir="false"
             if [[ "$db_engine" == "arcadedb_sql" || "$db_engine" == "arcadedb_cypher" ]]; then
                 wheel_artifacts_for_dir="true"
@@ -136,6 +140,7 @@ for ((run = 1; run <= RUNS; run++)); do
                 "arcadedb_embedded" "auto" \
                 "real_ladybug" "auto" \
                 "graphqlite" "auto" \
+                "duckdb" "auto" \
                 "sqlite" "builtin" \
                 "python_memory" "builtin"
 

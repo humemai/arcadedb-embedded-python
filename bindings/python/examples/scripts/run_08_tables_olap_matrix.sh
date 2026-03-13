@@ -16,19 +16,20 @@ source "$HELPERS_SH"
 # Large         10,000  8GB     16
 # X-Large       25,000  32GB    32
 
-DATASET="stackoverflow-medium"
-BATCH_SIZE=5000
-MEM_LIMIT="4g"
-THREADS=1
+DATASET="stackoverflow-xlarge"
+BATCH_SIZE=25000
+MEM_LIMIT="32g"
+THREADS=8
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
 DOCKER_IMAGE="python:3.12-slim"
 POSTGRESQL_IMAGE="postgres:latest"
-QUERY_RUNS=10
+QUERY_RUNS=100
 QUERY_ORDER="shuffled"
 ARCADEDB_QUERY_MAX_HEAP_ELEMENTS=-1
-DBS_RAW="arcadedb_sql,sqlite,duckdb,postgresql"
+# DBS_RAW="sqlite,postgresql,duckdb,arcadedb_sql"
+DBS_RAW="duckdb"
 LABEL_PREFIX="sweep08"
 
 if [[ $# -gt 0 ]]; then
@@ -56,7 +57,7 @@ echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED
 echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER arcadedb-query-max-heap-elements=$ARCADEDB_QUERY_MAX_HEAP_ELEMENTS"
 
 dataset_slug="${DATASET//-/_}"
-mem_tag="mem$(printf '%s' "$MEM_LIMIT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
+mem_tag="$(matrix_normalize_mem_tag "$MEM_LIMIT")"
 
 execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
@@ -67,7 +68,8 @@ for ((run = 1; run <= RUNS; run++)); do
         fi
 
         seed=$((SEED_START + execution_idx))
-        run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
+        internal_run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
+        run_label="$(matrix_build_summary_run_label "$internal_run_label" "$MEM_LIMIT")"
         run_docker_image="$DOCKER_IMAGE"
         if [[ "$db" == "postgresql" ]]; then
             run_docker_image="$POSTGRESQL_IMAGE"
@@ -98,9 +100,7 @@ for ((run = 1; run <= RUNS; run++)); do
         set -e
 
         target_dir="my_test_databases/${dataset_slug}_tables_olap_${db}_${mem_tag}_${run_label}"
-        if [[ ! -d "$target_dir" ]]; then
-            mkdir -p "$target_dir"
-        fi
+        mkdir -p "$target_dir"
 
         collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
         run_status="success"
@@ -122,9 +122,13 @@ for ((run = 1; run <= RUNS; run++)); do
   "query_order": "$QUERY_ORDER",
   "seed": $seed,
   "run_label": "$run_label",
+    "internal_run_label": "$internal_run_label",
   "collected_at_utc": "$collected_at"
 }
 EOF
+
+        matrix_rename_result_artifacts "$target_dir" "$internal_run_label" "$run_label"
+        matrix_rewrite_json_run_label "$target_dir" "$internal_run_label" "$run_label"
 
         wheel_artifacts_for_dir="false"
         if [[ "$db" == "arcadedb_sql" || "$db" == "arcadedb_cypher" ]]; then

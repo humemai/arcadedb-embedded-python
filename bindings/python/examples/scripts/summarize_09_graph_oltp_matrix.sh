@@ -28,14 +28,18 @@ if [[ -z "${DATASET_TAG// /}" ]]; then
 fi
 SUMMARY_MD="$OUTPUT_DIR/summary_09_graph_oltp_${DATASET_TAG}.md"
 
-python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" << 'PY'
+python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" "$SCRIPT_DIR" << 'PY'
 import glob
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-input_dir, summary_md, dataset, label_prefix = sys.argv[1:]
+input_dir, summary_md, dataset, label_prefix, script_dir = sys.argv[1:]
+sys.path.insert(0, script_dir)
+
+from _summary_helpers import normalize_db_label, normalize_run_label, normalized_run_key
+
 dataset_filter = dataset.strip()
 dataset_label = dataset_filter or "all"
 
@@ -97,9 +101,9 @@ def fmt(value):
 def resolve_db_label(data, status_for_run):
     status_db = status_for_run.get("db") if isinstance(status_for_run, dict) else None
     if isinstance(status_db, str) and status_db.strip():
-        return status_db.strip()
+        return normalize_db_label(status_db.strip())
 
-    return data.get("db")
+    return normalize_db_label(data.get("db"))
 
 def add_version(version_sets, key, value):
     if key in (None, "", "collected_at_utc"):
@@ -173,6 +177,8 @@ def ensure_versions_for_db_set(version_sets, db_values):
         expected.add("real_ladybug")
     if "graphqlite" in db_values:
         expected.add("graphqlite")
+    if "duckdb" in db_values:
+        expected.add("duckdb")
     if "sqlite" in db_values:
         expected.add("sqlite")
     if "python_memory" in db_values:
@@ -200,10 +206,21 @@ for run_dir in run_dirs:
             status = None
 
     if status is not None:
+        normalized_status_label = normalize_run_label(
+            status.get("run_label"),
+            mem_limit=status.get("mem_limit"),
+            run_dir=run_dir,
+        )
+        if normalized_status_label:
+            status["run_label"] = normalized_status_label
         status_rows.append(status)
-        run_label = status.get("run_label")
-        if run_label:
-            status_by_run[str(run_label)] = status
+        run_key = normalized_run_key(
+            status.get("run_label"),
+            mem_limit=status.get("mem_limit"),
+            run_dir=run_dir,
+        )
+        if run_key[0]:
+            status_by_run[run_key] = status
 
     result_paths = sorted(glob.glob(os.path.join(run_dir, "results_*.json")))
     if not result_paths:
@@ -232,9 +249,20 @@ for run_dir in run_dirs:
         if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
             continue
 
+        normalized_run_label = normalize_run_label(
+            run_label,
+            mem_limit=data.get("mem_limit"),
+            run_dir=run_dir,
+        )
+        run_key = normalized_run_key(
+            run_label,
+            mem_limit=data.get("mem_limit"),
+            run_dir=run_dir,
+        )
+
         collect_version_metadata(version_sets, data, run_dir)
 
-        status_for_run = status_by_run.get(str(run_label) if run_label else "", {})
+        status_for_run = status_by_run.get(run_key, {})
         latency_overall = (data.get("latency_summary") or {}).get("overall") or {}
         latency_ops = (data.get("latency_summary") or {}).get("ops") or {}
         op_counts = data.get("op_counts") or {}
@@ -249,7 +277,7 @@ for run_dir in run_dirs:
         row = {
             "dataset": data.get("dataset"),
             "db": resolve_db_label(data, status_for_run),
-            "run_label": run_label,
+            "run_label": normalized_run_label,
             "seed": to_int(data.get("seed")) or to_int(status_for_run.get("seed")),
             "threads": to_int(data.get("threads")) or to_int(status_for_run.get("threads")),
             "transactions": to_int(data.get("transactions")) or to_int(status_for_run.get("transactions")),

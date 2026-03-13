@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ArcadeDB Python Bindings - Social Network Graph Example
+Example 02: Social Network Graph
 
 This example demonstrates how to use ArcadeDB as a graph database to model
 a social network with people and friendships. It showcases:
@@ -1162,6 +1162,6 @@ def print_section_header(title, emoji="🔹"):
 
 
 if __name__ == "__main__":
-    print("🌐 ArcadeDB Python - Social Network Graph Example")
+    print("🌐 ArcadeDB Python - Example 02: Social Network Graph")
     print("=" * 55)
     main()

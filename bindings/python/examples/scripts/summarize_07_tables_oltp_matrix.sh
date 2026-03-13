@@ -28,14 +28,18 @@ if [[ -z "${DATASET_TAG// /}" ]]; then
 fi
 SUMMARY_MD="$OUTPUT_DIR/summary_07_tables_oltp_${DATASET_TAG}.md"
 
-python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" << 'PY'
+python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" "$SCRIPT_DIR" << 'PY'
 import glob
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-input_dir, summary_md, dataset, label_prefix = sys.argv[1:]
+input_dir, summary_md, dataset, label_prefix, script_dir = sys.argv[1:]
+sys.path.insert(0, script_dir)
+
+from _summary_helpers import normalize_run_label
+
 dataset_filter = dataset.strip()
 dataset_label = dataset_filter or "all"
 
@@ -244,6 +248,12 @@ for result_path in result_files:
     if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
         continue
 
+    normalized_run_label = normalize_run_label(
+        run_label,
+        mem_limit=data.get("mem_limit"),
+        run_dir=run_dir,
+    )
+
     collect_version_metadata(version_sets, data, run_dir)
 
     du_path = os.path.join(run_dir, "disk_usage_du.json")
@@ -260,7 +270,7 @@ for result_path in result_files:
     row = {
         "dataset": data.get("dataset"),
         "db": data.get("db"),
-        "run_label": data.get("run_label"),
+        "run_label": normalized_run_label,
         "seed": to_int(data.get("seed")),
         "threads": to_int(data.get("threads")),
         "transactions": to_int(data.get("transactions")),

@@ -22,17 +22,18 @@ source "$HELPERS_SH"
 # X-Large       1,000,000     25,000  32GB    1
 # X-Large       1,000,000     25,000  32GB    8
 
-DATASET="stackoverflow-medium"
-TRANSACTIONS=100000
-BATCH_SIZE=5000
-MEM_LIMIT="4g"
+DATASET="stackoverflow-xlarge"
+TRANSACTIONS=1000000
+BATCH_SIZE=25000
+MEM_LIMIT="8g"
 THREADS=8
 RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
 DOCKER_IMAGE="python:3.12-slim"
 POSTGRESQL_IMAGE="postgres:latest"
-DBS_RAW="arcadedb_sql,sqlite,duckdb,postgresql"
+# DBS_RAW="arcadedb_sql,sqlite,duckdb,postgresql"
+DBS_RAW="sqlite"
 LABEL_PREFIX="sweep07"
 
 if [[ $# -gt 0 ]]; then
@@ -70,7 +71,7 @@ echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED
 echo "Profile: threads=$THREADS transactions=$TRANSACTIONS mem-limit=$MEM_LIMIT"
 
 dataset_slug="${DATASET//-/_}"
-mem_tag="mem$(printf '%s' "$MEM_LIMIT" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
+mem_tag="$(matrix_normalize_mem_tag "$MEM_LIMIT")"
 
 execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
@@ -81,7 +82,8 @@ for ((run = 1; run <= RUNS; run++)); do
         fi
 
         seed=$((SEED_START + execution_idx))
-        run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
+        internal_run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
+        run_label="$(matrix_build_summary_run_label "$internal_run_label" "$MEM_LIMIT")"
         run_docker_image="$DOCKER_IMAGE"
         if [[ "$db" == "postgresql" ]]; then
             run_docker_image="$POSTGRESQL_IMAGE"
@@ -113,9 +115,7 @@ for ((run = 1; run <= RUNS; run++)); do
         set -e
 
         target_dir="my_test_databases/${dataset_slug}_tables_oltp_${db}_${mem_tag}_${run_label}"
-        if [[ ! -d "$target_dir" ]]; then
-            mkdir -p "$target_dir"
-        fi
+        mkdir -p "$target_dir"
 
         collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
         run_status="success"
@@ -136,9 +136,13 @@ for ((run = 1; run <= RUNS; run++)); do
     "docker_image": "$run_docker_image",
   "seed": $seed,
   "run_label": "$run_label",
+    "internal_run_label": "$internal_run_label",
   "collected_at_utc": "$collected_at"
 }
 EOF
+
+        matrix_rename_result_artifacts "$target_dir" "$internal_run_label" "$run_label"
+        matrix_rewrite_json_run_label "$target_dir" "$internal_run_label" "$run_label"
 
         wheel_artifacts_for_dir="false"
         if [[ "$db" == "arcadedb_sql" || "$db" == "arcadedb_cypher" ]]; then

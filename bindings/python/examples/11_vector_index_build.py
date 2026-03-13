@@ -1619,7 +1619,7 @@ def collect_runtime_metadata(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Example 13: vector index build-only benchmark"
+        description="Example 11: vector index build-only benchmark"
     )
     parser.add_argument(
         "--backend",
@@ -1797,7 +1797,7 @@ def main() -> None:
     db_path.mkdir(parents=True, exist_ok=True)
 
     print("=" * 80)
-    print("Example 13: Vector Index Build (build-only)")
+    print("Example 11: Vector Index Build (build-only)")
     print("=" * 80)
     print(f"Backend: {args.backend}")
     print(f"Dataset: {args.dataset}")
