@@ -18,7 +18,8 @@ Parameter normalization note:
 - ArcadeDB/jvector uses `overquery_factor` directly.
 - HNSW backends expose `ef_search`.
 - These knobs are not semantically identical, so this benchmark uses a fixed
-    normalization: `ef_search = 0.5 * k * overquery_factor` for pgvector/qdrant/milvus.
+    normalization: `ef_search = 0.5 * k * overquery_factor` for
+    faiss/pgvector/qdrant/milvus and LanceDB HNSW-like search tuning.
 """
 
 from __future__ import annotations
@@ -608,18 +609,48 @@ def search_lancedb(
     gt_full: dict[int, List[int]],
     k: int,
     overquery_factor: float,
+    build_config: dict,
 ) -> dict:
     latencies_ms: List[float] = []
     recalls: List[float] = []
 
-    nprobes = max(1, int(round(overquery_factor * 4)))
+    lancedb_cfg = build_config.get("lancedb") if isinstance(build_config, dict) else {}
+    if not isinstance(lancedb_cfg, dict):
+        lancedb_cfg = {}
+
+    index_type = str(lancedb_cfg.get("index_type") or "IVF_HNSW_SQ").upper()
+    ef_search = overquery_to_ef_search(k, overquery_factor)
+    nprobes = None
+    if index_type.startswith("IVF_"):
+        nprobes = (
+            1
+            if int(lancedb_cfg.get("num_partitions") or 1) <= 1
+            else max(1, int(round(overquery_factor * 4)))
+        )
+
+    applied_ef_search = None
+    applied_nprobes = None
 
     for q_idx, qid in enumerate(qids):
         start = time.perf_counter()
         search = table.search(queries[q_idx].tolist()).metric("cosine").limit(int(k))
-        if hasattr(search, "nprobes"):
+        if hasattr(search, "ef"):
+            try:
+                search = search.ef(int(ef_search))
+                applied_ef_search = int(ef_search)
+            except Exception:
+                pass
+        elif hasattr(search, "ef_search"):
+            try:
+                search = search.ef_search(int(ef_search))
+                applied_ef_search = int(ef_search)
+            except Exception:
+                pass
+
+        if nprobes is not None and hasattr(search, "nprobes"):
             try:
                 search = search.nprobes(int(nprobes))
+                applied_nprobes = int(nprobes)
             except Exception:
                 pass
         rows = search.to_list()
@@ -646,6 +677,8 @@ def search_lancedb(
         "latency_ms_mean": lat_mean,
         "latency_ms_p95": lat_p95,
         "recall_count": len(recalls),
+        "effective_ef_search": applied_ef_search,
+        "effective_nprobes": applied_nprobes,
     }
 
 
@@ -1957,7 +1990,8 @@ def main() -> None:
         default="1,2,3,4,6,8",
         help=(
             "Sweep values. For arcadedb: overquery factors. "
-            "For pgvector/qdrant/milvus: ef_search = 0.5 * k * factor. "
+            "For faiss/pgvector/qdrant/milvus and LanceDB HNSW-like tuning: "
+            "ef_search = 0.5 * k * factor. "
             "Default: 1,2,3,4,6,8"
         ),
     )
@@ -2267,6 +2301,7 @@ def main() -> None:
                             gt_full,
                             k=args.k,
                             overquery_factor=overquery,
+                            build_config=build_config,
                         ),
                         queries=queries,
                         qids=qids,
@@ -2287,7 +2322,8 @@ def main() -> None:
                 sweeps.append(
                     {
                         "overquery_factor": overquery,
-                        "effective_nprobes": max(1, int(round(overquery * 4))),
+                        "effective_ef_search": stats.get("effective_ef_search"),
+                        "effective_nprobes": stats.get("effective_nprobes"),
                         "phases": phases,
                         "recall_mean": stats.get("recall_mean"),
                         "recall_count": stats.get("recall_count"),
@@ -2765,6 +2801,27 @@ def main() -> None:
                 }
                 for factor in overqueries
             ],
+            "lancedb_search_mapping": (
+                [
+                    {
+                        "factor": factor,
+                        "effective_ef_search": overquery_to_ef_search(args.k, factor),
+                        "effective_nprobes": (
+                            1
+                            if str(
+                                ((build_config.get("lancedb") or {}).get("index_type"))
+                                or ""
+                            )
+                            .upper()
+                            .startswith("IVF_")
+                            else None
+                        ),
+                    }
+                    for factor in overqueries
+                ]
+                if args.backend == "lancedb"
+                else None
+            ),
             "sweeps": sweeps,
         },
         "peak_rss_mb": peak_rss_mb,
@@ -2877,10 +2934,13 @@ def main() -> None:
         recall_text = f"{recall:.4f}" if recall is not None else "n/a"
         lat_text = f"{lat:.2f}" if lat is not None else "n/a"
         p95_text = f"{p95:.2f}" if p95 is not None else "n/a"
-        if args.backend in {"pgvector", "qdrant", "milvus", "faiss"}:
+        if args.backend in {"pgvector", "qdrant", "milvus", "faiss", "lancedb"}:
             ef_text = str(sweep.get("effective_ef_search"))
+            extra = ""
+            if args.backend == "lancedb" and sweep.get("effective_nprobes") is not None:
+                extra = f" | nprobes={sweep.get('effective_nprobes')}"
             print(
-                f"factor={oq:>4} | ef_search={ef_text} | "
+                f"factor={oq:>4} | ef_search={ef_text}{extra} | "
                 f"recall@{args.k}={recall_text} | latency_mean_ms={lat_text} | "
                 f"latency_p95_ms={p95_text}"
             )

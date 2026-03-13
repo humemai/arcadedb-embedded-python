@@ -219,6 +219,16 @@ for run_dir in run_dirs:
                 "dataset": dataset_name,
                 "backend": backend,
                 "run_label": normalized_run_label,
+                "lancedb_index_type": (
+                    ((config.get("lancedb") or {}).get("index_type"))
+                    if backend == "lancedb" and isinstance(config.get("lancedb"), dict)
+                    else None
+                ),
+                "lancedb_num_partitions": (
+                    ((config.get("lancedb") or {}).get("num_partitions"))
+                    if backend == "lancedb" and isinstance(config.get("lancedb"), dict)
+                    else None
+                ),
                 "seed": to_int(config.get("seed") or data.get("seed") or (status or {}).get("seed")),
                 "mem_limit": env.get("mem_limit") or config.get("mem_limit") or data.get("mem_limit") or (status or {}).get("mem_limit"),
                 "threads": to_int(env.get("threads_limit") or (status or {}).get("threads")),
@@ -270,6 +280,8 @@ version_summary_lines = format_version_summary_lines(version_sets)
 COLUMNS = [
     "backend",
     "run_label",
+    "lancedb_index_type",
+    "lancedb_num_partitions",
     "seed",
     "mem_limit",
     "threads",
@@ -303,6 +315,8 @@ if version_summary_lines:
         lines.append(f"  - {item}")
 if status_total > 0:
     lines.append(f"- Run status files: total={status_total}, success={status_success}, failed={status_failed}")
+lines.append("- Note: LanceDB prefers pure `HNSW` when supported by the installed version; otherwise it falls back to single-partition `IVF_HNSW_SQ`.")
+lines.append("- Note: heuristic HNSW similarity only, not a formal metric: Faiss `HNSWFlat` ~= 100%; pgvector/Qdrant/Milvus HNSW ~= 85-95%; LanceDB pure `HNSW` ~= 90-95%; LanceDB single-partition `IVF_HNSW_SQ` ~= 75%; bruteforce is exact search, not HNSW.")
 lines.append("- Note: times are phase-level benchmark timings from each run result.")
 lines.append("- Note: `du_mib` is measured filesystem usage from `disk_usage_du.json`.")
 lines.append("")

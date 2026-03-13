@@ -546,16 +546,54 @@ def create_index_lancedb(
     table,
     max_connections: int,
     beam_width: int,
-) -> None:
-    partitions = max(1, min(256, int(max_connections) * 8))
-    table.create_index(
-        metric="cosine",
-        vector_column_name="vector",
-        index_type="IVF_HNSW_SQ",
-        num_partitions=partitions,
-        m=int(max_connections),
-        ef_construction=int(beam_width),
-    )
+) -> dict:
+    common_kwargs = {
+        "metric": "cosine",
+        "vector_column_name": "vector",
+        "m": int(max_connections),
+        "ef_construction": int(beam_width),
+    }
+    attempts = [
+        ("HNSW", {}),
+        ("IVF_HNSW_SQ", {"num_partitions": 1}),
+    ]
+    last_error: Exception | None = None
+
+    for index_type, extra_kwargs in attempts:
+        try:
+            table.create_index(
+                index_type=index_type,
+                **common_kwargs,
+                **extra_kwargs,
+            )
+            config = {
+                "metric": "cosine",
+                "index_type": index_type,
+                "hnsw_m": int(max_connections),
+                "hnsw_ef_construct": int(beam_width),
+            }
+            if "num_partitions" in extra_kwargs:
+                config["num_partitions"] = int(extra_kwargs["num_partitions"])
+                config["quantization"] = "SQ"
+            else:
+                config["quantization"] = "NONE"
+
+            print(
+                "Using LanceDB index mode: "
+                f"{index_type}"
+                + (
+                    f" (num_partitions={extra_kwargs['num_partitions']})"
+                    if "num_partitions" in extra_kwargs
+                    else ""
+                )
+            )
+            return config
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            last_error = exc
+
+    raise RuntimeError(
+        "Unable to create LanceDB index in HNSW-like mode"
+    ) from last_error
 
 
 def vector_to_pg_literal(vec: np.ndarray) -> str:
@@ -1825,6 +1863,7 @@ def main() -> None:
             phases[name].update(result)
 
     runtime_versions: dict[str, str | None] = {}
+    lancedb_index_config: dict[str, object] | None = None
 
     if args.backend == "arcadedb_sql":
         stop_cpu = start_cpu_logger(2)
@@ -1969,7 +2008,7 @@ def main() -> None:
             )
             record("ingest", {"ingested": int(ingested)}, dur, r0, r1)
 
-            (_, dur, r0, r1) = timed_section(
+            (lancedb_index_config, dur, r0, r1) = timed_section(
                 "create_index",
                 lambda: create_index_lancedb(
                     table,
@@ -1977,7 +2016,7 @@ def main() -> None:
                     beam_width=args.beam_width,
                 ),
             )
-            record("create_index", {}, dur, r0, r1)
+            record("create_index", lancedb_index_config, dur, r0, r1)
 
             close_db_fn = getattr(db, "close", None)
             (_, dur, r0, r1) = timed_section(
@@ -2379,8 +2418,18 @@ def main() -> None:
             "lancedb": {
                 "data_dir": str(db_path / "lancedb-data"),
                 "table": "vectordata",
-                "metric": "cosine",
-                "index_type": "IVF_HNSW_SQ",
+                "metric": (
+                    str((lancedb_index_config or {}).get("metric"))
+                    if lancedb_index_config
+                    else "cosine"
+                ),
+                "index_type": (
+                    str((lancedb_index_config or {}).get("index_type"))
+                    if lancedb_index_config
+                    else "IVF_HNSW_SQ"
+                ),
+                "num_partitions": ((lancedb_index_config or {}).get("num_partitions")),
+                "quantization": ((lancedb_index_config or {}).get("quantization")),
                 "hnsw_m": args.max_connections,
                 "hnsw_ef_construct": args.beam_width,
             },

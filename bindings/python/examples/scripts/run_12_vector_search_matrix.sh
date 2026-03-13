@@ -15,8 +15,8 @@ source "$HELPERS_SH"
 # Large         16GB    16
 # X-Large       32GB    32
 
-DATASET="stackoverflow-large"
-MEM_LIMIT="8g"
+DATASET="stackoverflow-medium"
+MEM_LIMIT="2g"
 THREADS=4
 RUNS=1
 SEED_START=0
@@ -50,10 +50,131 @@ MILVUS_COMPOSE_VERSION="v2.6.10"
 MILVUS_COLLECTION="vectordata"
 
 # BACKENDS_RAW="arcadedb_sql,faiss,lancedb,pgvector,qdrant,milvus,bruteforce"
-BACKENDS_RAW="lancedb"
+BACKENDS_RAW="faiss"
 
 BUILD_LABEL_PREFIX="sweep11"
 SEARCH_LABEL_PREFIX="sweep12"
+
+parse_mem_limit_to_mib() {
+    local raw="${1:-}"
+    raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+    raw="${raw#mem}"
+    raw="${raw// /}"
+
+    if [[ ! "$raw" =~ ^([0-9]+)([kmgt]?)$ ]]; then
+        printf '%s\n' 999999999
+        return 0
+    fi
+
+    local amount="${BASH_REMATCH[1]}"
+    local unit="${BASH_REMATCH[2]}"
+    case "$unit" in
+        "" | m)
+            printf '%s\n' "$amount"
+            ;;
+        g)
+            printf '%s\n' $((amount * 1024))
+            ;;
+        t)
+            printf '%s\n' $((amount * 1024 * 1024))
+            ;;
+        k)
+            local mib=$((amount / 1024))
+            if ((mib < 1)); then
+                mib=1
+            fi
+            printf '%s\n' "$mib"
+            ;;
+        *)
+            printf '%s\n' 999999999
+            ;;
+    esac
+}
+
+build_dir_mem_mib() {
+    local dir_name
+    dir_name="$(basename "$1")"
+
+    local raw=""
+    if [[ "$dir_name" =~ (^|_)all_mem=([^_]+) ]]; then
+        raw="${BASH_REMATCH[2]}"
+    elif [[ "$dir_name" =~ (^|_)mem=([^_]+) ]]; then
+        raw="${BASH_REMATCH[2]}"
+    elif [[ "$dir_name" =~ _mem([0-9]+[kmgt]?)($|_) ]]; then
+        raw="${BASH_REMATCH[1]}"
+    fi
+
+    parse_mem_limit_to_mib "$raw"
+}
+
+find_saved_build_result() {
+    local run_dir="$1"
+    local build_prefix="$2"
+    local run="$3"
+    local backend="$4"
+
+    find "$run_dir" -maxdepth 1 -type f \
+        -name "results_${build_prefix}_r$(printf '%02d' "$run")_${backend}_*.json" |
+        sort | head -n 1
+}
+
+resolve_saved_build_dir() {
+    local db_root="$1"
+    local backend="$2"
+    local dataset="$3"
+    local run="$4"
+    local build_prefix="$5"
+
+    local run_tag
+    run_tag="$(printf '%02d' "$run")"
+
+    mapfile -t build_dirs < <(
+        find "$db_root" -mindepth 1 -maxdepth 1 -type d \
+            -name "*backend=${backend}_dataset=${dataset}_*run=${build_prefix}_r${run_tag}_${backend}_*s*" |
+            sort
+    )
+
+    if [[ "${#build_dirs[@]}" -eq 0 ]]; then
+        echo "No build directories found for backend=$backend dataset=$dataset run=$run (prefix=${build_prefix})." >&2
+        return 1
+    fi
+
+    local ranked=()
+    local dir=""
+    local result_file=""
+    local mem_mib=""
+    for dir in "${build_dirs[@]}"; do
+        result_file="$(find_saved_build_result "$dir" "$build_prefix" "$run" "$backend")"
+        if [[ -z "$result_file" ]]; then
+            continue
+        fi
+
+        mem_mib="$(build_dir_mem_mib "$dir")"
+        ranked+=("$(printf '%012d\t%s\t%s' "$mem_mib" "$dir" "$result_file")")
+    done
+
+    if [[ "${#ranked[@]}" -eq 0 ]]; then
+        echo "Found build directories for backend=$backend dataset=$dataset run=$run, but none contain saved ${build_prefix} results. Aborting." >&2
+        printf 'Checked directories:\n' >&2
+        for dir in "${build_dirs[@]}"; do
+            printf '  %s\n' "$dir" >&2
+        done
+        return 1
+    fi
+
+    mapfile -t ranked < <(printf '%s\n' "${ranked[@]}" | sort)
+
+    local chosen_mem=""
+    local chosen_dir=""
+    local chosen_result=""
+    IFS=$'\t' read -r chosen_mem chosen_dir chosen_result <<< "${ranked[0]}"
+
+    if [[ "${#ranked[@]}" -gt 1 ]]; then
+        echo "Multiple saved ${build_prefix} build directories found for backend=$backend dataset=$dataset run=$run; choosing lowest-memory directory: $chosen_dir" >&2
+    fi
+
+    printf '%s\t%s\n' "$chosen_dir" "$chosen_result"
+}
 
 if [[ $# -gt 0 ]]; then
     echo "This script does not accept command-line arguments." >&2
@@ -133,32 +254,18 @@ for ((run = 1; run <= RUNS; run++)); do
             db_path="$DB_ROOT/backend=${backend}_dataset=${DATASET}_mem=${mem_tag}_run=${normalized_build_run_label}"
             mkdir -p "$db_path"
         else
-            mapfile -t build_dirs < <(find "$DB_ROOT" -mindepth 1 -maxdepth 1 -type d -name "*backend=${backend}_dataset=${DATASET}_*run=${BUILD_LABEL_PREFIX}_r$(printf '%02d' "$run")_${backend}_*s*" | sort)
-            if [[ "${#build_dirs[@]}" -eq 0 ]]; then
-                echo "Build DB directory not found for backend=$backend run=$run (prefix=${BUILD_LABEL_PREFIX}). Skipping..." >&2
-                execution_idx=$((execution_idx + 1))
-                continue
-            fi
+            build_selection="$(resolve_saved_build_dir "$DB_ROOT" "$backend" "$DATASET" "$run" "$BUILD_LABEL_PREFIX")" || exit 1
+            IFS=$'\t' read -r db_path build_result_file <<< "$build_selection"
 
-            db_path="${build_dirs[0]}"
-            if [[ "${#build_dirs[@]}" -gt 1 ]]; then
-                echo "Warning: multiple build DB dirs matched for backend=$backend run=$run; using first: $db_path"
-            fi
+            build_result_name="$(basename "$build_result_file")"
+            build_run_label="${build_result_name#results_}"
+            build_run_label="${build_run_label%.json}"
+            normalized_build_run_label="$build_run_label"
 
-            build_run_label="${db_path##*run=}"
-            if [[ "$build_run_label" =~ _s([0-9]{5})$ ]]; then
+            if [[ "$build_run_label" =~ _s([0-9]{5})(_|$) ]]; then
                 seed=$((10#${BASH_REMATCH[1]}))
             else
                 seed=$((SEED_START + execution_idx))
-            fi
-
-            normalized_build_run_label="$(matrix_build_summary_run_label "$build_run_label" "$MEM_LIMIT")"
-            final_db_path="${db_path%run=${build_run_label}}run=${normalized_build_run_label}"
-            if [[ -d "$db_path" ]]; then
-                matrix_move_dir_if_needed "$db_path" "$final_db_path"
-                db_path="$final_db_path"
-            elif [[ -d "$final_db_path" ]]; then
-                db_path="$final_db_path"
             fi
         fi
 

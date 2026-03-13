@@ -171,8 +171,23 @@ for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results
     run_obj = data.get("run") if isinstance(data.get("run"), dict) else {}
     search_obj = data.get("search") if isinstance(data.get("search"), dict) else {}
     db_obj = data.get("db") if isinstance(data.get("db"), dict) else {}
+    config_obj = data.get("config") if isinstance(data.get("config"), dict) else {}
+    build_config = (
+        config_obj.get("build_config") if isinstance(config_obj.get("build_config"), dict) else {}
+    )
     env_obj = data.get("environment") if isinstance(data.get("environment"), dict) else {}
     telemetry_obj = data.get("telemetry") if isinstance(data.get("telemetry"), dict) else {}
+
+    status_path = os.path.join(run_dir, "search_run_status.json")
+    status_obj = None
+    if os.path.isfile(status_path):
+        try:
+            with open(status_path, "r", encoding="utf-8") as f:
+                status_obj = json.load(f)
+        except Exception:
+            status_obj = None
+    if status_obj is not None:
+        status_rows.append(status_obj)
 
     run_label = run_obj.get("run_label") or search_obj.get("run_label")
     if label_prefix and (not run_label or not str(run_label).startswith(label_prefix)):
@@ -185,19 +200,13 @@ for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results
         mem_limit=env_obj.get("mem_limit") or search_obj.get("mem_limit") or data.get("mem_limit") or (status_obj or {}).get("mem_limit"),
         run_dir=run_dir,
     )
+    normalized_build_run_label = normalize_run_label(
+        (status_obj or {}).get("build_run_label"),
+        mem_limit=None,
+        run_dir=run_dir,
+    )
 
     collect_version_metadata(version_sets, data, run_dir)
-
-    status_path = os.path.join(run_dir, "search_run_status.json")
-    status_obj = None
-    if os.path.isfile(status_path):
-        try:
-            with open(status_path, "r", encoding="utf-8") as f:
-                status_obj = json.load(f)
-        except Exception:
-            status_obj = None
-    if status_obj is not None:
-        status_rows.append(status_obj)
 
     du_mib = None
     du_path = os.path.join(run_dir, "disk_usage_du_search.json")
@@ -224,7 +233,18 @@ for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results
             {
                 "dataset": dataset_name,
                 "backend": db_obj.get("backend"),
-                "run_label": normalized_run_label,
+                "search_run_label": normalized_run_label,
+                "build_run_label": normalized_build_run_label,
+                "lancedb_index_type": (
+                    ((build_config.get("lancedb") or {}).get("index_type"))
+                    if db_obj.get("backend") == "lancedb" and isinstance(build_config.get("lancedb"), dict)
+                    else None
+                ),
+                "lancedb_num_partitions": (
+                    ((build_config.get("lancedb") or {}).get("num_partitions"))
+                    if db_obj.get("backend") == "lancedb" and isinstance(build_config.get("lancedb"), dict)
+                    else None
+                ),
                 "seed": to_int(search_obj.get("seed")),
                 "mem_limit": env_obj.get("mem_limit") or search_obj.get("mem_limit") or data.get("mem_limit") or (status_obj or {}).get("mem_limit"),
                 "query_runs": to_int(search_obj.get("query_runs")),
@@ -255,7 +275,7 @@ rows.sort(
     key=lambda r: (
         str(r.get("dataset") or ""),
         str(r.get("backend") or ""),
-        str(r.get("run_label") or ""),
+        str(r.get("search_run_label") or ""),
         float(r.get("overquery_factor") or 0),
     )
 )
@@ -285,7 +305,10 @@ version_summary_lines = format_version_summary_lines(version_sets)
 
 COLUMNS = [
     "backend",
-    "run_label",
+    "search_run_label",
+    "build_run_label",
+    "lancedb_index_type",
+    "lancedb_num_partitions",
     "seed",
     "mem_limit",
     "k",
@@ -322,6 +345,9 @@ if version_summary_lines:
         lines.append(f"  - {item}")
 if status_total > 0:
     lines.append(f"- Search run status files: total={status_total}, success={status_success}, failed={status_failed}")
+lines.append("- Note: `search_run_label` is the Example 12 sweep label; `build_run_label` is the Example 11 build label for the reused DB directory.")
+lines.append("- Note: LanceDB search uses HNSW-style `ef_search` tuning when available; for the single-partition IVF fallback it also pins `nprobes=1`.")
+lines.append("- Note: heuristic HNSW similarity only, not a formal metric: Faiss `HNSWFlat` ~= 100%; pgvector/Qdrant/Milvus HNSW ~= 85-95%; LanceDB pure `HNSW` ~= 90-95%; LanceDB single-partition `IVF_HNSW_SQ` ~= 75%; bruteforce is exact search, not HNSW.")
 lines.append("- Note: one row = one backend run + one overquery sweep point.")
 lines.append("- Note: `du_mib` is measured filesystem usage from `disk_usage_du_search.json`.")
 lines.append("")
