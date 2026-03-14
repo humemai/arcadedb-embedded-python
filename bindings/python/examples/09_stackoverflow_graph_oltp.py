@@ -36,6 +36,26 @@ except ImportError:
     print("Install with: uv pip install lxml")
     sys.exit(1)
 
+
+def uv_bootstrap_commands(python_cmd: str) -> List[str]:
+    return [
+        (
+            f'{python_cmd} -c "import json, pathlib, platform, shutil, tarfile, urllib.request; '
+            "arch={'x86_64':'x86_64-unknown-linux-gnu','amd64':'x86_64-unknown-linux-gnu','aarch64':'aarch64-unknown-linux-gnu','arm64':'aarch64-unknown-linux-gnu'}[platform.machine().lower()]; "
+            "req=urllib.request.Request('https://api.github.com/repos/astral-sh/uv/releases/latest', headers={'User-Agent':'arcadedb-bench'}); "
+            "version=json.load(urllib.request.urlopen(req, timeout=30))['tag_name'].lstrip('v'); "
+            "archive=pathlib.Path('/tmp/uv.tar.gz'); "
+            "archive.write_bytes(urllib.request.urlopen(f'https://github.com/astral-sh/uv/releases/download/{version}/uv-{arch}.tar.gz', timeout=30).read()); "
+            "target=pathlib.Path('/tmp/uv-extract'); target.mkdir(parents=True, exist_ok=True); "
+            "tarfile.open(archive, 'r:gz').extractall(target); "
+            "uv_bin=next(p for p in target.rglob('uv') if p.is_file()); "
+            "pathlib.Path('/tmp/uv-bin').mkdir(parents=True, exist_ok=True); "
+            "shutil.copy2(uv_bin, '/tmp/uv-bin/uv')\""
+        ),
+        'export PATH="/tmp/uv-bin:$PATH"',
+    ]
+
+
 EXPECTED_DATASETS = {
     "stackoverflow-tiny",
     "stackoverflow-small",
@@ -2894,8 +2914,7 @@ def run_graph_oltp_arcadedb(
                                 MATCH (u:User {Id: %d})-[:ASKED|ANSWERED]->(p)
                                 RETURN p.Id
                                 LIMIT 1
-                                """
-                                % target_id,
+                                """ % target_id,
                             ).to_list()
                     elif read_kind == "question":
                         with id_lock:
@@ -2909,8 +2928,7 @@ def run_graph_oltp_arcadedb(
                                 MATCH (q:Question {Id: %d})-[:TAGGED_WITH]->(t:Tag)
                                 RETURN t.Id
                                 LIMIT 1
-                                """
-                                % target_id,
+                                """ % target_id,
                             ).to_list()
                     elif read_kind == "answer":
                         with id_lock:
@@ -2922,8 +2940,7 @@ def run_graph_oltp_arcadedb(
                                 MATCH (a:Answer {Id: %d})<-[:COMMENTED_ON_ANSWER]-(c:Comment)
                                 RETURN c.Id
                                 LIMIT 1
-                                """
-                                % target_id,
+                                """ % target_id,
                             ).to_list()
                     elif read_kind == "tag":
                         with id_lock:
@@ -2935,8 +2952,7 @@ def run_graph_oltp_arcadedb(
                                 MATCH (q:Question)-[:TAGGED_WITH]->(t:Tag {Id: %d})
                                 RETURN q.Id
                                 LIMIT 1
-                                """
-                                % target_id,
+                                """ % target_id,
                             ).to_list()
                     elif read_kind == "comment":
                         with id_lock:
@@ -2948,8 +2964,7 @@ def run_graph_oltp_arcadedb(
                                 MATCH (c:Comment {Id: %d})-[r:COMMENTED_ON|COMMENTED_ON_ANSWER]->(p)
                                 RETURN p.Id
                                 LIMIT 1
-                                """
-                                % target_id,
+                                """ % target_id,
                             ).to_list()
                     elif read_kind == "edge_sample":
                         db.query(
@@ -2970,8 +2985,7 @@ def run_graph_oltp_arcadedb(
                                 MATCH (u:User)-[:EARNED]->(b:Badge {Id: %d})
                                 RETURN u.Id
                                 LIMIT 1
-                                """
-                                % target_id,
+                                """ % target_id,
                             ).to_list()
                 except Exception as exc:
                     if not is_transient_record_not_found_error(exc):
@@ -3003,8 +3017,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (q:Question {Id: %d})
                                         SET q.Score = coalesce(q.Score, 0) + 1
-                                        """
-                                        % target_id,
+                                        """ % target_id,
                                     )
                                 elif update_kind == "answer":
                                     db.command(
@@ -3012,8 +3025,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (a:Answer {Id: %d})
                                         SET a.Score = coalesce(a.Score, 0) + 1
-                                        """
-                                        % target_id,
+                                        """ % target_id,
                                     )
                                 elif update_kind == "comment":
                                     db.command(
@@ -3021,8 +3033,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (c:Comment {Id: %d})
                                         SET c.Score = coalesce(c.Score, 0) + 1
-                                        """
-                                        % target_id,
+                                        """ % target_id,
                                     )
                                 elif update_kind == "tag":
                                     db.command(
@@ -3030,8 +3041,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (t:Tag {Id: %d})
                                         SET t.Count = coalesce(t.Count, 0) + 1
-                                        """
-                                        % target_id,
+                                        """ % target_id,
                                     )
                                 else:
                                     db.command(
@@ -3039,8 +3049,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (u:User {Id: %d})
                                         SET u.Reputation = coalesce(u.Reputation, 0) + 1
-                                        """
-                                        % target_id,
+                                        """ % target_id,
                                     )
 
                         try:
@@ -3062,8 +3071,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (u:User {Id: %d})-[r:ASKED]->(q:Question {Id: %d})
                                         SET r.CreationDate = coalesce(r.CreationDate, 0) + 1
-                                        """
-                                        % (user_id, question_id),
+                                        """ % (user_id, question_id),
                                     ),
                                     arcade_error,
                                 )
@@ -3082,8 +3090,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (u:User {Id: %d})-[r:ANSWERED]->(a:Answer {Id: %d})
                                         SET r.CreationDate = coalesce(r.CreationDate, 0) + 1
-                                        """
-                                        % (user_id, answer_id),
+                                        """ % (user_id, answer_id),
                                     ),
                                     arcade_error,
                                 )
@@ -3106,8 +3113,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (c:Comment {Id: %d})-[r:COMMENTED_ON]->(q:Question {Id: %d})
                                         SET r.Score = coalesce(r.Score, 0) + 1
-                                        """
-                                        % (comment_id, question_id),
+                                        """ % (comment_id, question_id),
                                     ),
                                     arcade_error,
                                 )
@@ -3128,8 +3134,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (c:Comment {Id: %d})-[r:COMMENTED_ON_ANSWER]->(a:Answer {Id: %d})
                                         SET r.Score = coalesce(r.Score, 0) + 1
-                                        """
-                                        % (comment_id, answer_id),
+                                        """ % (comment_id, answer_id),
                                     ),
                                     arcade_error,
                                 )
@@ -3148,8 +3153,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (u:User {Id: %d})-[r:EARNED]->(b:Badge {Id: %d})
                                         SET r.Class = coalesce(r.Class, 0) + 1
-                                        """
-                                        % (user_id, badge_id),
+                                        """ % (user_id, badge_id),
                                     ),
                                     arcade_error,
                                 )
@@ -3170,8 +3174,7 @@ def run_graph_oltp_arcadedb(
                                         """
                                         MATCH (q1:Question {Id: %d})-[r:LINKED_TO]->(q2:Question {Id: %d})
                                         SET r.LinkTypeId = coalesce(r.LinkTypeId, 0) + 1
-                                        """
-                                        % (post_id, related_id),
+                                        """ % (post_id, related_id),
                                     ),
                                     arcade_error,
                                 )
@@ -3349,8 +3352,7 @@ def run_graph_oltp_arcadedb(
                                     """
                                     MATCH (q:Question {Id: %d}), (t:Tag {Id: %d})
                                     CREATE (q)-[:TAGGED_WITH]->(t)
-                                    """
-                                    % (question_id, tag_id),
+                                    """ % (question_id, tag_id),
                                 )
                             elif (
                                 insert_kind == "post_link"
@@ -3362,8 +3364,7 @@ def run_graph_oltp_arcadedb(
                                     """
                                     MATCH (q1:Question {Id: %d}), (q2:Question {Id: %d})
                                     CREATE (q1)-[:LINKED_TO {LinkTypeId: 1, CreationDate: %d}]->(q2)
-                                    """
-                                    % (question_id, second_question_id, now_ms),
+                                    """ % (question_id, second_question_id, now_ms),
                                 )
                             elif (
                                 insert_kind == "accepted_answer"
@@ -3375,8 +3376,7 @@ def run_graph_oltp_arcadedb(
                                     """
                                     MATCH (q:Question {Id: %d}), (a:Answer {Id: %d})
                                     CREATE (q)-[:ACCEPTED_ANSWER]->(a)
-                                    """
-                                    % (question_id, answer_id),
+                                    """ % (question_id, answer_id),
                                 )
                             elif (
                                 insert_kind == "badge"
@@ -3394,8 +3394,7 @@ def run_graph_oltp_arcadedb(
                                         Class: 1
                                     })
                                     CREATE (u)-[:EARNED {Date: %d, Class: 1}]->(b)
-                                    """
-                                    % (user_id, new_badge_id, now_ms, now_ms),
+                                    """ % (user_id, new_badge_id, now_ms, now_ms),
                                 )
 
                     try:
@@ -7982,7 +7981,7 @@ def run_in_docker(args) -> bool:
     python_cmd = "python"
     inner_cmd_parts.append(f"{python_cmd} -m venv /tmp/bench-venv")
     inner_cmd_parts.append(". /tmp/bench-venv/bin/activate")
-    inner_cmd_parts.append(f"{python_cmd} -m pip install --no-cache-dir uv")
+    inner_cmd_parts.extend(uv_bootstrap_commands(python_cmd))
     inner_cmd_parts.append(f"uv pip install {packages_str}")
     if arcadedb_wheel_mount_path is not None:
         inner_cmd_parts.append(f'uv pip install "{arcadedb_wheel_mount_path}"')

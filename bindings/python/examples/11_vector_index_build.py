@@ -27,6 +27,7 @@ import os
 import platform
 import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -36,7 +37,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List
-from urllib.request import urlopen, urlretrieve
+from urllib.request import Request, urlopen, urlretrieve
 
 import numpy as np
 
@@ -49,6 +50,17 @@ META_FILENAME_RE = re.compile(r"msmarco-passages-(.+?)\.meta\.json")
 SIZE_TOKEN_RE = re.compile(
     r"^\s*([0-9]*\.?[0-9]+)\s*([kmgt]?)(?:i?b)?\s*$", re.IGNORECASE
 )
+MILVUS_MEMORY_WEIGHTS = {
+    "standalone": 0.70,
+    "minio": 0.15,
+    "etcd": 0.15,
+}
+MILVUS_CPU_WEIGHTS = {
+    "standalone": 0.90,
+    "minio": 0.05,
+    "etcd": 0.05,
+}
+LATEST_RESOLUTION_CACHE: Dict[str, str] = {}
 
 MILVUS_RUNNER_DOCKERFILE = """FROM python:3.12-slim
 
@@ -56,11 +68,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \\
     && apt-get install -y --no-install-recommends \\
+        curl \
         docker-cli \\
         docker-compose \\
     && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install --no-cache-dir uv \\
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
     && uv pip install --system numpy pymilvus psutil
 """
 
@@ -79,6 +92,86 @@ def get_docker_version() -> str | None:
     except (subprocess.SubprocessError, OSError):
         return None
     return out.strip() or None
+
+
+def fetch_json(url: str) -> dict:
+    req = Request(url, headers={"User-Agent": "arcadedb-bench"})
+    with urlopen(req, timeout=30) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Expected JSON object from {url}")
+    return payload
+
+
+def resolve_latest_pgvector_image() -> str:
+    cached = LATEST_RESOLUTION_CACHE.get("pgvector_image")
+    if cached:
+        return cached
+
+    payload = fetch_json(
+        "https://hub.docker.com/v2/repositories/pgvector/pgvector/tags?page_size=100"
+    )
+    best_major = -1
+    best_tag = None
+    for item in payload.get("results", []):
+        tag = str(item.get("name") or "")
+        match = re.match(r"^pg(\d+)-trixie$", tag)
+        if not match:
+            continue
+        major = int(match.group(1))
+        if major > best_major:
+            best_major = major
+            best_tag = tag
+
+    if not best_tag:
+        raise RuntimeError("Could not resolve latest pgvector Docker tag")
+
+    resolved = f"pgvector/pgvector:{best_tag}"
+    LATEST_RESOLUTION_CACHE["pgvector_image"] = resolved
+    return resolved
+
+
+def resolve_qdrant_image(image: str) -> str:
+    if image in {"", "latest"}:
+        return "qdrant/qdrant:latest"
+    return image
+
+
+def resolve_milvus_compose_version(release_tag: str) -> str:
+    if release_tag not in {"", "latest"}:
+        return release_tag
+
+    cached = LATEST_RESOLUTION_CACHE.get("milvus_compose_version")
+    if cached:
+        return cached
+
+    payload = fetch_json(
+        "https://api.github.com/repos/milvus-io/milvus/releases/latest"
+    )
+    resolved = str(payload.get("tag_name") or "").strip()
+    if not resolved:
+        raise RuntimeError("Could not resolve latest Milvus release tag")
+    LATEST_RESOLUTION_CACHE["milvus_compose_version"] = resolved
+    return resolved
+
+
+def uv_bootstrap_commands(python_cmd: str = "python") -> List[str]:
+    return [
+        (
+            f'{python_cmd} -c "import json, pathlib, platform, shutil, tarfile, urllib.request; '
+            "arch={'x86_64':'x86_64-unknown-linux-gnu','amd64':'x86_64-unknown-linux-gnu','aarch64':'aarch64-unknown-linux-gnu','arm64':'aarch64-unknown-linux-gnu'}[platform.machine().lower()]; "
+            "req=urllib.request.Request('https://api.github.com/repos/astral-sh/uv/releases/latest', headers={'User-Agent':'arcadedb-bench'}); "
+            "version=json.load(urllib.request.urlopen(req, timeout=30))['tag_name'].lstrip('v'); "
+            "archive=pathlib.Path('/tmp/uv.tar.gz'); "
+            "archive.write_bytes(urllib.request.urlopen(f'https://github.com/astral-sh/uv/releases/download/{version}/uv-{arch}.tar.gz', timeout=30).read()); "
+            "target=pathlib.Path('/tmp/uv-extract'); target.mkdir(parents=True, exist_ok=True); "
+            "tarfile.open(archive, 'r:gz').extractall(target); "
+            "uv_bin=next(p for p in target.rglob('uv') if p.is_file()); "
+            "pathlib.Path('/tmp/uv-bin').mkdir(parents=True, exist_ok=True); "
+            "shutil.copy2(uv_bin, '/tmp/uv-bin/uv')\""
+        ),
+        'export PATH="/tmp/uv-bin:$PATH"',
+    ]
 
 
 def is_running_in_docker() -> bool:
@@ -947,6 +1040,38 @@ def milvus_container_name(container_id: str) -> str:
         return ""
 
 
+def milvus_container_role(name: str) -> str | None:
+    normalized = name.lower()
+    for role in ("standalone", "minio", "etcd"):
+        if role in normalized:
+            return role
+    return None
+
+
+def milvus_weight_map(
+    container_ids: List[str],
+    weights_by_role: Dict[str, float],
+) -> Dict[str, float]:
+    names = {cid: milvus_container_name(cid) for cid in container_ids}
+    return {
+        cid: weights_by_role.get(milvus_container_role(names[cid]) or "", 0.0)
+        for cid in container_ids
+    }
+
+
+def milvus_role_allocation(
+    total_amount: int | float,
+    weights_by_role: Dict[str, float],
+) -> Dict[str, float]:
+    total_weight = sum(weights_by_role.values())
+    if total_weight <= 0:
+        return {}
+    return {
+        role: float(total_amount) * weight / total_weight
+        for role, weight in weights_by_role.items()
+    }
+
+
 def milvus_memory_limits_by_container(
     container_ids: List[str],
     total_mem_limit: str,
@@ -955,19 +1080,7 @@ def milvus_memory_limits_by_container(
         return {}
 
     total_mib = max(parse_size_to_mib(total_mem_limit), len(container_ids))
-    names = {cid: milvus_container_name(cid) for cid in container_ids}
-
-    weight_map: Dict[str, float] = {}
-    for cid in container_ids:
-        name = names[cid]
-        if "standalone" in name:
-            weight_map[cid] = 0.70
-        elif "etcd" in name:
-            weight_map[cid] = 0.15
-        elif "minio" in name:
-            weight_map[cid] = 0.15
-        else:
-            weight_map[cid] = 0.0
+    weight_map = milvus_weight_map(container_ids, MILVUS_MEMORY_WEIGHTS)
 
     total_weight = sum(weight_map.values())
     if total_weight <= 0:
@@ -1009,6 +1122,29 @@ def milvus_memory_limits_by_container(
     return {cid: f"{mib}m" for cid, mib in alloc.items()}
 
 
+def milvus_cpu_limits_by_container(
+    container_ids: List[str],
+    total_cpus: float,
+) -> Dict[str, str]:
+    if not container_ids:
+        return {}
+
+    total = max(float(total_cpus), 0.01)
+    weight_map = milvus_weight_map(container_ids, MILVUS_CPU_WEIGHTS)
+
+    total_weight = sum(weight_map.values())
+    if total_weight <= 0:
+        per_container = total / len(container_ids)
+        return {cid: format_cpu_quota(per_container) for cid in container_ids}
+
+    cpu_limits: Dict[str, str] = {}
+    for cid in container_ids:
+        allocated = total * weight_map[cid] / total_weight
+        cpu_limits[cid] = format_cpu_quota(max(allocated, 0.01))
+
+    return cpu_limits
+
+
 def apply_container_limits(
     container_ids: List[str],
     *,
@@ -1017,8 +1153,10 @@ def apply_container_limits(
 ) -> None:
     docker_bin = resolve_docker_binary()
     mem_limits = milvus_memory_limits_by_container(container_ids, mem_limit)
+    cpu_limits = milvus_cpu_limits_by_container(container_ids, cpus)
     for container_id in container_ids:
         container_mem = mem_limits.get(container_id, mem_limit)
+        container_cpu = cpu_limits.get(container_id, format_cpu_quota(cpus))
         subprocess.run(
             [
                 docker_bin,
@@ -1028,7 +1166,7 @@ def apply_container_limits(
                 "--memory-swap",
                 container_mem,
                 "--cpus",
-                format_cpu_quota(cpus),
+                container_cpu,
                 container_id,
             ],
             check=True,
@@ -1167,7 +1305,7 @@ def dir_size_mb(path: Path) -> float:
 
 def default_docker_image(backend: str) -> str:
     if backend == "pgvector":
-        return "pgvector/pgvector:pg16"
+        return resolve_latest_pgvector_image()
     return "python:3.12-slim"
 
 
@@ -1295,6 +1433,22 @@ def budget_allocation_report(args) -> dict:
                 "cpus": format_cpu_quota(server_cpu),
             },
         }
+        if backend == "milvus":
+            server_mem_mib = parse_size_to_mib(server_mem)
+            report["split"]["server_container_allocation"] = {
+                "memory_limit": {
+                    role: format_mib_as_docker_limit(int(round(mib)))
+                    for role, mib in milvus_role_allocation(
+                        server_mem_mib, MILVUS_MEMORY_WEIGHTS
+                    ).items()
+                },
+                "cpus": {
+                    role: format_cpu_quota(cpus)
+                    for role, cpus in milvus_role_allocation(
+                        server_cpu, MILVUS_CPU_WEIGHTS
+                    ).items()
+                },
+            }
     else:
         report["split"] = {
             "client_fraction": 1.0,
@@ -1491,7 +1645,7 @@ def run_in_docker(args) -> bool:
             [
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install numpy psutil",
                 f'uv pip install "{arcadedb_wheel_mount_path}"',
                 "echo 'Starting vector build benchmark...'",
@@ -1504,7 +1658,7 @@ def run_in_docker(args) -> bool:
             [
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install faiss-cpu numpy psutil",
                 "echo 'Starting vector build benchmark...'",
                 f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
@@ -1516,7 +1670,7 @@ def run_in_docker(args) -> bool:
             [
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install lancedb numpy psutil",
                 "echo 'Starting vector build benchmark...'",
                 f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
@@ -1531,7 +1685,7 @@ def run_in_docker(args) -> bool:
                 "rm -rf /var/lib/apt/lists/*",
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install numpy qdrant-client psutil",
                 "echo 'Starting vector build benchmark...'",
                 f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
@@ -1555,7 +1709,7 @@ def run_in_docker(args) -> bool:
                     "rm -rf /var/lib/apt/lists/*",
                     "python -m venv /tmp/bench-venv",
                     ". /tmp/bench-venv/bin/activate",
-                    "python -m pip install --no-cache-dir uv",
+                    *uv_bootstrap_commands("python"),
                     "uv pip install numpy pymilvus psutil",
                     "echo 'Starting vector build benchmark...'",
                     f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
@@ -1570,7 +1724,7 @@ def run_in_docker(args) -> bool:
             [
                 "python3 -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install numpy psycopg[binary] psutil",
                 "echo 'Starting vector build benchmark...'",
                 f"python -u 11_vector_index_build.py {' '.join(filtered_args)}",
@@ -1593,7 +1747,7 @@ def run_in_docker(args) -> bool:
                     f"echo '{bench_user}:x:{os.getuid()}:{os.getgid()}::/tmp:/bin/sh' "
                     ">> /etc/passwd"
                 ),
-                f'gosu {user_spec} sh -lc "{user_inner_cmd}"',
+                f"gosu {user_spec} sh -lc {shlex.quote(user_inner_cmd)}",
             ]
         )
         run_user_args = []
@@ -1764,19 +1918,25 @@ def main() -> None:
     parser.add_argument("--milvus-port", type=int, default=19530)
     parser.add_argument(
         "--milvus-compose-version",
-        default="v2.6.10",
+        default="latest",
         help="Milvus release tag for standalone docker-compose file",
     )
     parser.add_argument("--milvus-collection", default="vectordata")
     parser.add_argument("--qdrant-host", default="127.0.0.1")
     parser.add_argument("--qdrant-port", type=int, default=6333)
-    parser.add_argument("--qdrant-image", default="qdrant/qdrant:v1.11.3")
+    parser.add_argument("--qdrant-image", default="qdrant/qdrant:latest")
 
     args = parser.parse_args()
     if args.run_label:
         args.run_label = args.run_label.strip().replace("/", "-").replace(" ", "_")
     if args.jvm_heap_fraction <= 0 or args.jvm_heap_fraction > 1:
         parser.error("--jvm-heap-fraction must be > 0 and <= 1")
+    args.qdrant_image = resolve_qdrant_image(args.qdrant_image)
+    args.milvus_compose_version = resolve_milvus_compose_version(
+        args.milvus_compose_version
+    )
+    if args.backend == "pgvector" and args.docker_image == "python:3.12-slim":
+        args.docker_image = resolve_latest_pgvector_image()
     configure_reproducibility(args.seed)
 
     run_start_perf = time.perf_counter()
@@ -1796,7 +1956,7 @@ def main() -> None:
     )
 
     stackoverflow_corpus = "all"
-    (dataset_info, _dur, _r0, _r1) = timed_section(
+    dataset_info, _dur, _r0, _r1 = timed_section(
         "load_corpus",
         lambda: resolve_vector_dataset(args.dataset, stackoverflow_corpus),
     )
@@ -1876,7 +2036,7 @@ def main() -> None:
         if args.jvm_args is not None:
             jvm_kwargs["jvm_args"] = args.jvm_args
 
-        (db, dur, r0, r1) = timed_section(
+        db, dur, r0, r1 = timed_section(
             "create_db",
             lambda: arcadedb.create_database(str(db_path), jvm_kwargs=jvm_kwargs),
         )
@@ -1886,7 +2046,7 @@ def main() -> None:
             to_java_float_array = getattr(arcadedb, "to_java_float_array", None)
             ingest_started_at = datetime.now(timezone.utc).isoformat()
             print(f"Ingest start (arcadedb, UTC): {ingest_started_at}")
-            (ingested, dur, r0, r1) = timed_section(
+            ingested, dur, r0, r1 = timed_section(
                 "ingest",
                 lambda: ingest_vectors_arcadedb(
                     db,
@@ -1904,7 +2064,7 @@ def main() -> None:
             )
             record("ingest", {"ingested": int(ingested)}, dur, r0, r1)
 
-            (_index, dur, r0, r1) = timed_section(
+            _index, dur, r0, r1 = timed_section(
                 "create_index",
                 lambda: create_index_arcadedb(
                     db,
@@ -1919,7 +2079,7 @@ def main() -> None:
             record("create_index", {}, dur, r0, r1)
         finally:
             try:
-                (_, dur, r0, r1) = timed_section("close_db", db.close)
+                _, dur, r0, r1 = timed_section("close_db", db.close)
                 record("close_db", {}, dur, r0, r1)
             except RuntimeError:
                 pass
@@ -1937,14 +2097,14 @@ def main() -> None:
 
         stop_cpu = start_cpu_logger(2)
 
-        (index, dur, r0, r1) = timed_section(
+        index, dur, r0, r1 = timed_section(
             "create_db",
             lambda: {"index": None},
         )
         record("create_db", {"db_path": str(db_path)}, dur, r0, r1)
 
         try:
-            (index_obj, dur, r0, r1) = timed_section(
+            index_obj, dur, r0, r1 = timed_section(
                 "create_index",
                 lambda: create_index_faiss(
                     dim=dim,
@@ -1954,7 +2114,7 @@ def main() -> None:
             )
             record("create_index", {}, dur, r0, r1)
 
-            (ingested, dur, r0, r1) = timed_section(
+            ingested, dur, r0, r1 = timed_section(
                 "ingest",
                 lambda: ingest_vectors_faiss(
                     index=index_obj,
@@ -1966,7 +2126,7 @@ def main() -> None:
             )
             record("ingest", {"ingested": int(ingested)}, dur, r0, r1)
 
-            (_, dur, r0, r1) = timed_section(
+            _, dur, r0, r1 = timed_section(
                 "close_db",
                 lambda: persist_faiss_index(index_obj, db_path),
             )
@@ -1987,7 +2147,7 @@ def main() -> None:
 
         stop_cpu = start_cpu_logger(2)
 
-        (db, dur, r0, r1) = timed_section(
+        db, dur, r0, r1 = timed_section(
             "create_db",
             lambda: lancedb.connect(str(db_path / "lancedb-data")),
         )
@@ -1995,7 +2155,7 @@ def main() -> None:
 
         table_name = "vectordata"
         try:
-            ((table, ingested), dur, r0, r1) = timed_section(
+            (table, ingested), dur, r0, r1 = timed_section(
                 "ingest",
                 lambda: ingest_vectors_lancedb(
                     db=db,
@@ -2008,7 +2168,7 @@ def main() -> None:
             )
             record("ingest", {"ingested": int(ingested)}, dur, r0, r1)
 
-            (lancedb_index_config, dur, r0, r1) = timed_section(
+            lancedb_index_config, dur, r0, r1 = timed_section(
                 "create_index",
                 lambda: create_index_lancedb(
                     table,
@@ -2019,7 +2179,7 @@ def main() -> None:
             record("create_index", lancedb_index_config, dur, r0, r1)
 
             close_db_fn = getattr(db, "close", None)
-            (_, dur, r0, r1) = timed_section(
+            _, dur, r0, r1 = timed_section(
                 "close_db",
                 lambda: close_db_fn() if callable(close_db_fn) else None,
             )
@@ -2057,7 +2217,7 @@ def main() -> None:
         rss_provider = combined_rss_provider(qdrant_pid_provider)
         stop_cpu = start_cpu_logger(2, rss_provider=rss_provider)
 
-        (client, dur, r0, r1) = timed_section(
+        client, dur, r0, r1 = timed_section(
             "create_db",
             lambda: QdrantClient(
                 host=args.qdrant_host,
@@ -2070,7 +2230,7 @@ def main() -> None:
         record("create_db", {"db_path": str(db_path)}, dur, r0, r1)
 
         try:
-            (_, dur, r0, r1) = timed_section(
+            _, dur, r0, r1 = timed_section(
                 "create_index",
                 lambda: create_collection_qdrant(
                     client,
@@ -2083,7 +2243,7 @@ def main() -> None:
             )
             record("create_index", {}, dur, r0, r1)
 
-            (ingested, dur, r0, r1) = timed_section(
+            ingested, dur, r0, r1 = timed_section(
                 "ingest",
                 lambda: ingest_vectors_qdrant(
                     client,
@@ -2104,7 +2264,7 @@ def main() -> None:
             runtime_versions["lancedb"] = None
         finally:
             try:
-                (_, dur, r0, r1) = timed_section(
+                _, dur, r0, r1 = timed_section(
                     "close_db",
                     client.close,
                     rss_provider=rss_provider,
@@ -2151,7 +2311,7 @@ def main() -> None:
         alias = "milvus-bench-build"
         collection = None
         try:
-            (_, dur, r0, r1) = timed_section(
+            _, dur, r0, r1 = timed_section(
                 "create_db",
                 lambda: connections.connect(
                     alias=alias,
@@ -2187,7 +2347,7 @@ def main() -> None:
                 using=alias,
             )
 
-            (_, dur, r0, r1) = timed_section(
+            _, dur, r0, r1 = timed_section(
                 "create_index",
                 lambda: create_collection_milvus(
                     collection,
@@ -2198,7 +2358,7 @@ def main() -> None:
             )
             record("create_index", {}, dur, r0, r1)
 
-            (ingested, dur, r0, r1) = timed_section(
+            ingested, dur, r0, r1 = timed_section(
                 "ingest",
                 lambda: ingest_vectors_milvus(
                     collection,
@@ -2222,7 +2382,7 @@ def main() -> None:
             runtime_versions["lancedb"] = None
         finally:
             try:
-                (_, dur, r0, r1) = timed_section(
+                _, dur, r0, r1 = timed_section(
                     "close_db",
                     lambda: connections.disconnect(alias=alias),
                     rss_provider=rss_provider,
@@ -2251,7 +2411,7 @@ def main() -> None:
 
         conn: psycopg.Connection | None = None
         try:
-            (conn, dur, r0, r1) = timed_section(
+            conn, dur, r0, r1 = timed_section(
                 "create_db",
                 lambda: psycopg.connect(
                     host=args.pg_host,
@@ -2281,7 +2441,7 @@ def main() -> None:
 
             ensure_pg_schema(conn, dim)
 
-            (ingested, dur, r0, r1) = timed_section(
+            ingested, dur, r0, r1 = timed_section(
                 "ingest",
                 lambda: ingest_vectors_pgvector(
                     conn,
@@ -2294,7 +2454,7 @@ def main() -> None:
             )
             record("ingest", {"ingested": int(ingested)}, dur, r0, r1)
 
-            (_, dur, r0, r1) = timed_section(
+            _, dur, r0, r1 = timed_section(
                 "create_index",
                 lambda: create_index_pgvector(
                     conn,
@@ -2314,7 +2474,7 @@ def main() -> None:
         finally:
             if conn is not None:
                 try:
-                    (_, dur, r0, r1) = timed_section(
+                    _, dur, r0, r1 = timed_section(
                         "close_db",
                         conn.close,
                         rss_provider=rss_provider,

@@ -172,6 +172,91 @@ matrix_resolve_version() {
     echo "$requested"
 }
 
+matrix_http_json_value() {
+    local url="$1"
+    local python_expr="$2"
+
+    python3 - "$url" "$python_expr" << 'PY'
+import json
+import sys
+import urllib.request
+
+url = sys.argv[1]
+python_expr = sys.argv[2]
+req = urllib.request.Request(url, headers={"User-Agent": "arcadedb-bench"})
+with urllib.request.urlopen(req, timeout=30) as response:
+    payload = json.load(response)
+
+namespace = {"payload": payload}
+value = eval(python_expr, {"__builtins__": {}}, namespace)
+if value in (None, ""):
+    raise SystemExit(f"No value found for expression: {python_expr}")
+print(value)
+PY
+}
+
+matrix_resolve_latest_pgvector_image() {
+    python3 - << 'PY'
+import json
+import re
+import urllib.request
+
+url = 'https://hub.docker.com/v2/repositories/pgvector/pgvector/tags?page_size=100'
+req = urllib.request.Request(url, headers={'User-Agent': 'arcadedb-bench'})
+with urllib.request.urlopen(req, timeout=30) as response:
+    payload = json.load(response)
+
+pattern = re.compile(r'^pg(\d+)-trixie$')
+best = None
+for item in payload.get('results', []):
+    tag = str(item.get('name') or '')
+    match = pattern.match(tag)
+    if not match:
+        continue
+    major = int(match.group(1))
+    candidate = (major, tag)
+    if best is None or candidate > best:
+        best = candidate
+
+if best is None:
+    raise SystemExit('Could not resolve latest pgvector pgN-trixie tag from Docker Hub')
+
+print(f'pgvector/pgvector:{best[1]}')
+PY
+}
+
+matrix_resolve_pgvector_image() {
+    local requested="${1:-}"
+    if [[ -z "$requested" || "$requested" == "latest" || "$requested" == "pgvector/pgvector:latest" ]]; then
+        matrix_resolve_latest_pgvector_image
+        return
+    fi
+
+    echo "$requested"
+}
+
+matrix_resolve_qdrant_image() {
+    local requested="${1:-}"
+    if [[ -z "$requested" || "$requested" == "latest" ]]; then
+        echo "qdrant/qdrant:latest"
+        return
+    fi
+
+    echo "$requested"
+}
+
+matrix_resolve_milvus_compose_version() {
+    local requested="${1:-}"
+    if [[ -z "$requested" || "$requested" == "latest" ]]; then
+        matrix_http_json_value \
+            "https://api.github.com/repos/milvus-io/milvus/releases/latest" \
+            "payload.get('tag_name')"
+        return
+    fi
+
+    echo "$requested"
+}
+
 matrix_prepare_local_arcadedb_wheel() {
     local examples_dir="$1"
     local platform="${2:-linux/amd64}"

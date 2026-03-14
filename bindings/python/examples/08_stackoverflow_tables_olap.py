@@ -30,6 +30,26 @@ except ImportError:
     print("Install with: uv pip install lxml")
     sys.exit(1)
 
+
+def uv_bootstrap_commands(python_cmd: str) -> List[str]:
+    return [
+        (
+            f'{python_cmd} -c "import json, pathlib, platform, shutil, tarfile, urllib.request; '
+            "arch={'x86_64':'x86_64-unknown-linux-gnu','amd64':'x86_64-unknown-linux-gnu','aarch64':'aarch64-unknown-linux-gnu','arm64':'aarch64-unknown-linux-gnu'}[platform.machine().lower()]; "
+            "req=urllib.request.Request('https://api.github.com/repos/astral-sh/uv/releases/latest', headers={'User-Agent':'arcadedb-bench'}); "
+            "version=json.load(urllib.request.urlopen(req, timeout=30))['tag_name'].lstrip('v'); "
+            "archive=pathlib.Path('/tmp/uv.tar.gz'); "
+            "archive.write_bytes(urllib.request.urlopen(f'https://github.com/astral-sh/uv/releases/download/{version}/uv-{arch}.tar.gz', timeout=30).read()); "
+            "target=pathlib.Path('/tmp/uv-extract'); target.mkdir(parents=True, exist_ok=True); "
+            "tarfile.open(archive, 'r:gz').extractall(target); "
+            "uv_bin=next(p for p in target.rglob('uv') if p.is_file()); "
+            "pathlib.Path('/tmp/uv-bin').mkdir(parents=True, exist_ok=True); "
+            "shutil.copy2(uv_bin, '/tmp/uv-bin/uv')\""
+        ),
+        'export PATH="/tmp/uv-bin:$PATH"',
+    ]
+
+
 EXPECTED_DATASETS = {
     "stackoverflow-tiny",
     "stackoverflow-small",
@@ -1381,12 +1401,12 @@ def run_in_docker(args):
     python_cmd = "python"
     if args.db == "postgresql":
         inner_cmd_parts.append(
-            "apt-get update && apt-get install -y postgresql python3 python3-venv python3-pip && rm -rf /var/lib/apt/lists/*"
+            "apt-get update && apt-get install -y postgresql python3 python3-venv && rm -rf /var/lib/apt/lists/*"
         )
         python_cmd = "python3"
     inner_cmd_parts.append(f"{python_cmd} -m venv /tmp/bench-venv")
     inner_cmd_parts.append(". /tmp/bench-venv/bin/activate")
-    inner_cmd_parts.append(f"{python_cmd} -m pip install --no-cache-dir uv")
+    inner_cmd_parts.extend(uv_bootstrap_commands(python_cmd))
     inner_cmd_parts.append(f"uv pip install {packages_str}")
     if arcadedb_wheel_mount_path is not None:
         inner_cmd_parts.append(f'uv pip install "{arcadedb_wheel_mount_path}"')

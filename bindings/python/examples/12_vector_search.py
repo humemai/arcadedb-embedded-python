@@ -31,6 +31,7 @@ import os
 import platform
 import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -40,7 +41,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List
-from urllib.request import urlopen, urlretrieve
+from urllib.request import Request, urlopen, urlretrieve
 
 import numpy as np
 
@@ -55,6 +56,17 @@ SIZE_TOKEN_RE = re.compile(
     r"^\s*([0-9]*\.?[0-9]+)\s*([kmgt]?)(?:i?b)?\s*$", re.IGNORECASE
 )
 HNSW_EF_NORMALIZATION = 0.5
+MILVUS_MEMORY_WEIGHTS = {
+    "standalone": 0.70,
+    "minio": 0.15,
+    "etcd": 0.15,
+}
+MILVUS_CPU_WEIGHTS = {
+    "standalone": 0.90,
+    "minio": 0.05,
+    "etcd": 0.05,
+}
+LATEST_RESOLUTION_CACHE: Dict[str, str] = {}
 
 MILVUS_RUNNER_DOCKERFILE = """FROM python:3.12-slim
 
@@ -62,11 +74,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \\
     && apt-get install -y --no-install-recommends \\
+        curl \
         docker-cli \\
         docker-compose \\
     && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install --no-cache-dir uv \\
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
     && uv pip install --system numpy pymilvus psutil
 """
 
@@ -85,6 +98,86 @@ def get_docker_version() -> str | None:
     except (subprocess.SubprocessError, OSError):
         return None
     return out.strip() or None
+
+
+def fetch_json(url: str) -> dict:
+    req = Request(url, headers={"User-Agent": "arcadedb-bench"})
+    with urlopen(req, timeout=30) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Expected JSON object from {url}")
+    return payload
+
+
+def resolve_latest_pgvector_image() -> str:
+    cached = LATEST_RESOLUTION_CACHE.get("pgvector_image")
+    if cached:
+        return cached
+
+    payload = fetch_json(
+        "https://hub.docker.com/v2/repositories/pgvector/pgvector/tags?page_size=100"
+    )
+    best_major = -1
+    best_tag = None
+    for item in payload.get("results", []):
+        tag = str(item.get("name") or "")
+        match = re.match(r"^pg(\d+)-trixie$", tag)
+        if not match:
+            continue
+        major = int(match.group(1))
+        if major > best_major:
+            best_major = major
+            best_tag = tag
+
+    if not best_tag:
+        raise RuntimeError("Could not resolve latest pgvector Docker tag")
+
+    resolved = f"pgvector/pgvector:{best_tag}"
+    LATEST_RESOLUTION_CACHE["pgvector_image"] = resolved
+    return resolved
+
+
+def resolve_qdrant_image(image: str) -> str:
+    if image in {"", "latest"}:
+        return "qdrant/qdrant:latest"
+    return image
+
+
+def resolve_milvus_compose_version(release_tag: str) -> str:
+    if release_tag not in {"", "latest"}:
+        return release_tag
+
+    cached = LATEST_RESOLUTION_CACHE.get("milvus_compose_version")
+    if cached:
+        return cached
+
+    payload = fetch_json(
+        "https://api.github.com/repos/milvus-io/milvus/releases/latest"
+    )
+    resolved = str(payload.get("tag_name") or "").strip()
+    if not resolved:
+        raise RuntimeError("Could not resolve latest Milvus release tag")
+    LATEST_RESOLUTION_CACHE["milvus_compose_version"] = resolved
+    return resolved
+
+
+def uv_bootstrap_commands(python_cmd: str = "python") -> List[str]:
+    return [
+        (
+            f'{python_cmd} -c "import json, pathlib, platform, shutil, tarfile, urllib.request; '
+            "arch={'x86_64':'x86_64-unknown-linux-gnu','amd64':'x86_64-unknown-linux-gnu','aarch64':'aarch64-unknown-linux-gnu','arm64':'aarch64-unknown-linux-gnu'}[platform.machine().lower()]; "
+            "req=urllib.request.Request('https://api.github.com/repos/astral-sh/uv/releases/latest', headers={'User-Agent':'arcadedb-bench'}); "
+            "version=json.load(urllib.request.urlopen(req, timeout=30))['tag_name'].lstrip('v'); "
+            "archive=pathlib.Path('/tmp/uv.tar.gz'); "
+            "archive.write_bytes(urllib.request.urlopen(f'https://github.com/astral-sh/uv/releases/download/{version}/uv-{arch}.tar.gz', timeout=30).read()); "
+            "target=pathlib.Path('/tmp/uv-extract'); target.mkdir(parents=True, exist_ok=True); "
+            "tarfile.open(archive, 'r:gz').extractall(target); "
+            "uv_bin=next(p for p in target.rglob('uv') if p.is_file()); "
+            "pathlib.Path('/tmp/uv-bin').mkdir(parents=True, exist_ok=True); "
+            "shutil.copy2(uv_bin, '/tmp/uv-bin/uv')\""
+        ),
+        'export PATH="/tmp/uv-bin:$PATH"',
+    ]
 
 
 def is_running_in_docker() -> bool:
@@ -1223,6 +1316,38 @@ def milvus_container_name(container_id: str) -> str:
         return ""
 
 
+def milvus_container_role(name: str) -> str | None:
+    normalized = name.lower()
+    for role in ("standalone", "minio", "etcd"):
+        if role in normalized:
+            return role
+    return None
+
+
+def milvus_weight_map(
+    container_ids: List[str],
+    weights_by_role: Dict[str, float],
+) -> Dict[str, float]:
+    names = {cid: milvus_container_name(cid) for cid in container_ids}
+    return {
+        cid: weights_by_role.get(milvus_container_role(names[cid]) or "", 0.0)
+        for cid in container_ids
+    }
+
+
+def milvus_role_allocation(
+    total_amount: int | float,
+    weights_by_role: Dict[str, float],
+) -> Dict[str, float]:
+    total_weight = sum(weights_by_role.values())
+    if total_weight <= 0:
+        return {}
+    return {
+        role: float(total_amount) * weight / total_weight
+        for role, weight in weights_by_role.items()
+    }
+
+
 def milvus_memory_limits_by_container(
     container_ids: List[str],
     total_mem_limit: str,
@@ -1231,19 +1356,7 @@ def milvus_memory_limits_by_container(
         return {}
 
     total_mib = max(parse_size_to_mib(total_mem_limit), len(container_ids))
-    names = {cid: milvus_container_name(cid) for cid in container_ids}
-
-    weight_map: Dict[str, float] = {}
-    for cid in container_ids:
-        name = names[cid]
-        if "standalone" in name:
-            weight_map[cid] = 0.90
-        elif "etcd" in name:
-            weight_map[cid] = 0.05
-        elif "minio" in name:
-            weight_map[cid] = 0.05
-        else:
-            weight_map[cid] = 0.0
+    weight_map = milvus_weight_map(container_ids, MILVUS_MEMORY_WEIGHTS)
 
     total_weight = sum(weight_map.values())
     if total_weight <= 0:
@@ -1285,6 +1398,29 @@ def milvus_memory_limits_by_container(
     return {cid: f"{mib}m" for cid, mib in alloc.items()}
 
 
+def milvus_cpu_limits_by_container(
+    container_ids: List[str],
+    total_cpus: float,
+) -> Dict[str, str]:
+    if not container_ids:
+        return {}
+
+    total = max(float(total_cpus), 0.01)
+    weight_map = milvus_weight_map(container_ids, MILVUS_CPU_WEIGHTS)
+
+    total_weight = sum(weight_map.values())
+    if total_weight <= 0:
+        per_container = total / len(container_ids)
+        return {cid: format_cpu_quota(per_container) for cid in container_ids}
+
+    cpu_limits: Dict[str, str] = {}
+    for cid in container_ids:
+        allocated = total * weight_map[cid] / total_weight
+        cpu_limits[cid] = format_cpu_quota(max(allocated, 0.01))
+
+    return cpu_limits
+
+
 def apply_container_limits(
     container_ids: List[str],
     *,
@@ -1293,8 +1429,10 @@ def apply_container_limits(
 ) -> None:
     docker_bin = resolve_docker_binary()
     mem_limits = milvus_memory_limits_by_container(container_ids, mem_limit)
+    cpu_limits = milvus_cpu_limits_by_container(container_ids, cpus)
     for container_id in container_ids:
         container_mem = mem_limits.get(container_id, mem_limit)
+        container_cpu = cpu_limits.get(container_id, format_cpu_quota(cpus))
         subprocess.run(
             [
                 docker_bin,
@@ -1304,7 +1442,7 @@ def apply_container_limits(
                 "--memory-swap",
                 container_mem,
                 "--cpus",
-                format_cpu_quota(cpus),
+                container_cpu,
                 container_id,
             ],
             check=True,
@@ -1497,7 +1635,7 @@ def get_postmaster_pid(data_dir: Path) -> int | None:
 
 def default_docker_image(backend: str) -> str:
     if backend == "pgvector":
-        return "pgvector/pgvector:pg16"
+        return resolve_latest_pgvector_image()
     return "python:3.12-slim"
 
 
@@ -1625,6 +1763,22 @@ def budget_allocation_report(args) -> dict:
                 "cpus": format_cpu_quota(server_cpu),
             },
         }
+        if backend == "milvus":
+            server_mem_mib = parse_size_to_mib(server_mem)
+            report["split"]["server_container_allocation"] = {
+                "memory_limit": {
+                    role: format_mib_as_docker_limit(int(round(mib)))
+                    for role, mib in milvus_role_allocation(
+                        server_mem_mib, MILVUS_MEMORY_WEIGHTS
+                    ).items()
+                },
+                "cpus": {
+                    role: format_cpu_quota(cpus)
+                    for role, cpus in milvus_role_allocation(
+                        server_cpu, MILVUS_CPU_WEIGHTS
+                    ).items()
+                },
+            }
     else:
         report["split"] = {
             "client_fraction": 1.0,
@@ -1819,7 +1973,7 @@ def run_in_docker(args) -> bool:
             [
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install numpy psutil",
                 f'uv pip install "{arcadedb_wheel_mount_path}"',
                 "echo 'Starting vector search benchmark...'",
@@ -1832,7 +1986,7 @@ def run_in_docker(args) -> bool:
             [
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install faiss-cpu numpy psutil",
                 "echo 'Starting vector search benchmark...'",
                 f"python -u 12_vector_search.py {' '.join(filtered_args)}",
@@ -1844,7 +1998,7 @@ def run_in_docker(args) -> bool:
             [
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install lancedb numpy psutil",
                 "echo 'Starting vector search benchmark...'",
                 f"python -u 12_vector_search.py {' '.join(filtered_args)}",
@@ -1856,7 +2010,7 @@ def run_in_docker(args) -> bool:
             [
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install numpy psutil",
                 "echo 'Starting vector search benchmark...'",
                 f"python -u 12_vector_search.py {' '.join(filtered_args)}",
@@ -1871,7 +2025,7 @@ def run_in_docker(args) -> bool:
                 "rm -rf /var/lib/apt/lists/*",
                 "python -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install numpy qdrant-client psutil",
                 "echo 'Starting vector search benchmark...'",
                 f"python -u 12_vector_search.py {' '.join(filtered_args)}",
@@ -1895,7 +2049,7 @@ def run_in_docker(args) -> bool:
                     "rm -rf /var/lib/apt/lists/*",
                     "python -m venv /tmp/bench-venv",
                     ". /tmp/bench-venv/bin/activate",
-                    "python -m pip install --no-cache-dir uv",
+                    *uv_bootstrap_commands("python"),
                     "uv pip install numpy pymilvus psutil",
                     "echo 'Starting vector search benchmark...'",
                     f"python -u 12_vector_search.py {' '.join(filtered_args)}",
@@ -1909,7 +2063,7 @@ def run_in_docker(args) -> bool:
             [
                 "python3 -m venv /tmp/bench-venv",
                 ". /tmp/bench-venv/bin/activate",
-                "python -m pip install --no-cache-dir uv",
+                *uv_bootstrap_commands("python"),
                 "uv pip install numpy psycopg[binary] psutil",
                 "echo 'Starting vector search benchmark...'",
                 f"python -u 12_vector_search.py {' '.join(filtered_args)}",
@@ -1922,7 +2076,7 @@ def run_in_docker(args) -> bool:
                 "rm -rf /var/lib/apt/lists/*",
                 f"getent group {os.getgid()} >/dev/null || echo 'benchgrp:x:{os.getgid()}:' >> /etc/group",
                 f"getent passwd {os.getuid()} >/dev/null || echo 'benchusr:x:{os.getuid()}:{os.getgid()}::/tmp:/bin/sh' >> /etc/passwd",
-                f'gosu {user_spec} sh -lc "{user_inner_cmd}"',
+                f"gosu {user_spec} sh -lc {shlex.quote(user_inner_cmd)}",
             ]
         )
         run_user_args = []
@@ -2074,19 +2228,25 @@ def main() -> None:
     parser.add_argument("--milvus-port", type=int, default=19530)
     parser.add_argument(
         "--milvus-compose-version",
-        default="v2.6.10",
+        default="latest",
         help="Milvus release tag for standalone docker-compose file",
     )
     parser.add_argument("--milvus-collection", default="vectordata")
     parser.add_argument("--qdrant-host", default="127.0.0.1")
     parser.add_argument("--qdrant-port", type=int, default=6333)
-    parser.add_argument("--qdrant-image", default="qdrant/qdrant:v1.11.3")
+    parser.add_argument("--qdrant-image", default="qdrant/qdrant:latest")
 
     args = parser.parse_args()
     if args.run_label:
         args.run_label = args.run_label.strip().replace("/", "-").replace(" ", "_")
     if args.jvm_heap_fraction <= 0 or args.jvm_heap_fraction > 1:
         parser.error("--jvm-heap-fraction must be > 0 and <= 1")
+    args.qdrant_image = resolve_qdrant_image(args.qdrant_image)
+    args.milvus_compose_version = resolve_milvus_compose_version(
+        args.milvus_compose_version
+    )
+    if args.backend == "pgvector" and not args.docker_image:
+        args.docker_image = resolve_latest_pgvector_image()
     configure_reproducibility(args.seed)
 
     if run_in_docker(args):
