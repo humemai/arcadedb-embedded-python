@@ -1,11 +1,9 @@
 #!/bin/bash
 # Script to sync upstream changes while preserving fork-specific customizations
 #
-# This fork maintains custom files that should never be overwritten:
-#   - .github/workflows/  (Python CI/CD)
-#   - bindings/python/    (Python bindings)
-#   - README.md          (modified for Python)
-#   - CLAUDE.md          (excluded from this fork)
+# This fork maintains a small set of fork-owned files that should never be
+# overwritten by upstream during sync. Everything else, including
+# bindings/python/, is rebased normally on top of upstream-main.
 #
 # Usage: ./sync-upstream.sh [--help|--status|--dry-run]
 
@@ -19,9 +17,12 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-PROTECTED_PATHS=(".github/workflows" "bindings/python" "README.md" "CLAUDE.md")
+FORK_OWNED_PATHS=(
+    "README.md"
+    "CLAUDE.md"
+)
 
-PROTECTED_BACKUP_DIR=""
+PROTECTED_SOURCE_REV=""
 
 try_auto_resolve() {
     local conflicts resolved
@@ -31,8 +32,8 @@ try_auto_resolve() {
     fi
     resolved=0
     for path in $conflicts; do
-        for prefix in "${PROTECTED_PATHS[@]}"; do
-            if [[ "$path" == "$prefix"* ]]; then
+        for protected_path in "${FORK_OWNED_PATHS[@]}"; do
+            if [[ "$path" == "$protected_path" ]]; then
                 git checkout --theirs -- "$path"
                 git add "$path"
                 resolved=1
@@ -46,35 +47,25 @@ try_auto_resolve() {
     return 1
 }
 
-backup_protected_paths() {
-    local path
-
-    PROTECTED_BACKUP_DIR=$(mktemp -d -t arcadedb_protected.XXXXXX)
-    for path in "${PROTECTED_PATHS[@]}"; do
-        if git rev-parse --verify --quiet "HEAD:$path" >/dev/null; then
-            git archive --format=tar HEAD -- "$path" | tar -xf - -C "$PROTECTED_BACKUP_DIR"
-        fi
-    done
+capture_protected_source_rev() {
+    PROTECTED_SOURCE_REV=$(git rev-parse HEAD)
 }
 
 restore_protected_paths() {
-    local path backup_path tracked_entry
+    local path tracked_entry
 
-    for path in "${PROTECTED_PATHS[@]}"; do
-        backup_path="$PROTECTED_BACKUP_DIR/$path"
-
+    for path in "${FORK_OWNED_PATHS[@]}"; do
         while IFS= read -r tracked_entry; do
             [ -n "$tracked_entry" ] || continue
-            git rm -r --cached --ignore-unmatch --quiet -- "$tracked_entry" >/dev/null 2>&1 || true
-            rm -rf -- "$tracked_entry"
+            if ! git cat-file -e "$PROTECTED_SOURCE_REV:$tracked_entry" >/dev/null 2>&1; then
+                git rm -r --cached --ignore-unmatch --quiet -- "$tracked_entry" >/dev/null 2>&1 || true
+                rm -rf -- "$tracked_entry"
+            fi
         done < <(git ls-files -- "$path")
 
-        if [ -e "$backup_path" ]; then
-            mkdir -p "$(dirname "$path")"
-            cp -a "$backup_path" "$path"
+        if git cat-file -e "$PROTECTED_SOURCE_REV:$path" >/dev/null 2>&1; then
+            git restore --source="$PROTECTED_SOURCE_REV" --staged --worktree -- "$path"
         fi
-
-        git add -A -- "$path"
     done
 }
 
@@ -93,11 +84,12 @@ ${YELLOW}Usage:${NC}
   ./sync-upstream.sh --status   Check sync status only
   ./sync-upstream.sh --help     Show this help
 
-${YELLOW}Protected Files (never overwritten):${NC}
-  • .github/workflows/    - Python CI/CD pipelines
-  • bindings/python/      - Python bindings implementation
-  • README.md            - Fork-specific documentation
-    • CLAUDE.md            - Removed from this fork
+${YELLOW}Fork-Owned Files (restored after rebase):${NC}
+    • README.md
+    • CLAUDE.md
+
+${YELLOW}Normal Rebase Paths:${NC}
+    • bindings/python/      - Rebases normally on top of upstream-main
 
 ${YELLOW}After Sync:${NC}
 1. Test: cd bindings/python && ./build.sh linux/amd64 && pytest tests/
@@ -193,14 +185,6 @@ echo -e "${YELLOW}📊 Checking current branch...${NC}"
 CURRENT_BRANCH=$(git branch --show-current)
 START_BRANCH="$CURRENT_BRANCH"
 
-# 2b. Set cleanup for protected path backup
-cleanup() {
-    if [ -n "$PROTECTED_BACKUP_DIR" ] && [ -d "$PROTECTED_BACKUP_DIR" ]; then
-        rm -rf "$PROTECTED_BACKUP_DIR"
-    fi
-}
-trap cleanup EXIT
-
 # 3. Check for uncommitted changes
 if ! git diff-index --quiet HEAD --; then
     echo -e "${RED}❌ You have uncommitted changes${NC}"
@@ -209,8 +193,8 @@ if ! git diff-index --quiet HEAD --; then
     exit 1
 fi
 
-# 3b. Backup tracked protected fork paths so they cannot be overwritten during rebase
-backup_protected_paths
+# 3b. Capture the exact tracked fork state for fork-owned files before rebase
+capture_protected_source_rev
 
 # 4. Ensure upstream-main exists
 if ! git show-ref --verify --quiet refs/heads/upstream-main; then
@@ -280,7 +264,7 @@ else
     fi
 fi
 
-# 9b. Restore protected fork paths exactly as they were before the rebase
+# 9b. Restore fork-owned files exactly as they were before the rebase
 restore_protected_paths
 
 # Commit fork-specific preservation changes only when needed
