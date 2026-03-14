@@ -170,7 +170,12 @@
     - compare against synchronous transactional SQL ingest
     - compare against async SQL ingest
     - do not assume it is better until measured from Python
-  - Step 7: only document/recommend it if it actually wins cleanly
+  - Step 7: revisit the current Python tests/examples/docs if we actually implement it
+    - revisit `bindings/python/examples/16_import_database_vs_transactional_graph_ingest.py` first, because it is the current graph-ingest comparison harness
+    - decide whether Example 16 becomes 4-way (transactional vs async SQL vs SQL `IMPORT DATABASE` vs `GraphBatchImporter`) or whether `GraphBatchImporter` replaces the SQL import branch there
+    - add dedicated wrapper correctness tests instead of trying to overload `test_import_database.py`
+    - revisit graph-ingest documentation and Java API coverage notes so the recommended ingest story stays coherent
+  - Step 8: only document/recommend it if it actually wins cleanly
     - if it performs well and the wrapper stays simple, document it as an advanced bulk graph ingest path
     - if not, keep the investigation notes and do not broaden the public API unnecessarily
 

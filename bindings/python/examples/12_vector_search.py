@@ -1358,17 +1358,29 @@ def wait_for_milvus_ready(host: str, port: int, timeout_sec: int = 300) -> None:
     logging.getLogger("pymilvus").setLevel(logging.CRITICAL)
 
     start = time.perf_counter()
+    last_report = 0.0
+    print(
+        f"[milvus] Waiting for server readiness at {host}:{port} "
+        f"(timeout={timeout_sec}s)"
+    )
     while True:
         try:
             connections.connect(alias="_bootstrap", host=host, port=str(port))
             _ = utility.get_server_version(using="_bootstrap")
             connections.disconnect(alias="_bootstrap")
+            elapsed = time.perf_counter() - start
+            print(f"[milvus] Server ready after {elapsed:.1f}s")
             return
         except Exception:
-            if time.perf_counter() - start > timeout_sec:
+            elapsed = time.perf_counter() - start
+            if elapsed > timeout_sec:
                 raise SystemExit(
-                    f"Milvus did not become ready within {timeout_sec}s at {host}:{port}"
+                    "Milvus did not become ready within "
+                    f"{timeout_sec}s at {host}:{port}"
                 )
+            if elapsed - last_report >= 5.0:
+                print(f"[milvus] Still waiting for server readiness... {elapsed:.1f}s")
+                last_report = elapsed
             time.sleep(1)
 
 
@@ -1382,9 +1394,17 @@ def wait_for_milvus_collection_load(
 
     logging.getLogger("pymilvus").setLevel(logging.CRITICAL)
     start = time.perf_counter()
+    last_report = 0.0
+    collection_name = getattr(collection, "name", "<unknown>")
+    print(
+        f"[milvus] Waiting for collection load: {collection_name} "
+        f"(timeout={timeout_sec}s)"
+    )
     while True:
         try:
             collection.load()
+            elapsed = time.perf_counter() - start
+            print(f"[milvus] Collection loaded after {elapsed:.1f}s: {collection_name}")
             return
         except Exception as exc:
             msg = str(exc)
@@ -1396,11 +1416,15 @@ def wait_for_milvus_collection_load(
             if not transient:
                 raise
 
-            if time.perf_counter() - start > timeout_sec:
+            elapsed = time.perf_counter() - start
+            if elapsed > timeout_sec:
                 raise SystemExit(
                     "Milvus collection load did not become ready within "
                     f"{timeout_sec}s"
                 ) from exc
+            if elapsed - last_report >= 5.0:
+                print(f"[milvus] Still waiting for collection load... {elapsed:.1f}s")
+                last_report = elapsed
             time.sleep(poll_sec)
 
 
@@ -2096,7 +2120,7 @@ def main() -> None:
     if not qids:
         raise SystemExit("No valid query IDs with ground truth found")
 
-    (queries, _dur, _r0, _r1) = timed_section(
+    queries, _dur, _r0, _r1 = timed_section(
         "load_queries",
         lambda: materialize_queries(sources, qids, dim=dim),
     )
@@ -2139,13 +2163,13 @@ def main() -> None:
 
                 phases: List[dict] = []
 
-                (db, dur, r0, r1) = timed_section(
+                db, dur, r0, r1 = timed_section(
                     "open_db",
                     lambda: arcadedb.open_database(str(db_path), jvm_kwargs=jvm_kwargs),
                 )
                 phases.append(record_phase("open_db", {}, dur, r0, r1))
 
-                (stats, dur, r0, r1) = timed_section(
+                stats, dur, r0, r1 = timed_section(
                     "search",
                     lambda: run_repeated_search(
                         lambda run_queries, run_qids: search_arcadedb(
@@ -2166,7 +2190,7 @@ def main() -> None:
                 )
                 phases.append(record_phase("search", stats, dur, r0, r1))
 
-                (_, dur, r0, r1) = timed_section("close_db", lambda: db.close())
+                _, dur, r0, r1 = timed_section("close_db", lambda: db.close())
                 phases.append(record_phase("close_db", {}, dur, r0, r1))
 
                 sweeps.append(
@@ -2213,13 +2237,13 @@ def main() -> None:
 
                 phases: List[dict] = []
 
-                (index, dur, r0, r1) = timed_section(
+                index, dur, r0, r1 = timed_section(
                     "open_db",
                     lambda: faiss.read_index(str(index_path)),
                 )
                 phases.append(record_phase("open_db", {}, dur, r0, r1))
 
-                (stats, dur, r0, r1) = timed_section(
+                stats, dur, r0, r1 = timed_section(
                     "search",
                     lambda: run_repeated_search(
                         lambda run_queries, run_qids: search_faiss(
@@ -2239,7 +2263,7 @@ def main() -> None:
                 )
                 phases.append(record_phase("search", stats, dur, r0, r1))
 
-                (_, dur, r0, r1) = timed_section("close_db", lambda: None)
+                _, dur, r0, r1 = timed_section("close_db", lambda: None)
                 phases.append(record_phase("close_db", {}, dur, r0, r1))
 
                 sweeps.append(
@@ -2285,13 +2309,13 @@ def main() -> None:
 
                 phases: List[dict] = []
 
-                ((db, table), dur, r0, r1) = timed_section(
+                (db, table), dur, r0, r1 = timed_section(
                     "open_db",
                     lambda: open_lancedb_table(lancedb_dir, table_name),
                 )
                 phases.append(record_phase("open_db", {}, dur, r0, r1))
 
-                (stats, dur, r0, r1) = timed_section(
+                stats, dur, r0, r1 = timed_section(
                     "search",
                     lambda: run_repeated_search(
                         lambda run_queries, run_qids: search_lancedb(
@@ -2313,7 +2337,7 @@ def main() -> None:
                 phases.append(record_phase("search", stats, dur, r0, r1))
 
                 close_db_fn = getattr(db, "close", None)
-                (_, dur, r0, r1) = timed_section(
+                _, dur, r0, r1 = timed_section(
                     "close_db",
                     lambda: close_db_fn() if callable(close_db_fn) else None,
                 )
@@ -2353,13 +2377,13 @@ def main() -> None:
 
                 phases: List[dict] = []
 
-                (corpus_vectors_normalized, dur, r0, r1) = timed_section(
+                corpus_vectors_normalized, dur, r0, r1 = timed_section(
                     "open_db",
                     lambda: normalize_rows(materialize_corpus_vectors(sources, dim)),
                 )
                 phases.append(record_phase("open_db", {}, dur, r0, r1))
 
-                (stats, dur, r0, r1) = timed_section(
+                stats, dur, r0, r1 = timed_section(
                     "search",
                     lambda: run_repeated_search(
                         lambda run_queries, run_qids: search_bruteforce(
@@ -2378,7 +2402,7 @@ def main() -> None:
                 )
                 phases.append(record_phase("search", stats, dur, r0, r1))
 
-                (_, dur, r0, r1) = timed_section("close_db", lambda: None)
+                _, dur, r0, r1 = timed_section("close_db", lambda: None)
                 phases.append(record_phase("close_db", {}, dur, r0, r1))
 
                 sweeps.append(
@@ -2440,7 +2464,7 @@ def main() -> None:
 
                 phases: List[dict] = []
 
-                (client, dur, r0, r1) = timed_section(
+                client, dur, r0, r1 = timed_section(
                     "open_db",
                     lambda: QdrantClient(
                         host=args.qdrant_host,
@@ -2453,7 +2477,7 @@ def main() -> None:
                 phases.append(record_phase("open_db", {}, dur, r0, r1))
 
                 try:
-                    (stats, dur, r0, r1) = timed_section(
+                    stats, dur, r0, r1 = timed_section(
                         "search",
                         lambda: run_repeated_search(
                             lambda run_queries, run_qids: search_qdrant(
@@ -2475,7 +2499,7 @@ def main() -> None:
                     )
                     phases.append(record_phase("search", stats, dur, r0, r1))
                 finally:
-                    (_, dur, r0, r1) = timed_section(
+                    _, dur, r0, r1 = timed_section(
                         "close_db",
                         lambda: client.close(),
                         rss_provider=rss_provider,
@@ -2551,7 +2575,7 @@ def main() -> None:
 
                 phases: List[dict] = []
 
-                (_, dur, r0, r1) = timed_section(
+                _, dur, r0, r1 = timed_section(
                     "open_db",
                     lambda: connections.connect(
                         alias=alias,
@@ -2566,7 +2590,7 @@ def main() -> None:
                     collection = Collection(args.milvus_collection, using=alias)
                     wait_for_milvus_collection_load(collection)
 
-                    (stats, dur, r0, r1) = timed_section(
+                    stats, dur, r0, r1 = timed_section(
                         "search",
                         lambda: run_repeated_search(
                             lambda run_queries, run_qids: search_milvus(
@@ -2587,7 +2611,7 @@ def main() -> None:
                     )
                     phases.append(record_phase("search", stats, dur, r0, r1))
                 finally:
-                    (_, dur, r0, r1) = timed_section(
+                    _, dur, r0, r1 = timed_section(
                         "close_db",
                         lambda: connections.disconnect(alias=alias),
                         rss_provider=rss_provider,
@@ -2650,7 +2674,7 @@ def main() -> None:
 
                 phases: List[dict] = []
 
-                (conn, dur, r0, r1) = timed_section(
+                conn, dur, r0, r1 = timed_section(
                     "open_db",
                     lambda: psycopg.connect(
                         host=args.pg_host,
@@ -2665,7 +2689,7 @@ def main() -> None:
                 phases.append(record_phase("open_db", {}, dur, r0, r1))
 
                 try:
-                    (stats, dur, r0, r1) = timed_section(
+                    stats, dur, r0, r1 = timed_section(
                         "search",
                         lambda: run_repeated_search(
                             lambda run_queries, run_qids: search_pgvector(
@@ -2686,7 +2710,7 @@ def main() -> None:
                     )
                     phases.append(record_phase("search", stats, dur, r0, r1))
                 finally:
-                    (_, dur, r0, r1) = timed_section(
+                    _, dur, r0, r1 = timed_section(
                         "close_db",
                         lambda: conn.close(),
                         rss_provider=rss_provider,

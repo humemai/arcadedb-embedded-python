@@ -58,15 +58,16 @@ backup_protected_paths() {
 }
 
 restore_protected_paths() {
-    local path backup_path
+    local path backup_path tracked_entry
 
     for path in "${PROTECTED_PATHS[@]}"; do
         backup_path="$PROTECTED_BACKUP_DIR/$path"
 
-        if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
-            git rm -r --cached --ignore-unmatch --quiet "$path" >/dev/null 2>&1 || true
-        fi
-        rm -rf "$path"
+        while IFS= read -r tracked_entry; do
+            [ -n "$tracked_entry" ] || continue
+            git rm -r --cached --ignore-unmatch --quiet -- "$tracked_entry" >/dev/null 2>&1 || true
+            rm -rf -- "$tracked_entry"
+        done < <(git ls-files -- "$path")
 
         if [ -e "$backup_path" ]; then
             mkdir -p "$(dirname "$path")"
