@@ -1288,20 +1288,35 @@ def embed_vertex_type(
     }
 
 
-def create_vector_index(db, vertex_type: str) -> Tuple[Any, float]:
+def create_vector_index(db, vertex_type: str) -> float:
     start = time.time()
-    index = db.create_vector_index(
-        vertex_type=vertex_type,
-        vector_property="embedding",
-        dimensions=384,
-        distance_function="cosine",
-        max_connections=16,
-        beam_width=100,
-        quantization="INT8",
-        store_vectors_in_graph=False,
-        add_hierarchy=True,
+    db.command(
+        "sql",
+        f"""
+        CREATE INDEX ON {vertex_type} (embedding)
+        LSM_VECTOR
+        METADATA {{
+            "dimensions": 384,
+            "similarity": "COSINE",
+            "maxConnections": 16,
+            "beamWidth": 100,
+            "quantization": "INT8",
+            "storeVectorsInGraph": false,
+            "addHierarchy": true
+        }}
+        """,
     )
-    return index, time.time() - start
+    index = db.schema.get_vector_index(vertex_type, "embedding")
+    if index is None:
+        raise RuntimeError(f"Failed to load vector index for {vertex_type}[embedding]")
+    index.build_graph_now()
+    return time.time() - start
+
+
+def to_sql_vector_literal(vector: Any) -> str:
+    if hasattr(vector, "tolist"):
+        vector = vector.tolist()
+    return "[" + ", ".join(str(float(value)) for value in vector) + "]"
 
 
 def normalize_value(value: Any) -> Any:
@@ -1343,7 +1358,6 @@ def timed_step(name: str, fn: Callable[[], Any]) -> Dict[str, Any]:
 def run_hybrid_queries(
     db,
     model,
-    question_index,
     top_k: int,
     candidate_limit: int,
     min_reputation: int,
@@ -1372,35 +1386,43 @@ def run_hybrid_queries(
     allowed_rids = [
         str(row.get("rid")) for row in step["result"] if row.get("rid") is not None
     ]
+    query_vector_sql = to_sql_vector_literal(
+        model.encode(
+            ["How do I parse JSON in Python?"],
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        )[0]
+    )
+    allowed_rids_sql = "[" + ", ".join(allowed_rids) + "]" if allowed_rids else "[]"
     step2 = timed_step(
         "vector_search",
-        lambda: question_index.find_nearest(
-            model.encode(
-                ["How do I parse JSON in Python?"],
-                show_progress_bar=False,
-                convert_to_numpy=True,
-            )[0],
-            k=top_k,
-            ef_search=max(top_k, 100),
-            allowed_rids=allowed_rids,
+        lambda: run_sql(
+            db,
+            f"""
+            SELECT Id AS question_id, Title AS title, Score AS score, distance
+            FROM (
+              SELECT expand(`vector.neighbors`(
+                'Question[embedding]', {query_vector_sql}, {max(candidate_limit, top_k)}
+              ))
+            )
+            WHERE @rid IN {allowed_rids_sql}
+            ORDER BY distance ASC, question_id ASC
+            LIMIT {top_k}
+            """,
         ),
     )
     steps.append(step2)
-    rows = []
-    for vertex, distance in step2["result"]:
-        qid = vertex.get("Id")
-        if qid is None or int(qid) not in candidate_ids:
-            continue
-        rows.append(
-            {
-                "question_id": int(qid),
-                "title": vertex.get("Title"),
-                "score": vertex.get("Score"),
-                "distance": float(distance),
-            }
-        )
-        if len(rows) >= top_k:
-            break
+    rows = [
+        {
+            "question_id": int(row.get("question_id")),
+            "title": row.get("title"),
+            "score": row.get("score"),
+            "distance": float(row.get("distance")),
+        }
+        for row in step2["result"]
+        if row.get("question_id") is not None
+        and int(row.get("question_id")) in candidate_ids
+    ]
     results.append(
         {
             "name": "q1_sql_to_vector",
@@ -1532,23 +1554,33 @@ def run_hybrid_queries(
 
     # Q4: Vector -> Cypher
     steps = []
+    seed_query_sql = to_sql_vector_literal(
+        model.encode(
+            ["database indexing best practices for performance"],
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        )[0]
+    )
     step = timed_step(
         "vector_seed",
-        lambda: question_index.find_nearest(
-            model.encode(
-                ["database indexing best practices for performance"],
-                show_progress_bar=False,
-                convert_to_numpy=True,
-            )[0],
-            k=top_k,
-            ef_search=max(top_k, 100),
+        lambda: run_sql(
+            db,
+            f"""
+            SELECT Id AS question_id, Title AS title, distance
+            FROM (
+              SELECT expand(`vector.neighbors`(
+                'Question[embedding]', {seed_query_sql}, {top_k}
+              ))
+            )
+            ORDER BY distance ASC, question_id ASC
+            """,
         ),
     )
     steps.append(step)
     seed_ids = [
-        int(vertex.get("Id"))
-        for vertex, _distance in step["result"]
-        if vertex.get("Id") is not None
+        int(row.get("question_id"))
+        for row in step["result"]
+        if row.get("question_id") is not None
     ]
     if seed_ids:
         cypher_ids = "[" + ", ".join(str(v) for v in seed_ids) + "]"
@@ -1592,23 +1624,33 @@ def run_hybrid_queries(
 
     # Q5: Vector -> Cypher -> SQL
     steps = []
+    q5_query_sql = to_sql_vector_literal(
+        model.encode(
+            ["concurrency control and transaction isolation"],
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        )[0]
+    )
     step = timed_step(
         "vector_seed",
-        lambda: question_index.find_nearest(
-            model.encode(
-                ["concurrency control and transaction isolation"],
-                show_progress_bar=False,
-                convert_to_numpy=True,
-            )[0],
-            k=top_k,
-            ef_search=max(top_k, 100),
+        lambda: run_sql(
+            db,
+            f"""
+            SELECT Id AS question_id, distance
+            FROM (
+              SELECT expand(`vector.neighbors`(
+                'Question[embedding]', {q5_query_sql}, {top_k}
+              ))
+            )
+            ORDER BY distance ASC, question_id ASC
+            """,
         ),
     )
     steps.append(step)
     qids = [
-        int(vertex.get("Id"))
-        for vertex, _distance in step["result"]
-        if vertex.get("Id") is not None
+        int(row.get("question_id"))
+        for row in step["result"]
+        if row.get("question_id") is not None
     ]
     if qids:
         cypher_ids = "[" + ", ".join(str(v) for v in qids) + "]"
@@ -1846,17 +1888,16 @@ def phase3_and_phase4(
         )
 
         index_stats = {}
-        question_index, q_time = create_vector_index(db, "Question")
+        q_time = create_vector_index(db, "Question")
         index_stats["Question"] = q_time
-        _, a_time = create_vector_index(db, "Answer")
+        a_time = create_vector_index(db, "Answer")
         index_stats["Answer"] = a_time
-        _, c_time = create_vector_index(db, "Comment")
+        c_time = create_vector_index(db, "Comment")
         index_stats["Comment"] = c_time
 
         hybrid_queries = run_hybrid_queries(
             db,
             model,
-            question_index,
             top_k=top_k,
             candidate_limit=candidate_limit,
             min_reputation=min_reputation,

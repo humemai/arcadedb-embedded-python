@@ -243,6 +243,7 @@ class Database:
         vertex_type: str,
         vector_property: str,
         dimensions: int,
+        id_property: Optional[str] = None,
         distance_function: str = "cosine",
         max_connections: int = 16,
         beam_width: int = 100,
@@ -272,6 +273,8 @@ class Database:
             vertex_type: Name of the vertex type
             vector_property: Name of the property containing vectors
             dimensions: Vector dimensionality (e.g., 768 for BERT)
+            id_property: Optional property used for key-based vector lookup.
+                Defaults to the engine default (usually "id") when omitted.
             distance_function: "cosine", "euclidean", or "inner_product"
             max_connections: Max connections per node (default: 16).
                 Maps to `maxConnections` in JVector.
@@ -328,7 +331,6 @@ class Database:
             VectorIndex object
         """
         self._check_not_closed()
-        from .schema import IndexType
 
         # Create the index using the Java Builder API directly to pass configuration
         try:
@@ -363,6 +365,9 @@ class Database:
             builder.withSimilarity(distance_function)
             builder.withMaxConnections(max_connections)
             builder.withBeamWidth(beam_width)
+
+            if id_property:
+                builder.withIdProperty(id_property)
 
             if quantization:
                 builder.withQuantization(quantization)
