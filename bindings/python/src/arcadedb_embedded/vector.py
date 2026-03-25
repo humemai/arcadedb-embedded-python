@@ -181,6 +181,64 @@ class VectorIndex:
 
         return normalized
 
+    def _get_primary_metadata(self):
+        index = self._get_primary_lsm_index()
+        if index is None:
+            raise ArcadeDBError("Underlying index does not expose vector metadata")
+        return index.getMetadata()
+
+    def _get_type_name(self):
+        index = self._get_primary_lsm_index()
+        if index is None:
+            raise ArcadeDBError("Underlying index does not expose vector type metadata")
+        return str(index.getTypeName())
+
+    def _get_vector_property_name(self):
+        index = self._get_primary_lsm_index()
+        if index is None:
+            raise ArcadeDBError(
+                "Underlying index does not expose vector property metadata"
+            )
+
+        property_names = index.getPropertyNames()
+        if hasattr(property_names, "get"):
+            return str(property_names.get(0))
+        return str(property_names[0])
+
+    def _get_id_property_name(self):
+        index = self._get_primary_lsm_index()
+        if index is None:
+            raise ArcadeDBError("Underlying index does not expose id-property metadata")
+        return str(index.getIdPropertyName())
+
+    def _lookup_query_vector_by_key(self, key):
+        vector_property = self._get_vector_property_name()
+        type_name = self._get_type_name()
+        id_property = self._get_id_property_name()
+
+        result = self._database.query(
+            "sql",
+            (
+                f"SELECT {vector_property} FROM {type_name} "
+                f"WHERE {id_property} = ? LIMIT 1"
+            ),
+            key,
+        ).first()
+
+        if result is None:
+            raise ArcadeDBError(
+                f"No record found in type '{type_name}' where {id_property} = {key!r}"
+            )
+
+        query_vector = result.get(vector_property)
+        if query_vector is None:
+            raise ArcadeDBError(
+                f"Record found for {id_property} = {key!r} "
+                f"but property '{vector_property}' is null"
+            )
+
+        return query_vector
+
     def find_nearest(
         self,
         query_vector,
@@ -281,7 +339,7 @@ class VectorIndex:
             # Final k truncation
             return all_results[:k]
 
-        except Exception as e:
+        except Exception:
             # print(f"Debug VectorIndex: ERROR in find_nearest: {e}")
             # import traceback
             # traceback.print_exc()
@@ -299,6 +357,71 @@ class VectorIndex:
             return self._java_index.countEntries()
         except Exception as e:
             raise ArcadeDBError(f"Failed to get index size: {e}") from e
+
+    def get_metadata(self):
+        """
+        Get stable metadata for the vector index.
+
+        Returns:
+            dict: Index metadata including names, dimensions, similarity function,
+            id property, quantization, and selected tuning settings.
+        """
+        try:
+            index = self._get_primary_lsm_index()
+            meta = self._get_primary_metadata()
+
+            return {
+                "index_name": str(self._java_index.getName()),
+                "bucket_index_name": str(index.getName()),
+                "type_name": str(index.getTypeName()),
+                "vector_property": self._get_vector_property_name(),
+                "dimensions": int(meta.dimensions),
+                "similarity_function": str(meta.similarityFunction),
+                "id_property": str(meta.idPropertyName),
+                "quantization": str(meta.quantizationType),
+                "max_connections": int(meta.maxConnections),
+                "beam_width": int(meta.beamWidth),
+                "ef_search": int(meta.efSearch),
+                "location_cache_size": int(meta.locationCacheSize),
+                "graph_build_cache_size": int(meta.graphBuildCacheSize),
+                "mutations_before_rebuild": int(meta.mutationsBeforeRebuild),
+                "store_vectors_in_graph": bool(meta.storeVectorsInGraph),
+                "add_hierarchy": bool(meta.addHierarchy),
+                "build_state": str(meta.buildState),
+                "pq_subspaces": int(meta.pqSubspaces),
+                "pq_clusters": int(meta.pqClusters),
+                "pq_center_globally": bool(meta.pqCenterGlobally),
+                "pq_training_limit": int(meta.pqTrainingLimit),
+            }
+        except Exception as e:
+            raise ArcadeDBError(f"Failed to read vector index metadata: {e}") from e
+
+    def find_nearest_by_key(
+        self,
+        key,
+        k=10,
+        ef_search=None,
+        allowed_rids=None,
+    ):
+        """
+        Find nearest neighbors using the indexed vector from an existing record.
+
+        Args:
+            key: Value of the configured id property for the source record.
+            k: Number of nearest neighbors to return (default: 10).
+            ef_search: Optional search beam width override for exact graph search.
+            allowed_rids: Optional RID whitelist to restrict the final search.
+
+        Returns:
+            List of tuples: [(record, score), ...]
+        """
+        query_vector = self._lookup_query_vector_by_key(key)
+        return self.find_nearest(
+            query_vector,
+            k=k,
+            ef_search=ef_search,
+            allowed_rids=allowed_rids,
+        )
 
     def find_nearest_approximate(
         self,

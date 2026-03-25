@@ -1,0 +1,373 @@
+# Social Network Graph Example
+
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/02_social_network_graph.py){ .md-button }
+
+## Overview
+
+This example demonstrates how to use ArcadeDB as a graph database to model and query social networks. It showcases the power of graph databases for representing and traversing complex relationships between entities.
+
+**What You'll Learn:**
+
+- Creating vertex and edge types (schema definition)
+- Modeling entities (Person) and relationships (FRIEND_OF) with properties
+- NULL value handling for optional vertex properties (email, phone, reputation)
+- Graph traversal patterns (friends, friends-of-friends, mutual connections)
+- **Comparing SQL MATCH vs OpenCypher query languages**
+- **Performance characteristics of each query language**
+- Variable-length path queries (`*1..3` syntax in OpenCypher)
+- Working with relationship properties and directed-edge traversal semantics
+- Filtering by NULL values (finding people without email/phone)
+- Proper transaction handling and property access patterns
+- Real-world graph database implementation techniques
+
+## ⚡ SQL MATCH vs OpenCypher
+
+This example compares SQL MATCH and OpenCypher for expressing the same graph traversals.
+
+### Guidance
+
+- **SQL MATCH** is a good choice for SQL developers and reporting-style queries.
+- **OpenCypher** is expressive for path-based traversals and graph patterns.
+- Choose the language that best matches your team's familiarity and your query style.
+
+## Real-World Use Case
+
+Social networks are perfect examples of graph data structures where:
+
+- **Entities** (people, companies, places) become vertices
+- **Relationships** (friendships, follows, likes) become edges
+- **Properties** store additional information about both entities and relationships
+- **Graph queries** efficiently find patterns like "friends of friends" or "mutual connections"
+
+This pattern applies to many domains:
+
+- Social media platforms
+- Professional networks (LinkedIn-style)
+- Recommendation systems
+- Fraud detection networks
+- Knowledge graphs
+
+## Key Graph Concepts
+
+### Vertices (Nodes)
+
+Represent entities in your domain:
+
+```python
+with db.transaction():
+    db.command(
+        "sql",
+        "INSERT INTO Person SET name = 'Alice Johnson', age = 28, city = 'New York'",
+    )
+```
+
+### Edges (Relationships)
+
+Connect vertices with optional properties:
+
+```python
+# Directed friendship edge with relationship metadata
+with db.transaction():
+    db.command(
+        "sql",
+        """
+        CREATE EDGE FRIEND_OF
+        FROM (SELECT FROM Person WHERE name = 'Alice Johnson')
+        TO (SELECT FROM Person WHERE name = 'Bob Smith')
+        SET since = '2020-05-15', closeness = 'close'
+        """,
+    )
+```
+
+!!! note "Directed-edge migration note"
+    Current graph examples explicitly declare `CREATE EDGE TYPE ... UNIDIRECTIONAL`.
+    That means you should not assume reverse edges are automatically materialized in
+    storage. If you need incoming traversal behavior, express it in the query pattern.
+
+### Schema Definition
+
+Define types and properties upfront for consistency:
+
+```python
+import arcadedb_embedded as arcadedb
+
+with arcadedb.create_database("./social_network_db") as db:
+    # Create vertex type with properties (schema ops are auto-transactional)
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE PROPERTY Person.name STRING")
+    db.command("sql", "CREATE PROPERTY Person.age INTEGER")
+    db.command("sql", "CREATE PROPERTY Person.city STRING")
+    db.command("sql", "CREATE PROPERTY Person.joined_date DATE")
+    db.command("sql", "CREATE PROPERTY Person.email STRING")      # Optional (can be NULL)
+    db.command("sql", "CREATE PROPERTY Person.phone STRING")      # Optional (can be NULL)
+    db.command("sql", "CREATE PROPERTY Person.verified BOOLEAN")
+    db.command("sql", "CREATE PROPERTY Person.reputation FLOAT")  # Optional (can be NULL)
+
+    # Create edge type with properties
+    db.command("sql", "CREATE EDGE TYPE FRIEND_OF UNIDIRECTIONAL")
+    db.command("sql", "CREATE PROPERTY FRIEND_OF.since DATE")
+    db.command("sql", "CREATE PROPERTY FRIEND_OF.closeness STRING")
+
+    # Create indexes for performance
+    db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
+```
+
+## Query Examples
+
+The example demonstrates 6 queries in each of three languages:
+
+### SQL MATCH Queries
+
+```sql
+-- 1. Find all friends of Alice
+MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
+      -FRIEND_OF->
+      {type: Person, as: friend}
+RETURN friend.name as name, friend.city as city
+ORDER BY friend.name
+```
+
+```sql
+-- 2. Find friends of friends of Alice
+MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
+      -FRIEND_OF->
+      {type: Person, as: friend}
+      -FRIEND_OF->
+      {type: Person, as: friend_of_friend, where: (name <> 'Alice Johnson')}
+RETURN DISTINCT friend_of_friend.name as name, friend.name as through_friend
+ORDER BY friend_of_friend.name
+```
+
+```sql
+-- 3. Find mutual friends between Alice and Bob
+MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
+      -FRIEND_OF->
+      {type: Person, as: mutual}
+      <-FRIEND_OF-
+      {type: Person, as: bob, where: (name = 'Bob Smith')}
+RETURN mutual.name as mutual_friend
+ORDER BY mutual.name
+```
+
+```sql
+-- 4. Friendship statistics by city (SQL aggregation)
+SELECT city, COUNT(*) as person_count,
+       AVG(age) as avg_age
+FROM Person
+GROUP BY city
+ORDER BY person_count DESC, city
+```
+
+```sql
+-- 5. Find people without email (SQL NULL check)
+SELECT name, phone, verified
+FROM Person
+WHERE email IS NULL
+```
+
+```sql
+-- 6. Verified people with reputation (exclude NULLs)
+SELECT name, reputation, city
+FROM Person
+WHERE verified = true AND reputation IS NOT NULL
+ORDER BY reputation DESC
+```
+
+### OpenCypher Queries
+
+```cypher
+-- 1. Find all friends of Alice
+MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF]->(friend:Person)
+RETURN friend.name as name, friend.city as city
+ORDER BY friend.name
+```
+
+```cypher
+-- 2. Find friends of friends of Alice
+MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF]->(friend:Person)
+MATCH (friend)-[:FRIEND_OF]->(fof:Person)
+WHERE fof.name <> 'Alice Johnson'
+RETURN DISTINCT fof.name as name, friend.name as through_friend
+ORDER BY name
+```
+
+```cypher
+-- 3. Find mutual friends between Alice and Bob
+MATCH (alice:Person {name: 'Alice Johnson'})
+      -[:FRIEND_OF]->(mutual:Person)
+      <-[:FRIEND_OF]-(bob:Person {name: 'Bob Smith'})
+RETURN mutual.name as mutual_friend
+ORDER BY mutual.name
+```
+
+```cypher
+-- 4. Find close friendships (Cypher)
+MATCH (p1:Person)-[f:FRIEND_OF {closeness: 'close'}]->(p2:Person)
+RETURN p1.name as person1, p2.name as person2, f.since as since
+ORDER BY f.since
+```
+
+```cypher
+-- 5. Count friends per person (Cypher aggregation)
+MATCH (p:Person)
+OPTIONAL MATCH (p)-[:FRIEND_OF]->(friend:Person)
+RETURN p.name as name, COUNT(friend) as friend_count
+ORDER BY friend_count DESC, name
+```
+
+```cypher
+-- 6. Find outgoing connections within 3 steps from Alice (Cypher)
+MATCH (alice:Person {name: 'Alice Johnson'})
+    -[:FRIEND_OF*1..3]->(connected:Person)
+WHERE connected.name <> 'Alice Johnson'
+RETURN DISTINCT connected.name as name, connected.city as city
+ORDER BY connected.name
+```
+
+## NULL Value Handling in Graphs
+
+Graph vertices can have optional properties with NULL values:
+
+```python
+import arcadedb_embedded as arcadedb
+
+with arcadedb.open_database("./social_network_db") as db:
+    # Insert person with NULL email and phone
+    with db.transaction():
+        db.command("sql", """
+            CREATE VERTEX Person SET
+                name = 'Eve Brown',
+                age = 29,
+                city = 'Seattle',
+                joined_date = date('2020-08-22'),
+                email = NULL,
+                phone = NULL,
+                verified = false,
+                reputation = 3.2
+        """)
+
+    # Querying for NULL Values - Find vertices with missing optional properties
+    # Find people without email addresses (reads don't need transaction)
+    result = db.query("sql", """
+        SELECT name, phone, verified
+        FROM Person
+        WHERE email IS NULL
+    """)
+
+    # Find verified people with reputation scores (exclude NULLs)
+    result = db.query("sql", """
+        SELECT name, reputation, city
+        FROM Person
+        WHERE verified = true AND reputation IS NOT NULL
+        ORDER BY reputation DESC
+    """)
+```
+
+This pattern is useful for:
+
+- Finding incomplete profiles
+- Identifying missing contact information
+- Filtering by data completeness
+- Quality checks and data validation
+
+## Performance Considerations
+
+### Indexing
+
+Create indexes on frequently queried properties:
+
+```python
+# Index on person names for fast lookups
+db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE_HASH")
+
+# For unique identifiers
+db.command("sql", "CREATE INDEX ON Person (person_id) UNIQUE_HASH")
+```
+
+### Batch Operations
+
+For large datasets, use batch operations:
+
+```python
+import arcadedb_embedded as arcadedb
+
+with arcadedb.open_database("./social_network_db") as db:
+    # Batch vertex creation (all inside single transaction)
+    large_dataset = [{"name": "Person1"}, {"name": "Person2"}]  # Example data
+
+    with db.transaction():
+        for person_data in large_dataset:
+            db.command("sql", f"CREATE VERTEX Person SET name = '{person_data['name']}'")
+            # Transaction automatically commits at end of 'with' block
+```
+
+## Try It Yourself
+
+1. **Run the example:**
+    ```bash
+    # Important: Navigate to examples directory first
+    cd bindings/python/examples
+    python 02_social_network_graph.py
+    ```
+
+2. **Explore the database:**
+    - Database files are created in `./my_test_databases/social_network_db/`
+    - Inspect the console output to understand each operation
+    - Try modifying the sample data in the code
+
+3. **Experiment with queries:**
+    - Modify the Cypher queries in `demonstrate_cypher_queries()`
+    - Add new relationship types (WORKS_WITH, LIVES_NEAR)
+    - Try different traversal patterns and depths
+    - Add relationship scoring (strength, trust level)
+
+4. **Scale it up:**
+    - Import larger datasets from CSV files
+    - Add more vertex types (Company, Location, Interest)
+    - Implement recommendation algorithms
+    - Add temporal aspects (friendship start/end dates)
+
+## Key Implementation Notes
+
+### Property Access Pattern
+
+```python
+# Always use .get() for query results
+for row in result:
+    name = row.get('name')  # ✅ Correct
+    city = row.get('city')  # ✅ Correct
+    # name = row['name']    # ❌ Wrong - will fail
+```
+
+### Transaction Handling
+
+```python
+# Wrap all write operations in transactions
+with db.transaction():
+    db.command("sql", "CREATE VERTEX Person SET name = ?", "Alice")
+    db.command("sql", "CREATE EDGE FRIEND_OF FROM (...) TO (...)")
+```
+
+### Edge Creation Best Practice
+
+```python
+# Use property-based lookups instead of RIDs
+db.command("sql", """
+    CREATE EDGE FRIEND_OF
+    FROM (SELECT FROM Person WHERE name = 'Alice')
+    TO (SELECT FROM Person WHERE name = 'Bob')
+    SET since = date('2020-05-15')
+""")
+```
+
+## Related Examples
+
+- [**01 - Simple Document Store**](01_simple_document_store.md) - Foundation example with document types and CRUD operations
+- [**03 - Vector Search**](03_vector_search.md) - Semantic similarity search with HNSW indexing
+- [**05 - CSV Import (Graph)**](05_csv_import_graph.md) - Creating graph structures from CSV data
+- [**06 - Vector Search Recommendations**](06_vector_search_recommendations.md) - Semantic search and movie recommendations
+
+## Next Steps
+
+- Learn about [Vector Search](03_vector_search.md) for AI-powered semantic search
+- Explore [CSV Import (Graph)](05_csv_import_graph.md) for importing graph data from files

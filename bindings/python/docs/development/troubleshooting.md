@@ -1,0 +1,1052 @@
+# Troubleshooting
+
+Common issues, solutions, and debugging techniques for ArcadeDB Python bindings.
+
+## Installation Issues
+
+### Package Import Errors
+
+**Problem**: Can't import arcadedb_embedded module
+
+**Solutions**:
+
+1. **Verify Installation**:
+    ```bash
+    uv pip show arcadedb-embedded
+    uv pip list | grep arcadedb
+    ```
+
+2. **Reinstall Package**:
+    ```bash
+    uv pip uninstall arcadedb-embedded
+    uv pip install arcadedb-embedded
+    ```
+
+3. **Reinstall if wheel looks corrupted**:
+    Wheels bundle the ArcadeDB JRE and JARs. If imports fail, reinstall the wheel
+    (no external Java install is needed):
+
+    ```bash
+    uv pip uninstall -y arcadedb-embedded
+    uv pip install --no-cache-dir arcadedb-embedded
+    ```
+
+4. **Check Python Path**:
+    ```python
+    import sys
+    print(sys.path)
+    ```
+---
+
+## Runtime Errors
+
+### Database Connection Issues
+
+**Problem**: Can't connect to database
+
+**Solutions**:
+
+1. **Check Database Path**:
+    ```python
+    import os
+    db_path = "databases/mydb"
+    print(f"Exists: {os.path.exists(db_path)}")
+    ```
+
+2. **Verify Database Created**:
+    ```python
+    import arcadedb_embedded as arcadedb
+
+    # Create if not exists
+    if not os.path.exists(db_path):
+        db = arcadedb.create_database(db_path)
+    else:
+        db = arcadedb.open_database(db_path)
+    ```
+
+3. **Check Permissions**:
+    ```bash
+    ls -la databases/
+    chmod -R 755 databases/
+    ```
+---
+
+### Database Already Exists
+
+**Symptom:**
+```python
+arcadedb.create_database("./mydb")
+# ArcadeDBError: Database already exists
+```
+
+**Solution:**
+
+Use `open_database()` instead:
+
+```python
+import os
+import arcadedb_embedded as arcadedb
+
+if os.path.exists("./mydb"):
+    db = arcadedb.open_database("./mydb")
+else:
+    db = arcadedb.create_database("./mydb")
+```
+
+Or delete existing database:
+
+```python
+import shutil
+
+# Remove existing database
+if os.path.exists("./mydb"):
+    shutil.rmtree("./mydb")
+
+# Create fresh database
+db = arcadedb.create_database("./mydb")
+```
+
+---
+
+### Database Locked
+
+**Symptom:** `ArcadeDBError: Database is locked by another process`
+
+**Cause:** Another process has the database open.
+
+**Solution:**
+
+1. **Close other connections:**
+```python
+# Ensure previous database is closed
+db.close()
+```
+
+2. **Check for orphaned processes:**
+```bash
+ps aux | grep python
+kill <PID>
+```
+
+3. **Remove lock file (last resort):**
+```bash
+# Only if you're sure no process is using the database
+rm ./mydb/.lock
+```
+
+---
+
+### Memory Configuration
+
+#### JVM Memory Configuration
+
+Configure JVM memory in Python **before the first database or server is created**:
+
+**Basic Configuration (preferred):**
+
+```python
+import arcadedb_embedded as arcadedb
+
+# Default: 4GB heap (no changes needed)
+
+# Production: 8GB heap with matching initial size
+arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g")
+```
+
+**Common JVM Options:**
+
+| Option | Description | Example |
+|--------|-------------|----------|
+| `-Xmx<size>` | Maximum heap memory | `-Xmx8g` (8 gigabytes) |
+| `-Xms<size>` | Initial heap size (recommended: same as `-Xmx`) | `-Xms8g` |
+| `-XX:MaxDirectMemorySize=<size>` | Limit off-heap direct buffers | `-XX:MaxDirectMemorySize=8g` |
+| `-Darcadedb.vectorIndex.locationCacheSize=<count>` | Max vector locations to cache (default: -1 = unlimited) | `-Darcadedb.vectorIndex.locationCacheSize=100000` |
+| `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>` | Max vectors cached during HNSW build (default: 10000) | `-Darcadedb.vectorIndex.graphBuildCacheSize=3000` |
+| `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>` | Mutations before graph rebuild (default: 100) | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=200` |
+
+**Vector Index Memory Tuning:**
+
+For applications using vector indexes, control memory usage:
+
+```python
+# Conservative: bounded caches for large vector datasets
+arcadedb.start_jvm(
+    heap_size="8g",
+    jvm_args=(
+        "-Xms8g -XX:MaxDirectMemorySize=8g "
+        "-Darcadedb.vectorIndex.locationCacheSize=100000 "
+        "-Darcadedb.vectorIndex.graphBuildCacheSize=3000 "
+        "-Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
+    ),
+)
+```
+
+**Cache Size Guidelines:**
+
+- `locationCacheSize`: Number of vector locations (each ~56 bytes)
+    - 100000 entries ≈ 5.6 MB
+    - -1 = unlimited (backward compatible, may consume unbounded memory)
+    - Recommended: 100000 for datasets with 1M+ vectors
+
+- `graphBuildCacheSize`: Number of vectors during HNSW build
+    - Memory ≈ cacheSize × (dimensions × 4 + 64) bytes
+    - For 768-dim: 10000 entries ≈ 30 MB
+    - Lower values reduce build-time memory spikes
+    - Recommended: 3000-5000 for high-dimensional vectors
+
+**Memory Planning:**
+
+```text
+Total Process Memory = JVM Heap + Off-Heap Components
+
+Off-Heap Components:
+
+- Direct buffers (MaxDirectMemorySize)
+- Metaspace (class definitions)
+- Page cache
+- Thread stacks
+- Vector index caches (if bounded)
+
+Rule of thumb: Plan for 1.5-2× your heap size in actual RAM
+```
+
+**Example Configurations:**
+
+```python
+# Small datasets (<1M records, <100K vectors)
+arcadedb.start_jvm(heap_size="2g", jvm_args="-Xms2g")
+
+# Medium datasets (1M-10M records, 100K-1M vectors)
+arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
+
+# Large datasets (10M+ records, 1M+ vectors) with bounded caches
+arcadedb.start_jvm(
+    heap_size="16g",
+    jvm_args=(
+        "-Xms16g -XX:MaxDirectMemorySize=16g "
+        "-Darcadedb.vectorIndex.locationCacheSize=100000 "
+        "-Darcadedb.vectorIndex.graphBuildCacheSize=5000 "
+        "-Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
+    ),
+)
+
+# High-dimensional vectors (e.g., 1536-dim embeddings)
+arcadedb.start_jvm(
+    heap_size="8g",
+    jvm_args=(
+        "-Xms8g -XX:MaxDirectMemorySize=8g "
+        "-Darcadedb.vectorIndex.locationCacheSize=50000 "
+        "-Darcadedb.vectorIndex.graphBuildCacheSize=2000 "
+        "-Darcadedb.vectorIndex.mutationsBeforeRebuild=150"
+    ),
+)
+```
+
+!!! warning "Configuration Timing"
+    JVM options are locked after the JVM starts. Configure `start_jvm(...)` or pass
+    `jvm_kwargs` before the first database or server is created. To change settings,
+    start a new Python process.
+
+!!! tip "Alternative: ARCADEDB_JVM_ERROR_FILE"
+    Set crash log location:
+
+    ```bash
+    export ARCADEDB_JVM_ERROR_FILE="/var/log/arcade/errors.log"
+    ```
+
+#### Out of Memory Errors
+
+**Problem**: `OutOfMemoryError` or heap space errors
+
+**Solutions**:
+
+1. **Increase Heap (preferred)**:
+    ```python
+    import arcadedb_embedded as arcadedb
+    arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g")
+    ```
+
+2. **Bound Vector Caches** (for vector workloads):
+    ```python
+    arcadedb.start_jvm(
+        heap_size="8g",
+        jvm_args=(
+            "-Xms8g "
+            "-Darcadedb.vectorIndex.locationCacheSize=100000 "
+            "-Darcadedb.vectorIndex.graphBuildCacheSize=3000"
+        ),
+    )
+    ```
+
+3. **Use Batch Processing**:
+    ```python
+    batch_size = 1000
+    for i in range(0, len(data), batch_size):
+        batch = data[i:i + batch_size]
+        process_batch(batch)
+    ```
+
+4. **Close ResultSets**:
+    ```python
+    result = db.query("sql", "SELECT FROM LargeTable")
+    try:
+        for row in result:
+            process(row)
+    finally:
+        result.close()
+    ```
+
+---
+
+### Data Type Issues
+
+**Problem**: Type conversion errors
+
+**Solutions**:
+
+1. **Use Correct Types**:
+    ```python
+    with db.transaction():
+        db.command(
+            "sql",
+            "INSERT INTO User SET age = ?, name = ?, tags = ?, created = ?",
+            25,
+            "Alice",
+            ["python", "database"],
+            datetime.now(),
+        )
+    ```
+
+2. **Convert NumPy Arrays**:
+    ```python
+    from arcadedb_embedded import to_java_float_array
+    import numpy as np
+
+    arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    with db.transaction():
+        db.command(
+            "sql",
+            "INSERT INTO EmbeddingDoc SET embedding = ?",
+            to_java_float_array(arr),
+        )
+    ```
+---
+
+### Transaction Already Active
+
+**Symptom:**
+
+```python
+with db.transaction():
+    with db.transaction():  # Nested!
+        pass
+# ArcadeDBError: Transaction already active
+```
+
+**Cause:** Nested transactions not supported.
+
+**Solution:**
+
+Don't nest transactions:
+
+```python
+# Bad
+with db.transaction():
+    some_operation()
+    with db.transaction():  # ✗ Error
+        another_operation()
+
+# Good
+with db.transaction():
+    some_operation()
+    another_operation()
+```
+
+Or use separate transaction blocks:
+
+```python
+with db.transaction():
+    some_operation()
+
+# First transaction committed
+
+with db.transaction():
+    another_operation()
+```
+
+---
+
+### Query Syntax Error
+
+**Symptom:**
+```python
+db.query("sql", "SELECT * FROM User WHERE name = Alice")
+# ArcadeDBError: Syntax error near 'Alice'
+```
+
+**Cause:** String not properly quoted.
+
+**Solution:**
+
+Use parameters (RECOMMENDED):
+
+```python
+db.query("sql",
+    "SELECT FROM User WHERE name = :name",
+    {"name": "Alice"}
+)
+```
+
+Or quote strings in SQL:
+
+```python
+db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
+#                                              ↑    ↑ quotes
+```
+
+---
+
+### Function Name Errors
+
+**Problem**: SQL function not recognized
+
+**Solutions**:
+
+1. **Check Function Name Case**:
+    ```python
+    # Wrong
+    with db.transaction():
+        db.command("sql", "INSERT INTO Product SET created = SYSDATE()")
+
+    # Correct
+    with db.transaction():
+        db.command("sql", "INSERT INTO Product SET created = sysdate()")
+    ```
+
+2. **Use Built-in Functions**:
+    ```python
+    # Date/time
+    with db.transaction():
+        db.command("sql", "INSERT INTO Event SET timestamp = sysdate()")
+
+    # UUID
+    with db.transaction():
+        db.command("sql", "INSERT INTO User SET id = uuid()")
+    ```
+
+---
+
+### Multi-line Query Issues
+
+**Problem**: SQL parser errors with complex queries
+
+**Solution**: Use single-line queries or proper escaping:
+
+```python
+# ✅ Single line (wrap in a transaction when executing)
+query = "INSERT INTO Product SET name = 'test', created_at = sysdate()"
+
+# ✅ Multi-line with proper formatting
+query = """
+INSERT INTO Product SET
+    name = 'test',
+    created_at = sysdate()
+""".strip()
+```
+
+---
+
+### Type Conversion Error
+
+**Symptom:**
+```python
+vertex.set("embedding", numpy_array)
+# TypeError: Cannot convert numpy.ndarray to Java type
+```
+
+**Cause:** NumPy arrays need explicit conversion.
+
+**Solution:**
+
+Use conversion utilities:
+
+```python
+from arcadedb_embedded import to_java_float_array
+import numpy as np
+
+embedding = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+vertex.set("embedding", to_java_float_array(embedding))
+```
+
+## Performance Issues
+
+### Slow Queries
+
+**Symptom:**
+Queries take seconds or minutes.
+
+**Diagnosis:**
+
+Use EXPLAIN to analyze:
+
+```python
+result = db.query("sql", "EXPLAIN SELECT FROM User WHERE email = 'alice@example.com'")
+for row in result:
+    print(row.to_dict())
+```
+
+**Solutions:**
+
+1. **Create indexes:**
+```python
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+```
+
+2. **Use LIMIT:**
+```python
+# Bad: Load everything
+result = db.query("sql", "SELECT FROM User")
+
+# Good: Limit results
+result = db.query("sql", "SELECT FROM User LIMIT 100")
+```
+
+3. **Project only needed fields:**
+```python
+# Bad: Load all properties
+result = db.query("sql", "SELECT FROM User")
+
+# Good: Only needed fields
+result = db.query("sql", "SELECT name, email FROM User")
+```
+
+---
+
+### Slow Imports
+
+**Symptom:**
+Importing data is very slow.
+
+**Solutions:**
+
+1. **Increase batch size (`commitEvery`):**
+```python
+db.command(
+    "sql",
+    "IMPORT DATABASE file:///data/users.csv WITH documentType = 'User', commitEvery = 10000",
+)
+```
+
+2. **Drop indexes during import:**
+```python
+# Drop indexes
+db.command("sql", "DROP INDEX `User[email]`")
+
+# Import data
+db.command(
+    "sql",
+    "IMPORT DATABASE file:///data/users.csv WITH documentType = 'User'",
+)
+
+# Recreate indexes
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+```
+
+3. **Use transactions efficiently:**
+```python
+# Bad: Many small transactions
+for record in records:
+    with db.transaction():
+        db.command("sql", "INSERT INTO Data SET data = ?", record)
+
+# Good: Batch in larger transactions
+batch_size = 10000
+for i in range(0, len(records), batch_size):
+    with db.transaction():
+        for record in records[i:i+batch_size]:
+            db.command("sql", "INSERT INTO Data SET data = ?", record)
+```
+
+---
+
+### High Memory Usage
+
+**Symptom:**
+Process memory grows continuously.
+
+**Diagnosis:**
+
+Monitor memory:
+
+```python
+import psutil
+import os
+
+process = psutil.Process(os.getpid())
+print(f"Memory: {process.memory_info().rss / 1024 / 1024:.1f} MB")
+```
+
+**Solutions:**
+
+1. **Stream large ResultSets:**
+```python
+# Bad: Load all results
+result = db.query("sql", "SELECT FROM LargeTable")
+all_results = list(result)  # Loads everything!
+
+# Good: Process streaming
+result = db.query("sql", "SELECT FROM LargeTable")
+for row in result:
+    process(row)
+    # Only one row in memory
+```
+
+2. **Close ResultSets:**
+```python
+result = db.query("sql", "SELECT FROM User")
+for row in result:
+    if some_condition(row):
+        break
+# ResultSet automatically closed when iterator exhausted
+```
+
+3. **Force garbage collection:**
+```python
+import gc
+
+for batch in large_dataset:
+    process_batch(batch)
+    gc.collect()  # Trigger GC
+```
+
+4. **Smaller transactions:**
+```python
+# Bad: Huge transaction
+with db.transaction():
+    for i in range(1000000):
+        db.command("sql", "INSERT INTO Data SET id = ?", i)
+
+# Good: Batch transactions
+batch_size = 10000
+for i in range(0, 1000000, batch_size):
+    with db.transaction():
+        for j in range(batch_size):
+            db.command("sql", "INSERT INTO Data SET id = ?", i + j)
+```
+
+## Server Mode Issues
+
+### Server Won't Start
+
+**Symptom:**
+```python
+server = arcadedb.create_server("./databases")
+server.start()
+# ArcadeDBError: Unable to start server
+```
+
+**Solutions:**
+
+1. **Check port availability:**
+```bash
+lsof -i :2480
+```
+
+Use different port:
+
+```python
+server = arcadedb.create_server(
+    root_path="./databases",
+    http_port=8080  # Different port
+)
+```
+
+2. **Check permissions:**
+```bash
+ls -la ./databases
+# Ensure write permissions
+chmod -R 755 ./databases
+```
+
+3. **Check logs:**
+```python
+# Enable logging
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+server = arcadedb.create_server("./databases")
+server.start()
+# Check log output
+```
+
+---
+
+### Can't Connect to Server
+
+**Symptom:**
+Server running but can't connect via HTTP.
+
+**Solutions:**
+
+1. **Verify server is running:**
+```python
+if server.is_started():
+    print("Server is running")
+    print(f"URL: http://localhost:{server.http_port}")
+```
+
+2. **Check firewall:**
+```bash
+# Linux
+sudo ufw allow 2480
+
+# macOS
+# System Preferences > Security & Privacy > Firewall
+```
+
+3. **Test with curl:**
+```bash
+curl http://localhost:2480/api/v1/server
+```
+
+## Vector Search Issues
+
+### Vector Dimension Mismatch
+
+**Symptom:**
+```python
+vertex.save()
+# ArcadeDBError: Vector dimension mismatch
+```
+
+**Cause:**
+Embedding dimension doesn't match index dimension.
+
+**Solution:**
+
+Verify dimensions match:
+
+```python
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Check model dimension
+test_embedding = model.encode("test")
+print(f"Model dimension: {len(test_embedding)}")  # 384
+
+# Create index with matching dimension
+index = db.create_vector_index(
+    vertex_type="Document",
+    vector_property="embedding",
+    dimensions=384  # Must match!
+)
+```
+
+---
+
+### Slow First Query
+
+**Symptom:**
+The first vector search query takes significantly longer than subsequent queries.
+
+**Cause:**
+Most apps should not see this with current defaults, because `create_vector_index()`
+eagerly prepares the graph (`build_graph_now=True`). A slow first query typically means
+you created the index with `build_graph_now=False`, so graph preparation is deferred.
+
+**Solution:**
+If you want predictable first-query latency, either keep the default eager behavior or
+explicitly rebuild before serving traffic. This is also useful after bulk vector inserts
+or removals/deletes when you want to force rebuild at a controlled time.
+
+```python
+# Preferred: eager at creation (default)
+index = db.create_vector_index(
+    vertex_type="Document",
+    vector_property="embedding",
+    dimensions=384,
+    build_graph_now=True,
+)
+
+# Optional: if created with build_graph_now=False, rebuild explicitly
+index.build_graph_now()
+```
+
+---
+
+### Poor Search Results
+
+**Symptom:**
+Vector search returns irrelevant results.
+
+**Solutions:**
+
+1. **Try different distance function:**
+```python
+# Cosine (default, usually best for text)
+index = db.create_vector_index(
+    vertex_type="Doc",
+    vector_property="embedding",
+    dimensions=384,
+    distance_function="cosine"
+)
+
+# Euclidean (sometimes better for images)
+index = db.create_vector_index(
+    vertex_type="Image",
+    vector_property="features",
+    dimensions=512,
+    distance_function="euclidean"
+)
+```
+
+2. **Tune vector parameters:**
+```python
+# Better recall, slower
+index = db.create_vector_index(
+    vertex_type="Doc",
+    vector_property="embedding",
+    dimensions=384,
+    max_connections=32,  # Default: 16
+    beam_width=200       # Default: 100
+)
+```
+
+3. **Improve embeddings:**
+```python
+# Combine title and content
+text = f"{doc['title']}. {doc['content']}"
+embedding = model.encode(text)
+
+# vs. just content
+embedding = model.encode(doc['content'])  # May be less effective
+```
+
+## Debugging
+
+### Enable Logging
+
+**Python logging:**
+```python
+import logging
+
+# Basic logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# File logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    filename='arcadedb.log',
+    filemode='w',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+import arcadedb_embedded as arcadedb
+# Now all operations will be logged
+```
+
+**Java logging:**
+```python
+import jpype
+
+# Enable Java logging before importing arcadedb
+jpype.startJVM(
+    classpath=[...],
+    "-Djava.util.logging.config.file=logging.properties"
+)
+```
+
+logging.properties:
+
+```properties
+.level=INFO
+handlers=java.util.logging.ConsoleHandler
+java.util.logging.ConsoleHandler.level=ALL
+com.arcadedata.level=DEBUG
+```
+
+---
+
+### Inspect Java Objects
+
+```python
+# Get Java class name
+java_obj = vertex._java_vertex
+print(java_obj.getClass().getName())
+
+# List methods
+for method in java_obj.getClass().getMethods():
+    print(method.getName())
+
+# Get property value (raw Java)
+value = java_obj.get("property_name")
+print(f"Type: {type(value)}, Value: {value}")
+```
+
+---
+
+### Transaction Debugging
+
+```python
+class DebugTransaction:
+    """Debug wrapper for transactions."""
+
+    def __init__(self, db):
+        self.db = db
+        self.transaction = None
+
+    def __enter__(self):
+        print("Starting transaction")
+        self.transaction = self.db.transaction()
+        return self.transaction.__enter__()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            print(f"Transaction failed: {exc_type.__name__}: {exc_val}")
+        else:
+            print("Transaction committed")
+        return self.transaction.__exit__(exc_type, exc_val, exc_tb)
+
+# Usage
+with DebugTransaction(db):
+    db.command("sql", "INSERT INTO User SET name = ?", "Alice")
+```
+
+---
+
+### Query Debugging
+
+```python
+def debug_query(db, language, query, *args):
+    """Execute query with debugging."""
+    print(f"Query: {query}")
+    if args:
+        print(f"Params: {args}")
+
+    try:
+        result = db.query(language, query, *args)
+        rows = list(result)
+        print(f"Results: {len(rows)} rows")
+        return rows
+    except Exception as e:
+        print(f"Error: {e}")
+        raise
+
+# Usage
+results = debug_query(db, "sql", "SELECT FROM User WHERE name = :name", {"name": "Alice"})
+```
+
+## Common Error Messages
+
+### "Property not found"
+
+**Meaning:** Trying to get property that doesn't exist.
+
+**Solution:**
+```python
+# Check if property exists
+row = db.query("sql", "SELECT name FROM User LIMIT 1").first()
+if row.has_property("name"):
+    name = row.get("name")
+else:
+    name = "Unknown"
+
+# Or use default
+name = row.get("name") or "Unknown"
+```
+
+---
+
+### "Type not found"
+
+**Meaning:** Vertex/Edge type doesn't exist.
+
+**Solution:**
+```python
+# Create type first
+result = db.query("sql", "SELECT FROM schema:types WHERE name = 'User'")
+if not result.has_next():
+    db.command("sql", "CREATE VERTEX TYPE User")
+
+# Then insert data
+with db.transaction():
+    db.command("sql", "INSERT INTO User SET name = ?", "Alice")
+```
+
+---
+
+### "Index already exists"
+
+**Meaning:** Trying to create duplicate index.
+
+**Solution:**
+```python
+# Drop existing index
+try:
+    db.command("sql", "DROP INDEX `User[email]`")
+except Exception:
+    pass  # Index doesn't exist
+
+# Create new index
+db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+```
+
+---
+
+### "Unique constraint violation"
+
+**Meaning:** Trying to insert duplicate value for unique property.
+
+**Solution:**
+```python
+# Check if exists first
+result = db.query("sql", "SELECT FROM User WHERE email = :email", {"email": "alice@example.com"})
+
+if result.has_next():
+    with db.transaction():
+        db.command(
+            "sql",
+            "UPDATE User SET name = ? WHERE email = ?",
+            "Alice",
+            "alice@example.com",
+        )
+else:
+    # Create new
+    with db.transaction():
+        db.command(
+            "sql",
+            "INSERT INTO User SET email = ?, name = ?",
+            "alice@example.com",
+            "Alice",
+        )
+```
+
+## Getting Help
+
+1. **Check Documentation:**
+    - [API Reference](../api/database.md)
+    - [Guides](../guide/import.md)
+    - [Examples](../examples/import.md)
+
+2. **Search Issues:**
+    - [GitHub Issues](https://github.com/humemai/arcadedb-embedded-python/issues)
+    - [ArcadeDB Documentation](https://docs.arcadedb.com/)
+
+3. **Report Bug:**
+    Include:
+
+    - Python version (`python --version`)
+    - Package version (`uv pip show arcadedb-embedded`)
+    - Minimal reproducible example
+    - Full error message with stack trace
+    - Operating system
+
+## See Also
+
+- [Architecture](architecture.md) - System architecture and design
+- [Database API](../api/database.md) - Core database operations
+- [Exceptions API](../api/exceptions.md) - Error handling reference

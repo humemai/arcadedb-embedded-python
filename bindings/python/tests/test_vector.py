@@ -133,6 +133,26 @@ class TestLSMVectorIndex:
         assert meta.pqCenterGlobally is False
         assert meta.pqTrainingLimit == 5000
 
+    def test_create_vector_index_with_custom_id_property(self, test_db):
+        """Custom id_property should propagate to vector metadata."""
+
+        test_db.command("sql", "CREATE VERTEX TYPE Doc")
+        test_db.command("sql", "CREATE PROPERTY Doc.slug STRING")
+        test_db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "Doc",
+            "embedding",
+            dimensions=3,
+            id_property="slug",
+        )
+
+        java_idx = index._java_index
+        if "TypeIndex" in java_idx.getClass().getName():
+            java_idx = java_idx.getSubIndexes().get(0)
+
+        assert str(java_idx.getMetadata().idPropertyName) == "slug"
+
     def test_lsm_vector_search(self, test_db):
         """Test searching in vector index (JVector implementation)."""
         # Create schema and index
@@ -171,6 +191,100 @@ class TestLSMVectorIndex:
         # Verify the embedding of the result
         res_embedding = arcadedb.to_python_array(vertex.get("embedding"))
         assert abs(res_embedding[0] - 1.0) < 0.001
+
+    def test_lsm_vector_search_by_key(self, test_db):
+        """Key-based nearest search should reuse the indexed record vector."""
+
+        test_db.command("sql", "CREATE VERTEX TYPE Doc")
+        test_db.command("sql", "CREATE PROPERTY Doc.slug STRING")
+        test_db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "Doc",
+            "embedding",
+            dimensions=3,
+            id_property="slug",
+        )
+
+        with test_db.transaction():
+            test_db.command(
+                "sql",
+                "INSERT INTO Doc SET slug = ?, embedding = ?",
+                "doc-a",
+                arcadedb.to_java_float_array([1.0, 0.0, 0.0]),
+            )
+            test_db.command(
+                "sql",
+                "INSERT INTO Doc SET slug = ?, embedding = ?",
+                "doc-b",
+                arcadedb.to_java_float_array([0.95, 0.05, 0.0]),
+            )
+            test_db.command(
+                "sql",
+                "INSERT INTO Doc SET slug = ?, embedding = ?",
+                "doc-c",
+                arcadedb.to_java_float_array([0.0, 1.0, 0.0]),
+            )
+
+        results = index.find_nearest_by_key("doc-a", k=2)
+
+        assert len(results) == 2
+        assert results[0][0].get("slug") == "doc-a"
+        assert results[1][0].get("slug") == "doc-b"
+
+    def test_lsm_vector_search_by_key_missing_record_raises(self, test_db):
+        """Key-based search should fail clearly when the source record is missing."""
+
+        test_db.command("sql", "CREATE VERTEX TYPE Doc")
+        test_db.command("sql", "CREATE PROPERTY Doc.slug STRING")
+        test_db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "Doc",
+            "embedding",
+            dimensions=3,
+            id_property="slug",
+        )
+
+        with pytest.raises(arcadedb.ArcadeDBError, match="No record found"):
+            index.find_nearest_by_key("missing-doc", k=1)
+
+    def test_lsm_vector_metadata(self, test_db):
+        """Metadata helper should expose stable, Python-friendly vector settings."""
+
+        test_db.command("sql", "CREATE VERTEX TYPE Doc")
+        test_db.command("sql", "CREATE PROPERTY Doc.slug STRING")
+        test_db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "Doc",
+            "embedding",
+            dimensions=4,
+            id_property="slug",
+            distance_function="euclidean",
+            quantization="INT8",
+            store_vectors_in_graph=True,
+            add_hierarchy=True,
+            location_cache_size=123,
+            graph_build_cache_size=456,
+            mutations_before_rebuild=789,
+        )
+
+        metadata = index.get_metadata()
+
+        assert metadata["index_name"]
+        assert metadata["bucket_index_name"]
+        assert metadata["type_name"] == "Doc"
+        assert metadata["vector_property"] == "embedding"
+        assert metadata["dimensions"] == 4
+        assert metadata["similarity_function"] == "EUCLIDEAN"
+        assert metadata["id_property"] == "slug"
+        assert metadata["quantization"] == "INT8"
+        assert metadata["location_cache_size"] == 123
+        assert metadata["graph_build_cache_size"] == 456
+        assert metadata["mutations_before_rebuild"] == 789
+        assert metadata["store_vectors_in_graph"] is True
+        assert metadata["add_hierarchy"] is True
 
     def test_lsm_vector_search_approximate_product(self, test_db):
         """Test PQ approximate search path (PRODUCT quantization)."""

@@ -1,0 +1,28 @@
+# JVM Args Tests
+
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_jvm_args.py){ .md-button }
+
+Covers JVM argument construction for the embedded runtime.
+
+## What's Covered
+
+- Defaults when no explicit JVM args are provided.
+- Merging custom `jvm_args` / env fallback while preserving mandatory flags:
+    - `-Djava.awt.headless=true`
+    - `--add-modules=jdk.incubator.vector`
+    - `--enable-native-access=ALL-UNNAMED`
+    - `-Dfile.encoding=UTF8`
+    - `--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED`
+    - `--add-opens=java.base/java.nio.channels.spi=ALL-UNNAMED`
+    - `--add-opens=java.base/java.lang=ALL-UNNAMED`
+    - `-Dpolyglot.engine.WarnInterpreterOnly=false`
+    - `-XX:+UseCompactObjectHeaders`
+- Ensuring a default heap (`-Xmx4g`) is injected if the user omits it.
+- Avoiding duplicate flags when the user already provides them.
+- `ARCADEDB_JVM_ERROR_FILE` handling via `-XX:ErrorFile=...`.
+
+## Run
+
+```bash
+pytest tests/test_jvm_args.py -v
+```
