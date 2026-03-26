@@ -125,7 +125,7 @@ def http_json_request(
     method: str = "GET",
     payload: dict | None = None,
     headers: dict[str, str] | None = None,
-    timeout: float = 10.0,
+    timeout: float = 30.0,
 ) -> dict:
     request_headers = {"Accept": "application/json"}
     if headers:
