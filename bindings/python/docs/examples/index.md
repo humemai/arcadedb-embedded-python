@@ -64,6 +64,9 @@ Four-way graph-ingest comparison. Repository guidance from these experiments is 
 **[17 - Time Series End-to-End](17_timeseries_end_to_end.md)**
 SQL-first time-series workflow covering type creation, tagged inserts, range queries, and hourly bucket aggregation.
 
+**[19 - Hash Index Exact-Match Lookup Workflow](19_hash_index_exact_match.md)**
+SQL-first HASH index workflow covering unique and non-unique exact-match lookups, schema inspection, and duplicate-key rejection.
+
 ## Quick Start
 
 **⚠️ Important: Always run examples from the `examples/` directory.**
@@ -87,6 +90,7 @@ python 01_simple_document_store.py
 10. **Hybrid Queries** (13) - Combined SQL, graph, and vector workflow
 11. **Lifecycle And Ingest Benchmarks** (14/15/16) - Embedded lifecycle timing and ingest comparisons
 12. **Time Series SQL Workflow** (17) - Tagged samples, range queries, and bucket aggregation from Python
+13. **Hash Index Workflow** (19) - Exact-match HASH indexes, missing-key behavior, and duplicate protection
 
 ---
 
