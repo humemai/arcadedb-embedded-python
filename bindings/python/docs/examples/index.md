@@ -70,6 +70,9 @@ SQL-first geospatial workflow covering WKT storage, GEOSPATIAL indexes, indexed 
 **[19 - Hash Index Exact-Match Lookup Workflow](19_hash_index_exact_match.md)**
 SQL-first HASH index workflow covering unique and non-unique exact-match lookups, schema inspection, and duplicate-key rejection.
 
+**[20 - Graph Algorithms Route Planning](20_graph_algorithms_route_planning.md)**
+SQL-first graph algorithms workflow covering minimum-hop `shortestPath`, weighted `dijkstra` / `astar`, sqlscript variables, and route-cost comparison.
+
 ## Quick Start
 
 **⚠️ Important: Always run examples from the `examples/` directory.**
@@ -95,6 +98,7 @@ python 01_simple_document_store.py
 12. **Time Series SQL Workflow** (17) - Tagged samples, range queries, and bucket aggregation from Python
 13. **Geo Predicate Workflow** (18) - WKT points and polygons, indexed spatial filters, and fallback semantics
 14. **Hash Index Workflow** (19) - Exact-match HASH indexes, missing-key behavior, and duplicate protection
+15. **Graph Algorithms Workflow** (20) - Minimum-hop versus weighted routing with `shortestPath`, `dijkstra`, and `astar`
 
 ---
 

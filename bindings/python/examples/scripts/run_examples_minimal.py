@@ -299,6 +299,7 @@ def build_examples(_examples_dir: Path) -> list[ExampleRun]:
         ),
         ExampleRun(18, "18_geo_predicates_wkt.py", lambda _, __: []),
         ExampleRun(19, "19_hash_index_exact_match.py", lambda _, __: []),
+        ExampleRun(20, "20_graph_algorithms_route_planning.py", lambda _, __: []),
     ]
 
 
@@ -313,7 +314,7 @@ def run_command(command: list[str], cwd: Path, dry_run: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run examples 01-19 with small inputs for quicker smoke coverage."
+        description="Run examples 01-20 with small inputs for quicker smoke coverage."
     )
     parser.add_argument(
         "--only",
