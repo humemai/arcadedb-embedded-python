@@ -72,8 +72,9 @@ This fork tracks ArcadeData/arcadedb through the local `upstream-main` mirror br
 - Merge upstream: `./sync-upstream.sh`
 
 The sync keeps this fork's root `README.md`, `CLAUDE.md`, and the removed Java/Maven
-workflows under `.github/workflows/` from being overwritten or reintroduced. See the
-full sync notes in `bindings/python/docs/development/sync-upstream.md`.
+workflows under `.github/workflows/` from being overwritten or reintroduced, including
+the removed `meterian.yml` workflow. See the full sync notes in
+`bindings/python/docs/development/sync-upstream.md`.
 
 ## 🧭 Upstream ArcadeDB (Java)
 
