@@ -297,6 +297,7 @@ def build_examples(_examples_dir: Path) -> list[ExampleRun]:
                 "10",
             ],
         ),
+        ExampleRun(18, "18_geo_predicates_wkt.py", lambda _, __: []),
         ExampleRun(19, "19_hash_index_exact_match.py", lambda _, __: []),
     ]
 

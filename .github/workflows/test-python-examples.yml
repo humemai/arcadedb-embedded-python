@@ -402,6 +402,12 @@ jobs:
                 timeout_duration=900
                 example_jvm_args=""
                 ;;
+              "18_geo_predicates_wkt.py")
+                example_args=""
+                example_name="$example (geo predicates with WKT points and polygons)"
+                timeout_duration=900
+                example_jvm_args=""
+                ;;
               "19_hash_index_exact_match.py")
                 example_args=""
                 example_name="$example (hash index exact-match workflow)"
