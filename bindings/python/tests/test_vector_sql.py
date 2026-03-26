@@ -101,6 +101,51 @@ class TestVectorSQL:
         assert abs(res[0] - 0.6) < 0.001
         assert abs(res[1] - 0.8) < 0.001
 
+    def test_sql_create_index_builds_vector_graph_immediately_by_default(self, test_db):
+        """SQL LSM_VECTOR creation should be queryable immediately."""
+
+        test_db.command("sql", "CREATE VERTEX TYPE Movie")
+        test_db.command("sql", "CREATE PROPERTY Movie.title STRING")
+        test_db.command("sql", "CREATE PROPERTY Movie.embedding ARRAY_OF_FLOATS")
+
+        with test_db.transaction():
+            test_db.command(
+                "sql",
+                "INSERT INTO Movie SET title = 'A', embedding = [1.0, 0.0, 0.0, 0.0]",
+            )
+            test_db.command(
+                "sql",
+                "INSERT INTO Movie SET title = 'B', embedding = [0.9, 0.1, 0.0, 0.0]",
+            )
+            test_db.command(
+                "sql",
+                "INSERT INTO Movie SET title = 'C', embedding = [0.0, 1.0, 0.0, 0.0]",
+            )
+
+        test_db.command(
+            "sql",
+            """
+            CREATE INDEX ON Movie (embedding)
+            LSM_VECTOR
+            METADATA {
+                "dimensions": 4,
+                "similarity": "COSINE"
+            }
+            """,
+        )
+
+        rows = test_db.query(
+            "sql",
+            """
+            SELECT expand(
+                `vector.neighbors`('Movie[embedding]', [1.0, 0.0, 0.0, 0.0], 2)
+            )
+            """,
+        ).to_list()
+
+        assert len(rows) == 2
+        assert rows[0].get("title") == "A"
+
     def test_vector_quantization_functions(self, test_db):
         """Test vector quantization functions."""
         v = [0.1, 0.5, 0.9, -0.1]

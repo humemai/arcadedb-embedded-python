@@ -74,22 +74,22 @@ INSERT INTO VectorData SET id = ?, vector = ?
 
 #### ArcadeDB Index Build Call
 
-```python
-db.create_vector_index(
-  vertex_type="VectorData",
-  vector_property="vector",
-  dimensions=dim,
-  distance_function="cosine",
-  max_connections=max_connections,
-  beam_width=beam_width,
-  quantization=quant,
-  store_vectors_in_graph=store_vectors_in_graph,
-  add_hierarchy=add_hierarchy,
-  build_graph_now=True,
-)
+```sql
+CREATE INDEX ON VectorData (vector)
+LSM_VECTOR
+METADATA {
+  "dimensions": <dim>,
+  "similarity": "COSINE",
+  "maxConnections": <max_connections>,
+  "beamWidth": <beam_width>,
+  "quantization": <quant>,
+  "storeVectorsInGraph": <store_vectors_in_graph>,
+  "addHierarchy": <add_hierarchy>
+}
 ```
 
-This is the exact Example 11 build path for ArcadeDB.
+This is the exact Example 11 build path for ArcadeDB. The Python object helper exists,
+but the benchmark and the recommended docs path use SQL.
 
 ### FAISS
 

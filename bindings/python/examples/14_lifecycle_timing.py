@@ -57,18 +57,6 @@ def create_schema(db, vector_dimensions: int) -> None:
     db.command("sql", "CREATE PROPERTY VectorDoc.embedding ARRAY_OF_FLOATS")
     db.command("sql", "CREATE INDEX ON VectorDoc (doc_id) UNIQUE_HASH")
 
-    db.command(
-        "sql",
-        f"""
-        CREATE INDEX ON VectorDoc (embedding)
-        LSM_VECTOR
-        METADATA {{
-            "dimensions": {int(vector_dimensions)},
-            "similarity": "COSINE"
-        }}
-        """,
-    )
-
 
 def run_single_iteration(
     db_path: Path,
@@ -136,12 +124,19 @@ def run_single_iteration(
                 ),
             )
     transaction_time_s = time.perf_counter() - transaction_start
-    load_time_s = time.perf_counter() - transaction_breakdown_start
 
-    index = db.schema.get_vector_index("VectorDoc", "embedding")
-    if index is None:
-        raise RuntimeError("Failed to load vector index for VectorDoc[embedding]")
-    index.build_graph_now()
+    db.command(
+        "sql",
+        f"""
+        CREATE INDEX ON VectorDoc (embedding)
+        LSM_VECTOR
+        METADATA {{
+            "dimensions": {int(vector_dimensions)},
+            "similarity": "COSINE"
+        }}
+        """,
+    )
+    load_time_s = time.perf_counter() - transaction_breakdown_start
 
     query_start = time.perf_counter()
     for query_index in range(query_runs):

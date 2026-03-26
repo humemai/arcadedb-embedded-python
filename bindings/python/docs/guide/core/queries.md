@@ -351,6 +351,9 @@ db.command("sql", "CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA {\"dimens
 db.command("sql", "CREATE INDEX ON Place (location) GEOSPATIAL")
 ```
 
+For `LSM_VECTOR`, SQL builds the graph immediately by default. If you need to defer that
+work, pass `"buildGraphNow": false` inside `METADATA`.
+
 Rules of thumb:
 
 - Use `UNIQUE_HASH` or `NOTUNIQUE_HASH` for exact-match lookups only.

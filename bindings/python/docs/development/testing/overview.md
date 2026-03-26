@@ -5,7 +5,7 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 ## Quick Statistics
 
 !!! success "Test Results"
-    - **Current package**: ✅ 282 passed
+    - **Current package**: ✅ 290 passed
     - Environment-specific skips may vary depending on optional components
 
 ## What's Tested
@@ -130,7 +130,7 @@ pytest -m "not slow"
 When the current bindings test suite passes, you should see a clean all-green summary.
 
 ```
-======================== 282 passed ========================
+======================== 290 passed ========================
 ```
 
 

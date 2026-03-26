@@ -658,7 +658,14 @@ db.create_vector_index(
 ) -> VectorIndex
 ```
 
-Create a vector index for similarity search (JVector implementation). Existing records are indexed automatically when the index is created. By default, graph preparation is performed immediately (`build_graph_now=True`).
+Create a vector index for similarity search (JVector implementation). Existing records
+are indexed automatically when the index is created. By default, graph preparation is
+performed immediately (`build_graph_now=True`).
+
+For normal application code and documentation examples, prefer SQL `CREATE INDEX ...
+LSM_VECTOR METADATA {...}` because it is cleaner and aligns with the SQL-first workflow.
+Keep `create_vector_index()` for Python-driven setup, tests, or manual control when you
+specifically need that surface.
 
 **Parameters:**
 
@@ -703,7 +710,7 @@ db.command("sql", "CREATE VERTEX TYPE Document")
 db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
 db.command("sql", "CREATE PROPERTY Document.id STRING")
 
-# Create vector index
+# Secondary/manual option: create vector index from Python
 index = db.create_vector_index("Document", "embedding", dimensions=384)
 
 # Add vectors
@@ -714,17 +721,14 @@ with db.transaction():
         vertex.set("embedding", arcadedb.to_java_float_array(embedding))
         vertex.save()
 
-# Search
+# Preferred query path: SQL search
 query_vector = np.random.rand(384)
-results = index.find_nearest(query_vector, k=5)
-
-# Preferred when you want richer query composition
 qvec_literal = "[" + ", ".join(str(float(x)) for x in query_vector.tolist()) + "]"
 rows = db.query(
     "sql",
     (
         "SELECT id, distance, (1 - distance) AS score "
-        "FROM (SELECT expand(`vector.neighbors`('Document[embedding]', "
+        "FROM (SELECT expand(vectorNeighbors('Document[embedding]', "
         f"{qvec_literal}, 5))) ORDER BY distance"
     ),
 ).to_list()

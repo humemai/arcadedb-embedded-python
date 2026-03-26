@@ -10,8 +10,8 @@ bindings.
 
 What the tests cover:
 
-- ✅ **HNSW (JVector)/LSM index creation** via `create_vector_index`
-- ✅ **Nearest-neighbor search** with `find_nearest`
+- ✅ **HNSW (JVector)/LSM index creation** via SQL and Python helper coverage
+- ✅ **Nearest-neighbor search** via SQL and embedded helper coverage
 - ✅ **RID filtering** using `allowed_rids`
 - ✅ **Exact-search beam tuning** (`ef_search`)
 - ✅ **Distance functions** (cosine default, euclidean variants)
@@ -20,8 +20,8 @@ What the tests cover:
 
 ## Test Coverage (high level)
 
-- `test_create_vector_index` – creates HNSW (JVector)/LSM index and verifies schema listing
-- `test_lsm_vector_search` – basic nearest-neighbor search
+- `test_create_vector_index` – covers the Python helper surface for vector index creation
+- `test_lsm_vector_search` – basic nearest-neighbor search through the embedded helper
 - `test_lsm_vector_search_with_filter` – `allowed_rids` filtering
 - `test_lsm_vector_delete_and_search_others` – deletes vertices, ensures others are still found
 - `test_lsm_vector_search_ef_search` – adjusts `ef_search`
@@ -44,13 +44,18 @@ with arcadedb.create_database("./test_db") as db:
     db.command("sql", "CREATE VERTEX TYPE Doc")
     db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
 
-    index = db.create_vector_index(
-        "Doc",
-        "embedding",
-        dimensions=384,
-        distance_function="cosine",   # default
-        max_connections=16,            # graph degree (default)
-        beam_width=100                 # search/construction beam (default)
+    db.command(
+        "sql",
+        '''
+        CREATE INDEX ON Doc (embedding)
+        LSM_VECTOR
+        METADATA {
+            "dimensions": 384,
+            "similarity": "COSINE",
+            "maxConnections": 16,
+            "beamWidth": 100
+        }
+        ''',
     )
 ```
 
@@ -59,12 +64,11 @@ with arcadedb.create_database("./test_db") as db:
 ```python
 with arcadedb.create_database("./test_db") as db:
     db.command("sql", "CREATE VERTEX TYPE Doc")
+    db.command("sql", "CREATE PROPERTY Doc.docId INTEGER")
     db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
-
-    index = db.create_vector_index(
-        "Doc",
-        "embedding",
-        dimensions=3,
+    db.command(
+        "sql",
+        'CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA {"dimensions": 3}',
     )
 
     # Insert test vertices with embeddings
@@ -76,12 +80,15 @@ with arcadedb.create_database("./test_db") as db:
 
     # Search with filters
     query = [1.0, 0.0, 0.0]
-    results = index.find_nearest(
-        query,
-        k=2,
-        allowed_rids=[doc1.get_rid(), doc2.get_rid()],
-        ef_search=100,
-    )
+    allowed_rids_sql = f"['{doc1.get_rid()}', '{doc2.get_rid()}']"
+    query_literal = "[" + ", ".join(str(float(v)) for v in query) + "]"
+    results = db.query(
+        "sql",
+        (
+            "SELECT expand(vectorNeighbors('Doc[embedding]', "
+            f"{query_literal}, 2, 100)) WHERE @rid IN {allowed_rids_sql}"
+        ),
+    ).to_list()
 ```
 
 ### Chunked insert vectors (preferred)
@@ -107,10 +114,10 @@ with arcadedb.create_database("./test_db") as db:
 ## Key Takeaways
 
 1. JVector is fully Java-native and LSM-backed; no legacy hnswlib path remains.
-2. Use `allowed_rids` for pre-filtered searches and `ef_search` when you need an
-   explicit exact-search recall/latency trade-off.
-3. `max_connections` and `beam_width` map to JVector graph degree and search beam; tune per workload.
-4. Prefer chunked `db.transaction()` inserts for embedded workloads rather than a separate batching abstraction.
+2. `max_connections` and `beam_width` map to JVector graph degree and search beam; tune
+   per workload.
+3. Prefer chunked `db.transaction()` inserts for embedded workloads rather than a
+   separate batching abstraction.
 
 ## See Also
 

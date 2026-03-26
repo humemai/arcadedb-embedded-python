@@ -620,10 +620,10 @@ mkdocs build
 git add src/ tests/ docs/
 
 # Commit with clear message
-git commit -m "Add vector search distance function parameter
+git commit -m "Refine vector search docs and tests
 
-- Added distance_function parameter to create_vector_index()
-- Supports cosine, euclidean, and inner_product
+- Clarified SQL-first vector index workflow
+- Updated vector docs and tests
 - Added tests for all distance functions
 - Updated API documentation
 

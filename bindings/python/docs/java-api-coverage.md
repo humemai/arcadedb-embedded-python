@@ -122,7 +122,8 @@ Full Pythonic Schema API available via `db.schema`:
 - ✅ `create_property()`, `drop_property()`
 - ✅ `drop_type()`, `exists_type()`, `get_type()`, `get_types()`
 - ✅ Indexes: `create_index()`, `drop_index()`, `get_indexes()`, `exists_index()`
-- ✅ Vector indexes: `create_vector_index()` (on `Database`), `list_vector_indexes()`
+- ✅ Vector indexes: SQL `CREATE INDEX ... LSM_VECTOR`, secondary/manual helper coverage,
+  `list_vector_indexes()`
 
 #### 5. Server Mode
 
@@ -166,9 +167,9 @@ Support exists, but the current repository guidance is:
 
 #### 8. Vector Search
 
-- ✅ Vector index creation - `create_vector_index()` (JVector)
+- ✅ Vector index creation - SQL `CREATE INDEX ... LSM_VECTOR`
 - ✅ NumPy array support - `to_java_float_array()`, `to_python_array()`
-- ✅ Similarity search - `VectorIndex.find_nearest()` and PQ approximate search
+- ✅ Similarity search - SQL `vectorNeighbors`
 - ✅ Distance functions - cosine, euclidean, inner_product
 - ✅ Index tuning parameters (connections, beam width, quantization)
 - ✅ Automatic indexing of existing records

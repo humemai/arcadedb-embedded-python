@@ -1,11 +1,8 @@
 ## Things to do for python bindings
 
-- [ ] Currently: vector examples use a temporary hybrid flow. We create the
-      LSM_VECTOR / HNSW index in SQL, then fetch it via the Python object API and
-      call `build_graph_now()` to build the HNSW graph immediately. This is a bit
-      dirty, but cleaner than `REBUILD INDEX` for now. Luca is working on making
-      this fully doable from SQL in one clean step. when done, update the tests,
-      examples, and the documents
+- [x] Vector examples, tests, and docs now use the SQL-only flow for eager
+      LSM_VECTOR / HNSW graph creation by default. Keep `build_graph_now()` for
+      explicit maintenance cases after large vector mutations.
 - [ ] add example 17: time series end-to-end (create type, insert tagged points, range query, bucket aggregation)
 - [ ] add example 18: geo predicates (within/intersects with WKT points/polygons)
 - [ ] add example 19: hash index exact-match lookup workflow

@@ -28,7 +28,7 @@ It is important to distinguish between operations that require explicit transact
 | **Data Write** | `db.command("sql", "INSERT...")`, `db.command("sql", "UPDATE...")`, `db.command("sql", "DELETE...")`, `db.command("opencypher", "CREATE ...")` | **Required** (Wrap in `with db.transaction():`) |
 | **Bulk Operations** | `db.command("sql", "IMPORT DATABASE...")`, `db.import_documents(...)`, `db.graph_batch(...)` | **Auto-transactional / auto-managed** (Built-in transaction management) |
 | **Data Read** | `db.query()`, `db.command("sql", "SELECT...")`, `db.lookup_by_rid()` | **Optional** (Can run outside transaction for better performance) |
-| **Vector Operations** | `db.create_vector_index()` | **Auto-transactional** (Do NOT wrap) |
+| **Vector Operations** | `CREATE INDEX ... LSM_VECTOR` | **Auto-transactional** (Do NOT wrap) |
 
 ### Key Distinction: `db.query()` vs `db.command()`
 

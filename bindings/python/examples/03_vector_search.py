@@ -232,13 +232,9 @@ with arcadedb.create_database(db_path) as db:
         }}
         """,
     )
-    index = db.schema.get_vector_index("Article", "embedding")
-    if index is None:
-        raise RuntimeError("Failed to load vector index for Article[embedding]")
-    index.build_graph_now()
 
     print("   ✅ Created JVector vector index")
-    print("   ✅ Built vector index graph")
+    print("   ✅ Built vector index graph immediately via SQL")
     print("   💡 LSM index automatically indexes existing records upon creation.")
     print("   ✅ Indexing handled by ArcadeDB engine.")
     print(f"   ⏱️  Time: {time.time() - step_start:.3f}s")

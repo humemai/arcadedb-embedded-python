@@ -60,21 +60,28 @@ with db.transaction():
 
 ### 4. Creating Vector Index
 
-Create a JVector index for similarity search:
+Create the JVector index for similarity search in SQL. This is the cleaner and
+recommended path:
 
 ```python
-index = db.create_vector_index(
-    vertex_type="Article",
-    vector_property="embedding",
-    dimensions=384,
-    distance_function="cosine"
+db.command(
+    "sql",
+    """
+    CREATE INDEX ON Article (embedding)
+    LSM_VECTOR
+    METADATA {
+       "dimensions": 384,
+       "similarity": "COSINE"
+    }
+    """
 )
 ```
 
 **Parameters:**
 - `dimensions`: Must match embedding model size
 - `distance_function`: `cosine` (for normalized vectors), `euclidean`, or `inner_product`
-- `build_graph_now`: Defaults to `True` (eager graph preparation). Set to `False` to defer preparation to first query.
+- `buildGraphNow`: Defaults to `true` in SQL metadata. Set it to `false` only if you
+   intentionally want to defer preparation to the first query.
 
 ### 5. Semantic Search
 
@@ -89,7 +96,7 @@ rows = db.query(
    "sql",
    (
       "SELECT title, category, distance, (1 - distance) AS score "
-      "FROM (SELECT expand(`vector.neighbors`('Article[embedding]', "
+      "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
       f"{qvec_literal}, 5))) ORDER BY distance"
    ),
 ).to_list()
@@ -105,7 +112,7 @@ filtered_rows = db.query(
    "sql",
    (
       "SELECT title, category, distance, (1 - distance) AS score "
-      "FROM (SELECT expand(`vector.neighbors`('Article[embedding]', "
+      "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
       f"{qvec_literal}, 50))) WHERE category = ? ORDER BY distance LIMIT 5"
    ),
    category,

@@ -21,6 +21,7 @@ Tests storing and retrieving NumPy arrays.
 - Round-trip conversion
 
 **Pattern:**
+
 ```python
 # Create NumPy array
 embedding = np.array([0.1, 0.2, 0.3], dtype=np.float32)
@@ -52,6 +53,7 @@ Tests vector similarity search with NumPy arrays.
 - Retrieving nearest neighbors
 
 **Pattern:**
+
 ```python
 import numpy as np
 
@@ -59,7 +61,10 @@ import numpy as np
 db.command("sql", "CREATE VERTEX TYPE Document")
 db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
 
-db.create_vector_index("Document", "embedding", dimensions=128)
+db.command(
+    "sql",
+    'CREATE INDEX ON Document (embedding) LSM_VECTOR METADATA {"dimensions": 128}',
+)
 
 # Insert vectors
 for i in range(100):
@@ -72,12 +77,12 @@ for i in range(100):
 
 # Search for similar vectors
 query_vector = np.random.rand(128).astype(np.float32)
+query_literal = "[" + ", ".join(str(float(v)) for v in query_vector.tolist()) + "]"
 
 results = db.query(
     "sql",
-    "SELECT FROM Document WHERE embedding ~ ?",
-    query_vector.tolist()
-)
+    f"SELECT expand(vectorNeighbors('Document[embedding]', {query_literal}, 5))",
+).to_list()
 
 for result in results:
     print(result.get("docId"))
@@ -97,6 +102,7 @@ Tests NumPy dtype handling.
 - Type preservation during round-trip
 
 **Pattern:**
+
 ```python
 import numpy as np
 
