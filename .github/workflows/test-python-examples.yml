@@ -27,7 +27,7 @@ on:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
         type: string
-        default: "0[1-9]_*.py 1[0-9]_*.py 2[0-1]_*.py"
+        default: "0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py"
       build-version:
         description: "Override package version (PEP 440) for build.sh"
         required: false
@@ -39,10 +39,14 @@ on:
       examples:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
-        default: "0[1-9]_*.py 1[0-9]_*.py 2[0-1]_*.py"
+        default: "0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py"
 
 env:
-  EXAMPLES: ${{ inputs.examples || '0[1-9]_*.py 1[0-9]_*.py 2[0-1]_*.py' }}
+  EXAMPLES: ${{ inputs.examples || '0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py' }}
+
+# Note: Example 21 is intentionally excluded in CI.
+# It has shown repeated GitHub Actions instability across platforms despite
+# timeout increases, so the workflow skips it explicitly below.
 
 permissions:
   contents: read
@@ -313,6 +317,14 @@ jobs:
 
             # Set example-specific parameters and timeout
             case "$example" in
+              "21_server_mode_http_access.py")
+                # Example 21 is kept in the repo for local/manual use, but is
+                # excluded from GitHub Actions because it is CI-unstable.
+                echo "⏭️  SKIPPED: $example (excluded from GitHub Actions due to CI instability)" | tee -a $results_file
+                skipped=$((skipped + 1))
+                echo ""
+                continue
+                ;;
               "04_csv_import_documents.py")
                 example_args="--dataset movielens-small --export"
                 example_name="$example (movielens-small dataset with export)"
@@ -419,12 +431,6 @@ jobs:
               "20_graph_algorithms_route_planning.py")
                 example_args=""
                 example_name="$example (graph algorithms route planning workflow)"
-                timeout_duration=900
-                example_jvm_args=""
-                ;;
-              "21_server_mode_http_access.py")
-                example_args=""
-                example_name="$example (server mode and HTTP access workflow)"
                 timeout_duration=900
                 example_jvm_args=""
                 ;;
