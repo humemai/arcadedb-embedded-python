@@ -157,6 +157,10 @@ nav:
   - 14 - Lifecycle Timing Benchmark: examples/14_lifecycle_timing.md
   - 15 - Table Ingest Comparison: examples/15_import_database_vs_transactional_table_ingest.md
   - 16 - Graph Ingest Comparison: examples/16_import_database_vs_transactional_graph_ingest.md
+  - 17 - Time Series End-to-End: examples/17_timeseries_end_to_end.md
+  - 18 - Geo Predicates With WKT: examples/18_geo_predicates_wkt.md
+  - 19 - Hash Index Exact Match: examples/19_hash_index_exact_match.md
+  - 20 - Graph Algorithms Route Planning: examples/20_graph_algorithms_route_planning.md
   - Data Import Patterns: examples/import.md
   - Vector Search Patterns: examples/vectors.md
 - User Guide:

@@ -553,15 +553,17 @@ def create_index_arcadedb(
     if quant is not None:
         metadata_lines.insert(4, f'"quantization": "{quant}"')
 
+    metadata_body = ",\n            ".join(metadata_lines)
+
     db.command(
         "sql",
-        f'''
+        f"""
         CREATE INDEX ON VectorData (vector)
         LSM_VECTOR
         METADATA {{
-            {",\n            ".join(metadata_lines)}
+            {metadata_body}
         }}
-        ''',
+        """,
     )
 
 

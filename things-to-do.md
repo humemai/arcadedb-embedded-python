@@ -1,16 +1,6 @@
 # Things to do for python bindings
 
-- [x] add example 18: geo predicates (within/intersects with WKT points/polygons). both
-  `/mnt/ssd2/repos/arcadedb-embedded-python/.github/workflows/test-python-examples.yml`
-  and
-  `/mnt/ssd2/repos/arcadedb-embedded-python/bindings/python/examples/scripts/run_examples_minimal.py`
-  should be updated after adding the example script.
-- [x] add example 19: hash index exact-match lookup workflow. both
-  `/mnt/ssd2/repos/arcadedb-embedded-python/.github/workflows/test-python-examples.yml`
-  and
-  `/mnt/ssd2/repos/arcadedb-embedded-python/bindings/python/examples/scripts/run_examples_minimal.py`
-  should be updated after adding the example script.
-- [ ] add example 20: graph algorithms (shortestPath, dijkstra, astar). both
+- [x] add example 20: graph algorithms (shortestPath, dijkstra, astar). both
   `/mnt/ssd2/repos/arcadedb-embedded-python/.github/workflows/test-python-examples.yml`
   and
   `/mnt/ssd2/repos/arcadedb-embedded-python/bindings/python/examples/scripts/run_examples_minimal.py`
