@@ -188,6 +188,20 @@ Synthetic graph ingest comparison harness:
 
 ---
 
+### ⏱️ [17_timeseries_end_to_end.py](./17_timeseries_end_to_end.py)
+**Time Series SQL | Tagged Points | Range Queries | Bucket Aggregation**
+
+SQL-first time-series workflow from Python bindings:
+- Creates a `TIMESERIES TYPE` with timestamp, tags, and numeric fields
+- Inserts tagged samples inside a transaction
+- Queries a time range for a single sensor
+- Aggregates with `ts.timeBucket('1h', ts)`
+- Demonstrates the current bindings posture: use SQL rather than a Python-native time-series API
+
+**Learn:** How to drive ArcadeDB time-series capabilities from Python without adding a new public object model
+
+---
+
 ## 💡 Tips
 
 - **Run from examples/ directory** - Always execute examples from `bindings/python/examples/` for correct file paths

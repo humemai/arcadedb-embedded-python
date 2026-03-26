@@ -1,9 +1,10 @@
 ## Things to do for python bindings
 
-- [x] Vector examples, tests, and docs now use the SQL-only flow for eager
-      LSM_VECTOR / HNSW graph creation by default. Keep `build_graph_now()` for
-      explicit maintenance cases after large vector mutations.
-- [ ] add example 17: time series end-to-end (create type, insert tagged points, range query, bucket aggregation)
+- [ ] revisit: `/mnt/ssd2/repos/arcadedb-embedded-python/.github` the thing is that this
+  repo is the fork of the original java-heavy repo, and my repo is about python
+  bindings. so we can perhaps remove the java tests. This means that we also have to
+  revisit `/mnt/ssd2/repos/arcadedb-embedded-python/sync-upstream.sh`, cuz we might have
+  to add some stuff to `FORK_OWNED_PATHS`?
 - [ ] add example 18: geo predicates (within/intersects with WKT points/polygons)
 - [ ] add example 19: hash index exact-match lookup workflow
 - [ ] add example 20: materialized view lifecycle (create, alter refresh mode, refresh, inspect metadata, drop)
@@ -13,4 +14,4 @@
       support for client-server as well. Let's see how much can work out of the box. Let's
       not over-engineer it.
 - [ ] GAV: add a small management API in Python
-  - [ ] I think this is still being updated. Maybe i'll visit later.
+  - [ ] I think this is still under active development. Maybe i'll visit later.

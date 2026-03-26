@@ -3,16 +3,18 @@
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/13_stackoverflow_hybrid_queries.py){ .md-button }
 
 This example builds a standalone Stack Overflow pipeline combining document tables,
-property graph data, embeddings, vector indexes, and hybrid queries.
+property graph data, embeddings, vector indexes, hybrid queries, and a derived
+time-series activity layer.
 
 ## Overview
 
-Example 13 runs four phases:
+Example 13 runs five phases:
 
 1. XML to document tables
 2. XML to graph
 3. Embeddings plus vector indexes on Question, Answer, and Comment
 4. Hybrid queries combining SQL, OpenCypher, and vector search
+5. Derived time-series analytics from existing timestamped events
 
 ## Current Repository Guidance
 
@@ -24,6 +26,8 @@ Example 13 runs four phases:
 - `GraphBatch` is the repository's recommended bulk graph ingest path from Python
 - Graph edge creation uses RID-based directed endpoints
 - Traversal semantics are directional
+- Phase 5 does not replace the document or graph models; it builds a compact
+  `ActivitySeries` projection from existing `CreationDate` / `Date` fields
 
 ## Run
 
@@ -36,7 +40,8 @@ python 13_stackoverflow_hybrid_queries.py \
   --encode-batch-size 256 \
   --model all-MiniLM-L6-v2 \
   --heap-size 4g \
-  --top-k 10
+  --top-k 10 \
+  --timeseries-top-tags 5
 ```
 
 ## Key Options
@@ -48,3 +53,25 @@ python 13_stackoverflow_hybrid_queries.py \
 - `--heap-size`: JVM heap size
 - `--top-k`: hybrid/vector result count
 - `--candidate-limit`: candidate pool size for hybrid ranking
+- `--timeseries-top-tags`: number of top tags projected into the derived
+  time-series activity layer
+
+## Time-Series Layer
+
+The script now adds a compact derived TimeSeries type after the main hybrid phases:
+
+- `ActivitySeries`
+- timestamp: daily bucket timestamp
+- tags: `event_type`, `scope`, `tag`
+- fields: `event_count`, `total_score`, `avg_score`
+
+The source data comes from the timestamps already present on:
+
+- `Question.CreationDate`
+- `Answer.CreationDate`
+- `Comment.CreationDate`
+- `Badge.Date`
+
+That means the example stays faithful to the Stack Overflow domain model while also
+demonstrating how ArcadeDB can project graph/document events into a time-series view
+for trend analysis.

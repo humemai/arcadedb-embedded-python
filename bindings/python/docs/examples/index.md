@@ -61,6 +61,9 @@ Four-way table-ingest comparison. Repository guidance from these experiments is 
 **[16 - Import Database vs Transactional Graph Ingest](16_import_database_vs_transactional_graph_ingest.md)**
 Four-way graph-ingest comparison. Repository guidance from these experiments is to prefer `GraphBatch` for bulk graph ingest.
 
+**[17 - Time Series End-to-End](17_timeseries_end_to_end.md)**
+SQL-first time-series workflow covering type creation, tagged inserts, range queries, and hourly bucket aggregation.
+
 ## Quick Start
 
 **⚠️ Important: Always run examples from the `examples/` directory.**
@@ -83,6 +86,7 @@ python 01_simple_document_store.py
 9. **Vector Benchmarks** (11/12) - Index build and search benchmarking across vector backends
 10. **Hybrid Queries** (13) - Combined SQL, graph, and vector workflow
 11. **Lifecycle And Ingest Benchmarks** (14/15/16) - Embedded lifecycle timing and ingest comparisons
+12. **Time Series SQL Workflow** (17) - Tagged samples, range queries, and bucket aggregation from Python
 
 ---
 

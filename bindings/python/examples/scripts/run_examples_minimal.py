@@ -287,6 +287,16 @@ def build_examples(_examples_dir: Path) -> list[ExampleRun]:
                 str(graph_work_dir),
             ],
         ),
+        ExampleRun(
+            17,
+            "17_timeseries_end_to_end.py",
+            lambda _, __: [
+                "--hours",
+                "2",
+                "--interval-minutes",
+                "10",
+            ],
+        ),
     ]
 
 
@@ -301,7 +311,7 @@ def run_command(command: list[str], cwd: Path, dry_run: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run examples 01-16 with small inputs for quicker smoke coverage."
+        description="Run examples 01-17 with small inputs for quicker smoke coverage."
     )
     parser.add_argument(
         "--only",

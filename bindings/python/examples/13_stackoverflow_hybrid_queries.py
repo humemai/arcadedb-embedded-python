@@ -2,11 +2,12 @@
 """
 Example 13: Stack Overflow Hybrid Queries (Standalone)
 
-Native-only ArcadeDB pipeline with four steps:
+Native-only ArcadeDB pipeline with five steps:
 1) Phase 1: XML -> document tables (+ indexes)
 2) Phase 2: XML -> graph (+ indexes)
 3) Phase 3: embeddings + vector indexes on Question/Answer/Comment
 4) Phase 4: hybrid queries combining SQL, OpenCypher, and vector search
+5) Phase 5: derived time-series analytics from existing event timestamps
 
 This script is intentionally compact and does not use Docker.
 
@@ -49,6 +50,8 @@ EXPECTED_DATASETS = {
     "stackoverflow-xlarge",
     "stackoverflow-full",
 }
+
+DAY_MS = 24 * 60 * 60 * 1000
 
 
 def get_arcadedb_module():
@@ -109,6 +112,20 @@ def to_epoch_millis(value: Optional[datetime]) -> Optional[int]:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return int(value.timestamp() * 1000)
+
+
+def floor_day_ms(value: int) -> int:
+    return int(value) - (int(value) % DAY_MS)
+
+
+def epoch_ms_to_iso(value: Optional[int]) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.isoformat()
+        return value.astimezone(timezone.utc).isoformat()
+    return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc).isoformat()
 
 
 def format_bytes_binary(value: int) -> str:
@@ -434,6 +451,8 @@ def create_indexes_with_retry(
     retry_delay: int,
     max_retries: int,
 ) -> float:
+    from arcadedb_embedded import ArcadeDBError
+
     start = time.time()
     for table, props, unique in index_defs:
         created = False
@@ -451,7 +470,7 @@ def create_indexes_with_retry(
                 )
                 created = True
                 break
-            except Exception as exc:
+            except ArcadeDBError as exc:
                 error_msg = str(exc)
                 retryable = (
                     "NeedRetryException" in error_msg
@@ -463,7 +482,7 @@ def create_indexes_with_retry(
                     continue
                 raise RuntimeError(
                     f"Failed creating index {table}[{','.join(props)}]: {error_msg}"
-                )
+                ) from exc
         if not created:
             raise RuntimeError(f"Failed creating index {table}[{','.join(props)}]")
 
@@ -1210,6 +1229,8 @@ def count_graph(db) -> Dict[str, Any]:
 
 
 def ensure_embedding_properties(db) -> None:
+    from arcadedb_embedded import ArcadeDBError
+
     for vertex_type in ("Question", "Answer", "Comment"):
         for prop_name, prop_type in (
             ("embedding", "ARRAY_OF_FLOATS"),
@@ -1219,7 +1240,7 @@ def ensure_embedding_properties(db) -> None:
                 db.command(
                     "sql", f"CREATE PROPERTY {vertex_type}.{prop_name} {prop_type}"
                 )
-            except Exception:
+            except ArcadeDBError:
                 pass
 
 
@@ -1274,7 +1295,8 @@ def embed_vertex_type(
             for entity_id, emb in zip(ids, embeddings):
                 db.command(
                     "sql",
-                    f"UPDATE {vertex_type} SET embedding = ?, vector_id = ? WHERE Id = ?",
+                    f"UPDATE {vertex_type} SET embedding = ?, vector_id = ? "
+                    "WHERE Id = ?",
                     [arcadedb.to_java_float_array(emb), str(entity_id), entity_id],
                 )
 
@@ -1349,6 +1371,244 @@ def timed_step(name: str, fn: Callable[[], Any]) -> Dict[str, Any]:
     start = time.perf_counter()
     result = fn()
     return {"name": name, "elapsed_s": time.perf_counter() - start, "result": result}
+
+
+def create_activity_timeseries_type(db) -> Tuple[bool, Optional[str]]:
+    from arcadedb_embedded import ArcadeDBError
+
+    try:
+        db.command(
+            "sql",
+            "CREATE TIMESERIES TYPE ActivitySeries "
+            "TIMESTAMP ts TAGS (event_type STRING, scope STRING, tag STRING) "
+            "FIELDS (event_count LONG, total_score LONG, avg_score DOUBLE)",
+        )
+    except ArcadeDBError as exc:
+        message = str(exc)
+        if "TIMESERIES" in message.upper() or "no viable alternative" in message:
+            return False, message
+        raise
+    return True, None
+
+
+def accumulate_daily_series(
+    rows: Iterable[Dict[str, Any]],
+    series: Dict[Tuple[int, str, str, str], Dict[str, float]],
+    *,
+    event_type: str,
+    scope: str,
+    tag_getter: Callable[[Dict[str, Any]], str],
+) -> int:
+    seen = 0
+    for row in rows:
+        ts = row.get("ts")
+        if ts is None:
+            continue
+        bucket = floor_day_ms(int(ts))
+        tag = tag_getter(row)
+        key = (bucket, event_type, scope, tag)
+        score = int(row.get("score") or 0)
+        entry = series.setdefault(
+            key,
+            {"event_count": 0.0, "total_score": 0.0},
+        )
+        entry["event_count"] += 1.0
+        entry["total_score"] += float(score)
+        seen += 1
+    return seen
+
+
+def insert_activity_timeseries(
+    db,
+    series: Dict[Tuple[int, str, str, str], Dict[str, float]],
+) -> int:
+    inserted = 0
+    with db.transaction():
+        for (bucket, event_type, scope, tag), values in sorted(series.items()):
+            event_count = int(values["event_count"])
+            total_score = int(values["total_score"])
+            avg_score = (total_score / event_count) if event_count else 0.0
+            db.command(
+                "sql",
+                "INSERT INTO ActivitySeries SET ts = ?, event_type = ?, scope = ?, "
+                "tag = ?, event_count = ?, total_score = ?, avg_score = ?",
+                bucket,
+                event_type,
+                scope,
+                tag,
+                event_count,
+                total_score,
+                avg_score,
+            )
+            inserted += 1
+    return inserted
+
+
+def build_activity_timeseries(db, top_tag_limit: int) -> Dict[str, Any]:
+    created, reason = create_activity_timeseries_type(db)
+    if not created:
+        return {
+            "enabled": False,
+            "reason": reason,
+            "inserted_points": 0,
+            "source_events": {},
+            "top_tags": [],
+            "queries": [],
+        }
+
+    top_tag_rows = run_sql(
+        db,
+        f"""
+        SELECT TagName, Count
+        FROM Tag
+        WHERE TagName IS NOT NULL
+        ORDER BY Count DESC, TagName ASC
+        LIMIT {top_tag_limit}
+        """,
+    )
+    top_tags = [str(row.get("TagName")) for row in top_tag_rows if row.get("TagName")]
+
+    series: Dict[Tuple[int, str, str, str], Dict[str, float]] = {}
+    source_events: Dict[str, int] = {}
+
+    source_events["question_global"] = accumulate_daily_series(
+        db.query(
+            "sql",
+            "SELECT CreationDate AS ts, Score AS score "
+            "FROM Question WHERE CreationDate IS NOT NULL",
+        ),
+        series,
+        event_type="question",
+        scope="global",
+        tag_getter=lambda _row: "__all__",
+    )
+    source_events["answer_global"] = accumulate_daily_series(
+        db.query(
+            "sql",
+            "SELECT CreationDate AS ts, Score AS score "
+            "FROM Answer WHERE CreationDate IS NOT NULL",
+        ),
+        series,
+        event_type="answer",
+        scope="global",
+        tag_getter=lambda _row: "__all__",
+    )
+    source_events["comment_global"] = accumulate_daily_series(
+        db.query(
+            "sql",
+            "SELECT CreationDate AS ts, Score AS score "
+            "FROM Comment WHERE CreationDate IS NOT NULL",
+        ),
+        series,
+        event_type="comment",
+        scope="global",
+        tag_getter=lambda _row: "__all__",
+    )
+    source_events["badge_global"] = accumulate_daily_series(
+        db.query(
+            "sql",
+            "SELECT Date AS ts, 0 AS score FROM Badge WHERE Date IS NOT NULL",
+        ),
+        series,
+        event_type="badge",
+        scope="global",
+        tag_getter=lambda _row: "__all__",
+    )
+
+    if top_tags:
+        cypher_tags = (
+            "[" + ", ".join(quote_cypher_string(tag) for tag in top_tags) + "]"
+        )
+        source_events["question_tagged"] = accumulate_daily_series(
+            db.query(
+                "opencypher",
+                f"""
+                MATCH (q:Question)-[:TAGGED_WITH]->(t:Tag)
+                WHERE q.CreationDate IS NOT NULL AND t.TagName IN {cypher_tags}
+                RETURN q.CreationDate AS ts, q.Score AS score, t.TagName AS tag
+                """,
+            ),
+            series,
+            event_type="question",
+            scope="tag",
+            tag_getter=lambda row: str(row.get("tag") or "unknown"),
+        )
+    else:
+        source_events["question_tagged"] = 0
+
+    inserted_points = insert_activity_timeseries(db, series)
+
+    global_daily = [
+        {
+            "day": epoch_ms_to_iso(row.get("day")),
+            "event_type": row.get("event_type"),
+            "event_count": int(row.get("event_count")),
+            "total_score": int(row.get("total_score")),
+            "avg_score": round(float(row.get("avg_score")), 3),
+        }
+        for row in db.query(
+            "sql",
+            "SELECT ts.timeBucket('1d', ts) AS day, event_type, "
+            "sum(event_count) AS event_count, "
+            "sum(total_score) AS total_score, "
+            "avg(avg_score) AS avg_score "
+            "FROM ActivitySeries WHERE scope = 'global' "
+            "GROUP BY day, event_type ORDER BY day, event_type",
+        )
+    ]
+
+    tagged_daily = [
+        {
+            "day": epoch_ms_to_iso(row.get("day")),
+            "tag": row.get("tag"),
+            "question_count": int(row.get("question_count")),
+            "total_score": int(row.get("total_score")),
+            "avg_score": round(float(row.get("avg_score")), 3),
+        }
+        for row in db.query(
+            "sql",
+            "SELECT ts.timeBucket('1d', ts) AS day, tag, "
+            "sum(event_count) AS question_count, "
+            "sum(total_score) AS total_score, "
+            "avg(avg_score) AS avg_score "
+            "FROM ActivitySeries WHERE scope = 'tag' "
+            "GROUP BY day, tag ORDER BY day, tag",
+        )
+    ]
+
+    hot_tag_days = [
+        row
+        for row in tagged_daily
+        if row["question_count"] >= 5 and row["avg_score"] >= 3.0
+    ]
+
+    return {
+        "enabled": True,
+        "reason": None,
+        "inserted_points": inserted_points,
+        "source_events": source_events,
+        "top_tags": top_tags,
+        "queries": [
+            {
+                "name": "global_daily_activity",
+                "row_count": len(global_daily),
+                "result_hash": hash_rows(global_daily),
+                "rows": global_daily,
+            },
+            {
+                "name": "top_tag_daily_activity",
+                "row_count": len(tagged_daily),
+                "result_hash": hash_rows(tagged_daily),
+                "rows": tagged_daily,
+            },
+            {
+                "name": "hot_tag_days",
+                "row_count": len(hot_tag_days),
+                "result_hash": hash_rows(hot_tag_days),
+                "rows": hot_tag_days,
+            },
+        ],
+    }
 
 
 def run_hybrid_queries(
@@ -1462,7 +1722,8 @@ def run_hybrid_queries(
             MATCH (q:Question)-[:TAGGED_WITH]->(t:Tag)
             MATCH (u:User)-[:ASKED]->(q)
             WHERE t.TagName IN {cypher_tags}
-            RETURN t.TagName AS tag, u.Id AS user_id, u.DisplayName AS name, count(q) AS questions
+                 RETURN t.TagName AS tag, u.Id AS user_id,
+                     u.DisplayName AS name, count(q) AS questions
             ORDER BY questions DESC, user_id ASC
             LIMIT {top_k}
             """,
@@ -1588,7 +1849,8 @@ def run_hybrid_queries(
                 MATCH (u:User)-[:ASKED]->(q:Question)
                 OPTIONAL MATCH (q)-[:HAS_ANSWER]->(a:Answer)
                 WHERE q.Id IN {cypher_ids}
-                RETURN q.Id AS question_id, q.Title AS title, u.Id AS asker_id, count(a) AS answer_count
+                  RETURN q.Id AS question_id, q.Title AS title,
+                      u.Id AS asker_id, count(a) AS answer_count
                 ORDER BY answer_count DESC, question_id ASC
                 LIMIT {top_k}
                 """,
@@ -1677,7 +1939,9 @@ def run_hybrid_queries(
                     f"""
                     SELECT Id, DisplayName, Reputation, Views
                     FROM User
-                    WHERE Id IN [{ids_sql}] AND Reputation IS NOT NULL AND Reputation >= {int(min_reputation)}
+                                        WHERE Id IN [{ids_sql}]
+                                            AND Reputation IS NOT NULL
+                                            AND Reputation >= {int(min_reputation)}
                     ORDER BY Reputation DESC, Views DESC, Id ASC
                     LIMIT {top_k}
                     """,
@@ -1852,7 +2116,9 @@ def phase3_and_phase4(
                 db,
                 model,
                 "Question",
-                text_builder=lambda row: f"{row.get('Title') or ''} {row.get('Body') or ''}",
+                text_builder=lambda row: (
+                    f"{row.get('Title') or ''} {row.get('Body') or ''}"
+                ),
                 select_fields="Title, Body",
                 batch_size=batch_size,
                 encode_batch_size=encode_batch_size,
@@ -1911,6 +2177,24 @@ def phase3_and_phase4(
     }
 
 
+def phase5_timeseries(
+    arcadedb,
+    graph_db_path: Path,
+    top_tag_limit: int,
+    jvm_kwargs: Dict[str, str],
+) -> Dict[str, Any]:
+    start = time.time()
+    db = arcadedb.open_database(str(graph_db_path), jvm_kwargs=jvm_kwargs)
+    try:
+        result = build_activity_timeseries(db, top_tag_limit=top_tag_limit)
+    finally:
+        db.close()
+
+    result["elapsed_s"] = time.time() - start
+    result["disk_bytes"] = get_dir_size_bytes(graph_db_path)
+    return result
+
+
 def write_results(
     graph_db_path: Path, payload: Dict[str, Any], run_label: str | None
 ) -> Path:
@@ -1941,6 +2225,12 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--candidate-limit", type=int, default=500)
     parser.add_argument("--min-reputation", type=int, default=1000)
+    parser.add_argument(
+        "--timeseries-top-tags",
+        type=int,
+        default=5,
+        help="Number of top tags to project into derived time-series analytics.",
+    )
     parser.add_argument(
         "--seed",
         type=int,
@@ -2019,7 +2309,8 @@ def main() -> None:
             infer_sample_limit=args.infer_sample_limit,
         )
         print(
-            f"  done in {phase1['elapsed_s']:.2f}s | disk={format_bytes_binary(phase1['disk_bytes'])}"
+            f"  done in {phase1['elapsed_s']:.2f}s | "
+            f"disk={format_bytes_binary(phase1['disk_bytes'])}"
         )
         record_rss_checkpoint(rss_state, "after_phase1_tables")
 
@@ -2032,7 +2323,8 @@ def main() -> None:
             jvm_kwargs=jvm_kwargs,
         )
         print(
-            f"  done in {phase2['elapsed_s']:.2f}s | disk={format_bytes_binary(phase2['disk_bytes'])}"
+            f"  done in {phase2['elapsed_s']:.2f}s | "
+            f"disk={format_bytes_binary(phase2['disk_bytes'])}"
         )
         record_rss_checkpoint(rss_state, "after_phase2_graph")
 
@@ -2050,9 +2342,30 @@ def main() -> None:
             jvm_kwargs=jvm_kwargs,
         )
         print(
-            f"  done in {phase34['elapsed_s']:.2f}s | disk={format_bytes_binary(phase34['disk_bytes'])}"
+            f"  done in {phase34['elapsed_s']:.2f}s | "
+            f"disk={format_bytes_binary(phase34['disk_bytes'])}"
         )
         record_rss_checkpoint(rss_state, "after_phase3_4_hybrid")
+
+        print("[Phase 5] Derived TimeSeries Analytics")
+        phase5 = phase5_timeseries(
+            arcadedb,
+            graph_db_path=graph_db_path,
+            top_tag_limit=args.timeseries_top_tags,
+            jvm_kwargs=jvm_kwargs,
+        )
+        if phase5.get("enabled"):
+            print(
+                f"  done in {phase5['elapsed_s']:.2f}s | "
+                f"points={phase5['inserted_points']} | "
+                f"disk={format_bytes_binary(phase5['disk_bytes'])}"
+            )
+        else:
+            print(
+                f"  skipped in {phase5['elapsed_s']:.2f}s | "
+                f"reason={phase5.get('reason')}"
+            )
+        record_rss_checkpoint(rss_state, "after_phase5_timeseries")
     finally:
         record_rss_checkpoint(rss_state, "run_end")
         stop_event.set()
@@ -2072,6 +2385,7 @@ def main() -> None:
             "top_k": args.top_k,
             "candidate_limit": args.candidate_limit,
             "min_reputation": args.min_reputation,
+            "timeseries_top_tags": args.timeseries_top_tags,
             "seed": args.seed,
             "run_label": args.run_label,
             "infer_types": True,
@@ -2080,6 +2394,7 @@ def main() -> None:
         "phase1_tables": phase1,
         "phase2_graph": phase2,
         "phase3_4_hybrid": phase34,
+        "phase5_timeseries": phase5,
         "runtime": {
             "total_time_s": total_elapsed,
             "rss_peak_kb": rss_state["max_kb"],
@@ -2111,6 +2426,21 @@ def main() -> None:
     print(f"Phase 1: {phase1['elapsed_s']:.2f}s")
     print(f"Phase 2: {phase2['elapsed_s']:.2f}s")
     print(f"Phase 3+4: {phase34['elapsed_s']:.2f}s")
+    if phase5.get("enabled"):
+        print(f"Phase 5: {phase5['elapsed_s']:.2f}s")
+        print("TimeSeries summary:")
+        print(f"  points inserted: {phase5['inserted_points']}")
+        if phase5.get("top_tags"):
+            print(f"  top tags: {', '.join(phase5['top_tags'])}")
+        for query in phase5.get("queries", []):
+            print(f"  {query['name']}: {query['row_count']} rows")
+            for row in query.get("rows", [])[:3]:
+                print(f"    {row}")
+            remaining = max(0, query.get("row_count", 0) - 3)
+            if remaining:
+                print(f"    ... {remaining} more rows")
+    else:
+        print(f"Phase 5: skipped ({phase5.get('reason')})")
     print(f"Total: {total_elapsed:.2f}s")
     print(f"Peak RSS: {payload['runtime']['rss_peak_human']}")
     if payload["runtime"].get("rss_checkpoints"):

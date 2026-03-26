@@ -25,7 +25,7 @@ on:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
         type: string
-        default: "0[1-9]_*.py 1[0-6]_*.py"
+        default: "0[1-9]_*.py 1[0-7]_*.py"
       build-version:
         description: "Override package version (PEP 440) for build.sh"
         required: false
@@ -37,10 +37,10 @@ on:
       examples:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
-        default: "0[1-9]_*.py 1[0-6]_*.py"
+        default: "0[1-9]_*.py 1[0-7]_*.py"
 
 env:
-  EXAMPLES: ${{ inputs.examples || '0[1-9]_*.py 1[0-6]_*.py' }}
+  EXAMPLES: ${{ inputs.examples || '0[1-9]_*.py 1[0-7]_*.py' }}
 
 permissions:
   contents: read
@@ -394,6 +394,12 @@ jobs:
                 example_args="--vertices 2000 --edges 4000 --vertex-int-props 3 --vertex-str-props 2 --edge-int-props 1 --edge-str-props 1 --string-size 32 --batch-size 500 --async-parallel 1 --parallel 1 --heap-size 4g --work-dir ./my_test_databases/import_vs_txn_graph_ci"
                 example_name="$example (graph ingest benchmark, minimal)"
                 timeout_duration=1200
+                example_jvm_args=""
+                ;;
+              "17_timeseries_end_to_end.py")
+                example_args="--hours 2 --interval-minutes 10"
+                example_name="$example (time-series end-to-end, minimal)"
+                timeout_duration=900
                 example_jvm_args=""
                 ;;
               *)
