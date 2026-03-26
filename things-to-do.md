@@ -1,6 +1,6 @@
-## Things to do for python bindings
+# Things to do for python bindings
 
-- [ ] revisit: `/mnt/ssd2/repos/arcadedb-embedded-python/.github` the thing is that this
+- [x] revisit: `/mnt/ssd2/repos/arcadedb-embedded-python/.github` the thing is that this
   repo is the fork of the original java-heavy repo, and my repo is about python
   bindings. so we can perhaps remove the java tests. This means that we also have to
   revisit `/mnt/ssd2/repos/arcadedb-embedded-python/sync-upstream.sh`, cuz we might have
