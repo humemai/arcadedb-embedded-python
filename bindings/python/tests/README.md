@@ -7,7 +7,7 @@ For detailed test documentation, examples, and best practices, see the **[Testin
 ## Quick Stats
 
 - Current bindings suite
-- ✅ **Current package**: 282 passed
+- ✅ **Current package**: 290 passed
 - Package includes all ArcadeDB features (SQL, OpenCypher, Studio)
 
 ## Running Tests

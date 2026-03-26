@@ -1288,7 +1288,7 @@ def embed_vertex_type(
     }
 
 
-def create_vector_index(db, vertex_type: str) -> float:
+def create_sql_vector_index(db, vertex_type: str) -> float:
     start = time.time()
     db.command(
         "sql",
@@ -1306,10 +1306,6 @@ def create_vector_index(db, vertex_type: str) -> float:
         }}
         """,
     )
-    index = db.schema.get_vector_index(vertex_type, "embedding")
-    if index is None:
-        raise RuntimeError(f"Failed to load vector index for {vertex_type}[embedding]")
-    index.build_graph_now()
     return time.time() - start
 
 
@@ -1888,11 +1884,11 @@ def phase3_and_phase4(
         )
 
         index_stats = {}
-        q_time = create_vector_index(db, "Question")
+        q_time = create_sql_vector_index(db, "Question")
         index_stats["Question"] = q_time
-        a_time = create_vector_index(db, "Answer")
+        a_time = create_sql_vector_index(db, "Answer")
         index_stats["Answer"] = a_time
-        c_time = create_vector_index(db, "Comment")
+        c_time = create_sql_vector_index(db, "Comment")
         index_stats["Comment"] = c_time
 
         hybrid_queries = run_hybrid_queries(

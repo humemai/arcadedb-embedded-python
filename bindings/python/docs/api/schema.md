@@ -287,8 +287,9 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 - **beam_width**: Beam width for build/search (default: 100; typical 64-200). Maps to
   JVector `beamWidth`.
 - **dimensions**: Vector size (must match your embeddings).
-- **ef_search**: Query-time exact-search beam width override via `find_nearest(...,
-  ef_search=...)`. Leave unset to use ArcadeDB's default/adaptive behavior.
+- **ef_search**: Query-time exact-search beam width override via SQL
+  `vectorNeighbors(..., k, ef_search)`. Leave unset to use ArcadeDB's default/adaptive
+  behavior.
 
 ## Type Inspection
 

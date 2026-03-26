@@ -563,10 +563,6 @@ def create_index_arcadedb(
         }}
         ''',
     )
-    index = db.schema.get_vector_index("VectorData", "vector")
-    if index is None:
-        raise RuntimeError("Failed to load vector index for VectorData[vector]")
-    index.build_graph_now()
 
 
 def create_index_faiss(dim: int, max_connections: int, beam_width: int):

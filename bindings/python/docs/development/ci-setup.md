@@ -102,7 +102,7 @@ All 4 platforms passing the bindings suite and example workflows:
 
 | Platforms | Wheel Size | JRE Size | Tests |
 |-----------|-----------|----------|-------|
-| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | ~70-75M | ~60M | 282 passed ✅ |
+| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | ~70-75M | ~60M | 290 passed ✅ |
 
 **All platforms include:**
 

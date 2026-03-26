@@ -37,7 +37,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 - ✅ All platforms use **platform-specific wheels** (not universal)
 - ✅ uv pip automatically selects the correct wheel for your system
 - ✅ Each platform has its own bundled JRE optimized for that architecture
-- ✅ Current suite validated in the latest local run: 282 passed
+- ✅ Current suite validated in the latest local run: 290 passed
 - ✅ Built on native runners (no emulation) for optimal performance
 
 ## What's Included
@@ -59,7 +59,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 
 ## Test Results
 
-The current bindings suite reports **282 passed** in a full local run:
+The current bindings suite reports **290 passed** in a full local run:
 
 - ✅ All core database operations
 - ✅ SQL and OpenCypher queries

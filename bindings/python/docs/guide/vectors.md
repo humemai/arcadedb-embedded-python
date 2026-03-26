@@ -1,7 +1,7 @@
 # Vector Search Guide
 
-Bring your own embeddings (OpenAI, HF, local models). This guide focuses on how the
-Python bindings build and query vector indexes (JVector) in embedded mode.
+Bring your own embeddings (OpenAI, HF, local models). This guide focuses on the
+recommended SQL-first way to build and query vector indexes (JVector) in embedded mode.
 
 ## Quick Start (Embedded, Minimal)
 
@@ -20,14 +20,17 @@ with arcadedb.create_database("./vector_demo") as db:
     db.command("sql", "CREATE PROPERTY Doc.text STRING")
     db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
 
-    index = db.create_vector_index(
-        vertex_type="Doc",
-        vector_property="embedding",
-        dimensions=3,                # must match your embedding size
-        distance_function="cosine",  # default: cosine
-        max_connections=16,          # Corresponds to M in HNSW (default)
-        beam_width=100               # Corresponds to efConstruction in HNSW (default)
-    )
+    db.command(
+      "sql",
+      """
+      CREATE INDEX ON Doc (embedding)
+      LSM_VECTOR
+      METADATA {
+        "dimensions": 3,
+        "similarity": "COSINE"
+      }
+      """,
+)
 
     with db.transaction():
         for i, t in enumerate(texts):
@@ -53,32 +56,20 @@ with arcadedb.create_database("./vector_demo") as db:
 
 Preferred split:
 
-- Use Python object API for vector index creation and configuration.
+- Use SQL `CREATE INDEX ... LSM_VECTOR METADATA {...}` for vector index creation.
 - Prefer SQL or Cypher for vector retrieval/search, because search composes naturally
   with filters, projections, and graph traversal.
-- Treat `find_nearest()` and `find_nearest_by_key()` as convenience wrappers for
-  simple embedded-mode workflows.
+- Keep the secondary Python helper APIs in mind only for manual or maintenance cases;
+  they are not the recommended application-facing workflow.
 
 - Vector property type must be `ARRAY_OF_FLOATS`.
-- `create_vector_index(vertex_type, vector_property, dimensions,
-  id_property=None, distance_function="cosine", max_connections=16,
-  beam_width=100, quantization="INT8",
-  location_cache_size=None, graph_build_cache_size=None, mutations_before_rebuild=None,
-  store_vectors_in_graph=False, add_hierarchy=True, pq_subspaces=None, pq_clusters=None,
-  pq_center_globally=None, pq_training_limit=None, build_graph_now=True)`
-    - `build_graph_now=True` eagerly prepares the graph at creation time.
-    - Set `build_graph_now=False` to defer graph preparation until first query.
-- `build_graph_now()` on the returned index can be called later to force
-  rebuild/preparation, e.g. after bulk vector inserts or removals/deletes.
-- `find_nearest(query_vector, k=10, ef_search=None, allowed_rids=None)`
-    - `ef_search` optionally overrides the exact-search beam width.
-    - Leave it as `None` to use ArcadeDB's default/adaptive behavior.
-    - `allowed_rids` filters candidates server-side (useful for metadata-prefilter).
-- `find_nearest_by_key(key, k=10, ef_search=None, allowed_rids=None)`
-    - Looks up the source vector by the index `id_property` and then runs the same
-      Python search path as `find_nearest()`.
-- `get_metadata()` returns stable index metadata such as dimensions, similarity
-  function, configured `id_property`, quantization, and cache/build settings.
+- `CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA {...}` is the preferred creation
+  path.
+    - SQL builds the vector graph immediately by default.
+    - Add `"buildGraphNow": false` only if you intentionally want lazy preparation.
+- Use `vectorNeighbors(..., k, ef_search)` as the default SQL nearest-neighbor surface.
+- `get_metadata()` remains available on the loaded vector index when you need to inspect
+  index configuration from Python.
 
 ## Distance Functions (scoring behavior)
 
@@ -88,7 +79,7 @@ Preferred split:
 
 Important:
 
-- `find_nearest()` / vector-index search exposes cosine as distance: $1 - \cos(\theta)$.
+- Vector-index search exposes cosine as distance: $1 - \cos(\theta)$.
 - SQL `vectorCosineSimilarity(...)` exposes raw cosine similarity, so its values follow
   cosine similarity semantics rather than vector-index distance semantics.
 
@@ -98,9 +89,7 @@ Important:
 - `max_connections` (HNSW M): higher → better recall, more memory/slow build (default: 16).
 - `beam_width` (ef/efConstruction): higher → better recall, slower search/build (default: 100).
 - `ef_search` (runtime, exact search only): higher → better recall, slower search.
-    - `None` uses the Java engine's default/adaptive behavior.
-    - PQ approximate search currently does not expose per-query `ef_search`; it only
-      accepts `k` and optional RID filters.
+    - Leave it unset to use the Java engine's default/adaptive behavior.
 
 Suggested presets from tests/examples (k=10):
 
@@ -149,11 +138,12 @@ with arcadedb.create_database("./vector_demo") as db:
     db.command("sql", "CREATE PROPERTY Doc.text STRING")
     db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
 
-    index = db.create_vector_index(
-        vertex_type="Doc",
-        vector_property="embedding",
-        dimensions=len(vec),
-        distance_function="cosine",
+  db.command(
+    "sql",
+    (
+      "CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA "
+      f'{{"dimensions": {len(vec)}, "similarity": "COSINE"}}'
+    ),
     )
 
     with db.transaction():
@@ -164,7 +154,10 @@ with arcadedb.create_database("./vector_demo") as db:
             to_java_float_array(vec),
         )
 
-    hits = index.find_nearest(vec, k=1)
+    hits = db.query(
+      "sql",
+      f"SELECT vectorNeighbors('Doc[embedding]', {list(map(float, vec))}, 1) as res",
+    ).to_list()
 ```
 
 Notes:
@@ -172,13 +165,6 @@ Notes:
 - `to_java_float_array` accepts NumPy arrays directly.
 - For cosine, pass `normalize_embeddings=True` (as above) to your model.
 - For euclidean or inner_product, skip normalization if magnitude should matter.
-
-## Filtering by RID (prefilter)
-
-```python
-rids = [row.get_rid() for row in db.query("sql", "SELECT @rid FROM Doc WHERE topic = 'ai'")]
-results = index.find_nearest(query_vec, k=5, allowed_rids=rids)
-```
 
 ## Preferred Search Surface: SQL / Cypher
 
@@ -193,7 +179,7 @@ rows = db.query(
   "sql",
   (
     "SELECT title, category, distance, (1 - distance) AS score "
-    "FROM (SELECT expand(`vector.neighbors`('Article[embedding]', "
+    "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
     f"{qvec_literal}, 50))) WHERE category = ? ORDER BY distance LIMIT 5"
   ),
   "category_42",
@@ -207,7 +193,7 @@ rows = db.query(
   "sql",
   (
     "SELECT title, distance, (1 - distance) AS score "
-    "FROM (SELECT expand(`vector.neighbors`('Movie[embedding]', "
+    "FROM (SELECT expand(vectorNeighbors('Movie[embedding]', "
     f"{qvec_literal}, 20))) WHERE title <> ? ORDER BY distance LIMIT 10"
   ),
   movie_title,
@@ -226,46 +212,6 @@ rows = db.query(
   {"vec": query_vec, "k": 5},
 ).to_list()
 ```
-
-## Search from an Existing Record
-
-```python
-with arcadedb.create_database("./vector_demo") as db:
-  db.command("sql", "CREATE VERTEX TYPE Doc")
-  db.command("sql", "CREATE PROPERTY Doc.slug STRING")
-  db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
-
-  index = db.create_vector_index(
-    vertex_type="Doc",
-    vector_property="embedding",
-    dimensions=3,
-    id_property="slug",
-  )
-
-  with db.transaction():
-    db.command(
-      "sql",
-      "INSERT INTO Doc SET slug = ?, embedding = ?",
-      "doc-a",
-      to_java_float_array([1.0, 0.0, 0.0]),
-    )
-    db.command(
-      "sql",
-      "INSERT INTO Doc SET slug = ?, embedding = ?",
-      "doc-b",
-      to_java_float_array([0.9, 0.1, 0.0]),
-    )
-
-  neighbors = index.find_nearest_by_key("doc-a", k=2)
-  metadata = index.get_metadata()
-
-  print(metadata["dimensions"], metadata["id_property"])
-  for record, distance in neighbors:
-    print(record.get("slug"), distance)
-```
-
-Use this helper when you want a small embedded-mode shortcut. For richer filtering,
-projection, self-exclusion, or score shaping, prefer SQL/Cypher queries.
 
 ## Quantization
 

@@ -736,10 +736,9 @@ test_embedding = model.encode("test")
 print(f"Model dimension: {len(test_embedding)}")  # 384
 
 # Create index with matching dimension
-index = db.create_vector_index(
-    vertex_type="Document",
-    vector_property="embedding",
-    dimensions=384  # Must match!
+db.command(
+    "sql",
+    'CREATE INDEX ON Document (embedding) LSM_VECTOR METADATA {"dimensions": 384}',
 )
 ```
 
@@ -751,9 +750,10 @@ index = db.create_vector_index(
 The first vector search query takes significantly longer than subsequent queries.
 
 **Cause:**
-Most apps should not see this with current defaults, because `create_vector_index()`
-eagerly prepares the graph (`build_graph_now=True`). A slow first query typically means
-you created the index with `build_graph_now=False`, so graph preparation is deferred.
+Most apps should not see this with current defaults, because SQL `CREATE INDEX ...
+LSM_VECTOR` eagerly prepares the graph unless you explicitly disable it. A slow first
+query typically means you created the SQL index with `"buildGraphNow": false`, so graph
+preparation is deferred.
 
 **Solution:**
 If you want predictable first-query latency, either keep the default eager behavior or
@@ -762,15 +762,10 @@ or removals/deletes when you want to force rebuild at a controlled time.
 
 ```python
 # Preferred: eager at creation (default)
-index = db.create_vector_index(
-    vertex_type="Document",
-    vector_property="embedding",
-    dimensions=384,
-    build_graph_now=True,
+db.command(
+    "sql",
+    'CREATE INDEX ON Document (embedding) LSM_VECTOR METADATA {"dimensions": 384}',
 )
-
-# Optional: if created with build_graph_now=False, rebuild explicitly
-index.build_graph_now()
 ```
 
 ---
@@ -785,31 +780,47 @@ Vector search returns irrelevant results.
 1. **Try different distance function:**
 ```python
 # Cosine (default, usually best for text)
-index = db.create_vector_index(
-    vertex_type="Doc",
-    vector_property="embedding",
-    dimensions=384,
-    distance_function="cosine"
+db.command(
+    "sql",
+    '''
+    CREATE INDEX ON Doc (embedding)
+    LSM_VECTOR
+    METADATA {
+        "dimensions": 384,
+        "similarity": "COSINE"
+    }
+    ''',
 )
 
 # Euclidean (sometimes better for images)
-index = db.create_vector_index(
-    vertex_type="Image",
-    vector_property="features",
-    dimensions=512,
-    distance_function="euclidean"
+db.command(
+    "sql",
+    '''
+    CREATE INDEX ON Image (features)
+    LSM_VECTOR
+    METADATA {
+        "dimensions": 512,
+        "similarity": "EUCLIDEAN"
+    }
+    ''',
 )
 ```
 
 2. **Tune vector parameters:**
 ```python
 # Better recall, slower
-index = db.create_vector_index(
-    vertex_type="Doc",
-    vector_property="embedding",
-    dimensions=384,
-    max_connections=32,  # Default: 16
-    beam_width=200       # Default: 100
+db.command(
+    "sql",
+    '''
+    CREATE INDEX ON Doc (embedding)
+    LSM_VECTOR
+    METADATA {
+        "dimensions": 384,
+        "similarity": "COSINE",
+        "maxConnections": 32,
+        "beamWidth": 200
+    }
+    ''',
 )
 ```
 

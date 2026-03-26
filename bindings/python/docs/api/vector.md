@@ -106,14 +106,42 @@ print(type(py_list))  # <class 'list'>
 
 Wrapper for ArcadeDB's vector index, providing similarity search capabilities.
 
-Creation and configuration fit well in the Python object API. For search, prefer SQL
-or Cypher when you need filtering, projection, self-exclusion, or custom score
-shaping. The Python search methods below are convenience helpers for simple
-embedded-mode workflows.
+For creation, prefer SQL `CREATE INDEX ... LSM_VECTOR METADATA {...}`. For search,
+prefer SQL or Cypher when you need filtering, projection, self-exclusion, or custom
+score shaping. The Python methods below are convenience helpers for simple
+embedded-mode workflows and for advanced/manual control. They are not the primary
+application-facing workflow this documentation recommends.
+
+For SQL snippets in this documentation, use `vectorNeighbors(...)` by default. The
+engine also exposes an equivalent dotted canonical function name, but the alias is more
+ergonomic in SQL because it does not require backticks.
+
+### Preferred Creation: SQL
+
+Use SQL as the default creation surface:
+
+```python
+db.command(
+    "sql",
+    """
+    CREATE INDEX ON Document (embedding)
+    LSM_VECTOR
+    METADATA {
+        "dimensions": 384,
+        "similarity": "COSINE"
+    }
+    """
+)
+```
+
+SQL builds the vector graph immediately by default. Add `"buildGraphNow": false` only
+if you intentionally want lazy preparation.
 
 ### Creation via Database
 
-Vector indexes are created using the `Database.create_vector_index()` method:
+`Database.create_vector_index()` still exists, but it should be treated as a secondary,
+Python-driven helper for manual setup, tests, and API completeness rather than the
+primary documented workflow.
 
 **Signature:**
 
@@ -177,8 +205,6 @@ db.create_vector_index(
 
 ```python
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded import to_java_float_array
-import numpy as np
 
 # Create database and schema
 db = arcadedb.create_database("./vector_db")
@@ -189,7 +215,7 @@ db.command("sql", "CREATE PROPERTY Document.text STRING")
 db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
 db.command("sql", "CREATE INDEX ON Document (id) UNIQUE")
 
-# Create vector index
+# Secondary option: create vector index from Python
 index = db.create_vector_index(
     vertex_type="Document",
     vector_property="embedding",
@@ -209,9 +235,14 @@ print(f"Created vector index: {index}")
 
 Find k-nearest neighbors to the query vector.
 
+Treat this as a helper/manual API. For normal application queries, prefer SQL
+`vectorNeighbors` so search composes naturally with filtering, projection, and record
+exclusion.
+
 **Note:** With default settings (`build_graph_now=True` in `create_vector_index`), graph
-preparation runs during index creation. If you set `build_graph_now=False`, the first call
-to `find_nearest` may perform lazy graph preparation and therefore take longer.
+preparation runs during index creation. In the preferred SQL path, this eager behavior is
+also the default. If you explicitly disable eager preparation, the first call to
+`find_nearest` may perform lazy graph preparation and therefore take longer.
 
 **Parameters:**
 
@@ -264,7 +295,7 @@ rows = db.query(
     "sql",
     (
         "SELECT id, distance, (1 - distance) AS score "
-        "FROM (SELECT expand(`vector.neighbors`('Document[embedding]', "
+        "FROM (SELECT expand(vectorNeighbors('Document[embedding]', "
         f"{qvec_literal}, 10))) WHERE id <> ? ORDER BY distance LIMIT 5"
     ),
     "doc-42",
@@ -291,6 +322,9 @@ Find nearest neighbors by reusing the vector stored on an existing record.
 
 This is the Python wrapper for the common "search from an existing record" workflow,
 using the index's configured `id_property` to look up the source vector first.
+
+Treat this as a convenience helper. If you need the recommended query surface, use SQL
+or Cypher instead.
 
 **Parameters:**
 
@@ -350,14 +384,20 @@ print(meta["dimensions"], meta["similarity_function"], meta["id_property"])
 
 Force an immediate rebuild/preparation of the vector graph.
 
+This is a maintenance API, not part of the normal SQL-first creation workflow.
+
 Use this when you want to control when rebuild cost is paid, for example:
 
 - after bulk inserts,
 - after bulk deletes/removals,
 - before opening traffic after large vector mutations.
 
-This is especially useful if you created the index with `build_graph_now=False` and want
-to avoid rebuild work on the first query.
+This is especially useful if you created the index with `build_graph_now=False` or with
+SQL metadata `"buildGraphNow": false` and want to avoid rebuild work on the first query.
+
+When you create an `LSM_VECTOR` index through SQL, ArcadeDB now builds the graph
+immediately by default. Use `build_graph_now()` only for explicit maintenance or when
+you intentionally deferred graph preparation.
 
 **Returns:**
 
@@ -395,15 +435,22 @@ db.command("sql", "CREATE PROPERTY Document.content STRING")
 db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
 db.command("sql", "CREATE INDEX ON Document (id) UNIQUE")
 
-# Create vector index (384 dimensions for all-MiniLM-L6-v2)
-index = db.create_vector_index(
-    vertex_type="Document",
-    vector_property="embedding",
-    dimensions=384,
-    distance_function="cosine",
-    max_connections=16,
-    beam_width=100  # Default beam width
+# Preferred: create vector index in SQL
+db.command(
+    "sql",
+    """
+    CREATE INDEX ON Document (embedding)
+    LSM_VECTOR
+    METADATA {
+        "dimensions": 384,
+        "similarity": "COSINE",
+        "maxConnections": 16,
+        "beamWidth": 100
+    }
+    """
 )
+
+index = db.schema.get_vector_index("Document", "embedding")
 
 # Sample documents
 documents = [
@@ -471,12 +518,20 @@ db.command("sql", "CREATE PROPERTY Product.price DECIMAL")
 db.command("sql", "CREATE PROPERTY Product.features ARRAY_OF_FLOATS")
 db.command("sql", "CREATE INDEX ON Product (category) NOTUNIQUE")
 
-# Create vector index
-index = db.create_vector_index(
-    vertex_type="Product",
-    vector_property="features",
-    dimensions=128
+# Create vector index in SQL
+db.command(
+    "sql",
+    """
+    CREATE INDEX ON Product (features)
+    LSM_VECTOR
+    METADATA {
+        "dimensions": 128,
+        "similarity": "COSINE"
+    }
+    """
 )
+
+index = db.schema.get_vector_index("Product", "features")
 
 # Add products with feature vectors
 products = [
@@ -552,15 +607,22 @@ db.command("sql", "CREATE PROPERTY Image.filename STRING")
 db.command("sql", "CREATE PROPERTY Image.path STRING")
 db.command("sql", "CREATE PROPERTY Image.embedding ARRAY_OF_FLOATS")
 
-# Create index
-index = db.create_vector_index(
-    vertex_type="Image",
-    vector_property="embedding",
-    dimensions=512,
-    distance_function="cosine",
-    max_connections=24,  # Higher for image search
-    beam_width=200
+# Create index in SQL
+db.command(
+    "sql",
+    """
+    CREATE INDEX ON Image (embedding)
+    LSM_VECTOR
+    METADATA {
+        "dimensions": 512,
+        "similarity": "COSINE",
+        "maxConnections": 24,
+        "beamWidth": 200
+    }
+    """
 )
+
+index = db.schema.get_vector_index("Image", "embedding")
 
 # Index images
 image_files = ["img1.jpg", "img2.jpg", "img3.jpg"]
@@ -662,7 +724,10 @@ import numpy as np
 
 try:
     # Dimension mismatch
-    index = db.create_vector_index("Doc", "emb", dimensions=384)
+    db.command(
+        "sql",
+        'CREATE INDEX ON Doc (emb) LSM_VECTOR METADATA {"dimensions": 384}',
+    )
 
     v = db.new_vertex("Doc")
     v.set("emb", to_java_float_array(np.random.rand(512)))  # Wrong size!

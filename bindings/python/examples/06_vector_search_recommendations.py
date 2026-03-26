@@ -232,7 +232,7 @@ def generate_embeddings(
     return total
 
 
-def create_vector_index(db, property_suffix=""):
+def create_sql_vector_index(db, property_suffix=""):
     """Create vector index on Movie embeddings and populate it.
 
     Args:
@@ -265,10 +265,6 @@ def create_vector_index(db, property_suffix=""):
         }}
         """,
     )
-    index = db.schema.get_vector_index("Movie", embedding_prop)
-    if index is None:
-        raise RuntimeError(f"Failed to load vector index for Movie[{embedding_prop}]")
-    index.build_graph_now()
 
     elapsed = time.time() - start_time
     print(f"✓ Created and indexed {num_movies:,} movies in {elapsed:.1f}s")
@@ -563,7 +559,7 @@ def main():
             force_embed=args.force_embed,
         )
         print(f"✓ Embedded {num_embedded:,} movies")
-        create_vector_index(db, property_suffix="_v1")
+        create_sql_vector_index(db, property_suffix="_v1")
 
         # Model 2: paraphrase-MiniLM-L6-v2
         model_2_name = "paraphrase-MiniLM-L6-v2"
@@ -578,7 +574,7 @@ def main():
             force_embed=args.force_embed,
         )
         print(f"✓ Embedded {num_embedded:,} movies")
-        create_vector_index(db, property_suffix="_v2")
+        create_sql_vector_index(db, property_suffix="_v2")
 
         # Run searches for 5 diverse movies
         test_movies = [

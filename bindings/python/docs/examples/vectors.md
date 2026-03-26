@@ -10,7 +10,7 @@ This page covers examples for implementing AI-powered semantic search using vect
 
 Learn the fundamentals of vector search:
 
-- Creating vector indexes
+- Creating vector indexes with SQL
 - Generating embeddings
 - Performing similarity searches
 - Understanding JVector parameters
@@ -40,17 +40,21 @@ with arcadedb.create_database("./vector_demo") as db:
     db.command("sql", "CREATE PROPERTY Product.description STRING")
     db.command("sql", "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS")
 
-    # Create vector index (384 dims to mirror Example 03)
-    db.create_vector_index(
-        "Product",
-        "embedding",
-        dimensions=384,
-        distance_function="cosine",
+    # Preferred: create the vector index in SQL
+    db.command(
+        "sql",
+        """
+        CREATE INDEX ON Product (embedding)
+        LSM_VECTOR
+        METADATA {
+            "dimensions": 384,
+            "similarity": "COSINE"
+        }
+        """,
     )
 
-    # By default, create_vector_index(..., build_graph_now=True) eagerly
-    # prepares the vector graph. Set build_graph_now=False to defer until
-    # first query.
+    # SQL builds the graph immediately by default.
+    # Add "buildGraphNow": false only if you intentionally want lazy preparation.
 ```
 
 ### Insert Vectors
@@ -142,7 +146,7 @@ rows = db.query(
     "sql",
     (
         "SELECT name, description, distance, (1 - distance) AS score "
-        "FROM (SELECT expand(`vector.neighbors`('Product[embedding]', "
+        "FROM (SELECT expand(vectorNeighbors('Product[embedding]', "
         f"{qvec_literal}, 20))) WHERE name <> ? ORDER BY distance LIMIT 5"
     ),
     "Laptop",
@@ -226,11 +230,20 @@ with arcadedb.create_database("./vector_demo") as db:
     db.command("sql", "CREATE VERTEX TYPE Product")
     db.command("sql", "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS")
 
-    # Create index with JVector parameters (schema operations are auto-transactional)
-    db.create_vector_index("Product", "embedding",
-                          dimensions=384,         # Match Example 03 defaults
-                          max_connections=16,     # Connections per node (default: 16)
-                          beam_width=100)         # Search beam width (default: 100)
+    # Preferred: configure the index directly in SQL metadata
+    db.command(
+        "sql",
+        """
+        CREATE INDEX ON Product (embedding)
+        LSM_VECTOR
+        METADATA {
+            "dimensions": 384,
+            "similarity": "COSINE",
+            "maxConnections": 16,
+            "beamWidth": 100
+        }
+        """
+    )
 ```
 
 **Index Configuration Parameters:**
@@ -240,7 +253,8 @@ with arcadedb.create_database("./vector_demo") as db:
     - 64: Fast search, lower accuracy
     - 100: Balanced (default)
     - 200: High accuracy, slower search
-- **build_graph_now**: `True` by default (eager graph preparation). Set `False` to defer graph preparation to first query.
+- **buildGraphNow**: `true` by default in SQL metadata. Set it to `false` only when you
+  intentionally want lazy graph preparation.
 - **ef_search**: Exact-search beam width override (optional)
     - Leave unset to use ArcadeDB's default/adaptive behavior
     - Smaller values are faster with lower recall

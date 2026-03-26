@@ -64,37 +64,16 @@ intermediate factor.
 
 ### ArcadeDB
 
-The ArcadeDB path has two execution branches.
-
-#### SQL `vectorNeighbors()` branch
-
-When the loaded index handle is a metadata dict, the benchmark issues:
+The ArcadeDB benchmark path is intentionally SQL-only. For each query it issues:
 
 ```sql
-SELECT vectorNeighbors('{index_name}', [q1, q2, ...], {k}) as res
+SELECT vectorNeighbors('{index_name}', [q1, q2, ...], {k}, {ef_search}) as res
 ```
 
 where `[q1, q2, ...]` is the literal query vector.
 
-#### Embedded index API branch
-
-If the loaded handle is an embedded index object:
-
-- product quantization uses:
-
-```python
-index.find_nearest_approximate(qvec, k=k)
-```
-
-- non-product paths use:
-
-```python
-index.find_nearest(qvec, k=k, ef_search=ef_search)
-```
-
-ArcadeDB exact search now exposes `ef_search` directly. The current PQ approximate API
-still only exposes `k`, so the `ef_search` sweep affects ArcadeDB's exact path but not
-its PQ approximate path.
+ArcadeDB exact search now exposes `ef_search` directly through SQL, so the benchmark can
+compare the same SQL surface that normal application code should prefer.
 
 The CLI exposes this sweep as `--ef-search-values`.
 

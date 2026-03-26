@@ -560,7 +560,6 @@ def search_arcadedb(
     gt_full: dict[int, List[int]],
     k: int,
     ef_search: int,
-    quantization: str,
 ) -> dict:
     latencies_ms: List[float] = []
     recalls: List[float] = []
@@ -589,24 +588,19 @@ def search_arcadedb(
         qvec = queries[q_idx]
         start = time.perf_counter()
 
-        if isinstance(index, dict):
-            db = index["db"]
-            index_name = index["name"]
-            qvec_literal = "[" + ", ".join(str(float(x)) for x in qvec.tolist()) + "]"
-            rs = db.query(
-                "sql",
-                f"SELECT vectorNeighbors('{index_name}', {qvec_literal}, {int(k)}, {int(ef_search)}) as res",
-            ).to_list()
-            neighbors = rs[0].get("res") if rs else []
-            results = [(rec, 0.0) for rec in neighbors]
-        elif quantization.upper() == "PRODUCT":
-            results = index.find_nearest_approximate(qvec, k=k)
-        else:
-            results = index.find_nearest(
-                qvec,
-                k=k,
-                ef_search=ef_search,
-            )
+        db = index["db"]
+        index_name = index["name"]
+        qvec_literal = "[" + ", ".join(str(float(x)) for x in qvec.tolist()) + "]"
+        rs = db.query(
+            "sql",
+            (
+                "SELECT vectorNeighbors("
+                f"'{index_name}', {qvec_literal}, {int(k)}, {int(ef_search)}"
+                ") as res"
+            ),
+        ).to_list()
+        neighbors = rs[0].get("res") if rs else []
+        results = [(rec, 0.0) for rec in neighbors]
 
         latencies_ms.append((time.perf_counter() - start) * 1000)
 
@@ -2318,7 +2312,6 @@ def main() -> None:
                             gt_full,
                             k=args.k,
                             ef_search=ef_search,
-                            quantization=quantization,
                         ),
                         queries=queries,
                         qids=qids,

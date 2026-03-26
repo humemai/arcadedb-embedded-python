@@ -313,11 +313,16 @@ Vector (paraphrase-MiniLM-L6-v2):
 ## JVector Index Configuration
 
 ```python
-index = db.create_vector_index(
-    vertex_type="Movie",
-    vector_property="embedding_v1",  # or "embedding_v2"
-    dimensions=384,
-    distance_function="cosine",
+db.command(
+    "sql",
+    """
+    CREATE INDEX ON Movie (embedding_v1)
+    LSM_VECTOR
+    METADATA {
+        "dimensions": 384,
+        "similarity": "COSINE"
+    }
+    """
 )
 ```
 
@@ -327,7 +332,11 @@ index = db.create_vector_index(
 - **vector_property:** Property containing the embedding vectors
 - **dimensions:** Vector dimensionality (384 for sentence-transformers models)
 - **distance_function:** "cosine" for cosine distance (0-2 range, lower is better)
-- **build_graph_now:** `True` by default (eager graph preparation). Set `False` to defer graph preparation to first query.
+- **buildGraphNow:** `true` by default in SQL metadata. Set it to `false` only when you
+    intentionally want lazy graph preparation.
+
+The Python object API can still create indexes, but SQL is the cleaner default and is
+what this example encourages.
 
 ## Output
 
