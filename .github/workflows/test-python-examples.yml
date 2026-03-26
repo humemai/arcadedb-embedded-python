@@ -25,7 +25,7 @@ on:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
         type: string
-        default: "0[1-9]_*.py 1[0-7]_*.py"
+        default: "0[1-9]_*.py 1[0-9]_*.py"
       build-version:
         description: "Override package version (PEP 440) for build.sh"
         required: false
@@ -37,10 +37,10 @@ on:
       examples:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
-        default: "0[1-9]_*.py 1[0-7]_*.py"
+        default: "0[1-9]_*.py 1[0-9]_*.py"
 
 env:
-  EXAMPLES: ${{ inputs.examples || '0[1-9]_*.py 1[0-7]_*.py' }}
+  EXAMPLES: ${{ inputs.examples || '0[1-9]_*.py 1[0-9]_*.py' }}
 
 permissions:
   contents: read
@@ -399,6 +399,12 @@ jobs:
               "17_timeseries_end_to_end.py")
                 example_args="--hours 2 --interval-minutes 10"
                 example_name="$example (time-series end-to-end, minimal)"
+                timeout_duration=900
+                example_jvm_args=""
+                ;;
+              "19_hash_index_exact_match.py")
+                example_args=""
+                example_name="$example (hash index exact-match workflow)"
                 timeout_duration=900
                 example_jvm_args=""
                 ;;
