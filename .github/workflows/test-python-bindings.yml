@@ -4,7 +4,7 @@ on:
   # Run on push to bindings/python/ directory
   push:
     tags-ignore:
-      - '[0-9]+.[0-9]+.[0-9]+*'
+      - '[0-9]*.[0-9]*.[0-9]*'
     paths:
       - 'bindings/python/**'
       - '.github/workflows/test-python-bindings.yml'
