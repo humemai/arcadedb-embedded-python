@@ -25,7 +25,7 @@ on:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
         type: string
-        default: "0[1-9]_*.py 1[0-9]_*.py 20_*.py"
+        default: "0[1-9]_*.py 1[0-9]_*.py 2[0-1]_*.py"
       build-version:
         description: "Override package version (PEP 440) for build.sh"
         required: false
@@ -37,10 +37,10 @@ on:
       examples:
         description: "Glob pattern(s) for examples to run (space-separated, relative to bindings/python/examples)."
         required: false
-        default: "0[1-9]_*.py 1[0-9]_*.py 20_*.py"
+        default: "0[1-9]_*.py 1[0-9]_*.py 2[0-1]_*.py"
 
 env:
-  EXAMPLES: ${{ inputs.examples || '0[1-9]_*.py 1[0-9]_*.py 20_*.py' }}
+  EXAMPLES: ${{ inputs.examples || '0[1-9]_*.py 1[0-9]_*.py 2[0-1]_*.py' }}
 
 permissions:
   contents: read
@@ -417,6 +417,12 @@ jobs:
               "20_graph_algorithms_route_planning.py")
                 example_args=""
                 example_name="$example (graph algorithms route planning workflow)"
+                timeout_duration=900
+                example_jvm_args=""
+                ;;
+              "21_server_mode_http_access.py")
+                example_args=""
+                example_name="$example (server mode and HTTP access workflow)"
                 timeout_duration=900
                 example_jvm_args=""
                 ;;

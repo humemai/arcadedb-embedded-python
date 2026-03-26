@@ -455,11 +455,11 @@ index = db.schema.get_vector_index("Document", "embedding")
 # Sample documents
 documents = [
     {"id": "doc1", "title": "Python Tutorial",
-     "content": "Learn Python programming basics"},
+        "content": "Learn Python programming basics"},
     {"id": "doc2", "title": "Machine Learning Guide",
-     "content": "Introduction to ML algorithms"},
+        "content": "Introduction to ML algorithms"},
     {"id": "doc3", "title": "Database Systems",
-     "content": "Understanding relational databases"},
+        "content": "Understanding relational databases"},
 ]
 
 # Index documents
@@ -536,11 +536,11 @@ index = db.schema.get_vector_index("Product", "features")
 # Add products with feature vectors
 products = [
     {"id": "p1", "name": "Laptop", "category": "Electronics",
-     "price": 999.99, "features": np.random.rand(128)},
+        "price": 999.99, "features": np.random.rand(128)},
     {"id": "p2", "name": "Mouse", "category": "Electronics",
-     "price": 29.99, "features": np.random.rand(128)},
+        "price": 29.99, "features": np.random.rand(128)},
     {"id": "p3", "name": "Desk", "category": "Furniture",
-     "price": 299.99, "features": np.random.rand(128)},
+        "price": 299.99, "features": np.random.rand(128)},
 ]
 
 with db.transaction():

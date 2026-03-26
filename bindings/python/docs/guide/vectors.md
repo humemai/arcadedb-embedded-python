@@ -21,15 +21,15 @@ with arcadedb.create_database("./vector_demo") as db:
     db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
 
     db.command(
-      "sql",
-      """
-      CREATE INDEX ON Doc (embedding)
-      LSM_VECTOR
-      METADATA {
+        "sql",
+        """
+        CREATE INDEX ON Doc (embedding)
+        LSM_VECTOR
+        METADATA {
         "dimensions": 3,
         "similarity": "COSINE"
-      }
-      """,
+        }
+        """,
 )
 
     with db.transaction():
@@ -124,7 +124,11 @@ Use any model you like; the bindings only need a Python list/NumPy array of floa
 typical text workflow uses a Transformer-based embedding model, e.g.,
 sentence-transformers with normalized outputs for cosine:
 
+{% raw %}
+
 ```python
+import json
+import arcadedb_embedded as arcadedb
 from sentence_transformers import SentenceTransformer
 from arcadedb_embedded import to_java_float_array
 
@@ -137,13 +141,11 @@ with arcadedb.create_database("./vector_demo") as db:
     db.command("sql", "CREATE VERTEX TYPE Doc")
     db.command("sql", "CREATE PROPERTY Doc.text STRING")
     db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+    metadata_json = json.dumps({"dimensions": len(vec), "similarity": "COSINE"})
 
-  db.command(
-    "sql",
-    (
-      "CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA "
-      f'{{"dimensions": {len(vec)}, "similarity": "COSINE"}}'
-    ),
+    db.command(
+        "sql",
+        "CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA " + metadata_json,
     )
 
     with db.transaction():
@@ -155,10 +157,12 @@ with arcadedb.create_database("./vector_demo") as db:
         )
 
     hits = db.query(
-      "sql",
-      f"SELECT vectorNeighbors('Doc[embedding]', {list(map(float, vec))}, 1) as res",
+        "sql",
+        f"SELECT vectorNeighbors('Doc[embedding]', {list(map(float, vec))}, 1) as res",
     ).to_list()
 ```
+
+{% endraw %}
 
 Notes:
 
@@ -176,13 +180,13 @@ For new code, prefer query APIs for search.
 qvec_literal = "[" + ", ".join(str(float(x)) for x in query_vec) + "]"
 
 rows = db.query(
-  "sql",
-  (
+    "sql",
+    (
     "SELECT title, category, distance, (1 - distance) AS score "
     "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
     f"{qvec_literal}, 50))) WHERE category = ? ORDER BY distance LIMIT 5"
-  ),
-  "category_42",
+    ),
+    "category_42",
 ).to_list()
 ```
 
@@ -190,13 +194,13 @@ rows = db.query(
 
 ```python
 rows = db.query(
-  "sql",
-  (
+    "sql",
+    (
     "SELECT title, distance, (1 - distance) AS score "
     "FROM (SELECT expand(vectorNeighbors('Movie[embedding]', "
     f"{qvec_literal}, 20))) WHERE title <> ? ORDER BY distance LIMIT 10"
-  ),
-  movie_title,
+    ),
+    movie_title,
 ).to_list()
 ```
 
@@ -204,12 +208,12 @@ rows = db.query(
 
 ```python
 rows = db.query(
-  "opencypher",
-  (
+    "opencypher",
+    (
     "CALL vector.neighbors('Doc[embedding]', $vec, $k) "
     "YIELD name, distance RETURN name, (1 - distance) AS score ORDER BY score DESC"
-  ),
-  {"vec": query_vec, "k": 5},
+    ),
+    {"vec": query_vec, "k": 5},
 ).to_list()
 ```
 

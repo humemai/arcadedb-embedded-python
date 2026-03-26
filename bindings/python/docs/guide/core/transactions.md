@@ -145,17 +145,17 @@ with db.transaction():
     db.command(
         "sql",
         """UPDATE Task SET
-           completed = true,
-           cost = 127.50
-           WHERE title = 'Buy groceries'""",
+            completed = true,
+            cost = 127.50
+            WHERE title = 'Buy groceries'""",
     )
 
 with db.transaction():
     db.command(
         "sql",
         """UPDATE Task SET
-           cost = NULL,
-           estimated_hours = NULL
-           WHERE title = 'Call dentist'""",
+            cost = NULL,
+            estimated_hours = NULL
+            WHERE title = 'Call dentist'""",
     )
 ```

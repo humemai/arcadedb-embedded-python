@@ -50,12 +50,12 @@ Insert documents with embeddings in transactions:
 ```python
 with db.transaction():
     for doc in documents:
-      db.command(
-         "sql",
-         "INSERT INTO Article SET title = ?, embedding = ?",
-         doc["title"],
-         arcadedb.to_java_float_array(doc["embedding"]),
-      )
+        db.command(
+            "sql",
+            "INSERT INTO Article SET title = ?, embedding = ?",
+            doc["title"],
+            arcadedb.to_java_float_array(doc["embedding"]),
+        )
 ```
 
 ### 4. Creating Vector Index
@@ -70,8 +70,8 @@ db.command(
     CREATE INDEX ON Article (embedding)
     LSM_VECTOR
     METADATA {
-       "dimensions": 384,
-       "similarity": "COSINE"
+        "dimensions": 384,
+        "similarity": "COSINE"
     }
     """
 )
@@ -93,29 +93,29 @@ easy to express.
 query_embedding = create_mock_embedding(category, "query")
 qvec_literal = "[" + ", ".join(str(float(x)) for x in query_embedding.tolist()) + "]"
 rows = db.query(
-   "sql",
-   (
-      "SELECT title, category, distance, (1 - distance) AS score "
-      "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
-      f"{qvec_literal}, 5))) ORDER BY distance"
-   ),
+    "sql",
+    (
+        "SELECT title, category, distance, (1 - distance) AS score "
+        "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
+        f"{qvec_literal}, 5))) ORDER BY distance"
+    ),
 ).to_list()
 
 for hit in rows:
-   print(f"{hit.get('title')}: {hit.get('distance'):.4f}")
+    print(f"{hit.get('title')}: {hit.get('distance'):.4f}")
 ```
 
 The example also shows a filtered query in the same category:
 
 ```python
 filtered_rows = db.query(
-   "sql",
-   (
-      "SELECT title, category, distance, (1 - distance) AS score "
-      "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
-      f"{qvec_literal}, 50))) WHERE category = ? ORDER BY distance LIMIT 5"
-   ),
-   category,
+    "sql",
+    (
+        "SELECT title, category, distance, (1 - distance) AS score "
+        "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
+        f"{qvec_literal}, 50))) WHERE category = ? ORDER BY distance LIMIT 5"
+    ),
+    category,
 ).to_list()
 ```
 

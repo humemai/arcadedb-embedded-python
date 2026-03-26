@@ -470,7 +470,7 @@ if not user_type.get("phoneNumber"):
 
 # Add index to existing type (auto-transactional)
 if not any(idx.get_property_names() == ["email"]
-           for idx in schema.get_type("User").get_indexes()):
+            for idx in schema.get_type("User").get_indexes()):
     schema.create_index("User", ["email"], unique=True)
     print("✅ Added email index")
 ```
@@ -615,7 +615,7 @@ def migrate_schema_v1_to_v2(db):
 
     # Add new index
     if not any(idx.get_property_names() == ["status"]
-               for idx in user_type.get_indexes()):
+                for idx in user_type.get_indexes()):
         db.schema.create_index("User", ["status"])
         print("✅ Added status index")
 

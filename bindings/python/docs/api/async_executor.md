@@ -303,7 +303,7 @@ Schedule asynchronous record deletion.
 ```python
 # Delete old records
 to_delete = list(db.query("sql", "SELECT FROM LogEntry WHERE timestamp < ?",
-                          cutoff_date))
+                            cutoff_date))
 
 async_exec = db.async_executor()
 

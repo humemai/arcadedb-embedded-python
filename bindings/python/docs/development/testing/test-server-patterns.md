@@ -62,6 +62,6 @@ import requests
 session = requests.Session()
 session.auth = ("root", "password")
 r = session.post("http://localhost:2480/api/v1/query/mydb",
-                  json={"language": "sql", "command": "SELECT ..."})
+                    json={"language": "sql", "command": "SELECT ..."})
 # 5–7x slower than Java API, ~0.7ms overhead per op
 ```

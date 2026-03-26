@@ -19,6 +19,12 @@ The test suite covers:
 - ✅ **Query languages** - SQL, OpenCypher
 - ✅ **Vector search** - HNSW (JVector) based Vector indexes, similarity search
 - ✅ **Data import** - CSV with batch commits and type inference
+- ✅ **Graph ingest helper** - `GraphBatch` buffering and flush behavior
+- ✅ **Geospatial SQL** - `geo.within`, `geo.intersects`, null/boundary semantics
+- ✅ **Time series SQL** - `CREATE TIMESERIES TYPE`, range queries, bucketing
+- ✅ **Materialized views** - create, refresh, alter, drop lifecycle
+- ✅ **Graph algorithms** - `shortestPath`, `dijkstra`, `astar`
+- ✅ **HASH schema indexes** - create, discover, idempotent drop behavior
 - ✅ **Unicode support** - International characters, emoji
 - ✅ **Schema introspection** - Querying database metadata
 - ✅ **Type conversions** - Python/Java type mapping
@@ -68,7 +74,7 @@ pytest -v -s
 Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs`.
 
 | Test File | Description |
-|-----------|-------------|
+| --------- | ----------- |
 | [`test_core.py`](test-core.md) | Core database operations, CRUD, transactions, queries |
 | [`test_server.py`](test-server.md) | Server mode, HTTP API, configuration |
 | [`test_concurrency.py`](test-concurrency.md) | File locking, thread safety, multi-process behavior |
@@ -76,6 +82,12 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_import_database.py`](test-importer.md) | SQL `IMPORT DATABASE` scenarios and format coverage |
 | [`test_docs_examples.py`](test-docs-examples.md) | Executes representative Python snippets from the documentation site |
 | [`test_cypher.py`](test-opencypher.md) | OpenCypher query language |
+| [`test_graph_batch.py`](test-graph-batch.md) | Bulk graph-ingest helper coverage |
+| [`test_geo_predicate_sql.py`](test-geo-predicate-sql.md) | Geospatial SQL predicate semantics |
+| [`test_timeseries_sql.py`](test-timeseries-sql.md) | Time-series SQL type creation, range filters, and bucketing |
+| [`test_materialized_view_sql.py`](test-materialized-view-sql.md) | Materialized view lifecycle and refresh behavior |
+| [`test_graph_algorithms_sql.py`](test-graph-algorithms-sql.md) | SQL graph algorithm runtime coverage |
+| [`test_hash_index_schema.py`](test-hash-index-schema.md) | HASH index schema API behavior |
 | [`test_jvm_args.py`](test-jvm-args.md) | JVM args handling |
 | [`test_vector_params_verification.py`](test-vector-params-verification.md) | Vector param validation |
 
@@ -129,11 +141,9 @@ pytest -m "not slow"
 
 When the current bindings test suite passes, you should see a clean all-green summary.
 
-```
+```text
 ======================== 290 passed ========================
 ```
-
-
 
 ## Next Steps
 

@@ -73,6 +73,9 @@ SQL-first HASH index workflow covering unique and non-unique exact-match lookups
 **[20 - Graph Algorithms Route Planning](20_graph_algorithms_route_planning.md)**
 SQL-first graph algorithms workflow covering minimum-hop `shortestPath`, weighted `dijkstra` / `astar`, sqlscript variables, and route-cost comparison.
 
+**[21 - Server Mode And HTTP Access](21_server_mode_http_access.md)**
+Embedded-first server workflow covering `create_server(...)`, HTTP auth, server-managed database creation, and mixed embedded plus HTTP access to the same data.
+
 ## Quick Start
 
 **⚠️ Important: Always run examples from the `examples/` directory.**
@@ -99,6 +102,7 @@ python 01_simple_document_store.py
 13. **Geo Predicate Workflow** (18) - WKT points and polygons, indexed spatial filters, and fallback semantics
 14. **Hash Index Workflow** (19) - Exact-match HASH indexes, missing-key behavior, and duplicate protection
 15. **Graph Algorithms Workflow** (20) - Minimum-hop versus weighted routing with `shortestPath`, `dijkstra`, and `astar`
+16. **Server Mode Workflow** (21) - Start the built-in server, create schema over HTTP, and verify mixed embedded plus HTTP access
 
 ---
 

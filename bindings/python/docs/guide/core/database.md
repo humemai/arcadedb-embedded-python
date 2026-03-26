@@ -251,14 +251,14 @@ db = arcadedb.open_database("./mydb")
 
 ```python
 with arcadedb.open_database("./database1") as db1, \
-     arcadedb.open_database("./database2") as db2:
+        arcadedb.open_database("./database2") as db2:
     # Use both databases
     result1 = db1.query("sql", "SELECT FROM User")
     result2 = db2.query("sql", "SELECT FROM Product")
 
 # Or with context managers
 with arcadedb.open_database("./database1") as db1, \
-     arcadedb.open_database("./database2") as db2:
+        arcadedb.open_database("./database2") as db2:
     # Use both databases
     pass
 ```
@@ -369,7 +369,7 @@ backup_path = backup_database("./mydb", "./backups")
 def migrate_database(old_path: str, new_path: str):
     """Migrate data from old to new database."""
     with arcadedb.open_database(old_path) as old_db, \
-         arcadedb.create_database(new_path) as new_db:
+            arcadedb.create_database(new_path) as new_db:
         # Copy schema
         new_db.command("sql", "CREATE VERTEX TYPE User")
         new_db.command("sql", "CREATE VERTEX TYPE Post")
@@ -504,8 +504,8 @@ with arcadedb.open_database("./db1") as db2:  # Same JVM
 ```python
 # All databases share the same JVM
 with arcadedb.open_database("./database1") as db1, \
-     arcadedb.open_database("./database2") as db2, \
-     arcadedb.open_database("./database3") as db3:
+        arcadedb.open_database("./database2") as db2, \
+        arcadedb.open_database("./database3") as db3:
     # Efficient: shared JVM resources
     pass
 ```
