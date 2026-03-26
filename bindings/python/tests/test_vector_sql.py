@@ -138,7 +138,7 @@ class TestVectorSQL:
             "sql",
             """
             SELECT expand(
-                `vector.neighbors`('Movie[embedding]', [1.0, 0.0, 0.0, 0.0], 2)
+                vectorNeighbors('Movie[embedding]', [1.0, 0.0, 0.0, 0.0], 2)
             )
             """,
         ).to_list()
@@ -415,7 +415,7 @@ class TestVectorSQL:
             "sql",
             """
             SELECT name, distance
-            FROM (SELECT expand(`vector.neighbors`('Word[vector]', 'docA', 3)))
+            FROM (SELECT expand(vectorNeighbors('Word[vector]', 'docA', 3)))
             ORDER BY distance
             """,
         ).to_list()

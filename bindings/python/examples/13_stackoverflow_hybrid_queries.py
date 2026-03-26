@@ -1657,7 +1657,7 @@ def run_hybrid_queries(
             f"""
             SELECT Id AS question_id, Title AS title, Score AS score, distance
             FROM (
-              SELECT expand(`vector.neighbors`(
+                            SELECT expand(vectorNeighbors(
                 'Question[embedding]', {query_vector_sql}, {max(candidate_limit, top_k)}
               ))
             )
@@ -1825,7 +1825,7 @@ def run_hybrid_queries(
             f"""
             SELECT Id AS question_id, Title AS title, distance
             FROM (
-              SELECT expand(`vector.neighbors`(
+                            SELECT expand(vectorNeighbors(
                 'Question[embedding]', {seed_query_sql}, {top_k}
               ))
             )
@@ -1896,7 +1896,7 @@ def run_hybrid_queries(
             f"""
             SELECT Id AS question_id, distance
             FROM (
-              SELECT expand(`vector.neighbors`(
+                            SELECT expand(vectorNeighbors(
                 'Question[embedding]', {q5_query_sql}, {top_k}
               ))
             )

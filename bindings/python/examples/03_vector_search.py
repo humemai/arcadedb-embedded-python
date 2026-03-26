@@ -270,7 +270,7 @@ with arcadedb.create_database(db_path) as db:
             "sql",
             (
                 "SELECT title, category, distance, (1 - distance) AS score "
-                "FROM (SELECT expand(`vector.neighbors`('Article[embedding]', "
+                "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
                 f"{qvec_literal}, 5))) ORDER BY distance"
             ),
         ).to_list()
@@ -288,7 +288,7 @@ with arcadedb.create_database(db_path) as db:
             "sql",
             (
                 "SELECT title, category, distance, (1 - distance) AS score "
-                "FROM (SELECT expand(`vector.neighbors`('Article[embedding]', "
+                "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
                 f"{qvec_literal}, 50))) WHERE category = ? ORDER BY distance LIMIT 5"
             ),
             category,

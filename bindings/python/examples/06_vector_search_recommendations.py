@@ -409,7 +409,7 @@ def vector_based_recommendations(db, model, movie_title, property_suffix="", lim
         "sql",
         (
             "SELECT title, distance, (1 - distance) AS score "
-            "FROM (SELECT expand(`vector.neighbors`('Movie["
+            "FROM (SELECT expand(vectorNeighbors('Movie["
             f"{embedding_prop}]', "
             f"{qvec_literal}, {int(limit + 5)}))) WHERE title <> ? "
             "ORDER BY distance LIMIT ?"
