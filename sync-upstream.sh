@@ -20,6 +20,10 @@ NC='\033[0m' # No Color
 FORK_OWNED_PATHS=(
     "README.md"
     "CLAUDE.md"
+    ".github/workflows/mvn-test.yml"
+    ".github/workflows/mvn-deploy.yml"
+    ".github/workflows/mvn-release.yml"
+    ".github/workflows/license-compliance.yml"
 )
 
 # Upstream-owned files that may conflict because equivalent upstream commits were
@@ -111,6 +115,10 @@ ${YELLOW}Usage:${NC}
 ${YELLOW}Fork-Owned Files (restored after merge):${NC}
     • README.md
     • CLAUDE.md
+    • .github/workflows/mvn-test.yml
+    • .github/workflows/mvn-deploy.yml
+    • .github/workflows/mvn-release.yml
+    • .github/workflows/license-compliance.yml
 
 ${YELLOW}Normal Merge Paths:${NC}
     • bindings/python/      - Merges normally from upstream-main into main
