@@ -161,6 +161,7 @@ nav:
   - 18 - Geo Predicates With WKT: examples/18_geo_predicates_wkt.md
   - 19 - Hash Index Exact Match: examples/19_hash_index_exact_match.md
   - 20 - Graph Algorithms Route Planning: examples/20_graph_algorithms_route_planning.md
+  - 21 - Server Mode And HTTP Access: examples/21_server_mode_http_access.md
   - Data Import Patterns: examples/import.md
   - Vector Search Patterns: examples/vectors.md
 - User Guide:
@@ -176,12 +177,14 @@ nav:
   - Graph Operations: guide/graphs.md
 - API Reference:
   - Database: api/database.md
+  - GraphBatch: api/graph_batch.md
   - Record Wrappers: api/record-wrappers.md
   - Results: api/results.md
   - Server: api/server.md
   - Transactions: api/transactions.md
   - Vector: api/vector.md
   - Importer: api/importer.md
+  - Citation: api/citation.md
   - Async Executor: api/async_executor.md
   - Schema: api/schema.md
   - Exporter: api/exporter.md
@@ -203,6 +206,7 @@ nav:
       - AsyncExecutor: development/testing/test-async-executor.md
       - Schema: development/testing/test-schema.md
       - Exporter: development/testing/test-exporter.md
+      - GraphBatch: development/testing/test-graph-batch.md
       - JVM Args: development/testing/test-jvm-args.md
       - ResultSet: development/testing/test-resultset.md
       - Type Conversion: development/testing/test-type-conversion.md
@@ -219,6 +223,11 @@ nav:
       - Data Import: development/testing/test-importer.md
       - Documentation Examples: development/testing/test-docs-examples.md
       - OpenCypher Queries: development/testing/test-opencypher.md
+      - Geo Predicate SQL: development/testing/test-geo-predicate-sql.md
+      - Timeseries SQL: development/testing/test-timeseries-sql.md
+      - Materialized View SQL: development/testing/test-materialized-view-sql.md
+      - Graph Algorithms SQL: development/testing/test-graph-algorithms-sql.md
+      - Hash Index Schema: development/testing/test-hash-index-schema.md
     - Best Practices: development/testing/best-practices.md
   - Release Workflow: development/release.md
   - Troubleshooting: development/troubleshooting.md

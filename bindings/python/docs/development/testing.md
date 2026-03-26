@@ -54,6 +54,42 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
     Executable coverage for representative Python snippets in the MkDocs docs tree
 
+-   :material-source-branch: **[GraphBatch Tests](testing/test-graph-batch.md)**
+
+    ---
+
+    Engine-backed bulk graph ingest helper coverage
+
+-   :material-map-marker-radius: **[Geo Predicate SQL Tests](testing/test-geo-predicate-sql.md)**
+
+    ---
+
+    SQL `geo.within` and `geo.intersects` semantics
+
+-   :material-chart-timeline-variant: **[Timeseries SQL Tests](testing/test-timeseries-sql.md)**
+
+    ---
+
+    SQL-first timeseries type creation, range queries, and bucketing
+
+-   :material-table-search: **[Materialized View SQL Tests](testing/test-materialized-view-sql.md)**
+
+    ---
+
+    Materialized view lifecycle, refresh, and metadata coverage
+
+-   :material-map-search: **[Graph Algorithms SQL Tests](testing/test-graph-algorithms-sql.md)**
+
+    ---
+
+    `shortestPath`, `dijkstra`, and `astar` runtime coverage
+
+-   :material-pound-box: **[Hash Index Schema Tests](testing/test-hash-index-schema.md)**
+
+    ---
+
+    HASH index creation, discovery, and drop coverage
+
 -   :material-graph: **[OpenCypher Tests](testing/test-opencypher.md)**
 
     ---
@@ -101,7 +137,7 @@ pytest --cov=arcadedb_embedded --cov-report=html
 | **Server Patterns** | Embedded+HTTP combinations, lock management |
 | **Data Import** | SQL import workflows, type inference, batch commits |
 | **Query Languages** | SQL, OpenCypher |
-| **Advanced Features** | Unicode support, schema introspection, large datasets |
+| **Advanced Features** | Unicode support, schema introspection, geospatial SQL, timeseries SQL, graph algorithms, materialized views, HASH indexes |
 
 ## Key Concepts
 
@@ -158,6 +194,12 @@ tests/
 ├── test_server.py            # Server mode (6 tests)
 ├── test_concurrency.py       # Concurrency (4 tests)
 ├── test_server_patterns.py   # Patterns (4 tests)
+├── test_graph_batch.py       # Bulk graph ingest helper
+├── test_graph_algorithms_sql.py  # shortestPath / dijkstra / astar
+├── test_geo_predicate_sql.py # Geospatial SQL predicates
+├── test_timeseries_sql.py    # Timeseries SQL coverage
+├── test_materialized_view_sql.py # Materialized view lifecycle
+├── test_hash_index_schema.py # HASH index schema API coverage
 ├── test_import_database.py   # Import database tests
 ├── test_docs_examples.py     # Validates runnable docs examples
 ├── test_cypher.py            # OpenCypher (tests)

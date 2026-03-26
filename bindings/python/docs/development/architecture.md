@@ -354,7 +354,7 @@ if __name__ == "__main__":
 
     with mp.Pool(processes=4) as pool:
         pool.starmap(process_chunk,
-                     [("./mydb", chunk) for chunk in chunks])
+                        [("./mydb", chunk) for chunk in chunks])
 ```
 
 ## Performance Considerations

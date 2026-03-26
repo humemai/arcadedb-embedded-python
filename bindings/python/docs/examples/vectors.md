@@ -107,7 +107,7 @@ with arcadedb.open_database("./vector_demo") as db:
         "sql",
         """
         SELECT name, description,
-               vectorL2Distance(embedding, ?) as distance
+                vectorL2Distance(embedding, ?) as distance
         FROM Product
         ORDER BY distance ASC
         LIMIT 5
@@ -209,7 +209,7 @@ with arcadedb.open_database("./vector_demo") as db:
         "sql",
         """
         SELECT name,
-               vectorL2Distance(embedding, ?) as distance
+                vectorL2Distance(embedding, ?) as distance
         FROM Product
         ORDER BY distance ASC
         LIMIT 10

@@ -426,13 +426,13 @@ with db.transaction():
 with db.transaction():
     # Debit from Alice
     db.command("sql",
-               "UPDATE Account SET balance = balance - 100 "
-               "WHERE name = 'Alice'")
+                "UPDATE Account SET balance = balance - 100 "
+                "WHERE name = 'Alice'")
 
     # Credit to Bob
     db.command("sql",
-               "UPDATE Account SET balance = balance + 100 "
-               "WHERE name = 'Bob'")
+                "UPDATE Account SET balance = balance + 100 "
+                "WHERE name = 'Bob'")
 
 # Both updates commit together or neither commits
 ```

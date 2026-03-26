@@ -3,13 +3,14 @@
 Normalize Markdown formatting in docs/.
 
 Rules:
-1) Headers start with '#' and are not in code fences. Remove leading whitespace if present.
-2) If a line ends with ':' and the next non-empty line is a list item, ensure a blank line
-   separates them (space between ':' and first bullet point).
-3) List item indentation must be a multiple of 4 spaces (0,4,8,...). Normalize to the next
-   multiple of 4 for indented lists.
-4) In Python fenced code blocks, clamp accidental over-indentation after block openers such as
-    `with`, `if`, and `for` to a single additional indentation level.
+1) Headers start with '#' and are not in code fences.
+    Remove leading whitespace if present.
+2) If a line ends with ':' and the next non-empty line is a list item,
+    ensure a blank line separates them.
+3) List item indentation must be a multiple of 4 spaces (0,4,8,...).
+    Normalize to the next multiple of 4 for indented lists.
+4) In Python fenced code blocks, normalize leading indentation
+    to 4-space multiples.
 """
 
 from __future__ import annotations
@@ -33,6 +34,13 @@ def normalize_indent(indent_len: int) -> int:
         return 0
     # Round up to the next multiple of 4 to preserve nesting depth.
     return ((indent_len + 3) // 4) * 4
+
+
+def normalize_python_indent(prefix: str) -> str:
+    expanded_len = len(prefix.replace("\t", "    "))
+    if expanded_len <= 0:
+        return ""
+    return " " * normalize_indent(expanded_len)
 
 
 def _format_line_list(lines: List[int], max_items: int = 20) -> str:
@@ -113,9 +121,6 @@ def process_file(
 
     last_list_indent_len: Optional[int] = None
     last_list_fixed_len: Optional[int] = None
-    last_code_indent_len: Optional[int] = None
-    last_code_line: Optional[str] = None
-
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -127,30 +132,19 @@ def process_file(
                     in_python_fence = False
                     fence_char = None
                     fence_len = None
-                    last_code_indent_len = None
-                    last_code_line = None
                     new_lines.append(line)
                     i += 1
                     continue
 
             if in_python_fence and line.strip():
-                indent_len = len(line) - len(line.lstrip(" "))
-                if (
-                    last_code_indent_len is not None
-                    and last_code_line is not None
-                    and last_code_line.rstrip().endswith(":")
-                    and indent_len > last_code_indent_len + 4
-                ):
-                    line = " " * (last_code_indent_len + 4) + line.lstrip(" ")
+                stripped_line = line.lstrip(" \t")
+                prefix = line[: len(line) - len(stripped_line)]
+                normalized_prefix = normalize_python_indent(prefix)
+                if normalized_prefix != prefix:
+                    line = normalized_prefix + stripped_line
                     changed = True
                     code_indent_fixes += 1
                     code_indent_lines.append(i + 1)
-
-                last_code_indent_len = len(line) - len(line.lstrip(" "))
-                last_code_line = line
-            elif in_python_fence:
-                last_code_indent_len = None
-                last_code_line = None
 
             new_lines.append(line)
             i += 1
@@ -161,8 +155,6 @@ def process_file(
             in_fence = True
             in_python_fence = _is_python_fence(line)
             fence_char, fence_len = fence
-            last_code_indent_len = None
-            last_code_line = None
             new_lines.append(line)
             i += 1
             continue

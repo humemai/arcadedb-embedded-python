@@ -202,6 +202,58 @@ SQL-first time-series workflow from Python bindings:
 
 ---
 
+### 🌍 [18_geo_predicates_wkt.py](./18_geo_predicates_wkt.py)
+**GEOSPATIAL Indexes | WKT Geometry | Indexed Predicates | Fallback Queries**
+
+SQL-first geospatial workflow:
+- stores points and polygons as WKT
+- builds a GEOSPATIAL index
+- runs indexed `within` and `intersects` predicates
+- compares indexed behavior with fallback behavior after dropping the index
+
+**Learn:** How to drive ArcadeDB geospatial features from Python through SQL without adding a Python-native spatial wrapper
+
+---
+
+### #️⃣ [19_hash_index_exact_match.py](./19_hash_index_exact_match.py)
+**HASH Index | Unique And Non-Unique Lookup | Schema Inspection | Duplicate Rejection**
+
+SQL-first exact-match workflow:
+- builds unique and non-unique HASH indexes
+- exercises exact-match lookup semantics for present and missing keys
+- inspects created indexes from schema metadata
+- verifies duplicate-key rejection for the unique case
+
+**Learn:** When HASH indexes are the right tool for equality-heavy Python workloads
+
+---
+
+### 🧭 [20_graph_algorithms_route_planning.py](./20_graph_algorithms_route_planning.py)
+**Graph Algorithms | shortestPath | dijkstra | astar | Route Comparison**
+
+SQL-first route-planning workflow:
+- creates a directed multi-modal transport graph
+- compares minimum-hop routing against weighted routing
+- optimizes for distance, duration, and risk
+- cross-checks `astar(...)` against `dijkstra(...)`
+
+**Learn:** How to use ArcadeDB graph algorithms from Python without introducing a separate algorithm API layer
+
+---
+
+### 🌐 [21_server_mode_http_access.py](./21_server_mode_http_access.py)
+**Server Mode | HTTP API | Bearer Auth | Mixed Access Pattern**
+
+Embedded-first server workflow:
+- starts ArcadeDB server mode from the Python package
+- reads server metadata over HTTP
+- creates a database through the server-managed Java API
+- mixes embedded writes with HTTP queries and updates
+
+**Learn:** The current supported client-server posture for this repo without changing the public Python API surface
+
+---
+
 ## 💡 Tips
 
 - **Run from examples/ directory** - Always execute examples from `bindings/python/examples/` for correct file paths

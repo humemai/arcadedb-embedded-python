@@ -65,7 +65,7 @@ db.export_to_csv("SELECT * FROM User", "users.csv")
 
 # CSV with fieldnames
 db.export_to_csv("SELECT movieId, title FROM Movie", "movies.csv",
-                  fieldnames=["movieId", "title"])
+                    fieldnames=["movieId", "title"])
 
 # Import roundtrip
 db.command("sql", "IMPORT DATABASE file:///path/to/export.jsonl.tgz")

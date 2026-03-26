@@ -99,9 +99,9 @@ FAISS uses `IndexHNSWFlat` wrapped in `IndexIDMap2`.
 
 ```python
 index_hnsw = faiss.IndexHNSWFlat(
-  int(dim),
-  int(max_connections),
-  faiss.METRIC_INNER_PRODUCT,
+    int(dim),
+    int(max_connections),
+    faiss.METRIC_INNER_PRODUCT,
 )
 index_hnsw.hnsw.efConstruction = int(beam_width)
 index = faiss.IndexIDMap2(index_hnsw)
@@ -143,12 +143,12 @@ The build call is:
 
 ```python
 table.create_index(
-  index_type=index_type,
-  metric="cosine",
-  vector_column_name="vector",
-  m=int(max_connections),
-  ef_construction=int(beam_width),
-  **extra_kwargs,
+    index_type=index_type,
+    metric="cosine",
+    vector_column_name="vector",
+    m=int(max_connections),
+    ef_construction=int(beam_width),
+    **extra_kwargs,
 )
 ```
 
@@ -190,15 +190,15 @@ Qdrant recreates the collection with cosine distance and HNSW config.
 
 ```python
 client.recreate_collection(
-  collection_name=collection_name,
-  vectors_config=models.VectorParams(
+    collection_name=collection_name,
+    vectors_config=models.VectorParams(
     size=int(dim),
     distance=models.Distance.COSINE,
-  ),
-  hnsw_config=models.HnswConfigDiff(
+    ),
+    hnsw_config=models.HnswConfigDiff(
     m=int(max_connections),
     ef_construct=int(beam_width),
-  ),
+    ),
 )
 ```
 
@@ -218,20 +218,20 @@ Milvus creates an explicit collection schema before building an HNSW index.
 
 ```python
 schema = CollectionSchema(
-  fields=[
+    fields=[
     FieldSchema(
-      name="id",
-      dtype=DataType.INT64,
-      is_primary=True,
-      auto_id=False,
+        name="id",
+        dtype=DataType.INT64,
+        is_primary=True,
+        auto_id=False,
     ),
     FieldSchema(
-      name="vector",
-      dtype=DataType.FLOAT_VECTOR,
-      dim=dim,
+        name="vector",
+        dtype=DataType.FLOAT_VECTOR,
+        dim=dim,
     ),
-  ],
-  description="Vector benchmark collection",
+    ],
+    description="Vector benchmark collection",
 )
 ```
 
@@ -239,12 +239,12 @@ schema = CollectionSchema(
 
 ```python
 index_params = {
-  "index_type": "HNSW",
-  "metric_type": "COSINE",
-  "params": {
+    "index_type": "HNSW",
+    "metric_type": "COSINE",
+    "params": {
     "M": int(max_connections),
     "efConstruction": int(beam_width),
-  },
+    },
 }
 collection.create_index(field_name="vector", index_params=index_params)
 ```

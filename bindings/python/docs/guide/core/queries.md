@@ -254,8 +254,8 @@ result = db.query(
     "sql",
     """
     MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
-          -FRIEND_OF->
-          {type: Person, as: friend}
+            -FRIEND_OF->
+            {type: Person, as: friend}
     RETURN friend.name as name, friend.city as city
     ORDER BY friend.name
 """,
@@ -270,10 +270,10 @@ result = db.query(
     "sql",
     """
     MATCH {type: Person, as: alice, where: (name = 'Alice Johnson')}
-          -FRIEND_OF->
-          {type: Person, as: friend}
-          -FRIEND_OF->
-          {type: Person, as: friend_of_friend, where: (name <> 'Alice Johnson')}
+            -FRIEND_OF->
+            {type: Person, as: friend}
+            -FRIEND_OF->
+            {type: Person, as: friend_of_friend, where: (name <> 'Alice Johnson')}
     RETURN DISTINCT friend_of_friend.name as name, friend.name as through_friend
     ORDER BY friend_of_friend.name
 """,
@@ -297,7 +297,7 @@ result = db.query(
     "sql",
     """
     SELECT city, COUNT(*) as person_count,
-           AVG(age) as avg_age
+            AVG(age) as avg_age
     FROM Person
     GROUP BY city
     ORDER BY person_count DESC, city
