@@ -25,6 +25,7 @@ FORK_OWNED_PATHS=(
     ".github/workflows/mvn-release.yml"
     ".github/workflows/license-compliance.yml"
     ".github/workflows/meterian.yml"
+    ".github/workflows/studio-security-audit.yml"
 )
 
 # Upstream-owned files that may conflict because equivalent upstream commits were
@@ -121,6 +122,7 @@ ${YELLOW}Fork-Owned Files (restored after merge):${NC}
     • .github/workflows/mvn-release.yml
     • .github/workflows/license-compliance.yml
     • .github/workflows/meterian.yml
+    • .github/workflows/studio-security-audit.yml
 
 ${YELLOW}Normal Merge Paths:${NC}
     • bindings/python/      - Merges normally from upstream-main into main
