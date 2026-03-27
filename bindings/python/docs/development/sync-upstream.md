@@ -18,7 +18,7 @@ This fork tracks `ArcadeData/arcadedb` through the local `upstream-main` branch.
 - Keeps removed upstream workflows from being reintroduced:
   `.github/workflows/mvn-test.yml`, `.github/workflows/mvn-deploy.yml`,
   `.github/workflows/mvn-release.yml`, `.github/workflows/license-compliance.yml`, and
-  `.github/workflows/meterian.yml`
+  `.github/workflows/meterian.yml`, and `.github/workflows/studio-security-audit.yml`
 
 ## After sync
 
