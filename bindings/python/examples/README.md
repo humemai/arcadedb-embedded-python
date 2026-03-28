@@ -254,6 +254,21 @@ Embedded-first server workflow:
 
 ---
 
+### 🕸️ [22_graph_analytical_view_sql.py](./22_graph_analytical_view_sql.py)
+**Graph Analytical View | SQL DDL | Schema Metadata | Rebuild Lifecycle**
+
+SQL-first Graph Analytical View workflow:
+- generates a larger synthetic transport graph with 100,000 base cities by default
+- creates a named GAV with vertex and edge property filters
+- polls `schema:graphAnalyticalViews` until the async build is `READY`
+- shows `OFF` mode becoming `STALE` after graph writes
+- rebuilds the view and then switches to `SYNCHRONOUS` updates
+- reopens the database to confirm persisted GAV restoration
+
+**Learn:** How to use Graph Analytical Views from Python without introducing a dedicated Python object API
+
+---
+
 ## 💡 Tips
 
 - **Run from examples/ directory** - Always execute examples from `bindings/python/examples/` for correct file paths

@@ -162,6 +162,7 @@ nav:
   - 19 - Hash Index Exact Match: examples/19_hash_index_exact_match.md
   - 20 - Graph Algorithms Route Planning: examples/20_graph_algorithms_route_planning.md
   - 21 - Server Mode And HTTP Access: examples/21_server_mode_http_access.md
+  - 22 - Graph Analytical View SQL Workflow: examples/22_graph_analytical_view_sql.md
   - Data Import Patterns: examples/import.md
   - Vector Search Patterns: examples/vectors.md
 - User Guide:

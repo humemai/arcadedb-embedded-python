@@ -18,7 +18,7 @@ source "$HELPERS_SH"
 
 DATASET="stackoverflow-large"
 BATCH_SIZE=10000
-MEM_LIMIT="32g"
+MEM_LIMIT="16g"
 THREADS=4
 RUNS=1
 SEED_START=0
@@ -30,6 +30,7 @@ QUERY_ORDER="shuffled"
 ONLY_QUERY=""
 MANUAL_CHECKS=false
 DBS_RAW="arcadedb_cypher"
+GAV_MODES_RAW="on"
 LABEL_PREFIX="sweep10"
 
 if [[ $# -gt 0 ]]; then
@@ -41,6 +42,12 @@ fi
 IFS=',' read -r -a DBS <<< "$DBS_RAW"
 if [[ "${#DBS[@]}" -eq 0 ]]; then
     echo "DBS_RAW cannot be empty" >&2
+    exit 1
+fi
+
+IFS=',' read -r -a GAV_MODES <<< "$GAV_MODES_RAW"
+if [[ "${#GAV_MODES[@]}" -eq 0 ]]; then
+    echo "GAV_MODES_RAW cannot be empty" >&2
     exit 1
 fi
 
@@ -63,7 +70,7 @@ fi
 
 cd "$EXAMPLES_DIR"
 
-echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED_START"
+echo "Running matrix: runs=$RUNS dbs=${DBS[*]} dataset=$DATASET seed_start=$SEED_START gav_modes=${GAV_MODES[*]}"
 echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE query-runs=$QUERY_RUNS query-order=$QUERY_ORDER sqlite-profile=$SQLITE_PROFILE"
 
 dataset_slug="${DATASET//-/_}"
@@ -89,71 +96,86 @@ for ((run = 1; run <= RUNS; run++)); do
                 ;;
         esac
 
-        seed=$((SEED_START + execution_idx))
-        internal_run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
-        run_label="$(matrix_build_summary_run_label "$internal_run_label" "$MEM_LIMIT")"
+        for gav_mode in "${GAV_MODES[@]}"; do
+            gav_mode="$(echo "$gav_mode" | xargs | tr '[:upper:]' '[:lower:]')"
+            case "$gav_mode" in
+                on | off) ;;
+                *)
+                    echo "Unsupported GAV mode in GAV_MODES_RAW: $gav_mode" >&2
+                    echo "Supported values: on, off" >&2
+                    exit 1
+                    ;;
+            esac
 
-        cmd=(
-            python3 "$PY_SCRIPT"
-            --dataset "$DATASET"
-            --db "$db_engine"
-            --threads "$THREADS"
-            --batch-size "$BATCH_SIZE"
-            --mem-limit "$MEM_LIMIT"
-            --jvm-heap-fraction "$JVM_HEAP_FRACTION"
-            --sqlite-profile "$SQLITE_PROFILE"
-            --docker-image "$DOCKER_IMAGE"
-            --query-runs "$QUERY_RUNS"
-            --query-order "$QUERY_ORDER"
-            --seed "$seed"
-            --run-label "$run_label"
-        )
+            seed=$((SEED_START + execution_idx))
+            internal_run_label=$(printf "%s_t%02d_r%02d_%s_gav%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$gav_mode" "$seed")
+            run_label="$(matrix_build_summary_run_label "$internal_run_label" "$MEM_LIMIT")"
 
-        if [[ -n "$ONLY_QUERY" ]]; then
-            cmd+=(--only-query "$ONLY_QUERY")
-        fi
+            cmd=(
+                python3 "$PY_SCRIPT"
+                --dataset "$DATASET"
+                --db "$db_engine"
+                --threads "$THREADS"
+                --batch-size "$BATCH_SIZE"
+                --mem-limit "$MEM_LIMIT"
+                --jvm-heap-fraction "$JVM_HEAP_FRACTION"
+                --sqlite-profile "$SQLITE_PROFILE"
+                --docker-image "$DOCKER_IMAGE"
+                --query-runs "$QUERY_RUNS"
+                --query-order "$QUERY_ORDER"
+                --seed "$seed"
+                --run-label "$run_label"
+            )
 
-        if [[ "$MANUAL_CHECKS" == true ]]; then
-            cmd+=(--manual-checks)
-        fi
-
-        echo
-        echo "[$((execution_idx + 1))/$((RUNS * ${#DBS[@]}))] db=$db run=$run seed=$seed label=$run_label"
-        echo "Command: ${cmd[*]}"
-        "${cmd[@]}"
-
-        target_dir="my_test_databases/${dataset_slug}_graph_olap_${db_engine}_${mem_tag}_${run_label}"
-        if [[ -d "$target_dir" ]]; then
-            collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-            matrix_rename_result_artifacts "$target_dir" "$internal_run_label" "$run_label"
-            matrix_rewrite_json_run_label "$target_dir" "$internal_run_label" "$run_label"
-            wheel_artifacts_for_dir="false"
-            if [[ "$db_engine" == "arcadedb_sql" || "$db_engine" == "arcadedb_cypher" ]]; then
-                wheel_artifacts_for_dir="true"
+            if [[ "$gav_mode" == "on" ]]; then
+                cmd+=(--use-gav)
             fi
-            matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"
-            matrix_embed_wheel_metadata_in_results "$target_dir" "$collected_at"
-            matrix_write_dependency_versions \
-                "$target_dir" \
-                "$collected_at" \
-                "arcadedb_embedded" "auto" \
-                "real_ladybug" "auto" \
-                "graphqlite" "auto" \
-                "duckdb" "auto" \
-                "sqlite" "builtin" \
-                "python_memory" "builtin"
 
-            du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"
-            du_human="$(du -sh "$target_dir" | awk '{print $1}')"
+            if [[ -n "$ONLY_QUERY" ]]; then
+                cmd+=(--only-query "$ONLY_QUERY")
+            fi
 
-            cat > "$target_dir/disk_usage_du.txt" << EOF
+            if [[ "$MANUAL_CHECKS" == true ]]; then
+                cmd+=(--manual-checks)
+            fi
+
+            echo
+            echo "[$((execution_idx + 1))/$((RUNS * ${#DBS[@]} * ${#GAV_MODES[@]}))] db=$db gav=$gav_mode run=$run seed=$seed label=$run_label"
+            echo "Command: ${cmd[*]}"
+            "${cmd[@]}"
+
+            target_dir="my_test_databases/${dataset_slug}_graph_olap_${db_engine}_${mem_tag}_${run_label}"
+            if [[ -d "$target_dir" ]]; then
+                collected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+                matrix_rename_result_artifacts "$target_dir" "$internal_run_label" "$run_label"
+                matrix_rewrite_json_run_label "$target_dir" "$internal_run_label" "$run_label"
+                wheel_artifacts_for_dir="false"
+                if [[ "$db_engine" == "arcadedb_sql" || "$db_engine" == "arcadedb_cypher" ]]; then
+                    wheel_artifacts_for_dir="true"
+                fi
+                matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"
+                matrix_embed_wheel_metadata_in_results "$target_dir" "$collected_at"
+                matrix_write_dependency_versions \
+                    "$target_dir" \
+                    "$collected_at" \
+                    "arcadedb_embedded" "auto" \
+                    "real_ladybug" "auto" \
+                    "graphqlite" "auto" \
+                    "duckdb" "auto" \
+                    "sqlite" "builtin" \
+                    "python_memory" "builtin"
+
+                du_bytes="$(du -sB1 "$target_dir" | awk '{print $1}')"
+                du_human="$(du -sh "$target_dir" | awk '{print $1}')"
+
+                cat > "$target_dir/disk_usage_du.txt" << EOF
 path: $target_dir
 du_bytes: $du_bytes
 du_human: $du_human
 collected_at_utc: $collected_at
 EOF
 
-            cat > "$target_dir/disk_usage_du.json" << EOF
+                cat > "$target_dir/disk_usage_du.json" << EOF
 {
   "path": "$target_dir",
   "du_bytes": $du_bytes,
@@ -162,12 +184,13 @@ EOF
 }
 EOF
 
-            echo "Saved du size: $du_human ($du_bytes bytes) -> $target_dir/disk_usage_du.json"
-        else
-            echo "Warning: target directory not found for du capture: $target_dir"
-        fi
+                echo "Saved du size: $du_human ($du_bytes bytes) -> $target_dir/disk_usage_du.json"
+            else
+                echo "Warning: target directory not found for du capture: $target_dir"
+            fi
 
-        execution_idx=$((execution_idx + 1))
+            execution_idx=$((execution_idx + 1))
+        done
     done
 done
 

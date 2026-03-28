@@ -76,6 +76,9 @@ SQL-first graph algorithms workflow covering minimum-hop `shortestPath`, weighte
 **[21 - Server Mode And HTTP Access](21_server_mode_http_access.md)**
 Embedded-first server workflow covering `create_server(...)`, HTTP auth, server-managed database creation, and mixed embedded plus HTTP access to the same data.
 
+**[22 - Graph Analytical View SQL Workflow](22_graph_analytical_view_sql.md)**
+SQL-first Graph Analytical View workflow covering six-figure synthetic graph generation, `CREATE` / `ALTER` / `REBUILD`, schema metadata polling, stale-versus-ready lifecycle, and persisted GAV restoration.
+
 ## Quick Start
 
 **⚠️ Important: Always run examples from the `examples/` directory.**
@@ -103,6 +106,7 @@ python 01_simple_document_store.py
 14. **Hash Index Workflow** (19) - Exact-match HASH indexes, missing-key behavior, and duplicate protection
 15. **Graph Algorithms Workflow** (20) - Minimum-hop versus weighted routing with `shortestPath`, `dijkstra`, and `astar`
 16. **Server Mode Workflow** (21) - Start the built-in server, create schema over HTTP, and verify mixed embedded plus HTTP access
+17. **Graph Analytical View Workflow** (22) - Manage GAV lifecycle entirely through SQL and inspect `schema:graphAnalyticalViews`
 
 ---
 

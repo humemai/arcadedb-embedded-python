@@ -62,6 +62,18 @@ def to_float(value):
         return None
 
 
+def to_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return None
+
+
 def first_not_none(*values):
     for value in values:
         if value is not None:
@@ -401,6 +413,8 @@ for run_dir in run_dirs:
                 "load_time_s": to_float(data.get("load_time_s")),
                 "index_time_s": to_float(data.get("index_time_s")),
                 "query_time_s": to_float(data.get("query_time_s")),
+                "gav_enabled": to_bool(data.get("gav_enabled")),
+                "gav_ready_wait_time_s": to_float(data.get("gav_ready_wait_time_s")),
                 "rss_peak_mib": kib_to_mib(data.get("rss_peak_kb")),
                 "du_mib": du_mib,
             }
@@ -558,6 +572,8 @@ if version_summary_lines:
 lines.append(
     "- Note: `load_*` is ingest only, `index_*` is post-ingest index build, and `query_*` is OLAP query-suite execution."
 )
+lines.append("- `gav_enabled` shows whether ArcadeDB queries ran after a Graph Analytical View was built.")
+lines.append("- `gav_ready_wait_s` measures the wall-clock wait until the GAV reported `READY`.")
 lines.append("- DB summary timing/memory/disk columns are single-run values (no averaging).")
 lines.append("- Query parity is evaluated via `result_hash` and `row_count` across DBs.")
 lines.append("")
@@ -570,9 +586,9 @@ for current_dataset in datasets:
     lines.append("### DB summary")
     lines.append("")
     lines.append(
-        f"| db | run_label | seed | batch_size | mem_limit | threads | query_runs | query_order | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
+        f"| db | gav_enabled | gav_ready_wait_s | run_label | seed | batch_size | mem_limit | threads | query_runs | query_order | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
     )
-    lines.append("|---|---|---|---:|---|---:|---:|---|---:|---:|---:|---:|---:|")
+    lines.append("|---|---|---:|---|---:|---:|---|---:|---:|---|---:|---:|---:|---:|---:|")
     for row in result_rows:
         if str(row["dataset"] or "") != current_dataset:
             continue
@@ -581,6 +597,8 @@ for current_dataset in datasets:
             + " | ".join(
                 [
                     fmt(row["db"]),
+                    fmt(row["gav_enabled"]),
+                    fmt(row["gav_ready_wait_time_s"]),
                     fmt(row["run_label"]),
                     fmt(row["seed"]),
                     fmt(row["batch_size"]),

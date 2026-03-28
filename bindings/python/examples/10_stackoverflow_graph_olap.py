@@ -97,6 +97,9 @@ EDGE_TYPES = [
     "LINKED_TO",
 ]
 
+GAV_NAME = "stackoverflowOlap"
+GAV_QUERY_PROPERTIES = ["Id", "DisplayName", "TagName", "Name", "Score"]
+
 QUERY_DEFS: List[Dict[str, str]] = [
     {
         "name": "top_askers",
@@ -455,6 +458,68 @@ def collect_graph_counts_arcadedb(db) -> Dict[str, object]:
         "node_counts_by_type": node_counts,
         "edge_counts_by_type": edge_counts,
     }
+
+
+def create_arcadedb_gav(db, arcade_error) -> None:
+    vertex_types_sql = ", ".join(VERTEX_TYPES)
+    edge_types_sql = ", ".join(EDGE_TYPES)
+    property_sql = ", ".join(GAV_QUERY_PROPERTIES)
+    statement = (
+        f"CREATE GRAPH ANALYTICAL VIEW {GAV_NAME} "
+        f"VERTEX TYPES ({vertex_types_sql}) "
+        f"EDGE TYPES ({edge_types_sql}) "
+        f"PROPERTIES ({property_sql}) "
+        "UPDATE MODE OFF"
+    )
+    try:
+        db.command("sql", statement)
+    except arcade_error as exc:
+        raise RuntimeError(
+            "GAV was requested for Example 10, but Graph Analytical View SQL "
+            f"support is not available: {exc}"
+        ) from exc
+
+
+def fetch_arcadedb_gav_metadata(db, name: str) -> Optional[Dict[str, Any]]:
+    row = db.query(
+        "sql",
+        "SELECT FROM schema:graphAnalyticalViews WHERE name = ?",
+        name,
+    ).first()
+    if row is None:
+        return None
+
+    return {
+        "name": row.get("name"),
+        "status": row.get("status"),
+        "updateMode": row.get("updateMode"),
+        "nodeCount": row.get("nodeCount"),
+        "edgeCount": row.get("edgeCount"),
+        "buildDurationMs": row.get("buildDurationMs"),
+    }
+
+
+def wait_for_arcadedb_gav_status(
+    db,
+    name: str,
+    expected_statuses: set[str],
+    timeout_sec: float = 1800.0,
+) -> Dict[str, Any]:
+    start = time.perf_counter()
+    last_metadata = None
+    while True:
+        metadata = fetch_arcadedb_gav_metadata(db, name)
+        if metadata is not None:
+            last_metadata = metadata
+            if metadata["status"] in expected_statuses:
+                return metadata
+
+        if time.perf_counter() - start > timeout_sec:
+            raise RuntimeError(
+                f"Timed out waiting for GAV {name} to reach "
+                f"{sorted(expected_statuses)}. Last metadata: {last_metadata}"
+            )
+        time.sleep(0.25)
 
 
 def collect_graph_counts_ladybug(conn) -> Dict[str, object]:
@@ -3058,6 +3123,7 @@ def run_olap_arcadedb(
     query_runs: int = 1,
     query_order: str = "fixed",
     seed: int = 42,
+    use_gav: bool = False,
 ) -> dict:
     arcadedb, arcade_error = get_arcadedb_module()
     if arcadedb is None or arcade_error is None:
@@ -3092,6 +3158,16 @@ def run_olap_arcadedb(
 
     disk_after_load = get_dir_size_bytes(db_path)
     disk_after_index = disk_after_load
+
+    gav_metadata = None
+    gav_ready_wait_time_s = None
+    if use_gav:
+        print("Creating Graph Analytical View (GAV)...")
+        create_arcadedb_gav(db, arcade_error)
+        print("Waiting for GAV to become READY...")
+        gav_wait_start = time.perf_counter()
+        gav_metadata = wait_for_arcadedb_gav_status(db, GAV_NAME, {"READY"})
+        gav_ready_wait_time_s = time.perf_counter() - gav_wait_start
 
     print("Running OLAP queries...")
     query_language = (olap_language or "cypher").strip().lower()
@@ -3146,6 +3222,13 @@ def run_olap_arcadedb(
         "disk_after_index_bytes": disk_after_index,
         "disk_after_queries_bytes": disk_after_queries,
         "arcadedb_olap_language": query_language,
+        "gav_enabled": use_gav,
+        "gav_name": GAV_NAME if use_gav else None,
+        "gav_status": gav_metadata.get("status") if gav_metadata else None,
+        "gav_ready_wait_time_s": gav_ready_wait_time_s,
+        "gav_build_duration_ms": (
+            gav_metadata.get("buildDurationMs") if gav_metadata else None
+        ),
     }
 
 
@@ -5020,6 +5103,14 @@ def write_results(db_path: Path, args: argparse.Namespace, summary: dict):
         "run_label": args.run_label,
         "query_runs": args.query_runs,
         "query_order": args.query_order,
+        "gav_enabled": summary.get(
+            "gav_enabled",
+            args.use_gav if args.db in ("arcadedb_sql", "arcadedb_cypher") else False,
+        ),
+        "gav_name": summary.get("gav_name"),
+        "gav_status": summary.get("gav_status"),
+        "gav_ready_wait_time_s": summary.get("gav_ready_wait_time_s"),
+        "gav_build_duration_ms": summary.get("gav_build_duration_ms"),
         "schema_time_s": summary["schema_time_s"],
         "load_time_s": summary["load_time_s"],
         "load_time_including_index_s": summary.get("load_time_including_index_s"),
@@ -5326,6 +5417,11 @@ def main():
         default=None,
         help="Optional label appended to DB directory and result filename",
     )
+    parser.add_argument(
+        "--use-gav",
+        action="store_true",
+        help="Create a Graph Analytical View and wait until it is READY before queries",
+    )
 
     args = parser.parse_args()
     if args.run_label:
@@ -5373,6 +5469,7 @@ def main():
     print(f"DB: {args.db}")
     if args.db in ("arcadedb_sql", "arcadedb_cypher"):
         print(f"ArcadeDB OLAP language: {args.arcadedb_olap_language}")
+        print(f"GAV enabled: {args.use_gav}")
     if args.db in ("sqlite", "graphqlite", "python_memory"):
         print(f"SQLite profile: {args.sqlite_profile}")
     print(f"Batch size: {args.batch_size}")
@@ -5401,6 +5498,7 @@ def main():
             query_runs=args.query_runs,
             query_order=args.query_order,
             seed=args.seed,
+            use_gav=args.use_gav,
         )
     elif args.db in ("ladybug", "ladybugdb"):
         summary = run_olap_ladybug(
@@ -5474,6 +5572,8 @@ def main():
     print(f"Schema time: {summary['schema_time_s']:.2f}s")
     print(f"Load time: {summary['load_time_s']:.2f}s")
     print(f"Index time: {summary['index_time_s']:.2f}s")
+    if summary.get("gav_enabled"):
+        print(f"GAV READY wait time: {summary['gav_ready_wait_time_s']:.2f}s")
     print(f"Query time: {summary['query_time_s']:.2f}s")
     print(f"Total time: {summary['total_time_s']:.2f}s")
     print(f"Disk after load: {format_bytes_binary(summary['disk_after_load_bytes'])}")
