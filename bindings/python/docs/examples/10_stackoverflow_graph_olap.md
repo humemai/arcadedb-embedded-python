@@ -5,13 +5,19 @@
 This example builds a Stack Overflow property graph and runs a fixed OLAP query suite
 using OpenCypher.
 
+For ArcadeDB runs, the benchmark can optionally create a Graph Analytical View (GAV)
+before the query suite and measure how long it takes to wait until that view becomes
+`READY`.
+
 ## Overview
 
 Example 10 is the graph-oriented OLAP benchmark in the Python examples set.
 
 - Builds the Stack Overflow graph with directed edge types
 - Runs a fixed analytical query suite across the selected backend
+- Optionally builds a GAV for ArcadeDB before running the Cypher workload
 - Records load/index/query timings, disk usage, and peak RSS
+- Records whether GAV was enabled and the time spent waiting for GAV `READY`
 - Supports repeated query runs and single-query filtering
 
 ## Graph Projection Assumptions
@@ -180,6 +186,8 @@ The source creates unique `Id` indexes on all six vertex types before the query 
   driven by the configured `--threads` value
 - `GraphBatch` is the repository's recommended bulk graph ingest path from Python
 - ArcadeDB query execution is cypher-only in this example path
+- ArcadeDB GAV usage is opt-in through `--use-gav`; when enabled, the benchmark waits
+  for the analytical view to reach `READY` before measuring the query suite
 - Traversal expectations should be interpreted as directed
 
 ## Supported Backends
@@ -200,6 +208,7 @@ From `bindings/python/examples`:
 python 10_stackoverflow_graph_olap.py \
   --dataset stackoverflow-tiny \
   --db arcadedb_cypher \
+  --use-gav \
   --batch-size 10000 \
   --query-runs 3 \
   --query-order shuffled \
@@ -215,3 +224,5 @@ python 10_stackoverflow_graph_olap.py \
 - `--query-order`: `fixed` or `shuffled`
 - `--only-query`: run a single named query
 - `--manual-checks`: enable additional validation queries
+- `--use-gav`: for ArcadeDB runs, create a Graph Analytical View and measure the
+  wait until it reports `READY`

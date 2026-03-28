@@ -301,6 +301,24 @@ def build_examples(_examples_dir: Path) -> list[ExampleRun]:
         ExampleRun(19, "19_hash_index_exact_match.py", lambda _, __: []),
         ExampleRun(20, "20_graph_algorithms_route_planning.py", lambda _, __: []),
         ExampleRun(21, "21_server_mode_http_access.py", lambda _, __: []),
+        ExampleRun(
+            22,
+            "22_graph_analytical_view_sql.py",
+            lambda _, __: [
+                "--base-cities",
+                "1200",
+                "--stale-growth-cities",
+                "300",
+                "--sync-growth-cities",
+                "200",
+                "--regions",
+                "12",
+                "--batch-size",
+                "300",
+                "--sample-limit",
+                "5",
+            ],
+        ),
     ]
 
 
@@ -315,7 +333,7 @@ def run_command(command: list[str], cwd: Path, dry_run: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run examples 01-21 with small inputs for quicker smoke coverage."
+        description="Run examples 01-22 with small inputs for quicker smoke coverage."
     )
     parser.add_argument(
         "--only",
