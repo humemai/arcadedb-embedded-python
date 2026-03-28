@@ -3,8 +3,6 @@ name: Test Python Bindings
 on:
   # Run on push to bindings/python/ directory
   push:
-    tags-ignore:
-      - '[0-9]*.[0-9]*.[0-9]*'
     paths:
       - 'bindings/python/**'
       - '**/*.java'
