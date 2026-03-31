@@ -29,8 +29,8 @@ QUERY_RUNS=100
 QUERY_ORDER="shuffled"
 ONLY_QUERY=""
 MANUAL_CHECKS=false
-DBS_RAW="neo4j"
-GAV_MODES_RAW="off"
+DBS_RAW="arcadedb_cypher"
+GAV_MODES_RAW="off,on"
 LABEL_PREFIX="sweep10"
 
 if [[ $# -gt 0 ]]; then

@@ -273,8 +273,8 @@ SQL-first Graph Analytical View workflow:
 
 - **Run from examples/ directory** - Always execute examples from `bindings/python/examples/` for correct file paths
 - **Start with Example 01** - Foundation for all ArcadeDB concepts
-- **Use directed graph assumptions** - Current graph examples explicitly define
-  `UNIDIRECTIONAL` edge types unless a script says otherwise
+- **Use directed graph assumptions** - Graph examples keep edge direction
+  semantics while relying on default bidirectional edge storage unless a script says otherwise
 - **Database files persist** - Examples preserve data for inspection
 - **Output is educational** - Check console output to understand operations
 - **Experiment freely** - Examples clean up and recreate on each run

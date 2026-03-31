@@ -260,7 +260,7 @@ def create_schema(db) -> None:
     db.command("sql", "CREATE PROPERTY City.lon DOUBLE")
 
     for edge_type in ("Road", "Rail", "Ferry"):
-        db.command("sql", f"CREATE EDGE TYPE {edge_type} UNIDIRECTIONAL")
+        db.command("sql", f"CREATE EDGE TYPE {edge_type}")
         db.command("sql", f"CREATE PROPERTY {edge_type}.distance LONG")
         db.command("sql", f"CREATE PROPERTY {edge_type}.duration LONG")
         db.command("sql", f"CREATE PROPERTY {edge_type}.risk LONG")
@@ -393,7 +393,7 @@ def run_algorithm_phase(db) -> None:
           'distance',
           {
             direction: 'out',
-            parallel: true,
+            'parallel': true,
             edgeTypeNames: ['Road'],
             vertexAxisNames: ['lat', 'lon'],
             heuristicFormula: 'EUCLIDEANNOSQR'
@@ -530,7 +530,7 @@ def run_astar_crosscheck_phase(db) -> None:
           'duration',
           {
             direction: 'out',
-            parallel: true,
+            'parallel': true,
             vertexAxisNames: ['lat', 'lon'],
             heuristicFormula: 'EUCLIDEANNOSQR',
             tieBreaker: true
@@ -557,7 +557,7 @@ def run_astar_crosscheck_phase(db) -> None:
           'risk',
           {
             direction: 'out',
-            parallel: true,
+            'parallel': true,
             vertexAxisNames: ['lat', 'lon'],
             heuristicFormula: 'EUCLIDEANNOSQR',
             tieBreaker: true

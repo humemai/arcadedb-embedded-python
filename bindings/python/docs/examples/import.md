@@ -85,7 +85,7 @@ with arcadedb.create_database("./import_demo") as db:
 ```python
 with arcadedb.create_database("./graph_import_demo") as db:
     db.command("sql", "CREATE VERTEX TYPE User")
-    db.command("sql", "CREATE EDGE TYPE Follows UNIDIRECTIONAL")
+    db.command("sql", "CREATE EDGE TYPE Follows")
 
     db.command(
         "sql",

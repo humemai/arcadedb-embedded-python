@@ -33,7 +33,7 @@ with db.transaction():
 ```python
 # Create schema
 db.command("sql", "CREATE VERTEX TYPE Person")
-db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
+db.command("sql", "CREATE EDGE TYPE Knows")
 
 # Insert using SQL (RECOMMENDED)
 with db.transaction():
