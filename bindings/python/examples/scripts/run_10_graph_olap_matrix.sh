@@ -16,11 +16,11 @@ source "$HELPERS_SH"
 # Large         10,000      8GB     16
 # X-Large       25,000      32GB    32
 
-DATASET="stackoverflow-large"
-BATCH_SIZE=10000
-MEM_LIMIT="32g"
+DATASET="stackoverflow-medium"
+BATCH_SIZE=5000
+MEM_LIMIT="8g"
 THREADS=4
-RUNS=3
+RUNS=1
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
 SQLITE_PROFILE="olap"
@@ -29,8 +29,8 @@ QUERY_RUNS=100
 QUERY_ORDER="shuffled"
 ONLY_QUERY=""
 MANUAL_CHECKS=false
-DBS_RAW="arcadedb_cypher,python_memory,ladybug,neo4j"
-GAV_MODES_RAW="off,on"
+DBS_RAW="neo4j"
+GAV_MODES_RAW="off"
 LABEL_PREFIX="sweep10"
 
 if [[ $# -gt 0 ]]; then
