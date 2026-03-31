@@ -101,7 +101,7 @@ def file_url(path: str) -> str:
 
 with arcadedb.create_database("./graphdb") as db:
     db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE Follows UNIDIRECTIONAL")
+    db.command("sql", "CREATE EDGE TYPE Follows")
 
     db.command(
         "sql",

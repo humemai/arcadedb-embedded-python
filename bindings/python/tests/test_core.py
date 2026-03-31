@@ -374,7 +374,7 @@ def test_graph_operations(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph schema
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
+        db.command("sql", "CREATE EDGE TYPE Knows")
 
         # Create vertices using SQL
         with db.transaction():
@@ -457,7 +457,7 @@ def test_opencypher_queries(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create graph schema
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE FRIEND_OF UNIDIRECTIONAL")
+        db.command("sql", "CREATE EDGE TYPE FRIEND_OF")
 
         # Insert data using OpenCypher (if available)
         try:
@@ -552,7 +552,7 @@ def test_schema_queries(temp_db_path):
         db.command("sql", "CREATE VERTEX TYPE Company")
         db.command("sql", "CREATE PROPERTY Company.name STRING")
 
-        db.command("sql", "CREATE EDGE TYPE WorksFor UNIDIRECTIONAL")
+        db.command("sql", "CREATE EDGE TYPE WorksFor")
 
         # Query schema:types to get type information
         result = db.query("sql", "SELECT FROM schema:types WHERE name = 'Person'")
@@ -688,8 +688,8 @@ def test_complex_graph_traversal(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         # Create social network graph
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE Follows UNIDIRECTIONAL")
-        db.command("sql", "CREATE EDGE TYPE Likes UNIDIRECTIONAL")
+        db.command("sql", "CREATE EDGE TYPE Follows")
+        db.command("sql", "CREATE EDGE TYPE Likes")
 
         # Create vertices using SQL
         with db.transaction():

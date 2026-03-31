@@ -314,11 +314,11 @@ db.command("sql", "CREATE PROPERTY Movie.title STRING")
 db.command("sql", "CREATE INDEX ON Movie (movieId) UNIQUE_HASH")
 
 # Create edge types
-db.command("sql", "CREATE EDGE TYPE RATED UNIDIRECTIONAL IF NOT EXISTS")
+db.command("sql", "CREATE EDGE TYPE RATED IF NOT EXISTS")
 db.command("sql", "CREATE PROPERTY RATED.rating FLOAT")
 db.command("sql", "CREATE PROPERTY RATED.timestamp LONG")
 
-db.command("sql", "CREATE EDGE TYPE TAGGED UNIDIRECTIONAL IF NOT EXISTS")
+db.command("sql", "CREATE EDGE TYPE TAGGED IF NOT EXISTS")
 db.command("sql", "CREATE PROPERTY TAGGED.tag STRING")
 db.command("sql", "CREATE PROPERTY TAGGED.timestamp LONG")
 ```

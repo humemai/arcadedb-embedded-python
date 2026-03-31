@@ -98,7 +98,7 @@ db.command(
 ### Import Graph Edges
 
 ```python
-db.command("sql", "CREATE EDGE TYPE Follows UNIDIRECTIONAL")
+db.command("sql", "CREATE EDGE TYPE Follows")
 db.command(
     "sql",
     (

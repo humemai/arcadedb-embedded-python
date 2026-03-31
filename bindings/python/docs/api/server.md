@@ -579,7 +579,7 @@ except:
 
 # Initialize schema
 db.command("sql", "CREATE VERTEX TYPE TestNode")
-db.command("sql", "CREATE EDGE TYPE TestEdge UNIDIRECTIONAL")
+db.command("sql", "CREATE EDGE TYPE TestEdge")
 
 db.close()
 

@@ -34,8 +34,8 @@ with arcadedb.create_database("./social") as db:
     db.command("sql", "CREATE VERTEX TYPE Company")
 
     # Create edge types
-    db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
-    db.command("sql", "CREATE EDGE TYPE WorksFor UNIDIRECTIONAL")
+    db.command("sql", "CREATE EDGE TYPE Knows")
+    db.command("sql", "CREATE EDGE TYPE WorksFor")
 
     # Add properties to vertices
     db.command("sql", "CREATE PROPERTY Person.name STRING")
@@ -172,7 +172,7 @@ def create_social_network():
         # 1. Create schema
         print("Creating schema...")
         db.command("sql", "CREATE VERTEX TYPE Person")
-        db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
+        db.command("sql", "CREATE EDGE TYPE Knows")
         db.command("sql", "CREATE PROPERTY Person.name STRING")
         db.command("sql", "CREATE PROPERTY Person.age INTEGER")
         db.command("sql", "CREATE PROPERTY Knows.since INTEGER")
@@ -385,7 +385,7 @@ import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./graph_db") as db:
     db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
+    db.command("sql", "CREATE EDGE TYPE Knows")
 
     # Insert data and query via OpenCypher
     with db.transaction():

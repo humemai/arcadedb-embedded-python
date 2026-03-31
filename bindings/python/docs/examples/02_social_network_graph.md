@@ -79,10 +79,10 @@ with db.transaction():
     )
 ```
 
-!!! note "Directed-edge migration note"
-    Current graph examples explicitly declare `CREATE EDGE TYPE ... UNIDIRECTIONAL`.
-    That means you should not assume reverse edges are automatically materialized in
-    storage. If you need incoming traversal behavior, express it in the query pattern.
+!!! note "Directed-edge storage note"
+    Graph relationships are still directed from source to target, but the examples now
+    rely on ArcadeDB's default bidirectional edge storage. That keeps reverse traversal
+    efficient without changing the semantic direction of the relationship.
 
 ### Schema Definition
 
@@ -104,7 +104,7 @@ with arcadedb.create_database("./social_network_db") as db:
     db.command("sql", "CREATE PROPERTY Person.reputation FLOAT")  # Optional (can be NULL)
 
     # Create edge type with properties
-    db.command("sql", "CREATE EDGE TYPE FRIEND_OF UNIDIRECTIONAL")
+    db.command("sql", "CREATE EDGE TYPE FRIEND_OF")
     db.command("sql", "CREATE PROPERTY FRIEND_OF.since DATE")
     db.command("sql", "CREATE PROPERTY FRIEND_OF.closeness STRING")
 

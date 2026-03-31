@@ -18,7 +18,7 @@ import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./opencypher_test_db") as db:
     db.command("sql", "CREATE VERTEX TYPE Person")
-    db.command("sql", "CREATE EDGE TYPE Knows UNIDIRECTIONAL")
+    db.command("sql", "CREATE EDGE TYPE Knows")
 
     with db.transaction():
         alice = db.new_vertex("Person")
