@@ -188,6 +188,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
   private volatile List<DeltaVectorEntry> deltaVectors = new ArrayList<>();
 
+  // Inactivity rebuild timer (issue #3737): when mutations exist but haven't reached the threshold,
+  // a timer triggers an async rebuild after a period of inactivity.
+  private volatile java.util.TimerTask inactivityRebuildTask;
+  private volatile java.util.Timer     inactivityTimer;
+
   // Compaction support
   private final    AtomicInteger           currentMutablePages;
   private final    int                     minPagesToScheduleACompaction;
@@ -1112,6 +1117,54 @@ public class LSMVectorIndex implements Index, IndexInternal {
           "Graph build from pages: %d total entries, %d deleted, %d active for graph",
           totalEntriesRead[0], filteredDeletedVectors[0], activeVectorIds.length);
 
+    // SECONDARY DEFENSE (issue #3722): Cross-check page-parsed vectors against actual document count.
+    // If pages have corrupted entries (e.g., old-format tombstones), the parser may miss many vectors.
+    // In that case, fall back to scanning documents directly to rebuild the vector list.
+    final String typeName = getTypeName();
+    if (typeName != null && !ridToLatestVector.isEmpty()) {
+      try {
+        final long docCount = database.countType(typeName, false);
+        if (ridToLatestVector.size() < docCount * 8 / 10) {
+          LogManager.instance().log(this, Level.WARNING,
+              "Page-parsed vectors (%d) significantly less than document count (%d) for index %s. "
+                  + "Falling back to document scan to recover missing vectors.",
+              ridToLatestVector.size(), docCount, indexName);
+
+          // Scan all documents to find vectors missing from the page-parsed set
+          final String vectorProp =
+              metadata.propertyNames != null && !metadata.propertyNames.isEmpty() ? metadata.propertyNames.getFirst() :
+                  "vector";
+          database.scanType(typeName, false, record -> {
+            final Document doc = (Document) record;
+            final RID rid = doc.getIdentity();
+            if (!ridToLatestVector.containsKey(rid)) {
+              // Document exists but was not found in pages — add it with a synthetic vector ID
+              final Object vectorObj = doc.get(vectorProp);
+              if (vectorObj != null) {
+                final float[] vector = VectorUtils.convertToFloatArray(vectorObj);
+                if (vector != null && vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector)) {
+                  final int syntheticId = nextId.getAndIncrement();
+                  ridToLatestVector.put(rid, new VectorEntryForGraphBuild(syntheticId, rid, false, -1));
+                }
+              }
+            }
+            return true;
+          });
+
+          LogManager.instance().log(this, Level.INFO,
+              "After document scan fallback: %d active vectors for graph build (was %d from pages only)",
+              ridToLatestVector.size(), activeVectorIds.length);
+        }
+      } catch (final Exception e) {
+        LogManager.instance().log(this, Level.WARNING,
+            "Document count cross-check failed for index %s: %s", indexName, e.getMessage());
+      }
+    }
+
+    // Rebuild ordinal mapping (may have changed after document scan fallback)
+    final int[] finalActiveVectorIdsFromPages = ridToLatestVector.values().stream()
+        .mapToInt(v -> v.vectorId).sorted().toArray();
+
     // Acquire write lock for updating vectorIndex and preparing build
     lock.writeLock().lock();
     final RandomAccessVectorValues vectors;
@@ -1127,7 +1180,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         for (final VectorEntryForGraphBuild entry : ridToLatestVector.values()) {
           vectorIndex.addOrUpdate(entry.vectorId, entry.isCompacted, entry.absoluteFileOffset, entry.rid, false);
         }
-        vectorIds = activeVectorIds; // Use vector IDs from pages
+        vectorIds = finalActiveVectorIdsFromPages; // Use vector IDs from pages (may include doc-scan fallback)
       } else {
         LogManager.instance().log(this, Level.SEVERE,
             "FALLBACK: Could not read vectors from pages (database closing), using existing vectorIndex with %d entries",
@@ -1429,6 +1482,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
         // Subtract only mutations present at build start, preserving concurrent ones
         mutationsSinceSerialize.addAndGet(-mutationsAtBuildStart);
+
+        // Cancel inactivity timer if all mutations were flushed (issue #3737)
+        if (mutationsSinceSerialize.get() <= 0)
+          cancelInactivityRebuildTimer();
 
         // Only transition to IMMUTABLE if no new mutations arrived during rebuild
         this.graphState = remaining.isEmpty() ? GraphState.IMMUTABLE : GraphState.MUTABLE;
@@ -2133,7 +2190,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
         final int vectorIdSize = Binary.getNumberSpace(vectorId);
         final int bucketIdSize = Binary.getNumberSpace(loc.rid.getBucketId());
         final int positionSize = Binary.getNumberSpace(loc.rid.getPosition());
-        final int entrySize = vectorIdSize + positionSize + bucketIdSize + 1; // +1 for deleted byte
+        // FIX #3722: Include +1 for quantization type byte to match the format expected by
+        // LSMVectorIndexPageParser.parsePages() which always calls skipQuantizationData()
+        final int entrySize = vectorIdSize + positionSize + bucketIdSize + 1 + 1; // +1 deleted byte +1 quantType byte
 
         // Get current page
         MutablePage currentPage = getDatabase().getTransaction()
@@ -2177,6 +2236,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
         bytesWritten += currentPage.writeNumber(offsetFreeContent + bytesWritten, loc.rid.getBucketId());
         bytesWritten += currentPage.writeNumber(offsetFreeContent + bytesWritten, loc.rid.getPosition());
         bytesWritten += currentPage.writeByte(offsetFreeContent + bytesWritten, (byte) 1); // Mark as deleted
+        // FIX #3722: Write quantization type byte (NONE for tombstones) to match the entry format
+        // expected by LSMVectorIndexPageParser.skipQuantizationData(). Without this byte, the parser
+        // reads into the next entry's data, corrupting all subsequent entries on the same page.
+        bytesWritten += currentPage.writeByte(offsetFreeContent + bytesWritten, (byte) VectorQuantizationType.NONE.ordinal());
 
         // Update page header
         numberOfEntries++;
@@ -3139,6 +3202,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
           // Increment mutation counter (used for periodic graph persistence)
           mutationsSinceSerialize.incrementAndGet();
+
+          // Schedule inactivity rebuild timer (issue #3737)
+          scheduleInactivityRebuild();
         } finally {
           lock.writeLock().unlock();
         }
@@ -3203,6 +3269,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
           // Increment mutation counter (count number of deletions)
           mutationsSinceSerialize.addAndGet(deletedIds.size());
+
+          // Schedule inactivity rebuild timer (issue #3737)
+          scheduleInactivityRebuild();
         }
       } finally {
         lock.writeLock().unlock();
@@ -3563,6 +3632,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
   @Override
   public void close() {
+    // Cancel inactivity rebuild timer (issue #3737)
+    cancelInactivityRebuildTimer();
+
     // Cancel any in-progress async graph rebuild
     final Thread rebuildThread = asyncRebuildThread;
     if (rebuildThread != null && rebuildThread.isAlive()) {
@@ -4253,6 +4325,93 @@ public class LSMVectorIndex implements Index, IndexInternal {
     }
     return mutable.getDatabase().getConfiguration()
         .getValueAsInteger(GlobalConfiguration.VECTOR_INDEX_MUTATIONS_BEFORE_REBUILD);
+  }
+
+  /**
+   * Get the inactivity rebuild timeout from configuration (per-index metadata or global default).
+   *
+   * @return Inactivity timeout in milliseconds, or 0 if disabled
+   */
+  private int getInactivityRebuildTimeoutMs() {
+    if (metadata != null && metadata.inactivityRebuildTimeoutMs >= 0)
+      return metadata.inactivityRebuildTimeoutMs;
+    return mutable.getDatabase().getConfiguration()
+        .getValueAsInteger(GlobalConfiguration.VECTOR_INDEX_INACTIVITY_REBUILD_TIMEOUT_MS);
+  }
+
+  /**
+   * Schedule or reset the inactivity rebuild timer (issue #3737).
+   * Called after each mutation when mutations are below the rebuild threshold.
+   * If a timer is already scheduled, it is cancelled and a new one is started,
+   * effectively resetting the inactivity window.
+   * When the timer fires, it triggers an async graph rebuild regardless of the mutation count.
+   */
+  private void scheduleInactivityRebuild() {
+    final int timeoutMs = getInactivityRebuildTimeoutMs();
+    if (timeoutMs <= 0)
+      return; // Disabled
+
+    if (mutationsSinceSerialize.get() <= 0)
+      return; // Nothing to rebuild
+
+    // Cancel any previously scheduled task (reset on new mutation)
+    final java.util.TimerTask existing = inactivityRebuildTask;
+    if (existing != null)
+      existing.cancel();
+
+    final java.util.TimerTask task = new java.util.TimerTask() {
+      @Override
+      public void run() {
+        // Double-check: only rebuild if there are still pending mutations
+        if (mutationsSinceSerialize.get() <= 0)
+          return;
+
+        LogManager.instance().log(this, Level.INFO,
+            "Inactivity timeout expired (%d ms), triggering graph rebuild for %d pending mutations (index: %s)",
+            timeoutMs, mutationsSinceSerialize.get(), indexName);
+
+        try {
+          if (graphIndex != null && graphIndex.size() >= ASYNC_REBUILD_MIN_GRAPH_SIZE) {
+            // Large graph: async rebuild
+            startAsyncGraphRebuild();
+          } else {
+            // Small graph: synchronous rebuild
+            lock.writeLock().lock();
+            try {
+              if (mutationsSinceSerialize.get() > 0)
+                buildGraphFromScratch();
+            } finally {
+              lock.writeLock().unlock();
+            }
+          }
+        } catch (final Exception e) {
+          LogManager.instance().log(this, Level.WARNING,
+              "Error during inactivity rebuild for index %s: %s", indexName, e.getMessage());
+        }
+      }
+    };
+
+    inactivityRebuildTask = task;
+
+    if (inactivityTimer == null)
+      inactivityTimer = new java.util.Timer("VectorIndex-InactivityTimer-" + indexName, true);
+    inactivityTimer.schedule(task, timeoutMs);
+  }
+
+  /**
+   * Cancel the inactivity rebuild timer if one is scheduled.
+   */
+  private void cancelInactivityRebuildTimer() {
+    final java.util.TimerTask task = inactivityRebuildTask;
+    if (task != null) {
+      task.cancel();
+      inactivityRebuildTask = null;
+    }
+    final java.util.Timer timer = inactivityTimer;
+    if (timer != null) {
+      timer.cancel();
+      inactivityTimer = null;
+    }
   }
 
   /**
