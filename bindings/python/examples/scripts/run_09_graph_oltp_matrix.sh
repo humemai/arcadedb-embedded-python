@@ -29,13 +29,13 @@ ARCADEDB_TRANSACTIONS=250000
 LADYBUG_TRANSACTIONS_FRACTION=1
 GRAPHQLITE_TRANSACTIONS_FRACTION=0.1
 BATCH_SIZE=10000
-MEM_LIMIT="32g"
+MEM_LIMIT="16g"
 THREADS=4
-RUNS=1
+RUNS=3
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
 DOCKER_IMAGE="python:3.12-slim"
-DBS_RAW="arcadedb_cypher"
+DBS_RAW="arcadedb_cypher,python_memory,neo4j,ladybug"
 LABEL_PREFIX="sweep09"
 
 if [[ $# -gt 0 ]]; then
@@ -95,6 +95,9 @@ for ((run = 1; run <= RUNS; run++)); do
             arcadedb_cypher)
                 db_engine="$db"
                 ;;
+            neo4j)
+                db_engine="$db"
+                ;;
             ladybug | ladybugdb)
                 db_engine="$db"
                 ;;
@@ -112,7 +115,7 @@ for ((run = 1; run <= RUNS; run++)); do
                 ;;
             *)
                 echo "Unsupported DB alias in DBS_RAW: $db" >&2
-                echo "Supported values: arcadedb_cypher, arcadedb_sql, ladybug, ladybugdb, graphqlite, duckdb, sqlite, python_memory" >&2
+                echo "Supported values: arcadedb_cypher, arcadedb_sql, neo4j, ladybug, ladybugdb, graphqlite, duckdb, sqlite, python_memory" >&2
                 exit 1
                 ;;
         esac
@@ -205,6 +208,7 @@ EOF
             "$collected_at" \
             "arcadedb_embedded" "auto" \
             "real_ladybug" "auto" \
+            "neo4j" "auto" \
             "graphqlite" "auto" \
             "duckdb" "auto" \
             "sqlite" "builtin" \

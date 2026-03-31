@@ -18,9 +18,9 @@ source "$HELPERS_SH"
 
 DATASET="stackoverflow-large"
 BATCH_SIZE=10000
-MEM_LIMIT="16g"
+MEM_LIMIT="32g"
 THREADS=4
-RUNS=1
+RUNS=3
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
 SQLITE_PROFILE="olap"
@@ -29,8 +29,8 @@ QUERY_RUNS=100
 QUERY_ORDER="shuffled"
 ONLY_QUERY=""
 MANUAL_CHECKS=false
-DBS_RAW="arcadedb_cypher"
-GAV_MODES_RAW="on"
+DBS_RAW="arcadedb_cypher,python_memory,ladybug,neo4j"
+GAV_MODES_RAW="off,on"
 LABEL_PREFIX="sweep10"
 
 if [[ $# -gt 0 ]]; then
@@ -86,12 +86,12 @@ for ((run = 1; run <= RUNS; run++)); do
 
         db_engine="$db"
         case "$db" in
-            arcadedb_sql | arcadedb_cypher | ladybug | ladybugdb | duckdb | sqlite | graphqlite | python_memory)
+            arcadedb_sql | arcadedb_cypher | neo4j | ladybug | ladybugdb | duckdb | sqlite | graphqlite | python_memory)
                 db_engine="$db"
                 ;;
             *)
                 echo "Unsupported DB alias in DBS_RAW: $db" >&2
-                echo "Supported values: arcadedb_sql, arcadedb_cypher, ladybug, ladybugdb, duckdb, sqlite, graphqlite, python_memory" >&2
+                echo "Supported values: arcadedb_sql, arcadedb_cypher, neo4j, ladybug, ladybugdb, duckdb, sqlite, graphqlite, python_memory" >&2
                 exit 1
                 ;;
         esac
@@ -107,8 +107,20 @@ for ((run = 1; run <= RUNS; run++)); do
                     ;;
             esac
 
+            effective_gav_mode="$gav_mode"
+            if [[ "$db_engine" != arcadedb_* ]]; then
+                effective_gav_mode=""
+                if ((${#GAV_MODES[@]} > 1)) && [[ "$gav_mode" != "${GAV_MODES[0]}" ]]; then
+                    continue
+                fi
+            fi
+
             seed=$((SEED_START + execution_idx))
-            internal_run_label=$(printf "%s_t%02d_r%02d_%s_gav%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$gav_mode" "$seed")
+            if [[ -n "$effective_gav_mode" ]]; then
+                internal_run_label=$(printf "%s_t%02d_r%02d_%s_gav%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$effective_gav_mode" "$seed")
+            else
+                internal_run_label=$(printf "%s_t%02d_r%02d_%s_s%05d" "$LABEL_PREFIX" "$THREADS" "$run" "$db" "$seed")
+            fi
             run_label="$(matrix_build_summary_run_label "$internal_run_label" "$MEM_LIMIT")"
 
             cmd=(
@@ -127,7 +139,7 @@ for ((run = 1; run <= RUNS; run++)); do
                 --run-label "$run_label"
             )
 
-            if [[ "$gav_mode" == "on" ]]; then
+            if [[ "$db_engine" == arcadedb_* && "$effective_gav_mode" == "on" ]]; then
                 cmd+=(--use-gav)
             fi
 
@@ -140,7 +152,7 @@ for ((run = 1; run <= RUNS; run++)); do
             fi
 
             echo
-            echo "[$((execution_idx + 1))/$((RUNS * ${#DBS[@]} * ${#GAV_MODES[@]}))] db=$db gav=$gav_mode run=$run seed=$seed label=$run_label"
+            echo "[$((execution_idx + 1))/$((RUNS * ${#DBS[@]} * ${#GAV_MODES[@]}))] db=$db gav=${effective_gav_mode:-} run=$run seed=$seed label=$run_label"
             echo "Command: ${cmd[*]}"
             "${cmd[@]}"
 
@@ -160,6 +172,7 @@ for ((run = 1; run <= RUNS; run++)); do
                     "$collected_at" \
                     "arcadedb_embedded" "auto" \
                     "real_ladybug" "auto" \
+                    "neo4j" "auto" \
                     "graphqlite" "auto" \
                     "duckdb" "auto" \
                     "sqlite" "builtin" \

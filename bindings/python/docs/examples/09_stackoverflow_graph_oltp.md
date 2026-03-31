@@ -10,6 +10,7 @@ Example 09 is the graph-oriented OLTP benchmark in the Python examples set.
 
 - Builds the Stack Overflow graph with the repository's directed schema conventions
 - Runs mixed graph CRUD operations against the selected backend
+- Supports ArcadeDB embedded and Neo4j client/server execution paths alongside the in-process backends
 - Measures throughput, latency, disk usage, and peak RSS
 - Supports deterministic single-thread verification for repeatability checks
 
@@ -655,6 +656,9 @@ DELETE r
 - ArcadeDB graph preload now uses `GraphBatch` for the initial node and edge load,
   driven by the configured `--threads` value
 - `GraphBatch` is the repository's recommended bulk graph ingest path from Python
+- Neo4j runs through a Dockerized server plus Python driver wrapper, with the benchmark
+  splitting the configured global memory/CPU budget between client and server via
+  `--server-fraction`
 - Traversal expectations should be read as directed unless the query pattern
   explicitly traverses both directions
 - For cross-database comparability, `--threads 1` is the recommended baseline
@@ -665,6 +669,7 @@ DELETE r
 
 - `arcadedb_sql`
 - `arcadedb_cypher`
+- `neo4j`
 - `ladybug` / `ladybugdb`
 - `graphqlite`
 - `duckdb`
@@ -694,12 +699,15 @@ python 09_stackoverflow_graph_oltp.py \
 - `--transactions`: number of OLTP operations
 - `--batch-size`: preload XML insert batch size
 - `--mem-limit`: Docker and JVM memory budget
+- `--server-fraction`: for Neo4j, fraction of the total CPU/memory budget reserved for the server process
 - `--sqlite-profile`: SQLite tuning profile when using SQLite-backed paths
 
 ## Result Notes
 
 - `du_mib` is real post-run filesystem usage
 - `disk_after_*` fields are benchmark-reported logical size counters
+- Neo4j runs also record `client_rss_peak_*` and `server_rss_peak_*`, while `rss_peak_*`
+  represents the combined observed peak
 - Per-operation latency is derived from `latency_summary.ops.{50,95,99}` with values
   converted from seconds to milliseconds
 - Operation totals come from `op_counts`

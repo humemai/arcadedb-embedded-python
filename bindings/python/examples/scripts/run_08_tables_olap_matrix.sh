@@ -20,7 +20,7 @@ DATASET="stackoverflow-large"
 BATCH_SIZE=10000
 MEM_LIMIT="8g"
 THREADS=4
-RUNS=1
+RUNS=3
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
 DOCKER_IMAGE="python:3.12-slim"
@@ -28,7 +28,7 @@ POSTGRESQL_IMAGE="postgres:latest"
 QUERY_RUNS=100
 QUERY_ORDER="shuffled"
 ARCADEDB_QUERY_MAX_HEAP_ELEMENTS=-1
-DBS_RAW="arcadedb_sql"
+DBS_RAW="arcadedb_sql,postgresql,sqlite,duckdb"
 LABEL_PREFIX="sweep08"
 
 if [[ $# -gt 0 ]]; then
