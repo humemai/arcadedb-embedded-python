@@ -27,12 +27,12 @@ TRANSACTIONS=250000
 BATCH_SIZE=10000
 MEM_LIMIT="8g"
 THREADS=4
-RUNS=1
+RUNS=3
 SEED_START=0
 JVM_HEAP_FRACTION="0.80"
 DOCKER_IMAGE="python:3.12-slim"
 POSTGRESQL_IMAGE="postgres:latest"
-DBS_RAW="arcadedb_sql"
+DBS_RAW="arcadedb_sql,postgresql,sqlite,duckdb"
 LABEL_PREFIX="sweep07"
 
 if [[ $# -gt 0 ]]; then

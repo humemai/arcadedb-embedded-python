@@ -74,6 +74,31 @@ def to_bool(value):
     return None
 
 
+def resolve_gav_mode(data, resolved_db):
+    db = str(resolved_db or "")
+    if not db.startswith("arcadedb_"):
+        return None
+
+    mode = str(data.get("graph_olap_acceleration_mode") or "").strip().lower()
+    if mode == "gav":
+        return "on"
+    if mode == "off":
+        return "off"
+    if to_bool(data.get("gav_enabled")):
+        return "on"
+    return "off"
+
+
+def resolve_gav_setup_time(data, resolved_db):
+    mode = resolve_gav_mode(data, resolved_db)
+    if mode != "on":
+        return None
+    value = to_float(data.get("graph_olap_setup_time_s"))
+    if value is not None:
+        return value
+    return to_float(data.get("gav_ready_wait_time_s"))
+
+
 def first_not_none(*values):
     for value in values:
         if value is not None:
@@ -218,6 +243,7 @@ def add_version(version_sets, key, value):
 def collect_version_metadata(version_sets, data, run_dir):
     add_version(version_sets, "arcadedb_embedded", data.get("arcadedb_version"))
     add_version(version_sets, "real_ladybug", data.get("ladybug_version"))
+    add_version(version_sets, "neo4j", data.get("neo4j_version"))
     add_version(version_sets, "graphqlite", data.get("graphqlite_version"))
     add_version(
         version_sets,
@@ -288,6 +314,8 @@ def ensure_versions_for_db_set(version_sets, db_values):
         expected.add("arcadedb_embedded")
     if any(v in db_values for v in ("ladybug", "ladybugdb")):
         expected.add("real_ladybug")
+    if "neo4j" in db_values:
+        expected.add("neo4j")
     if "graphqlite" in db_values:
         expected.add("graphqlite")
     if "duckdb" in db_values:
@@ -413,8 +441,8 @@ for run_dir in run_dirs:
                 "load_time_s": to_float(data.get("load_time_s")),
                 "index_time_s": to_float(data.get("index_time_s")),
                 "query_time_s": to_float(data.get("query_time_s")),
-                "gav_enabled": to_bool(data.get("gav_enabled")),
-                "gav_ready_wait_time_s": to_float(data.get("gav_ready_wait_time_s")),
+                "gav_mode": resolve_gav_mode(data, resolved_db),
+                "gav_setup_time_s": resolve_gav_setup_time(data, resolved_db),
                 "rss_peak_mib": kib_to_mib(data.get("rss_peak_kb")),
                 "du_mib": du_mib,
             }
@@ -572,8 +600,8 @@ if version_summary_lines:
 lines.append(
     "- Note: `load_*` is ingest only, `index_*` is post-ingest index build, and `query_*` is OLAP query-suite execution."
 )
-lines.append("- `gav_enabled` shows whether ArcadeDB queries ran after a Graph Analytical View was built.")
-lines.append("- `gav_ready_wait_s` measures the wall-clock wait until the GAV reported `READY`.")
+lines.append("- `gav_mode` is the ArcadeDB-only sweep dimension for Graph Analytical View usage: `on` or `off`.")
+lines.append("- `gav_setup_s` is populated only for ArcadeDB runs where GAV was enabled.")
 lines.append("- DB summary timing/memory/disk columns are single-run values (no averaging).")
 lines.append("- Query parity is evaluated via `result_hash` and `row_count` across DBs.")
 lines.append("")
@@ -586,7 +614,7 @@ for current_dataset in datasets:
     lines.append("### DB summary")
     lines.append("")
     lines.append(
-        f"| db | gav_enabled | gav_ready_wait_s | run_label | seed | batch_size | mem_limit | threads | query_runs | query_order | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
+        f"| db | gav_mode | gav_setup_s | run_label | seed | batch_size | mem_limit | threads | query_runs | query_order | {load_col} | {index_col} | {query_col} | {rss_col} | {du_col} |"
     )
     lines.append("|---|---|---:|---|---:|---:|---|---:|---:|---|---:|---:|---:|---:|---:|")
     for row in result_rows:
@@ -597,8 +625,8 @@ for current_dataset in datasets:
             + " | ".join(
                 [
                     fmt(row["db"]),
-                    fmt(row["gav_enabled"]),
-                    fmt(row["gav_ready_wait_time_s"]),
+                    fmt(row["gav_mode"]),
+                    fmt(row["gav_setup_time_s"]),
                     fmt(row["run_label"]),
                     fmt(row["seed"]),
                     fmt(row["batch_size"]),

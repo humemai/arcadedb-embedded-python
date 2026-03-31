@@ -16,6 +16,7 @@ Example 10 is the graph-oriented OLAP benchmark in the Python examples set.
 - Builds the Stack Overflow graph with directed edge types
 - Runs a fixed analytical query suite across the selected backend
 - Optionally builds a GAV for ArcadeDB before running the Cypher workload
+- Supports Neo4j as a client/server backend using the same query suite, without a GAV-specific acceleration toggle
 - Records load/index/query timings, disk usage, and peak RSS
 - Records whether GAV was enabled and the time spent waiting for GAV `READY`
 - Supports repeated query runs and single-query filtering
@@ -188,12 +189,15 @@ The source creates unique `Id` indexes on all six vertex types before the query 
 - ArcadeDB query execution is cypher-only in this example path
 - ArcadeDB GAV usage is opt-in through `--use-gav`; when enabled, the benchmark waits
   for the analytical view to reach `READY` before measuring the query suite
+- Neo4j runs execute the same OLAP query suite through a Dockerized server plus Python
+  driver wrapper, with client/server resource accounting derived from `--server-fraction`
 - Traversal expectations should be interpreted as directed
 
 ## Supported Backends
 
 - `arcadedb_sql`
 - `arcadedb_cypher`
+- `neo4j`
 - `ladybug` / `ladybugdb`
 - `graphqlite`
 - `duckdb`
@@ -224,5 +228,6 @@ python 10_stackoverflow_graph_olap.py \
 - `--query-order`: `fixed` or `shuffled`
 - `--only-query`: run a single named query
 - `--manual-checks`: enable additional validation queries
+- `--server-fraction`: for Neo4j, fraction of the total CPU/memory budget reserved for the server process
 - `--use-gav`: for ArcadeDB runs, create a Graph Analytical View and measure the
   wait until it reports `READY`
