@@ -36,7 +36,7 @@ jobs:
           echo "📌 Tag base version: $TAG_BASE"
 
           # Get version from pom.xml
-          POM_VERSION=$(python3 extract_version.py --format=docker)
+          POM_VERSION=$(python3 scripts/extract_version.py --format=docker)
           echo "📌 pom.xml version: $POM_VERSION"
 
           # Extract base version from pom.xml (remove -SNAPSHOT, etc.)

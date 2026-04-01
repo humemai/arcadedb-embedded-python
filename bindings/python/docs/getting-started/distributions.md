@@ -55,7 +55,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 **Optimized:**
 
 - Some components are excluded to optimize package size (e.g., gRPC wire protocol)
-- See `jar_exclusions.txt` in the repository for details
+- See `scripts/jar_exclusions.txt` in the repository for details
 
 ## Test Results
 
@@ -124,7 +124,7 @@ target platform:
 **Optimizations:**
 
 - Some components excluded for size (e.g., gRPC wire protocol)
-- See `jar_exclusions.txt` in repository for details
+- See `scripts/jar_exclusions.txt` in repository for details
 
 ## Installation Tips
 

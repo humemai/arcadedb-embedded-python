@@ -8,6 +8,7 @@ import glob
 import os
 import platform
 import shlex
+import zipfile
 from pathlib import Path
 from typing import Iterable, Optional, Union
 
@@ -19,10 +20,43 @@ from .exceptions import ArcadeDBError
 _JVM_CONFIG = None
 
 
+def _project_dir() -> Path:
+    return Path(__file__).resolve().parent.parents[1]
+
+
+def _extract_runtime_resource(resource_name: str) -> Path:
+    package_dir = Path(__file__).resolve().parent
+    resource_dir = package_dir / resource_name
+    if resource_dir.exists():
+        return resource_dir
+
+    project_dir = _project_dir()
+    dist_dir = project_dir / "dist"
+    wheels = sorted(dist_dir.glob("arcadedb_embedded-*.whl"), reverse=True)
+    if not wheels:
+        return resource_dir
+
+    cache_root = project_dir / ".runtime-cache"
+    extracted_root = cache_root / "arcadedb_embedded"
+    extracted_resource_dir = extracted_root / resource_name
+    if extracted_resource_dir.exists():
+        return extracted_resource_dir
+
+    cache_root.mkdir(parents=True, exist_ok=True)
+    prefix = f"arcadedb_embedded/{resource_name}/"
+
+    with zipfile.ZipFile(wheels[0]) as wheel_zip:
+        members = [name for name in wheel_zip.namelist() if name.startswith(prefix)]
+        if not members:
+            return resource_dir
+        wheel_zip.extractall(cache_root, members)
+
+    return extracted_resource_dir
+
+
 def get_jar_path() -> str:
     """Get the path to bundled JAR files."""
-    package_dir = Path(__file__).parent
-    jar_dir = package_dir / "jars"
+    jar_dir = _extract_runtime_resource("jars")
     return str(jar_dir)
 
 
@@ -37,8 +71,7 @@ def get_bundled_jre_lib_path() -> str:
     Raises:
         ArcadeDBError: If the bundled JRE or JVM library is not found.
     """
-    package_dir = Path(__file__).parent
-    jre_dir = package_dir / "jre"
+    jre_dir = _extract_runtime_resource("jre")
 
     # Check if JRE directory exists
     if not jre_dir.exists():

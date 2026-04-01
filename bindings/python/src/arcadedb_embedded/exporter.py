@@ -86,7 +86,9 @@ def export_database(
         os.makedirs(export_dir, exist_ok=True)
 
     try:
-        from com.arcadedb.integration.exporter import Exporter
+        import jpype
+
+        Exporter = jpype.JClass("com.arcadedb.integration.exporter.Exporter")
 
         # Create exporter instance
         exporter = Exporter(db._java_db, file_path)
@@ -109,8 +111,7 @@ def export_database(
 
         if settings:
             # Convert Python dict to Java Map
-            from java.util import HashMap
-
+            HashMap = jpype.JClass("java.util.HashMap")
             java_settings = HashMap()
             for key, value in settings.items():
                 java_settings.put(key, value)
@@ -179,30 +180,50 @@ def export_to_csv(
     from .results import ResultSet
 
     try:
-        # Convert ResultSet to list of dicts
-        if isinstance(results, ResultSet):
-            data = results.to_list()
-        else:
-            data = results
-
         # Ensure directory exists
         file_dir = os.path.dirname(file_path)
         if file_dir and not os.path.exists(file_dir):
             os.makedirs(file_dir, exist_ok=True)
 
+        if isinstance(results, ResultSet):
+            with open(file_path, "w", newline="", encoding="utf-8") as f:
+                writer = None
+                wrote_header = False
+
+                for chunk in results.iter_chunks(size=1000):
+                    if not chunk:
+                        continue
+
+                    if fieldnames is None:
+                        fieldnames = list(chunk[0].keys())
+
+                    if writer is None:
+                        writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+                    if not wrote_header:
+                        writer.writeheader()
+                        wrote_header = True
+
+                    writer.writerows(chunk)
+
+                if not wrote_header and fieldnames:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+
+            return
+
+        data = results
+
         if not data:
-            # Create empty file with headers
             with open(file_path, "w", newline="", encoding="utf-8") as f:
                 if fieldnames:
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
             return
 
-        # Auto-detect fieldnames from first record
         if fieldnames is None:
             fieldnames = list(data[0].keys())
 
-        # Write CSV
         with open(file_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()

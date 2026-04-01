@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end helper to rebuild ArcadeDB JARs (via Docker Maven),
 # stage them for the Python wheel, build the wheel, and install it with uv.
-# Usage: run from any directory: ./bindings/python/build_and_install.sh
+# Usage: run from any directory: ./bindings/python/scripts/build_and_install_locally.sh
 
 set -euo pipefail
 
@@ -10,8 +10,8 @@ log() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-PY_BINDINGS_DIR="${REPO_ROOT}/bindings/python"
+PY_BINDINGS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${PY_BINDINGS_DIR}/../.." && pwd)"
 LOCAL_JARS_DIR="${PY_BINDINGS_DIR}/local-jars/lib"
 
 log "Repo root: ${REPO_ROOT}"
@@ -54,7 +54,7 @@ log "Copied $(ls -1 "${LOCAL_JARS_DIR}" | wc -l) JARs into local stash"
 #    For Windows or macOS, run this script on that OS and update the platform accordingly.
 log "Building Python wheel with local JARs..."
 cd "${PY_BINDINGS_DIR}"
-./build.sh linux/amd64 3.12 "${LOCAL_JARS_DIR}"
+./scripts/build.sh linux/amd64 3.12 "${LOCAL_JARS_DIR}"
 
 # 4) Install the wheel with uv (force reinstall)
 log "Installing wheel via uv pip..."

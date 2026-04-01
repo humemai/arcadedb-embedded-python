@@ -30,7 +30,7 @@ QUERY_ORDER="shuffled"
 ONLY_QUERY=""
 MANUAL_CHECKS=false
 DBS_RAW="arcadedb_cypher"
-GAV_MODES_RAW="off,on"
+GAV_MODES_RAW="on"
 LABEL_PREFIX="sweep10"
 
 if [[ $# -gt 0 ]]; then

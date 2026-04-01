@@ -80,7 +80,7 @@ Quick build:
 cd bindings/python/
 
 # Build for your current platform (auto-detected)
-./build.sh
+./scripts/build.sh
 ```
 
 Built wheels will be in `dist/`:

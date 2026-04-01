@@ -68,7 +68,7 @@ You need to create one environment in GitHub repository settings:
     ```bash
     # Build a wheel locally first
     cd bindings/python
-    ./build.sh
+    ./scripts/build.sh
 
     # Upload manually to register the package
     uv pip install twine
@@ -142,8 +142,8 @@ Previously used QEMU for linux/arm64:
 cd bindings/python
 
 # Build for specific platform (requires Docker for Linux builds)
-./build.sh --platform linux/amd64
-./build.sh --platform darwin/arm64
+./scripts/build.sh --platform linux/amd64
+./scripts/build.sh --platform darwin/arm64
 
 # Check the wheels
 ls -lh dist/
@@ -156,7 +156,7 @@ cd bindings/python
 
 for platform in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
   echo "Building $platform..."
-  ./build.sh --platform "$platform"
+    ./scripts/build.sh --platform "$platform"
 done
 
 # Should have 4 wheels

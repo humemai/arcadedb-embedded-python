@@ -16,8 +16,9 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Get script directory
+# Get script directory and bindings root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY_BINDINGS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Parameters
 PLATFORM="${1:-}"
@@ -82,14 +83,14 @@ if [[ -z "$PYTHON_WITH_BUILD" ]]; then
     echo -e "${YELLOW}      python3 -m venv .build-env${NC}"
     echo -e "${YELLOW}      source .build-env/bin/activate${NC}"
     echo -e "${YELLOW}      uv pip install build${NC}"
-    echo -e "${YELLOW}      ./build.sh${NC}"
+    echo -e "${YELLOW}      ./scripts/build.sh${NC}"
     exit 1
 fi
 
 echo ""
 
 # Step 1: Download ArcadeDB JARs (if not already present)
-JARS_DIR="$SCRIPT_DIR/src/arcadedb_embedded/jars"
+JARS_DIR="$PY_BINDINGS_DIR/src/arcadedb_embedded/jars"
 if [[ -d "$JARS_DIR" ]] && [[ $(ls -1 "$JARS_DIR"/*.jar 2> /dev/null | wc -l) -gt 0 ]]; then
     echo -e "${GREEN}✅ Using existing JARs from: $JARS_DIR${NC}"
     JAR_COUNT=$(ls -1 "$JARS_DIR"/*.jar | wc -l)
@@ -165,7 +166,7 @@ echo -e "${CYAN}📦 Detected modules (raw): ${YELLOW}${DETECTED_MODULES}${NC}"
 echo -e "${CYAN}📦 Detected modules (filtered): ${YELLOW}${FILTERED_MODULES}${NC}"
 echo -e "${CYAN}📦 Final modules list: ${YELLOW}${REQUIRED_MODULES}${NC}"
 
-rm -rf "$SCRIPT_DIR/temp_jre"
+rm -rf "$PY_BINDINGS_DIR/temp_jre"
 jlink \
     --module-path "${JAVA_HOME}/jmods" \
     --add-modules "${REQUIRED_MODULES}" \
@@ -174,19 +175,19 @@ jlink \
     --no-man-pages \
     --no-header-files \
     --compress zip-9 \
-    --output "$SCRIPT_DIR/temp_jre"
+    --output "$PY_BINDINGS_DIR/temp_jre"
 
 echo -e "${GREEN}✅ JRE built${NC}"
-JRE_SIZE=$(du -sh "$SCRIPT_DIR/temp_jre" | cut -f1)
+JRE_SIZE=$(du -sh "$PY_BINDINGS_DIR/temp_jre" | cut -f1)
 echo -e "${CYAN}📊 JRE size: ${YELLOW}${JRE_SIZE}${NC}"
 
 # Step 3: Copy JRE to package (JARs already filtered and in place from artifact)
 echo -e "${CYAN}📦 Preparing package...${NC}"
 
 # Build and copy JRE
-rm -rf "$SCRIPT_DIR/src/arcadedb_embedded/jre"
-mkdir -p "$SCRIPT_DIR/src/arcadedb_embedded/jre"
-cp -R "$SCRIPT_DIR/temp_jre"/* "$SCRIPT_DIR/src/arcadedb_embedded/jre/"
+rm -rf "$PY_BINDINGS_DIR/src/arcadedb_embedded/jre"
+mkdir -p "$PY_BINDINGS_DIR/src/arcadedb_embedded/jre"
+cp -R "$PY_BINDINGS_DIR/temp_jre"/* "$PY_BINDINGS_DIR/src/arcadedb_embedded/jre/"
 
 JAR_COUNT=$(ls -1 "$JARS_DIR"/*.jar | wc -l)
 echo -e "${GREEN}✅ Package prepared (${JAR_COUNT} JARs + JRE)${NC}"
@@ -203,19 +204,19 @@ echo -e "${CYAN}📦 Python package version: ${YELLOW}${PYTHON_VERSION}${NC}"
 # Update pyproject.toml (handle macOS BSD sed vs GNU sed)
 if [[ "$(uname -s)" == "Darwin" ]]; then
     # macOS uses BSD sed
-    sed -i '' "s|^version = .*|version = \"${PYTHON_VERSION}\"|" "$SCRIPT_DIR/pyproject.toml"
-    sed -i '' "s|^name = .*|name = \"${PACKAGE_NAME}\"|" "$SCRIPT_DIR/pyproject.toml"
-    sed -i '' "s|^description = .*|description = \"${PACKAGE_DESCRIPTION}\"|" "$SCRIPT_DIR/pyproject.toml"
+    sed -i '' "s|^version = .*|version = \"${PYTHON_VERSION}\"|" "$PY_BINDINGS_DIR/pyproject.toml"
+    sed -i '' "s|^name = .*|name = \"${PACKAGE_NAME}\"|" "$PY_BINDINGS_DIR/pyproject.toml"
+    sed -i '' "s|^description = .*|description = \"${PACKAGE_DESCRIPTION}\"|" "$PY_BINDINGS_DIR/pyproject.toml"
 else
     # Linux/Windows use GNU sed
-    sed -i "s|^version = .*|version = \"${PYTHON_VERSION}\"|" "$SCRIPT_DIR/pyproject.toml"
-    sed -i "s|^name = .*|name = \"${PACKAGE_NAME}\"|" "$SCRIPT_DIR/pyproject.toml"
-    sed -i "s|^description = .*|description = \"${PACKAGE_DESCRIPTION}\"|" "$SCRIPT_DIR/pyproject.toml"
+    sed -i "s|^version = .*|version = \"${PYTHON_VERSION}\"|" "$PY_BINDINGS_DIR/pyproject.toml"
+    sed -i "s|^name = .*|name = \"${PACKAGE_NAME}\"|" "$PY_BINDINGS_DIR/pyproject.toml"
+    sed -i "s|^description = .*|description = \"${PACKAGE_DESCRIPTION}\"|" "$PY_BINDINGS_DIR/pyproject.toml"
 fi
 
 # Step 5: Generate version file
 echo -e "${CYAN}📝 Generating _version.py...${NC}"
-python3 "$SCRIPT_DIR/write_version.py" "$SCRIPT_DIR/../../pom.xml"
+python3 "$SCRIPT_DIR/write_version.py" "$PY_BINDINGS_DIR/../../pom.xml"
 
 # Step 6: Build wheel with proper platform tag
 echo -e "${CYAN}🔨 Building wheel...${NC}"

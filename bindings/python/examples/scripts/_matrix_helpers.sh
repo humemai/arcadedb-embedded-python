@@ -285,7 +285,7 @@ PY
     matrix_log "Building local arcadedb wheel from source (platform=$platform, python=$python_version)"
     (
         cd "$py_bindings_dir"
-        ./build.sh "$platform" "$python_version"
+        ./scripts/build.sh "$platform" "$python_version"
     )
 
     local wheel_path
@@ -308,7 +308,7 @@ PY
     matrix_log "Keeping local wheel artifact for Docker-wrapped example runs: $wheel_name"
 
     local arcadedb_tag
-    arcadedb_tag="$(python3 "$py_bindings_dir/extract_version.py" --format=docker)"
+    arcadedb_tag="$(python3 "$py_bindings_dir/scripts/extract_version.py" --format=docker)"
 
     matrix_log "Resolving ArcadeDB image digest for arcadedata/arcadedb:$arcadedb_tag"
     docker pull "arcadedata/arcadedb:$arcadedb_tag" > /dev/null

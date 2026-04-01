@@ -147,7 +147,7 @@ jobs:
 #### macOS Platform (Native)
 
 1. Download pre-filtered JARs artifact
-2. Run `build-native.sh`:
+2. Run `scripts/build-native.sh`:
     - Uses system Java (GitHub runner provides Java 25)
     - Runs `jlink` natively → platform-specific JRE
     - Builds wheel with `python -m build`
@@ -156,7 +156,7 @@ jobs:
 #### Windows Platform (Native)
 
 1. Download pre-filtered JARs artifact
-2. Run `build-native.sh`:
+2. Run `scripts/build-native.sh`:
     - Uses system Java (GitHub runner provides Java 25)
     - Runs `jlink` natively → platform-specific JRE
     - Builds wheel with `python -m build`
@@ -164,9 +164,9 @@ jobs:
 
 ## JAR Exclusion System
 
-### Single Source of Truth: `jar_exclusions.txt`
+### Single Source of Truth: `scripts/jar_exclusions.txt`
 
-**Location:** `bindings/python/jar_exclusions.txt`
+**Location:** `bindings/python/scripts/jar_exclusions.txt`
 
 **Format:** One glob pattern per line
 ```
@@ -176,8 +176,8 @@ arcadedb-grpcw-*.jar
 **Used by:**
 
 1. `.github/workflows/test-python-bindings.yml` (download-jars job)
-2. `bindings/python/Dockerfile.build` (Docker builds)
-3. `bindings/python/setup_jars.py` (documentation/validation)
+2. `bindings/python/scripts/Dockerfile.build` (Docker builds)
+3. `bindings/python/scripts/setup_jars.py` (documentation/validation)
 
 **Result:** ~40MB savings per wheel (gRPC is ~38MB)
 
@@ -185,9 +185,9 @@ arcadedb-grpcw-*.jar
 
 **Before (Broken):** Each build step filtered independently
 
-- `build-native.sh`: Filtered with bash on macOS
-- `Dockerfile.build`: Filtered with bash on Linux
-- `setup_jars.py`: Filtered with Python glob
+- `scripts/build-native.sh`: Filtered with bash on macOS
+- `scripts/Dockerfile.build`: Filtered with bash on Linux
+- `scripts/setup_jars.py`: Filtered with Python glob
 - **Problem:** Glob patterns varied across shells, causing duplication and inconsistency
 
 **After (Fixed):** Single upstream filter
@@ -251,7 +251,7 @@ COPY --from=jre-builder /jre /jre
 
 ## Native Build Script
 
-### `build-native.sh` Workflow
+### `scripts/build-native.sh` Workflow
 
 ```bash
 # 1. Check for pre-filtered JARs (from artifact)
@@ -271,7 +271,7 @@ jlink --output jre \
   --compress zip-6
 
 # 3. Copy JARs and JRE to package
-python setup_jars.py
+python scripts/setup_jars.py
 
 # 4. Build wheel
 python -m build --wheel
@@ -313,10 +313,11 @@ Since the runner itself is ARM64, Docker builds run natively without emulation.
 
 ```
 bindings/python/
-├── jar_exclusions.txt          # Single source of truth for JAR filtering
-├── build-native.sh             # Native builds (macOS)
-├── Dockerfile.build            # Docker builds (Linux)
-├── setup_jars.py               # Copies JARs/JRE to package
+├── scripts/build.sh            # Main build entrypoint
+├── scripts/build-native.sh     # Native builds (macOS)
+├── scripts/jar_exclusions.txt  # Single source of truth for JAR filtering
+├── scripts/Dockerfile.build    # Docker builds (Linux)
+├── scripts/setup_jars.py       # Copies JARs/JRE to package
 ├── pyproject.toml              # Package metadata, dependencies
 └── src/arcadedb/
     └── jre/                    # Bundled JRE (created during build)
@@ -397,10 +398,10 @@ Sizes are ballpark values and vary by platform and version:
 ```bash
 # Build for current platform
 cd bindings/python
-./build-native.sh
+./scripts/build-native.sh
 
 # Or use Docker (Linux only)
-docker build -f Dockerfile.build -t arcadedb-python-builder .
+docker build -f scripts/Dockerfile.build -t arcadedb-python-builder ../..
 ```
 
 ### Test Locally

@@ -10,7 +10,7 @@ git clone https://github.com/humemai/arcadedb-embedded-python.git
 cd arcadedb-embedded-python/bindings/python
 
 # Build the package (requires Docker)
-./build.sh base
+./scripts/build.sh base
 
 # Install in development mode
 uv pip install -e .
@@ -138,14 +138,17 @@ arcadedb/bindings/python/
 │   └── benchmark-vector/          # Vector benchmark suite
 ├── pyproject.toml                 # Package configuration
 ├── setup.py                       # Setup configuration
-├── setup_jars.py                  # JAR download script
-├── extract_version.py             # Version extraction
-├── write_version.py               # Version writing
-├── jar_exclusions.txt             # JAR optimization list
 ├── build.sh                       # Build script
-├── build-native.sh                # Native build script
-├── ensure-build-tools.sh          # Build tools setup
-├── Dockerfile.build               # Build container
+├── scripts/                       # Build and maintenance helpers
+│   ├── jar_exclusions.txt         # JAR optimization list
+│   ├── build-native.sh            # Native build script
+│   ├── ensure-build-tools.sh      # Build tools setup
+│   ├── extract_version.py         # Version extraction
+│   ├── fix_markdown.py            # Docs formatter
+│   ├── list_image_jars_by_size.sh # Image JAR inspection helper
+│   ├── setup_jars.py              # JAR staging script
+│   ├── write_version.py           # Version writing
+│   └── Dockerfile.build           # Build container
 └── mkdocs.yml                     # Documentation config
 ```
 
@@ -155,7 +158,7 @@ arcadedb/bindings/python/
 
 ```bash
 # Build the current package
-./build.sh base
+./scripts/build.sh base
 
 # Output: dist/*.whl
 ```
@@ -164,7 +167,7 @@ arcadedb/bindings/python/
 
 1. Extracts ArcadeDB version from parent `pom.xml`
 2. Downloads appropriate JAR files with custom filtering
-3. Packages Python code with optimized JARs (see `jar_exclusions.txt`)
+3. Packages Python code with optimized JARs (see `scripts/jar_exclusions.txt`)
 4. Runs tests in isolated Docker environment
 5. Creates wheel file in `dist/`
 
@@ -172,7 +175,7 @@ arcadedb/bindings/python/
 
 ```bash
 # Download JARs with custom filtering
-python setup_jars.py
+python scripts/setup_jars.py
 
 # Build wheel
 python -m build
@@ -693,14 +696,14 @@ We follow ArcadeDB core version:
 
 ```bash
 # Version automatically extracted during build
-python extract_version.py
+python scripts/extract_version.py
 ```
 
 2. **Build Package**
 
 ```bash
 # Build the package
-./build.sh base
+./scripts/build.sh base
 
 # Verify wheels
 ls -lh dist/
@@ -795,7 +798,7 @@ rm -rf src/arcadedb_embedded/jars/
 rm -rf src/arcadedb_embedded/jre/
 
 # Rebuild
-./build.sh
+./scripts/build.sh
 ```
 
 ### Test Failures
@@ -818,7 +821,7 @@ pytest --cov=arcadedb_embedded --cov-report=term-missing
 docker system prune -a
 
 # Rebuild without cache
-docker build --no-cache -f Dockerfile.build ../..
+docker build --no-cache -f scripts/Dockerfile.build ../..
 ```
 
 ## Getting Help
