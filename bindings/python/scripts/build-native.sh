@@ -19,6 +19,7 @@ NC='\033[0m'
 # Get script directory and bindings root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY_BINDINGS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+DIST_DIR="$PY_BINDINGS_DIR/dist"
 
 # Parameters
 PLATFORM="${1:-}"
@@ -261,18 +262,20 @@ if [[ "$PLATFORM" == darwin/* ]]; then
 fi
 
 # Build wheel
-"$PYTHON_WITH_BUILD" -m build --wheel --outdir "$SCRIPT_DIR/dist"
+mkdir -p "$DIST_DIR"
+rm -f "$DIST_DIR"/*.whl
+"$PYTHON_WITH_BUILD" -m build --wheel --outdir "$DIST_DIR"
 
 # Rename wheel to have correct platform tag if needed
 # (python -m build may not set it correctly for cross-platform builds)
-WHEEL_FILE=$(ls "$SCRIPT_DIR/dist"/*.whl | head -n1)
+WHEEL_FILE=$(ls "$DIST_DIR"/*.whl | head -n1)
 if [[ -n "$WHEEL_FILE" ]]; then
     # Extract components from wheel filename
     WHEEL_NAME=$(basename "$WHEEL_FILE")
     # arcadedb_embedded-25.10.1-py3-none-any.whl -> arcadedb_embedded-25.10.1-py3-none-PLAT_NAME.whl
     NEW_WHEEL_NAME=$(echo "$WHEEL_NAME" | sed "s|-py3-none-any\.whl|-py3-none-${PLAT_NAME}.whl|")
     if [[ "$WHEEL_NAME" != "$NEW_WHEEL_NAME" ]]; then
-        mv "$WHEEL_FILE" "$SCRIPT_DIR/dist/$NEW_WHEEL_NAME"
+        mv "$WHEEL_FILE" "$DIST_DIR/$NEW_WHEEL_NAME"
         echo -e "${CYAN}🏷️  Renamed wheel to: ${YELLOW}${NEW_WHEEL_NAME}${NC}"
     fi
 fi
@@ -281,9 +284,9 @@ echo -e "${GREEN}✅ Wheel built${NC}"
 
 # Step 7: Clean up temp files
 echo -e "${CYAN}🧹 Cleaning up...${NC}"
-rm -rf "$SCRIPT_DIR/temp_jre"
+rm -rf "$PY_BINDINGS_DIR/temp_jre"
 
 echo ""
 echo -e "${GREEN}🎉 Native build completed successfully!${NC}"
 echo -e "${CYAN}📦 Wheel file:${NC}"
-ls -lh "$SCRIPT_DIR/dist"/*.whl
+ls -lh "$DIST_DIR"/*.whl
