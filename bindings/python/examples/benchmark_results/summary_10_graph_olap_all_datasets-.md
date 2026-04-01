@@ -1,6 +1,6 @@
 # 10 Graph OLAP Matrix Summary — All Dataset Sizes
 
-- Generated (UTC): 2026-04-01T06:49:26Z
+- Generated (UTC): 2026-04-01T06:49:11Z
 - Dataset: all
 - Dataset size profile: all
 - Label prefix: sweep10
@@ -28,7 +28,7 @@
 
 | db | gav_mode | gav_setup_s | run_label | seed | batch_size | mem_limit | threads | query_runs | query_order | load_s | index_s | query_s | rss_peak_mib | du_mib |
 |---|---|---:|---|---:|---:|---|---:|---:|---|---:|---:|---:|---:|---:|
-| arcadedb_cypher | off |  | sweep10_t04_r01_arcadedb_cypher_gavoff_s00000_mem8g | 0 | 5,000 | 8g | 4 | 100 | shuffled | 374.59 | 33.059 | 439.589 | 7,531.504 | 4,010.199 |
+| arcadedb_cypher | on | 7.852 | sweep10_t04_r01_arcadedb_cypher_gavon_s00000_mem8g | 0 | 5,000 | 8g | 4 | 100 | shuffled | 337.934 | 32.763 | 333.929 | 8,131.277 | 4,010.215 |
 | ladybug |  |  | sweep10_t04_r01_ladybug_s00000_mem8g | 0 | 5,000 | 8g | 4 | 100 | shuffled | 91.265 | 0 | 87.257 | 3,040.812 | 1,818.504 |
 | neo4j |  |  | sweep10_t04_r01_neo4j_s00000_mem8g | 0 | 5,000 | 8g | 4 | 100 | shuffled | 183.343 | 0.258 | 436.678 | 5,722.233 | 3,965.191 |
 
@@ -36,16 +36,16 @@
 
 | db | threads | query | samples | elapsed_mean_ms | elapsed_p95_ms | row_counts | hash_stable_within_db |
 |---|---:|---|---:|---:|---:|---|---|
-| arcadedb_cypher | 4 | asker_answerer_pairs | 100 | 169.809 | 343.957 | 0 | True |
-| arcadedb_cypher | 4 | questions_with_most_answers | 100 | 721.728 | 1,295.503 | 10 | True |
-| arcadedb_cypher | 4 | tag_cooccurrence | 100 | 1.863 | 7.859 | 0 | True |
-| arcadedb_cypher | 4 | top_accepted_answerers | 100 | 183.022 | 344.775 | 0 | True |
-| arcadedb_cypher | 4 | top_answerers | 100 | 782.037 | 1,198.261 | 10 | True |
-| arcadedb_cypher | 4 | top_askers | 100 | 769.981 | 1,222.799 | 10 | True |
-| arcadedb_cypher | 4 | top_badges | 100 | 271.096 | 333.818 | 0 | True |
-| arcadedb_cypher | 4 | top_questions_by_score | 100 | 243.253 | 372.166 | 10 | True |
-| arcadedb_cypher | 4 | top_questions_by_total_comments | 100 | 1,250.091 | 2,138.402 | 10 | True |
-| arcadedb_cypher | 4 | top_tags_by_questions | 100 | 1.643 | 7.893 | 0 | True |
+| arcadedb_cypher | 4 | asker_answerer_pairs | 100 | 608.584 | 800.826 | 10 | True |
+| arcadedb_cypher | 4 | questions_with_most_answers | 100 | 185.807 | 280.967 | 10 | True |
+| arcadedb_cypher | 4 | tag_cooccurrence | 100 | 1,140.62 | 1,338.949 | 10 | True |
+| arcadedb_cypher | 4 | top_accepted_answerers | 100 | 142.943 | 234.145 | 10 | True |
+| arcadedb_cypher | 4 | top_answerers | 100 | 123.258 | 244.212 | 10 | True |
+| arcadedb_cypher | 4 | top_askers | 100 | 188.329 | 309.576 | 10 | True |
+| arcadedb_cypher | 4 | top_badges | 100 | 434.892 | 561.425 | 10 | True |
+| arcadedb_cypher | 4 | top_questions_by_score | 100 | 207.238 | 314.985 | 10 | True |
+| arcadedb_cypher | 4 | top_questions_by_total_comments | 100 | 298 | 474.033 | 10 | True |
+| arcadedb_cypher | 4 | top_tags_by_questions | 100 | 7.82 | 8.832 | 10 | True |
 | ladybug | 4 | asker_answerer_pairs | 100 | 197.989 | 226.504 | 10 | True |
 | ladybug | 4 | questions_with_most_answers | 100 | 70.776 | 84.514 | 10 | True |
 | ladybug | 4 | tag_cooccurrence | 100 | 165.572 | 202.696 | 10 | True |
@@ -71,24 +71,13 @@
 
 | query | dbs | hash_equal_across_dbs | hash_groups | row_counts_equal_across_dbs | row_count_groups | all_values_equal_across_dbs |
 |---|---|---|---|---|---|---|
-| asker_answerer_pairs | arcadedb_cypher, ladybug, neo4j | False | 4f53cda18c2b: arcadedb_cypher; 99b21d499377: ladybug, neo4j | False | 0: arcadedb_cypher; 10: ladybug, neo4j | False |
+| asker_answerer_pairs | arcadedb_cypher, ladybug, neo4j | True | 99b21d499377: arcadedb_cypher, ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | True |
 | questions_with_most_answers | arcadedb_cypher, ladybug, neo4j | True | 155492c2f771: arcadedb_cypher, ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | True |
-| tag_cooccurrence | arcadedb_cypher, ladybug, neo4j | False | 4f53cda18c2b: arcadedb_cypher; 526e9967c0da: ladybug, neo4j | False | 0: arcadedb_cypher; 10: ladybug, neo4j | False |
-| top_accepted_answerers | arcadedb_cypher, ladybug, neo4j | False | 4f53cda18c2b: arcadedb_cypher; d3212f9008dc: ladybug, neo4j | False | 0: arcadedb_cypher; 10: ladybug, neo4j | False |
+| tag_cooccurrence | arcadedb_cypher, ladybug, neo4j | True | 526e9967c0da: arcadedb_cypher, ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | True |
+| top_accepted_answerers | arcadedb_cypher, ladybug, neo4j | True | d3212f9008dc: arcadedb_cypher, ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | True |
 | top_answerers | arcadedb_cypher, ladybug, neo4j | True | 61f3be3d7d7a: arcadedb_cypher, ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | True |
 | top_askers | arcadedb_cypher, ladybug, neo4j | True | a024896d12c8: arcadedb_cypher, ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | True |
-| top_badges | arcadedb_cypher, ladybug, neo4j | False | 4f53cda18c2b: arcadedb_cypher; 61f2dab37691: ladybug, neo4j | False | 0: arcadedb_cypher; 10: ladybug, neo4j | False |
+| top_badges | arcadedb_cypher, ladybug, neo4j | True | 61f2dab37691: arcadedb_cypher, ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | True |
 | top_questions_by_score | arcadedb_cypher, ladybug, neo4j | True | 8ae48f2ff3e6: arcadedb_cypher, ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | True |
-| top_questions_by_total_comments | arcadedb_cypher, ladybug, neo4j | False | 1a16e6548b34: arcadedb_cypher; bc63940adee8: ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | False |
-| top_tags_by_questions | arcadedb_cypher, ladybug, neo4j | False | 2d776db39b29: ladybug, neo4j; 4f53cda18c2b: arcadedb_cypher | False | 0: arcadedb_cypher; 10: ladybug, neo4j | False |
-
-### Cross-DB mismatches only
-
-| query | majority_hash_dbs | differing_hash_dbs | majority_row_count_dbs | differing_row_count_dbs |
-|---|---|---|---|---|
-| asker_answerer_pairs | ladybug, neo4j | arcadedb_cypher | ladybug, neo4j | arcadedb_cypher |
-| tag_cooccurrence | ladybug, neo4j | arcadedb_cypher | ladybug, neo4j | arcadedb_cypher |
-| top_accepted_answerers | ladybug, neo4j | arcadedb_cypher | ladybug, neo4j | arcadedb_cypher |
-| top_badges | ladybug, neo4j | arcadedb_cypher | ladybug, neo4j | arcadedb_cypher |
-| top_questions_by_total_comments | ladybug, neo4j | arcadedb_cypher | arcadedb_cypher, ladybug, neo4j | none |
-| top_tags_by_questions | ladybug, neo4j | arcadedb_cypher | ladybug, neo4j | arcadedb_cypher |
+| top_questions_by_total_comments | arcadedb_cypher, ladybug, neo4j | True | bc63940adee8: arcadedb_cypher, ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | True |
+| top_tags_by_questions | arcadedb_cypher, ladybug, neo4j | True | 2d776db39b29: arcadedb_cypher, ladybug, neo4j | True | 10: arcadedb_cypher, ladybug, neo4j | True |

@@ -597,6 +597,89 @@ class TestLSMVectorIndex:
         assert len(results) == 1
         assert str(results[0][0].get_identity()) == rids[3]
 
+    def test_lsm_vector_search_uses_database_lookup_by_rid(self, test_db, monkeypatch):
+        """Result materialization should go through the Database wrapper."""
+
+        test_db.command("sql", "CREATE VERTEX TYPE Doc")
+        test_db.command("sql", "CREATE PROPERTY Doc.name STRING")
+        test_db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index("Doc", "embedding", dimensions=3)
+
+        with test_db.transaction():
+            test_db.command(
+                "sql",
+                "INSERT INTO Doc SET name = ?, embedding = ?",
+                "doc-a",
+                arcadedb.to_java_float_array([1.0, 0.0, 0.0]),
+            )
+            test_db.command(
+                "sql",
+                "INSERT INTO Doc SET name = ?, embedding = ?",
+                "doc-b",
+                arcadedb.to_java_float_array([0.9, 0.1, 0.0]),
+            )
+
+        lookup_calls = {"count": 0}
+        original_lookup = test_db.lookup_by_rid
+
+        def wrapped_lookup(rid):
+            lookup_calls["count"] += 1
+            return original_lookup(rid)
+
+        monkeypatch.setattr(test_db, "lookup_by_rid", wrapped_lookup)
+
+        results = index.find_nearest([1.0, 0.0, 0.0], k=2)
+
+        assert len(results) == 2
+        assert lookup_calls["count"] == 2
+
+    def test_lsm_vector_search_uses_database_rid_conversion(self, test_db, monkeypatch):
+        """RID whitelist conversion should go through the Database wrapper."""
+
+        test_db.command("sql", "CREATE VERTEX TYPE Doc")
+        test_db.command("sql", "CREATE PROPERTY Doc.id INTEGER")
+        test_db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index(
+            "Doc", "embedding", dimensions=3, id_property="id"
+        )
+
+        with test_db.transaction():
+            for doc_id, embedding in (
+                (1, [1.0, 0.0, 0.0]),
+                (2, [0.9, 0.1, 0.0]),
+                (3, [0.0, 1.0, 0.0]),
+            ):
+                test_db.command(
+                    "sql",
+                    "INSERT INTO Doc SET id = ?, embedding = ?",
+                    doc_id,
+                    arcadedb.to_java_float_array(embedding),
+                )
+
+        allowed_rids = [
+            str(row.get("@rid"))
+            for row in test_db.query(
+                "sql", "SELECT @rid FROM Doc WHERE id IN [1, 2] ORDER BY id"
+            )
+        ]
+
+        rid_conversion_calls = []
+        original_to_java_rid = test_db.to_java_rid
+
+        def wrapped_to_java_rid(value):
+            rid_conversion_calls.append(str(value))
+            return original_to_java_rid(value)
+
+        monkeypatch.setattr(test_db, "to_java_rid", wrapped_to_java_rid)
+
+        results = index.find_nearest([1.0, 0.0, 0.0], k=2, allowed_rids=allowed_rids)
+
+        assert len(results) == 2
+        assert rid_conversion_calls[: len(allowed_rids)] == allowed_rids
+        assert len(rid_conversion_calls) >= len(allowed_rids)
+
     @pytest.mark.skip(
         reason="Known upstream bug: Vector deletions cause index corruption"
     )

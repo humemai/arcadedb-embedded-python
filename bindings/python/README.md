@@ -84,7 +84,7 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 The compressed wheel size is measured from `dist/*.whl`, and the installed package size
 is measured from the extracted `site-packages/arcadedb_embedded/` directory.
 
-**Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See [`jar_exclusions.txt`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/jar_exclusions.txt) for details.
+**Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See [`scripts/jar_exclusions.txt`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/scripts/jar_exclusions.txt) for details.
 
 Import: `import arcadedb_embedded as arcadedb`
 
@@ -125,7 +125,7 @@ uv pip install build
 uv pip install -e ".[test]"
 
 # Build for your current platform (auto-detected)
-./build.sh
+./scripts/build.sh
 ```
 
 Built wheels will be in `dist/`.

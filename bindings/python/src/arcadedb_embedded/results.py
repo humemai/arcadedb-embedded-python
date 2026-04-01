@@ -109,10 +109,14 @@ class ResultSet:
 
     def count(self) -> int:
         """
-        Count results without loading all into memory.
+        Count the remaining results without building a list.
+
+        Note:
+            This consumes the remaining rows from the current result set.
+            After calling `count()`, the iterator is exhausted.
 
         Returns:
-            Number of results
+            Number of remaining results
 
         Example:
             >>> count = db.query("sql", "SELECT FROM User").count()

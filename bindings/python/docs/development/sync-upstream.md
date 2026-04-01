@@ -24,7 +24,7 @@ This fork tracks `ArcadeData/arcadedb` through the local `upstream-main` branch.
 
 ```bash
 cd bindings/python
-./build.sh linux/amd64
+./scripts/build.sh linux/amd64
 pytest tests/ -v
 git push origin main
 ```

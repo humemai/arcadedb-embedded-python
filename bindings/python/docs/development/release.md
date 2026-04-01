@@ -24,7 +24,7 @@ On `main` (or a `release/X.Y.Z` branch if you want main to keep moving):
 cd bindings/python
 
 # Build distribution
-./build.sh
+./scripts/build.sh
 
 # Test distribution
 uv pip install dist/arcadedb_embedded-*.whl
@@ -117,14 +117,14 @@ For Python-only bug fixes that don't require a new ArcadeDB version:
 
 ```bash
 # Build with Python patch number
-./build.sh base --python-patch 1
+./scripts/build.sh base --python-patch 1
 
 # Results in version: 25.9.1.post1 (if base ArcadeDB version is 25.9.1)
 ```
 
 ### Implementation Details
 
-The conversion is handled by `bindings/python/extract_version.py` (see file for detailed implementation). Key features:
+The conversion is handled by `bindings/python/scripts/extract_version.py` (see file for detailed implementation). Key features:
 
 - **Automatic Detection**: Distinguishes development vs release mode automatically
 - **Command Line Interface**: Supports `--python-patch` parameter for .postN versions
@@ -145,7 +145,7 @@ Python bindings follow the ArcadeDB main project version from `pom.xml`:
 **How version is determined:**
 
 1. Set in `pom.xml` root: `<version>X.Y.Z-SNAPSHOT</version>` or `<version>X.Y.Z</version>`
-2. `extract_version.py` converts based on mode:
+2. `scripts/extract_version.py` converts based on mode:
     - Development: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0`
     - Release: `X.Y.Z` → `X.Y.Z` (or `X.Y.Z.postN` with --python-patch)
 3. Create annotated tag: `git tag -a X.Y.Z -m "Python release X.Y.Z"`
@@ -175,7 +175,7 @@ vim pom.xml  # Change to X.Y.Z+1-SNAPSHOT
 
 # 3. Test thoroughly
 cd bindings/python
-./build.sh full && pytest
+./scripts/build.sh full && pytest
 
 # 4. Commit and create hotfix release
 git commit -am "Hotfix: description"
@@ -274,7 +274,7 @@ mike set-default 25.9.0 --push
 **Docker build error:**
 
 - Check Docker daemon is running
-- Verify Dockerfile.build syntax
+- Verify scripts/Dockerfile.build syntax
 - Check Maven dependencies are available
 
 **Test failures:**

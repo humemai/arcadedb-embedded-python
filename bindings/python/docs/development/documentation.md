@@ -25,7 +25,7 @@ Run a local development server with live reload:
 
 ```bash
 # Normalize Markdown formatting for proper MkDocs rendering
-python fix_markdown.py
+python scripts/fix_markdown.py
 ```
 
 ```bash
@@ -82,7 +82,7 @@ Documentation is versioned using [mike](https://github.com/jimporter/mike) and a
 ```bash
 # 1. Make documentation changes on python-embedded branch
 # 2. Build and test wheels
-./build.sh base
+./scripts/build.sh base
 pytest
 
 # 3. Commit and push changes

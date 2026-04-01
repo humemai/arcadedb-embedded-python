@@ -3,8 +3,8 @@ set -euo pipefail
 
 # List JARs from the latest ArcadeDB Docker image (arcadedata/arcadedb) ordered by size.
 # Usage:
-#   ./list_image_jars_by_size.sh [IMAGE_TAG]
-#   ./list_image_jars_by_size.sh latest
+#   ./scripts/list_image_jars_by_size.sh [IMAGE_TAG]
+#   ./scripts/list_image_jars_by_size.sh latest
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 IMAGE_TAG="${1:-}"

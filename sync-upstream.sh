@@ -128,8 +128,8 @@ ${YELLOW}Normal Merge Paths:${NC}
     • bindings/python/      - Merges normally from upstream-main into main
 
 ${YELLOW}After Sync:${NC}
-1. Test: cd bindings/python && ./build.sh linux/amd64 && pytest tests/
-        (or on Windows: ./build.sh windows/amd64; on macOS: ./build.sh darwin/arm64)
+1. Test: cd bindings/python && ./scripts/build.sh linux/amd64 && pytest tests/
+    (or on Windows: ./scripts/build.sh windows/amd64; on macOS: ./scripts/build.sh darwin/arm64)
 2. Push: git push origin main
 
 ${YELLOW}Troubleshooting:${NC}
@@ -332,9 +332,9 @@ echo -e "   ${CYAN}1. Review changes:${NC}"
 echo -e "      ${YELLOW}git log --oneline -10${NC}"
 echo ""
 echo -e "   ${CYAN}2. Test locally (REQUIRED):${NC}"
-echo -e "      ${YELLOW}cd bindings/python && ./build.sh linux/amd64${NC}"
+echo -e "      ${YELLOW}cd bindings/python && ./scripts/build.sh linux/amd64${NC}"
 echo -e "      ${YELLOW}pytest tests/ -v${NC}"
-echo -e "      ${YELLOW}(or ./build.sh windows/amd64 on Windows; ./build.sh darwin/arm64 on macOS)${NC}"
+echo -e "      ${YELLOW}(or ./scripts/build.sh windows/amd64 on Windows; ./scripts/build.sh darwin/arm64 on macOS)${NC}"
 echo ""
 echo -e "   ${CYAN}3. Push to your fork:${NC}"
 echo -e "      ${YELLOW}git push origin main${NC}"

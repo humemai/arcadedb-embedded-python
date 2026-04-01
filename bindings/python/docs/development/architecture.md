@@ -637,7 +637,7 @@ dependencies = ["JPype1>=1.4.0", "numpy>=1.20.0"]
 ### JAR Management
 
 ```python
-# setup_jars.py - Download and package JARs
+# scripts/setup_jars.py - Download and package JARs
 
 import requests
 import os

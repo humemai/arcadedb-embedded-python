@@ -553,6 +553,10 @@ def normalize_rows(vectors: np.ndarray) -> np.ndarray:
     return vectors / norms
 
 
+def vector_to_arcadedb_literal(vec: np.ndarray) -> str:
+    return "[" + ", ".join(f"{float(x):.7g}" for x in vec.tolist()) + "]"
+
+
 def search_arcadedb(
     index,
     queries: np.ndarray,
@@ -584,28 +588,27 @@ def search_arcadedb(
 
         return None
 
+    db = index["db"]
+    index_name = index["name"]
+    query_literals = [vector_to_arcadedb_literal(qvec) for qvec in queries]
+
     for q_idx, qid in enumerate(qids):
-        qvec = queries[q_idx]
+        sql = (
+            "SELECT vectorNeighbors("
+            f"'{index_name}', {query_literals[q_idx]}, {int(k)}, {int(ef_search)}"
+            ") as res"
+        )
+
         start = time.perf_counter()
-
-        db = index["db"]
-        index_name = index["name"]
-        qvec_literal = "[" + ", ".join(str(float(x)) for x in qvec.tolist()) + "]"
-        rs = db.query(
+        row = db.query(
             "sql",
-            (
-                "SELECT vectorNeighbors("
-                f"'{index_name}', {qvec_literal}, {int(k)}, {int(ef_search)}"
-                ") as res"
-            ),
-        ).to_list()
-        neighbors = rs[0].get("res") if rs else []
-        results = [(rec, 0.0) for rec in neighbors]
-
+            sql,
+        ).first()
         latencies_ms.append((time.perf_counter() - start) * 1000)
 
+        neighbors = row.get("res") if row else []
         result_ids: List[int] = []
-        for rec, _score in results:
+        for rec in neighbors:
             rid = _extract_result_id(rec)
             if rid is not None:
                 result_ids.append(rid)
