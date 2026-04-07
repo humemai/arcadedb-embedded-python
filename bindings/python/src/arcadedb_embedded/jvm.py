@@ -105,6 +105,7 @@ def start_jvm(
     heap_size: Optional[str] = "4g",
     disable_xml_limits: bool = True,
     jvm_args: Optional[Union[Iterable[str], str]] = None,
+    common_pool_parallelism: Optional[int] = None,
 ):
     """
     Start the JVM with ArcadeDB JARs if not already started.
@@ -124,6 +125,14 @@ def start_jvm(
         Additional JVM flags to pass through (e.g. "-XX:MaxDirectMemorySize=8g",
         "-Dfoo=bar"). Can be a space-separated string or an iterable of strings.
         Note: -Xmx is managed by heap_size when provided.
+
+    common_pool_parallelism (optional)
+        Sets `-Djava.util.concurrent.ForkJoinPool.common.parallelism=<count>`.
+        Use this to make thread-cap settings explicit and reproducible from the
+        calling Python code.
+
+        Example:
+            start_jvm(heap_size="8g", common_pool_parallelism=8)
 
     JVM Configuration (environment fallback):
     -----------------------------------------
@@ -151,6 +160,9 @@ def start_jvm(
             # Development/testing (smaller memory)
             start_jvm(heap_size="2g")
 
+            # Explicit thread cap for reproducible benchmarks
+            start_jvm(heap_size="8g", common_pool_parallelism=8)
+
     ARCADEDB_JVM_ERROR_FILE (optional)
         Path for JVM crash logs (default: ./log/hs_err_pid%p.log)
 
@@ -164,6 +176,7 @@ def start_jvm(
                 heap_size=heap_size,
                 disable_xml_limits=disable_xml_limits,
                 jvm_args=jvm_args,
+                common_pool_parallelism=common_pool_parallelism,
             )
         )
         if _JVM_CONFIG is not None:
@@ -178,6 +191,7 @@ def start_jvm(
             jvm_args is not None
             or (heap_size not in (None, "4g"))
             or (disable_xml_limits is not True)
+            or (common_pool_parallelism is not None)
         )
         if has_overrides:
             raise ArcadeDBError(
@@ -203,7 +217,10 @@ def start_jvm(
     jvm_path = get_bundled_jre_lib_path()
 
     jvm_args = _build_jvm_args(
-        heap_size=heap_size, disable_xml_limits=disable_xml_limits, jvm_args=jvm_args
+        heap_size=heap_size,
+        disable_xml_limits=disable_xml_limits,
+        jvm_args=jvm_args,
+        common_pool_parallelism=common_pool_parallelism,
     )
 
     try:
@@ -270,8 +287,12 @@ def _build_jvm_args(
     heap_size: Optional[str],
     disable_xml_limits: bool,
     jvm_args: Optional[Union[Iterable[str], str]],
+    common_pool_parallelism: Optional[int] = None,
 ) -> list[str]:
     """Helper to construct JVM arguments from params, env vars, and defaults."""
+    if common_pool_parallelism is not None and common_pool_parallelism < 1:
+        raise ArcadeDBError("common_pool_parallelism must be >= 1")
+
     # JVM arguments: start from env, then merge explicit args
     jvm_args_str = os.environ.get("ARCADEDB_JVM_ARGS")
     if jvm_args_str:
@@ -280,6 +301,19 @@ def _build_jvm_args(
         merged_args = []
 
     merged_args.extend(_normalize_jvm_args(jvm_args))
+
+    if common_pool_parallelism is not None:
+        merged_args = [
+            arg
+            for arg in merged_args
+            if not arg.startswith(
+                "-Djava.util.concurrent.ForkJoinPool.common.parallelism="
+            )
+        ]
+        merged_args.append(
+            "-Djava.util.concurrent.ForkJoinPool.common.parallelism="
+            f"{common_pool_parallelism}"
+        )
 
     # Optional XML import limits
     if disable_xml_limits:

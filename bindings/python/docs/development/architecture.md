@@ -41,6 +41,7 @@ arcadedb_embedded/
 
 - Starts JVM using bundled JRE and packaged JARs
 - Prefers programmatic configuration (`start_jvm(...)`, `jvm_kwargs`)
+- Supports explicit heap and common-pool thread limits via `heap_size` and `common_pool_parallelism`
 - Supports `ARCADEDB_JVM_ARGS` / `ARCADEDB_JVM_ERROR_FILE` as fallback
 - Refuses to start twice in a process
 
@@ -101,7 +102,12 @@ arcadedb_embedded/
 ### JVM Lifecycle
 
 ```python
-def start_jvm(heap_size="4g", disable_xml_limits=True, jvm_args=None):
+def start_jvm(
+    heap_size="4g",
+    disable_xml_limits=True,
+    jvm_args=None,
+    common_pool_parallelism=None,
+):
     if jpype.isJVMStarted():
         return
 
@@ -114,6 +120,7 @@ def start_jvm(heap_size="4g", disable_xml_limits=True, jvm_args=None):
         heap_size=heap_size,
         disable_xml_limits=disable_xml_limits,
         jvm_args=jvm_args,
+        common_pool_parallelism=common_pool_parallelism,
     )
 
     # Single-shot startup per process
@@ -126,6 +133,20 @@ def start_jvm(heap_size="4g", disable_xml_limits=True, jvm_args=None):
 2. Loads packaged ArcadeDB JARs from `arcadedb_embedded/jars`
 3. Configurable via Python API before first database or server creation (`start_jvm`, `jvm_kwargs`)
 4. JVM stays live for the process lifetime and cannot be restarted
+
+Thread control example:
+
+```python
+import arcadedb_embedded as arcadedb
+
+db = arcadedb.create_database(
+    "./mydb",
+    jvm_kwargs={
+        "heap_size": "8g",
+        "common_pool_parallelism": 8,
+    },
+)
+```
 
 **Implications:**
 
