@@ -213,6 +213,13 @@ db.command("sql", "CREATE DOCUMENT TYPE Person")
 db.command("sql", "CREATE PROPERTY Person.name STRING")
 db.command("sql", "CREATE PROPERTY Person.age INTEGER")
 
+# OpenCypher DDL also passes straight through to the engine
+db.command("opencypher", "CREATE INDEX FOR (p:Person) ON (p.email)")
+db.command(
+    "opencypher",
+    "CREATE CONSTRAINT FOR (p:Person) REQUIRE p.email IS TYPED STRING",
+)
+
 # Data operations must be in a transaction
 with db.transaction():
     db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)

@@ -340,6 +340,66 @@ def test_truncate_bucket(temp_db_path):
         assert db.count_type("BucketDoc") == 0
 
 
+def test_update_batch_clause(temp_db_path):
+    """UPDATE ... BATCH executes successfully through the Python SQL pass-through."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE BatchUpdateDoc")
+
+        with db.transaction():
+            for idx in range(25):
+                db.command(
+                    "sql",
+                    "INSERT INTO BatchUpdateDoc SET idx = ?, processed = false",
+                    idx,
+                )
+
+        with db.transaction():
+            db.command(
+                "sql",
+                "UPDATE BatchUpdateDoc SET processed = true WHERE idx >= 10 BATCH 5",
+            )
+
+        processed = db.query(
+            "sql",
+            "SELECT count(*) AS c FROM BatchUpdateDoc WHERE processed = true",
+        ).one()
+        untouched = db.query(
+            "sql",
+            "SELECT count(*) AS c FROM BatchUpdateDoc WHERE processed = false",
+        ).one()
+
+        assert processed.get("c") == 15
+        assert untouched.get("c") == 10
+
+
+def test_delete_batch_clause(temp_db_path):
+    """DELETE ... BATCH executes successfully through the Python SQL pass-through."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE BatchDeleteDoc")
+
+        with db.transaction():
+            for idx in range(30):
+                db.command("sql", "INSERT INTO BatchDeleteDoc SET idx = ?", idx)
+
+        with db.transaction():
+            db.command(
+                "sql",
+                "DELETE FROM BatchDeleteDoc WHERE idx % 2 = 0 BATCH 4",
+            )
+
+        remaining = db.query(
+            "sql",
+            "SELECT count(*) AS c FROM BatchDeleteDoc",
+        ).one()
+        odd_count = db.query(
+            "sql",
+            "SELECT count(*) AS c FROM BatchDeleteDoc WHERE idx % 2 = 1",
+        ).one()
+
+        assert remaining.get("c") == 15
+        assert odd_count.get("c") == 15
+
+
 def test_transactions(temp_db_path):
     """Test transaction support."""
     with arcadedb.create_database(temp_db_path) as db:
