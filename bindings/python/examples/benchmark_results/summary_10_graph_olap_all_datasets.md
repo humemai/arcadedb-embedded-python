@@ -1,12 +1,12 @@
 # 10 Graph OLAP Matrix Summary — All Dataset Sizes
 
-- Generated (UTC): 2026-04-01T06:49:26Z
+- Generated (UTC): 2026-04-07T13:37:38Z
 - Dataset: all
 - Dataset size profile: all
 - Label prefix: sweep10
 - Total result files: 3
 - Versions/digest observed:
-  - arcadedb_docker_digest: arcadedata/arcadedb@sha256:535c81b4b423b38da3a8cd908b898efbde16de3f1a2db335bf8fca7220b4b2ea, arcadedata/arcadedb@sha256:83f736a95404095ad8d251cca0041942c7033506f68575ec19322a3d5f87e15c
+  - arcadedb_docker_digest: arcadedata/arcadedb@sha256:29e3fe892eec029b7cf70f8815df1640d2710181ae59c20a78d7b393f8fe5735, arcadedata/arcadedb@sha256:535c81b4b423b38da3a8cd908b898efbde16de3f1a2db335bf8fca7220b4b2ea
   - arcadedb_docker_tag: 26.4.1-SNAPSHOT
   - arcadedb_embedded: 26.4.1.dev0
   - neo4j: 2026.02.3
@@ -28,7 +28,7 @@
 
 | db | gav_mode | gav_setup_s | run_label | seed | batch_size | mem_limit | threads | query_runs | query_order | load_s | index_s | query_s | rss_peak_mib | du_mib |
 |---|---|---:|---|---:|---:|---|---:|---:|---|---:|---:|---:|---:|---:|
-| arcadedb_cypher | off |  | sweep10_t04_r01_arcadedb_cypher_gavoff_s00000_mem8g | 0 | 5,000 | 8g | 4 | 100 | shuffled | 374.59 | 33.059 | 439.589 | 7,531.504 | 4,010.199 |
+| arcadedb_cypher | off |  | sweep10_t04_r01_arcadedb_cypher_gavoff_s00001_mem8g | 1 | 5,000 | 8g | 4 | 100 | shuffled | 296.305 | 32.707 | 287.201 | 7,812.703 | 4,010.184 |
 | ladybug |  |  | sweep10_t04_r01_ladybug_s00000_mem8g | 0 | 5,000 | 8g | 4 | 100 | shuffled | 91.265 | 0 | 87.257 | 3,040.812 | 1,818.504 |
 | neo4j |  |  | sweep10_t04_r01_neo4j_s00000_mem8g | 0 | 5,000 | 8g | 4 | 100 | shuffled | 183.343 | 0.258 | 436.678 | 5,722.233 | 3,965.191 |
 
@@ -36,16 +36,16 @@
 
 | db | threads | query | samples | elapsed_mean_ms | elapsed_p95_ms | row_counts | hash_stable_within_db |
 |---|---:|---|---:|---:|---:|---|---|
-| arcadedb_cypher | 4 | asker_answerer_pairs | 100 | 169.809 | 343.957 | 0 | True |
-| arcadedb_cypher | 4 | questions_with_most_answers | 100 | 721.728 | 1,295.503 | 10 | True |
-| arcadedb_cypher | 4 | tag_cooccurrence | 100 | 1.863 | 7.859 | 0 | True |
-| arcadedb_cypher | 4 | top_accepted_answerers | 100 | 183.022 | 344.775 | 0 | True |
-| arcadedb_cypher | 4 | top_answerers | 100 | 782.037 | 1,198.261 | 10 | True |
-| arcadedb_cypher | 4 | top_askers | 100 | 769.981 | 1,222.799 | 10 | True |
-| arcadedb_cypher | 4 | top_badges | 100 | 271.096 | 333.818 | 0 | True |
-| arcadedb_cypher | 4 | top_questions_by_score | 100 | 243.253 | 372.166 | 10 | True |
-| arcadedb_cypher | 4 | top_questions_by_total_comments | 100 | 1,250.091 | 2,138.402 | 10 | True |
-| arcadedb_cypher | 4 | top_tags_by_questions | 100 | 1.643 | 7.893 | 0 | True |
+| arcadedb_cypher | 4 | asker_answerer_pairs | 100 | 143.965 | 232.233 | 0 | True |
+| arcadedb_cypher | 4 | questions_with_most_answers | 100 | 449.116 | 551.671 | 10 | True |
+| arcadedb_cypher | 4 | tag_cooccurrence | 100 | 0.827 | 1.021 | 0 | True |
+| arcadedb_cypher | 4 | top_accepted_answerers | 100 | 149.096 | 245.76 | 0 | True |
+| arcadedb_cypher | 4 | top_answerers | 100 | 417.781 | 559.025 | 10 | True |
+| arcadedb_cypher | 4 | top_askers | 100 | 453.242 | 545.472 | 10 | True |
+| arcadedb_cypher | 4 | top_badges | 100 | 246.717 | 302.694 | 0 | True |
+| arcadedb_cypher | 4 | top_questions_by_score | 100 | 207.858 | 275.409 | 10 | True |
+| arcadedb_cypher | 4 | top_questions_by_total_comments | 100 | 801.259 | 1,184.27 | 10 | True |
+| arcadedb_cypher | 4 | top_tags_by_questions | 100 | 0.879 | 1.041 | 0 | True |
 | ladybug | 4 | asker_answerer_pairs | 100 | 197.989 | 226.504 | 10 | True |
 | ladybug | 4 | questions_with_most_answers | 100 | 70.776 | 84.514 | 10 | True |
 | ladybug | 4 | tag_cooccurrence | 100 | 165.572 | 202.696 | 10 | True |
