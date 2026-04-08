@@ -3,6 +3,7 @@ var globalRecordEditorState = {
   rid: null,
   type: null,
   properties: {},
+  originalProperties: {},
   source: null
 };
 
@@ -11,6 +12,7 @@ function openRecordEditor(rid, type, properties, source) {
   globalRecordEditorState.rid = rid;
   globalRecordEditorState.type = type;
   globalRecordEditorState.properties = properties || {};
+  globalRecordEditorState.originalProperties = JSON.parse(JSON.stringify(globalRecordEditorState.properties));
   globalRecordEditorState.source = source;
 
   renderRecordEditorContent();
@@ -56,7 +58,12 @@ function renderRecordEditorContent() {
     var isMetadata = p.charAt(0) === "@";
     var isBinary = (!isComplex && typeof displayValue === "string" && /^\[B@[0-9a-fA-F]+$/.test(displayValue));
 
-    html += "<label class='form-label'>" + escapeHtml(p) + "</label>";
+    html += "<div class='record-editor-prop-row'>";
+    html += "<div class='d-flex align-items-center justify-content-between'>";
+    html += "<label class='form-label mb-0'>" + escapeHtml(p) + "</label>";
+    if (!isMetadata && !isBinary)
+      html += "<button class='btn btn-sm record-editor-delete-prop' onclick='deletePropertyFromRecord(\"" + escapeHtml(p).replace(/"/g, "&quot;") + "\")' title='Remove property'><i class='fa fa-times'></i></button>";
+    html += "</div>";
     if (isBinary) {
       var sizeInfo = properties["contentLength"] || properties[p + "Length"] || "";
       var sizeLabel = sizeInfo ? " (" + Number(sizeInfo).toLocaleString() + " bytes)" : "";
@@ -65,7 +72,9 @@ function renderRecordEditorContent() {
       html += "<textarea class='form-control record-editor-field' data-prop='" + escapeHtml(p) + "' data-original='" + escapeHtml(displayValue) + "' rows='3'" + (isMetadata ? " disabled" : "") + ">" + escapeHtml(displayValue) + "</textarea>";
     else
       html += "<input type='text' class='form-control record-editor-field' data-prop='" + escapeHtml(p) + "' data-original='" + escapeHtml(displayValue) + "' value='" + escapeHtml(displayValue) + "'" + (isMetadata ? " disabled" : "") + " />";
+    html += "</div>";
   }
+  html += "<button class='btn btn-sm btn-outline-secondary w-100 mt-1' onclick='addPropertyToRecord()'><i class='fa fa-plus'></i> Add Property</button>";
   html += "</div>";
 
   // Action buttons
@@ -307,7 +316,9 @@ function bindGraphAppearanceEvents(type) {
 function saveRecordEditor() {
   var rid = globalRecordEditorState.rid;
   var setParts = [];
+  var removeParts = [];
 
+  // Collect field changes (SET)
   $(getRecordEditorTarget() + " .record-editor-field").each(function () {
     if ($(this).prop("disabled"))
       return;
@@ -341,12 +352,25 @@ function saveRecordEditor() {
     setParts.push("`" + prop + "` = " + sqlValue);
   });
 
-  if (setParts.length === 0) {
+  // Collect deleted properties (REMOVE)
+  var orig = globalRecordEditorState.originalProperties;
+  var curr = globalRecordEditorState.properties;
+  for (var p in orig) {
+    if (!curr.hasOwnProperty(p))
+      removeParts.push("`" + p + "`");
+  }
+
+  if (setParts.length === 0 && removeParts.length === 0) {
     globalNotify("Info", "No changes to save", "warning");
     return;
   }
 
-  var sql = "UPDATE " + rid + " SET " + setParts.join(", ");
+  var sql = "UPDATE " + rid;
+  if (setParts.length > 0)
+    sql += " SET " + setParts.join(", ");
+  if (removeParts.length > 0)
+    sql += " REMOVE " + removeParts.join(", ");
+
   var database = escapeHtml(getCurrentDatabase());
 
   $.ajax({
@@ -358,8 +382,8 @@ function saveRecordEditor() {
     }
   })
   .done(function () {
-    globalNotify("Success", "Record updated", "success");
-    refreshRecordAfterSave();
+    globalNotify("Success", "Record updated", "success", 1000);
+    cancelRecordEditor();
   })
   .fail(function (jqXHR) {
     globalNotify("Error", escapeHtml(jqXHR.responseText), "danger");
@@ -450,6 +474,44 @@ function deleteRecord() {
       });
     }
   );
+}
+
+function addPropertyToRecord() {
+  var html = "<div class='mb-3'>";
+  html += "<label class='form-label'>Property name</label>";
+  html += "<input type='text' class='form-control' id='newPropertyName' placeholder='Enter property name' />";
+  html += "</div>";
+
+  globalPrompt("Add Property", html, "Add", function (values) {
+    var propName = (values["newPropertyName"] || "").trim();
+    if (!propName) {
+      globalNotify("Error", "Property name is required", "danger");
+      return;
+    }
+    if (globalRecordEditorState.properties.hasOwnProperty(propName)) {
+      globalNotify("Error", "Property already exists", "danger");
+      return;
+    }
+    globalRecordEditorState.properties[propName] = "";
+    renderRecordEditorContent();
+    $(getRecordEditorTarget() + " .record-editor-field[data-prop='" + propName + "']").focus();
+  });
+}
+
+function syncRecordEditorFields() {
+  $(getRecordEditorTarget() + " .record-editor-field").each(function () {
+    if ($(this).prop("disabled"))
+      return;
+    var prop = $(this).data("prop");
+    var current = $(this).val();
+    globalRecordEditorState.properties[prop] = current;
+  });
+}
+
+function deletePropertyFromRecord(propName) {
+  syncRecordEditorFields();
+  delete globalRecordEditorState.properties[propName];
+  renderRecordEditorContent();
 }
 
 function showRecordInGraph() {
