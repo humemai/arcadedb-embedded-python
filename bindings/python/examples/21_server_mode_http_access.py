@@ -27,6 +27,7 @@ import argparse
 import base64
 import json
 import shutil
+import socket
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -110,6 +111,32 @@ def reset_server_root(server_root: Path) -> None:
     server_root.parent.mkdir(parents=True, exist_ok=True)
 
 
+def choose_http_port(host: str, requested_port: int) -> tuple[int, bool]:
+    """Return a usable HTTP port for the example.
+
+    Tries the requested port first. If it is unavailable, fall back to an
+    ephemeral free port chosen by the OS.
+    """
+
+    def _can_bind(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind((host, port))
+            except OSError:
+                return False
+        return True
+
+    if requested_port > 0 and _can_bind(requested_port):
+        return requested_port, False
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        fallback_port = int(sock.getsockname()[1])
+
+    return fallback_port, True
+
+
 def basic_auth_header(username: str, password: str) -> dict[str, str]:
     token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
     return {"Authorization": f"Basic {token}"}
@@ -186,7 +213,9 @@ def main() -> int:
     server_root = Path(args.server_root)
     reset_server_root(server_root)
 
-    base_url = f"http://{args.host}:{args.http_port}"
+    http_port, used_fallback_port = choose_http_port(args.host, args.http_port)
+
+    base_url = f"http://{args.host}:{http_port}"
     basic_headers = basic_auth_header("root", ROOT_PASSWORD)
 
     print("=" * 72)
@@ -197,6 +226,11 @@ def main() -> int:
     print(f"Server root: {server_root}")
     print(f"Database name: {args.db_name}")
     print(f"Base URL: {base_url}")
+    if used_fallback_port:
+        print(
+            f"Requested HTTP port {args.http_port} was unavailable; "
+            f"using {http_port} instead."
+        )
     print()
 
     with arcadedb.create_server(
@@ -204,7 +238,7 @@ def main() -> int:
         root_password=ROOT_PASSWORD,
         config={
             "host": args.host,
-            "http_port": args.http_port,
+            "http_port": http_port,
             "mode": "development",
         },
     ) as server:
