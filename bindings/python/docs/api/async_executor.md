@@ -332,7 +332,7 @@ Execute async query.
 
 **Parameters:**
 
-- `language` (str): Query language ("sql", "cypher", etc.)
+- `language` (str): Query language ("sql", "opencypher", etc.)
 - `query` (str): Query string
 - `callback` (Callable): Callback for query results
 - `**params`: Query parameters

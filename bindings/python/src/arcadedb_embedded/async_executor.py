@@ -376,7 +376,7 @@ class AsyncExecutor:
         Execute async query with callback for each result.
 
         Args:
-            language: Query language ("sql", "cypher", etc.)
+            language: Query language ("sql", "opencypher", etc.)
             query_text: Query string
             callback: Result callback, receives each ResultSet row
             **params: Query parameters
@@ -425,7 +425,7 @@ class AsyncExecutor:
         Execute async command with optional callback.
 
         Args:
-            language: Command language ("sql", "cypher", etc.)
+            language: Command language ("sql", "opencypher", etc.)
             command_text: Command string
             callback: Optional result callback
             **params: Command parameters

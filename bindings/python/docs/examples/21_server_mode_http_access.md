@@ -44,8 +44,10 @@ python3 21_server_mode_http_access.py --http-port 2491 --server-root ./my_test_d
   remote client wrapper or a new dependency.
 - Database creation still happens through the existing server-managed Java API,
   because that is the supported path already used in the test suite.
-- The example binds to `127.0.0.1:2481` by default to reduce clashes with any
-  separately running local ArcadeDB server on the usual `2480` port.
+- The example prefers `127.0.0.1:2481` by default to reduce clashes with any
+  separately running local ArcadeDB server on the usual `2480` port. If that
+  port is already in use, the script automatically falls back to a free local
+  port and prints the chosen value.
 - By default the example exits as soon as the scripted verification steps finish,
   which shuts the server down immediately. Use `--wait-for-enter` if you want time
   to open Studio and inspect the database before shutdown.

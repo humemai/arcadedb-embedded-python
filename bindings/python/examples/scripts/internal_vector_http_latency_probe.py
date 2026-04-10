@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import random
+import socket
 import tempfile
 import time
 from contextlib import contextmanager
@@ -138,6 +139,32 @@ def parse_args() -> argparse.Namespace:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(message)
+
+
+def choose_http_port(host: str, requested_port: int) -> tuple[int, bool]:
+    """Return a usable HTTP port for the probe.
+
+    Tries the requested port first. If it is unavailable, fall back to an
+    ephemeral free port chosen by the OS.
+    """
+
+    def _can_bind(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind((host, port))
+            except OSError:
+                return False
+        return True
+
+    if requested_port > 0 and _can_bind(requested_port):
+        return requested_port, False
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        fallback_port = int(sock.getsockname()[1])
+
+    return fallback_port, True
 
 
 @contextmanager
@@ -442,7 +469,8 @@ def main() -> int:
     db_path = Path(args.db_path).resolve()
     require(db_path.is_dir(), f"Database path not found or not a directory: {db_path}")
     index_name = f"{args.type_name}[{args.vector_field}]"
-    base_url = f"http://{args.host}:{args.http_port}"
+    http_port, used_fallback_port = choose_http_port(args.host, args.http_port)
+    base_url = f"http://{args.host}:{http_port}"
 
     sql_forms = [args.sql_form] if args.sql_form != "both" else ["raw", "expand"]
 
@@ -456,7 +484,7 @@ def main() -> int:
             "root_password": args.root_password,
             "config": {
                 "host": args.host,
-                "http_port": args.http_port,
+                "http_port": http_port,
                 "mode": "development",
             },
         }
@@ -472,6 +500,8 @@ def main() -> int:
         print(f"wrapper_root:  {using_wrapper_root}")
         print(f"index_name:    {index_name}")
         print(f"base_url:      {base_url}")
+        if used_fallback_port:
+            print(f"requested_port:{args.http_port} unavailable, using {http_port}")
         print(f"k:             {args.k}")
         print(f"ef_search:     {args.ef_search}")
         print(f"warmup_runs:   {args.warmup_runs}")

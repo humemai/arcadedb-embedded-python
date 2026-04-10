@@ -658,14 +658,14 @@ import arcadedb_embedded as arcadedb
 
 db = arcadedb.open_database("./graph_db")
 
-# Cypher queries also return ResultSet
+# OpenCypher queries also return ResultSet
 cypher_query = """
     MATCH (p:Person)-[:WORKS_AT]->(c:Company)
     WHERE c.name = 'TechCorp'
     RETURN p.name AS employee, p.role AS position
 """
 
-result_set = db.query("cypher", cypher_query)
+result_set = db.query("opencypher", cypher_query)
 
 print("TechCorp Employees:")
 for result in result_set:
