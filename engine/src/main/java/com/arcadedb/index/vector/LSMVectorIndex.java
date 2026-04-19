@@ -96,6 +96,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -117,6 +118,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
   public static final  int               CURRENT_VERSION = 0;
   public static final  int               DEF_PAGE_SIZE   = 262_144;
   private static final VectorTypeSupport vts             = VectorizationProvider.getInstance().getVectorTypeSupport();
+
+  // JVM-wide semaphore limiting the number of concurrent async graph rebuilds across all indexes
+  // and databases.  Multiple concurrent rebuilds are extremely memory-intensive and can cause OOM
+  // kills (issue #3868).  The permit count is read once at class-load time from the configuration.
+  private static final Semaphore REBUILD_SEMAPHORE = new Semaphore(
+      GlobalConfiguration.VECTOR_INDEX_MAX_CONCURRENT_REBUILDS.getValueAsInteger());
 
   // Page header layout constants
   public static final int OFFSET_FREE_CONTENT = 0;  // 4 bytes
@@ -1939,6 +1946,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * The current graph remains available for searches while the rebuild is in progress.
    * When the rebuild completes, the new graph is hot-swapped atomically.
    * If a rebuild is already in progress, this method does nothing (the next search will check again).
+   * <p>
+   * A JVM-wide semaphore limits the number of concurrent rebuilds to prevent OOM kills
+   * when multiple indexes trigger rebuilds simultaneously (issue #3868).
    */
   private synchronized void startAsyncGraphRebuild() {
     if (asyncRebuildInProgress)
@@ -1953,6 +1963,20 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
     asyncRebuildThread = new Thread(() -> {
       try {
+        // Acquire a rebuild permit to limit concurrent rebuilds across all indexes (issue #3868).
+        // This prevents multiple large graph rebuilds from running simultaneously and exhausting
+        // heap memory.  The thread blocks here until a permit becomes available.
+        REBUILD_SEMAPHORE.acquire();
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+        asyncRebuildInProgress = false;
+        asyncRebuildThread = null;
+        return;
+      }
+      try {
+        LogManager.instance().log(this, Level.INFO,
+            "Acquired rebuild permit for index: %s (available permits: %d)",
+            indexName, REBUILD_SEMAPHORE.availablePermits());
         buildGraphFromScratch();
         LogManager.instance().log(this, Level.INFO,
             "Async graph rebuild completed for index: %s", indexName);
@@ -1965,6 +1989,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
               "Error during async graph rebuild for index %s: %s", indexName, e.getMessage());
         }
       } finally {
+        REBUILD_SEMAPHORE.release();
         asyncRebuildInProgress = false;
         asyncRebuildThread = null;
       }
@@ -3282,23 +3307,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
           // Persist vector to page (will be added to vectorIndex inside persistVectorWithLocation)
           persistVectorWithLocation(id, rid, vector);
 
-          // Incremental graph update: add node directly to the live HNSW graph in O(log n)
-          // instead of buffering in deltaVectors and rebuilding from scratch
+          // Track in liveVectorValues for metadata consistency (O(1) - just a map put)
           final VectorFloat<?> vf = vts.createFloatVector(vector);
-
-          // Lazy-initialize the live builder on first insert (if graph exists)
-          if (liveBuilder == null && graphIndex != null)
-            ensureLiveBuilder();
-
-          if (liveBuilder != null) {
+          if (liveVectorValues != null)
             liveVectorValues.addVector(id, vf);
-            // Add to live builder's graph (O(log n) HNSW insert)
-            if (!liveBuilder.getGraph().containsNode(id))
-              liveBuilder.addGraphNode(id, vf);
-          }
 
           // Add to delta buffer so the vector is visible in search via mergeWithDeltaScan.
-          // The live builder's graph will replace the batch-built graph on next full rebuild.
+          // Skipping expensive O(log n) HNSW graph inserts during commit replay (issue #3864):
+          // the inactivity rebuild timer will incorporate delta vectors into the graph.
           deltaVectors.add(new DeltaVectorEntry(id, rid, vector));
 
           if (graphState == GraphState.IMMUTABLE || graphState == GraphState.LOADING)
@@ -3306,12 +3322,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
           // Increment mutation counter (used for periodic graph persistence)
           mutationsSinceSerialize.incrementAndGet();
-
-          // Schedule inactivity rebuild timer (issue #3737)
-          scheduleInactivityRebuild();
         } finally {
           lock.writeLock().unlock();
         }
+
+        // Schedule inactivity rebuild timer outside the lock (issue #3737)
+        scheduleInactivityRebuild();
       }
     } finally {
       // Track insert latency (only for actual writes, not transaction registration)
@@ -3321,6 +3337,68 @@ public class LSMVectorIndex implements Index, IndexInternal {
         metrics.addInsertLatency(elapsed);
       }
     }
+  }
+
+  /**
+   * Batch insert multiple vectors in a single lock acquisition.
+   * Called by TransactionIndexContext during commit replay for efficient batch processing (issue #3864).
+   * Skips per-vector HNSW graph inserts and schedules a single inactivity rebuild at the end.
+   * Vectors are immediately visible in search via delta scan (mergeWithDeltaScan).
+   *
+   * @param keysList list of key arrays, each containing a single ComparableVector or float[]
+   * @param ridsList list of corresponding RIDs
+   */
+  public void putBatch(final List<Object[]> keysList, final List<RID> ridsList) {
+    if (keysList.isEmpty())
+      return;
+
+    final long startTime = System.currentTimeMillis();
+
+    lock.writeLock().lock();
+    try {
+      for (int i = 0; i < keysList.size(); i++) {
+        final Object[] keys = keysList.get(i);
+        final RID rid = ridsList.get(i);
+
+        if (keys == null || keys.length == 0 || keys[0] == null)
+          continue;
+
+        final float[] vector;
+        if (keys[0] instanceof ComparableVector c)
+          vector = c.vector;
+        else
+          vector = VectorUtils.convertToFloatArray(keys[0]);
+
+        if (vector == null || vector.length != metadata.dimensions)
+          continue;
+
+        final int id = nextId.getAndIncrement();
+        persistVectorWithLocation(id, rid, vector);
+
+        // Track in liveVectorValues for metadata consistency (O(1) - just a map put)
+        final VectorFloat<?> vf = vts.createFloatVector(vector);
+        if (liveVectorValues != null)
+          liveVectorValues.addVector(id, vf);
+
+        // Add to delta buffer for search visibility via mergeWithDeltaScan
+        deltaVectors.add(new DeltaVectorEntry(id, rid, vector));
+
+        mutationsSinceSerialize.incrementAndGet();
+      }
+
+      if (graphState == GraphState.IMMUTABLE || graphState == GraphState.LOADING)
+        this.graphState = GraphState.MUTABLE;
+
+      metrics.incrementInsertOperations(keysList.size());
+    } finally {
+      lock.writeLock().unlock();
+    }
+
+    // Schedule ONE inactivity rebuild for the entire batch (outside the lock)
+    scheduleInactivityRebuild();
+
+    final long elapsed = System.currentTimeMillis() - startTime;
+    metrics.addInsertLatency(elapsed);
   }
 
   @Override
@@ -4485,18 +4563,26 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
         try {
           if (graphIndex != null && graphIndex.size() >= ASYNC_REBUILD_MIN_GRAPH_SIZE) {
-            // Large graph: async rebuild
+            // Large graph: async rebuild (semaphore acquired inside the async thread)
             startAsyncGraphRebuild();
           } else {
-            // Small graph: synchronous rebuild.
-            // Do NOT wrap in an external write lock - buildGraphFromScratch() manages
-            // its own locking internally (acquires/releases around preparation and state
-            // update phases, but releases during graph build to allow concurrent reads).
-            // Wrapping in an external lock would cause the internal release to only
-            // decrement the hold count, keeping the lock held during the graph build phase
-            // and potentially blocking ForkJoinPool workers that need database access.
-            if (mutationsSinceSerialize.get() > 0)
-              buildGraphFromScratch();
+            // Small graph: synchronous rebuild on the timer thread.
+            // Use tryAcquire to avoid blocking the timer thread indefinitely.
+            // If a large rebuild is already running, skip this small one - the next
+            // inactivity timeout or mutation threshold will pick it up.
+            if (mutationsSinceSerialize.get() > 0) {
+              if (REBUILD_SEMAPHORE.tryAcquire()) {
+                try {
+                  buildGraphFromScratch();
+                } finally {
+                  REBUILD_SEMAPHORE.release();
+                }
+              } else {
+                LogManager.instance().log(this, Level.INFO,
+                    "Skipping inactivity rebuild for index %s: another rebuild is already in progress",
+                    indexName);
+              }
+            }
           }
         } catch (final Exception e) {
           LogManager.instance().log(this, Level.WARNING,
