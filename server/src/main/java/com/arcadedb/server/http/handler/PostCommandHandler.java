@@ -21,10 +21,15 @@ package com.arcadedb.server.http.handler;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.async.AsyncResultsetCallback;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.sql.executor.ExecutionPlan;
+import com.arcadedb.query.sql.executor.IteratorResultSet;
+import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.query.sql.parser.ExplainResultSet;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.http.HttpServer;
+import com.arcadedb.server.monitor.QueryProfile;
+import com.arcadedb.server.monitor.ServerQueryProfiler;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.micrometer.core.instrument.Metrics;
 import io.undertow.server.HttpServerExchange;
@@ -51,7 +56,16 @@ public class PostCommandHandler extends AbstractQueryHandler {
     if (json == null)
       return new ExecutionResponse(400, "{ \"error\" : \"Command text is null\"}");
 
-    final Map<String, Object> requestMap = json.toMap();
+    final QueryProfile profile = new QueryProfile();
+    QueryProfile.pushCurrent(profile);
+    try {
+
+    // Issue #3864 follow-up: use the optimized toMap so JSON numeric arrays (e.g. vector
+    // embeddings inside `params.batch[*].vector`) are returned as primitive double[]/long[]
+    // instead of List<Double>, avoiding millions of boxed Number allocations per request.
+    final long deserializationStart = System.nanoTime();
+    final Map<String, Object> requestMap = json.toMap(true);
+    profile.addDeserializationNanos(System.nanoTime() - deserializationStart);
 
     if (requestMap.get("command") == null)
       throw new IllegalArgumentException("command missing");
@@ -110,7 +124,10 @@ public class PostCommandHandler extends AbstractQueryHandler {
       return new ExecutionResponse(202, "{ \"result\": \"Command accepted for asynchronous execution\"}");
     } else {
 
-      final ResultSet qResult = executeCommand(database, language, command, paramMap);
+      final boolean detailedProfile = "detailed".equalsIgnoreCase(profileExecution);
+
+      final long engineStart = System.nanoTime();
+      ResultSet qResult = executeCommand(database, language, command, paramMap);
 
       final JSONObject response = new JSONObject();
       response.put("user", user != null ? user.getName() : null);
@@ -123,10 +140,22 @@ public class PostCommandHandler extends AbstractQueryHandler {
         while (qResult.hasNext()) {
           qResult.next();
         }
+        profile.addEngineNanos(System.nanoTime() - engineStart);
+
+        final long serializationStart = System.nanoTime();
         serializeResultSet(database, serializer, limit, response, qResult);
         response.put("explain", explainText);
         response.put("explainPlan", executionPlan.toResult().toJSON());
+        profile.addSerializationNanos(System.nanoTime() - serializationStart);
       } else {
+        if (detailedProfile && qResult != null) {
+          // Materialize the ResultSet inside the engine timer so the serialization
+          // timer captures only the wire-format conversion and not query work.
+          qResult = materializeResultSet(qResult);
+        }
+        profile.addEngineNanos(System.nanoTime() - engineStart);
+
+        final long serializationStart = System.nanoTime();
         serializeResultSet(database, serializer, limit, response, qResult);
 
         if (qResult != null && qResult.getExecutionPlan().isPresent() &&
@@ -136,11 +165,71 @@ public class PostCommandHandler extends AbstractQueryHandler {
           response.put("explain", executionPlan.prettyPrint(0, 2));
           response.put("explainPlan", executionPlan.toResult().toJSON());
         }
+        profile.addSerializationNanos(System.nanoTime() - serializationStart);
       }
 
+      if (detailedProfile)
+        response.put("profile", profile.toJSON());
+
       Metrics.counter("http.command").increment();
+      recordProfilerMetrics("http.command", profile);
+
+      recordServerProfile(database.getName(), language, command, profile, qResult);
 
       return new ExecutionResponse(200, response.toString());
+    }
+
+    } finally {
+      QueryProfile.popCurrent();
+    }
+  }
+
+  protected void recordServerProfile(final String databaseName, final String language, final String command,
+      final QueryProfile profile, final ResultSet qResult) {
+    final ServerQueryProfiler serverProfiler = httpServer.getServer().getQueryProfiler();
+    if (serverProfiler == null || !serverProfiler.isRecording())
+      return;
+
+    JSONObject planJson = null;
+    try {
+      if (qResult != null) {
+        final var plan = qResult.getExecutionPlan();
+        if (plan.isPresent())
+          planJson = plan.get().toResult().toJSON();
+      }
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.FINE, "Could not extract execution plan for profiling", e);
+    }
+    serverProfiler.recordQuery(databaseName, language, command, profile, planJson);
+  }
+
+  protected static void recordProfilerMetrics(final String prefix, final QueryProfile profile) {
+    Metrics.timer(prefix + ".deserialization").record(profile.getDeserializationNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+    Metrics.timer(prefix + ".engine").record(profile.getEngineNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+    Metrics.timer(prefix + ".serialization").record(profile.getSerializationNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+  }
+
+  /**
+   * Drains the given {@link ResultSet} into an in-memory list preserving the
+   * original execution plan, and returns a new {@link ResultSet} backed by the
+   * list. The source {@link ResultSet} is closed. Used by the profiler to
+   * separate engine execution time from serialization time.
+   */
+  private static ResultSet materializeResultSet(final ResultSet source) {
+    try {
+      final List<Result> rows = new ArrayList<>();
+      while (source.hasNext())
+        rows.add(source.next());
+
+      final Optional<ExecutionPlan> plan = source.getExecutionPlan();
+      return new IteratorResultSet(rows.iterator()) {
+        @Override
+        public Optional<ExecutionPlan> getExecutionPlan() {
+          return plan;
+        }
+      };
+    } finally {
+      source.close();
     }
   }
 

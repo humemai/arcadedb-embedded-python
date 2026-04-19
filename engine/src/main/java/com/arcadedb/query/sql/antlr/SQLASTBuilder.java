@@ -61,7 +61,8 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
    * When an identifierChain matches "namespace.method(args)", it is rewritten as a
    * namespace-qualified function call (e.g. "geo.point(x,y)" → FunctionCall("geo.point")).
    */
-  private static final Set<String> FUNCTION_NAMESPACES = Set.of("ts","geo");
+  private static final Set<String> FUNCTION_NAMESPACES = Set.of("ts", "geo", "text", "math", "convert", "date", "util", "coll",
+      "map", "agg", "node", "rel", "path", "create");
 
 
   private int positionalParamCounter = 0;
@@ -2522,6 +2523,23 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       throw new CommandSQLParsingException("Failed to wrap map literal in BaseExpression: " + e.getMessage(), e);
     }
 
+    // Process modifiers (e.g., {"a": 1}.a)
+    if (ctx.modifier() != null && !ctx.modifier().isEmpty()) {
+      Modifier firstModifier = null;
+      Modifier currentModifier = null;
+      for (final SQLParser.ModifierContext modCtx : ctx.modifier()) {
+        final Modifier modifier = (Modifier) visit(modCtx);
+        if (firstModifier == null) {
+          firstModifier = modifier;
+          currentModifier = modifier;
+        } else {
+          currentModifier.next = modifier;
+          currentModifier = modifier;
+        }
+      }
+      baseExpr.modifier = firstModifier;
+    }
+
     return baseExpr;
   }
 
@@ -4245,8 +4263,8 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
         final SQLParser.BaseExpressionContext baseExprCtx = baseCtx.baseExpression();
 
         if (baseExprCtx != null && baseExprCtx instanceof final SQLParser.ParenthesizedStmtContext parenCtx) {
-          if (parenCtx.statement() != null) {
-            // Found a statement inside parentheses - visit it directly
+          if (parenCtx.statement() != null && CollectionUtils.isEmpty(parenCtx.modifier())) {
+            // Found a statement inside parentheses with no trailing modifiers - visit it directly
             statementFromExpr = (Statement) visit(parenCtx.statement());
           }
         }
@@ -5871,6 +5889,25 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     stmt.ifExists = bodyCtx.IF() != null && bodyCtx.EXISTS() != null;
 
     // UNSAFE
+    stmt.unsafe = bodyCtx.UNSAFE() != null;
+
+    return stmt;
+  }
+
+  /**
+   * Visit DROP TIMESERIES TYPE statement - delegates to the same DropTypeStatement.
+   */
+  @Override
+  public DropTypeStatement visitDropTimeSeriesTypeStmt(final SQLParser.DropTimeSeriesTypeStmtContext ctx) {
+    final DropTypeStatement stmt = new DropTypeStatement(-1);
+    final SQLParser.DropTypeBodyContext bodyCtx = ctx.dropTypeBody();
+
+    if (bodyCtx.identifier() != null)
+      stmt.name = (Identifier) visit(bodyCtx.identifier());
+    else if (bodyCtx.inputParameter() != null)
+      stmt.nameParam = (InputParameter) visit(bodyCtx.inputParameter());
+
+    stmt.ifExists = bodyCtx.IF() != null && bodyCtx.EXISTS() != null;
     stmt.unsafe = bodyCtx.UNSAFE() != null;
 
     return stmt;
