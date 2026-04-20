@@ -136,6 +136,10 @@ with db.transaction():
 Convert the document to a Python dictionary of its properties (metadata like RID/type
 is not included). Use `get_rid()` for the record ID if needed.
 
+**Performance note:** `to_dict()` eagerly converts the full document into Python
+data. For large scans or repeated wrapper access, prefer `get()` when you only need
+specific fields.
+
 ```python
 doc_dict = doc.to_dict()
 print(doc_dict)

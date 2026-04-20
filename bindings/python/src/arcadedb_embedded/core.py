@@ -32,6 +32,10 @@ class Database:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
+    def get_java_database(self):
+        """Expose the wrapped Java database for internal integrations."""
+        return self._java_db
+
     @staticmethod
     def _convert_args(args):
         if not args:

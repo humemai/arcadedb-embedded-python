@@ -1,0 +1,4083 @@
+{
+  "generated_at": "2026-04-20T14:01:05.923983+00:00",
+  "config": {
+    "scenarios": [
+      "jvm_startup",
+      "db_lifecycle",
+      "sql_projected_lazy_scan",
+      "sql_projected_to_list",
+      "sql_full_records_to_list",
+      "sql_full_records_to_list_no_convert",
+      "sql_full_records_wrapper_scan",
+      "sql_full_records_to_list_retained",
+      "sql_aggregate_first",
+      "sql_aggregate_one",
+      "opencypher_lazy_scan",
+      "opencypher_to_list",
+      "sql_vector_neighbors_extract_hits",
+      "sql_vector_neighbors_followup_query",
+      "async_query_callback",
+      "export_to_csv"
+    ],
+    "runs": 3,
+    "records": 5000,
+    "person_count": 2000,
+    "graph_degree": 3,
+    "vector_records": 1500,
+    "vector_dimensions": 32,
+    "vector_k": 10,
+    "query_runs": 100,
+    "chunk_size": 1000,
+    "heap_size": "4g"
+  },
+  "scenario_reports": [
+    {
+      "scenario": "jvm_startup",
+      "runs": [
+        {
+          "scenario": "jvm_startup",
+          "durations_s": {
+            "start_jvm": 0.1654474961105734,
+            "wall_total": 0.1654474961105734
+          },
+          "snapshots": [
+            {
+              "label": "before_start_jvm",
+              "rss_bytes": 45821952,
+              "max_rss_bytes": 42569728,
+              "python_current_bytes": 8495297,
+              "python_peak_bytes": 8508409,
+              "user_s": 1.688282,
+              "system_s": 0.023694999999999997,
+              "jvm_free_bytes": null,
+              "jvm_total_bytes": null,
+              "jvm_max_bytes": null
+            },
+            {
+              "label": "after_start_jvm",
+              "rss_bytes": 173953024,
+              "max_rss_bytes": 186298368,
+              "python_current_bytes": 8879327,
+              "python_peak_bytes": 8909156,
+              "user_s": 2.379163,
+              "system_s": 0.119256,
+              "jvm_free_bytes": 22172152,
+              "jvm_total_bytes": 29360128,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_delta_bytes": 128131072,
+            "python_peak_delta_bytes": 400747
+          },
+          "worker_wall_s": 0.526356115937233
+        },
+        {
+          "scenario": "jvm_startup",
+          "durations_s": {
+            "start_jvm": 0.16783374198712409,
+            "wall_total": 0.16783374198712409
+          },
+          "snapshots": [
+            {
+              "label": "before_start_jvm",
+              "rss_bytes": 45826048,
+              "max_rss_bytes": 43941888,
+              "python_current_bytes": 8494062,
+              "python_peak_bytes": 8507129,
+              "user_s": 1.864488,
+              "system_s": 0.013899,
+              "jvm_free_bytes": null,
+              "jvm_total_bytes": null,
+              "jvm_max_bytes": null
+            },
+            {
+              "label": "after_start_jvm",
+              "rss_bytes": 172359680,
+              "max_rss_bytes": 179924992,
+              "python_current_bytes": 8877809,
+              "python_peak_bytes": 8907440,
+              "user_s": 2.53794,
+              "system_s": 0.108272,
+              "jvm_free_bytes": 22085816,
+              "jvm_total_bytes": 29360128,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_delta_bytes": 126533632,
+            "python_peak_delta_bytes": 400311
+          },
+          "worker_wall_s": 0.5292269350029528
+        },
+        {
+          "scenario": "jvm_startup",
+          "durations_s": {
+            "start_jvm": 0.17249409994110465,
+            "wall_total": 0.17249409994110465
+          },
+          "snapshots": [
+            {
+              "label": "before_start_jvm",
+              "rss_bytes": 45858816,
+              "max_rss_bytes": 44150784,
+              "python_current_bytes": 8494694,
+              "python_peak_bytes": 8507871,
+              "user_s": 1.851869,
+              "system_s": 0.024904,
+              "jvm_free_bytes": null,
+              "jvm_total_bytes": null,
+              "jvm_max_bytes": null
+            },
+            {
+              "label": "after_start_jvm",
+              "rss_bytes": 166277120,
+              "max_rss_bytes": 178548736,
+              "python_current_bytes": 8879083,
+              "python_peak_bytes": 8908709,
+              "user_s": 2.568044,
+              "system_s": 0.120345,
+              "jvm_free_bytes": 22168400,
+              "jvm_total_bytes": 29360128,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_delta_bytes": 120418304,
+            "python_peak_delta_bytes": 400838
+          },
+          "worker_wall_s": 0.565088998991996
+        }
+      ],
+      "wall_summary_s": {
+        "min": 0.1654474961105734,
+        "mean": 0.16859177934626737,
+        "median": 0.16783374198712409,
+        "max": 0.17249409994110465
+      },
+      "wall_p95_s": 0.1720280641457066,
+      "wall_p99_s": 0.17240089278202503
+    },
+    {
+      "scenario": "db_lifecycle",
+      "runs": [
+        {
+          "scenario": "db_lifecycle",
+          "durations_s": {
+            "create_database": 0.304476676043123,
+            "populate": 0.3366303851362318,
+            "close": 0.006957641104236245,
+            "wall_total": 0.648064702283591
+          },
+          "snapshots": [
+            {
+              "label": "before_create_database",
+              "rss_bytes": 45776896,
+              "max_rss_bytes": 44998656,
+              "python_current_bytes": 8498193,
+              "python_peak_bytes": 8506894,
+              "user_s": 1.8042319999999998,
+              "system_s": 0.018907999999999998,
+              "jvm_free_bytes": null,
+              "jvm_total_bytes": null,
+              "jvm_max_bytes": null
+            },
+            {
+              "label": "after_create_database",
+              "rss_bytes": 135884800,
+              "max_rss_bytes": 148803584,
+              "python_current_bytes": 8966939,
+              "python_peak_bytes": 8973688,
+              "user_s": 2.383928,
+              "system_s": 0.07979599999999999,
+              "jvm_free_bytes": 22680864,
+              "jvm_total_bytes": 29360128,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_populate",
+              "rss_bytes": 205697024,
+              "max_rss_bytes": 199569408,
+              "python_current_bytes": 9040797,
+              "python_peak_bytes": 9043085,
+              "user_s": 3.5307209999999998,
+              "system_s": 0.142907,
+              "jvm_free_bytes": 1051181880,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 266493952,
+              "max_rss_bytes": 260648960,
+              "python_current_bytes": 9068809,
+              "python_peak_bytes": 9070468,
+              "user_s": 3.867222,
+              "system_s": 0.188718,
+              "jvm_free_bytes": 134423208,
+              "jvm_total_bytes": 146800640,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_after_create_delta_bytes": 90107904,
+            "rss_after_populate_delta_bytes": 159920128,
+            "rss_after_close_delta_bytes": 220717056
+          },
+          "counts": {
+            "records": 5000
+          },
+          "worker_wall_s": 0.9858463609125465
+        },
+        {
+          "scenario": "db_lifecycle",
+          "durations_s": {
+            "create_database": 0.26412424189038575,
+            "populate": 0.25977674894966185,
+            "close": 0.007493813056498766,
+            "wall_total": 0.5313948038965464
+          },
+          "snapshots": [
+            {
+              "label": "before_create_database",
+              "rss_bytes": 45797376,
+              "max_rss_bytes": 44580864,
+              "python_current_bytes": 8498222,
+              "python_peak_bytes": 8506911,
+              "user_s": 1.876935,
+              "system_s": 0.020921,
+              "jvm_free_bytes": null,
+              "jvm_total_bytes": null,
+              "jvm_max_bytes": null
+            },
+            {
+              "label": "after_create_database",
+              "rss_bytes": 145141760,
+              "max_rss_bytes": 150769664,
+              "python_current_bytes": 8966382,
+              "python_peak_bytes": 8973131,
+              "user_s": 2.404204,
+              "system_s": 0.075319,
+              "jvm_free_bytes": 20484024,
+              "jvm_total_bytes": 29360128,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_populate",
+              "rss_bytes": 247017472,
+              "max_rss_bytes": 242798592,
+              "python_current_bytes": 9040444,
+              "python_peak_bytes": 9043975,
+              "user_s": 3.405163,
+              "system_s": 0.144943,
+              "jvm_free_bytes": 16145904,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 242417664,
+              "max_rss_bytes": 243335168,
+              "python_current_bytes": 9068336,
+              "python_peak_bytes": 9069995,
+              "user_s": 3.857026,
+              "system_s": 0.156216,
+              "jvm_free_bytes": 24607152,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_after_create_delta_bytes": 99344384,
+            "rss_after_populate_delta_bytes": 201220096,
+            "rss_after_close_delta_bytes": 196620288
+          },
+          "counts": {
+            "records": 5000
+          },
+          "worker_wall_s": 0.9162003269884735
+        },
+        {
+          "scenario": "db_lifecycle",
+          "durations_s": {
+            "create_database": 0.2541870209388435,
+            "populate": 0.27205873606726527,
+            "close": 0.007427162025123835,
+            "wall_total": 0.5336729190312326
+          },
+          "snapshots": [
+            {
+              "label": "before_create_database",
+              "rss_bytes": 45756416,
+              "max_rss_bytes": 44789760,
+              "python_current_bytes": 8498502,
+              "python_peak_bytes": 8507238,
+              "user_s": 1.86073,
+              "system_s": 0.008941,
+              "jvm_free_bytes": null,
+              "jvm_total_bytes": null,
+              "jvm_max_bytes": null
+            },
+            {
+              "label": "after_create_database",
+              "rss_bytes": 152174592,
+              "max_rss_bytes": 148836352,
+              "python_current_bytes": 8979468,
+              "python_peak_bytes": 8986164,
+              "user_s": 2.359634,
+              "system_s": 0.073957,
+              "jvm_free_bytes": 28765720,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_populate",
+              "rss_bytes": 240971776,
+              "max_rss_bytes": 235397120,
+              "python_current_bytes": 9040053,
+              "python_peak_bytes": 9042576,
+              "user_s": 3.398323,
+              "system_s": 0.144544,
+              "jvm_free_bytes": 20761512,
+              "jvm_total_bytes": 29360128,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 234061824,
+              "max_rss_bytes": 235921408,
+              "python_current_bytes": 9065753,
+              "python_peak_bytes": 9070300,
+              "user_s": 3.728424,
+              "system_s": 0.155351,
+              "jvm_free_bytes": 18386952,
+              "jvm_total_bytes": 29360128,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_after_create_delta_bytes": 106418176,
+            "rss_after_populate_delta_bytes": 195215360,
+            "rss_after_close_delta_bytes": 188305408
+          },
+          "counts": {
+            "records": 5000
+          },
+          "worker_wall_s": 0.8842313778586686
+        }
+      ],
+      "wall_summary_s": {
+        "min": 0.5313948038965464,
+        "mean": 0.5710441417371234,
+        "median": 0.5336729190312326,
+        "max": 0.648064702283591
+      },
+      "wall_p95_s": 0.6366255239583551,
+      "wall_p99_s": 0.6457768666185438
+    },
+    {
+      "scenario": "sql_projected_lazy_scan",
+      "runs": [
+        {
+          "scenario": "sql_projected_lazy_scan",
+          "durations_s": {
+            "query_create": 0.5196262425743043,
+            "iterate": 2.160738848382607,
+            "wall_total": 2.6803650909569114
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 220246016,
+              "max_rss_bytes": 214650880,
+              "python_current_bytes": 9022640,
+              "python_peak_bytes": 9025465,
+              "user_s": 3.503193,
+              "system_s": 0.146762,
+              "jvm_free_bytes": 1043235416,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 222576640,
+              "max_rss_bytes": 216748032,
+              "python_current_bytes": 9039129,
+              "python_peak_bytes": 9040191,
+              "user_s": 3.537324,
+              "system_s": 0.146762,
+              "jvm_free_bytes": 1040411472,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 765276160,
+              "max_rss_bytes": 758444032,
+              "python_current_bytes": 16788198,
+              "python_peak_bytes": 16788566,
+              "user_s": 7.761232,
+              "system_s": 0.341935,
+              "jvm_free_bytes": 596160808,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_iterate",
+              "rss_bytes": 787922944,
+              "max_rss_bytes": 781774848,
+              "python_current_bytes": 16808283,
+              "python_peak_bytes": 16812299,
+              "user_s": 7.873607,
+              "system_s": 0.411862,
+              "jvm_free_bytes": 69844856,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 787820544,
+              "max_rss_bytes": 781774848,
+              "python_current_bytes": 16809446,
+              "python_peak_bytes": 16819382,
+              "user_s": 7.8756,
+              "system_s": 0.41286599999999996,
+              "jvm_free_bytes": 69844856,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_iterate_delta_bytes": 22646784,
+            "python_peak_iterate_delta_bytes": 23733
+          },
+          "counts": {
+            "rows_processed": 250400,
+            "checksum": 624876400
+          },
+          "worker_wall_s": 3.633271930972114
+        },
+        {
+          "scenario": "sql_projected_lazy_scan",
+          "durations_s": {
+            "query_create": 0.5310961555223912,
+            "iterate": 2.179359157336876,
+            "wall_total": 2.710455312859267
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 218169344,
+              "max_rss_bytes": 213696512,
+              "python_current_bytes": 9022017,
+              "python_peak_bytes": 9024842,
+              "user_s": 3.521326,
+              "system_s": 0.15353999999999998,
+              "jvm_free_bytes": 1043306616,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 220516352,
+              "max_rss_bytes": 215793664,
+              "python_current_bytes": 9038507,
+              "python_peak_bytes": 9039523,
+              "user_s": 3.5541,
+              "system_s": 0.15369,
+              "jvm_free_bytes": 1040440272,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 761155584,
+              "max_rss_bytes": 755363840,
+              "python_current_bytes": 16787409,
+              "python_peak_bytes": 16787777,
+              "user_s": 7.781604,
+              "system_s": 0.370456,
+              "jvm_free_bytes": 611864936,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_iterate",
+              "rss_bytes": 783331328,
+              "max_rss_bytes": 779218944,
+              "python_current_bytes": 16809851,
+              "python_peak_bytes": 16811510,
+              "user_s": 7.891745,
+              "system_s": 0.448829,
+              "jvm_free_bytes": 69819952,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 783233024,
+              "max_rss_bytes": 779218944,
+              "python_current_bytes": 16808710,
+              "python_peak_bytes": 16818646,
+              "user_s": 7.8939889999999995,
+              "system_s": 0.449906,
+              "jvm_free_bytes": 69819952,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_iterate_delta_bytes": 22175744,
+            "python_peak_iterate_delta_bytes": 23733
+          },
+          "counts": {
+            "rows_processed": 250400,
+            "checksum": 624876400
+          },
+          "worker_wall_s": 3.6588441689964384
+        },
+        {
+          "scenario": "sql_projected_lazy_scan",
+          "durations_s": {
+            "query_create": 0.5012230933643878,
+            "iterate": 2.155360745731741,
+            "wall_total": 2.656583839096129
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 239063040,
+              "max_rss_bytes": 235986944,
+              "python_current_bytes": 9023720,
+              "python_peak_bytes": 9027833,
+              "user_s": 3.549907,
+              "system_s": 0.16402799999999998,
+              "jvm_free_bytes": 25040184,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 237035520,
+              "max_rss_bytes": 235986944,
+              "python_current_bytes": 9040228,
+              "python_peak_bytes": 9041335,
+              "user_s": 3.576127,
+              "system_s": 0.16614299999999999,
+              "jvm_free_bytes": 23176408,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 335044608,
+              "max_rss_bytes": 327630848,
+              "python_current_bytes": 16784915,
+              "python_peak_bytes": 16785283,
+              "user_s": 8.032903,
+              "system_s": 0.264333,
+              "jvm_free_bytes": 9788808,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_iterate",
+              "rss_bytes": 335077376,
+              "max_rss_bytes": 327630848,
+              "python_current_bytes": 16811574,
+              "python_peak_bytes": 16813288,
+              "user_s": 8.061858,
+              "system_s": 0.264356,
+              "jvm_free_bytes": 36819048,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 334950400,
+              "max_rss_bytes": 327630848,
+              "python_current_bytes": 16810433,
+              "python_peak_bytes": 16820369,
+              "user_s": 8.066744,
+              "system_s": 0.264356,
+              "jvm_free_bytes": 36819048,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_iterate_delta_bytes": 32768,
+            "python_peak_iterate_delta_bytes": 28005
+          },
+          "counts": {
+            "rows_processed": 250400,
+            "checksum": 624876400
+          },
+          "worker_wall_s": 3.532241490902379
+        }
+      ],
+      "wall_summary_s": {
+        "min": 2.656583839096129,
+        "mean": 2.6824680809707693,
+        "median": 2.6803650909569114,
+        "max": 2.710455312859267
+      },
+      "wall_p95_s": 2.7074462906690315,
+      "wall_p99_s": 2.7098535084212196
+    },
+    {
+      "scenario": "sql_projected_to_list",
+      "runs": [
+        {
+          "scenario": "sql_projected_to_list",
+          "durations_s": {
+            "query_create": 0.4829591966699809,
+            "materialize": 6.52396933385171,
+            "wall_total": 7.006928530521691
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 218456064,
+              "max_rss_bytes": 213286912,
+              "python_current_bytes": 9023168,
+              "python_peak_bytes": 9025993,
+              "user_s": 3.412275,
+              "system_s": 0.150585,
+              "jvm_free_bytes": 1043181312,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 220823552,
+              "max_rss_bytes": 215646208,
+              "python_current_bytes": 9039614,
+              "python_peak_bytes": 9040675,
+              "user_s": 3.445542,
+              "system_s": 0.15273299999999998,
+              "jvm_free_bytes": 1040408432,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 220831744,
+              "max_rss_bytes": 215646208,
+              "python_current_bytes": 9040273,
+              "python_peak_bytes": 9050393,
+              "user_s": 3.445929,
+              "system_s": 0.15275,
+              "jvm_free_bytes": 1040408432,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 338063360,
+              "max_rss_bytes": 357130240,
+              "python_current_bytes": 17848938,
+              "python_peak_bytes": 18739055,
+              "user_s": 12.246409,
+              "system_s": 0.284776,
+              "jvm_free_bytes": 20543800,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 338141184,
+              "max_rss_bytes": 357130240,
+              "python_current_bytes": 17748935,
+              "python_peak_bytes": 18739055,
+              "user_s": 12.289269,
+              "system_s": 0.284794,
+              "jvm_free_bytes": 36635248,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 338018304,
+              "max_rss_bytes": 357130240,
+              "python_current_bytes": 17747794,
+              "python_peak_bytes": 18739055,
+              "user_s": 12.292711,
+              "system_s": 0.285807,
+              "jvm_free_bytes": 36635248,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": 117231616,
+            "python_peak_materialize_delta_bytes": 9688662,
+            "rss_release_delta_bytes": 77824,
+            "python_peak_release_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 250400,
+            "checksum": 624876400
+          },
+          "worker_wall_s": 7.991132048889995
+        },
+        {
+          "scenario": "sql_projected_to_list",
+          "durations_s": {
+            "query_create": 0.4605703440029174,
+            "materialize": 6.557655256008729,
+            "wall_total": 7.018225600011647
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 223014912,
+              "max_rss_bytes": 223674368,
+              "python_current_bytes": 9023313,
+              "python_peak_bytes": 9027471,
+              "user_s": 3.479192,
+              "system_s": 0.12997799999999998,
+              "jvm_free_bytes": 15109336,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 221290496,
+              "max_rss_bytes": 223674368,
+              "python_current_bytes": 9039738,
+              "python_peak_bytes": 9040813,
+              "user_s": 3.5103869999999997,
+              "system_s": 0.13214299999999998,
+              "jvm_free_bytes": 13259000,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 221294592,
+              "max_rss_bytes": 223674368,
+              "python_current_bytes": 9040397,
+              "python_peak_bytes": 9050517,
+              "user_s": 3.511527,
+              "system_s": 0.13214299999999998,
+              "jvm_free_bytes": 13259000,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 355115008,
+              "max_rss_bytes": 350965760,
+              "python_current_bytes": 17849296,
+              "python_peak_bytes": 18739413,
+              "user_s": 12.391619,
+              "system_s": 0.251723,
+              "jvm_free_bytes": 19083656,
+              "jvm_total_bytes": 62914560,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 355573760,
+              "max_rss_bytes": 351490048,
+              "python_current_bytes": 17749072,
+              "python_peak_bytes": 18739413,
+              "user_s": 12.438182,
+              "system_s": 0.252694,
+              "jvm_free_bytes": 36554192,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 355450880,
+              "max_rss_bytes": 351490048,
+              "python_current_bytes": 17747931,
+              "python_peak_bytes": 18739413,
+              "user_s": 12.442549,
+              "system_s": 0.252694,
+              "jvm_free_bytes": 36554192,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": 133820416,
+            "python_peak_materialize_delta_bytes": 9688896,
+            "rss_release_delta_bytes": 458752,
+            "python_peak_release_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 250400,
+            "checksum": 624876400
+          },
+          "worker_wall_s": 7.9519307089503855
+        },
+        {
+          "scenario": "sql_projected_to_list",
+          "durations_s": {
+            "query_create": 0.4886758257634938,
+            "materialize": 6.426264633890241,
+            "wall_total": 6.914940459653735
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 237944832,
+              "max_rss_bytes": 231788544,
+              "python_current_bytes": 9024503,
+              "python_peak_bytes": 9027328,
+              "user_s": 3.460827,
+              "system_s": 0.14673,
+              "jvm_free_bytes": 27158352,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 238321664,
+              "max_rss_bytes": 232050688,
+              "python_current_bytes": 9041009,
+              "python_peak_bytes": 9042070,
+              "user_s": 3.489186,
+              "system_s": 0.14774299999999999,
+              "jvm_free_bytes": 25290040,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 238329856,
+              "max_rss_bytes": 232050688,
+              "python_current_bytes": 9041668,
+              "python_peak_bytes": 9051788,
+              "user_s": 3.489313,
+              "system_s": 0.147749,
+              "jvm_free_bytes": 25290040,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 318767104,
+              "max_rss_bytes": 313569280,
+              "python_current_bytes": 17850602,
+              "python_peak_bytes": 18740719,
+              "user_s": 12.057424,
+              "system_s": 0.24193399999999998,
+              "jvm_free_bytes": 18650264,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 318816256,
+              "max_rss_bytes": 313569280,
+              "python_current_bytes": 17750512,
+              "python_peak_bytes": 18740719,
+              "user_s": 12.09733,
+              "system_s": 0.24193399999999998,
+              "jvm_free_bytes": 36760472,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 318697472,
+              "max_rss_bytes": 313569280,
+              "python_current_bytes": 17749371,
+              "python_peak_bytes": 18740719,
+              "user_s": 12.100688,
+              "system_s": 0.24292,
+              "jvm_free_bytes": 36760472,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": 80437248,
+            "python_peak_materialize_delta_bytes": 9688931,
+            "rss_release_delta_bytes": 49152,
+            "python_peak_release_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 250400,
+            "checksum": 624876400
+          },
+          "worker_wall_s": 7.86195213207975
+        }
+      ],
+      "wall_summary_s": {
+        "min": 6.914940459653735,
+        "mean": 6.980031530062358,
+        "median": 7.006928530521691,
+        "max": 7.018225600011647
+      },
+      "wall_p95_s": 7.017095893062651,
+      "wall_p99_s": 7.017999658621847
+    },
+    {
+      "scenario": "sql_full_records_to_list",
+      "runs": [
+        {
+          "scenario": "sql_full_records_to_list",
+          "durations_s": {
+            "query_create": 0.4651575777679682,
+            "materialize": 27.230544409248978,
+            "wall_total": 27.695701987016946
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 229195776,
+              "max_rss_bytes": 230580224,
+              "python_current_bytes": 9021819,
+              "python_peak_bytes": 9025932,
+              "user_s": 3.442058,
+              "system_s": 0.170398,
+              "jvm_free_bytes": 24870760,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 227160064,
+              "max_rss_bytes": 230580224,
+              "python_current_bytes": 9038202,
+              "python_peak_bytes": 9039272,
+              "user_s": 3.464785,
+              "system_s": 0.172487,
+              "jvm_free_bytes": 22992632,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 227164160,
+              "max_rss_bytes": 230580224,
+              "python_current_bytes": 9038861,
+              "python_peak_bytes": 9048981,
+              "user_s": 3.46491,
+              "system_s": 0.17249299999999998,
+              "jvm_free_bytes": 22992632,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 388259840,
+              "max_rss_bytes": 1000116224,
+              "python_current_bytes": 27527648,
+              "python_peak_bytes": 30563903,
+              "user_s": 32.344778,
+              "system_s": 0.628683,
+              "jvm_free_bytes": 67939232,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 389275648,
+              "max_rss_bytes": 1000116224,
+              "python_current_bytes": 27471791,
+              "python_peak_bytes": 30563903,
+              "user_s": 32.420146,
+              "system_s": 0.629566,
+              "jvm_free_bytes": 36241464,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 389144576,
+              "max_rss_bytes": 1000116224,
+              "python_current_bytes": 27470650,
+              "python_peak_bytes": 30563903,
+              "user_s": 32.423597,
+              "system_s": 0.629566,
+              "jvm_free_bytes": 36241464,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": 161095680,
+            "python_peak_materialize_delta_bytes": 21514922,
+            "rss_release_delta_bytes": 1015808,
+            "python_peak_release_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 500000,
+            "checksum": 1249750000
+          },
+          "worker_wall_s": 28.7992541261483
+        },
+        {
+          "scenario": "sql_full_records_to_list",
+          "durations_s": {
+            "query_create": 0.5563312622252852,
+            "materialize": 26.418972697574645,
+            "wall_total": 26.97530395979993
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 218345472,
+              "max_rss_bytes": 212762624,
+              "python_current_bytes": 9021821,
+              "python_peak_bytes": 9024646,
+              "user_s": 3.540778,
+              "system_s": 0.13877499999999998,
+              "jvm_free_bytes": 1043217160,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 220827648,
+              "max_rss_bytes": 214859776,
+              "python_current_bytes": 9038204,
+              "python_peak_bytes": 9039274,
+              "user_s": 3.570484,
+              "system_s": 0.14088699999999998,
+              "jvm_free_bytes": 1040402328,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 220831744,
+              "max_rss_bytes": 214859776,
+              "python_current_bytes": 9038863,
+              "python_peak_bytes": 9048983,
+              "user_s": 3.570613,
+              "system_s": 0.140892,
+              "jvm_free_bytes": 1040402328,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 375021568,
+              "max_rss_bytes": 369115136,
+              "python_current_bytes": 27619524,
+              "python_peak_bytes": 30655883,
+              "user_s": 32.159648,
+              "system_s": 0.28773,
+              "jvm_free_bytes": 14746064,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 377073664,
+              "max_rss_bytes": 371474432,
+              "python_current_bytes": 27471527,
+              "python_peak_bytes": 30655883,
+              "user_s": 32.220722,
+              "system_s": 0.289725,
+              "jvm_free_bytes": 36696744,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 376946688,
+              "max_rss_bytes": 371474432,
+              "python_current_bytes": 27470386,
+              "python_peak_bytes": 30655883,
+              "user_s": 32.226096,
+              "system_s": 0.29073099999999996,
+              "jvm_free_bytes": 36696744,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": 154189824,
+            "python_peak_materialize_delta_bytes": 21606900,
+            "rss_release_delta_bytes": 2052096,
+            "python_peak_release_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 500000,
+            "checksum": 1249750000
+          },
+          "worker_wall_s": 28.085826869821176
+        },
+        {
+          "scenario": "sql_full_records_to_list",
+          "durations_s": {
+            "query_create": 0.38071698299609125,
+            "materialize": 27.470709714572877,
+            "wall_total": 27.851426697568968
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 218660864,
+              "max_rss_bytes": 213078016,
+              "python_current_bytes": 9022458,
+              "python_peak_bytes": 9025338,
+              "user_s": 3.454797,
+              "system_s": 0.136293,
+              "jvm_free_bytes": 1043127856,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 221003776,
+              "max_rss_bytes": 215437312,
+              "python_current_bytes": 9038885,
+              "python_peak_bytes": 9039901,
+              "user_s": 3.483678,
+              "system_s": 0.142293,
+              "jvm_free_bytes": 1040340088,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 221007872,
+              "max_rss_bytes": 215437312,
+              "python_current_bytes": 9039544,
+              "python_peak_bytes": 9049664,
+              "user_s": 3.483803,
+              "system_s": 0.14229899999999998,
+              "jvm_free_bytes": 1040340088,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 372682752,
+              "max_rss_bytes": 365678592,
+              "python_current_bytes": 27480002,
+              "python_peak_bytes": 30516257,
+              "user_s": 33.051347,
+              "system_s": 0.27704999999999996,
+              "jvm_free_bytes": 35823296,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 372961280,
+              "max_rss_bytes": 365940736,
+              "python_current_bytes": 27472152,
+              "python_peak_bytes": 30516257,
+              "user_s": 33.123235,
+              "system_s": 0.27704999999999996,
+              "jvm_free_bytes": 36737184,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 372834304,
+              "max_rss_bytes": 365940736,
+              "python_current_bytes": 27471011,
+              "python_peak_bytes": 30516257,
+              "user_s": 33.126228,
+              "system_s": 0.277055,
+              "jvm_free_bytes": 36737184,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": 151674880,
+            "python_peak_materialize_delta_bytes": 21466593,
+            "rss_release_delta_bytes": 278528,
+            "python_peak_release_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 500000,
+            "checksum": 1249750000
+          },
+          "worker_wall_s": 28.937330568907782
+        }
+      ],
+      "wall_summary_s": {
+        "min": 26.97530395979993,
+        "mean": 27.507477548128616,
+        "median": 27.695701987016946,
+        "max": 27.851426697568968
+      },
+      "wall_p95_s": 27.835854226513767,
+      "wall_p99_s": 27.848312203357928
+    },
+    {
+      "scenario": "sql_full_records_to_list_no_convert",
+      "runs": [
+        {
+          "scenario": "sql_full_records_to_list_no_convert",
+          "durations_s": {
+            "query_create": 1.0382714658044279,
+            "materialize": 30.146593167912215,
+            "wall_total": 31.184864633716643
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 243875840,
+              "max_rss_bytes": 238215168,
+              "python_current_bytes": 9024391,
+              "python_peak_bytes": 9026583,
+              "user_s": 3.41046,
+              "system_s": 0.13811199999999998,
+              "jvm_free_bytes": 1013787832,
+              "jvm_total_bytes": 1059061760,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 246272000,
+              "max_rss_bytes": 240312320,
+              "python_current_bytes": 9039350,
+              "python_peak_bytes": 9040366,
+              "user_s": 3.444232,
+              "system_s": 0.139059,
+              "jvm_free_bytes": 1011536936,
+              "jvm_total_bytes": 1059061760,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 246272000,
+              "max_rss_bytes": 240312320,
+              "python_current_bytes": 9039953,
+              "python_peak_bytes": 9050129,
+              "user_s": 3.444432,
+              "system_s": 0.139067,
+              "jvm_free_bytes": 1011536936,
+              "jvm_total_bytes": 1059061760,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 343363584,
+              "max_rss_bytes": 336809984,
+              "python_current_bytes": 28421370,
+              "python_peak_bytes": 32319730,
+              "user_s": 36.123802,
+              "system_s": 0.279532,
+              "jvm_free_bytes": 14665056,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 351604736,
+              "max_rss_bytes": 345460736,
+              "python_current_bytes": 28271953,
+              "python_peak_bytes": 32319730,
+              "user_s": 36.648770999999996,
+              "system_s": 0.288644,
+              "jvm_free_bytes": 21743264,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 351481856,
+              "max_rss_bytes": 345460736,
+              "python_current_bytes": 28273116,
+              "python_peak_bytes": 32319730,
+              "user_s": 36.657721,
+              "system_s": 0.289661,
+              "jvm_free_bytes": 21743264,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": 97091584,
+            "python_peak_materialize_delta_bytes": 23269601,
+            "rss_release_delta_bytes": 8241152,
+            "python_peak_release_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 500000,
+            "checksum": 500000
+          },
+          "worker_wall_s": 32.33036645012908
+        },
+        {
+          "scenario": "sql_full_records_to_list_no_convert",
+          "durations_s": {
+            "query_create": 1.0957986013963819,
+            "materialize": 30.228723217034712,
+            "wall_total": 31.324521818431094
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 236802048,
+              "max_rss_bytes": 231395328,
+              "python_current_bytes": 9021971,
+              "python_peak_bytes": 9025187,
+              "user_s": 3.444916,
+              "system_s": 0.159104,
+              "jvm_free_bytes": 26920672,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 237137920,
+              "max_rss_bytes": 231395328,
+              "python_current_bytes": 9038645,
+              "python_peak_bytes": 9039661,
+              "user_s": 3.468415,
+              "system_s": 0.161321,
+              "jvm_free_bytes": 24995328,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 237142016,
+              "max_rss_bytes": 231395328,
+              "python_current_bytes": 9039304,
+              "python_peak_bytes": 9049424,
+              "user_s": 3.468541,
+              "system_s": 0.161327,
+              "jvm_free_bytes": 24995328,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 336531456,
+              "max_rss_bytes": 331055104,
+              "python_current_bytes": 28420996,
+              "python_peak_bytes": 32319356,
+              "user_s": 36.295501,
+              "system_s": 0.23721799999999998,
+              "jvm_free_bytes": 8478920,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 357498880,
+              "max_rss_bytes": 352550912,
+              "python_current_bytes": 28271448,
+              "python_peak_bytes": 32319356,
+              "user_s": 36.831872,
+              "system_s": 0.25326699999999996,
+              "jvm_free_bytes": 21777648,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 357367808,
+              "max_rss_bytes": 352550912,
+              "python_current_bytes": 28272787,
+              "python_peak_bytes": 32319356,
+              "user_s": 36.845831,
+              "system_s": 0.25426699999999997,
+              "jvm_free_bytes": 21777648,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": 99389440,
+            "python_peak_materialize_delta_bytes": 23269932,
+            "rss_release_delta_bytes": 20967424,
+            "python_peak_release_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 500000,
+            "checksum": 500000
+          },
+          "worker_wall_s": 32.51536187995225
+        },
+        {
+          "scenario": "sql_full_records_to_list_no_convert",
+          "durations_s": {
+            "query_create": 1.016193418763578,
+            "materialize": 28.34323729830794,
+            "wall_total": 29.35943071707152
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 211148800,
+              "max_rss_bytes": 205733888,
+              "python_current_bytes": 9021115,
+              "python_peak_bytes": 9023940,
+              "user_s": 3.555282,
+              "system_s": 0.164382,
+              "jvm_free_bytes": 1043434504,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 213508096,
+              "max_rss_bytes": 207831040,
+              "python_current_bytes": 9037592,
+              "python_peak_bytes": 9038653,
+              "user_s": 3.583503,
+              "system_s": 0.168493,
+              "jvm_free_bytes": 1040626320,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 213508096,
+              "max_rss_bytes": 207831040,
+              "python_current_bytes": 9038251,
+              "python_peak_bytes": 9048371,
+              "user_s": 3.583625,
+              "system_s": 0.16849899999999998,
+              "jvm_free_bytes": 1040626320,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 332947456,
+              "max_rss_bytes": 327114752,
+              "python_current_bytes": 28419789,
+              "python_peak_bytes": 32318149,
+              "user_s": 34.143061,
+              "system_s": 0.264511,
+              "jvm_free_bytes": 21949344,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 366755840,
+              "max_rss_bytes": 360407040,
+              "python_current_bytes": 28270417,
+              "python_peak_bytes": 32318149,
+              "user_s": 34.710498,
+              "system_s": 0.275575,
+              "jvm_free_bytes": 27951872,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 366637056,
+              "max_rss_bytes": 360407040,
+              "python_current_bytes": 28271580,
+              "python_peak_bytes": 32318149,
+              "user_s": 34.718411,
+              "system_s": 0.275575,
+              "jvm_free_bytes": 27951872,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": 119439360,
+            "python_peak_materialize_delta_bytes": 23269778,
+            "rss_release_delta_bytes": 33808384,
+            "python_peak_release_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 500000,
+            "checksum": 500000
+          },
+          "worker_wall_s": 30.616891441866755
+        }
+      ],
+      "wall_summary_s": {
+        "min": 29.35943071707152,
+        "mean": 30.62293905640642,
+        "median": 31.184864633716643,
+        "max": 31.324521818431094
+      },
+      "wall_p95_s": 31.310556099959648,
+      "wall_p99_s": 31.321728674736804
+    },
+    {
+      "scenario": "sql_full_records_wrapper_scan",
+      "runs": [
+        {
+          "scenario": "sql_full_records_wrapper_scan",
+          "durations_s": {
+            "query_create": 0.38405893580056727,
+            "iterate": 4.4332544966600835,
+            "wall_total": 4.817313432460651
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 221016064,
+              "max_rss_bytes": 220741632,
+              "python_current_bytes": 9021181,
+              "python_peak_bytes": 9025294,
+              "user_s": 3.467446,
+              "system_s": 0.162786,
+              "jvm_free_bytes": 16706944,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 219242496,
+              "max_rss_bytes": 220741632,
+              "python_current_bytes": 9037658,
+              "python_peak_bytes": 9038719,
+              "user_s": 3.496042,
+              "system_s": 0.163908,
+              "jvm_free_bytes": 14624552,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_iterate",
+              "rss_bytes": 218980352,
+              "max_rss_bytes": 220741632,
+              "python_current_bytes": 9038317,
+              "python_peak_bytes": 9048437,
+              "user_s": 3.49619,
+              "system_s": 0.163915,
+              "jvm_free_bytes": 14624552,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_iterate",
+              "rss_bytes": 559243264,
+              "max_rss_bytes": 553390080,
+              "python_current_bytes": 9107634,
+              "python_peak_bytes": 9110665,
+              "user_s": 9.321292,
+              "system_s": 0.298521,
+              "jvm_free_bytes": 760709808,
+              "jvm_total_bytes": 1069547520,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 617160704,
+              "max_rss_bytes": 611323904,
+              "python_current_bytes": 9135049,
+              "python_peak_bytes": 9136708,
+              "user_s": 9.657972000000001,
+              "system_s": 0.394038,
+              "jvm_free_bytes": 70048800,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 617062400,
+              "max_rss_bytes": 611323904,
+              "python_current_bytes": 9133764,
+              "python_peak_bytes": 9143644,
+              "user_s": 9.667816,
+              "system_s": 0.395076,
+              "jvm_free_bytes": 70048800,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_iterate_delta_bytes": 340262912,
+            "python_peak_iterate_delta_bytes": 62228,
+            "rss_release_delta_bytes": 57917440,
+            "python_peak_release_delta_bytes": 26043
+          },
+          "counts": {
+            "rows_seen": 500000,
+            "checksum": 3396000
+          },
+          "worker_wall_s": 5.748061052989215
+        },
+        {
+          "scenario": "sql_full_records_wrapper_scan",
+          "durations_s": {
+            "query_create": 0.3905602542217821,
+            "iterate": 4.469723379472271,
+            "wall_total": 4.860283633694053
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 231141376,
+              "max_rss_bytes": 226643968,
+              "python_current_bytes": 9021365,
+              "python_peak_bytes": 9024190,
+              "user_s": 3.512458,
+              "system_s": 0.12706499999999998,
+              "jvm_free_bytes": 18781480,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 231522304,
+              "max_rss_bytes": 226643968,
+              "python_current_bytes": 9037892,
+              "python_peak_bytes": 9038962,
+              "user_s": 3.5456849999999998,
+              "system_s": 0.128108,
+              "jvm_free_bytes": 16873392,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_iterate",
+              "rss_bytes": 231526400,
+              "max_rss_bytes": 226643968,
+              "python_current_bytes": 9038551,
+              "python_peak_bytes": 9048671,
+              "user_s": 3.545911,
+              "system_s": 0.128116,
+              "jvm_free_bytes": 16873392,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_iterate",
+              "rss_bytes": 556212224,
+              "max_rss_bytes": 550502400,
+              "python_current_bytes": 9107951,
+              "python_peak_bytes": 9110982,
+              "user_s": 9.412574,
+              "system_s": 0.257053,
+              "jvm_free_bytes": 750911448,
+              "jvm_total_bytes": 1067450368,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 618987520,
+              "max_rss_bytes": 613416960,
+              "python_current_bytes": 9135360,
+              "python_peak_bytes": 9137019,
+              "user_s": 9.736981,
+              "system_s": 0.353414,
+              "jvm_free_bytes": 57464584,
+              "jvm_total_bytes": 71303168,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 620687360,
+              "max_rss_bytes": 615251968,
+              "python_current_bytes": 9134075,
+              "python_peak_bytes": 9143955,
+              "user_s": 9.748332,
+              "system_s": 0.35342599999999996,
+              "jvm_free_bytes": 57464584,
+              "jvm_total_bytes": 71303168,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_iterate_delta_bytes": 324685824,
+            "python_peak_iterate_delta_bytes": 62311,
+            "rss_release_delta_bytes": 62775296,
+            "python_peak_release_delta_bytes": 26037
+          },
+          "counts": {
+            "rows_seen": 500000,
+            "checksum": 3396000
+          },
+          "worker_wall_s": 5.8158873410429806
+        },
+        {
+          "scenario": "sql_full_records_wrapper_scan",
+          "durations_s": {
+            "query_create": 0.3872281964868307,
+            "iterate": 4.416428754106164,
+            "wall_total": 4.803656950592995
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 216576000,
+              "max_rss_bytes": 210874368,
+              "python_current_bytes": 9022344,
+              "python_peak_bytes": 9025224,
+              "user_s": 3.4731389999999998,
+              "system_s": 0.139648,
+              "jvm_free_bytes": 1043296912,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 218931200,
+              "max_rss_bytes": 212971520,
+              "python_current_bytes": 9038879,
+              "python_peak_bytes": 9039895,
+              "user_s": 3.500166,
+              "system_s": 0.141735,
+              "jvm_free_bytes": 1040513112,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_iterate",
+              "rss_bytes": 218935296,
+              "max_rss_bytes": 212971520,
+              "python_current_bytes": 9039538,
+              "python_peak_bytes": 9049658,
+              "user_s": 3.500353,
+              "system_s": 0.142707,
+              "jvm_free_bytes": 1040513112,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_iterate",
+              "rss_bytes": 589246464,
+              "max_rss_bytes": 583905280,
+              "python_current_bytes": 9111645,
+              "python_peak_bytes": 9112756,
+              "user_s": 9.1945,
+              "system_s": 0.298248,
+              "jvm_free_bytes": 700251184,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 651907072,
+              "max_rss_bytes": 645246976,
+              "python_current_bytes": 9136529,
+              "python_peak_bytes": 9138188,
+              "user_s": 9.541019,
+              "system_s": 0.40936,
+              "jvm_free_bytes": 70010328,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 653180928,
+              "max_rss_bytes": 646557696,
+              "python_current_bytes": 9135244,
+              "python_peak_bytes": 9145124,
+              "user_s": 9.548846,
+              "system_s": 0.40936,
+              "jvm_free_bytes": 70010328,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_iterate_delta_bytes": 370311168,
+            "python_peak_iterate_delta_bytes": 63098,
+            "rss_release_delta_bytes": 62660608,
+            "python_peak_release_delta_bytes": 25432
+          },
+          "counts": {
+            "rows_seen": 500000,
+            "checksum": 3396000
+          },
+          "worker_wall_s": 5.7675647519063205
+        }
+      ],
+      "wall_summary_s": {
+        "min": 4.803656950592995,
+        "mean": 4.827084672249232,
+        "median": 4.817313432460651,
+        "max": 4.860283633694053
+      },
+      "wall_p95_s": 4.855986613570712,
+      "wall_p99_s": 4.859424229669385
+    },
+    {
+      "scenario": "sql_full_records_to_list_retained",
+      "runs": [
+        {
+          "scenario": "sql_full_records_to_list_retained",
+          "durations_s": {
+            "query_create": 0.3772961071226746,
+            "materialize": 24.718107752501965,
+            "wall_total": 25.09540385962464
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 215142400,
+              "max_rss_bytes": 210063360,
+              "python_current_bytes": 9022006,
+              "python_peak_bytes": 9024831,
+              "user_s": 3.593912,
+              "system_s": 0.15456599999999998,
+              "jvm_free_bytes": 1043176872,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 217497600,
+              "max_rss_bytes": 212160512,
+              "python_current_bytes": 9038446,
+              "python_peak_bytes": 9039516,
+              "user_s": 3.619002,
+              "system_s": 0.158693,
+              "jvm_free_bytes": 1040354264,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 217501696,
+              "max_rss_bytes": 212160512,
+              "python_current_bytes": 9039105,
+              "python_peak_bytes": 9049225,
+              "user_s": 3.619139,
+              "system_s": 0.15869899999999998,
+              "jvm_free_bytes": 1040354264,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_retained",
+              "rss_bytes": 1301422080,
+              "max_rss_bytes": 1296474112,
+              "python_current_bytes": 329524728,
+              "python_peak_bytes": 329526115,
+              "user_s": 30.036213,
+              "system_s": 0.831839,
+              "jvm_free_bytes": 1008390704,
+              "jvm_total_bytes": 1073741824,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 1217130496,
+              "max_rss_bytes": 1363582976,
+              "python_current_bytes": 27471915,
+              "python_peak_bytes": 329535836,
+              "user_s": 31.140343,
+              "system_s": 0.902154,
+              "jvm_free_bytes": 69743712,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 1217036288,
+              "max_rss_bytes": 1363582976,
+              "python_current_bytes": 27470774,
+              "python_peak_bytes": 329535836,
+              "user_s": 31.143151,
+              "system_s": 0.902154,
+              "jvm_free_bytes": 69743712,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_retained_delta_bytes": 1083920384,
+            "python_peak_retained_delta_bytes": 320476890,
+            "rss_release_delta_bytes": -84291584,
+            "python_peak_release_delta_bytes": 9721
+          },
+          "counts": {
+            "rows": 500000,
+            "checksum": 1249750000,
+            "retained_batches": 100
+          },
+          "worker_wall_s": 27.337458099005744
+        },
+        {
+          "scenario": "sql_full_records_to_list_retained",
+          "durations_s": {
+            "query_create": 0.37438007490709424,
+            "materialize": 24.005762892775238,
+            "wall_total": 24.380142967682332
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 238444544,
+              "max_rss_bytes": 231669760,
+              "python_current_bytes": 9020356,
+              "python_peak_bytes": 9024469,
+              "user_s": 3.487068,
+              "system_s": 0.16405,
+              "jvm_free_bytes": 24429440,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 236814336,
+              "max_rss_bytes": 232718336,
+              "python_current_bytes": 9036849,
+              "python_peak_bytes": 9037964,
+              "user_s": 3.51416,
+              "system_s": 0.165054,
+              "jvm_free_bytes": 22534472,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 236814336,
+              "max_rss_bytes": 232718336,
+              "python_current_bytes": 9037508,
+              "python_peak_bytes": 9047628,
+              "user_s": 3.514291,
+              "system_s": 0.16505999999999998,
+              "jvm_free_bytes": 22534472,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_retained",
+              "rss_bytes": 1250627584,
+              "max_rss_bytes": 1244405760,
+              "python_current_bytes": 329523113,
+              "python_peak_bytes": 329524500,
+              "user_s": 29.082864,
+              "system_s": 0.892192,
+              "jvm_free_bytes": 26841536,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 1150005248,
+              "max_rss_bytes": 1311514624,
+              "python_current_bytes": 27470363,
+              "python_peak_bytes": 329534276,
+              "user_s": 30.14228,
+              "system_s": 0.9382849999999999,
+              "jvm_free_bytes": 36694008,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 1149874176,
+              "max_rss_bytes": 1311514624,
+              "python_current_bytes": 27469222,
+              "python_peak_bytes": 329534276,
+              "user_s": 30.152977,
+              "system_s": 0.938306,
+              "jvm_free_bytes": 36694008,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_retained_delta_bytes": 1013813248,
+            "python_peak_retained_delta_bytes": 320476872,
+            "rss_release_delta_bytes": -100622336,
+            "python_peak_release_delta_bytes": 9776
+          },
+          "counts": {
+            "rows": 500000,
+            "checksum": 1249750000,
+            "retained_batches": 100
+          },
+          "worker_wall_s": 26.51423070812598
+        },
+        {
+          "scenario": "sql_full_records_to_list_retained",
+          "durations_s": {
+            "query_create": 0.4054330480284989,
+            "materialize": 24.039672054350376,
+            "wall_total": 24.445105102378875
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 215236608,
+              "max_rss_bytes": 210489344,
+              "python_current_bytes": 9020406,
+              "python_peak_bytes": 9023231,
+              "user_s": 3.501757,
+              "system_s": 0.134913,
+              "jvm_free_bytes": 1043084544,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 217718784,
+              "max_rss_bytes": 212586496,
+              "python_current_bytes": 9036854,
+              "python_peak_bytes": 9037969,
+              "user_s": 3.530282,
+              "system_s": 0.13601,
+              "jvm_free_bytes": 1040335640,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "before_materialize",
+              "rss_bytes": 217718784,
+              "max_rss_bytes": 212586496,
+              "python_current_bytes": 9037513,
+              "python_peak_bytes": 9047633,
+              "user_s": 3.531412,
+              "system_s": 0.13601,
+              "jvm_free_bytes": 1040335640,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_retained",
+              "rss_bytes": 1255264256,
+              "max_rss_bytes": 1249193984,
+              "python_current_bytes": 329523016,
+              "python_peak_bytes": 329524379,
+              "user_s": 29.208743,
+              "system_s": 0.907893,
+              "jvm_free_bytes": 31597976,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_release",
+              "rss_bytes": 1154686976,
+              "max_rss_bytes": 1316040704,
+              "python_current_bytes": 27470320,
+              "python_peak_bytes": 329534355,
+              "user_s": 30.370757,
+              "system_s": 0.952058,
+              "jvm_free_bytes": 36683720,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 1154568192,
+              "max_rss_bytes": 1316040704,
+              "python_current_bytes": 27469187,
+              "python_peak_bytes": 329534355,
+              "user_s": 30.384652,
+              "system_s": 0.953024,
+              "jvm_free_bytes": 36683720,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_retained_delta_bytes": 1037545472,
+            "python_peak_retained_delta_bytes": 320476746,
+            "rss_release_delta_bytes": -100577280,
+            "python_peak_release_delta_bytes": 9976
+          },
+          "counts": {
+            "rows": 500000,
+            "checksum": 1249750000,
+            "retained_batches": 100
+          },
+          "worker_wall_s": 26.62201365013607
+        }
+      ],
+      "wall_summary_s": {
+        "min": 24.380142967682332,
+        "mean": 24.64021730989528,
+        "median": 24.445105102378875,
+        "max": 25.09540385962464
+      },
+      "wall_p95_s": 25.030373983900063,
+      "wall_p99_s": 25.082397884479725
+    },
+    {
+      "scenario": "sql_aggregate_first",
+      "runs": [
+        {
+          "scenario": "sql_aggregate_first",
+          "durations_s": {
+            "query_create": 0.5836453367955983,
+            "first": 0.004218334564939141,
+            "wall_total": 0.5878636713605374
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 216809472,
+              "max_rss_bytes": 211480576,
+              "python_current_bytes": 9021510,
+              "python_peak_bytes": 9024335,
+              "user_s": 3.496856,
+              "system_s": 0.156334,
+              "jvm_free_bytes": 1043193352,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 219148288,
+              "max_rss_bytes": 213577728,
+              "python_current_bytes": 9037945,
+              "python_peak_bytes": 9038961,
+              "user_s": 3.528634,
+              "system_s": 0.157321,
+              "jvm_free_bytes": 1040367792,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 800096256,
+              "max_rss_bytes": 794226688,
+              "python_current_bytes": 9189277,
+              "python_peak_bytes": 9189597,
+              "user_s": 6.686924,
+              "system_s": 0.428067,
+              "jvm_free_bytes": 562986216,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_first",
+              "rss_bytes": 821391360,
+              "max_rss_bytes": 815722496,
+              "python_current_bytes": 9210615,
+              "python_peak_bytes": 9212274,
+              "user_s": 6.778357,
+              "system_s": 0.505275,
+              "jvm_free_bytes": 70604912,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 821301248,
+              "max_rss_bytes": 815722496,
+              "python_current_bytes": 9210426,
+              "python_peak_bytes": 9220362,
+              "user_s": 6.780356,
+              "system_s": 0.5072909999999999,
+              "jvm_free_bytes": 70604912,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_first_delta_bytes": 21295104,
+            "python_peak_first_delta_bytes": 22677
+          },
+          "counts": {
+            "checksum": 749900.0
+          },
+          "worker_wall_s": 1.6451874079648405
+        },
+        {
+          "scenario": "sql_aggregate_first",
+          "durations_s": {
+            "query_create": 0.4786999747157097,
+            "first": 0.0033206783700734377,
+            "wall_total": 0.4820206530857831
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 240136192,
+              "max_rss_bytes": 234950656,
+              "python_current_bytes": 9022387,
+              "python_peak_bytes": 9026551,
+              "user_s": 3.482176,
+              "system_s": 0.152143,
+              "jvm_free_bytes": 25103256,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 238116864,
+              "max_rss_bytes": 234950656,
+              "python_current_bytes": 9038785,
+              "python_peak_bytes": 9039846,
+              "user_s": 3.509487,
+              "system_s": 0.154163,
+              "jvm_free_bytes": 23157656,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 499908608,
+              "max_rss_bytes": 495333376,
+              "python_current_bytes": 9185069,
+              "python_peak_bytes": 9185389,
+              "user_s": 6.008283,
+              "system_s": 0.296282,
+              "jvm_free_bytes": 890035536,
+              "jvm_total_bytes": 1084227584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_first",
+              "rss_bytes": 516747264,
+              "max_rss_bytes": 511586304,
+              "python_current_bytes": 9211867,
+              "python_peak_bytes": 9213526,
+              "user_s": 6.044113,
+              "system_s": 0.375297,
+              "jvm_free_bytes": 78997160,
+              "jvm_total_bytes": 92274688,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 516665344,
+              "max_rss_bytes": 511586304,
+              "python_current_bytes": 9210726,
+              "python_peak_bytes": 9220662,
+              "user_s": 6.047375,
+              "system_s": 0.375312,
+              "jvm_free_bytes": 78997160,
+              "jvm_total_bytes": 92274688,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_first_delta_bytes": 16838656,
+            "python_peak_first_delta_bytes": 28137
+          },
+          "counts": {
+            "checksum": 749900.0
+          },
+          "worker_wall_s": 1.4332309220917523
+        },
+        {
+          "scenario": "sql_aggregate_first",
+          "durations_s": {
+            "query_create": 0.5630077505484223,
+            "first": 0.003998372238129377,
+            "wall_total": 0.5670061227865517
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 214585344,
+              "max_rss_bytes": 209883136,
+              "python_current_bytes": 9023220,
+              "python_peak_bytes": 9026045,
+              "user_s": 3.519913,
+              "system_s": 0.15713,
+              "jvm_free_bytes": 1043141464,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 216936448,
+              "max_rss_bytes": 212242432,
+              "python_current_bytes": 9039815,
+              "python_peak_bytes": 9040931,
+              "user_s": 3.5503080000000002,
+              "system_s": 0.158191,
+              "jvm_free_bytes": 1040324576,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 782712832,
+              "max_rss_bytes": 776638464,
+              "python_current_bytes": 9191278,
+              "python_peak_bytes": 9191598,
+              "user_s": 6.439071,
+              "system_s": 0.384944,
+              "jvm_free_bytes": 573268464,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_first",
+              "rss_bytes": 803823616,
+              "max_rss_bytes": 798134272,
+              "python_current_bytes": 9212616,
+              "python_peak_bytes": 9214275,
+              "user_s": 6.532387,
+              "system_s": 0.469537,
+              "jvm_free_bytes": 70595552,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 803741696,
+              "max_rss_bytes": 798134272,
+              "python_current_bytes": 9212427,
+              "python_peak_bytes": 9222363,
+              "user_s": 6.536355,
+              "system_s": 0.469537,
+              "jvm_free_bytes": 70595552,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_first_delta_bytes": 21110784,
+            "python_peak_first_delta_bytes": 22677
+          },
+          "counts": {
+            "checksum": 749900.0
+          },
+          "worker_wall_s": 1.6097751788329333
+        }
+      ],
+      "wall_summary_s": {
+        "min": 0.4820206530857831,
+        "mean": 0.5456301490776241,
+        "median": 0.5670061227865517,
+        "max": 0.5878636713605374
+      },
+      "wall_p95_s": 0.5857779165031388,
+      "wall_p99_s": 0.5874465203890576
+    },
+    {
+      "scenario": "sql_aggregate_one",
+      "runs": [
+        {
+          "scenario": "sql_aggregate_one",
+          "durations_s": {
+            "query_create": 0.509728267788887,
+            "one": 0.0036069010384380817,
+            "wall_total": 0.5133351688273251
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 217190400,
+              "max_rss_bytes": 211148800,
+              "python_current_bytes": 9022483,
+              "python_peak_bytes": 9025308,
+              "user_s": 3.407596,
+              "system_s": 0.124167,
+              "jvm_free_bytes": 1043174456,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 219561984,
+              "max_rss_bytes": 213245952,
+              "python_current_bytes": 9039038,
+              "python_peak_bytes": 9040144,
+              "user_s": 3.436579,
+              "system_s": 0.125166,
+              "jvm_free_bytes": 1040353144,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 761704448,
+              "max_rss_bytes": 755884032,
+              "python_current_bytes": 9190391,
+              "python_peak_bytes": 9191095,
+              "user_s": 5.667858,
+              "system_s": 0.346005,
+              "jvm_free_bytes": 576394168,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_one",
+              "rss_bytes": 783237120,
+              "max_rss_bytes": 776593408,
+              "python_current_bytes": 9211729,
+              "python_peak_bytes": 9213388,
+              "user_s": 5.75641,
+              "system_s": 0.436928,
+              "jvm_free_bytes": 70559712,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 783151104,
+              "max_rss_bytes": 776593408,
+              "python_current_bytes": 9211485,
+              "python_peak_bytes": 9221476,
+              "user_s": 5.759061,
+              "system_s": 0.437905,
+              "jvm_free_bytes": 70559712,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_one_delta_bytes": 21532672,
+            "python_peak_one_delta_bytes": 22293
+          },
+          "counts": {
+            "checksum": 749900.0
+          },
+          "worker_wall_s": 1.5077501160558313
+        },
+        {
+          "scenario": "sql_aggregate_one",
+          "durations_s": {
+            "query_create": 0.5086549138650298,
+            "one": 0.003177804173901677,
+            "wall_total": 0.5118327180389315
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 217006080,
+              "max_rss_bytes": 211111936,
+              "python_current_bytes": 9021275,
+              "python_peak_bytes": 9024162,
+              "user_s": 3.496384,
+              "system_s": 0.149358,
+              "jvm_free_bytes": 1042925144,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 219443200,
+              "max_rss_bytes": 213733376,
+              "python_current_bytes": 9037872,
+              "python_peak_bytes": 9038933,
+              "user_s": 3.534452,
+              "system_s": 0.149399,
+              "jvm_free_bytes": 1040197568,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 767291392,
+              "max_rss_bytes": 761364480,
+              "python_current_bytes": 9188837,
+              "python_peak_bytes": 9189541,
+              "user_s": 5.893761,
+              "system_s": 0.366794,
+              "jvm_free_bytes": 577249456,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_one",
+              "rss_bytes": 788410368,
+              "max_rss_bytes": 782860288,
+              "python_current_bytes": 9210175,
+              "python_peak_bytes": 9211834,
+              "user_s": 5.992961,
+              "system_s": 0.43687099999999995,
+              "jvm_free_bytes": 70559840,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 788324352,
+              "max_rss_bytes": 782860288,
+              "python_current_bytes": 9209986,
+              "python_peak_bytes": 9219922,
+              "user_s": 5.997103,
+              "system_s": 0.43688099999999996,
+              "jvm_free_bytes": 70559840,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_one_delta_bytes": 21118976,
+            "python_peak_one_delta_bytes": 22293
+          },
+          "counts": {
+            "checksum": 749900.0
+          },
+          "worker_wall_s": 1.4963838511612266
+        },
+        {
+          "scenario": "sql_aggregate_one",
+          "durations_s": {
+            "query_create": 0.4841516660526395,
+            "one": 0.00260717305354774,
+            "wall_total": 0.4867588391061872
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 220012544,
+              "max_rss_bytes": 214757376,
+              "python_current_bytes": 9022443,
+              "python_peak_bytes": 9025314,
+              "user_s": 3.490834,
+              "system_s": 0.151557,
+              "jvm_free_bytes": 1039556976,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 222330880,
+              "max_rss_bytes": 217116672,
+              "python_current_bytes": 9039003,
+              "python_peak_bytes": 9040109,
+              "user_s": 3.5176689999999997,
+              "system_s": 0.153684,
+              "jvm_free_bytes": 1036811264,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 747651072,
+              "max_rss_bytes": 741142528,
+              "python_current_bytes": 9190248,
+              "python_peak_bytes": 9190952,
+              "user_s": 5.635763,
+              "system_s": 0.337422,
+              "jvm_free_bytes": 576924816,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_one",
+              "rss_bytes": 769581056,
+              "max_rss_bytes": 763424768,
+              "python_current_bytes": 9210135,
+              "python_peak_bytes": 9214386,
+              "user_s": 5.71378,
+              "system_s": 0.411496,
+              "jvm_free_bytes": 58020696,
+              "jvm_total_bytes": 71303168,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 769490944,
+              "max_rss_bytes": 763424768,
+              "python_current_bytes": 9211298,
+              "python_peak_bytes": 9221234,
+              "user_s": 5.716369,
+              "system_s": 0.411496,
+              "jvm_free_bytes": 58020696,
+              "jvm_total_bytes": 71303168,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_one_delta_bytes": 21929984,
+            "python_peak_one_delta_bytes": 23434
+          },
+          "counts": {
+            "checksum": 749900.0
+          },
+          "worker_wall_s": 1.479596498887986
+        }
+      ],
+      "wall_summary_s": {
+        "min": 0.4867588391061872,
+        "mean": 0.5039755753241479,
+        "median": 0.5118327180389315,
+        "max": 0.5133351688273251
+      },
+      "wall_p95_s": 0.5131849237484857,
+      "wall_p99_s": 0.5133051198115571
+    },
+    {
+      "scenario": "opencypher_lazy_scan",
+      "runs": [
+        {
+          "scenario": "opencypher_lazy_scan",
+          "durations_s": {
+            "query_create": 0.08294341084547341,
+            "iterate": 0.21671673143282533,
+            "wall_total": 0.29966014227829874
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 1031704576,
+              "max_rss_bytes": 1032744960,
+              "python_current_bytes": 9026752,
+              "python_peak_bytes": 9029249,
+              "user_s": 15.351951,
+              "system_s": 0.693669,
+              "jvm_free_bytes": 803884032,
+              "jvm_total_bytes": 1084227584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 1031999488,
+              "max_rss_bytes": 1032744960,
+              "python_current_bytes": 9043105,
+              "python_peak_bytes": 9044170,
+              "user_s": 15.370589,
+              "system_s": 0.695701,
+              "jvm_free_bytes": 800493768,
+              "jvm_total_bytes": 1084227584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 1082867712,
+              "max_rss_bytes": 1077186560,
+              "python_current_bytes": 9188408,
+              "python_peak_bytes": 9189272,
+              "user_s": 17.130441,
+              "system_s": 0.7236659999999999,
+              "jvm_free_bytes": 617237504,
+              "jvm_total_bytes": 1084227584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_iterate",
+              "rss_bytes": 1095380992,
+              "max_rss_bytes": 1089769472,
+              "python_current_bytes": 9209809,
+              "python_peak_bytes": 9211521,
+              "user_s": 17.25944,
+              "system_s": 0.79318,
+              "jvm_free_bytes": 68644120,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 1095286784,
+              "max_rss_bytes": 1089769472,
+              "python_current_bytes": 9209596,
+              "python_peak_bytes": 9219484,
+              "user_s": 17.262571,
+              "system_s": 0.794234,
+              "jvm_free_bytes": 68644120,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_iterate_delta_bytes": 12513280,
+            "python_peak_iterate_delta_bytes": 22249
+          },
+          "counts": {
+            "rows_processed": 300,
+            "checksum": 5400
+          },
+          "worker_wall_s": 9.22615332598798
+        },
+        {
+          "scenario": "opencypher_lazy_scan",
+          "durations_s": {
+            "query_create": 0.08068443345837295,
+            "iterate": 0.2158101350069046,
+            "wall_total": 0.29649456846527755
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 1048453120,
+              "max_rss_bytes": 1043177472,
+              "python_current_bytes": 9024645,
+              "python_peak_bytes": 9027087,
+              "user_s": 15.710248,
+              "system_s": 0.5098039999999999,
+              "jvm_free_bytes": 632948096,
+              "jvm_total_bytes": 1073741824,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 1048764416,
+              "max_rss_bytes": 1043177472,
+              "python_current_bytes": 9041137,
+              "python_peak_bytes": 9042149,
+              "user_s": 15.733469,
+              "system_s": 0.509806,
+              "jvm_free_bytes": 630568848,
+              "jvm_total_bytes": 1073741824,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 1123352576,
+              "max_rss_bytes": 1117102080,
+              "python_current_bytes": 9186267,
+              "python_peak_bytes": 9187131,
+              "user_s": 17.543944,
+              "system_s": 0.5520889999999999,
+              "jvm_free_bytes": 447592352,
+              "jvm_total_bytes": 1073741824,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_iterate",
+              "rss_bytes": 1124450304,
+              "max_rss_bytes": 1117888512,
+              "python_current_bytes": 9207652,
+              "python_peak_bytes": 9209364,
+              "user_s": 17.713936,
+              "system_s": 0.5695629999999999,
+              "jvm_free_bytes": 56111856,
+              "jvm_total_bytes": 71303168,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 1124352000,
+              "max_rss_bytes": 1117888512,
+              "python_current_bytes": 9207463,
+              "python_peak_bytes": 9217399,
+              "user_s": 17.717311,
+              "system_s": 0.570615,
+              "jvm_free_bytes": 56111856,
+              "jvm_total_bytes": 71303168,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_iterate_delta_bytes": 1097728,
+            "python_peak_iterate_delta_bytes": 22233
+          },
+          "counts": {
+            "rows_processed": 300,
+            "checksum": 5400
+          },
+          "worker_wall_s": 9.20759957912378
+        },
+        {
+          "scenario": "opencypher_lazy_scan",
+          "durations_s": {
+            "query_create": 0.07782871229574084,
+            "iterate": 0.21799944643862545,
+            "wall_total": 0.2958281587343663
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 1025425408,
+              "max_rss_bytes": 1020305408,
+              "python_current_bytes": 9027923,
+              "python_peak_bytes": 9030418,
+              "user_s": 14.869622,
+              "system_s": 0.461908,
+              "jvm_free_bytes": 1020468416,
+              "jvm_total_bytes": 1077936128,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 1027166208,
+              "max_rss_bytes": 1022140416,
+              "python_current_bytes": 9044376,
+              "python_peak_bytes": 9045441,
+              "user_s": 14.893732,
+              "system_s": 0.46297499999999997,
+              "jvm_free_bytes": 1017911304,
+              "jvm_total_bytes": 1077936128,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 1082347520,
+              "max_rss_bytes": 1076666368,
+              "python_current_bytes": 9189379,
+              "python_peak_bytes": 9190243,
+              "user_s": 16.610469,
+              "system_s": 0.490052,
+              "jvm_free_bytes": 832031280,
+              "jvm_total_bytes": 1077936128,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_iterate",
+              "rss_bytes": 1085329408,
+              "max_rss_bytes": 1079287808,
+              "python_current_bytes": 9210833,
+              "python_peak_bytes": 9212492,
+              "user_s": 16.743715,
+              "system_s": 0.5175449999999999,
+              "jvm_free_bytes": 62364728,
+              "jvm_total_bytes": 77594624,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 1085239296,
+              "max_rss_bytes": 1079287808,
+              "python_current_bytes": 9210644,
+              "python_peak_bytes": 9220580,
+              "user_s": 16.750934,
+              "system_s": 0.518558,
+              "jvm_free_bytes": 62364728,
+              "jvm_total_bytes": 77594624,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_iterate_delta_bytes": 2981888,
+            "python_peak_iterate_delta_bytes": 22249
+          },
+          "counts": {
+            "rows_processed": 300,
+            "checksum": 5400
+          },
+          "worker_wall_s": 8.949163544923067
+        }
+      ],
+      "wall_summary_s": {
+        "min": 0.2958281587343663,
+        "mean": 0.2973276231593142,
+        "median": 0.29649456846527755,
+        "max": 0.29966014227829874
+      },
+      "wall_p95_s": 0.29934358489699664,
+      "wall_p99_s": 0.2995968308020383
+    },
+    {
+      "scenario": "opencypher_to_list",
+      "runs": [
+        {
+          "scenario": "opencypher_to_list",
+          "durations_s": {
+            "query_create": 0.07387657766230404,
+            "materialize": 0.2668167792726308,
+            "wall_total": 0.34069335693493485
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 958197760,
+              "max_rss_bytes": 953196544,
+              "python_current_bytes": 9025643,
+              "python_peak_bytes": 9028085,
+              "user_s": 14.614253,
+              "system_s": 0.447835,
+              "jvm_free_bytes": 874567664,
+              "jvm_total_bytes": 1067450368,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 958533632,
+              "max_rss_bytes": 953196544,
+              "python_current_bytes": 9041921,
+              "python_peak_bytes": 9043095,
+              "user_s": 14.628394,
+              "system_s": 0.44890199999999997,
+              "jvm_free_bytes": 871136600,
+              "jvm_total_bytes": 1067450368,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 565440512,
+              "max_rss_bytes": 1072279552,
+              "python_current_bytes": 9222382,
+              "python_peak_bytes": 9238444,
+              "user_s": 16.214258,
+              "system_s": 0.626899,
+              "jvm_free_bytes": 137216056,
+              "jvm_total_bytes": 176160768,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 485335040,
+              "max_rss_bytes": 1072279552,
+              "python_current_bytes": 9244635,
+              "python_peak_bytes": 9246294,
+              "user_s": 16.270583,
+              "system_s": 0.635428,
+              "jvm_free_bytes": 56105584,
+              "jvm_total_bytes": 71303168,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 428826624,
+              "max_rss_bytes": 1072279552,
+              "python_current_bytes": 9243470,
+              "python_peak_bytes": 9253358,
+              "user_s": 16.274893,
+              "system_s": 0.638486,
+              "jvm_free_bytes": 56105584,
+              "jvm_total_bytes": 71303168,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": -80105472,
+            "python_peak_materialize_delta_bytes": 7850
+          },
+          "counts": {
+            "rows": 300,
+            "checksum": 5400
+          },
+          "worker_wall_s": 8.936098605161533
+        },
+        {
+          "scenario": "opencypher_to_list",
+          "durations_s": {
+            "query_create": 0.07627214421518147,
+            "materialize": 0.2596245869062841,
+            "wall_total": 0.33589673112146556
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 1062776832,
+              "max_rss_bytes": 1064312832,
+              "python_current_bytes": 9023616,
+              "python_peak_bytes": 9026120,
+              "user_s": 15.85052,
+              "system_s": 0.816417,
+              "jvm_free_bytes": 973652112,
+              "jvm_total_bytes": 1088421888,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 1063088128,
+              "max_rss_bytes": 1064312832,
+              "python_current_bytes": 9040124,
+              "python_peak_bytes": 9041136,
+              "user_s": 15.863026,
+              "system_s": 0.817444,
+              "jvm_free_bytes": 970064760,
+              "jvm_total_bytes": 1088421888,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 790204416,
+              "max_rss_bytes": 1167888384,
+              "python_current_bytes": 9221086,
+              "python_peak_bytes": 9238348,
+              "user_s": 17.682438,
+              "system_s": 0.9954179999999999,
+              "jvm_free_bytes": 137618272,
+              "jvm_total_bytes": 176160768,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 658247680,
+              "max_rss_bytes": 1167888384,
+              "python_current_bytes": 9243168,
+              "python_peak_bytes": 9244827,
+              "user_s": 17.753612,
+              "system_s": 1.006544,
+              "jvm_free_bytes": 62385528,
+              "jvm_total_bytes": 77594624,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 618606592,
+              "max_rss_bytes": 1167888384,
+              "python_current_bytes": 9242027,
+              "python_peak_bytes": 9251963,
+              "user_s": 17.759155,
+              "system_s": 1.009463,
+              "jvm_free_bytes": 62385528,
+              "jvm_total_bytes": 77594624,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": -131956736,
+            "python_peak_materialize_delta_bytes": 6479
+          },
+          "counts": {
+            "rows": 300,
+            "checksum": 5400
+          },
+          "worker_wall_s": 9.486656976863742
+        },
+        {
+          "scenario": "opencypher_to_list",
+          "durations_s": {
+            "query_create": 0.07738022576086223,
+            "materialize": 0.2761823018081486,
+            "wall_total": 0.35356252756901085
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 953225216,
+              "max_rss_bytes": 946626560,
+              "python_current_bytes": 9025804,
+              "python_peak_bytes": 9028299,
+              "user_s": 14.631774,
+              "system_s": 0.48145299999999996,
+              "jvm_free_bytes": 858236504,
+              "jvm_total_bytes": 1067450368,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 953552896,
+              "max_rss_bytes": 947412992,
+              "python_current_bytes": 9042142,
+              "python_peak_bytes": 9043256,
+              "user_s": 14.642256,
+              "system_s": 0.48146799999999995,
+              "jvm_free_bytes": 855859832,
+              "jvm_total_bytes": 1067450368,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 565915648,
+              "max_rss_bytes": 1078611968,
+              "python_current_bytes": 9222462,
+              "python_peak_bytes": 9238076,
+              "user_s": 16.386774,
+              "system_s": 0.702461,
+              "jvm_free_bytes": 136265048,
+              "jvm_total_bytes": 176160768,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_materialize",
+              "rss_bytes": 527192064,
+              "max_rss_bytes": 1078611968,
+              "python_current_bytes": 9244391,
+              "python_peak_bytes": 9246105,
+              "user_s": 16.439126,
+              "system_s": 0.704305,
+              "jvm_free_bytes": 62389840,
+              "jvm_total_bytes": 77594624,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 491585536,
+              "max_rss_bytes": 1078611968,
+              "python_current_bytes": 9243250,
+              "python_peak_bytes": 9253186,
+              "user_s": 16.445565,
+              "system_s": 0.7071959999999999,
+              "jvm_free_bytes": 62389840,
+              "jvm_total_bytes": 77594624,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_materialize_delta_bytes": -38723584,
+            "python_peak_materialize_delta_bytes": 8029
+          },
+          "counts": {
+            "rows": 300,
+            "checksum": 5400
+          },
+          "worker_wall_s": 8.846138068009168
+        }
+      ],
+      "wall_summary_s": {
+        "min": 0.33589673112146556,
+        "mean": 0.3433842052084704,
+        "median": 0.34069335693493485,
+        "max": 0.35356252756901085
+      },
+      "wall_p95_s": 0.35227561050560324,
+      "wall_p99_s": 0.3533051441563293
+    },
+    {
+      "scenario": "sql_vector_neighbors_extract_hits",
+      "runs": [
+        {
+          "scenario": "sql_vector_neighbors_extract_hits",
+          "durations_s": {
+            "query": 0.1335509589407593,
+            "extract_hits": 0.868720460915938,
+            "wall_total": 1.0022714198566973
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 298848256,
+              "max_rss_bytes": 300056576,
+              "python_current_bytes": 9353185,
+              "python_peak_bytes": 9360803,
+              "user_s": 7.6036,
+              "system_s": 0.276622,
+              "jvm_free_bytes": 33516896,
+              "jvm_total_bytes": 71303168,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 299421696,
+              "max_rss_bytes": 300056576,
+              "python_current_bytes": 9369613,
+              "python_peak_bytes": 9370735,
+              "user_s": 7.6292860000000005,
+              "system_s": 0.279807,
+              "jvm_free_bytes": 30972608,
+              "jvm_total_bytes": 71303168,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 335896576,
+              "max_rss_bytes": 329330688,
+              "python_current_bytes": 9817190,
+              "python_peak_bytes": 9853419,
+              "user_s": 9.618439,
+              "system_s": 0.313972,
+              "jvm_free_bytes": 1034296504,
+              "jvm_total_bytes": 1077936128,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_extract",
+              "rss_bytes": 352751616,
+              "max_rss_bytes": 346632192,
+              "python_current_bytes": 9842524,
+              "python_peak_bytes": 9853419,
+              "user_s": 9.681468,
+              "system_s": 0.340918,
+              "jvm_free_bytes": 82254352,
+              "jvm_total_bytes": 98566144,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 352657408,
+              "max_rss_bytes": 346894336,
+              "python_current_bytes": 9841383,
+              "python_peak_bytes": 9853419,
+              "user_s": 9.684111,
+              "system_s": 0.34093999999999997,
+              "jvm_free_bytes": 82254352,
+              "jvm_total_bytes": 98566144,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_extract_hits_delta_bytes": 16855040,
+            "python_peak_extract_hits_delta_bytes": 0
+          },
+          "counts": {
+            "hits_seen": 1000,
+            "checksum": 541200
+          },
+          "worker_wall_s": 2.2817630348727107
+        },
+        {
+          "scenario": "sql_vector_neighbors_extract_hits",
+          "durations_s": {
+            "query": 0.16101046279072762,
+            "extract_hits": 0.8740647796075791,
+            "wall_total": 1.0350752423983067
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 329072640,
+              "max_rss_bytes": 323358720,
+              "python_current_bytes": 9354330,
+              "python_peak_bytes": 9361948,
+              "user_s": 7.627499,
+              "system_s": 0.287715,
+              "jvm_free_bytes": 1002554728,
+              "jvm_total_bytes": 1073741824,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 332353536,
+              "max_rss_bytes": 326504448,
+              "python_current_bytes": 9370821,
+              "python_peak_bytes": 9371886,
+              "user_s": 7.65138,
+              "system_s": 0.29153799999999996,
+              "jvm_free_bytes": 999279264,
+              "jvm_total_bytes": 1073741824,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 361324544,
+              "max_rss_bytes": 377360384,
+              "python_current_bytes": 9822158,
+              "python_peak_bytes": 9858387,
+              "user_s": 9.571845,
+              "system_s": 0.384878,
+              "jvm_free_bytes": 102524728,
+              "jvm_total_bytes": 176160768,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_extract",
+              "rss_bytes": 361771008,
+              "max_rss_bytes": 377360384,
+              "python_current_bytes": 9843811,
+              "python_peak_bytes": 9858387,
+              "user_s": 9.637243999999999,
+              "system_s": 0.38588999999999996,
+              "jvm_free_bytes": 67670072,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 361676800,
+              "max_rss_bytes": 377360384,
+              "python_current_bytes": 9842670,
+              "python_peak_bytes": 9858387,
+              "user_s": 9.639569,
+              "system_s": 0.38588999999999996,
+              "jvm_free_bytes": 67670072,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_extract_hits_delta_bytes": 446464,
+            "python_peak_extract_hits_delta_bytes": 0
+          },
+          "counts": {
+            "hits_seen": 1000,
+            "checksum": 541200
+          },
+          "worker_wall_s": 2.3092082089278847
+        },
+        {
+          "scenario": "sql_vector_neighbors_extract_hits",
+          "durations_s": {
+            "query": 0.14626996940933168,
+            "extract_hits": 0.8738526569213718,
+            "wall_total": 1.0201226263307035
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 298524672,
+              "max_rss_bytes": 292728832,
+              "python_current_bytes": 9352718,
+              "python_peak_bytes": 9360480,
+              "user_s": 7.486389,
+              "system_s": 0.249411,
+              "jvm_free_bytes": 59416536,
+              "jvm_total_bytes": 98566144,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 299081728,
+              "max_rss_bytes": 293253120,
+              "python_current_bytes": 9369273,
+              "python_peak_bytes": 9370387,
+              "user_s": 7.505206,
+              "system_s": 0.254482,
+              "jvm_free_bytes": 57222088,
+              "jvm_total_bytes": 98566144,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 286781440,
+              "max_rss_bytes": 297971712,
+              "python_current_bytes": 9817154,
+              "python_peak_bytes": 9853383,
+              "user_s": 9.523758,
+              "system_s": 0.292914,
+              "jvm_free_bytes": 28013240,
+              "jvm_total_bytes": 62914560,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_extract",
+              "rss_bytes": 287825920,
+              "max_rss_bytes": 297971712,
+              "python_current_bytes": 9842431,
+              "python_peak_bytes": 9853383,
+              "user_s": 9.583019,
+              "system_s": 0.292914,
+              "jvm_free_bytes": 40864400,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 287698944,
+              "max_rss_bytes": 297971712,
+              "python_current_bytes": 9841290,
+              "python_peak_bytes": 9853383,
+              "user_s": 9.585207,
+              "system_s": 0.292914,
+              "jvm_free_bytes": 40864400,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_extract_hits_delta_bytes": 1044480,
+            "python_peak_extract_hits_delta_bytes": 0
+          },
+          "counts": {
+            "hits_seen": 1000,
+            "checksum": 541200
+          },
+          "worker_wall_s": 2.291210414143279
+        }
+      ],
+      "wall_summary_s": {
+        "min": 1.0022714198566973,
+        "mean": 1.019156429528569,
+        "median": 1.0201226263307035,
+        "max": 1.0350752423983067
+      },
+      "wall_p95_s": 1.0335799807915464,
+      "wall_p99_s": 1.0347761900769545
+    },
+    {
+      "scenario": "sql_vector_neighbors_followup_query",
+      "runs": [
+        {
+          "scenario": "sql_vector_neighbors_followup_query",
+          "durations_s": {
+            "vector_query": 0.14117118064314127,
+            "followup_query": 0.23543608654290438,
+            "wall_total": 0.37660726718604565
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 279564288,
+              "max_rss_bytes": 289153024,
+              "python_current_bytes": 9353311,
+              "python_peak_bytes": 9360929,
+              "user_s": 7.368766,
+              "system_s": 0.284033,
+              "jvm_free_bytes": 22669384,
+              "jvm_total_bytes": 62914560,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 280158208,
+              "max_rss_bytes": 289153024,
+              "python_current_bytes": 9369683,
+              "python_peak_bytes": 9370970,
+              "user_s": 7.401016,
+              "system_s": 0.286204,
+              "jvm_free_bytes": 20055264,
+              "jvm_total_bytes": 62914560,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 333615104,
+              "max_rss_bytes": 328282112,
+              "python_current_bytes": 9864295,
+              "python_peak_bytes": 9910212,
+              "user_s": 10.359271,
+              "system_s": 0.361979,
+              "jvm_free_bytes": 40484248,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_followup",
+              "rss_bytes": 333656064,
+              "max_rss_bytes": 328282112,
+              "python_current_bytes": 9888697,
+              "python_peak_bytes": 9910212,
+              "user_s": 10.38869,
+              "system_s": 0.363029,
+              "jvm_free_bytes": 40463360,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 333533184,
+              "max_rss_bytes": 328282112,
+              "python_current_bytes": 9887556,
+              "python_peak_bytes": 9910212,
+              "user_s": 10.391012,
+              "system_s": 0.36304,
+              "jvm_free_bytes": 40463360,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_followup_delta_bytes": 40960,
+            "python_peak_followup_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 1000,
+            "checksum": 541200
+          },
+          "worker_wall_s": 2.5289299150463194
+        },
+        {
+          "scenario": "sql_vector_neighbors_followup_query",
+          "durations_s": {
+            "vector_query": 0.1392359472811222,
+            "followup_query": 0.25504461443051696,
+            "wall_total": 0.39428056171163917
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 293130240,
+              "max_rss_bytes": 290648064,
+              "python_current_bytes": 9357341,
+              "python_peak_bytes": 9364946,
+              "user_s": 7.795196,
+              "system_s": 0.279593,
+              "jvm_free_bytes": 29017440,
+              "jvm_total_bytes": 62914560,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 293634048,
+              "max_rss_bytes": 290648064,
+              "python_current_bytes": 9373848,
+              "python_peak_bytes": 9374970,
+              "user_s": 7.827449,
+              "system_s": 0.283456,
+              "jvm_free_bytes": 26785504,
+              "jvm_total_bytes": 62914560,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 505323520,
+              "max_rss_bytes": 499503104,
+              "python_current_bytes": 9928350,
+              "python_peak_bytes": 9963683,
+              "user_s": 10.642193,
+              "system_s": 0.3821,
+              "jvm_free_bytes": 875293536,
+              "jvm_total_bytes": 1077936128,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_followup",
+              "rss_bytes": 521764864,
+              "max_rss_bytes": 516280320,
+              "python_current_bytes": 9892922,
+              "python_peak_bytes": 9963683,
+              "user_s": 10.690236,
+              "system_s": 0.46083799999999997,
+              "jvm_free_bytes": 117496184,
+              "jvm_total_bytes": 134217728,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 521674752,
+              "max_rss_bytes": 516280320,
+              "python_current_bytes": 9891781,
+              "python_peak_bytes": 9963683,
+              "user_s": 10.69168,
+              "system_s": 0.46186699999999997,
+              "jvm_free_bytes": 117496184,
+              "jvm_total_bytes": 134217728,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_followup_delta_bytes": 16441344,
+            "python_peak_followup_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 1000,
+            "checksum": 541200
+          },
+          "worker_wall_s": 2.587860826868564
+        },
+        {
+          "scenario": "sql_vector_neighbors_followup_query",
+          "durations_s": {
+            "vector_query": 0.13357652607373893,
+            "followup_query": 0.2291989119257778,
+            "wall_total": 0.3627754379995167
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 387547136,
+              "max_rss_bytes": 381923328,
+              "python_current_bytes": 9357436,
+              "python_peak_bytes": 9360644,
+              "user_s": 7.199143,
+              "system_s": 0.263901,
+              "jvm_free_bytes": 877350640,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 390782976,
+              "max_rss_bytes": 384544768,
+              "python_current_bytes": 9372484,
+              "python_peak_bytes": 9373598,
+              "user_s": 7.224627,
+              "system_s": 0.265893,
+              "jvm_free_bytes": 873776960,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 327921664,
+              "max_rss_bytes": 465285120,
+              "python_current_bytes": 9873311,
+              "python_peak_bytes": 9908588,
+              "user_s": 10.170889,
+              "system_s": 0.43518799999999996,
+              "jvm_free_bytes": 20819664,
+              "jvm_total_bytes": 62914560,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_followup",
+              "rss_bytes": 328450048,
+              "max_rss_bytes": 465285120,
+              "python_current_bytes": 9888412,
+              "python_peak_bytes": 9908588,
+              "user_s": 10.205855,
+              "system_s": 0.43518799999999996,
+              "jvm_free_bytes": 40386664,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 328327168,
+              "max_rss_bytes": 465285120,
+              "python_current_bytes": 9887271,
+              "python_peak_bytes": 9908588,
+              "user_s": 10.207454,
+              "system_s": 0.436164,
+              "jvm_free_bytes": 40386664,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_followup_delta_bytes": 528384,
+            "python_peak_followup_delta_bytes": 0
+          },
+          "counts": {
+            "rows": 1000,
+            "checksum": 541200
+          },
+          "worker_wall_s": 2.4973267179448158
+        }
+      ],
+      "wall_summary_s": {
+        "min": 0.3627754379995167,
+        "mean": 0.3778877556324005,
+        "median": 0.37660726718604565,
+        "max": 0.39428056171163917
+      },
+      "wall_p95_s": 0.3925132322590798,
+      "wall_p99_s": 0.3939270958211273
+    },
+    {
+      "scenario": "async_query_callback",
+      "runs": [
+        {
+          "scenario": "async_query_callback",
+          "durations_s": {
+            "enqueue_queries": 0.09961940697394311,
+            "wait_completion": 0.3383180401287973,
+            "wall_total": 0.4379374471027404
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 234598400,
+              "max_rss_bytes": 230535168,
+              "python_current_bytes": 9023189,
+              "python_peak_bytes": 9027349,
+              "user_s": 3.452667,
+              "system_s": 0.166562,
+              "jvm_free_bytes": 14008504,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 232976384,
+              "max_rss_bytes": 230535168,
+              "python_current_bytes": 9039640,
+              "python_peak_bytes": 9040747,
+              "user_s": 3.477531,
+              "system_s": 0.166792,
+              "jvm_free_bytes": 12242208,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_executor",
+              "rss_bytes": 235016192,
+              "max_rss_bytes": 230998016,
+              "python_current_bytes": 9122378,
+              "python_peak_bytes": 9124230,
+              "user_s": 3.514709,
+              "system_s": 0.171767,
+              "jvm_free_bytes": 20239640,
+              "jvm_total_bytes": 35651584,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_callback",
+              "rss_bytes": 319651840,
+              "max_rss_bytes": 313643008,
+              "python_current_bytes": 10205999,
+              "python_peak_bytes": 10207716,
+              "user_s": 12.657629,
+              "system_s": 0.309728,
+              "jvm_free_bytes": 84583152,
+              "jvm_total_bytes": 98566144,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 316698624,
+              "max_rss_bytes": 313643008,
+              "python_current_bytes": 10196565,
+              "python_peak_bytes": 10217291,
+              "user_s": 12.663814,
+              "system_s": 0.312724,
+              "jvm_free_bytes": 84583152,
+              "jvm_total_bytes": 98566144,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_callback_delta_bytes": 84635648,
+            "python_peak_callback_delta_bytes": 1083486
+          },
+          "counts": {
+            "rows_seen": 0,
+            "checksum": 0
+          },
+          "worker_wall_s": 1.3179483420681208
+        },
+        {
+          "scenario": "async_query_callback",
+          "durations_s": {
+            "enqueue_queries": 0.15662791184149683,
+            "wait_completion": 0.31262540095485747,
+            "wall_total": 0.4692533127963543
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 232976384,
+              "max_rss_bytes": 233119744,
+              "python_current_bytes": 9022638,
+              "python_peak_bytes": 9025900,
+              "user_s": 3.52239,
+              "system_s": 0.150272,
+              "jvm_free_bytes": 25610768,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 230940672,
+              "max_rss_bytes": 233119744,
+              "python_current_bytes": 9039076,
+              "python_peak_bytes": 9040138,
+              "user_s": 3.549409,
+              "system_s": 0.15236,
+              "jvm_free_bytes": 23528784,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_executor",
+              "rss_bytes": 234110976,
+              "max_rss_bytes": 233119744,
+              "python_current_bytes": 9122587,
+              "python_peak_bytes": 9124439,
+              "user_s": 3.56798,
+              "system_s": 0.157307,
+              "jvm_free_bytes": 19335640,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_callback",
+              "rss_bytes": 349290496,
+              "max_rss_bytes": 343654400,
+              "python_current_bytes": 10205533,
+              "python_peak_bytes": 10207192,
+              "user_s": 13.351742,
+              "system_s": 0.356446,
+              "jvm_free_bytes": 64205576,
+              "jvm_total_bytes": 77594624,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 346337280,
+              "max_rss_bytes": 343654400,
+              "python_current_bytes": 10196067,
+              "python_peak_bytes": 10214088,
+              "user_s": 13.357437000000001,
+              "system_s": 0.359388,
+              "jvm_free_bytes": 64205576,
+              "jvm_total_bytes": 77594624,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_callback_delta_bytes": 115179520,
+            "python_peak_callback_delta_bytes": 1082753
+          },
+          "counts": {
+            "rows_seen": 0,
+            "checksum": 0
+          },
+          "worker_wall_s": 1.3623742188792676
+        },
+        {
+          "scenario": "async_query_callback",
+          "durations_s": {
+            "enqueue_queries": 0.1709560949821025,
+            "wait_completion": 0.304102404974401,
+            "wall_total": 0.4750584999565035
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 240640000,
+              "max_rss_bytes": 236023808,
+              "python_current_bytes": 9022771,
+              "python_peak_bytes": 9026884,
+              "user_s": 3.486443,
+              "system_s": 0.167607,
+              "jvm_free_bytes": 24116128,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 239013888,
+              "max_rss_bytes": 236285952,
+              "python_current_bytes": 9039157,
+              "python_peak_bytes": 9040173,
+              "user_s": 3.514184,
+              "system_s": 0.16883399999999998,
+              "jvm_free_bytes": 22278160,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_executor",
+              "rss_bytes": 239812608,
+              "max_rss_bytes": 237256704,
+              "python_current_bytes": 9122615,
+              "python_peak_bytes": 9124467,
+              "user_s": 3.5342000000000002,
+              "system_s": 0.171906,
+              "jvm_free_bytes": 18639416,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_callback",
+              "rss_bytes": 295616512,
+              "max_rss_bytes": 316506112,
+              "python_current_bytes": 10205663,
+              "python_peak_bytes": 10207322,
+              "user_s": 13.703847,
+              "system_s": 0.338219,
+              "jvm_free_bytes": 37037520,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 292610048,
+              "max_rss_bytes": 316506112,
+              "python_current_bytes": 10196178,
+              "python_peak_bytes": 10214226,
+              "user_s": 13.708595,
+              "system_s": 0.339282,
+              "jvm_free_bytes": 37037520,
+              "jvm_total_bytes": 50331648,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_callback_delta_bytes": 55803904,
+            "python_peak_callback_delta_bytes": 1082855
+          },
+          "counts": {
+            "rows_seen": 0,
+            "checksum": 0
+          },
+          "worker_wall_s": 1.3095031769480556
+        }
+      ],
+      "wall_summary_s": {
+        "min": 0.4379374471027404,
+        "mean": 0.4607497532851994,
+        "median": 0.4692533127963543,
+        "max": 0.4750584999565035
+      },
+      "wall_p95_s": 0.47447798124048857,
+      "wall_p99_s": 0.47494239621330053
+    },
+    {
+      "scenario": "export_to_csv",
+      "runs": [
+        {
+          "scenario": "export_to_csv",
+          "durations_s": {
+            "query_create": 0.5053590247407556,
+            "export_csv": 16.663548625307158,
+            "wall_total": 17.168907650047913
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 212254720,
+              "max_rss_bytes": 206340096,
+              "python_current_bytes": 9022505,
+              "python_peak_bytes": 9024868,
+              "user_s": 3.507962,
+              "system_s": 0.150024,
+              "jvm_free_bytes": 1042956552,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 214659072,
+              "max_rss_bytes": 208699392,
+              "python_current_bytes": 9038662,
+              "python_peak_bytes": 9039787,
+              "user_s": 3.5363949999999997,
+              "system_s": 0.152092,
+              "jvm_free_bytes": 1040158464,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 414011392,
+              "max_rss_bytes": 408002560,
+              "python_current_bytes": 24529657,
+              "python_peak_bytes": 24696260,
+              "user_s": 22.66822,
+              "system_s": 0.346507,
+              "jvm_free_bytes": 45912344,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_export",
+              "rss_bytes": 416501760,
+              "max_rss_bytes": 410361856,
+              "python_current_bytes": 24426430,
+              "python_peak_bytes": 24696260,
+              "user_s": 22.746352,
+              "system_s": 0.34656899999999996,
+              "jvm_free_bytes": 41646232,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 416387072,
+              "max_rss_bytes": 410361856,
+              "python_current_bytes": 24425230,
+              "python_peak_bytes": 24696260,
+              "user_s": 22.75181,
+              "system_s": 0.347562,
+              "jvm_free_bytes": 41646232,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_export_delta_bytes": 2490368,
+            "python_peak_export_delta_bytes": 0
+          },
+          "counts": {
+            "bytes_written": 11391100
+          },
+          "worker_wall_s": 18.150673374067992
+        },
+        {
+          "scenario": "export_to_csv",
+          "durations_s": {
+            "query_create": 0.627370776841417,
+            "export_csv": 17.19076950266026,
+            "wall_total": 17.818140279501677
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 237481984,
+              "max_rss_bytes": 234926080,
+              "python_current_bytes": 9023496,
+              "python_peak_bytes": 9027264,
+              "user_s": 3.474074,
+              "system_s": 0.164524,
+              "jvm_free_bytes": 25095336,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 235470848,
+              "max_rss_bytes": 234926080,
+              "python_current_bytes": 9039726,
+              "python_peak_bytes": 9040801,
+              "user_s": 3.499459,
+              "system_s": 0.16663999999999998,
+              "jvm_free_bytes": 23109952,
+              "jvm_total_bytes": 41943040,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 1015627776,
+              "max_rss_bytes": 1009631232,
+              "python_current_bytes": 24526624,
+              "python_peak_bytes": 24693227,
+              "user_s": 23.167532,
+              "system_s": 0.52348,
+              "jvm_free_bytes": 1004005952,
+              "jvm_total_bytes": 1069547520,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_export",
+              "rss_bytes": 1033519104,
+              "max_rss_bytes": 1026932736,
+              "python_current_bytes": 24423709,
+              "python_peak_bytes": 24693227,
+              "user_s": 23.230808,
+              "system_s": 0.5474559999999999,
+              "jvm_free_bytes": 62437856,
+              "jvm_total_bytes": 77594624,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 1033449472,
+              "max_rss_bytes": 1026932736,
+              "python_current_bytes": 24422568,
+              "python_peak_bytes": 24693227,
+              "user_s": 23.234728,
+              "system_s": 0.5474559999999999,
+              "jvm_free_bytes": 62437856,
+              "jvm_total_bytes": 77594624,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_export_delta_bytes": 17891328,
+            "python_peak_export_delta_bytes": 0
+          },
+          "counts": {
+            "bytes_written": 11391100
+          },
+          "worker_wall_s": 18.820048263063654
+        },
+        {
+          "scenario": "export_to_csv",
+          "durations_s": {
+            "query_create": 0.5832695937715471,
+            "export_csv": 16.691200510133058,
+            "wall_total": 17.274470103904605
+          },
+          "snapshots": [
+            {
+              "label": "before_open",
+              "rss_bytes": 216911872,
+              "max_rss_bytes": 210563072,
+              "python_current_bytes": 9023935,
+              "python_peak_bytes": 9026298,
+              "user_s": 3.476522,
+              "system_s": 0.149841,
+              "jvm_free_bytes": 1043096912,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_open",
+              "rss_bytes": 219377664,
+              "max_rss_bytes": 212660224,
+              "python_current_bytes": 9040174,
+              "python_peak_bytes": 9041280,
+              "user_s": 3.504341,
+              "system_s": 0.15096199999999999,
+              "jvm_free_bytes": 1040161256,
+              "jvm_total_bytes": 1063256064,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_query",
+              "rss_bytes": 421646336,
+              "max_rss_bytes": 415240192,
+              "python_current_bytes": 24531393,
+              "python_peak_bytes": 24697996,
+              "user_s": 23.004566,
+              "system_s": 0.333268,
+              "jvm_free_bytes": 47667904,
+              "jvm_total_bytes": 83886080,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_export",
+              "rss_bytes": 424067072,
+              "max_rss_bytes": 417337344,
+              "python_current_bytes": 24428439,
+              "python_peak_bytes": 24697996,
+              "user_s": 23.044096,
+              "system_s": 0.333317,
+              "jvm_free_bytes": 41602024,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            },
+            {
+              "label": "after_close",
+              "rss_bytes": 423972864,
+              "max_rss_bytes": 417337344,
+              "python_current_bytes": 24427239,
+              "python_peak_bytes": 24697996,
+              "user_s": 23.046826,
+              "system_s": 0.335292,
+              "jvm_free_bytes": 41602024,
+              "jvm_total_bytes": 56623104,
+              "jvm_max_bytes": 4294967296
+            }
+          ],
+          "derived": {
+            "rss_export_delta_bytes": 2420736,
+            "python_peak_export_delta_bytes": 0
+          },
+          "counts": {
+            "bytes_written": 11391100
+          },
+          "worker_wall_s": 18.202015632996336
+        }
+      ],
+      "wall_summary_s": {
+        "min": 17.168907650047913,
+        "mean": 17.4205060111514,
+        "median": 17.274470103904605,
+        "max": 17.818140279501677
+      },
+      "wall_p95_s": 17.76377326194197,
+      "wall_p99_s": 17.807266875989736
+    }
+  ]
+}
