@@ -27,7 +27,7 @@ Common issues, solutions, and debugging techniques for ArcadeDB Python bindings.
     (no external Java install is needed):
 
     ```bash
-    uv pip uninstall -y arcadedb-embedded
+    uv pip uninstall arcadedb-embedded
     uv pip install --no-cache-dir arcadedb-embedded
     ```
 

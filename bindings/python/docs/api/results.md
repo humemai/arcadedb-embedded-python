@@ -276,6 +276,11 @@ for person in people:
 - Passing data to other libraries
 - Debugging/inspection
 
+**Performance note:** `to_dict()` eagerly converts the current row to Python data.
+That is convenient for small projections and interop, but repeated `to_dict()` calls
+across a large result set will allocate Python objects for every returned property.
+For large scans, prefer iterating and reading only the fields you need with `get()`.
+
 ---
 
 ### `to_json() -> str`
@@ -306,6 +311,10 @@ for result in result_set:
 ## Common Patterns
 
 ### Converting to Lists and Dicts
+
+`ResultSet.to_list()` and `Result.to_dict()` are eager materializers. They are the
+right choice when you explicitly want Python-native data, but they are not the
+lowest-overhead path for large result sets.
 
 ```python
 # List of dictionaries (most common)
@@ -352,7 +361,13 @@ print(df.head())
 For memory efficiency with large datasets:
 
 ```python
-# Process in batches
+# Stream one row at a time when you only need a few fields
+result_set = db.query("sql", "SELECT name, email FROM LargeTable")
+
+for result in result_set:
+    process_row(result.get("name"), result.get("email"))
+
+# Or process in batches when you do need dict materialization
 result_set = db.query("sql", "SELECT FROM LargeTable")
 
 batch = []

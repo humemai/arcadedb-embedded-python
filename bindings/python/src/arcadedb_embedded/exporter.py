@@ -5,18 +5,23 @@ Export functionality for ArcadeDB databases to various formats.
 Supports JSONL, GraphML, GraphSON, and CSV export.
 """
 
+from __future__ import annotations
+
 import csv
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from .exceptions import ArcadeDBError
 from .jvm import start_jvm
+
+if TYPE_CHECKING:
+    from .results import ResultSet
 
 
 def export_database(
     db,
     file_path: str,
-    format: str = "jsonl",
+    export_format: str = "jsonl",
     overwrite: bool = False,
     include_types: Optional[List[str]] = None,
     exclude_types: Optional[List[str]] = None,
@@ -28,7 +33,7 @@ def export_database(
     Args:
         db: Database instance
         file_path: Output file path (will auto-add exports/ prefix if not absolute)
-        format: Export format - "jsonl", "graphml", or "graphson"
+        export_format: Export format - "jsonl", "graphml", or "graphson"
         overwrite: Overwrite existing file if True
         include_types: List of types to export (None = all)
         exclude_types: List of types to exclude (None = none)
@@ -48,10 +53,14 @@ def export_database(
     Example:
         >>> # Export entire database to JSONL (recommended for backup)
         >>> stats = db.export_database("backup.jsonl.tgz", overwrite=True)
-        >>> print(f"Exported {stats['totalRecords']} records in {stats['elapsedInSecs']}s")
+        >>> print(
+        ...     f"Exported {stats['totalRecords']} records in {stats['elapsedInSecs']}s"
+        ... )
 
         >>> # Export to GraphML for visualization tools (Gephi, Cytoscape)
-        >>> db.export_database("graph.graphml.tgz", format="graphml", overwrite=True)
+        >>> db.export_database(
+        ...     "graph.graphml.tgz", export_format="graphml", overwrite=True
+        ... )
 
         >>> # Export specific types only
         >>> db.export_database(
@@ -70,9 +79,9 @@ def export_database(
 
     # Validate format
     supported_formats = ["jsonl", "graphml", "graphson"]
-    if format.lower() not in supported_formats:
+    if export_format.lower() not in supported_formats:
         raise ArcadeDBError(
-            f"Invalid export format: '{format}'. "
+            f"Invalid export format: '{export_format}'. "
             f"Supported formats: {', '.join(supported_formats)}"
         )
 
@@ -91,10 +100,10 @@ def export_database(
         Exporter = jpype.JClass("com.arcadedb.integration.exporter.Exporter")
 
         # Create exporter instance
-        exporter = Exporter(db._java_db, file_path)
+        exporter = Exporter(db.get_java_database(), file_path)
 
         # Configure exporter
-        exporter.setFormat(format.lower())
+        exporter.setFormat(export_format.lower())
         exporter.setOverwrite(overwrite)
 
         # Build settings map
@@ -133,10 +142,14 @@ def export_database(
         error_msg = str(e)
         if "Format not supported" in error_msg or "not found" in error_msg:
             raise ArcadeDBError(
-                f"Export format '{format}' requires additional modules. "
+                f"Export format '{export_format}' requires additional modules. "
                 f"GraphML and GraphSON support is unavailable. Error: {error_msg}"
             ) from e
-        elif "already exists" in error_msg or "cannot be overwritten" in error_msg:
+        elif (
+            "already exists" in error_msg
+            or "already exist" in error_msg
+            or "cannot be overwritten" in error_msg
+        ):
             raise ArcadeDBError(
                 f"Export file '{file_path}' already exists. "
                 f"Use overwrite=True to replace it. Error: {error_msg}"
@@ -146,7 +159,7 @@ def export_database(
 
 
 def export_to_csv(
-    results: Union["ResultSet", List[Dict]],
+    results: Union[ResultSet, List[Dict[str, Any]]],
     file_path: str,
     fieldnames: Optional[List[str]] = None,
 ):
@@ -190,21 +203,21 @@ def export_to_csv(
                 writer = None
                 wrote_header = False
 
-                for chunk in results.iter_chunks(size=1000):
-                    if not chunk:
-                        continue
+                if fieldnames is not None:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    wrote_header = True
 
-                    if fieldnames is None:
-                        fieldnames = list(chunk[0].keys())
-
+                for row in results.iter_dicts():
                     if writer is None:
+                        fieldnames = list(row.keys())
                         writer = csv.DictWriter(f, fieldnames=fieldnames)
 
                     if not wrote_header:
                         writer.writeheader()
                         wrote_header = True
 
-                    writer.writerows(chunk)
+                    writer.writerow(row)
 
                 if not wrote_header and fieldnames:
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -229,5 +242,5 @@ def export_to_csv(
             writer.writeheader()
             writer.writerows(data)
 
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         raise ArcadeDBError(f"CSV export failed: {e}") from e

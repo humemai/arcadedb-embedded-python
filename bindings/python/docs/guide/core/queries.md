@@ -372,6 +372,10 @@ records share the same exact-match value, such as `customerId`, `status`, or `co
 
 ### ResultSet Methods
 
+Use `first()` or direct iteration when you want the lowest-overhead path.
+`to_list()` eagerly materializes the full result set into Python dictionaries, so it
+is best reserved for smaller results or explicit interop steps.
+
 ```python
 # first() - get first result
 result = db.query("sql", "SELECT FROM Person ORDER BY name")
@@ -391,6 +395,34 @@ if first_mutual:
     print(f"Found: {first_mutual.get('name')}")
 else:
     print("No results found")
+```
+
+### Performance and Materialization
+
+Use lazy access inside the hot path, and materialize only when you explicitly need
+Python-native containers.
+
+- Use `first()` when you only need one row.
+- Use direct iteration plus `get()` for large scans and request-time processing.
+- Use `to_list()` when you need to keep all rows in Python, hand them to another
+    library, or serialize them as a batch.
+- Use `iter_chunks()` when you need batch processing without loading everything at
+    once.
+- Use wrapper `to_dict()` only when you truly want the full document in Python.
+
+```python
+# Lowest-overhead path for large scans
+result = db.query("sql", "SELECT name, score FROM Item WHERE score > ?", 100)
+for row in result:
+        handle(row.get("name"), row.get("score"))
+
+# Materialize only at the boundary where Python-native data is needed
+result = db.query("sql", "SELECT name, score FROM Item WHERE score > ?", 100)
+payload = result.to_list()
+
+# For wrappers, prefer field access over full dict conversion in large loops
+for doc in db.query("sql", "SELECT FROM Person"):
+        process(doc.get("name"), doc.get("city"))
 ```
 
 ## OpenCypher
