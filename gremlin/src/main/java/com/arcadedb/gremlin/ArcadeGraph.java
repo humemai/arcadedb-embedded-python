@@ -290,11 +290,11 @@ public class ArcadeGraph implements Graph, Closeable {
         case Vertex vertex -> {
           final Object objectId = vertex.id();
           if (objectId != null)
-            rid = objectId instanceof RID rid1 ? rid1 : new RID(database, objectId.toString());
+            rid = objectId instanceof RID rid1 ? rid1 : new RID(objectId.toString());
           else
             continue;
         }
-        case String string -> rid = new RID(database, string);
+        case String string -> rid = new RID(string);
         case null, default -> {
           continue;
         }
@@ -356,11 +356,11 @@ public class ArcadeGraph implements Graph, Closeable {
         case Edge edge -> {
           final Object objectId = edge.id();
           if (objectId != null)
-            rid = objectId instanceof RID rid1 ? rid1 : new RID(database, objectId.toString());
+            rid = objectId instanceof RID rid1 ? rid1 : new RID(objectId.toString());
           else
             continue;
         }
-        case String string -> rid = new RID(database, string);
+        case String string -> rid = new RID(string);
         case null, default -> {
           continue;
         }
