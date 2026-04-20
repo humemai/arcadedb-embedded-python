@@ -39,20 +39,20 @@
     "datatables.net-select": "^3.1.3",
     "datatables.net-select-bs5": "^3.1.3",
     "jquery": "^4.0.0",
-    "marked": "^18.0.0",
+    "marked": "^18.0.2",
     "jszip": "^3.10.1",
     "pdfmake": "^0.3.7",
-    "swagger-ui-dist": "^5.32.2",
+    "swagger-ui-dist": "^5.32.4",
     "sweetalert2": "^11.26.24"
   },
   "devDependencies": {
     "copy-webpack-plugin": "^14.0.0",
     "css-loader": "^7.1.4",
     "file-loader": "^6.2.0",
-    "html-webpack-plugin": "^5.6.6",
+    "html-webpack-plugin": "^5.6.7",
     "style-loader": "^4.0.0",
     "url-loader": "^4.1.1",
-    "webpack": "^5.106.1",
+    "webpack": "^5.106.2",
     "webpack-cli": "^7.0.2"
   },
   "overrides": {

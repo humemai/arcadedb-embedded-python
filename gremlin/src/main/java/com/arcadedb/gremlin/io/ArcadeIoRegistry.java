@@ -52,10 +52,10 @@ public class ArcadeIoRegistry extends AbstractIoRegistry {
     return switch (obj) {
       case null -> null;
       case RID rid -> rid;
-      case String s -> new RID(database, s);
+      case String s -> RID.create(database, s);
       case Map map -> {
         final Map<String, Number> map2 = map;
-        yield new RID(database, map2.get(BUCKET_ID).intValue(), map2.get(BUCKET_POSITION).longValue());
+        yield RID.create(database, map2.get(BUCKET_ID).intValue(), map2.get(BUCKET_POSITION).longValue());
       }
       default -> throw new IllegalArgumentException("Unable to convert unknown (" + obj.getClass() + ") type to RID");
     };
