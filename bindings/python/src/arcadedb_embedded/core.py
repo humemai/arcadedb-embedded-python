@@ -260,7 +260,7 @@ class Database:
             return value.getIdentity()
         if isinstance(value, str):
             RID = jpype.JClass("com.arcadedb.database.RID")
-            return RID(self._java_db, value)
+            return RID(value)
         if hasattr(value, "get_identity"):
             return value.get_identity()
         return value
