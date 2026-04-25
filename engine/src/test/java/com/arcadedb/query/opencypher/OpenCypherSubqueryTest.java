@@ -301,4 +301,152 @@ class OpenCypherSubqueryTest {
     assertThat(((Number) row2.getProperty("success2")).intValue()).isEqualTo(2);
     assertThat(result2.hasNext()).isFalse();
   }
+
+  /**
+   * Issue #3944: Unit CALL subquery (no RETURN) with inner UNWIND must not multiply outer rows.
+   * Each outer row should appear exactly once regardless of inner UNWIND cardinality.
+   */
+  @Test
+  void unitCallSubqueryWithUnwindPreservesOuterRowCount() {
+    database.getSchema().createVertexType("Person3944");
+    database.getSchema().createVertexType("Clone3944");
+
+    database.transaction(() -> {
+      database.command("opencypher", "CREATE (:Person3944 {name: 'Alice'})");
+      database.command("opencypher", "CREATE (:Person3944 {name: 'Bob'})");
+      database.command("opencypher", "CREATE (:Person3944 {name: 'Charlie'})");
+    });
+
+    database.transaction(() -> {
+      final ResultSet result = database.command("opencypher",
+          "MATCH (p:Person3944) " +
+          "CALL { " +
+          "  WITH p " +
+          "  UNWIND range(1, 2) AS i " +
+          "  CREATE (:Clone3944 {name: p.name, id: i}) " +
+          "} " +
+          "RETURN p.name AS person " +
+          "ORDER BY person");
+
+      final List<Result> rows = new ArrayList<>();
+      while (result.hasNext())
+        rows.add(result.next());
+
+      assertThat(rows).as("Unit CALL subquery must not multiply outer rows by inner UNWIND cardinality").hasSize(3);
+      assertThat((String) rows.get(0).getProperty("person")).isEqualTo("Alice");
+      assertThat((String) rows.get(1).getProperty("person")).isEqualTo("Bob");
+      assertThat((String) rows.get(2).getProperty("person")).isEqualTo("Charlie");
+    });
+  }
+
+  /**
+   * Issue #3944 control: Unit CALL subquery without UNWIND should still work correctly (one row per outer row).
+   */
+  @Test
+  void unitCallSubqueryWithoutUnwindPreservesOuterRowCount() {
+    database.getSchema().createVertexType("Person3944b");
+    database.getSchema().createVertexType("Clone3944b");
+
+    database.transaction(() -> {
+      database.command("opencypher", "CREATE (:Person3944b {name: 'Alice'})");
+      database.command("opencypher", "CREATE (:Person3944b {name: 'Bob'})");
+    });
+
+    database.transaction(() -> {
+      final ResultSet result = database.command("opencypher",
+          "MATCH (p:Person3944b) " +
+          "CALL { " +
+          "  WITH p " +
+          "  CREATE (:Clone3944b {name: p.name}) " +
+          "} " +
+          "RETURN p.name AS person " +
+          "ORDER BY person");
+
+      final List<Result> rows = new ArrayList<>();
+      while (result.hasNext())
+        rows.add(result.next());
+
+      assertThat(rows).as("Unit CALL subquery must produce exactly one row per outer row").hasSize(2);
+      assertThat((String) rows.get(0).getProperty("person")).isEqualTo("Alice");
+      assertThat((String) rows.get(1).getProperty("person")).isEqualTo("Bob");
+    });
+  }
+
+  /**
+   * Issue #3959: Reusing an outer variable name for an inner MATCH variable inside a
+   * non-importing CALL subquery must not leak the outer binding into the inner MATCH.
+   * The implicit scope CALL (no scope list, no importing WITH) runs with a fresh
+   * scope for inner variables, so the inner {@code MATCH (p:Person)} should scan all
+   * Person vertices, produce a cross product against the single outer row, and return
+   * three rows.
+   */
+  @Test
+  void callSubqueryShadowingOuterVariableWithoutImport() {
+    database.getSchema().createVertexType("Person3959");
+
+    database.transaction(() -> {
+      database.command("opencypher", "CREATE (:Person3959 {name: 'Bob', age: 30, role: 'Employee'})");
+      database.command("opencypher", "CREATE (:Person3959 {name: 'X', city: 'Berlin'})");
+      database.command("opencypher", "CREATE (:Person3959 {name: 'Y', city: 'Paris'})");
+      database.command("opencypher", "CREATE (:Person3959 {name: 'Z', city: 'London'})");
+    });
+
+    final ResultSet result = database.query("opencypher",
+        "MATCH (p:Person3959 {name: 'Bob'}) " +
+            "CALL { " +
+            "  MATCH (p:Person3959) " +
+            "  WHERE p.city IS NOT NULL " +
+            "  RETURN p.city AS location " +
+            "} " +
+            "RETURN p.name AS outerName, location " +
+            "ORDER BY location");
+
+    final List<Result> rows = new ArrayList<>();
+    while (result.hasNext())
+      rows.add(result.next());
+
+    assertThat(rows).as("Implicit-scope CALL with inner MATCH reusing outer name must scan all persons")
+        .hasSize(3);
+    assertThat((String) rows.get(0).getProperty("outerName")).isEqualTo("Bob");
+    assertThat((String) rows.get(0).getProperty("location")).isEqualTo("Berlin");
+    assertThat((String) rows.get(1).getProperty("outerName")).isEqualTo("Bob");
+    assertThat((String) rows.get(1).getProperty("location")).isEqualTo("London");
+    assertThat((String) rows.get(2).getProperty("outerName")).isEqualTo("Bob");
+    assertThat((String) rows.get(2).getProperty("location")).isEqualTo("Paris");
+  }
+
+  /**
+   * Issue #3959 control: renaming the inner variable yields the same expected behavior.
+   */
+  @Test
+  void callSubqueryWithRenamedInnerVariableMatchesNeo4j() {
+    database.getSchema().createVertexType("Person3959b");
+
+    database.transaction(() -> {
+      database.command("opencypher", "CREATE (:Person3959b {name: 'Bob', age: 30, role: 'Employee'})");
+      database.command("opencypher", "CREATE (:Person3959b {name: 'X', city: 'Berlin'})");
+      database.command("opencypher", "CREATE (:Person3959b {name: 'Y', city: 'Paris'})");
+      database.command("opencypher", "CREATE (:Person3959b {name: 'Z', city: 'London'})");
+    });
+
+    final ResultSet result = database.query("opencypher",
+        "MATCH (p:Person3959b {name: 'Bob'}) " +
+            "CALL { " +
+            "  MATCH (q:Person3959b) " +
+            "  WHERE q.city IS NOT NULL " +
+            "  RETURN q.city AS location " +
+            "} " +
+            "RETURN p.name AS outerName, location " +
+            "ORDER BY location");
+
+    final List<Result> rows = new ArrayList<>();
+    while (result.hasNext())
+      rows.add(result.next());
+
+    assertThat(rows).hasSize(3);
+    assertThat((String) rows.get(0).getProperty("outerName")).isEqualTo("Bob");
+    assertThat((String) rows.get(0).getProperty("location")).isEqualTo("Berlin");
+    assertThat((String) rows.get(1).getProperty("location")).isEqualTo("London");
+    assertThat((String) rows.get(2).getProperty("location")).isEqualTo("Paris");
+  }
 }

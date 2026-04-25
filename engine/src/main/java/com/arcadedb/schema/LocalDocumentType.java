@@ -18,6 +18,7 @@
  */
 package com.arcadedb.schema;
 
+import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Document;
 import com.arcadedb.database.MutableDocument;
 import com.arcadedb.database.RecordEvents;
@@ -35,6 +36,7 @@ import com.arcadedb.index.IndexInternal;
 import com.arcadedb.index.TypeIndex;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.CollectionUtils;
 import com.arcadedb.utility.FileUtils;
@@ -398,6 +400,8 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public LocalProperty createProperty(final String propertyName, final Type propertyType, final String ofType) {
+    ((DatabaseInternal) schema.getDatabase()).checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
+
     if (properties.containsKey(propertyName))
       throw new SchemaException(
           "Cannot create the property '" + propertyName + "' in type '" + name + "' because it already exists");
@@ -837,8 +841,7 @@ public class LocalDocumentType implements DocumentType {
 
         if (m1.getAssociatedBucketId() != m2.getAssociatedBucketId())
           return false;
-        if (!m1.getName().equals(m2.getName()))
-          return false;
+        // Index names contain timestamps that differ across HA nodes, so compare structurally
         if (m1.getPropertyNames().size() != m2.getPropertyNames().size())
           return false;
 

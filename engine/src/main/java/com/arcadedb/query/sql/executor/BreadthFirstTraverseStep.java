@@ -35,7 +35,12 @@ public class BreadthFirstTraverseStep extends AbstractTraverseStep {
 
   public BreadthFirstTraverseStep(final List<TraverseProjectionItem> projections, final WhereClause whileClause, final PInteger maxDepth,
       final CommandContext context) {
-    super(projections, whileClause, maxDepth, context);
+    this(projections, whileClause, null, maxDepth, context);
+  }
+
+  public BreadthFirstTraverseStep(final List<TraverseProjectionItem> projections, final WhereClause whileClause, final WhereClause postFilter,
+      final PInteger maxDepth, final CommandContext context) {
+    super(projections, whileClause, postFilter, maxDepth, context);
   }
 
   @Override
@@ -100,7 +105,8 @@ public class BreadthFirstTraverseStep extends AbstractTraverseStep {
   protected void fetchNextResults(final CommandContext context, final int nRecords) {
     if (!this.entryPoints.isEmpty()) {
       final TraverseResult item = (TraverseResult) this.entryPoints.removeFirst();
-      this.results.add(item);
+      if (postFilter == null || postFilter.matchesFilters(item, context))
+        this.results.add(item);
       for (final TraverseProjectionItem proj : projections) {
         final Object nextStep = proj.execute(item, context);
         final Integer depth = item.depth != null ? item.depth : (Integer) item.getMetadata("$depth");

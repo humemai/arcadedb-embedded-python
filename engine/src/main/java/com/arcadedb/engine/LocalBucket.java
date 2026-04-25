@@ -39,6 +39,7 @@ import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.FileUtils;
+import com.arcadedb.utility.IntIntHashMap;
 
 import java.io.*;
 import java.util.*;
@@ -88,7 +89,11 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
   protected final        int                       contentHeaderSize;
   private final          int                       maxRecordsInPage                 = DEF_MAX_RECORDS_IN_PAGE;
   private final          AtomicLong                cachedRecordCount                = new AtomicLong(-1);
-  private final          TreeMap<Integer, Integer> freeSpaceInPages                 = new TreeMap<>();
+  // pageId → free-space-bytes. TreeMap ordering is unused (verified by grep), so a primitive
+  // open-addressing map saves memory and avoids Integer boxing on every read/write/remove on
+  // the page-allocation hot path. Bounded by MAX_PAGES_GATHER_STATS (100). Single-threaded
+  // access is enforced by `synchronized (freeSpaceInPages)` blocks at every callsite.
+  private final          IntIntHashMap             freeSpaceInPages                 = new IntIntHashMap();
   private final          REUSE_SPACE_MODE          reuseSpaceMode;
   private                long                      timeOfLastStats                  = 0L;
   private                long                      changesFromLastStats             = 0L;
@@ -668,7 +673,11 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
 
       final MutablePage selectedPage;
       if (createNewPage) {
-        selectedPage = database.getTransaction().addPage(new PageId(database, file.getFileId(), txPageCounter), pageSize);
+        // Atomically reserve the next page number to prevent two concurrent transactions
+        // from allocating the same page number (which would cause silent data corruption
+        // when their commits both succeed and overwrite each other's chunks).
+        final int reservedPageNumber = reservedPageCounter.getAndIncrement();
+        selectedPage = database.getTransaction().addPage(new PageId(database, file.getFileId(), reservedPageNumber), pageSize);
         newRecordPositionInPage = contentHeaderSize;
         availablePositionIndex = 0;
       } else
@@ -730,12 +739,11 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
    * @param ridsOut    output array for assigned RIDs (must have length >= to - from)
    */
   public void createRecordsBulk(final Binary[] buffers, final int from, final int to, final RID[] ridsOut) {
-    int txPageCounter = getTotalPages();
-
-      // Always start from a fresh new page for bulk writes
+      // Always start from a fresh new page for bulk writes.
+      // Atomically reserve the next page number to prevent two concurrent transactions
+      // from allocating the same page number (which would cause silent data corruption).
       MutablePage currentPage = database.getTransaction()
-          .addPage(new PageId(database, file.getFileId(), txPageCounter), pageSize);
-      txPageCounter++;
+          .addPage(new PageId(database, file.getFileId(), reservedPageCounter.getAndIncrement()), pageSize);
       int recordPositionInPage = contentHeaderSize;
       int availablePositionIndex = 0;
       final int maxContent = currentPage.getMaxContentSize();
@@ -758,8 +766,7 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
 
           // Create a new page
           currentPage = database.getTransaction()
-              .addPage(new PageId(database, file.getFileId(), txPageCounter), pageSize);
-          txPageCounter++;
+              .addPage(new PageId(database, file.getFileId(), reservedPageCounter.getAndIncrement()), pageSize);
           recordPositionInPage = contentHeaderSize;
           availablePositionIndex = 0;
         }
@@ -1494,7 +1501,12 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
 
       if (nextPage == null) {
         // CREATE A NEW PAGE
-        nextPage = database.getTransaction().addPage(new PageId(database, file.getFileId(), txPageCounter++), pageSize);
+        // Atomically reserve the next page number to prevent two concurrent transactions
+        // from allocating the same page number (which would cause silent data corruption
+        // when their commits both succeed and overwrite each other's chunks).
+        final int reservedPageNumber = reservedPageCounter.getAndIncrement();
+        nextPage = database.getTransaction().addPage(new PageId(database, file.getFileId(), reservedPageNumber), pageSize);
+        txPageCounter = reservedPageNumber + 1;
         newPosition = contentHeaderSize;
         nextPage.writeUnsignedInt(PAGE_RECORD_TABLE_OFFSET, newPosition);
         nextPage.writeShort(PAGE_RECORD_COUNT_IN_PAGE_OFFSET, (short) 1);
@@ -1635,7 +1647,10 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
 
         if (nextPage == null) {
           // CREATE A NEW PAGE
-          nextPage = database.getTransaction().addPage(new PageId(database, file.getFileId(), txPageCounter), pageSize);
+          // Atomically reserve the next page number to prevent two concurrent transactions
+          // from allocating the same page number (which would cause silent data corruption).
+          final int reservedPageNumber = reservedPageCounter.getAndIncrement();
+          nextPage = database.getTransaction().addPage(new PageId(database, file.getFileId(), reservedPageNumber), pageSize);
           newPosition = contentHeaderSize;
           nextPage.writeUnsignedInt(PAGE_RECORD_TABLE_OFFSET, newPosition);
           nextPage.writeShort(PAGE_RECORD_COUNT_IN_PAGE_OFFSET, (short) 1);
@@ -1875,23 +1890,51 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
   private PageAnalysis findAvailableSpaceFromStatistics(final int currentPageId, final int spaceNeeded,
                                                         final boolean multiPageRecord)
           throws IOException {
+    // Snapshot keys/values into local arrays so we can safely mutate freeSpaceInPages
+    // (put/remove) inside the loop body. The snapshot is bounded by MAX_PAGES_GATHER_STATS (100).
+    //
+    // The snapshot is sorted by pageId to preserve the deterministic "fill lowest pageId first"
+    // allocation behavior that the previous TreeMap-backed implementation provided implicitly via
+    // its ordered iteration. Tests like RandomDeleteTest depend on this so that re-inserts after
+    // bulk deletes land at the same RIDs as the original inserts.
+    final int snapSize = freeSpaceInPages.size();
+    final int[] snapPageIds = new int[snapSize];
+    final int[] snapPageStats = new int[snapSize];
+    final int[] cursor = { 0 };
+    freeSpaceInPages.forEach((k, v) -> {
+      snapPageIds[cursor[0]] = k;
+      snapPageStats[cursor[0]] = v;
+      cursor[0]++;
+    });
+    sortByPageIdAscending(snapPageIds, snapPageStats, snapSize);
+
     PageAnalysis bestPageAnalysis = null;
-    List<Integer> pagesToRemove = null;
-    for (Map.Entry<Integer, Integer> entry : freeSpaceInPages.entrySet()) {
-      final int pageId = entry.getKey();
+    int[] pagesToRemove = null;
+    int pagesToRemoveCount = 0;
+    // Visible page horizon: the tx can see committed pages PLUS any pages it has added itself
+    // (tracked via tx.getPageCounter on this file). Pages beyond this are "phantoms" reserved
+    // by other concurrent transactions, not yet committed and not visible via readCache; reusing
+    // them at slot 0 would collide with the reserving tx and silently corrupt that record's chain.
+    final int txVisiblePageHorizon = getTotalPages();
+    for (int s = 0; s < snapSize; s++) {
+      final int pageId = snapPageIds[s];
       if (pageId == currentPageId)
         // ALREADY EVALUATED
         continue;
 
-      final Integer pageStats = entry.getValue();
+      if (pageId >= txVisiblePageHorizon)
+        continue;
+
+      final int pageStats = snapPageStats[s];
 
       if (pageStats >= spaceNeeded) {
         // CHECK IF THE SPACE AVAILABLE IS REAL
         final PageAnalysis pageAnalysis = getAvailableSpaceInPage(pageId, spaceNeeded, multiPageRecord);
 
         if (pageAnalysis.totalRecordsInPage >= maxRecordsInPage) {
-          pagesToRemove = pagesToRemove == null ? new ArrayList<>() : pagesToRemove;
-          pagesToRemove.add(pageId);
+          if (pagesToRemove == null)
+            pagesToRemove = new int[snapSize];
+          pagesToRemove[pagesToRemoveCount++] = pageId;
           continue;
         }
 
@@ -1899,10 +1942,11 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
           if (pageAnalysis.spaceAvailableInCurrentPage != pageStats) {
             // LOW COST UPDATE OF STATISTICS
             if (pageAnalysis.spaceAvailableInCurrentPage < MINIMUM_SPACE_LEFT_IN_PAGE) {
-              pagesToRemove = pagesToRemove == null ? new ArrayList<>() : pagesToRemove;
-              pagesToRemove.add(pageId);
+              if (pagesToRemove == null)
+                pagesToRemove = new int[snapSize];
+              pagesToRemove[pagesToRemoveCount++] = pageId;
             } else
-              entry.setValue(pageAnalysis.spaceAvailableInCurrentPage);
+              freeSpaceInPages.put(pageId, pageAnalysis.spaceAvailableInCurrentPage);
           }
 
           if (multiPageRecord && pageAnalysis.page.pageId.getPageNumber() == 0 && pageAnalysis.availablePositionIndex == 0)
@@ -1916,8 +1960,8 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
     }
 
     if (pagesToRemove != null)
-      for (Integer pageId : pagesToRemove)
-        freeSpaceInPages.remove(pageId);
+      for (int i = 0; i < pagesToRemoveCount; i++)
+        freeSpaceInPages.remove(pagesToRemove[i], -1);
 
     return bestPageAnalysis;
   }
@@ -1974,35 +2018,36 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
 
     synchronized (freeSpaceInPages) {
       if (availableSpace + delta == 0)
-        freeSpaceInPages.remove(pageId);
+        freeSpaceInPages.remove(pageId, -1);
       else {
         final int usableSpaceInPage = getPageSize() - contentHeaderSize;
 
-        final Integer freeSpaceInPage = freeSpaceInPages.get(pageId);
-        final int prevSpace = availableSpace == 0 && freeSpaceInPage != null ? freeSpaceInPage : availableSpace;
+        final boolean hasEntry = freeSpaceInPages.containsKey(pageId);
+        final int existingFreeSpace = hasEntry ? freeSpaceInPages.get(pageId, 0) : 0;
+        final int prevSpace = availableSpace == 0 && hasEntry ? existingFreeSpace : availableSpace;
         final int newSpace = prevSpace + delta;
 
-        if (freeSpaceInPage != null) {
+        if (hasEntry) {
           if (newSpace <= MINIMUM_SPACE_LEFT_IN_PAGE || (freeSpaceInPages.size() >= MAX_PAGES_GATHER_STATS
                   && newSpace * 100 / usableSpaceInPage < GATHER_STATS_MIN_SPACE_PERC))
-            freeSpaceInPages.remove(pageId);
+            freeSpaceInPages.remove(pageId, -1);
           else
             freeSpaceInPages.put(pageId, newSpace);
         } else if (newSpace * 100 / usableSpaceInPage >= GATHER_STATS_MIN_SPACE_PERC) {
           if (freeSpaceInPages.size() >= MAX_PAGES_GATHER_STATS) {
             // REMOVE THE SMALLEST PAGE
-            int lowestPageId = -1;
-            int lowestPageSpace = -1;
+            final int[] lowestPageId = { -1 };
+            final int[] lowestPageSpace = { -1 };
 
-            for (Map.Entry<Integer, Integer> entry : freeSpaceInPages.entrySet()) {
-              if (lowestPageId < 0 || entry.getValue() < lowestPageSpace) {
-                lowestPageId = entry.getKey();
-                lowestPageSpace = entry.getValue();
+            freeSpaceInPages.forEach((k, v) -> {
+              if (lowestPageId[0] < 0 || v < lowestPageSpace[0]) {
+                lowestPageId[0] = k;
+                lowestPageSpace[0] = v;
               }
-            }
+            });
 
-            if (lowestPageId > -1 && lowestPageSpace < newSpace) {
-              freeSpaceInPages.remove(lowestPageId);
+            if (lowestPageId[0] > -1 && lowestPageSpace[0] < newSpace) {
+              freeSpaceInPages.remove(lowestPageId[0], -1);
               freeSpaceInPages.put(pageId, newSpace);
             }
           } else
@@ -2022,6 +2067,26 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
     }
   }
 
+  /**
+   * Insertion sort on two parallel arrays, ordering by ascending {@code pageIds[i]}. Bounded to
+   * MAX_PAGES_GATHER_STATS (100) entries so insertion sort is the right choice (low constant,
+   * great cache behavior, in-place).
+   */
+  private static void sortByPageIdAscending(final int[] pageIds, final int[] pageStats, final int n) {
+    for (int i = 1; i < n; i++) {
+      final int kPage = pageIds[i];
+      final int kStats = pageStats[i];
+      int j = i - 1;
+      while (j >= 0 && pageIds[j] > kPage) {
+        pageIds[j + 1] = pageIds[j];
+        pageStats[j + 1] = pageStats[j];
+        j--;
+      }
+      pageIds[j + 1] = kPage;
+      pageStats[j + 1] = kStats;
+    }
+  }
+
   public JSONObject getStatistics() {
     final JSONObject json = new JSONObject();
 
@@ -2031,10 +2096,7 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
 
     final JSONArray pages = new JSONArray();
     synchronized (freeSpaceInPages) {
-      for (Map.Entry<Integer, Integer> entry : freeSpaceInPages.entrySet())
-        pages.put(//
-                new JSONObject().put("id", entry.getKey()).put("free", entry.getValue())//
-        );
+      freeSpaceInPages.forEach((k, v) -> pages.put(new JSONObject().put("id", k).put("free", v)));
     }
     json.put("pages", pages);
 

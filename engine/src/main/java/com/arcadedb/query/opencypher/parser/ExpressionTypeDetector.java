@@ -65,6 +65,16 @@ class ExpressionTypeDetector {
     if (existsCtx != null && existsCtx.getText().length() >= exprText.length() - 2)
       return builder.parseExistsExpression(existsCtx);
 
+    // COLLECT { ... } subquery expression
+    final Cypher25Parser.CollectExpressionContext collectCtx = builder.findCollectExpressionRecursive(ctx);
+    if (collectCtx != null && collectCtx.getText().length() >= exprText.length() - 2)
+      return builder.parseCollectExpression(collectCtx);
+
+    // COUNT { ... } subquery expression
+    final Cypher25Parser.CountExpressionContext countCtx = builder.findCountExpressionRecursive(ctx);
+    if (countCtx != null && countCtx.getText().length() >= exprText.length() - 2)
+      return builder.parseCountExpression(countCtx);
+
     // CASE expressions (both forms)
     final Cypher25Parser.CaseExpressionContext caseCtx = builder.findCaseExpressionRecursive(ctx);
     if (caseCtx != null && caseCtx.getText().length() >= exprText.length() - 2)
@@ -224,6 +234,14 @@ class ExpressionTypeDetector {
         return builder.parseVectorNormFunction(vecExpr1.vectorNormFunction());
       if (vecExpr1.vectorDistanceFunction() != null)
         return builder.parseVectorDistanceFunction(vecExpr1.vectorDistanceFunction());
+      // trimFunction and normalizeFunction are special grammar rules in expression1.
+      // Check them BEFORE findFunctionInvocationRecursive, which would otherwise find
+      // an inner function (e.g., toLower inside trim(toLower(...))) and return it
+      // instead of the outer trim/normalize.
+      if (vecExpr1.trimFunction() != null)
+        return builder.parseTrimFunction(vecExpr1.trimFunction());
+      if (vecExpr1.normalizeFunction() != null)
+        return builder.parseNormalizeFunction(vecExpr1.normalizeFunction());
     }
 
     // Check for top-level list literals BEFORE function invocations.
