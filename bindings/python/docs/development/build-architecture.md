@@ -123,10 +123,10 @@ jobs:
 
 **Steps:**
 
-1. Download 84 JARs from ArcadeDB Docker image
+1. Download the ArcadeDB JAR set from the upstream Docker image
 2. Read `jar_exclusions.txt` (single source of truth)
-3. Filter out excluded JARs (currently: `arcadedb-grpcw-*.jar`)
-4. Result: 83 JARs (167.4M)
+3. Filter out excluded JARs (for example `arcadedb-grpcw-*.jar`, `arcadedb-ha-raft-*.jar`)
+4. Result: a smaller filtered JAR set used by native builds
 5. Upload as artifact for native builds
 
 **Why Ubuntu?** Bash filtering works reliably and avoids cross-platform glob differences.
@@ -169,8 +169,10 @@ jobs:
 **Location:** `bindings/python/scripts/jar_exclusions.txt`
 
 **Format:** One glob pattern per line
-```
+
+```text
 arcadedb-grpcw-*.jar
+arcadedb-ha-raft-*.jar
 ```
 
 **Used by:**
@@ -179,7 +181,7 @@ arcadedb-grpcw-*.jar
 2. `bindings/python/scripts/Dockerfile.build` (Docker builds)
 3. `bindings/python/scripts/setup_jars.py` (documentation/validation)
 
-**Result:** ~40MB savings per wheel (gRPC is ~38MB)
+**Result:** The wheel excludes optional Java components that are not part of the default Python distribution.
 
 ### Implementation
 
@@ -195,7 +197,7 @@ arcadedb-grpcw-*.jar
 - `download-jars` job: Filters once on Ubuntu (reliable bash)
 - Native builds: Use pre-filtered JARs from artifact
 - Docker builds: Filter independently (different source)
-- **Result:** Consistent 83 JARs across all platforms
+- **Result:** Consistent filtered JAR contents across all platforms
 
 ## Test Parsing
 
@@ -228,13 +230,13 @@ errors=$(grep -oE 'errors="[0-9]+"' test-results.xml | grep -oE '[0-9]+')
 ```dockerfile
 # Stage 1: java-builder (downloads JARs from ArcadeDB image)
 FROM arcadedb/arcadedb:24.11.1 AS java-builder
-# Downloads 84 JARs to /jars
+# Downloads the upstream JAR set to /jars
 
 # Stage 2: jre-builder (filters JARs, creates JRE)
 FROM amazoncorretto:25 AS jre-builder
 COPY --from=java-builder /jars/*.jar /jars/
 # Reads jar_exclusions.txt
-# Filters to 83 JARs (167.4M)
+# Filters out excluded JARs before packaging
 # Runs jlink → creates /jre (platform-specific!)
 
 # Stage 3: python-builder (builds wheel)
@@ -246,8 +248,8 @@ COPY --from=jre-builder /jre /jre
 
 ### Key Fix: Copy from jre-builder, not java-builder
 
-**Bug:** Originally copied from `java-builder` → got 84 JARs (unfiltered)
-**Fix:** Copy from `jre-builder` → gets 83 JARs (filtered)
+**Bug:** Originally copied from `java-builder` → got unfiltered JARs
+**Fix:** Copy from `jre-builder` → gets the filtered JAR set
 
 ## Native Build Script
 
@@ -311,7 +313,7 @@ Since the runner itself is ARM64, Docker builds run natively without emulation.
 
 ## File Structure
 
-```
+```text
 bindings/python/
 ├── scripts/build.sh            # Main build entrypoint
 ├── scripts/build-native.sh     # Native builds (macOS)
@@ -360,7 +362,7 @@ bindings/python/
 
 ### Issue 3: Docker Copied Unfiltered JARs
 
-**Problem:** `python-builder` copied from `java-builder` (84 JARs) instead of `jre-builder` (83 JARs).
+**Problem:** `python-builder` copied from `java-builder` (unfiltered JARs) instead of `jre-builder` (filtered JARs).
 
 **Solution:** Change `COPY --from=java-builder` to `COPY --from=jre-builder`.
 
