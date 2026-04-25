@@ -36,6 +36,28 @@ UPSTREAM_PREFERRED_PATHS=(
 )
 
 PROTECTED_SOURCE_REV=""
+SYNC_TARGET_REF="upstream/main"
+
+resolve_sync_target() {
+    local requested_ref="$1"
+
+    if [ -z "$requested_ref" ]; then
+        SYNC_TARGET_REF="upstream/main"
+        return 0
+    fi
+
+    if ! git rev-parse --verify --quiet "$requested_ref" >/dev/null; then
+        echo -e "${RED}❌ Target revision not found: $requested_ref${NC}"
+        exit 1
+    fi
+
+    if ! git merge-base --is-ancestor "$requested_ref" upstream/main; then
+        echo -e "${RED}❌ Target revision is not an ancestor of upstream/main: $requested_ref${NC}"
+        exit 1
+    fi
+
+    SYNC_TARGET_REF=$(git rev-parse --short=12 "$requested_ref")
+}
 
 try_auto_resolve() {
     local conflicts resolved path handled
@@ -110,6 +132,8 @@ Syncs this fork with upstream ArcadeData/arcadedb while keeping:
 
 ${YELLOW}Usage:${NC}
   ./sync-upstream.sh            Sync with upstream (interactive)
+    ./sync-upstream.sh --until <commit>
+                                                                Sync only up to a specific upstream commit
   ./sync-upstream.sh --dry-run  Show what would be synced (no changes)
   ./sync-upstream.sh --status   Check sync status only
   ./sync-upstream.sh --help     Show this help
@@ -137,6 +161,10 @@ ${YELLOW}Troubleshooting:${NC}
     View changes:     git log main..upstream-main --oneline
     Check divergence: git log upstream-main..main --oneline
 
+${YELLOW}Examples:${NC}
+  ./sync-upstream.sh --until 96a306bed
+  ./sync-upstream.sh --dry-run --until upstream/main~10
+
 ${CYAN}Learn more: https://github.com/humemai/arcadedb-embedded-python${NC}
 EOF
     exit 0
@@ -148,6 +176,7 @@ check_status() {
     echo ""
 
     git fetch upstream --no-tags --quiet
+    resolve_sync_target "$STATUS_TARGET"
 
     if ! git show-ref --verify --quiet refs/heads/upstream-main; then
         echo -e "${YELLOW}⚠️  upstream-main branch not found. Run './sync-upstream.sh' to create it.${NC}"
@@ -155,28 +184,29 @@ check_status() {
     fi
 
     AHEAD=$(git rev-list --count upstream-main..main 2>/dev/null || echo 0)
-    BEHIND=$(git rev-list --count main..upstream-main 2>/dev/null || echo 0)
-    MIRROR_PENDING=$(git rev-list --count upstream-main..upstream/main 2>/dev/null || echo 0)
+    BEHIND=$(git rev-list --count main.."$SYNC_TARGET_REF" 2>/dev/null || echo 0)
+    MIRROR_PENDING=$(git rev-list --count upstream-main.."$SYNC_TARGET_REF" 2>/dev/null || echo 0)
 
     echo -e "${YELLOW}Branch:${NC} main (fork)"
     echo -e "${YELLOW}Upstream mirror:${NC} upstream-main"
     echo -e "${YELLOW}Remote:${NC} origin (humemai/arcadedb-embedded-python)"
     echo -e "${YELLOW}Upstream:${NC} upstream (ArcadeData/arcadedb)"
+    echo -e "${YELLOW}Sync target:${NC} $SYNC_TARGET_REF"
     echo ""
 
     if [ "$MIRROR_PENDING" -eq 0 ]; then
-        echo -e "${GREEN}✅ upstream-main already matches upstream/main${NC}"
+        echo -e "${GREEN}✅ upstream-main already matches $SYNC_TARGET_REF${NC}"
     else
-        echo -e "${YELLOW}⚠️  upstream-main is behind upstream/main by $MIRROR_PENDING commit(s)${NC}"
+        echo -e "${YELLOW}⚠️  upstream-main is behind $SYNC_TARGET_REF by $MIRROR_PENDING commit(s)${NC}"
     fi
 
     if [ "$BEHIND" -eq 0 ]; then
-        echo -e "${GREEN}✅ main already contains upstream-main${NC}"
+        echo -e "${GREEN}✅ main already contains $SYNC_TARGET_REF${NC}"
     else
-        echo -e "${YELLOW}⚠️  main is behind upstream-main by $BEHIND commit(s)${NC}"
+        echo -e "${YELLOW}⚠️  main is behind $SYNC_TARGET_REF by $BEHIND commit(s)${NC}"
         echo ""
         echo -e "${CYAN}Recent upstream changes:${NC}"
-        git log main..upstream-main --oneline --max-count=5
+        git log main.."$SYNC_TARGET_REF" --oneline --max-count=5
         echo ""
         echo -e "${BLUE}💡 Run './sync-upstream.sh' to sync${NC}"
     fi
@@ -190,25 +220,42 @@ check_status() {
 
 # Parse arguments
 DRY_RUN=false
-case "${1:-}" in
-    --help|-h)
-        show_help
-        ;;
-    --status|-s)
-        check_status
-        ;;
-    --dry-run|-n)
-        DRY_RUN=true
-        ;;
-    "")
-        # Continue with sync
-        ;;
-    *)
-        echo -e "${RED}❌ Unknown option: $1${NC}"
-        echo -e "${YELLOW}💡 Use --help for usage information${NC}"
-        exit 1
-        ;;
-esac
+STATUS_ONLY=false
+STATUS_TARGET=""
+REQUESTED_TARGET=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help|-h)
+            show_help
+            ;;
+        --status|-s)
+            STATUS_ONLY=true
+            ;;
+        --dry-run|-n)
+            DRY_RUN=true
+            ;;
+        --until)
+            if [ $# -lt 2 ]; then
+                echo -e "${RED}❌ Missing revision after --until${NC}"
+                exit 1
+            fi
+            REQUESTED_TARGET="$2"
+            STATUS_TARGET="$2"
+            shift
+            ;;
+        *)
+            echo -e "${RED}❌ Unknown option: $1${NC}"
+            echo -e "${YELLOW}💡 Use --help for usage information${NC}"
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+if [ "$STATUS_ONLY" = true ]; then
+    check_status
+fi
 
 echo -e "${BLUE}🔄 Syncing with upstream ArcadeData/arcadedb...${NC}"
 echo ""
@@ -216,6 +263,8 @@ echo ""
 # 1. Fetch latest upstream changes
 echo -e "${YELLOW}📥 Fetching upstream changes...${NC}"
 git fetch upstream --no-tags
+resolve_sync_target "$REQUESTED_TARGET"
+TARGET_LABEL="$SYNC_TARGET_REF"
 
 # 2. Check current status
 echo -e "${YELLOW}📊 Checking current branch...${NC}"
@@ -230,21 +279,21 @@ fi
 
 # 4. Show what will be synced
 echo ""
-UPSTREAM_COMMITS=$(git rev-list --count upstream-main..upstream/main)
-PENDING_MERGE_COMMITS=$(git rev-list --count main..upstream-main)
+UPSTREAM_COMMITS=$(git rev-list --count upstream-main.."$SYNC_TARGET_REF")
+PENDING_MERGE_COMMITS=$(git rev-list --count main.."$SYNC_TARGET_REF")
 if [ "$UPSTREAM_COMMITS" -eq 0 ]; then
-    echo -e "${GREEN}✅ upstream-main already matches upstream/main${NC}"
+    echo -e "${GREEN}✅ upstream-main already matches $TARGET_LABEL${NC}"
 else
-    echo -e "${BLUE}📋 Changes in upstream/main ($UPSTREAM_COMMITS new commit(s)):${NC}"
-    git log upstream-main..upstream/main --oneline
+    echo -e "${BLUE}📋 Changes up to $TARGET_LABEL ($UPSTREAM_COMMITS new commit(s)):${NC}"
+    git log upstream-main.."$SYNC_TARGET_REF" --oneline
 fi
 
 echo ""
 if [ "$PENDING_MERGE_COMMITS" -eq 0 ]; then
-    echo -e "${GREEN}✅ main already contains upstream-main${NC}"
+    echo -e "${GREEN}✅ main already contains $TARGET_LABEL${NC}"
 else
     echo -e "${BLUE}📋 Changes that will be merged into main ($PENDING_MERGE_COMMITS commit(s)):${NC}"
-    git log main..upstream-main --oneline --max-count=10
+    git log main.."$SYNC_TARGET_REF" --oneline --max-count=10
 fi
 
 # 5. Dry run mode
@@ -279,7 +328,7 @@ fi
 echo ""
 echo -e "${YELLOW}🔄 Updating upstream-main...${NC}"
 git checkout upstream-main
-git reset --hard upstream/main
+git reset --hard "$SYNC_TARGET_REF"
 
 # 9. Merge upstream-main into main
 echo -e "${YELLOW}🔄 Merging upstream-main into main...${NC}"
@@ -325,6 +374,7 @@ fi
 # 11. Show summary
 echo ""
 echo -e "${GREEN}🎉 Sync complete!${NC}"
+echo -e "${YELLOW}Synced through:${NC} $TARGET_LABEL"
 echo ""
 echo -e "${BLUE}📊 Next steps (IMPORTANT):${NC}"
 echo ""
