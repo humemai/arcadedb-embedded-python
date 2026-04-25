@@ -65,7 +65,6 @@ public final class TestServerHelper {
       config.setValue(GlobalConfiguration.SERVER_NAME, Constants.PRODUCT + "_" + i);
       config.setValue(GlobalConfiguration.SERVER_DATABASE_DIRECTORY, "./target/databases" + i);
       config.setValue(GlobalConfiguration.HA_SERVER_LIST, serverURLs);
-      config.setValue(GlobalConfiguration.HA_REPLICATION_INCOMING_HOST, "localhost");
       config.setValue(GlobalConfiguration.SERVER_HTTP_INCOMING_HOST, "localhost");
       config.setValue(GlobalConfiguration.HA_ENABLED, totalServers > 1);
       //config.setValue(GlobalConfiguration.NETWORK_SOCKET_TIMEOUT, 2000);
@@ -151,6 +150,7 @@ public final class TestServerHelper {
 
   public static void deleteDatabaseFolders(final int totalServers) {
     FileUtils.deleteRecursively(new File("./target/databases/"));
+    FileUtils.deleteRecursively(new File("./target/config/"));
     FileUtils.deleteRecursively(new File(GlobalConfiguration.SERVER_DATABASE_DIRECTORY.getValueAsString() + File.separator));
     for (int i = 0; i < totalServers; ++i)
       FileUtils.deleteRecursively(new File(GlobalConfiguration.SERVER_DATABASE_DIRECTORY.getValueAsString() + i + File.separator));

@@ -38,6 +38,8 @@ import com.arcadedb.index.IndexInternal;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.LocalSchema;
+import com.arcadedb.utility.IntHashSet;
+import com.arcadedb.utility.IntIntHashMap;
 import com.arcadedb.utility.RidHashSet;
 
 import java.io.*;
@@ -60,7 +62,9 @@ import java.util.stream.*;
 public class TransactionContext implements Transaction {
   private final DatabaseInternal                     database;
   private final Map<Integer, Integer>                newPageCounters       = new ConcurrentHashMap<>();
-  private final Map<Integer, AtomicInteger>          bucketRecordDelta     = new HashMap<>();
+  // Per-tx record-count delta per bucket. Single-threaded (HashMap was used, not ConcurrentHashMap),
+  // so AtomicInteger was only a mutable-cell trick. IntIntHashMap.add(key, delta) covers it directly.
+  private final IntIntHashMap                        bucketRecordDelta     = new IntIntHashMap();
   private final Map<RID, Record>                     immutableRecordsCache = new HashMap<>(1024);
   private final Map<RID, Record>                     modifiedRecordsCache  = new HashMap<>(1024);
   private final TransactionIndexContext              indexChanges;
@@ -500,8 +504,7 @@ public class TransactionContext implements Transaction {
 
   public Map<Integer, Integer> getBucketRecordDelta() {
     final Map<Integer, Integer> map = new HashMap<>(bucketRecordDelta.size());
-    for (Map.Entry<Integer, AtomicInteger> entry : bucketRecordDelta.entrySet())
-      map.put(entry.getKey(), entry.getValue().get());
+    bucketRecordDelta.forEach((k, v) -> map.put(k, v));
     return map;
   }
 
@@ -509,22 +512,14 @@ public class TransactionContext implements Transaction {
    * Returns the delta of records considering the pending changes in transaction.
    */
   public long getBucketRecordDelta(final int bucketId) {
-    final AtomicInteger delta = bucketRecordDelta.get(bucketId);
-    if (delta != null)
-      return delta.get();
-    return 0;
+    return bucketRecordDelta.get(bucketId, 0);
   }
 
   /**
    * Updates the record counter for buckets. At transaction commit, the delta is updated into the schema.
    */
   public void updateBucketRecordDelta(final int bucketId, final int delta) {
-    AtomicInteger counter = bucketRecordDelta.get(bucketId);
-    if (counter == null) {
-      counter = new AtomicInteger(delta);
-      bucketRecordDelta.put(bucketId, counter);
-    } else
-      counter.addAndGet(delta);
+    bucketRecordDelta.add(bucketId, delta);
   }
 
   /**
@@ -535,7 +530,7 @@ public class TransactionContext implements Transaction {
       final Map<Integer, Integer> bucketRecordDelta) throws TransactionException {
 
     for (Map.Entry<Integer, Integer> entry : bucketRecordDelta.entrySet())
-      this.bucketRecordDelta.put(entry.getKey(), new AtomicInteger(entry.getValue()));
+      this.bucketRecordDelta.put(entry.getKey(), entry.getValue());
 
     final int totalImpactedPages = buffer.pages.length;
     if (totalImpactedPages == 0 && keysTx.isEmpty()) {
@@ -545,8 +540,11 @@ public class TransactionContext implements Transaction {
     }
 
     try {
-      // LOCK FILES (IN ORDER, SO TO AVOID DEADLOCK)
-      final Set<Integer> modifiedFiles = new HashSet<>();
+      // LOCK FILES (IN ORDER, SO TO AVOID DEADLOCK).
+      // IntHashSet (zero-boxing) is used because this set is built on every commit
+      // and the small Integer boxing churn shows up in young-gen GC pressure under
+      // high transaction throughput.
+      final IntHashSet modifiedFiles = new IntHashSet(buffer.pages.length + 4);
 
       for (final WALFile.WALPage p : buffer.pages)
         modifiedFiles.add(p.fileId);
@@ -620,7 +618,7 @@ public class TransactionContext implements Transaction {
             ((LocalBucket) database.getSchema().getBucketById(rid.getBucketId())).fetchPageInTransaction(rid);
           }
 
-        final Set<Integer> modifiedFiles = lockFilesFromChanges();
+        final IntHashSet modifiedFiles = lockFilesFromChanges();
 
         if (explicitLockedFiles != null)
           checkExplicitLocks(modifiedFiles);
@@ -749,13 +747,13 @@ public class TransactionContext implements Transaction {
         ((PaginatedComponent) database.getSchema().getFileById(entry.getKey())).updatePageCount(entry.getValue());
 
       // UPDATE RECORD COUNT
-      for (Map.Entry<Integer, AtomicInteger> entry : bucketRecordDelta.entrySet()) {
+      bucketRecordDelta.forEach((bucketId, delta) -> {
         // THE BUCKET/FILE COULD HAVE BEEN REMOVED IN THE CURRENT TRANSACTION
-        final LocalBucket bucket = (LocalBucket) database.getSchema().getFileByIdIfExists(entry.getKey());
+        final LocalBucket bucket = (LocalBucket) database.getSchema().getFileByIdIfExists(bucketId);
         if (bucket != null && bucket.getCachedRecordCount() > -1)
           // UPDATE THE CACHE COUNTER ONLY IF ALREADY COMPUTED
-          bucket.setCachedRecordCount(bucket.getCachedRecordCount() + entry.getValue().get());
-      }
+          bucket.setCachedRecordCount(bucket.getCachedRecordCount() + delta);
+      });
 
       for (final Record r : modifiedRecordsCache.values())
         ((RecordInternal) r).unsetDirty();
@@ -866,7 +864,7 @@ public class TransactionContext implements Transaction {
     this.status = status;
   }
 
-  protected void explicitLock(final Set<Integer> filesToLock) {
+  protected void explicitLock(final IntHashSet filesToLock) {
     if (explicitLockedFiles != null)
       throw new TransactionException("Explicit lock already acquired");
 
@@ -879,8 +877,8 @@ public class TransactionContext implements Transaction {
     explicitLockedFiles = lockFilesInOrder(filesToLock);
   }
 
-  private Set<Integer> lockFilesFromChanges() {
-    final Set<Integer> modifiedFiles = new HashSet<>();
+  private IntHashSet lockFilesFromChanges() {
+    final IntHashSet modifiedFiles = new IntHashSet(modifiedPages.size() + 16);
 
     for (final PageId p : modifiedPages.keySet())
       modifiedFiles.add(p.getFileId());
@@ -890,15 +888,16 @@ public class TransactionContext implements Transaction {
 
     indexChanges.addFilesToLock(modifiedFiles);
 
-    modifiedFiles.addAll(newPageCounters.keySet());
+    for (final Integer fid : newPageCounters.keySet())
+      modifiedFiles.add(fid);
 
     return modifiedFiles;
   }
 
-  private List<Integer> lockFilesInOrder(final Set<Integer> files) {
+  private List<Integer> lockFilesInOrder(final IntHashSet files) {
     final long timeout = database.getConfiguration().getValueAsLong(GlobalConfiguration.COMMIT_LOCK_TIMEOUT);
 
-    final List<Integer> locked = database.getTransactionManager().tryLockFiles(files, timeout, getRequester());
+    final List<Integer> locked = database.getTransactionManager().tryLockFiles(files.toArray(), timeout, getRequester());
 
     // CHECK IF ALL THE LOCKED FILES STILL EXIST. FILE MISSING CAN HAPPEN IN CASE OF INDEX COMPACTION OR DROP OF A BUCKET OR AN INDEX
     for (Integer f : locked)
@@ -915,9 +914,14 @@ public class TransactionContext implements Transaction {
     return locked;
   }
 
-  private void checkExplicitLocks(final Set<Integer> modifiedFiles) {
-    // CHECK THE LOCKED FILES ARE ALL LOCKED ALREADY
-    if (!explicitLockedFiles.containsAll(modifiedFiles)) {
+  private void checkExplicitLocks(final IntHashSet modifiedFiles) {
+    // CHECK THE LOCKED FILES ARE ALL LOCKED ALREADY: every modified file must already be in explicitLockedFiles.
+    final boolean[] missing = { false };
+    modifiedFiles.forEach(fid -> {
+      if (!missing[0] && !explicitLockedFiles.contains(fid))
+        missing[0] = true;
+    });
+    if (missing[0]) {
       boolean anyMigration = false;
       // CHECK FOR ANY MIGRATED FILES (INDEX COMPACTION)
       final List<Integer> migratedFileIds = new ArrayList<>(explicitLockedFiles.size());
@@ -932,13 +936,23 @@ public class TransactionContext implements Transaction {
         }
       }
 
-      if (anyMigration && migratedFileIds.containsAll(modifiedFiles))
-        // FOUND MIGRATED FILE(S), FORCE THE CLIENT TO RETRY THE OPERATION
-        throw new ConcurrentModificationException(
-            "Error on commit transaction: some files have been migrated, please retry the operation");
+      if (anyMigration) {
+        // Check if EVERY modifiedFiles entry is in migratedFileIds
+        final HashSet<Integer> migratedSet = new HashSet<>(migratedFileIds);
+        final boolean[] allMigrated = { true };
+        modifiedFiles.forEach(fid -> {
+          if (allMigrated[0] && !migratedSet.contains(fid))
+            allMigrated[0] = false;
+        });
+        if (allMigrated[0])
+          // FOUND MIGRATED FILE(S), FORCE THE CLIENT TO RETRY THE OPERATION
+          throw new ConcurrentModificationException(
+              "Error on commit transaction: some files have been migrated, please retry the operation");
+      }
 
       // ERROR: NOT ALL THE MODIFIED FILES ARE LOCKED
-      final HashSet<Integer> left = new HashSet<>(modifiedFiles);
+      final HashSet<Integer> left = new HashSet<>(modifiedFiles.size());
+      modifiedFiles.forEach(left::add);
       left.removeAll(explicitLockedFiles);
 
       final Set<String> resourceNames = left.stream().map((fileId -> database.getSchema().getFileById(fileId).getName()))

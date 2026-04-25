@@ -74,17 +74,17 @@ public class TrimFunction implements StatelessFunction {
     throw new CommandExecutionException("trim() requires 1 or 3 arguments");
   }
 
-  private static String stripLeading(final String source, final String trimChar) {
+  static String stripLeading(final String source, final String trimChars) {
     int start = 0;
-    while (start < source.length() && source.startsWith(trimChar, start))
-      start += trimChar.length();
+    while (start < source.length() && trimChars.indexOf(source.charAt(start)) >= 0)
+      start++;
     return source.substring(start);
   }
 
-  private static String stripTrailing(final String source, final String trimChar) {
+  static String stripTrailing(final String source, final String trimChars) {
     int end = source.length();
-    while (end >= trimChar.length() && source.startsWith(trimChar, end - trimChar.length()))
-      end -= trimChar.length();
+    while (end > 0 && trimChars.indexOf(source.charAt(end - 1)) >= 0)
+      end--;
     return source.substring(0, end);
   }
 }

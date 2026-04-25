@@ -260,6 +260,16 @@ class CypherExpressionBuilder {
     if (existsCtx != null && existsCtx.getText().length() >= nodeText.length() - 2)
       return parseExistsExpression(existsCtx);
 
+    // Check for COLLECT { ... } subqueries
+    final Cypher25Parser.CollectExpressionContext collectCtx = findCollectExpressionRecursive(node);
+    if (collectCtx != null && collectCtx.getText().length() >= nodeText.length() - 2)
+      return parseCollectExpression(collectCtx);
+
+    // Check for COUNT { ... } subqueries
+    final Cypher25Parser.CountExpressionContext countCtx = findCountExpressionRecursive(node);
+    if (countCtx != null && countCtx.getText().length() >= nodeText.length() - 2)
+      return parseCountExpression(countCtx);
+
     // Check for logical expressions (AND, OR, XOR, NOT) in the parse tree
     // This handles cases like (a AND b) appearing as children of comparisons
     if (node instanceof Cypher25Parser.ExpressionContext)
@@ -374,6 +384,10 @@ class CypherExpressionBuilder {
         return parseAllReduceExpression(e1.allReduceExpression());
       if (e1.existsExpression() != null)
         return parseExistsExpression(e1.existsExpression());
+      if (e1.collectExpression() != null)
+        return parseCollectExpression(e1.collectExpression());
+      if (e1.countExpression() != null)
+        return parseCountExpression(e1.countExpression());
       if (e1.countStar() != null) {
         final List<Expression> e1Args = new ArrayList<>();
         e1Args.add(new StarExpression());
@@ -389,6 +403,10 @@ class CypherExpressionBuilder {
         return parseVectorNormFunction(e1.vectorNormFunction());
       if (e1.vectorDistanceFunction() != null)
         return parseVectorDistanceFunction(e1.vectorDistanceFunction());
+      if (e1.trimFunction() != null)
+        return parseTrimFunction(e1.trimFunction());
+      if (e1.normalizeFunction() != null)
+        return parseNormalizeFunction(e1.normalizeFunction());
       // Check for map literal
       final Cypher25Parser.MapContext e1MapCtx = findMapRecursive(e1);
       if (e1MapCtx != null)
@@ -811,7 +829,7 @@ class CypherExpressionBuilder {
    * Parse a trimFunction context into a FunctionCallExpression.
    * Handles both simple trim(source) and extended trim(LEADING/TRAILING/BOTH trimChar FROM source).
    */
-  private Expression parseTrimFunction(final Cypher25Parser.TrimFunctionContext ctx) {
+  Expression parseTrimFunction(final Cypher25Parser.TrimFunctionContext ctx) {
     final List<Expression> args = new ArrayList<>();
 
     if (ctx.FROM() != null) {
@@ -824,11 +842,13 @@ class CypherExpressionBuilder {
 
       args.add(new LiteralExpression(mode, mode));
 
-      // trimCharacterString may be null (e.g., trim(LEADING FROM source))
+      // trimCharacterString may be absent (e.g., trim(LEADING FROM source) - trim whitespace)
+      // vs explicitly null (e.g., trim(null FROM source) - return null per Cypher spec).
+      // Use empty string to signal "default whitespace" when no character is provided.
       if (ctx.trimCharacterString != null)
         args.add(parseExpression(ctx.trimCharacterString));
       else
-        args.add(new LiteralExpression(null, "null"));
+        args.add(new LiteralExpression("", "''"));
 
       args.add(parseExpression(ctx.trimSource));
     } else {
@@ -837,6 +857,19 @@ class CypherExpressionBuilder {
     }
 
     return new FunctionCallExpression("trim", args, false);
+  }
+
+  /**
+   * Parse a normalizeFunction context into a FunctionCallExpression.
+   * Handles normalize(string) and normalize(string, normalForm).
+   * The normalForm keyword (NFC/NFD/NFKC/NFKD) is passed as a string literal argument.
+   */
+  Expression parseNormalizeFunction(final Cypher25Parser.NormalizeFunctionContext ctx) {
+    final List<Expression> args = new ArrayList<>();
+    args.add(parseExpression(ctx.expression()));
+    if (ctx.normalForm() != null)
+      args.add(new LiteralExpression(ctx.normalForm().getText(), ctx.normalForm().getText()));
+    return new FunctionCallExpression("normalize", args, false);
   }
 
   /**
@@ -857,6 +890,46 @@ class CypherExpressionBuilder {
       if (found != null) {
         return found;
       }
+    }
+
+    return null;
+  }
+
+  /**
+   * Recursively find COLLECT { ... } subquery expression in the parse tree.
+   */
+  Cypher25Parser.CollectExpressionContext findCollectExpressionRecursive(
+      final ParseTree node) {
+    if (node == null)
+      return null;
+
+    if (node instanceof Cypher25Parser.CollectExpressionContext)
+      return (Cypher25Parser.CollectExpressionContext) node;
+
+    for (int i = 0; i < node.getChildCount(); i++) {
+      final Cypher25Parser.CollectExpressionContext found = findCollectExpressionRecursive(node.getChild(i));
+      if (found != null)
+        return found;
+    }
+
+    return null;
+  }
+
+  /**
+   * Recursively find COUNT { ... } subquery expression in the parse tree.
+   */
+  Cypher25Parser.CountExpressionContext findCountExpressionRecursive(
+      final ParseTree node) {
+    if (node == null)
+      return null;
+
+    if (node instanceof Cypher25Parser.CountExpressionContext)
+      return (Cypher25Parser.CountExpressionContext) node;
+
+    for (int i = 0; i < node.getChildCount(); i++) {
+      final Cypher25Parser.CountExpressionContext found = findCountExpressionRecursive(node.getChild(i));
+      if (found != null)
+        return found;
     }
 
     return null;
@@ -1685,6 +1758,69 @@ class CypherExpressionBuilder {
     }
 
     return new ExistsExpression(subquery, text);
+  }
+
+  /**
+   * Parse a COLLECT { ... } subquery expression.
+   * Example: COLLECT { MATCH (p)-[:KNOWS]->(f:Person) RETURN f.name }
+   */
+  CollectExpression parseCollectExpression(final Cypher25Parser.CollectExpressionContext ctx) {
+    final String originalText = CypherASTBuilder.getOriginalText(ctx);
+    final String text = originalText;
+
+    final int openBrace = originalText.indexOf('{');
+    final int closeBrace = originalText.lastIndexOf('}');
+    String subquery;
+    if (openBrace >= 0 && closeBrace > openBrace)
+      subquery = originalText.substring(openBrace + 1, closeBrace).trim();
+    else
+      subquery = originalText.substring(8, originalText.length() - 1).trim(); // fallback "COLLECT{" prefix
+
+    // Update clauses are not allowed inside a COLLECT subquery
+    final String upper = subquery.toUpperCase();
+    if (upper.contains("SET ") || upper.contains("CREATE ") || upper.contains("DELETE ")
+        || upper.contains("MERGE ") || upper.contains("REMOVE "))
+      throw new CommandParsingException(
+          "InvalidClauseComposition: COLLECT subquery cannot contain update clauses");
+
+    return new CollectExpression(subquery, text);
+  }
+
+  /**
+   * Parse a COUNT { ... } pattern / subquery expression.
+   * Examples:
+   * - COUNT { (a)-[:KNOWS]->(b) }
+   * - COUNT { MATCH (a)-[:KNOWS]->(b) WHERE b.age > 18 }
+   */
+  CountExpression parseCountExpression(final Cypher25Parser.CountExpressionContext ctx) {
+    final String originalText = CypherASTBuilder.getOriginalText(ctx);
+    final String text = originalText;
+
+    final int openBrace = originalText.indexOf('{');
+    final int closeBrace = originalText.lastIndexOf('}');
+    String subquery;
+    if (openBrace >= 0 && closeBrace > openBrace)
+      subquery = originalText.substring(openBrace + 1, closeBrace).trim();
+    else
+      subquery = originalText.substring(6, originalText.length() - 1).trim(); // fallback "COUNT{" prefix
+
+    final String upper = subquery.toUpperCase();
+    if (upper.contains("SET ") || upper.contains("CREATE ") || upper.contains("DELETE ")
+        || upper.contains("MERGE ") || upper.contains("REMOVE "))
+      throw new CommandParsingException(
+          "InvalidClauseComposition: COUNT subquery cannot contain update clauses");
+
+    // Pattern-only form: wrap with MATCH and add RETURN 1 so the outer evaluator can count rows.
+    final String upperTrimmed = subquery.toUpperCase();
+    if (!upperTrimmed.startsWith("MATCH")
+        && !upperTrimmed.startsWith("WITH")
+        && !upperTrimmed.startsWith("RETURN")) {
+      subquery = "MATCH " + subquery + " RETURN 1";
+    } else if (!upperTrimmed.contains("RETURN ")) {
+      subquery = subquery + " RETURN 1";
+    }
+
+    return new CountExpression(subquery, text);
   }
 
   /**
@@ -2535,17 +2671,23 @@ class CypherExpressionBuilder {
    */
   Expression parseVectorDistanceFunction(final Cypher25Parser.VectorDistanceFunctionContext ctx) {
     final String metric = ctx.vectorDistanceMetric().getText().toUpperCase();
+
+    final List<Expression> args = new ArrayList<>();
+    args.add(parseExpression(ctx.vector1));
+    args.add(parseExpression(ctx.vector2));
+
     final String functionName = switch (metric) {
       case "EUCLIDEAN" -> "vector.l2Distance";
       case "MANHATTAN" -> "vector.distance.manhattan";
       case "COSINE" -> "vector.distance.cosine";
       case "DOT" -> "vector.dotProduct";
+      case "EUCLIDEAN_SQUARED", "HAMMING" -> {
+        args.add(new LiteralExpression(metric, "'" + metric + "'"));
+        yield "vector.distance";
+      }
       default -> throw new CommandParsingException("Unsupported vector_distance metric: " + metric);
     };
 
-    final List<Expression> args = new ArrayList<>();
-    args.add(parseExpression(ctx.vector1));
-    args.add(parseExpression(ctx.vector2));
     return new FunctionCallExpression(functionName, args, false);
   }
 }

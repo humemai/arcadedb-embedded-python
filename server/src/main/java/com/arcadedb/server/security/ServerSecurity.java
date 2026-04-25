@@ -388,6 +388,61 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     }
   }
 
+  /**
+   * Returns the current users list as a JSON array string, suitable for HA
+   * replication via {@code HAServerPlugin.replicateSecurityUsers}. The output is
+   * the canonical representation of the in-memory users map.
+   * <p>
+   * Intentionally NOT {@code synchronized}: callers on the HTTP handler side use
+   * {@code synchronized(server.getSecurity())} to serialise read-compute-submit
+   * sequences. The state machine apply thread (which calls {@link #applyReplicatedUsers})
+   * must NOT touch that monitor or it would deadlock with a handler thread waiting
+   * for {@code submitAndWait} to complete.
+   */
+  public String getUsersJsonPayload() {
+    final JSONArray array = new JSONArray();
+    for (final JSONObject userJson : usersToJSON())
+      array.put(userJson);
+    return array.toString();
+  }
+
+  /**
+   * Applies a replicated users payload: writes it to {@code server-users.jsonl}
+   * and populates the in-memory users map directly from the payload.
+   * Called from the Raft state machine on every peer when a SECURITY_USERS_ENTRY
+   * is applied.
+   * <p>
+   * The in-memory map is built from the Raft payload rather than re-reading from
+   * disk. In multi-server test setups (and potentially in embedded deployments),
+   * multiple in-process servers may share the same config directory. Reading from
+   * the file after writing would race with concurrent writes from other servers'
+   * state machine threads, causing a server to load another server's (possibly
+   * earlier) snapshot and permanently lose users.
+   * <p>
+   * Intentionally NOT {@code synchronized} on the ServerSecurity monitor: the
+   * HTTP handler holds that monitor while waiting for {@code submitAndWait} to
+   * complete, and the state machine apply thread needs to call this method to
+   * unblock the wait. Raft state-machine apply is single-threaded per group, so
+   * there is no internal contention here.
+   */
+  public void applyReplicatedUsers(final String usersJsonArray) {
+    final JSONArray array = new JSONArray(usersJsonArray);
+    final List<JSONObject> list = new ArrayList<>(array.length());
+    for (int i = 0; i < array.length(); i++)
+      list.add(array.getJSONObject(i));
+
+    try {
+      usersRepository.save(list);
+    } catch (final IOException e) {
+      throw new ServerException("Failed to save replicated users file", e);
+    }
+
+    // Build in-memory map from the authoritative Raft payload, not from the file.
+    users.clear();
+    for (final JSONObject userJson : list)
+      users.put(userJson.getString("name"), new ServerSecurityUser(server, userJson));
+  }
+
   public void saveGroups() {
     try {
       groupRepository.save(groupsToJSON());
@@ -638,12 +693,45 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
 
   protected JSONObject getDatabaseGroupsConfiguration(final String databaseName) {
     final JSONObject groupDatabases = groupRepository.getGroups().getJSONObject("databases");
-    JSONObject databaseConfiguration = groupDatabases.has(databaseName) ? groupDatabases.getJSONObject(databaseName) : null;
-    if (databaseConfiguration == null)
-      // GET DEFAULT (*) DATABASE GROUPS
-      databaseConfiguration = groupDatabases.has(SecurityManager.ANY) ? groupDatabases.getJSONObject("*") : null;
-    if (databaseConfiguration == null || !databaseConfiguration.has("groups"))
+
+    // When the caller asks for the wildcard itself, return the wildcard live reference directly — callers
+    // (setup helpers, reload tests) rely on mutating the returned object.
+    if (SecurityManager.ANY.equals(databaseName)) {
+      final JSONObject wildcard = groupDatabases.has(SecurityManager.ANY) ? groupDatabases.getJSONObject("*") : null;
+      return wildcard != null && wildcard.has("groups") ? wildcard.getJSONObject("groups") : null;
+    }
+
+    final JSONObject wildcardConfiguration = groupDatabases.has(SecurityManager.ANY) ? groupDatabases.getJSONObject("*") : null;
+    final JSONObject specificConfiguration = groupDatabases.has(databaseName) ? groupDatabases.getJSONObject(databaseName) : null;
+
+    final JSONObject wildcardGroups =
+        wildcardConfiguration != null && wildcardConfiguration.has("groups") ? wildcardConfiguration.getJSONObject("groups") : null;
+    final JSONObject specificGroups =
+        specificConfiguration != null && specificConfiguration.has("groups") ? specificConfiguration.getJSONObject("groups") : null;
+
+    if (wildcardGroups == null && specificGroups == null)
       return null;
-    return databaseConfiguration.getJSONObject("groups");
+
+    // When there is no db-specific entry, return the wildcard groups live reference so existing callers that mutate it
+    // (e.g. setup helpers doing getDatabaseGroupsConfiguration(db).put(groupName, ...)) keep working.
+    if (specificGroups == null)
+      return wildcardGroups;
+    if (wildcardGroups == null)
+      return specificGroups;
+
+    // MERGE: wildcard groups are the baseline, db-specific entries override same-named groups. The returned object is
+    // a snapshot copy; callers that need to persist groups must go through saveGroup/deleteGroup.
+    final JSONObject merged = new JSONObject();
+    for (final String groupName : wildcardGroups.keySet()) {
+      final Object value = wildcardGroups.get(groupName);
+      if (value instanceof JSONObject)
+        merged.put(groupName, value);
+    }
+    for (final String groupName : specificGroups.keySet()) {
+      final Object value = specificGroups.get(groupName);
+      if (value instanceof JSONObject)
+        merged.put(groupName, value);
+    }
+    return merged;
   }
 }
