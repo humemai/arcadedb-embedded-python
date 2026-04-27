@@ -27,6 +27,7 @@ import com.arcadedb.database.EmbeddedDocument;
 import com.arcadedb.database.EmbeddedModifierProperty;
 import com.arcadedb.database.MutableDocument;
 import com.arcadedb.database.MutableEmbeddedDocument;
+import com.arcadedb.exception.SerializationException;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.Type;
 
@@ -37,6 +38,7 @@ import java.nio.*;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BinarySerializerTest extends TestHelper {
 
@@ -563,6 +565,180 @@ class BinarySerializerTest extends TestHelper {
         assertThat(d.getKey() instanceof Integer).isTrue();
         assertThat(d.getValue() instanceof EmbeddedDocument).isTrue();
       }
+    });
+  }
+
+  @Test
+  void deserializeUnknownTypeThrows() throws ClassNotFoundException {
+    final BinarySerializer serializer = new BinarySerializer(database.getConfiguration());
+    final Binary empty = new Binary();
+    assertThatThrownBy(() -> serializer.deserializeValue(database, empty, (byte) 101, null))
+        .isInstanceOf(SerializationException.class)
+        .hasMessageContaining("101");
+  }
+
+  /**
+   * Regression: a property whose value can't be serialized must not corrupt the rest of the record.
+   * Before the fix, the nameId was written to the header before the type check, so skipping the
+   * property left an orphan nameId and every subsequent property's contentPosition was misread.
+   */
+  @Test
+  void propertyWithUnserializableTypeDoesNotCorruptOtherProperties() throws Exception {
+    final BinarySerializer serializer = new BinarySerializer(database.getConfiguration());
+    database.transaction(() -> {
+      database.getSchema().createDocumentType("TestBadProp");
+
+      final MutableDocument doc = database.newDocument("TestBadProp");
+      doc.set("before", "first");
+      doc.set("bad", new StringBuilder("unserializable"));
+      doc.set("after", "last");
+      doc.set("num", 42);
+
+      final Binary buffer = serializer.serialize((DatabaseInternal) database, doc);
+
+      final ByteBuffer roundtrip = ByteBuffer.allocate((int) GlobalConfiguration.BUCKET_DEFAULT_PAGE_SIZE.getDefValue());
+      roundtrip.put(buffer.toByteArray());
+      roundtrip.flip();
+      final Binary readBuffer = new Binary(roundtrip);
+      readBuffer.getByte(); // SKIP RECORD TYPE
+
+      final Map<String, Object> record2 = serializer.deserializeProperties(database, readBuffer, null, null);
+
+      assertThat(record2).containsEntry("before", "first");
+      assertThat(record2).containsEntry("after", "last");
+      assertThat(record2).containsEntry("num", 42);
+      assertThat(record2).doesNotContainKey("bad");
+    });
+  }
+
+  /**
+   * Regression: a Map value containing an unserializable entry must not corrupt the surrounding record.
+   * Invalid values are stored as null so the key (and map size) is preserved; invalid keys drop the entry.
+   */
+  @Test
+  void mapWithUnserializableEntryDoesNotCorruptRecord() throws Exception {
+    final BinarySerializer serializer = new BinarySerializer(database.getConfiguration());
+    database.transaction(() -> {
+      database.getSchema().createDocumentType("TestBadMap");
+
+      final MutableDocument doc = database.newDocument("TestBadMap");
+      doc.set("id", 1);
+
+      final Map<String, Object> mixedMap = new LinkedHashMap<>();
+      mixedMap.put("good1", "hello");
+      mixedMap.put("badValue", new StringBuilder("nope"));
+      mixedMap.put("good2", 123);
+      doc.set("m", mixedMap);
+
+      doc.set("tail", "end");
+
+      final Binary buffer = serializer.serialize((DatabaseInternal) database, doc);
+
+      final ByteBuffer roundtrip = ByteBuffer.allocate((int) GlobalConfiguration.BUCKET_DEFAULT_PAGE_SIZE.getDefValue());
+      roundtrip.put(buffer.toByteArray());
+      roundtrip.flip();
+      final Binary readBuffer = new Binary(roundtrip);
+      readBuffer.getByte(); // SKIP RECORD TYPE
+
+      final Map<String, Object> record2 = serializer.deserializeProperties(database, readBuffer, null, null);
+
+      assertThat(record2).containsEntry("id", 1);
+      assertThat(record2).containsEntry("tail", "end");
+
+      final Map<String, Object> roundtrippedMap = (Map<String, Object>) record2.get("m");
+      assertThat(roundtrippedMap).hasSize(3);
+      assertThat(roundtrippedMap).containsEntry("good1", "hello");
+      assertThat(roundtrippedMap).containsEntry("good2", 123);
+      assertThat(roundtrippedMap).containsKey("badValue");
+      assertThat(roundtrippedMap.get("badValue")).isNull();
+    });
+  }
+
+  /**
+   * Regression: a List value containing an unserializable entry must not corrupt the surrounding record.
+   * The invalid entry is stored as null so positions and list size are preserved.
+   */
+  @Test
+  void listWithUnserializableEntryDoesNotCorruptRecord() throws Exception {
+    final BinarySerializer serializer = new BinarySerializer(database.getConfiguration());
+    database.transaction(() -> {
+      database.getSchema().createDocumentType("TestBadList");
+
+      final MutableDocument doc = database.newDocument("TestBadList");
+      doc.set("id", 1);
+
+      final List<Object> mixed = new ArrayList<>();
+      mixed.add("a");
+      mixed.add(new StringBuilder("nope"));
+      mixed.add("b");
+      mixed.add(99);
+      doc.set("l", mixed);
+
+      doc.set("tail", "end");
+
+      final Binary buffer = serializer.serialize((DatabaseInternal) database, doc);
+
+      final ByteBuffer roundtrip = ByteBuffer.allocate((int) GlobalConfiguration.BUCKET_DEFAULT_PAGE_SIZE.getDefValue());
+      roundtrip.put(buffer.toByteArray());
+      roundtrip.flip();
+      final Binary readBuffer = new Binary(roundtrip);
+      readBuffer.getByte(); // SKIP RECORD TYPE
+
+      final Map<String, Object> record2 = serializer.deserializeProperties(database, readBuffer, null, null);
+
+      assertThat(record2).containsEntry("id", 1);
+      assertThat(record2).containsEntry("tail", "end");
+
+      final List<Object> roundtrippedList = (List<Object>) record2.get("l");
+      assertThat(roundtrippedList).containsExactly("a", null, "b", 99);
+    });
+  }
+
+  /**
+   * Regression: a corrupted value byte for one property must not discard the whole record.
+   * Per-property recovery keeps the other properties readable; the bad one is logged and skipped.
+   */
+  @Test
+  void deserializeSkipsCorruptedPropertyAndReturnsRest() throws Exception {
+    final BinarySerializer serializer = new BinarySerializer(database.getConfiguration());
+    database.transaction(() -> {
+      database.getSchema().createDocumentType("Corruptible");
+
+      final MutableDocument doc = database.newDocument("Corruptible");
+      doc.set("a", "alpha");
+      doc.set("b", "beta");
+      doc.set("c", "gamma");
+
+      final Binary original = serializer.serialize((DatabaseInternal) database, doc);
+
+      // Parse the header to find the absolute offset of property "b"'s type byte, then overwrite it
+      // with an undefined type (101) to simulate corruption of that single property's value.
+      original.position(1); // SKIP RECORD TYPE
+      final int headerEndOffset = original.getInt();
+      final int count = (int) original.getUnsignedNumber();
+
+      int contentPosForB = -1;
+      for (int i = 0; i < count; i++) {
+        final int nameId = (int) original.getUnsignedNumber();
+        final int contentPos = (int) original.getUnsignedNumber();
+        if ("b".equals(database.getSchema().getDictionary().getNameById(nameId)))
+          contentPosForB = contentPos;
+      }
+      assertThat(contentPosForB).isGreaterThanOrEqualTo(0);
+
+      original.putByte(headerEndOffset + contentPosForB, (byte) 101);
+
+      final ByteBuffer dest = ByteBuffer.allocate((int) GlobalConfiguration.BUCKET_DEFAULT_PAGE_SIZE.getDefValue());
+      dest.put(original.toByteArray());
+      dest.flip();
+      final Binary corrupted = new Binary(dest);
+      corrupted.getByte(); // SKIP RECORD TYPE
+
+      final Map<String, Object> result = serializer.deserializeProperties(database, corrupted, null, null);
+
+      assertThat(result).doesNotContainKey("b");
+      assertThat(result).containsEntry("a", "alpha");
+      assertThat(result).containsEntry("c", "gamma");
     });
   }
 }
