@@ -1,6 +1,6 @@
 {
   "name": "arcadedb-studio",
-  "version": "26.4.2",
+  "version": "26.5.1-SNAPSHOT",
   "description": "ArcadeDB Studio Frontend - Multi-Model Database Administration Interface",
   "main": "src/main/resources/static/index.html",
   "scripts": {
@@ -56,7 +56,7 @@
     "webpack-cli": "^7.0.2"
   },
   "overrides": {
-    "ajv": "^8.18.0"
+    "ajv": "^8.20.0"
   },
   "engines": {
     "node": ">=18.12.0",
