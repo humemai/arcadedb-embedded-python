@@ -59,6 +59,7 @@ public class CountExpression implements Expression {
       if (result != null) {
         final List<String> whereConditions = new ArrayList<>();
         final List<String> matchPatterns = new ArrayList<>();
+        final List<String> withItems = new ArrayList<>();
 
         for (final String propertyName : result.getPropertyNames()) {
           if (propertyName.startsWith(" "))
@@ -75,6 +76,10 @@ public class CountExpression implements Expression {
               whereConditions.add("id(" + propertyName + ") = $" + paramName);
               matchPatterns.add("(" + propertyName + ")");
             }
+          } else if (value != null && variableUsedInSubquery(modifiedSubquery, propertyName)) {
+            final String paramName = "__count_" + propertyName;
+            params.put(paramName, value);
+            withItems.add("$" + paramName + " AS " + propertyName);
           }
         }
 
@@ -84,6 +89,8 @@ public class CountExpression implements Expression {
           final String conditionsStr = String.join(" AND ", whereConditions);
           modifiedSubquery = injectWhereConditions(modifiedSubquery, conditionsStr);
         }
+        if (!withItems.isEmpty())
+          modifiedSubquery = "WITH " + String.join(", ", withItems) + " " + modifiedSubquery;
       }
 
       long count = 0L;
@@ -100,15 +107,23 @@ public class CountExpression implements Expression {
   }
 
   private static boolean variableUsedInSubquery(final String subquery, final String varName) {
-    final int idx = subquery.indexOf(varName);
-    if (idx < 0)
-      return false;
-    if (idx > 0 && Character.isLetterOrDigit(subquery.charAt(idx - 1)))
-      return false;
-    final int end = idx + varName.length();
-    if (end < subquery.length() && Character.isLetterOrDigit(subquery.charAt(end)))
-      return false;
-    return true;
+    int fromIndex = 0;
+    final int len = varName.length();
+    while (true) {
+      final int idx = subquery.indexOf(varName, fromIndex);
+      if (idx < 0)
+        return false;
+      final boolean leftOk = idx == 0 || !isCypherIdentifierChar(subquery.charAt(idx - 1));
+      final int end = idx + len;
+      final boolean rightOk = end >= subquery.length() || !isCypherIdentifierChar(subquery.charAt(end));
+      if (leftOk && rightOk)
+        return true;
+      fromIndex = idx + 1;
+    }
+  }
+
+  private static boolean isCypherIdentifierChar(final char c) {
+    return Character.isLetterOrDigit(c) || c == '_';
   }
 
   private static String injectMatchPatterns(final String subquery, final List<String> patterns) {

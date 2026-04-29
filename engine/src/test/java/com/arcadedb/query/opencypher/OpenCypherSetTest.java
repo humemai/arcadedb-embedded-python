@@ -330,9 +330,10 @@ public class OpenCypherSetTest {
     // propA is not null, so it should be set; propB is not present, so it should be skipped
     database.transaction(() -> {
       database.command("opencypher",
-          "MATCH (t:Thing {id: 'thing1'}) " +
-          "SET (CASE WHEN t.propA IS NOT NULL THEN t END).propA = 'updatedA' " +
-          "SET (CASE WHEN t.propB IS NOT NULL THEN t END).propB = 'updatedB'");
+          """
+          MATCH (t:Thing {id: 'thing1'}) \
+          SET (CASE WHEN t.propA IS NOT NULL THEN t END).propA = 'updatedA' \
+          SET (CASE WHEN t.propB IS NOT NULL THEN t END).propB = 'updatedB'""");
     });
 
     // Verify: propA should be updated, propB should not exist
@@ -353,10 +354,11 @@ public class OpenCypherSetTest {
     // Use UNWIND with CASE subclause SET pattern
     database.transaction(() -> {
       database.command("opencypher",
-          "UNWIND [{id: 'a', propA: 'A1', propB: 'B1'}, {id: 'b', propA: 'A2'}] AS thing " +
-          "MERGE (t:Thing {id: thing.id}) " +
-          "SET (CASE WHEN thing.propA IS NOT NULL THEN t END).propA = thing.propA " +
-          "SET (CASE WHEN thing.propB IS NOT NULL THEN t END).propB = thing.propB");
+          """
+          UNWIND [{id: 'a', propA: 'A1', propB: 'B1'}, {id: 'b', propA: 'A2'}] AS thing \
+          MERGE (t:Thing {id: thing.id}) \
+          SET (CASE WHEN thing.propA IS NOT NULL THEN t END).propA = thing.propA \
+          SET (CASE WHEN thing.propB IS NOT NULL THEN t END).propB = thing.propB""");
     });
 
     // Verify thing 'a': both propA and propB set
@@ -443,5 +445,71 @@ public class OpenCypherSetTest {
     assertThat(verify.hasNext()).isTrue();
     final Vertex v = (Vertex) verify.next().toElement();
     assertThat(((Number) v.get("age")).intValue()).isEqualTo(40);
+  }
+
+  /**
+   * Self-referential SET across UNWIND row fanout must accumulate: UNWIND [1,2,3] AS i SET p.age = p.age + i
+   * with initial age=30 gives 36 (30+1+2+3), not 33 (last delta only).
+   */
+  @Test
+  void setSelfReferentialPropertyAccumulatesAcrossUnwindRows() {
+    database.transaction(() -> {
+      database.command("opencypher", "CREATE (:Person {name: 'Alice', age: 30})");
+    });
+
+    database.transaction(() -> {
+      database.command("opencypher",
+          "MATCH (p:Person {name: 'Alice'}) UNWIND [1, 2, 3] AS i SET p.age = p.age + i");
+    });
+
+    final ResultSet result = database.query("opencypher", "MATCH (p:Person {name: 'Alice'}) RETURN p.age AS age");
+    assertThat(result.hasNext()).isTrue();
+    assertThat(((Number) result.next().getProperty("age")).intValue()).isEqualTo(36);
+  }
+
+  /**
+   * Constant self-referential SET across UNWIND row fanout must accumulate per row:
+   * UNWIND [1,2,3] AS i SET p.age = p.age + 1 with initial age=30 gives 33 (30+1+1+1).
+   */
+  @Test
+  void setSelfReferentialConstantIncrementAccumulatesAcrossUnwindRows() {
+    database.transaction(() -> {
+      database.command("opencypher", "CREATE (:Person {name: 'Bob', age: 30})");
+    });
+
+    database.transaction(() -> {
+      database.command("opencypher",
+          "MATCH (p:Person {name: 'Bob'}) UNWIND [1, 2, 3] AS i SET p.age = p.age + 1");
+    });
+
+    final ResultSet result = database.query("opencypher", "MATCH (p:Person {name: 'Bob'}) RETURN p.age AS age");
+    assertThat(result.hasNext()).isTrue();
+    assertThat(((Number) result.next().getProperty("age")).intValue()).isEqualTo(33);
+  }
+
+  /**
+   * Two bound nodes updated together via UNWIND row fanout must both accumulate:
+   * p.age starts at 30 (ends 36), c.founded starts at 2000 (ends 1994).
+   */
+  @Test
+  void setSelfReferentialTwoNodesAccumulateAcrossUnwindRows() {
+    database.transaction(() -> {
+      database.command("opencypher",
+          "CREATE (:Person {name: 'Alice', age: 30}), (:Company {name: 'TechCorp', founded: 2000})");
+    });
+
+    database.transaction(() -> {
+      database.command("opencypher",
+          "MATCH (p:Person {name: 'Alice'}), (c:Company {name: 'TechCorp'}) "
+              + "UNWIND [1, 2, 3] AS i "
+              + "SET p.age = p.age + i, c.founded = c.founded - i");
+    });
+
+    final ResultSet result = database.query("opencypher",
+        "MATCH (p:Person {name: 'Alice'}), (c:Company {name: 'TechCorp'}) RETURN p.age AS age, c.founded AS founded");
+    assertThat(result.hasNext()).isTrue();
+    final Result row = result.next();
+    assertThat(((Number) row.getProperty("age")).intValue()).isEqualTo(36);
+    assertThat(((Number) row.getProperty("founded")).intValue()).isEqualTo(1994);
   }
 }

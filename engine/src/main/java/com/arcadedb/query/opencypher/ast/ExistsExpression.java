@@ -53,6 +53,7 @@ public class ExistsExpression implements Expression {
       if (result != null) {
         final List<String> whereConditions = new ArrayList<>();
         final List<String> matchPatterns = new ArrayList<>();
+        final List<String> withItems = new ArrayList<>();
 
         for (final String propertyName : result.getPropertyNames()) {
           // Skip internal variables (space-prefixed)
@@ -72,6 +73,11 @@ public class ExistsExpression implements Expression {
               // Add as extra MATCH pattern so the variable is in scope
               matchPatterns.add("(" + propertyName + ")");
             }
+          } else if (value != null && variableUsedInSubquery(modifiedSubquery, propertyName)) {
+            // Scalar outer variable referenced in subquery: bring into scope via WITH.
+            final String paramName = "__exists_" + propertyName;
+            params.put(paramName, value);
+            withItems.add("$" + paramName + " AS " + propertyName);
           }
         }
 
@@ -81,6 +87,8 @@ public class ExistsExpression implements Expression {
           final String conditionsStr = String.join(" AND ", whereConditions);
           modifiedSubquery = injectWhereConditions(modifiedSubquery, conditionsStr);
         }
+        if (!withItems.isEmpty())
+          modifiedSubquery = "WITH " + String.join(", ", withItems) + " " + modifiedSubquery;
       }
 
       final var resultSet = context.getDatabase().query("opencypher", modifiedSubquery, params);
@@ -93,19 +101,24 @@ public class ExistsExpression implements Expression {
   }
 
   /**
-   * Checks if a variable name is used anywhere in the subquery text.
+   * Checks if a variable name is used anywhere in the subquery text. Scans every occurrence and
+   * accepts the variable as long as at least one is a whole-word match, so e.g. {@code p} is
+   * detected in {@code WHERE p2.age > p.age} (where {@code p} appears first inside {@code p2}).
    */
   private static boolean variableUsedInSubquery(final String subquery, final String varName) {
-    final int idx = subquery.indexOf(varName);
-    if (idx < 0)
-      return false;
-    // Verify it's a word boundary (not part of a longer identifier)
-    if (idx > 0 && isCypherIdentifierChar(subquery.charAt(idx - 1)))
-      return false;
-    final int end = idx + varName.length();
-    if (end < subquery.length() && isCypherIdentifierChar(subquery.charAt(end)))
-      return false;
-    return true;
+    int fromIndex = 0;
+    final int len = varName.length();
+    while (true) {
+      final int idx = subquery.indexOf(varName, fromIndex);
+      if (idx < 0)
+        return false;
+      final boolean leftOk = idx == 0 || !isCypherIdentifierChar(subquery.charAt(idx - 1));
+      final int end = idx + len;
+      final boolean rightOk = end >= subquery.length() || !isCypherIdentifierChar(subquery.charAt(end));
+      if (leftOk && rightOk)
+        return true;
+      fromIndex = idx + 1;
+    }
   }
 
   /**
