@@ -1,9 +1,12 @@
 #!/bin/bash
 # Script to sync upstream changes while preserving fork-specific customizations
 #
-# This fork maintains a small set of fork-owned files that should never be
-# overwritten by upstream during sync. Everything else, including
-# bindings/python/, is merged normally from upstream-main into main.
+# This fork maintains two protected path categories during sync:
+#   1. fork-owned files that should always keep the fork's version
+#   2. fork-excluded files that should stay absent from the fork even if
+#      upstream contains them
+# Everything else, including bindings/python/, is merged normally from
+# upstream-main into main.
 #
 # Usage: ./sync-upstream.sh [--help|--status|--dry-run]
 
@@ -19,20 +22,21 @@ NC='\033[0m' # No Color
 
 FORK_OWNED_PATHS=(
     "README.md"
-    "CLAUDE.md"
-    ".github/workflows/mvn-test.yml"
-    ".github/workflows/mvn-deploy.yml"
-    ".github/workflows/mvn-release.yml"
-    ".github/workflows/license-compliance.yml"
-    ".github/workflows/meterian.yml"
-    ".github/workflows/studio-security-audit.yml"
 )
 
-# Upstream-owned files that may conflict because equivalent upstream commits were
-# previously imported into the fork with different commit ancestry. In these
-# cases we want the exact upstream version during sync.
-UPSTREAM_PREFERRED_PATHS=(
-    "engine/src/main/java/com/arcadedb/utility/RidHashSet.java"
+FORK_EXCLUDED_PATHS=(
+    "CLAUDE.md"
+    ".github/workflows/benchmark-tests.yml"
+    ".github/workflows/claude-code-review.yml"
+    ".github/workflows/claude.yml"
+    ".github/workflows/ha-resilience-tests.yml"
+    ".github/workflows/load-tests.yml"
+    ".github/workflows/license-compliance.yml"
+    ".github/workflows/meterian.yml"
+    ".github/workflows/mvn-deploy.yml"
+    ".github/workflows/mvn-release.yml"
+    ".github/workflows/mvn-test.yml"
+    ".github/workflows/studio-security-audit.yml"
 )
 
 PROTECTED_SOURCE_REV=""
@@ -68,30 +72,14 @@ try_auto_resolve() {
     resolved=0
     for path in $conflicts; do
         handled=0
-        for protected_path in "${FORK_OWNED_PATHS[@]}"; do
-            if [[ "$path" == "$protected_path" ]]; then
-                git checkout --ours -- "$path"
-                git add "$path"
-                resolved=1
-                handled=1
-                break
-            fi
-        done
+        if restore_path_to_fork_state "$path"; then
+            resolved=1
+            handled=1
+        fi
 
         if [ "$handled" -eq 1 ]; then
             continue
         fi
-
-        for upstream_path in "${UPSTREAM_PREFERRED_PATHS[@]}"; do
-            if [[ "$path" == "$upstream_path" ]]; then
-                echo -e "${CYAN}ℹ️  Auto-resolving upstream-preferred conflict: $path${NC}"
-                git checkout --theirs -- "$path"
-                git add "$path"
-                resolved=1
-                handled=1
-                break
-            fi
-        done
     done
     if [ "$resolved" -eq 1 ]; then
         return 0
@@ -103,10 +91,30 @@ capture_protected_source_rev() {
     PROTECTED_SOURCE_REV=$(git rev-parse HEAD)
 }
 
+restore_path_to_fork_state() {
+    local path="$1"
+    local protected_path
+
+    for protected_path in "${FORK_OWNED_PATHS[@]}" "${FORK_EXCLUDED_PATHS[@]}"; do
+        if [[ "$path" == "$protected_path" ]]; then
+            if git cat-file -e "$PROTECTED_SOURCE_REV:$path" >/dev/null 2>&1; then
+                git restore --source="$PROTECTED_SOURCE_REV" --staged --worktree -- "$path"
+                git add "$path"
+            else
+                git rm -r --cached --ignore-unmatch --quiet -- "$path" >/dev/null 2>&1 || true
+                rm -rf -- "$path"
+            fi
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 restore_protected_paths() {
     local path tracked_entry
 
-    for path in "${FORK_OWNED_PATHS[@]}"; do
+    for path in "${FORK_OWNED_PATHS[@]}" "${FORK_EXCLUDED_PATHS[@]}"; do
         while IFS= read -r tracked_entry; do
             [ -n "$tracked_entry" ] || continue
             if ! git cat-file -e "$PROTECTED_SOURCE_REV:$tracked_entry" >/dev/null 2>&1; then
@@ -140,15 +148,26 @@ ${YELLOW}Usage:${NC}
 
 ${YELLOW}Fork-Owned Files (restored after merge):${NC}
     • README.md
+
+${YELLOW}Fork-Excluded Files (kept out of the fork):${NC}
     • CLAUDE.md
-    • .github/workflows/mvn-test.yml
-    • .github/workflows/mvn-deploy.yml
-    • .github/workflows/mvn-release.yml
+    • .github/workflows/benchmark-tests.yml
+    • .github/workflows/claude-code-review.yml
+    • .github/workflows/claude.yml
+    • .github/workflows/ha-resilience-tests.yml
+    • .github/workflows/load-tests.yml
     • .github/workflows/license-compliance.yml
     • .github/workflows/meterian.yml
+    • .github/workflows/mvn-deploy.yml
+    • .github/workflows/mvn-release.yml
+    • .github/workflows/mvn-test.yml
     • .github/workflows/studio-security-audit.yml
 
 ${YELLOW}Normal Merge Paths:${NC}
+    • .github/workflows/release-python-packages.yml
+    • .github/workflows/deploy-python-docs.yml
+    • .github/workflows/test-python-bindings.yml
+    • .github/workflows/test-python-examples.yml
     • bindings/python/      - Merges normally from upstream-main into main
 
 ${YELLOW}After Sync:${NC}
@@ -312,7 +331,7 @@ if ! git diff-index --quiet HEAD --; then
     exit 1
 fi
 
-# 6b. Capture the exact tracked fork state for fork-owned files before merge
+# 6b. Capture the exact tracked fork state for fork-protected files before merge
 capture_protected_source_rev
 
 # 7. Ask for confirmation
@@ -358,7 +377,7 @@ else
     fi
 fi
 
-# 9b. Restore fork-owned files exactly as they were before the rebase
+# 9b. Restore fork-protected files exactly as they were before the merge
 restore_protected_paths
 
 # Commit fork-specific preservation changes only when needed
