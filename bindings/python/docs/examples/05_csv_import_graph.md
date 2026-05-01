@@ -457,8 +457,9 @@ Prefer configuring heap inside the script before it creates the first database:
 
 ```python
 import arcadedb_embedded as arcadedb
+from arcadedb_embedded.jvm import start_jvm
 
-arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g")
+start_jvm(heap_size="8g", jvm_args="-Xms8g")
 ```
 
 **Memory Planning:**

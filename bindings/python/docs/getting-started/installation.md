@@ -87,7 +87,13 @@ Built wheels will be in `dist/`:
 
 ```text
 dist/
-└── arcadedb_embedded-X.Y.Z-py3-none-<platform>.whl
+└── arcadedb_embedded-X.Y.Z-cp<pyver>-cp<pyver>-<platform>.whl
+```
+
+For example, a Linux x86_64 build on Python 3.12 now looks like:
+
+```text
+arcadedb_embedded-X.Y.Z-cp312-cp312-manylinux_2_34_x86_64.whl
 ```
 
 Install locally:

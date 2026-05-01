@@ -80,11 +80,11 @@ This simple class tells setuptools "this package has binary content" which:
 
 - Triggers platform-specific wheel naming
 - Makes uv pip download the correct wheel for each platform
-- Enables platform tags like `macosx_11_0_arm64`, `manylinux_2_17_x86_64`, etc.
+- Enables platform tags like `macosx_11_0_arm64`, `manylinux_2_34_x86_64`, etc.
 
 **Without setup.py**: All platforms → `arcadedb_embedded-X.Y.Z-py3-none-any.whl` (wrong!)
 
-**With setup.py**: Each platform → `arcadedb_embedded-X.Y.Z-py3-none-<platform>.whl` (correct!)
+**With setup.py**: Each platform → `arcadedb_embedded-X.Y.Z-cp<pyver>-cp<pyver>-<platform>.whl` (correct!)
 
 See `bindings/python/setup.py` for the complete implementation.
 
