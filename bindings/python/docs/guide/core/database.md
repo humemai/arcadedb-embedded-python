@@ -485,9 +485,10 @@ with open_with_retry("./mydb") as db:
 ```python
 # JVM starts on first database creation
 import arcadedb_embedded as arcadedb
+from arcadedb_embedded.jvm import start_jvm
 
 # Optional: configure JVM before first database or server
-arcadedb.start_jvm(heap_size="8g")
+start_jvm(heap_size="8g")
 
 # JVM runs for entire Python process
 with arcadedb.create_database("./db1") as db1:

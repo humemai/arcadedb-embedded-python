@@ -145,9 +145,9 @@ with arcadedb.create_database("./test") as db:
 uv pip automatically selects the correct platform-specific wheel:
 
 ```bash
-# On Linux x64, installs: arcadedb_embedded-X.Y.Z-py3-none-manylinux_2_17_x86_64.whl
-# On macOS ARM64, installs: arcadedb_embedded-X.Y.Z-py3-none-macosx_11_0_arm64.whl
-# On Windows x86_64, installs: arcadedb_embedded-X.Y.Z-py3-none-win_amd64.whl
+# On Linux x64 for Python 3.12, installs: arcadedb_embedded-X.Y.Z-cp312-cp312-manylinux_2_34_x86_64.whl
+# On macOS ARM64 for Python 3.12, installs: arcadedb_embedded-X.Y.Z-cp312-cp312-macosx_11_0_arm64.whl
+# On Windows x86_64 for Python 3.12, installs: arcadedb_embedded-X.Y.Z-cp312-cp312-win_amd64.whl
 # etc.
 ```
 

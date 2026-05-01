@@ -108,10 +108,10 @@ ArcadeDB has **three distinct types of logs** stored in **two different location
 **Verbosity**: Controlled by Java system properties:
 
 ```python
-import arcadedb_embedded as arcadedb
+from arcadedb_embedded.jvm import start_jvm
 
 # Set before the first database or server is created
-arcadedb.start_jvm(jvm_args="-Djava.util.logging.level=DEBUG -Darcadedb.log.level=FINE")
+start_jvm(jvm_args="-Djava.util.logging.level=DEBUG -Darcadedb.log.level=FINE")
 ```
 
 ## Database Files (Embedded Mode)

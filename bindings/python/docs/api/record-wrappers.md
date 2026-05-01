@@ -28,7 +28,7 @@ when you explicitly need the wrapper object in hand.
 
 ```python
 import arcadedb_embedded as arcadedb
-from arcadedb_embedded.graph import Document, Vertex, Edge
+from arcadedb_embedded import Document, Vertex, Edge
 
 with arcadedb.create_database("./mydb") as db:
     db.command("sql", "CREATE DOCUMENT TYPE Note")
@@ -186,7 +186,7 @@ with db.transaction():
 Static method to wrap Java objects as Python wrappers. Automatically detects type.
 
 ```python
-from arcadedb_embedded.graph import Document
+from arcadedb_embedded import Document
 
 # Wrap Java object and automatically detect type
 wrapped = Document.wrap(java_object)

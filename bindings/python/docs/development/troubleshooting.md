@@ -146,11 +146,12 @@ Configure JVM memory in Python **before the first database or server is created*
 
 ```python
 import arcadedb_embedded as arcadedb
+from arcadedb_embedded.jvm import start_jvm
 
 # Default: 4GB heap (no changes needed)
 
 # Production: 8GB heap with matching initial size
-arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g")
+start_jvm(heap_size="8g", jvm_args="-Xms8g")
 ```
 
 **Common JVM Options:**
@@ -170,7 +171,9 @@ For applications using vector indexes, control memory usage:
 
 ```python
 # Conservative: bounded caches for large vector datasets
-arcadedb.start_jvm(
+from arcadedb_embedded.jvm import start_jvm
+
+start_jvm(
     heap_size="8g",
     jvm_args=(
         "-Xms8g -XX:MaxDirectMemorySize=8g "
@@ -214,13 +217,15 @@ Rule of thumb: Plan for 1.5-2× your heap size in actual RAM
 
 ```python
 # Small datasets (<1M records, <100K vectors)
-arcadedb.start_jvm(heap_size="2g", jvm_args="-Xms2g")
+from arcadedb_embedded.jvm import start_jvm
+
+start_jvm(heap_size="2g", jvm_args="-Xms2g")
 
 # Medium datasets (1M-10M records, 100K-1M vectors)
-arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
+start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
 
 # Large datasets (10M+ records, 1M+ vectors) with bounded caches
-arcadedb.start_jvm(
+start_jvm(
     heap_size="16g",
     jvm_args=(
         "-Xms16g -XX:MaxDirectMemorySize=16g "
@@ -231,7 +236,7 @@ arcadedb.start_jvm(
 )
 
 # High-dimensional vectors (e.g., 1536-dim embeddings)
-arcadedb.start_jvm(
+start_jvm(
     heap_size="8g",
     jvm_args=(
         "-Xms8g -XX:MaxDirectMemorySize=8g "
@@ -262,13 +267,16 @@ arcadedb.start_jvm(
 
 1. **Increase Heap (preferred)**:
     ```python
-    import arcadedb_embedded as arcadedb
-    arcadedb.start_jvm(heap_size="8g", jvm_args="-Xms8g")
+    from arcadedb_embedded.jvm import start_jvm
+
+    start_jvm(heap_size="8g", jvm_args="-Xms8g")
     ```
 
 2. **Bound Vector Caches** (for vector workloads):
     ```python
-    arcadedb.start_jvm(
+    from arcadedb_embedded.jvm import start_jvm
+
+    start_jvm(
         heap_size="8g",
         jvm_args=(
             "-Xms8g "

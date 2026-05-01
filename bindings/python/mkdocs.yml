@@ -179,6 +179,7 @@ nav:
 - API Reference:
   - Database: api/database.md
   - GraphBatch: api/graph_batch.md
+  - JVM: api/jvm.md
   - Record Wrappers: api/record-wrappers.md
   - Results: api/results.md
   - Server: api/server.md
