@@ -18,6 +18,7 @@
  */
 package com.arcadedb.server.http.handler.batch;
 
+import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -36,6 +37,9 @@ import java.util.Set;
  * {"@type":"edge","@class":"KNOWS","@from":"t1","@to":"t2","since":2020}
  * </pre>
  * Blank lines are skipped. The record object is reused across calls.
+ * <p>
+ * Parsing errors are surfaced as {@link IllegalArgumentException} so the HTTP layer maps them
+ * to a 400 Bad Request with a clear message instead of a generic 500.
  */
 public class JsonlBatchRecordStream implements BatchRecordStream {
 
@@ -92,9 +96,29 @@ public class JsonlBatchRecordStream implements BatchRecordStream {
   private void parseLine(final String line) {
     record.reset();
 
-    final JSONObject json = new JSONObject(line);
+    // A JSON array is a common mistake (the format used by INSERT INTO ... CONTENT [...]).
+    // Detect it early and surface the JSONL requirement instead of a confusing parse error.
+    final int start = firstNonWhitespace(line);
+    final char first = line.charAt(start);
+    if (first == '[')
+      throw new IllegalArgumentException("Malformed JSONL at line " + lineNumber
+          + ": expected one JSON object per line but got a JSON array. "
+          + "The /api/v1/batch endpoint requires the JSONL format (newline-delimited JSON objects)");
+    if (first != '{')
+      throw new IllegalArgumentException("Malformed JSONL at line " + lineNumber
+          + ": expected a JSON object starting with '{'");
 
-    final String type = json.getString("@type");
+    final JSONObject json;
+    try {
+      json = new JSONObject(line);
+    } catch (final RuntimeException e) {
+      throw new IllegalArgumentException("Malformed JSON at line " + lineNumber + ": " + e.getMessage(), e);
+    }
+
+    final String type = json.getString("@type", null);
+    if (type == null)
+      throw new IllegalArgumentException("Missing @type at line " + lineNumber + ". Expected 'vertex' or 'edge'");
+
     if ("vertex".equals(type) || "v".equals(type)) {
       record.kind = BatchRecord.Kind.VERTEX;
     } else if ("edge".equals(type) || "e".equals(type)) {
@@ -102,24 +126,43 @@ public class JsonlBatchRecordStream implements BatchRecordStream {
     } else
       throw new IllegalArgumentException("Unknown @type '" + type + "' at line " + lineNumber + ". Expected 'vertex' or 'edge'");
 
-    record.typeName = json.getString("@class");
+    record.typeName = json.getString("@class", null);
     if (record.typeName == null || record.typeName.isEmpty())
       throw new IllegalArgumentException("Missing @class at line " + lineNumber);
 
     if (record.kind == BatchRecord.Kind.VERTEX) {
       record.tempId = json.getString("@id", null);
     } else {
-      record.fromRef = json.getString("@from");
-      record.toRef = json.getString("@to");
+      record.fromRef = json.getString("@from", null);
+      record.toRef = json.getString("@to", null);
       if (record.fromRef == null || record.toRef == null)
         throw new IllegalArgumentException("Edge missing @from or @to at line " + lineNumber);
     }
 
-    // Extract all non-meta keys as properties
+    // Extract all non-meta keys as properties.
+    // JSON arrays/objects are unwrapped to java.util.List / java.util.Map so downstream
+    // schema validation and Type.convert (which only recognise Collection/Map) accept
+    // them - issue #4069.
     for (final String key : json.keySet()) {
       if (META_KEYS.contains(key))
         continue;
-      record.addProperty(key, json.get(key));
+      record.addProperty(key, unwrap(json.get(key)));
     }
+  }
+
+  private static Object unwrap(final Object value) {
+    if (value instanceof JSONArray array)
+      return array.toList();
+    if (value instanceof JSONObject object)
+      return object.toMap();
+    return value;
+  }
+
+  private static int firstNonWhitespace(final String s) {
+    final int len = s.length();
+    int i = 0;
+    while (i < len && Character.isWhitespace(s.charAt(i)))
+      i++;
+    return i < len ? i : 0;
   }
 }

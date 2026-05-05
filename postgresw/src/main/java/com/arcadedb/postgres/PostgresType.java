@@ -25,7 +25,6 @@ import com.arcadedb.database.Record;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.schema.Type;
 import com.arcadedb.serializer.json.JSONObject;
-import com.arcadedb.utility.DateUtils;
 
 import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
@@ -56,6 +55,8 @@ public enum PostgresType {
   BOOLEAN(16, Boolean.class, 1, value -> value.equalsIgnoreCase("true")),
   DATE(1082, Date.class, 8, value -> new Date(Long.parseLong(value))),
   VARCHAR(1043, String.class, -1, value -> value),
+  TEXT(25, String.class, -1, value -> value),
+  BPCHAR(1042, String.class, -1, value -> value),
   JSON(114, JSONObject.class, -1, JSONObject::new),
   // Adding array types with PostgreSQL array type codes
   ARRAY_INT(1007, Collection.class, -1, value -> parseArrayFromString(value, Integer::parseInt)),
@@ -90,7 +91,6 @@ public enum PostgresType {
    * Parses an array string representation into an ArrayList.
    * Handles PostgreSQL array format like '{1,2,3}' or '{\"value1\",\"value2\"}'
    */
-  @SuppressWarnings("unchecked")
   private static <T> ArrayList<T> parseArrayFromString(String arrayStr, Function<String, T> elementParser) {
     if (arrayStr == null || arrayStr.isEmpty())
       return new ArrayList<>();
@@ -248,6 +248,7 @@ public enum PostgresType {
    * @param typeBuffer The buffer to write to
    * @param value      The value to serialize
    */
+  @SuppressWarnings("unchecked")
   public void serializeAsText(final PostgresType pgType, final Binary typeBuffer, final Object value) {
     String serializedValue = null;
     if (value == null && pgType.code == BOOLEAN.code) {
@@ -268,8 +269,8 @@ public enum PostgresType {
       serializedValue = ldt.format(POSTGRES_DATETIME_FORMATTER);
     } else if (value instanceof JSONObject json) {
       serializedValue = json.toString();
-    } else if (value instanceof Map map) {
-      serializedValue = new JSONObject(map).toString();
+    } else if (value instanceof Map<?, ?> map) {
+      serializedValue = new JSONObject((Map<String, ?>) map).toString();
     } else if (value instanceof Record record) {
       serializedValue = record.toJSON(true).toString();
     } else if (value instanceof Result result) {
@@ -296,6 +297,7 @@ public enum PostgresType {
   /**
    * Serializes a Collection into a PostgreSQL array string format.
    */
+  @SuppressWarnings("unchecked")
   private String serializeArrayToString(Collection<?> collection, PostgresType pgType) {
     if (collection.isEmpty())
       return "{}";
@@ -332,8 +334,8 @@ public enum PostgresType {
         sb.append("\"").append(result.toJSON().toString().replace("\"", "\\\"")).append("\"");
       } else if (element instanceof JSONObject json) {
         sb.append("\"").append(json.toString().replace("\"", "\\\"")).append("\"");
-      } else if (element instanceof Map map) {
-        sb.append("\"").append(new JSONObject(map).toString().replace("\"", "\\\"")).append("\"");
+      } else if (element instanceof Map<?, ?> map) {
+        sb.append("\"").append(new JSONObject((Map<String, ?>) map).toString().replace("\"", "\\\"")).append("\"");
       } else if (element instanceof Record record) {
         sb.append("\"").append(record.toJSON(true).toString().replace("\"", "\\\"")).append("\"");
       } else if (element instanceof EmbeddedDocument embeddedDocument) {
@@ -488,8 +490,8 @@ public enum PostgresType {
     }
 
     return switch (type) {
-      case VARCHAR -> {
-        // In PostgreSQL binary format, VARCHAR/TEXT is just the raw bytes
+      case VARCHAR, TEXT, BPCHAR -> {
+        // In PostgreSQL binary format, VARCHAR/TEXT/BPCHAR is just the raw bytes
         // The length is already provided in the Bind message's parameter size
         yield new String(valueAsBytes, DatabaseFactory.getDefaultCharset());
       }

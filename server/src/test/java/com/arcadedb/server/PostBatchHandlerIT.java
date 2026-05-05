@@ -134,6 +134,90 @@ class PostBatchHandlerIT extends BaseGraphServerTest {
     });
   }
 
+  /**
+   * Regression for discussion #4040: posting a JSONL line that omits the {@code @type} meta key
+   * must return a clear HTTP 400 error, not bubble up a raw {@code JSONObject[@type] not found}
+   * JSONException as HTTP 500.
+   */
+  @Test
+  void missingTypeReturnsHttp400() throws Exception {
+    testEachServer((serverIndex) -> {
+      final String body = "{\"@class\":\"V1\",\"id\":700}\n";
+
+      final HttpURLConnection conn = openBatchConnection(serverIndex, "application/x-ndjson", "");
+      writeBody(conn, body);
+      conn.connect();
+
+      assertThat(conn.getResponseCode()).isEqualTo(400);
+
+      final String error = readError(conn);
+      assertThat(error).contains("@type");
+      assertThat(error).contains("line 1");
+      conn.disconnect();
+    });
+  }
+
+  /**
+   * Regression for discussion #4040: posting a JSONL line that omits the {@code @class} meta key
+   * must return a clear HTTP 400 error.
+   */
+  @Test
+  void missingClassReturnsHttp400() throws Exception {
+    testEachServer((serverIndex) -> {
+      final String body = "{\"@type\":\"vertex\",\"id\":701}\n";
+
+      final HttpURLConnection conn = openBatchConnection(serverIndex, "application/x-ndjson", "");
+      writeBody(conn, body);
+      conn.connect();
+
+      assertThat(conn.getResponseCode()).isEqualTo(400);
+
+      final String error = readError(conn);
+      assertThat(error).contains("@class");
+      conn.disconnect();
+    });
+  }
+
+  /**
+   * Regression for discussion #4040: posting a body that is not valid JSON must return a clear
+   * HTTP 400 error.
+   */
+  @Test
+  void malformedJsonReturnsHttp400() throws Exception {
+    testEachServer((serverIndex) -> {
+      final String body = "this is not json\n";
+
+      final HttpURLConnection conn = openBatchConnection(serverIndex, "application/x-ndjson", "");
+      writeBody(conn, body);
+      conn.connect();
+
+      assertThat(conn.getResponseCode()).isEqualTo(400);
+      conn.disconnect();
+    });
+  }
+
+  /**
+   * Regression for discussion #4040: a user mistakenly sending a JSON array (the format expected
+   * by INSERT INTO ... CONTENT [...]) instead of JSONL must get a clear HTTP 400 with guidance,
+   * not HTTP 500.
+   */
+  @Test
+  void jsonArrayBodyReturnsHttp400WithGuidance() throws Exception {
+    testEachServer((serverIndex) -> {
+      final String body = "[{\"@type\":\"vertex\",\"@class\":\"V1\",\"id\":702}]\n";
+
+      final HttpURLConnection conn = openBatchConnection(serverIndex, "application/x-ndjson", "");
+      writeBody(conn, body);
+      conn.connect();
+
+      assertThat(conn.getResponseCode()).isEqualTo(400);
+
+      final String error = readError(conn);
+      assertThat(error.toLowerCase()).contains("jsonl");
+      conn.disconnect();
+    });
+  }
+
   @Test
   void lightEdgesParameter() throws Exception {
     testEachServer((serverIndex) -> {
@@ -146,6 +230,35 @@ class PostBatchHandlerIT extends BaseGraphServerTest {
       final JSONObject result = postBatch(serverIndex, body, "application/x-ndjson", "lightEdges=true");
       assertThat(result.getInt("verticesCreated")).isEqualTo(2);
       assertThat(result.getInt("edgesCreated")).isEqualTo(1);
+    });
+  }
+
+  /**
+   * Regression for issue #4069: posting a JSONL vertex whose property is declared as
+   * {@code LIST OF STRING} in the schema must accept the JSON array (the JSONL parser
+   * returned a {@link com.arcadedb.serializer.json.JSONArray}, which is not a
+   * {@link java.util.Collection}, so {@code Type.convert} wrapped it in a singleton list,
+   * yielding a nested array and a "value of type 'null'" validation error).
+   */
+  @Test
+  void listOfStringPropertyFromJsonl() throws Exception {
+    testEachServer((serverIndex) -> {
+      executeCommand(serverIndex, "sql", "CREATE VERTEX TYPE EntityA IF NOT EXISTS");
+      executeCommand(serverIndex, "sql", "CREATE PROPERTY EntityA.names IF NOT EXISTS LIST OF STRING");
+
+      final String body = """
+          {"@type":"vertex","@class":"EntityA","@id":"a4069","names":["ANONYMOUS WARD V/FOO BAR","SECOND"]}
+          """;
+
+      final JSONObject result = postBatch(serverIndex, body, "application/x-ndjson", "");
+      assertThat(result.getInt("verticesCreated")).isEqualTo(1);
+
+      final JSONObject query = executeCommand(serverIndex, "sql",
+          "SELECT names FROM EntityA");
+      final JSONObject record = query.getJSONObject("result").getJSONArray("records").getJSONObject(0);
+      assertThat(record.getJSONArray("names").length()).isEqualTo(2);
+      assertThat(record.getJSONArray("names").getString(0)).isEqualTo("ANONYMOUS WARD V/FOO BAR");
+      assertThat(record.getJSONArray("names").getString(1)).isEqualTo("SECOND");
     });
   }
 

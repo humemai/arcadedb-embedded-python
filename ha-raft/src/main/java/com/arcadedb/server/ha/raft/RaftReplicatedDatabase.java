@@ -185,6 +185,11 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     this.proxied.setWrappedDatabaseInstance(this);
   }
 
+  @Override
+  public boolean isReplicated() {
+    return true;
+  }
+
   private RaftHAServer requireRaftServer() {
     final RaftHAServer s = raftHAServer;
     if (s == null)
@@ -440,7 +445,12 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       final Object... args) {
     if (!isLeader()) {
       final QueryEngine queryEngine = proxied.getQueryEngineManager().getEngine(language, this);
-      if (queryEngine.isExecutedByTheLeader() || queryEngine.analyze(query).isDDL())
+      final QueryEngine.AnalyzedQuery analyzed = queryEngine.analyze(query);
+      // Forward write commands to the leader. Executing writes locally on a follower would
+      // bypass leader-coordinated mutations of shared state (e.g., the schema dictionary,
+      // see issue #4039), where the local page cache lags behind the asynchronous state
+      // machine apply and produces inconsistent IDs across the cluster.
+      if (queryEngine.isExecutedByTheLeader() || analyzed.isDDL() || !analyzed.isIdempotent())
         return forwardCommandToLeaderViaRaft(language, query, null, args);
       return proxied.command(language, query, configuration, args);
     }
@@ -468,7 +478,8 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       final Map<String, Object> args) {
     if (!isLeader()) {
       final QueryEngine queryEngine = proxied.getQueryEngineManager().getEngine(language, this);
-      if (queryEngine.isExecutedByTheLeader() || queryEngine.analyze(query).isDDL())
+      final QueryEngine.AnalyzedQuery analyzed = queryEngine.analyze(query);
+      if (queryEngine.isExecutedByTheLeader() || analyzed.isDDL() || !analyzed.isIdempotent())
         return forwardCommandToLeaderViaRaft(language, query, args, null);
     }
 
@@ -1133,8 +1144,21 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     }
 
     if (!proxied.getFileManager().startRecordingChanges()) {
-      // Already recording (nested schema change): run compaction locally only
-      return invokeCompaction(compaction);
+      // Another recordFileChanges/runWithCompactionReplication session is already active on this
+      // node. Running the compaction now would either share the active session's recordedChanges
+      // list (and lose its WAL pages, which are written outside the schema-commit-thread buffer)
+      // or skip replication entirely - both produce leader/follower divergence: the leader's
+      // mutable file gets renamed but followers either never see the new pages or never see the
+      // new file at all. That is what surfaces later as the "Cannot find index ..." warning on
+      // followers (issue #4063).
+      //
+      // Defer instead. Returning false bubbles up to LSMTreeIndex.compact(), which resets the
+      // index status to AVAILABLE in its finally block; the next onAfterCommit will reschedule
+      // the compaction once the contending recording session has released the file manager.
+      HALog.log(this, HALog.DETAILED,
+          "Skipping compaction for database '%s' because a recording session is in progress; will retry on next schedule",
+          getName());
+      return false;
     }
 
     try {
