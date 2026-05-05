@@ -55,6 +55,7 @@ import com.arcadedb.index.hash.HashIndexBucket;
 import com.arcadedb.index.fulltext.LSMTreeFullTextIndex;
 import com.arcadedb.index.geospatial.LSMTreeGeoIndex;
 import com.arcadedb.index.lsm.LSMTreeIndex;
+import com.arcadedb.index.sparsevector.LSMSparseVectorIndex;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract.NULL_STRATEGY;
 import com.arcadedb.index.lsm.LSMTreeIndexCompacted;
 import com.arcadedb.index.lsm.LSMTreeIndexMutable;
@@ -147,6 +148,7 @@ public class LocalSchema implements Schema {
     indexFactory.register(INDEX_TYPE.LSM_TREE.name(), new LSMTreeIndex.LSMTreeIndexFactoryHandler());
     indexFactory.register(INDEX_TYPE.FULL_TEXT.name(), new LSMTreeFullTextIndex.LSMTreeFullTextIndexFactoryHandler());
     indexFactory.register(INDEX_TYPE.LSM_VECTOR.name(), new LSMVectorIndex.LSMVectorIndexFactoryHandler());
+    indexFactory.register(INDEX_TYPE.LSM_SPARSE_VECTOR.name(), new LSMSparseVectorIndex.LSMSparseVectorIndexFactoryHandler());
     indexFactory.register(INDEX_TYPE.GEOSPATIAL.name(), new LSMTreeGeoIndex.GeoIndexFactoryHandler());
     indexFactory.register(INDEX_TYPE.HASH.name(), new HashIndex.HashIndexFactoryHandler());
     configurationFile = new File(databasePath + File.separator + SCHEMA_FILE_NAME);
@@ -1552,7 +1554,12 @@ public class LocalSchema implements Schema {
           type.addSuperType(getType(p), false);
       }
 
-      // PARSE INDEXES
+      // PARSE INDEXES. Warnings for indexes that are not yet present in {@code indexMap} are
+      // deferred: the orphan-relinking pass below can match them by bucket prefix when index
+      // files have been renamed (e.g. by LSM compaction). Logging upfront produces noisy
+      // "Cannot find index" warnings for cases that are then silently relinked, which masks
+      // the genuine cases where the file is truly missing (issue #4063).
+      final Map<String, List<String>> deferredMissingIndexWarnings = new LinkedHashMap<>();
       for (final String typeName : types.keySet()) {
         final JSONObject schemaType = types.getJSONObject(typeName);
         final JSONObject typeIndexesJSON = schemaType.getJSONObject("indexes");
@@ -1585,6 +1592,11 @@ public class LocalSchema implements Schema {
                     final int precision = indexJSON.getInt("precision", GeoIndexMetadata.DEFAULT_PRECISION);
                     index = new LSMTreeGeoIndex((LSMTreeIndex) index, precision);
                     indexMap.put(indexName, index);
+                  } else if (configuredIndexType.equalsIgnoreCase(Schema.INDEX_TYPE.LSM_SPARSE_VECTOR.toString())) {
+                    final LSMSparseVectorIndexMetadata sparseMeta = new LSMSparseVectorIndexMetadata(typeName, properties, -1);
+                    sparseMeta.fromJSON(indexJSON);
+                    index = new LSMSparseVectorIndex((LSMTreeIndex) index, sparseMeta);
+                    indexMap.put(indexName, index);
                   } else {
                     orphanIndexes.put(indexName, indexJSON);
                     indexJSON.put("type", typeName);
@@ -1610,14 +1622,17 @@ public class LocalSchema implements Schema {
             } else {
               orphanIndexes.put(indexName, indexJSON);
               indexJSON.put("type", typeName);
-              LogManager.instance()
-                  .log(this, Level.WARNING, "Cannot find index '%s' defined in type '%s'. Ignoring it", null, indexName, type);
+              deferredMissingIndexWarnings.computeIfAbsent(typeName, k -> new ArrayList<>()).add(indexName);
             }
           }
         }
       }
 
-      // ASSOCIATE ORPHAN INDEXES
+      // ASSOCIATE ORPHAN INDEXES. Bucket-prefix matching reattaches orphans to indexes already
+      // present in {@code indexMap} under a different (renamed) name. When this succeeds, the
+      // earlier "missing" entry must be dropped from {@code deferredMissingIndexWarnings} so we
+      // do not emit a misleading warning at the end of this method.
+      final Set<String> relinkedOrphanNames = new HashSet<>();
       boolean completed = false;
       while (!completed) {
         completed = true;
@@ -1649,7 +1664,8 @@ public class LocalSchema implements Schema {
                     index.setNullStrategy(nullStrategy);
                     type.addIndexInternal(index, bucket.getFileId(), properties, null);
                     LogManager.instance()
-                        .log(this, Level.WARNING, "Relinked orphan index '%s' to type '%s'", null, indexName, type.getName());
+                        .log(this, Level.FINE, "Relinked orphan index '%s' to type '%s'", null, indexName, type.getName());
+                    relinkedOrphanNames.add(entry.getKey());
                     saveConfiguration = true;
                     completed = false;
                     break;
@@ -1662,6 +1678,18 @@ public class LocalSchema implements Schema {
             }
           }
         }
+      }
+
+      // Emit warnings only for indexes that the orphan-relinking pass could not reattach.
+      for (final Map.Entry<String, List<String>> entry : deferredMissingIndexWarnings.entrySet()) {
+        final List<String> stillMissing = new ArrayList<>(entry.getValue().size());
+        for (final String n : entry.getValue())
+          if (!relinkedOrphanNames.contains(n))
+            stillMissing.add(n);
+        if (!stillMissing.isEmpty())
+          LogManager.instance()
+              .log(this, Level.WARNING, "Cannot find indexes %s defined in type '%s'. Ignoring them", null, stillMissing,
+                  entry.getKey());
       }
 
       // SET THE BUCKET STRATEGY AFTER THE INDEXES BECAUSE SOME OF THEM REQUIRE INDEXES (LIKE THE PARTITIONED)
