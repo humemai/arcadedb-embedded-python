@@ -25,6 +25,7 @@ import com.arcadedb.database.RID;
 import com.arcadedb.exception.CommandSQLParsingException;
 import com.arcadedb.function.sql.SQLFunctionAbstract;
 import com.arcadedb.query.sql.executor.CommandContext;
+import com.arcadedb.utility.IntHashSet;
 
 import java.util.HashSet;
 import java.util.List;
@@ -203,6 +204,112 @@ public abstract class SQLFunctionVectorAbstract extends SQLFunctionAbstract {
     public boolean isFull() {
       return filledGroups >= limit;
     }
+  }
+
+  /**
+   * Narrows {@code allowedBucketIds} (the per-type bucket allow-list assembled from
+   * {@code DocumentType.getBuckets(false)}) to the partition-pruned subset stashed on the
+   * {@link CommandContext} by {@code SelectExecutionPlanner.derivePartitionPrunedClusters}.
+   * <p>
+   * Returns the input unchanged when the planner did not stash a hint, when the hint was
+   * derived from a different FROM type than the function's target, or when the hint is empty.
+   * Builds a fresh {@link IntHashSet} (rather than mutating the input) so concurrent function
+   * calls in the same projection do not stomp on each other's narrowed view.
+   * <p>
+   * Net effect: a query like {@code SELECT vector.neighbors('Doc[embedding]', ..., k) FROM Doc
+   * WHERE tenant_id = 'X'} on a {@code partitioned('tenant_id')} type only enumerates the
+   * vector sub-index for {@code X}'s bucket instead of the full N-bucket fan-out. Issue #4087
+   * follow-up.
+   */
+  protected static IntHashSet narrowAllowedBucketIdsByPartitionHint(final IntHashSet allowedBucketIds,
+      final String typeName, final CommandContext context) {
+    if (allowedBucketIds == null || allowedBucketIds.isEmpty() || typeName == null || context == null)
+      return allowedBucketIds;
+    final Object hintTypeName = context.getVariable(CommandContext.PARTITION_PRUNED_TYPE_NAME_VAR);
+    if (!(hintTypeName instanceof String hintType) || !hintType.equals(typeName))
+      return allowedBucketIds;
+    final Object hintIds = context.getVariable(CommandContext.PARTITION_PRUNED_BUCKET_FILE_IDS_VAR);
+    if (!(hintIds instanceof IntHashSet hintSet) || hintSet.isEmpty())
+      return allowedBucketIds;
+    final IntHashSet narrowed = new IntHashSet(Math.min(allowedBucketIds.size(), hintSet.size()));
+    allowedBucketIds.forEach(id -> {
+      if (hintSet.contains(id))
+        narrowed.add(id);
+    });
+    return narrowed;
+  }
+
+  /**
+   * Reads the {@code @rid} of a candidate row produced by an upstream sparse / dense / fuse
+   * vector pipeline. Accepts the three shapes those pipelines emit interchangeably:
+   * a {@link Map} with an {@code @rid} or {@code rid} entry, a {@link com.arcadedb.query.sql.executor.Result}
+   * with the same fields or with {@code Result#getIdentity()} set, or a bare {@link Identifiable}.
+   * Returns {@code null} when no recognisable RID is present so callers can skip the row instead of
+   * throwing on an unfamiliar shape.
+   * <p>
+   * Centralised here so the four reranker functions ({@code vector.mmr}, {@code vector.recommend},
+   * {@code vector.discover}, {@code vector.rerank} - and {@code vector.boost} via its source-row
+   * iteration) share one canonical implementation. Diverging copies in earlier patches drifted
+   * silently (e.g. one variant did not check {@code Result#getIdentity()}); a single helper makes
+   * those drifts impossible.
+   */
+  protected static RID extractRidFromRow(final Object row) {
+    if (row == null)
+      return null;
+    if (row instanceof Map<?, ?> m) {
+      Object v = m.get("@rid");
+      if (v == null) v = m.get("rid");
+      if (v instanceof RID r) return r;
+      if (v instanceof Identifiable id) return id.getIdentity();
+      return null;
+    }
+    if (row instanceof com.arcadedb.query.sql.executor.Result r) {
+      if (r.getIdentity().isPresent())
+        return r.getIdentity().get();
+      Object v = r.getProperty("@rid");
+      if (v == null) v = r.getProperty("rid");
+      if (v instanceof RID rid) return rid;
+      if (v instanceof Identifiable id) return id.getIdentity();
+      return null;
+    }
+    if (row instanceof Identifiable id)
+      return id.getIdentity();
+    return null;
+  }
+
+  /**
+   * Reads a candidate row's similarity score, with the same auto-flip rules as
+   * {@link SQLFunctionVectorFuse#extractScore}: prefer {@code score} or {@code $score}
+   * (similarity-shaped, higher = better), fall back to the negated {@code distance} field that
+   * {@code vector.neighbors} emits (distance-shaped, lower = better - we flip the sign so the
+   * rest of the pipeline can assume one direction). Returns {@link Float#NaN} when no recognisable
+   * score field is present so callers can either skip the row or treat NaN as "missing score".
+   * <p>
+   * Critical: every reranker function that consumes vector function output MUST go through this
+   * helper, not its own variant. A bare-{@code score}-only extractor will silently drop every row
+   * piped in from {@code vector.neighbors} (which emits {@code distance}) - exactly the
+   * silent-data-loss bug the consolidation was meant to prevent.
+   */
+  protected static float extractScoreFromRow(final Object row) {
+    if (row instanceof Map<?, ?> m) {
+      final Object score = m.get("score");
+      if (score instanceof Number n) return n.floatValue();
+      final Object dollar = m.get("$score");
+      if (dollar instanceof Number n) return n.floatValue();
+      final Object distance = m.get("distance");
+      if (distance instanceof Number n) return -n.floatValue();
+      return Float.NaN;
+    }
+    if (row instanceof com.arcadedb.query.sql.executor.Result r) {
+      final Object score = r.getProperty("score");
+      if (score instanceof Number n) return n.floatValue();
+      final Object dollar = r.getProperty("$score");
+      if (dollar instanceof Number n) return n.floatValue();
+      final Object distance = r.getProperty("distance");
+      if (distance instanceof Number n) return -n.floatValue();
+      return Float.NaN;
+    }
+    return Float.NaN;
   }
 
   protected static Set<RID> parseRidFilter(final List<?> items, final String functionName, final CommandContext context) {

@@ -45,6 +45,18 @@ public interface DocumentType {
 
   MutableDocument newRecord();
 
+  /**
+   * True if a schema mutation invalidated the partition mapping for existing records (bucket
+   * add/drop on a partitioned type, or strategy change on populated data). Cleared by a
+   * successful {@code REBUILD TYPE ... WITH repartition = true}. Default {@code false} for
+   * implementations that don't track it (e.g. unpartitioned types, view types). Exposed on
+   * the interface so consumers - including remote clients - can read it without down-casting
+   * to a specific implementation.
+   */
+  default boolean isNeedsRepartition() {
+    return false;
+  }
+
   default byte getType() {
     return Document.RECORD_TYPE;
   }
@@ -220,6 +232,17 @@ public interface DocumentType {
   TypeIndex getPolymorphicIndexByProperties(String... properties);
 
   TypeIndex getPolymorphicIndexByProperties(List<String> properties);
+
+  /**
+   * Like {@link #getPolymorphicIndexByProperties(List)} but does NOT walk up the type hierarchy.
+   * Returns the TypeIndex defined directly on this type for the exact property list, or
+   * {@code null} if this type has no such index of its own. Use this when an operation must be
+   * scoped strictly to this type (e.g. CREATE INDEX on a sub-type must not match a parent's index
+   * and accidentally drop it).
+   */
+  TypeIndex getIndexByProperties(String... properties);
+
+  TypeIndex getIndexByProperties(List<String> properties);
 
   Schema getSchema();
 

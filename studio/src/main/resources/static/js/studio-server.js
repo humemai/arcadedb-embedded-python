@@ -284,6 +284,65 @@ function displayMetrics() {
     metersHtml += "</tr>";
   }
   $("#srvMetricMetersTable").html(metersHtml || "<tr><td colspan='3' class='text-muted text-center'>No HTTP meters available.</td></tr>");
+
+  // Executor Pools table - rendered from metrics.executors. Server-side keys are populated by
+  // PoolMetrics; expected pool names are "query" (QueryEngineManager) and "sparse_vector"
+  // (SparseVectorScoringPool). Each pool's gauges are: pool.size, pool.active, queue.depth,
+  // queue.capacity_remaining, tasks.completed, tasks.caller_run_fallbacks.
+  var ex = serverData.metrics.executors || {};
+  var executorRowLabels = { "query": "Query Parallelism", "sparse_vector": "Sparse Vector Scoring" };
+  var executorPoolNames = Object.keys(ex).sort();
+  var executorsHtml = "";
+  for (var i = 0; i < executorPoolNames.length; i++) {
+    var poolKey = executorPoolNames[i];
+    var pool = ex[poolKey] || {};
+    var label = executorRowLabels[poolKey] || poolKey;
+    var fallbacks = Math.round(pool["tasks.caller_run_fallbacks"] || 0);
+    // Highlight the saturation cell so the operator's eye catches it. Anything > 0 means the
+    // pool has had to fall back to caller-runs at least once - the metric they should care about
+    // most for capacity tuning.
+    var fallbackCellClass = fallbacks > 0 ? "text-end text-warning fw-bold" : "text-end";
+    executorsHtml += "<tr>";
+    executorsHtml += "<td>" + escapeHtml(label) + " <span class='text-muted small'>(" + escapeHtml(poolKey) + ")</span></td>";
+    executorsHtml += "<td class='text-end'>" + Math.round(pool["pool.active"] || 0).toLocaleString()
+        + " / " + Math.round(pool["pool.size"] || 0).toLocaleString() + "</td>";
+    executorsHtml += "<td class='text-end'>" + Math.round(pool["queue.depth"] || 0).toLocaleString() + "</td>";
+    executorsHtml += "<td class='text-end'>" + Math.round(pool["queue.capacity_remaining"] || 0).toLocaleString() + "</td>";
+    executorsHtml += "<td class='text-end'>" + Math.round(pool["tasks.completed"] || 0).toLocaleString() + "</td>";
+    executorsHtml += "<td class='" + fallbackCellClass + "'>" + fallbacks.toLocaleString() + "</td>";
+    executorsHtml += "</tr>";
+  }
+  $("#srvMetricExecutorsTable").html(executorsHtml || "<tr><td colspan='6' class='text-muted text-center'>No executor pool metrics available.</td></tr>");
+
+  // Sparse Vector Indexes table - rendered from metrics.sparseVectorIndexes. Shape:
+  //   { dbName: { typeIndexName: { memtablePostings, segmentCount, totalPostings } } }
+  // The card is hidden when no database has any sparse-vector indexes (the common case for
+  // installs that don't use LSM_SPARSE_VECTOR), so it doesn't take up real estate by default.
+  var spIdx = serverData.metrics.sparseVectorIndexes || {};
+  var spDbNames = Object.keys(spIdx).sort();
+  var spHtml = "";
+  for (var i = 0; i < spDbNames.length; i++) {
+    var dbName = spDbNames[i];
+    var indexes = spIdx[dbName] || {};
+    var indexNames = Object.keys(indexes).sort();
+    for (var j = 0; j < indexNames.length; j++) {
+      var idxName = indexNames[j];
+      var entry = indexes[idxName] || {};
+      spHtml += "<tr>";
+      spHtml += "<td>" + escapeHtml(dbName) + "</td>";
+      spHtml += "<td><code>" + escapeHtml(idxName) + "</code></td>";
+      spHtml += "<td class='text-end'>" + Math.round(entry.memtablePostings || 0).toLocaleString() + "</td>";
+      spHtml += "<td class='text-end'>" + Math.round(entry.segmentCount || 0).toLocaleString() + "</td>";
+      spHtml += "<td class='text-end'>" + Math.round(entry.totalPostings || 0).toLocaleString() + "</td>";
+      spHtml += "</tr>";
+    }
+  }
+  if (spHtml === "") {
+    $("#srvSparseVectorCard").hide();
+  } else {
+    $("#srvMetricSparseVectorTable").html(spHtml);
+    $("#srvSparseVectorCard").show();
+  }
 }
 
 function updateServerSetting(key, value) {
