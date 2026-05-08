@@ -19,6 +19,7 @@
 package com.arcadedb.query.opencypher.parser;
 
 import com.arcadedb.exception.CommandParsingException;
+import com.arcadedb.query.opencypher.ast.BooleanCoercionExpression;
 import com.arcadedb.query.opencypher.ast.BooleanExpression;
 import com.arcadedb.query.opencypher.ast.CallClause;
 import com.arcadedb.query.opencypher.ast.ClauseEntry;
@@ -1070,9 +1071,13 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
 
     // Check if expression6 contains an EXISTS expression
     // This handles cases like: WHERE EXISTS { (p)-[:WORKS_AT]->(:Company) }
+    // Require the EXISTS to span the entire expression6 text (allowing for whitespace),
+    // otherwise an inner EXISTS inside a parenthesized OR/AND would be returned alone
+    // and silently drop the surrounding boolean operators (issue #4126).
     final Cypher25Parser.Expression6Context expr6 = ctx.expression6();
     final Cypher25Parser.ExistsExpressionContext existsExpr = expressionBuilder.findExistsExpressionRecursive(expr6);
-    if (existsExpr != null && compCtx == null) {
+    if (existsExpr != null && compCtx == null
+        && existsExpr.getText().length() >= expr6.getText().length() - 2) {
       // Parse the EXISTS expression and wrap it as a boolean expression
       final ExistsExpression exists = expressionBuilder.parseExistsExpression(existsExpr);
       // ExistsExpression implements Expression, we need to wrap it to return as BooleanExpression
@@ -1116,7 +1121,7 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     if (patternExpr != null && compCtx == null) {
       // Parse the pattern and create a pattern predicate expression
       final PathPattern pathPattern = visitPatternExpression(patternExpr);
-      return new PatternPredicateExpression(pathPattern, false);
+      return new PatternPredicateExpression(pathPattern, false, getOriginalText(patternExpr));
     }
 
     if (compCtx != null) {
@@ -1239,8 +1244,13 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
       };
     }
 
-    // If no special comparison, treat as a simple expression that should evaluate to boolean
-    // This is a fallback for cases we haven't handled yet
+    // No special boolean form matched. Parse as a generic expression and adapt
+    // it to a boolean predicate. Covers bare boolean literals (WHERE true /
+    // WHERE false), boolean-typed properties, parameters, etc.
+    final Expression parsedExpr = expressionBuilder.parseExpressionFromText(expr6);
+    if (parsedExpr != null)
+      return new BooleanCoercionExpression(parsedExpr);
+
     return createFallbackComparison(ctx);
   }
 
@@ -1468,6 +1478,7 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     List<Expression> dynamicLabels = null;
     Map<String, Object> properties = null;
     String propertiesParameterName = null;
+    boolean labelDisjunction = false;
 
     // Variable
     if (ctx.variable() != null) {
@@ -1477,6 +1488,7 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     // Label expression (static labels + Cypher 25 dynamic $(expression) labels)
     if (ctx.labelExpression() != null) {
       labels = extractLabels(ctx.labelExpression());
+      labelDisjunction = ParserUtils.isLabelDisjunction(ctx.labelExpression());
       final List<Cypher25Parser.ExpressionContext> dynCtxs = ParserUtils.collectDynamicLabelContexts(ctx.labelExpression());
       if (!dynCtxs.isEmpty()) {
         dynamicLabels = new ArrayList<>(dynCtxs.size());
@@ -1494,7 +1506,7 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
         properties = visitProperties(propsCtx);
     }
 
-    return new NodePattern(variable, labels, dynamicLabels, properties, propertiesParameterName);
+    return new NodePattern(variable, labels, dynamicLabels, properties, propertiesParameterName, labelDisjunction);
   }
 
   public RelationshipPattern visitRelationshipPattern(final Cypher25Parser.RelationshipPatternContext ctx) {

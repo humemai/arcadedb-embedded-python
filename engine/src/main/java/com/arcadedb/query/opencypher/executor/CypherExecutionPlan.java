@@ -234,7 +234,8 @@ public class CypherExecutionPlan {
       // Use pre-computed flags from the cached CypherStatement to avoid scanning clause lists per execution
       if (physicalPlan != null && physicalPlan.getRootOperator() != null
           && !statement.hasUnwindBeforeMatch() && !statement.hasSubquery()
-          && !statement.hasWithBeforeMatch() && !statement.hasVariableLengthPath()) {
+          && !statement.hasWithBeforeMatch() && !statement.hasVariableLengthPath()
+          && !statement.hasWriteBeforeMatch()) {
         // Use optimizer - execute physical operators directly
         // Note: For Phase 4, we only optimize MATCH patterns
         // RETURN, ORDER BY, LIMIT are still handled by execution steps
@@ -475,8 +476,10 @@ public class CypherExecutionPlan {
           final boolean hasWithBeforeMatch2 = hasWithPrecedingMatch();
 
           final boolean hasVLP2 = hasVariableLengthPath();
+          final boolean hasWriteBeforeMatch2 = statement.hasWriteBeforeMatch();
+          final boolean hasSubquery2 = statement.hasSubquery();
           if (physicalPlan != null && physicalPlan.getRootOperator() != null && !hasUnwindBeforeMatch && !hasWithBeforeMatch2
-              && !hasVLP2)
+              && !hasVLP2 && !hasWriteBeforeMatch2 && !hasSubquery2)
             rootStep = buildExecutionStepsWithOptimizer(context);
           else
             rootStep = buildExecutionSteps(context);
@@ -1415,9 +1418,18 @@ public class CypherExecutionPlan {
             ("  nd" + anonymousVarCounter++);
         matchVariables.add(variable);
 
-        // Check if this variable was already bound in a previous MATCH clause
-        if (boundVariables.contains(variable)) {
-          // Variable already bound - skip creating a new MatchNodeStep
+        // Optimization: when the variable is already bound from a previous clause AND
+        // the new node pattern carries no additional constraints (no labels, no inline
+        // properties), skip the redundant MatchNodeStep - the carried binding already
+        // satisfies the empty constraint. We can only skip safely if the carried
+        // value is guaranteed to be a vertex (i.e. it came from a non-OPTIONAL MATCH).
+        // When the pattern adds labels or inline properties, MatchNodeStep must run
+        // so the constraints are checked against the bound vertex (and a null binding
+        // from an OPTIONAL MATCH correctly filters the row out - issue #4102).
+        if (boundVariables.contains(variable)
+            && !nodePattern.hasLabels()
+            && !nodePattern.hasProperties()) {
+          // Variable already bound and no new constraints - skip creating a new MatchNodeStep
           // But still handle zero-length named paths
           final String singlePathVar = pathPattern.hasPathVariable() ? pathPattern.getPathVariable() : null;
           if (singlePathVar != null) {

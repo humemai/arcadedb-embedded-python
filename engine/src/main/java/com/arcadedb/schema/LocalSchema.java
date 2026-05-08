@@ -56,6 +56,7 @@ import com.arcadedb.index.fulltext.LSMTreeFullTextIndex;
 import com.arcadedb.index.geospatial.LSMTreeGeoIndex;
 import com.arcadedb.index.lsm.LSMTreeIndex;
 import com.arcadedb.index.sparsevector.LSMSparseVectorIndex;
+import com.arcadedb.index.sparsevector.SparseSegmentComponent;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract.NULL_STRATEGY;
 import com.arcadedb.index.lsm.LSMTreeIndexCompacted;
 import com.arcadedb.index.lsm.LSMTreeIndexMutable;
@@ -138,6 +139,8 @@ public class LocalSchema implements Schema {
     componentFactory.registerComponent(LSMTreeIndexCompacted.NOTUNIQUE_INDEX_EXT,
         new LSMTreeIndex.PaginatedComponentFactoryHandlerNotUnique());
     componentFactory.registerComponent(LSMVectorIndex.FILE_EXT, new LSMVectorIndex.PaginatedComponentFactoryHandlerUnique());
+    componentFactory.registerComponent(SparseSegmentComponent.FILE_EXT,
+        new SparseSegmentComponent.PaginatedComponentFactoryHandler());
     componentFactory.registerComponent(TimeSeriesBucket.BUCKET_EXT, new TimeSeriesBucket.PaginatedComponentFactoryHandler());
     componentFactory.registerComponent(HashIndexBucket.UNIQUE_INDEX_EXT,
         new HashIndex.PaginatedComponentFactoryHandlerUnique());
@@ -1705,6 +1708,18 @@ public class LocalSchema implements Schema {
           final DocumentType type = getType(typeName);
           type.setBucketSelectionStrategy(bucketSelectionStrategy.getString("name"), properties);
         }
+        // Restore the persisted needsRepartition flag AFTER the strategy is set. We always force
+        // the flag to the persisted value (true OR false), because {@link
+        // LocalDocumentType#setBucketSelectionStrategy} can itself flip the flag to true when
+        // it sees a strategy shape change with records present - which is exactly the picture
+        // during load (default round-robin -> persisted partitioned, with records on disk). The
+        // persisted value wins: if the previous run cleared the flag via REBUILD TYPE WITH
+        // repartition, that cleared state must survive the restart.
+        final DocumentType type = getType(typeName);
+        if (type instanceof LocalDocumentType ldt) {
+          final boolean persisted = schemaType.has("needsRepartition") && schemaType.getBoolean("needsRepartition");
+          ldt.setNeedsRepartition(persisted);
+        }
       }
 
       if (saveConfiguration)
@@ -2074,6 +2089,16 @@ public class LocalSchema implements Schema {
 
   protected boolean isSchemaLoaded() {
     return loadInRamCompleted;
+  }
+
+  /**
+   * True while the schema is hydrating types from {@code schema.json}. Same-package callers
+   * (notably {@link LocalDocumentType#setBucketSelectionStrategy}) consult this to skip work
+   * the load path will redo immediately - e.g. the partition-shape-change flag-flip, where the
+   * persisted {@code needsRepartition} value is reapplied right after the strategy assignment.
+   */
+  boolean isReadingFromFile() {
+    return readingFromFile;
   }
 
   protected void updateSecurity() {

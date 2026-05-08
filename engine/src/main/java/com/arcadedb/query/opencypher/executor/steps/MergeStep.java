@@ -37,6 +37,7 @@ import com.arcadedb.query.opencypher.ast.SetClause;
 import com.arcadedb.query.opencypher.executor.CypherFunctionFactory;
 import com.arcadedb.query.opencypher.executor.ExpressionEvaluator;
 import com.arcadedb.query.opencypher.parser.CypherASTBuilder;
+import com.arcadedb.query.opencypher.temporal.TemporalUtil;
 import com.arcadedb.query.sql.executor.AbstractExecutionStep;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
@@ -650,7 +651,11 @@ public class MergeStep extends AbstractExecutionStep {
         if (indexIter != null) {
           while (indexIter.hasNext()) {
             final Identifiable identifiable = indexIter.next();
-            if (identifiable instanceof Vertex vertex && matchesProperties(vertex, evaluatedProperties))
+            if (identifiable == null)
+              continue;
+            // Index cursors yield RIDs; resolve to record to obtain the Vertex instance
+            final Vertex vertex = resolveVertex(identifiable);
+            if (vertex != null && matchesProperties(vertex, evaluatedProperties))
               matches.add(vertex);
           }
           return matches;
@@ -667,6 +672,23 @@ public class MergeStep extends AbstractExecutionStep {
           matches.add(vertex);
     }
     return matches;
+  }
+
+  /**
+   * Resolves an {@link Identifiable} (typically an RID returned by an index cursor) to a {@link Vertex} instance.
+   * Returns {@code null} if the record cannot be loaded or is not a vertex (e.g. dangling RID after deletion).
+   */
+  private Vertex resolveVertex(final Identifiable identifiable) {
+    if (identifiable instanceof Vertex v)
+      return v;
+    try {
+      final var record = context.getDatabase().lookupByRID(identifiable.getIdentity(), true);
+      if (record instanceof Vertex v)
+        return v;
+    } catch (final Exception ignore) {
+      // Record may have been removed or be inaccessible
+    }
+    return null;
   }
 
   /**
@@ -784,7 +806,7 @@ public class MergeStep extends AbstractExecutionStep {
         }
       }
 
-      document.set(key, value);
+      document.set(key, TemporalUtil.toCoreJavaType(value));
     }
   }
 
@@ -806,13 +828,13 @@ public class MergeStep extends AbstractExecutionStep {
 
       // If the value is an Expression object, evaluate it in the current result context
       if (value instanceof Expression) {
-        value = evaluator.evaluate((Expression) value, result, context);
+        value = TemporalUtil.toCoreJavaType(evaluator.evaluate((Expression) value, result, context));
       }
       // Resolve parameter references (e.g., $username -> actual value from context)
       else if (value instanceof CypherASTBuilder.ParameterReference) {
         final String paramName = ((CypherASTBuilder.ParameterReference) value).getName();
         if (context.getInputParameters() != null)
-          value = context.getInputParameters().get(paramName);
+          value = TemporalUtil.toCoreJavaType(context.getInputParameters().get(paramName));
       }
       // Legacy support: If the value looks like a property access (e.g., "BatchEntry.subtype"),
       // try to evaluate it against the current result context
@@ -874,11 +896,11 @@ public class MergeStep extends AbstractExecutionStep {
           if (!(obj instanceof Document doc))
             break;
           final MutableDocument mutableDoc = doc.modify();
-          final Object value = evaluator.evaluate(item.getValueExpression(), result, context);
+          Object value = evaluator.evaluate(item.getValueExpression(), result, context);
           if (value == null)
             mutableDoc.remove(item.getProperty());
           else
-            mutableDoc.set(item.getProperty(), value);
+            mutableDoc.set(item.getProperty(), TemporalUtil.toCoreJavaType(value));
           mutableDoc.save();
           ((ResultInternal) result).setProperty(variable, mutableDoc);
           break;
@@ -900,7 +922,7 @@ public class MergeStep extends AbstractExecutionStep {
               mutableDoc.remove(prop);
           for (final Map.Entry<String, Object> entry : map.entrySet())
             if (entry.getValue() != null)
-              mutableDoc.set(entry.getKey(), entry.getValue());
+              mutableDoc.set(entry.getKey(), TemporalUtil.toCoreJavaType(entry.getValue()));
           mutableDoc.save();
           ((ResultInternal) result).setProperty(variable, mutableDoc);
           break;
@@ -921,7 +943,7 @@ public class MergeStep extends AbstractExecutionStep {
             if (entry.getValue() == null)
               mutableDoc.remove(entry.getKey());
             else
-              mutableDoc.set(entry.getKey(), entry.getValue());
+              mutableDoc.set(entry.getKey(), TemporalUtil.toCoreJavaType(entry.getValue()));
           mutableDoc.save();
           ((ResultInternal) result).setProperty(variable, mutableDoc);
           break;
