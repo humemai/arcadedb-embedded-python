@@ -907,14 +907,15 @@ class Database:
         interpreter is shutting down and logging may already be unavailable,
         so we narrow the catch to AttributeError/RuntimeError that JPype can
         raise when the JVM has been torn down before this finalizer runs.
+        Server-managed databases raise UnsupportedOperationException on close,
+        which is handled by close() itself and also suppressed here.
         """
         try:
-            if not self._closed and self._java_db is not None:
-                self._close_async_executors()
-                self._java_db.close()
-                self._closed = True
+            self.close()
         except (AttributeError, RuntimeError):
             # JVM or referenced attributes already gone; nothing to do.
+            return
+        except Exception:  # nosec B110 - finalizer must not propagate
             return
 
 
