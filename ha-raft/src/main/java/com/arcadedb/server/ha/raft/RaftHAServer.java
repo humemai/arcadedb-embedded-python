@@ -110,6 +110,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   private          HealthMonitor             healthMonitor;
   private          ClusterTokenProvider      tokenProvider;
   private volatile int                       restartFailureCount   = 0;
+  private volatile BootstrapElection         bootstrapElection;
 
   public RaftHAServer(final ArcadeDBServer arcadeServer, final ContextConfiguration configuration) {
     this.arcadeServer = arcadeServer;
@@ -274,7 +275,14 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     final int batchSize = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_BATCH_SIZE);
     final int queueSize = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_QUEUE_SIZE);
     final int offerTimeout = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_OFFER_TIMEOUT);
-    transactionBroker = new RaftTransactionBroker(raftClient, quorum, quorumTimeout, batchSize, queueSize, offerTimeout);
+    final long grpcMessageSizeMax = configuration.getValueAsLong(GlobalConfiguration.HA_GRPC_MESSAGE_SIZE_MAX);
+    transactionBroker = new RaftTransactionBroker(raftClient, quorum, quorumTimeout, batchSize, queueSize, offerTimeout,
+        grpcMessageSizeMax, this::refreshRaftClient);
+
+    // Bootstrap election (issue #4147): runs once per cluster lifetime when this peer is elected
+    // leader and the Raft log is still empty. Stays a no-op if disabled or on subsequent leader
+    // changes. Wired into ArcadeStateMachine.notifyLeaderChanged below via runBootstrapIfEligible.
+    this.bootstrapElection = new BootstrapElection(this, arcadeServer);
 
     // K8s auto-join: if running in Kubernetes with no existing storage, try to join an existing cluster
     if (configuration.getValueAsBoolean(GlobalConfiguration.HA_K8S) && !hadExistingStorage)
@@ -283,6 +291,21 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     final long healthInterval = configuration.getValueAsLong(GlobalConfiguration.HA_HEALTH_CHECK_INTERVAL);
     this.healthMonitor = new HealthMonitor(this, healthInterval);
     this.healthMonitor.start();
+  }
+
+  /**
+   * Trigger the offline bootstrap election if conditions allow (this peer is leader, the cluster's
+   * commit index is still 0, and {@code arcadedb.ha.bootstrapFromLocalDatabase=true}). Called from
+   * {@link ArcadeStateMachine#notifyLeaderChanged} on every leader change. Issue #4147 phase 4.
+   *
+   * @return the protocol outcome (visible to tests; production code does not branch on it).
+   */
+  public BootstrapElection.Outcome runBootstrapIfEligible() {
+    final BootstrapElection election = bootstrapElection;
+    if (election == null)
+      return BootstrapElection.Outcome.SKIPPED_DISABLED;
+    election.onLeaderChanged();
+    return election.runIfEligible();
   }
 
   @Override
@@ -387,8 +410,9 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
         final int batchSize = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_BATCH_SIZE);
         final int queueSize = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_QUEUE_SIZE);
         final int offerTimeout = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_OFFER_TIMEOUT);
+        final long grpcMessageSizeMax = configuration.getValueAsLong(GlobalConfiguration.HA_GRPC_MESSAGE_SIZE_MAX);
         this.transactionBroker = new RaftTransactionBroker(raftClient, quorum, quorumTimeout, batchSize, queueSize,
-            offerTimeout);
+            offerTimeout, grpcMessageSizeMax, this::refreshRaftClient);
 
         restartFailureCount = 0;
         HALog.log(this, HALog.BASIC, "Ratis recovered successfully");
@@ -557,9 +581,15 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       final int batchSize = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_BATCH_SIZE);
       final int queueSize = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_QUEUE_SIZE);
       final int offerTimeout = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_OFFER_TIMEOUT);
+      final long grpcMessageSizeMax = configuration.getValueAsLong(GlobalConfiguration.HA_GRPC_MESSAGE_SIZE_MAX);
       final RaftTransactionBroker oldBroker = transactionBroker;
       transactionBroker = new RaftTransactionBroker(raftClient, quorum, quorumTimeout, batchSize, queueSize,
-          offerTimeout);
+          offerTimeout, grpcMessageSizeMax, this::refreshRaftClient);
+      // Transfer undispatched entries from the old broker to the new one BEFORE stopping the old
+      // broker, so a brief leader hiccup (e.g. self-stepdown -> re-elected leader) does not surface
+      // "Group committer shutting down" errors to in-flight callers. transferPendingTo() also halts
+      // the old flusher, so the subsequent stop() just closes the now-empty queue.
+      oldBroker.transferPendingTo(transactionBroker);
       oldBroker.stop();
     }
 

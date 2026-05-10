@@ -27,6 +27,7 @@ import com.arcadedb.exception.WALVersionGapException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.ServerDatabase;
 import org.apache.ratis.proto.RaftProtos;
 import org.apache.ratis.proto.RaftProtos.LogEntryProto;
 import org.apache.ratis.protocol.Message;
@@ -92,6 +93,12 @@ public class ArcadeStateMachine extends BaseStateMachine {
   private final    AtomicLong                electionCount    = new AtomicLong(0);
   private volatile long                      lastElectionTime = 0;
   private final    long                      startTime        = System.currentTimeMillis();
+  // Tracks the previous leader so leader-change logs can show "X -> Y" instead of just "Y".
+  // Useful when diagnosing churn: if X == Y across multiple changes, the leader is bouncing.
+  private volatile RaftPeerId                previousLeaderId = null;
+  // Tracks the highest term observed so notifyTermIndexUpdated can log only the first time we
+  // see each term (otherwise it fires on every config/metadata entry, which is noisy).
+  private final    AtomicLong                highestTermSeen  = new AtomicLong(-1);
 
   private volatile ArcadeDBServer server;
   private volatile RaftHAServer   raftHAServer;
@@ -104,6 +111,18 @@ public class ArcadeStateMachine extends BaseStateMachine {
     t.setDaemon(true);
     return t;
   });
+
+  /**
+   * Per-database bootstrap baseline committed via {@link RaftLogEntryType#BOOTSTRAP_FINGERPRINT_ENTRY}.
+   * Populated when the entry is applied (locally on every peer), used by the catch-up decision
+   * tree (locally bootstrapped vs leader-shipped vs late-newer-joiner refusal). Issue #4147.
+   */
+  private final java.util.concurrent.ConcurrentHashMap<String, BootstrapBaseline> bootstrapBaselines =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
+  /** Per-database bootstrap baseline as it appears in the committed Raft log entry. */
+  public record BootstrapBaseline(String fingerprint, long lastTxId) {
+  }
 
   private final AtomicBoolean needsSnapshotDownload = new AtomicBoolean(false);
   private final AtomicBoolean catchingUp            = new AtomicBoolean(false);
@@ -238,6 +257,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
       case INSTALL_DATABASE_ENTRY -> applyInstallDatabaseEntry(decoded);
       case DROP_DATABASE_ENTRY -> applyDropDatabaseEntry(decoded);
       case SECURITY_USERS_ENTRY -> applySecurityUsersEntry(decoded);
+      case BOOTSTRAP_FINGERPRINT_ENTRY -> applyBootstrapFingerprintEntry(decoded);
       }
 
       final long previousApplied = lastAppliedIndex.getAndSet(index);
@@ -319,14 +339,42 @@ public class ArcadeStateMachine extends BaseStateMachine {
   public void notifyLeaderChanged(final RaftGroupMemberId groupMemberId, final RaftPeerId newLeaderId) {
     super.notifyLeaderChanged(groupMemberId, newLeaderId);
 
+    final long previousElectionTime = lastElectionTime;
+    final long now = System.currentTimeMillis();
     electionCount.incrementAndGet();
-    lastElectionTime = System.currentTimeMillis();
+    lastElectionTime = now;
 
     if (raftHAServer == null || newLeaderId == null)
       return;
 
+    final RaftPeerId prevId = previousLeaderId;
+    previousLeaderId = newLeaderId;
+
     final String leaderName = raftHAServer.getPeerDisplayName(newLeaderId);
-    LogManager.instance().log(this, Level.INFO, "Leader elected: %s", leaderName);
+    final long currentTerm = getLastAppliedTermIndex() != null ? getLastAppliedTermIndex().getTerm() : -1;
+
+    if (prevId == null) {
+      // First leader observed since startup - no churn signal yet.
+      LogManager.instance().log(this, Level.INFO, "Leader elected: %s (term=%d)", leaderName, currentTerm);
+    } else if (prevId.equals(newLeaderId)) {
+      // The same node is leader again. Almost always means a step-down/re-election cycle: the
+      // leader couldn't keep heartbeats flowing (busy appender threads under bulk-load, GC pause,
+      // disk stall) and another node started an election with a higher term. The original leader
+      // sees the higher term, steps down, then wins the next election because it has the most
+      // up-to-date log. If you see this repeatedly under load, raise arcadedb.ha.electionTimeoutMin
+      // and Max, or reduce per-batch size.
+      final long sinceLast = previousElectionTime > 0 ? now - previousElectionTime : -1;
+      LogManager.instance().log(this, Level.WARNING,
+          "Leader churn: %s re-elected (term=%d, %d ms since last leader change). "
+              + "Likely cause: leader heartbeat blocked by bulk-load replication. "
+              + "Tune arcadedb.ha.electionTimeoutMin/Max higher or reduce batch size.",
+          leaderName, currentTerm, sinceLast);
+    } else {
+      // Different node became leader. Normal failover (network, server restart, etc.).
+      final String prevName = raftHAServer.getPeerDisplayName(prevId);
+      LogManager.instance().log(this, Level.INFO, "Leader changed: %s -> %s (term=%d)",
+          prevName, leaderName, currentTerm);
+    }
 
     // Recreate the RaftClient so its gRPC channels perform fresh DNS resolution.
     // After a network partition, channels to isolated peers enter TRANSIENT_FAILURE
@@ -340,6 +388,19 @@ public class ArcadeStateMachine extends BaseStateMachine {
       LogManager.instance().log(this, Level.INFO, "This node is now LEADER");
       raftHAServer.startLagMonitor();
       raftHAServer.printClusterConfiguration();
+
+      // Issue #4147: drive offline cluster bootstrap if conditions match (commit index still 0,
+      // arcadedb.ha.bootstrapFromLocalDatabase=true). Runs on a background thread to keep the
+      // notifyLeaderChanged callback non-blocking; a slow peer or a bootstrap-state RPC timeout
+      // must not stall Raft's normal leader-change processing on this node.
+      lifecycleExecutor.submit(() -> {
+        try {
+          raftHAServer.runBootstrapIfEligible();
+        } catch (final Throwable t) {
+          LogManager.instance().log(this, Level.WARNING,
+              "Bootstrap election threw on leader-change handler: %s", null, t.getMessage());
+        }
+      });
     } else {
       LogManager.instance().log(this, Level.INFO, "This node is now REPLICA (leader: %s)", leaderName);
       raftHAServer.stopLagMonitor();
@@ -699,6 +760,156 @@ public class ArcadeStateMachine extends BaseStateMachine {
 
     server.createDatabase(databaseName, ComponentFile.MODE.READ_WRITE);
     LogManager.instance().log(this, Level.INFO, "Database '%s' created via Raft install-database entry", databaseName);
+  }
+
+  /**
+   * Apply a {@link RaftLogEntryType#BOOTSTRAP_FINGERPRINT_ENTRY} on this peer (issue #4147 phase 5).
+   * <p>
+   * The committed entry names the peer chosen as the bootstrap source for {@code dbName} and
+   * carries that source's {@code (fingerprint, lastTxId)}. Each peer compares its local state
+   * against the committed baseline and decides:
+   * <ul>
+   *   <li><b>Match</b> (fingerprint and lastTxId both equal) - bootstrap locally, no bytes
+   *       transfer, the database files on disk are already correct.</li>
+   *   <li><b>Late newer joiner</b> (local lastTxId &gt; committed lastTxId) - this peer's data
+   *       is fresher than the cluster's chosen baseline. We refuse to silently overwrite it and
+   *       log a SEVERE pointing the operator at the recovery procedure.</li>
+   *   <li><b>Mismatch</b> (any other case) - fall back to the existing leader-shipped snapshot
+   *       path. Phase 6 will replace this with a "try delta first, fall back to full" flow when
+   *       the gap is below {@code arcadedb.ha.bootstrapDeltaThreshold} and the source has retained
+   *       WAL.</li>
+   * </ul>
+   * The committed baseline is recorded in {@link #bootstrapBaselines} for status export and tests.
+   */
+  private void applyBootstrapFingerprintEntry(final RaftLogEntryCodec.DecodedEntry decoded) {
+    final String dbName = decoded.databaseName();
+    final String chosenFingerprint = decoded.bootstrapFingerprint();
+    final long chosenLastTxId = decoded.bootstrapLastTxId();
+    if (dbName == null || chosenFingerprint == null) {
+      LogManager.instance().log(this, Level.WARNING,
+          "BOOTSTRAP_FINGERPRINT_ENTRY missing required fields, skipping (db=%s, fp=%s)",
+          dbName, chosenFingerprint);
+      return;
+    }
+    bootstrapBaselines.put(dbName, new BootstrapBaseline(chosenFingerprint, chosenLastTxId));
+
+    if (!server.existsDatabase(dbName)) {
+      // Late joiner with no local copy of this database. The follow-on INSTALL_DATABASE_ENTRY
+      // (or natural Raft replay) will create the database and install the leader's snapshot;
+      // we just record the baseline.
+      LogManager.instance().log(this, Level.INFO,
+          "Bootstrap baseline recorded for '%s' (lastTxId=%d); database not yet present locally, "
+              + "will be created via leader-shipped snapshot",
+          dbName, chosenLastTxId);
+      return;
+    }
+
+    // Compute local state.
+    final String localFingerprint;
+    final long localLastTxId;
+    final String localPath;
+    try {
+      final ServerDatabase serverDb = server.getDatabase(dbName);
+      final DatabaseInternal embedded = serverDb.getWrappedDatabaseInstance().getEmbedded();
+      if (!(embedded instanceof com.arcadedb.database.LocalDatabase localDb)) {
+        LogManager.instance().log(this, Level.WARNING,
+            "BOOTSTRAP_FINGERPRINT_ENTRY for '%s': embedded database is not a LocalDatabase, skipping",
+            dbName);
+        return;
+      }
+      localPath = localDb.getDatabasePath();
+      localFingerprint = com.arcadedb.database.BootstrapFingerprint.compute(new File(localPath));
+      localLastTxId = localDb.getLastTransactionId();
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.WARNING,
+          "Could not read local bootstrap state for '%s': %s; falling back to leader-shipped full snapshot",
+          dbName, e.getMessage());
+      // We don't know our own lastTxId so a delta makes no sense; pass -1 so the gap looks
+      // unbounded and BootstrapDeltaInstaller goes straight to the full-snapshot path.
+      installFromLeaderForBootstrap(dbName, -1L, chosenLastTxId);
+      return;
+    }
+
+    // Match: bootstrap locally, no bytes move.
+    if (localLastTxId == chosenLastTxId && chosenFingerprint.equals(localFingerprint)) {
+      LogManager.instance().log(this, Level.INFO,
+          "Database '%s' bootstrapped locally (lastTxId=%d, fingerprint matches cluster baseline)",
+          dbName, chosenLastTxId);
+      return;
+    }
+
+    // Late newer joiner: the operator's data is fresher than the cluster's chosen baseline.
+    // We will not silently overwrite it. Surface a SEVERE with the recovery procedure and leave
+    // the local files in place. The operator can stop the cluster, copy this peer's data to the
+    // others, and restart. Without this guard, a misconfigured rolling deploy could erase newer
+    // transactions on a single pod by re-bootstrapping from older peers.
+    if (localLastTxId > chosenLastTxId) {
+      LogManager.instance().log(this, Level.SEVERE,
+          "Database '%s': local lastTxId=%d is GREATER than cluster bootstrap lastTxId=%d. "
+              + "This peer's data is fresher than the cluster's chosen baseline (committed "
+              + "BOOTSTRAP_FINGERPRINT_ENTRY). Refusing to overwrite local data. To preserve it, "
+              + "stop the cluster, copy this peer's database directory to every other peer, then "
+              + "restart all peers.",
+          dbName, localLastTxId, chosenLastTxId);
+      return;
+    }
+
+    // Mismatch: try the delta endpoint first (issue #4147 phase 6); on 412 or any failure fall
+    // through to the existing leader-shipped full snapshot. Behaviour is identical to today's
+    // legacy path until WAL retention lands; the wrapper just plumbs the wire so a later phase
+    // can flip to delta replay without churning callers.
+    LogManager.instance().log(this, Level.INFO,
+        "Database '%s' bootstrap mismatch (local lastTxId=%d / fp=%s..., baseline lastTxId=%d / fp=%s...); "
+            + "attempting delta then full-snapshot fallback",
+        dbName, localLastTxId, localFingerprint.substring(0, Math.min(8, localFingerprint.length())),
+        chosenLastTxId, chosenFingerprint.substring(0, Math.min(8, chosenFingerprint.length())));
+    installFromLeaderForBootstrap(dbName, localLastTxId, chosenLastTxId);
+  }
+
+  /**
+   * Close the local database and pull either a WAL delta (when the gap is within
+   * {@code arcadedb.ha.bootstrapDeltaThreshold} and the source has retained WAL) or a full
+   * snapshot from the current leader. Falls back to full snapshot on any delta-path failure.
+   * Same low-level snapshot install machinery as
+   * {@code applyInstallDatabaseEntry(forceSnapshot=true)}.
+   */
+  private void installFromLeaderForBootstrap(final String dbName, final long localLastTxId,
+      final long sourceLastTxId) {
+    if (raftHAServer != null && raftHAServer.isLeader()) {
+      // The leader has the chosen baseline by definition (it's the source). No need to install.
+      HALog.log(this, HALog.TRACE, "Leader skips bootstrap snapshot install for '%s'", dbName);
+      return;
+    }
+
+    try {
+      String databasePath;
+      if (server.existsDatabase(dbName)) {
+        final DatabaseInternal db = (DatabaseInternal) server.getDatabase(dbName);
+        databasePath = db.getDatabasePath();
+        db.getEmbedded().close();
+        server.removeDatabase(dbName);
+      } else {
+        databasePath = server.getConfiguration().getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY)
+            + File.separator + dbName;
+      }
+      final String leaderHttpAddr = raftHAServer != null ? raftHAServer.getLeaderHttpAddress() : null;
+      final String clusterToken = raftHAServer != null ? raftHAServer.getClusterToken() : null;
+      BootstrapDeltaInstaller.installDeltaOrSnapshot(dbName, databasePath, leaderHttpAddr, clusterToken,
+          server, localLastTxId, sourceLastTxId);
+      LogManager.instance().log(this, Level.INFO,
+          "Database '%s' reinstalled after bootstrap mismatch", dbName);
+    } catch (final IOException e) {
+      throw new RuntimeException("Failed to install snapshot for bootstrap-mismatched database '" + dbName + "'", e);
+    }
+  }
+
+  /**
+   * Returns the bootstrap baseline committed for {@code dbName}, or {@code null} if no
+   * {@link RaftLogEntryType#BOOTSTRAP_FINGERPRINT_ENTRY} has been applied for it. Visible to
+   * tests and the cluster-status exporter (Phase 7).
+   */
+  public BootstrapBaseline getBootstrapBaseline(final String dbName) {
+    return bootstrapBaselines.get(dbName);
   }
 
   private void applyDropDatabaseEntry(final RaftLogEntryCodec.DecodedEntry decoded) {

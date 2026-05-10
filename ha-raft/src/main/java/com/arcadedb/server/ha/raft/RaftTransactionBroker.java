@@ -47,8 +47,23 @@ public class RaftTransactionBroker {
 
   public RaftTransactionBroker(final RaftClient raftClient, final Quorum quorum, final long quorumTimeout,
       final int maxBatchSize, final int maxQueueSize, final int offerTimeoutMs) {
+    this(raftClient, quorum, quorumTimeout, maxBatchSize, maxQueueSize, offerTimeoutMs,
+        RaftGroupCommitter.DEFAULT_MESSAGE_SIZE_MAX, null);
+  }
+
+  /**
+   * @param messageSizeMax  per-entry size cap matching {@code raft.grpc.message.size.max}. Entries
+   *                        larger than this are rejected synchronously instead of being dispatched
+   *                        and rejected by the Ratis gRPC client (which corrupts the SlidingWindow).
+   * @param onClientClosed  invoked when the underlying Ratis client is detected to be permanently
+   *                        CLOSED. Production code wires this to {@code RaftHAServer.refreshRaftClient}
+   *                        so a fresh client takes over; tests may pass {@code null}.
+   */
+  public RaftTransactionBroker(final RaftClient raftClient, final Quorum quorum, final long quorumTimeout,
+      final int maxBatchSize, final int maxQueueSize, final int offerTimeoutMs,
+      final long messageSizeMax, final Runnable onClientClosed) {
     this.groupCommitter = new RaftGroupCommitter(raftClient, quorum, quorumTimeout, maxBatchSize, maxQueueSize,
-        offerTimeoutMs);
+        offerTimeoutMs, messageSizeMax, onClientClosed);
   }
 
   /**
@@ -88,6 +103,15 @@ public class RaftTransactionBroker {
   }
 
   /**
+   * Replicates the {@code BOOTSTRAP_FINGERPRINT_ENTRY} that names the peer chosen as the
+   * bootstrap source for {@code dbName} at first cluster formation. Issue #4147 phase 4.
+   */
+  public void replicateBootstrapFingerprint(final String dbName, final String fingerprint, final long lastTxId) {
+    final ByteString entry = RaftLogEntryCodec.encodeBootstrapFingerprintEntry(dbName, fingerprint, lastTxId);
+    groupCommitter.submitAndWait(entry.toByteArray());
+  }
+
+  /**
    * Replicates a security users entry so all nodes update their user files.
    */
   public void replicateSecurityUsers(final String usersJson) {
@@ -100,5 +124,18 @@ public class RaftTransactionBroker {
    */
   public void stop() {
     groupCommitter.stop();
+  }
+
+  /**
+   * Transfers undispatched (still-queued) entries from this broker to {@code target} and stops
+   * the local flusher. Used by {@code RaftHAServer.refreshRaftClient} so a brief leader hiccup
+   * does not surface "Group committer shutting down" errors to in-flight callers; the entries
+   * are re-dispatched on the fresh client and the original {@code submitAndWait} callers stay
+   * blocked until they replicate successfully (or fail through the normal error path).
+   *
+   * @return number of entries transferred
+   */
+  public int transferPendingTo(final RaftTransactionBroker target) {
+    return groupCommitter.transferPendingTo(target.groupCommitter);
   }
 }

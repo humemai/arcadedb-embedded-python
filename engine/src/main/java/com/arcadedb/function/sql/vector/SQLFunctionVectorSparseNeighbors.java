@@ -32,6 +32,7 @@ import com.arcadedb.index.TypeIndex;
 import com.arcadedb.index.sparsevector.LSMSparseVectorIndex;
 import com.arcadedb.index.sparsevector.RidScore;
 import com.arcadedb.index.sparsevector.SparseVectorScoringPool;
+import com.arcadedb.index.vector.VectorUtils;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.utility.IntHashSet;
@@ -47,6 +48,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Function;
 
 /**
  * Returns the top-K nearest records by sparse-vector dot product against a {@code LSM_SPARSE_VECTOR}
@@ -194,26 +196,49 @@ public class SQLFunctionVectorSparseNeighbors extends SQLFunctionVectorAbstract 
       final float[] queryValues, final int k, final Set<RID> allowedRIDs, final String groupBy, final int groupSize,
       final float minScore, final CommandContext context) {
 
-    // Over-fetch when grouping so the post-traversal filter has enough material to fill k groups
-    // at groupSize each. Same 5x cushion and MAX_FETCH_CANDIDATES cap as `vector.neighbors`.
-    final int fetchK;
-    if (groupBy == null) {
-      fetchK = k;
-    } else {
+    // Memory-budget guard. The integrated grouped path (issue #4071) no longer over-fetches
+    // candidates - the per-group min-heap inside BMW DAAT bounds memory at O(k * groupSize) per
+    // bucket. We still apply the historical cap to reject pathological combinations (e.g.
+    // k=10000, groupSize=10000) early with a helpful error message rather than letting the engine
+    // allocate many GiB of per-group state at runtime. The 5x multiplier matches the MVP cap so
+    // existing tests that probe the boundary remain valid.
+    if (groupBy != null) {
       final long requested = Math.max((long) k * groupSize * 5L, (long) k);
       if (requested > MAX_FETCH_CANDIDATES)
         throw new CommandSQLParsingException(NAME + " over-fetch budget exceeded: k=" + k
             + ", groupSize=" + groupSize + " would require " + requested
             + " candidates (cap " + MAX_FETCH_CANDIDATES + "). Reduce k or groupSize.");
-      fetchK = (int) requested;
     }
 
     final ArrayList<RidScore> merged = new ArrayList<>();
+    final BasicDatabase databaseRef = context.getDatabase();
+
+    // Resolver for the integrated topKGrouped path. lookupByRID misses (record not found, e.g.
+    // stale postings after restore) map to a synthetic null group key so the candidate falls into
+    // the single null bucket, matching the MVP's HashMap null-key behaviour.
+    final Function<RID, Object> groupKeyResolver = groupBy == null ? null : rid -> {
+      try {
+        final Document record = (Document) databaseRef.lookupByRID(rid, true);
+        return readNestedField(record, groupBy);
+      } catch (final RecordNotFoundException e) {
+        return null;
+      }
+    };
+
+    // Per-bucket fetch cap. The non-grouped path keeps the original {@code fetchK = k} shape; the
+    // grouped path uses {@code k} as the distinct-group budget. In multi-bucket mode each bucket
+    // returns up to {@code k} distinct groups, and the post-merge {@link GroupAdmissionState}
+    // re-applies the global cap so cross-bucket group keys collapse correctly.
+    final int fetchK = k;
     if (indexes.size() <= 1) {
       // Single bucket: no parallelism opportunity. Skip the pool dispatch overhead and run the
-      // topK on the calling thread.
-      for (final LSMSparseVectorIndex idx : indexes)
-        merged.addAll(idx.topK(queryIndices, queryValues, fetchK, allowedRIDs));
+      // topK (or topKGrouped, when grouping is active) on the calling thread.
+      for (final LSMSparseVectorIndex idx : indexes) {
+        if (groupBy == null)
+          merged.addAll(idx.topK(queryIndices, queryValues, fetchK, allowedRIDs));
+        else
+          merged.addAll(idx.topKGrouped(queryIndices, queryValues, fetchK, groupSize, allowedRIDs, groupKeyResolver));
+      }
     } else {
       // Multi-bucket fan-out (#4085). Per-bucket sub-indexes are independent: different buckets
       // contain disjoint RID ranges, so per-bucket top-K calls have no shared mutable state and
@@ -222,8 +247,13 @@ public class SQLFunctionVectorSparseNeighbors extends SQLFunctionVectorAbstract 
       // worst case it runs inline on the submitter thread, which is exactly the serial fallback.
       final ExecutorService pool = SparseVectorScoringPool.getInstance().getExecutorService();
       final List<Future<List<RidScore>>> futures = new ArrayList<>(indexes.size());
-      for (final LSMSparseVectorIndex idx : indexes)
-        futures.add(pool.submit(() -> idx.topK(queryIndices, queryValues, fetchK, allowedRIDs)));
+      for (final LSMSparseVectorIndex idx : indexes) {
+        if (groupBy == null)
+          futures.add(pool.submit(() -> idx.topK(queryIndices, queryValues, fetchK, allowedRIDs)));
+        else
+          futures.add(pool.submit(() -> idx.topKGrouped(queryIndices, queryValues, fetchK, groupSize, allowedRIDs,
+              groupKeyResolver)));
+      }
       // Drain ALL futures even when one fails: a partial drain leaves the still-running tasks
       // contending for index I/O after the caller has moved on. Collect the per-future errors,
       // attach the rest as suppressed, then throw the first. On interrupt, cancel outstanding work
@@ -285,8 +315,10 @@ public class SQLFunctionVectorSparseNeighbors extends SQLFunctionVectorAbstract 
 
     merged.sort((a, b) -> Float.compare(b.score(), a.score()));
 
-    final BasicDatabase db = context.getDatabase();
     final ArrayList<Object> result = new ArrayList<>();
+    // Final per-group reduction. For single-bucket grouping the engine has already enforced the
+    // per-group constraint and this admission is idempotent. For multi-bucket grouping, per-bucket
+    // results may share group keys; this loop collapses them to the global per-group winners.
     final GroupAdmissionState groups = groupBy != null ? new GroupAdmissionState(k, groupSize) : null;
 
     for (final RidScore neighbor : merged) {
@@ -304,7 +336,7 @@ public class SQLFunctionVectorSparseNeighbors extends SQLFunctionVectorAbstract 
 
       final Document record;
       try {
-        record = (Document) db.lookupByRID(neighbor.rid(), true);
+        record = (Document) databaseRef.lookupByRID(neighbor.rid(), true);
       } catch (final RecordNotFoundException e) {
         continue;
       }
@@ -328,51 +360,21 @@ public class SQLFunctionVectorSparseNeighbors extends SQLFunctionVectorAbstract 
   private static int[] sparseToIntArray(final Object o) {
     if (o == null)
       return null;
-    if (o instanceof int[] arr)
-      return arr;
-    if (o instanceof Integer[] arr) {
-      final int[] out = new int[arr.length];
-      for (int i = 0; i < arr.length; i++)
-        out[i] = arr[i];
-      return out;
+    try {
+      return VectorUtils.toIntArray(o);
+    } catch (final IllegalArgumentException e) {
+      throw new CommandSQLParsingException("Sparse query indices: " + e.getMessage(), e);
     }
-    if (o instanceof List<?> list) {
-      final int[] out = new int[list.size()];
-      for (int i = 0; i < out.length; i++) {
-        final Object e = list.get(i);
-        if (!(e instanceof Number n))
-          throw new CommandSQLParsingException("Sparse query indices must be numbers, got: " + e);
-        out[i] = n.intValue();
-      }
-      return out;
-    }
-    throw new CommandSQLParsingException(
-        "Sparse query indices must be int[], Integer[] or List<Number>, got: " + o.getClass().getName());
   }
 
   private static float[] sparseToFloatArray(final Object o) {
     if (o == null)
       return null;
-    if (o instanceof float[] arr)
-      return arr;
-    if (o instanceof Float[] arr) {
-      final float[] out = new float[arr.length];
-      for (int i = 0; i < arr.length; i++)
-        out[i] = arr[i];
-      return out;
+    try {
+      return VectorUtils.toFloatArray(o);
+    } catch (final IllegalArgumentException e) {
+      throw new CommandSQLParsingException("Sparse query values: " + e.getMessage(), e);
     }
-    if (o instanceof List<?> list) {
-      final float[] out = new float[list.size()];
-      for (int i = 0; i < out.length; i++) {
-        final Object e = list.get(i);
-        if (!(e instanceof Number n))
-          throw new CommandSQLParsingException("Sparse query values must be numbers, got: " + e);
-        out[i] = n.floatValue();
-      }
-      return out;
-    }
-    throw new CommandSQLParsingException(
-        "Sparse query values must be float[], Float[] or List<Number>, got: " + o.getClass().getName());
   }
 
   @Override

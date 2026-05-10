@@ -615,10 +615,19 @@ public enum GlobalConfiguration {
   HA_QUORUM_TIMEOUT("arcadedb.ha.quorumTimeout", SCOPE.SERVER, "Timeout waiting for the quorum", Long.class, 10000),
 
   HA_ELECTION_TIMEOUT_MIN("arcadedb.ha.electionTimeoutMin", SCOPE.SERVER,
-      "Minimum election timeout in milliseconds. Increase for high-latency WAN clusters", Integer.class, 2000),
+      """
+      Minimum election timeout in milliseconds: a follower starts a new election if it has not heard from \
+      the leader for this many ms. Default of 5000ms is a balance between fast failover and resilience to \
+      heartbeat blips under heavy ingest. Bump higher for WAN clusters or sustained bulk-load workloads where \
+      leader appender threads compete with replication.""",
+      Integer.class, 5000),
 
   HA_ELECTION_TIMEOUT_MAX("arcadedb.ha.electionTimeoutMax", SCOPE.SERVER,
-      "Maximum election timeout in milliseconds. Increase for high-latency WAN clusters", Integer.class, 5000),
+      """
+      Maximum election timeout in milliseconds. Default of 10000ms is a balance between fast failover and \
+      resilience to heartbeat blips under heavy ingest. Bump higher for WAN clusters or sustained bulk-load \
+      workloads where leader appender threads compete with replication.""",
+      Integer.class, 10_000),
 
   HA_LOG_SEGMENT_SIZE("arcadedb.ha.logSegmentSize", SCOPE.SERVER,
       "Maximum Raft log segment size (e.g. '64MB', '128MB')", String.class, "64MB"),
@@ -716,6 +725,37 @@ public enum GlobalConfiguration {
   HA_GRPC_FLOW_CONTROL_WINDOW("arcadedb.ha.grpcFlowControlWindow", SCOPE.SERVER,
       "gRPC flow control window size in bytes for Ratis append-entries traffic. Larger values help catch-up replication after partitions.",
       Long.class, 4L * 1024 * 1024),
+
+  HA_GRPC_MESSAGE_SIZE_MAX("arcadedb.ha.grpcMessageSizeMax", SCOPE.SERVER,
+      """
+      Maximum size in bytes of a single Raft gRPC message (a replicated transaction or schema entry). \
+      Defaults to 128MB, higher than Ratis's 64MB stock default, so reasonable bulk-load batches do not get rejected. \
+      Lower it to bound memory exposure on hostile inputs; raise it if a single transaction legitimately exceeds 128MB.""",
+      Long.class, 128L * 1024 * 1024),
+
+  HA_BOOTSTRAP_FROM_LOCAL_DATABASE("arcadedb.ha.bootstrapFromLocalDatabase", SCOPE.SERVER,
+      """
+      When true (the default) and every peer's Raft log is empty at first cluster formation, peers exchange a \
+      (fingerprint, lastTxId) tuple per database; the peer with the highest lastTxId is elected as the bootstrap \
+      source via leadership transfer, and the others either bootstrap locally (matching fingerprint) or \
+      catch up via the existing leader-shipped snapshot path. Lets operators pre-stage 1+GB databases on every \
+      pod (init container, image bake, NFS) so the cluster forms in seconds instead of waiting on HTTP snapshot \
+      transfer. Safe to leave on: gating on empty Raft log + fingerprint check rules out silent divergence.""",
+      Boolean.class, true),
+
+  HA_BOOTSTRAP_TIMEOUT_MS("arcadedb.ha.bootstrapTimeoutMs", SCOPE.SERVER,
+      """
+      Maximum time in milliseconds the bootstrap leader waits for every configured peer to report its \
+      (fingerprint, lastTxId) before falling back to majority. A SEVERE log is emitted on timeout so the operator \
+      knows which peer was unreachable.""",
+      Long.class, 120_000L),
+
+  HA_BOOTSTRAP_DELTA_THRESHOLD("arcadedb.ha.bootstrapDeltaThreshold", SCOPE.SERVER,
+      """
+      Maximum lastTxId gap (number of transactions) for which a follower can be brought up to date by replaying \
+      a WAL delta from the source peer instead of downloading a full snapshot. Above this gap the leader-shipped \
+      full-snapshot path is used. Set to 0 to disable delta resync entirely.""",
+      Long.class, 100_000L),
 
   HA_SNAPSHOT_MAX_CONCURRENT("arcadedb.ha.snapshotMaxConcurrent", SCOPE.SERVER,
       "Maximum number of concurrent snapshot downloads served by the leader. Requests over this limit receive HTTP 503.",

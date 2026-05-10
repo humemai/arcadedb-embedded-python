@@ -1583,6 +1583,12 @@ public class LocalSchema implements Schema {
             IndexInternal index = indexMap.get(indexName);
             if (index != null) {
               index.setMetadata(indexJSON);
+              // Apply the user-supplied TypeIndex name (issue #4139) here so it works for every
+              // index implementation (LSM, Hash, FullText, Geo, Sparse/Dense Vector). Each
+              // {@code setMetadata(JSONObject)} differs across classes and we do not want to
+              // duplicate this read in all of them; addIndexInternal below consults the metadata.
+              if (indexJSON.has("typeIndexName"))
+                index.getMetadata().typeIndexName = indexJSON.getString("typeIndexName");
 
               if (indexJSON.has("type")) {
                 final String configuredIndexType = indexJSON.getString("type");
@@ -1665,6 +1671,12 @@ public class LocalSchema implements Schema {
                         NULL_STRATEGY.ERROR;
 
                     index.setNullStrategy(nullStrategy);
+                    // Carry the manual TypeIndex name (issue #4139) onto the metadata for the
+                    // orphan-relinking path too. addIndexInternal reads this when minting the
+                    // TypeIndex; without this hop, an index file renamed by compaction loses its
+                    // user-supplied name on the next reload.
+                    if (entry.getValue().has("typeIndexName"))
+                      index.getMetadata().typeIndexName = entry.getValue().getString("typeIndexName");
                     type.addIndexInternal(index, bucket.getFileId(), properties, null);
                     LogManager.instance()
                         .log(this, Level.FINE, "Relinked orphan index '%s' to type '%s'", null, indexName, type.getName());
@@ -1683,16 +1695,25 @@ public class LocalSchema implements Schema {
         }
       }
 
-      // Emit warnings only for indexes that the orphan-relinking pass could not reattach.
+      // Emit warnings only for indexes that the orphan-relinking pass could not reattach. The
+      // orphan reference is dropped from the in-memory schema (no addIndexInternal call), so the
+      // next saveConfiguration() will rewrite schema.json without it - mark the schema dirty so
+      // we self-heal: subsequent loads do not repeat the same warning forever (#4083 follow-up
+      // reported by mdre on 2026-05-07; an HA follower whose SCHEMA_ENTRY apply produced an
+      // unrelinkable index reference would log "Cannot find indexes [...]" on every later
+      // SCHEMA_ENTRY apply because applySchemaEntry calls load() each time and the persisted
+      // schema.json kept the dangling reference).
       for (final Map.Entry<String, List<String>> entry : deferredMissingIndexWarnings.entrySet()) {
         final List<String> stillMissing = new ArrayList<>(entry.getValue().size());
         for (final String n : entry.getValue())
           if (!relinkedOrphanNames.contains(n))
             stillMissing.add(n);
-        if (!stillMissing.isEmpty())
+        if (!stillMissing.isEmpty()) {
           LogManager.instance()
               .log(this, Level.WARNING, "Cannot find indexes %s defined in type '%s'. Ignoring them", null, stillMissing,
                   entry.getKey());
+          saveConfiguration = true;
+        }
       }
 
       // SET THE BUCKET STRATEGY AFTER THE INDEXES BECAUSE SOME OF THEM REQUIRE INDEXES (LIKE THE PARTITIONED)
@@ -2062,6 +2083,10 @@ public class LocalSchema implements Schema {
     // Copy collation settings from builder metadata to the index
     if (metadata != null && metadata.collations != null)
       index.getMetadata().collations = metadata.collations;
+    // Copy the user-supplied TypeIndex name through to the bucket-level metadata so the
+    // upcoming addIndexInternal mints the TypeIndex under the manual name (issue #4139).
+    if (metadata != null && metadata.typeIndexName != null)
+      index.getMetadata().typeIndexName = metadata.typeIndexName;
 
     try {
       registerFile(index.getComponent());
