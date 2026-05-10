@@ -511,6 +511,36 @@ def test_create_edge_with_content_object_preserves_properties(temp_db_path):
         assert row.get("note") == "met at summit"
 
 
+def test_find_references_returns_referring_record(temp_db_path):
+    """SQL FIND REFERENCES should return the record that points to the target RID."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE Car")
+        db.command("sql", "CREATE DOCUMENT TYPE Owner")
+
+        with db.transaction():
+            db.command("sql", "INSERT INTO Car SET model = 'Spider'")
+
+        car = db.query(
+            "sql", "SELECT @rid AS rid FROM Car WHERE model = 'Spider'"
+        ).one()
+
+        with db.transaction():
+            db.command(
+                "sql",
+                "INSERT INTO Owner SET name = ?, car = ?",
+                "Jack",
+                car.get("rid"),
+            )
+
+        row = db.query("sql", f"FIND REFERENCES {car.get('rid')}").one()
+
+        assert row.get("rid") == car.get("rid")
+        assert row.get("referredBy") is not None
+        fields = row.get("fields")
+        assert fields is not None
+        assert "car." in list(fields)
+
+
 def test_error_handling():
     """Test error handling."""
     # Test with invalid path

@@ -155,6 +155,7 @@ db.create_vector_index(
     max_connections: int = 16,
     beam_width: int = 100,
     quantization: str = "INT8",
+    encoding: str | None = None,
     location_cache_size: int | None = None,
     graph_build_cache_size: int | None = None,
     mutations_before_rebuild: int | None = None,
@@ -194,6 +195,10 @@ db.create_vector_index(
       to a small value or prefer `"INT8"`, `"BINARY"`, or `None`.
     - Prefer `"INT8"` for current production usage in these bindings.
     - `"PRODUCT"`/PQ is available but currently not recommended for production workloads.
+- `encoding` (str | None): Optional storage encoding for the vector property.
+    - Use `"INT8"` with a `BINARY` property when your vectors are already stored as
+    signed bytes.
+    - Pair `encoding="INT8"` with `quantization="NONE"` to avoid double quantization.
 - `build_graph_now` (bool): If `True` (default), eagerly prepares the vector graph
   during index creation. Set to `False` to defer graph preparation until first query.
 
@@ -238,6 +243,21 @@ Find k-nearest neighbors to the query vector.
 Treat this as a helper/manual API. For normal application queries, prefer SQL
 `vectorNeighbors` so search composes naturally with filtering, projection, and record
 exclusion.
+
+---
+
+### `to_java_byte_array(vector)`
+
+Convert a Python byte-like or integer array-like object to a Java `byte[]`.
+
+Use this when inserting native INT8 vectors into a `BINARY` property for indexes
+created with `encoding="INT8"`.
+
+```python
+from arcadedb_embedded import to_java_byte_array
+
+payload = to_java_byte_array([127, 0, -12, 5])
+```
 
 **Note:** With default settings (`build_graph_now=True` in `create_vector_index`), graph
 preparation runs during index creation. In the preferred SQL path, this eager behavior is

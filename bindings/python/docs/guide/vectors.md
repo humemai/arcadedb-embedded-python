@@ -62,7 +62,9 @@ Preferred split:
 - Keep the secondary Python helper APIs in mind only for manual or maintenance cases;
   they are not the recommended application-facing workflow.
 
-- Vector property type must be `ARRAY_OF_FLOATS`.
+- Vector property type is usually `ARRAY_OF_FLOATS`.
+- Use `BINARY` only when you are storing pre-quantized INT8 bytes with
+  `encoding="INT8"`.
 - `CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA {...}` is the preferred creation
   path.
     - SQL builds the vector graph immediately by default.
@@ -240,6 +242,96 @@ rows = db.query(
   `vectorDotProduct`, `vectorNormalize`, `vectorAdd`, `vectorSum`, etc.
 - Quantization via SQL: `METADATA {"quantization": "INT8"}` is the recommended path for
   embedded usage.
+
+## Native INT8 Storage
+
+If your application already has INT8 vectors, store them in a `BINARY` property and
+set `encoding="INT8"` on the vector index metadata.
+
+```python
+import arcadedb_embedded as arcadedb
+
+with arcadedb.create_database("./vector_demo_int8") as db:
+    db.command("sql", "CREATE VERTEX TYPE ByteDoc")
+    db.command("sql", "CREATE PROPERTY ByteDoc.id STRING")
+    db.command("sql", "CREATE PROPERTY ByteDoc.embedding BINARY")
+
+    db.command(
+    "sql",
+    """
+    CREATE INDEX ON ByteDoc (embedding)
+    LSM_VECTOR
+    METADATA {
+        "dimensions": 4,
+        "similarity": "COSINE",
+        "quantization": "NONE",
+        "encoding": "INT8"
+    }
+    """,
+    )
+
+    with db.transaction():
+    db.command(
+        "sql",
+        "INSERT INTO ByteDoc SET id = ?, embedding = ?",
+        "doc_a",
+        arcadedb.to_java_byte_array([127, 0, 0, 0]),
+    )
+```
+
+Use `encoding="INT8"` only with `quantization="NONE"`. Combining INT8 storage encoding
+with INT8 quantization would quantize the same vector twice.
+
+## Sparse Vectors
+
+ArcadeDB also supports sparse top-K retrieval through `LSM_SPARSE_VECTOR` and
+`vector.sparseNeighbors(...)`.
+
+```python
+import arcadedb_embedded as arcadedb
+import jpype.types as jtypes
+
+with arcadedb.create_database("./sparse_demo") as db:
+    db.command("sql", "CREATE DOCUMENT TYPE SparseDoc")
+    db.command("sql", "CREATE PROPERTY SparseDoc.tokens ARRAY_OF_INTEGERS")
+    db.command("sql", "CREATE PROPERTY SparseDoc.weights ARRAY_OF_FLOATS")
+
+    db.command(
+    "sql",
+    """
+    CREATE INDEX ON SparseDoc (tokens, weights)
+    LSM_SPARSE_VECTOR
+    METADATA {"dimensions": 128}
+    """,
+    )
+
+    rows = db.query(
+    "sql",
+    "SELECT expand(`vector.sparseNeighbors`('SparseDoc[tokens,weights]', ?, ?, 5))",
+    jtypes.JArray(jtypes.JInt)([5]),
+    arcadedb.to_java_float_array([1.0]),
+    ).to_list()
+```
+
+## Grouped Search
+
+Recent engine builds support `groupBy` / `groupSize` options on `vector.neighbors`.
+This is useful when you want diversity across a field such as source file, tenant, or
+document family.
+
+```python
+rows = db.query(
+    "sql",
+    (
+    "SELECT source_file, distance FROM "
+    "(SELECT expand(`vector.neighbors`(?, ?, ?, { groupBy: 'source_file', groupSize: 1 }))) "
+    "ORDER BY distance"
+    ),
+    "GroupedDoc[embedding]",
+    arcadedb.to_java_float_array([1.0, 0.0, 0.0, 0.0]),
+    3,
+).to_list()
+```
 
 ## Examples & References
 
