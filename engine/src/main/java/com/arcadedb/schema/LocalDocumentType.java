@@ -1082,8 +1082,18 @@ public class LocalDocumentType implements DocumentType {
       final List<String> propertyList = Arrays.asList(propertyNames);
       propIndex = indexesByProperties.get(propertyList);
       if (propIndex == null) {
-        // CREATE THE TYPE-INDEX FOR THE 1ST TIME
-        propIndex = new TypeIndex(name + Arrays.toString(propertyNames).replace(" ", ""), this);
+        // CREATE THE TYPE-INDEX FOR THE 1ST TIME. Honour any user-supplied name carried on the
+        // bucket-level index metadata (issue #4139): {@code CREATE INDEX <manual_name> ON ...}
+        // sets metadata.typeIndexName via TypeIndexBuilder, the schema reload re-attaches it via
+        // LSMTreeIndex.setMetadata, and we use it here so the TypeIndex (and therefore the
+        // schema-level indexMap entry / Studio's "Indexes" view) is keyed by the manual name.
+        // Falling back to the auto-derived form keeps the public default name unchanged for all
+        // callers that did not supply a manual name.
+        final String customName = index.getMetadata().typeIndexName;
+        final String typeIndexName = customName != null && !customName.isEmpty() ?
+            customName :
+            name + Arrays.toString(propertyNames).replace(" ", "");
+        propIndex = new TypeIndex(typeIndexName, this);
         schema.indexMap.put(propIndex.getName(), propIndex);
         indexesByProperties.put(propertyList, propIndex);
       }
@@ -1233,7 +1243,10 @@ public class LocalDocumentType implements DocumentType {
         // resolveExternalBucketPath() which returns <override>/<dbName>.
         final int pageSize = schema.getDatabase().getConfiguration()
             .getValueAsInteger(GlobalConfiguration.EXTERNAL_PROPERTY_BUCKET_DEFAULT_PAGE_SIZE);
-        final String overridePath = ((LocalDatabase) schema.getDatabase()).resolveExternalBucketPath();
+        // Unwrap to the embedded LocalDatabase: schema.getDatabase() can be the HA wrapper
+        // (e.g. RaftReplicatedDatabase) when this method runs after HA is enabled. Issue #4144.
+        final LocalDatabase localDb = (LocalDatabase) ((DatabaseInternal) schema.getDatabase()).getEmbedded();
+        final String overridePath = localDb.resolveExternalBucketPath();
         external = schema.createBucket(extName, pageSize, overridePath, LocalBucket.EXTERNAL_BUCKET_VERSION);
       }
       external.setPurpose(LocalBucket.Purpose.EXTERNAL_PROPERTY);
@@ -1276,7 +1289,9 @@ public class LocalDocumentType implements DocumentType {
     // Use an explicit throw instead of `assert`: production JVMs run without -ea, and a violation here can
     // lose data (we'd drop a bucket that has a queued tx record about to flush into it). Same pattern as
     // the hasExternalProperties() guard two lines above.
-    if (((LocalDatabase) schema.getDatabase()).isTransactionActive())
+    // isTransactionActive() is on the Database interface; calling it directly avoids the
+    // unsafe (LocalDatabase) cast that fails when the database is HA-wrapped. Issue #4144.
+    if (schema.getDatabase().isTransactionActive())
       throw new IllegalStateException(
           "reclaimEmptyExternalBuckets() requires no active transaction but one is open on database '"
               + schema.getDatabase().getName() + "'. Queued record updates have not flushed yet, so the"
@@ -1530,8 +1545,19 @@ public class LocalDocumentType implements DocumentType {
       type.put("needsRepartition", true);
 
     for (final TypeIndex i : getAllIndexes(false)) {
-      for (final IndexInternal entry : i.getIndexesOnBuckets())
-        indexes.put(entry.getMostRecentFileName(), entry.toJSON());
+      // Persist a user-supplied TypeIndex name once per bucket entry (issue #4139). Stored on the
+      // bucket-level JSON because that is what {@link LocalSchema#load} iterates and feeds back to
+      // {@link #addIndexInternal} via setMetadata. Detected by comparing the TypeIndex name to the
+      // auto-derived form so any non-LSM implementation (HashIndex, FullText, Geo, Vector, ...)
+      // gets the manual name persisted without needing each one's toJSON to know about it.
+      final String autoName = name + Arrays.toString(i.getPropertyNames().toArray()).replace(" ", "");
+      final String custom = i.getName().equals(autoName) ? null : i.getName();
+      for (final IndexInternal entry : i.getIndexesOnBuckets()) {
+        final JSONObject indexJSON = entry.toJSON();
+        if (custom != null)
+          indexJSON.put("typeIndexName", custom);
+        indexes.put(entry.getMostRecentFileName(), indexJSON);
+      }
     }
 
     type.put("custom", new JSONObject(custom));

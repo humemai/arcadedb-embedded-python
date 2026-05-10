@@ -50,8 +50,66 @@ function renderClusterData(data) {
   // Peer management list
   renderPeerManagement(data);
 
+  // Per-database bootstrap baselines (issue #4147 phase 7). Only renders content when at least
+  // one database has a committed bootstrap entry; otherwise the section stays empty so older
+  // clusters look identical to before.
+  renderBootstrapBaselines(data);
+
   // Update metrics summary
   updateMetricsSummary(data);
+}
+
+// Renders one row per database that has a committed bootstrap baseline. Surfaces lastTxId and
+// the abbreviated fingerprint so an operator sees at a glance which databases were locally
+// bootstrapped vs which still need a leader-shipped catch-up. Issue #4147 phase 7.
+function renderBootstrapBaselines(data) {
+  var container = $("#clusterBootstrapBaselines");
+  var card = $("#clusterBootstrapBaselinesCard");
+  if (container.length === 0)
+    return; // Older cluster.html that hasn't been updated yet; degrade silently.
+  container.empty();
+
+  var dbs = (data.databases || []).filter(function(db) {
+    return db.bootstrapLastTxId != null;
+  });
+  if (dbs.length === 0) {
+    card.hide();
+    return;
+  }
+  card.show();
+
+  for (var i = 0; i < dbs.length; i++) {
+    var db = dbs[i];
+    var fpAbbrev = abbreviateFingerprint(db.bootstrapFingerprint);
+    container.append(
+      '<div class="d-flex align-items-center justify-content-between py-1 px-2 mb-1" '
+      + 'style="font-size:0.82rem; background:var(--bg-main); border-radius:6px; border:1px solid var(--border-light);">'
+      + '<div><i class="fa fa-database" style="color:var(--color-brand); margin-right:6px;"></i>'
+      + escapeHtml(db.name)
+      + ' <span class="badge bg-info" style="font-size:0.6rem;">lastTxId=' + db.bootstrapLastTxId + '</span>'
+      + ' <span style="color:var(--text-secondary); font-size:0.75rem; font-family:monospace;">'
+      + escapeHtml(fpAbbrev) + '</span>'
+      + '</div>'
+      + '</div>'
+    );
+  }
+}
+
+function abbreviateFingerprint(fp) {
+  if (!fp || fp.length <= 16) return fp || "";
+  return fp.substring(0, 8) + "..." + fp.substring(fp.length - 8);
+}
+
+// Maps the server-side ClusterMonitor.ReplicaStatus enum to a Bootstrap badge style and a status
+// dot color. STALLED is the pre-churn signal so it gets red/danger; HEALTHY stays green.
+function replicaStatusStyle(status) {
+  switch (status) {
+    case "HEALTHY":        return { badge: "bg-success",   dot: "limegreen" };
+    case "CATCHING_UP":    return { badge: "bg-info",      dot: "deepskyblue" };
+    case "FALLING_BEHIND": return { badge: "bg-warning",   dot: "orange" };
+    case "STALLED":        return { badge: "bg-danger",    dot: "crimson" };
+    default:               return { badge: "bg-secondary", dot: "limegreen" }; // UNKNOWN / leader / no data
+  }
 }
 
 function renderNodeCards(data) {
@@ -72,19 +130,37 @@ function renderNodeCards(data) {
       : '<span class="badge bg-secondary">FOLLOWER</span>';
     var localBadge = isLocal ? ' <span class="badge bg-info" style="font-size:0.6rem;">LOCAL</span>' : '';
 
-    var dotColor = "limegreen";
+    // replicaStatus is only sent for followers and only by a leader's status export.
+    // A leader card has no status badge (its color comes from the LEADER role badge already).
+    var statusStyle = replicaStatusStyle(peer.replicaStatus);
+    var statusBadge = (!isLeader && peer.replicaStatus)
+      ? ' <span class="badge ' + statusStyle.badge + '" style="font-size:0.6rem;">' + escapeHtml(peer.replicaStatus) + '</span>'
+      : '';
+
+    var dotColor = isLeader ? "limegreen" : statusStyle.dot;
     var statusDot = '<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:' + dotColor + '; margin-right:6px;"></span>';
+
+    // Lag and matchIndex are present only when the local node is the leader (it's the leader who
+    // tracks per-follower replication state). Show them inline so a STALLED follower is obvious.
+    var lagLine = "";
+    if (!isLeader && peer.matchIndex != null) {
+      var lagText = "matchIndex=" + escapeHtml(String(peer.matchIndex));
+      lagLine = '<div style="font-size:0.72rem; color:var(--text-secondary); margin-top:2px;">'
+        + '<i class="fas fa-tachometer-alt" style="margin-right:4px;"></i>' + lagText
+        + '</div>';
+    }
 
     var card = '<div class="' + colClass + '">'
       + '<div class="card h-100" style="border: 2px solid ' + borderColor + '; border-radius: 10px;">'
       + '<div class="card-body py-2 px-3">'
       + '<div class="d-flex align-items-center justify-content-between">'
       + '<div>' + statusDot + '<b style="font-size:0.85rem;">' + escapeHtml(peer.id) + '</b>' + localBadge + '</div>'
-      + '<div>' + roleBadge + '</div>'
+      + '<div>' + roleBadge + statusBadge + '</div>'
       + '</div>'
       + '<div style="font-size:0.78rem; color:var(--text-secondary); margin-top:4px;">'
       + '<i class="fas fa-network-wired" style="margin-right:4px;"></i>' + escapeHtml(peer.address || "")
       + '</div>'
+      + lagLine
       + '</div></div></div>';
 
     container.append(card);
@@ -94,6 +170,13 @@ function renderNodeCards(data) {
 function renderPeerManagement(data) {
   var container = $("#peerManagementList");
   container.empty();
+
+  // addPeer / removePeer issue Raft setConfiguration, which only the leader can apply. Hide the
+  // controls on followers and surface a small hint instead, so the buttons never produce a 500.
+  var canManage = data.isLeader === true;
+  $("#btnAddPeer").toggle(canManage);
+  $("#peerManagementHint").toggle(!canManage);
+
   var peers = data.peers || [];
   for (var i = 0; i < peers.length; i++) {
     var peer = peers[i];
@@ -103,16 +186,105 @@ function renderPeerManagement(data) {
       ? '<span class="badge bg-success" style="font-size:0.65rem;">LEADER</span>'
       : '<span class="badge bg-secondary" style="font-size:0.65rem;">FOLLOWER</span>';
     var localTag = isLocal ? ' <span class="badge bg-info" style="font-size:0.6rem;">LOCAL</span>' : '';
+    var statusBadge = (!isLeader && peer.replicaStatus)
+      ? ' <span class="badge ' + replicaStatusStyle(peer.replicaStatus).badge + '" style="font-size:0.6rem;">' + escapeHtml(peer.replicaStatus) + '</span>'
+      : '';
+
+    // Remove button only when local is leader and target is a follower. The leader cannot remove
+    // itself: it must step down (or use Leave Cluster) so the resulting Raft config is valid.
+    // JSON.stringify + &quot; escaping keeps any characters in peer.id safe inside the attribute.
+    var removeBtn = "";
+    if (canManage && !isLeader) {
+      var idAttr = JSON.stringify(peer.id).replace(/"/g, "&quot;");
+      removeBtn = '<button class="btn btn-sm btn-outline-danger" style="font-size:0.7rem; padding:1px 8px;" '
+        + 'onclick="removePeer(' + idAttr + ')" title="Remove peer from the cluster">'
+        + '<i class="fa fa-trash"></i></button>';
+    }
 
     container.append(
       '<div class="d-flex align-items-center justify-content-between py-1 px-2 mb-1" '
       + 'style="font-size:0.82rem; background:var(--bg-main); border-radius:6px; border:1px solid var(--border-light);">'
       + '<div><i class="fa fa-server" style="color:var(--color-brand); margin-right:6px;"></i>'
       + escapeHtml(peer.id) + ' <span style="color:var(--text-secondary); font-size:0.75rem;">(' + escapeHtml(peer.address || "") + ')</span>'
-      + localTag + ' ' + roleBadge + '</div>'
+      + localTag + ' ' + roleBadge + statusBadge + '</div>'
+      + '<div>' + removeBtn + '</div>'
       + '</div>'
     );
   }
+}
+
+function addPeerPrompt() {
+  var html =
+    '<div class="mb-2">'
+    + '<label for="addPeerId" class="form-label" style="font-size:0.85rem;">Peer ID</label>'
+    + '<input type="text" class="form-control" id="addPeerId" placeholder="e.g. ArcadeDB_2" '
+    + 'onkeydown="if (event.which === 13) document.getElementById(\'addPeerAddress\').focus()">'
+    + '</div>'
+    + '<div class="mb-2">'
+    + '<label for="addPeerAddress" class="form-label" style="font-size:0.85rem;">Raft Address</label>'
+    + '<input type="text" class="form-control" id="addPeerAddress" placeholder="host:port (e.g. 192.168.1.2:2434)" '
+    + 'onkeydown="if (event.which === 13) document.getElementById(\'globalModalConfirmBtn\').click()">'
+    + '</div>'
+    + '<div class="mb-2">'
+    + '<label for="addPeerName" class="form-label" style="font-size:0.85rem;">Friendly Name <span class="text-muted">(optional)</span></label>'
+    + '<input type="text" class="form-control" id="addPeerName" placeholder="Optional display name" '
+    + 'onkeydown="if (event.which === 13) document.getElementById(\'globalModalConfirmBtn\').click()">'
+    + '</div>'
+    + '<p class="text-muted" style="font-size:0.75rem; margin-bottom:0;">'
+    + 'The new peer must already be running and reachable on the Raft port.'
+    + '</p>';
+
+  globalPrompt("Add Peer", html, "Add", function(values) {
+    var peerId = (values["addPeerId"] || "").trim();
+    var address = (values["addPeerAddress"] || "").trim();
+    var name = (values["addPeerName"] || "").trim();
+
+    if (!peerId) {
+      globalNotify("Error", "Peer ID is required", "danger");
+      return;
+    }
+    if (!address) {
+      globalNotify("Error", "Raft address is required", "danger");
+      return;
+    }
+
+    var payload = { peerId: peerId, address: address };
+    if (name) payload.name = name;
+
+    jQuery.ajax({
+      type: "POST",
+      url: "api/v1/cluster/peer",
+      data: JSON.stringify(payload),
+      contentType: "application/json",
+      beforeSend: function(xhr) { xhr.setRequestHeader("Authorization", globalCredentials); }
+    })
+    .done(function() {
+      globalNotify("Success", "Peer " + peerId + " added", "success");
+      updateCluster();
+    })
+    .fail(function(jqXHR) { globalNotifyError(jqXHR.responseText); });
+  });
+}
+
+function removePeer(peerId) {
+  globalConfirm("Remove Peer",
+    "Remove peer <b>" + escapeHtml(peerId) + "</b> from the cluster?<br><br>"
+    + "<span style='font-size:0.8rem;color:var(--text-secondary);'>"
+    + "The peer will stop receiving replicated entries. Restarting it will not rejoin the cluster automatically."
+    + "</span>",
+    "warning",
+    function() {
+      jQuery.ajax({
+        type: "DELETE",
+        url: "api/v1/cluster/peer/" + encodeURIComponent(peerId),
+        beforeSend: function(xhr) { xhr.setRequestHeader("Authorization", globalCredentials); }
+      })
+      .done(function() {
+        globalNotify("Success", "Peer " + peerId + " removed", "success");
+        updateCluster();
+      })
+      .fail(function(jqXHR) { globalNotifyError(jqXHR.responseText); });
+    });
 }
 
 function updateMetricsSummary(data) {
