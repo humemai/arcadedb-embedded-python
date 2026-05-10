@@ -648,10 +648,12 @@ db.create_vector_index(
     vertex_type: str,
     vector_property: str,
     dimensions: int,
+    id_property: str | None = None,
     distance_function: str = "cosine",
     max_connections: int = 16,
     beam_width: int = 100,
     quantization: str = "INT8",
+    encoding: str | None = None,
     location_cache_size: int | None = None,
     graph_build_cache_size: int | None = None,
     mutations_before_rebuild: int | None = None,
@@ -679,6 +681,7 @@ specifically need that surface.
 - `vertex_type` (str): Vertex type containing vectors
 - `vector_property` (str): Property storing vector arrays
 - `dimensions` (int): Vector dimensionality
+- `id_property` (str | None): Optional property used for key-based vector lookup.
 - `distance_function` (str): `"cosine"`, `"euclidean"`, or `"inner_product"`
 - `max_connections` (int): Max connections per node (default: 16). Maps to
   `maxConnections` in HNSW (JVector).
@@ -690,6 +693,10 @@ specifically need that surface.
   production workloads. In current ArcadeDB engine builds, `"PRODUCT"` also requires
   enough indexed vectors per bucket for PQ training. For tiny corpora, set `pq_clusters`
   explicitly to a small value or prefer another quantization mode.
+- `encoding` (str | None): Optional storage encoding for the document property.
+    Use `"INT8"` when the underlying property is `BINARY` and stores pre-quantized
+    bytes. Do not combine `encoding="INT8"` with `quantization="INT8"`; use
+    `quantization="NONE"` for native INT8 storage.
 - `location_cache_size` (int | None): Override location cache size (default: `None`, uses engine default).
 - `graph_build_cache_size` (int | None): Override graph build cache size (default: `None`, uses engine default).
 - `mutations_before_rebuild` (int | None): Override rebuild threshold (default: `None`, uses engine default).
