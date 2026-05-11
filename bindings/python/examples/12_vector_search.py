@@ -1558,16 +1558,29 @@ def get_milvus_version(host: str, port: int) -> str | None:
 
 def load_existing_build_config(db_path: Path) -> dict:
     config: dict = {}
+    candidates = []
+
     results_json = db_path / "results.json"
-    if not results_json.exists():
+    if results_json.exists():
+        candidates.append(results_json)
+
+    candidates.extend(sorted(db_path.glob("results_*.json")))
+    if not candidates:
         return config
 
-    try:
-        payload = json.loads(results_json.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return config
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
 
-    return payload.get("config", {}) if isinstance(payload, dict) else {}
+        candidate_config = (
+            payload.get("config", {}) if isinstance(payload, dict) else {}
+        )
+        if isinstance(candidate_config, dict) and candidate_config:
+            return candidate_config
+
+    return config
 
 
 def find_binary(name: str) -> str:
@@ -2091,6 +2104,7 @@ def run_in_docker(args) -> bool:
 def collect_runtime_metadata(
     args,
     quantization: str,
+    encoding: str,
     runtime_versions: dict[str, str | None],
     effective_heap_size: str | None,
 ) -> dict:
@@ -2113,6 +2127,7 @@ def collect_runtime_metadata(
         "runtime_versions": runtime_versions,
         "is_running_in_docker": is_running_in_docker(),
         "quantization": quantization,
+        "encoding": encoding,
     }
 
 
@@ -2265,6 +2280,7 @@ def main() -> None:
 
     build_config = load_existing_build_config(db_path)
     quantization = str(build_config.get("quantization", "NONE")).upper()
+    encoding = str(build_config.get("encoding", "NONE")).upper()
 
     sweeps: List[dict] = []
 
@@ -2887,6 +2903,7 @@ def main() -> None:
         "environment": collect_runtime_metadata(
             args,
             quantization,
+            encoding,
             runtime_versions,
             effective_heap_size=(
                 arcadedb_heap_size if args.backend == "arcadedb_sql" else None
@@ -2907,6 +2924,7 @@ def main() -> None:
             "path": str(db_path),
             "backend": args.backend,
             "quantization": quantization,
+            "encoding": encoding,
             "pg_shared_buffers_effective": (
                 pg_shared_buffers if args.backend == "pgvector" else None
             ),

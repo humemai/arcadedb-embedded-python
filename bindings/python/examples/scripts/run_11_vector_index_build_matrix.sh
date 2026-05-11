@@ -15,16 +15,17 @@ source "$HELPERS_SH"
 # Large         10,000  32GB    16
 # X-Large       25,000  64GB    32
 
-DATASET="stackoverflow-large"
-BATCH_SIZE=10000
-MEM_LIMIT="32g"
-THREADS=8
+DATASET="stackoverflow-medium"
+BATCH_SIZE=5000
+MEM_LIMIT="8g"
+THREADS=4
 RUNS=1
 SEED_START=0
 SERVER_FRACTION="0.8"
 MAX_CONNECTIONS=16
 BEAM_WIDTH=100
 QUANTIZATION="NONE"
+ENCODING="INT8"
 STORE_VECTORS_IN_GRAPH=false
 ADD_HIERARCHY=true
 JVM_HEAP_FRACTION="0.80"
@@ -79,6 +80,19 @@ case "$QUANTIZATION" in
         ;;
 esac
 
+case "$ENCODING" in
+    NONE | INT8) ;;
+    *)
+        echo "ENCODING must be one of: NONE, INT8" >&2
+        exit 1
+        ;;
+esac
+
+if [[ "$ENCODING" == "INT8" && "$QUANTIZATION" != "NONE" ]]; then
+    echo "ENCODING=INT8 requires QUANTIZATION=NONE" >&2
+    exit 1
+fi
+
 case "$ADD_HIERARCHY" in
     true | false) ;;
     *)
@@ -98,7 +112,7 @@ esac
 cd "$EXAMPLES_DIR"
 
 echo "Running matrix: runs=$RUNS backends=${BACKENDS[*]} dataset=$DATASET seed_start=$SEED_START"
-echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE max-connections=$MAX_CONNECTIONS beam-width=$BEAM_WIDTH quantization=$QUANTIZATION"
+echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT batch-size=$BATCH_SIZE max-connections=$MAX_CONNECTIONS beam-width=$BEAM_WIDTH quantization=$QUANTIZATION encoding=$ENCODING"
 
 execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
@@ -123,6 +137,7 @@ for ((run = 1; run <= RUNS; run++)); do
             --max-connections "$MAX_CONNECTIONS"
             --beam-width "$BEAM_WIDTH"
             --quantization "$QUANTIZATION"
+            --encoding "$ENCODING"
             --batch-size "$BATCH_SIZE"
             --seed "$seed"
             --run-label "$run_label"

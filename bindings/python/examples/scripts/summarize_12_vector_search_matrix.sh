@@ -32,6 +32,7 @@ python3 - "$INPUT_DIR" "$SUMMARY_MD" "$DATASET" "$LABEL_PREFIX" "$SCRIPT_DIR" <<
 import glob
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -60,6 +61,19 @@ def bytes_to_mib(value):
     if fvalue is None:
         return None
     return fvalue / (1024.0 ** 2)
+
+def normalize_mode(value, default="NONE"):
+    if value in (None, ""):
+        return default
+    return str(value).upper()
+
+def parse_build_modes_from_dir(run_dir):
+    dir_name = os.path.basename(run_dir)
+    quant_match = re.search(r"(?:^|_)quant=([^_]+)", dir_name)
+    enc_match = re.search(r"(?:^|_)enc=([^_]+)", dir_name)
+    quantization = normalize_mode(quant_match.group(1) if quant_match else None, "NONE")
+    encoding = normalize_mode(enc_match.group(1) if enc_match else None, "NONE")
+    return quantization, encoding
 
 def fmt(value):
     if value is None:
@@ -206,6 +220,22 @@ for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results
         run_dir=run_dir,
     )
 
+    dir_quantization, dir_encoding = parse_build_modes_from_dir(run_dir)
+    build_quantization = normalize_mode(
+        (status_obj or {}).get("build_quantization")
+        or build_config.get("quantization")
+        or dir_quantization
+        or db_obj.get("quantization"),
+        "NONE",
+    )
+    build_encoding = normalize_mode(
+        (status_obj or {}).get("build_encoding")
+        or build_config.get("encoding")
+        or dir_encoding
+        or db_obj.get("encoding"),
+        "NONE",
+    )
+
     collect_version_metadata(version_sets, data, run_dir)
 
     du_mib = None
@@ -235,6 +265,8 @@ for result_path in sorted(glob.glob(os.path.join(input_dir, "*", "search_results
                 "backend": db_obj.get("backend"),
                 "search_run_label": normalized_run_label,
                 "build_run_label": normalized_build_run_label,
+                "build_quantization": build_quantization,
+                "build_encoding": build_encoding,
                 "lancedb_index_type": (
                     ((build_config.get("lancedb") or {}).get("index_type"))
                     if db_obj.get("backend") == "lancedb" and isinstance(build_config.get("lancedb"), dict)
@@ -275,6 +307,8 @@ rows.sort(
     key=lambda r: (
         str(r.get("dataset") or ""),
         str(r.get("backend") or ""),
+        str(r.get("build_quantization") or ""),
+        str(r.get("build_encoding") or ""),
         str(r.get("search_run_label") or ""),
         float(r.get("effective_ef_search") or r.get("ef_search") or 0),
     )
@@ -307,6 +341,8 @@ COLUMNS = [
     "backend",
     "search_run_label",
     "build_run_label",
+    "build_quantization",
+    "build_encoding",
     "lancedb_index_type",
     "lancedb_num_partitions",
     "seed",
@@ -346,6 +382,7 @@ if version_summary_lines:
 if status_total > 0:
     lines.append(f"- Search run status files: total={status_total}, success={status_success}, failed={status_failed}")
 lines.append("- Note: `search_run_label` is the Example 12 sweep label; `build_run_label` is the Example 11 build label for the reused DB directory.")
+lines.append("- Note: `build_quantization` and `build_encoding` come from the reused Example 11 build metadata.")
 lines.append("- Note: LanceDB search uses HNSW-style `ef_search` tuning when available; for the single-partition IVF fallback it also pins `nprobes=1`.")
 lines.append("- Note: heuristic HNSW similarity only, not a formal metric: Faiss `HNSWFlat` ~= 100%; pgvector/Qdrant/Milvus HNSW ~= 85-95%; LanceDB pure `HNSW` ~= 90-95%; LanceDB single-partition `IVF_HNSW_SQ` ~= 75%; bruteforce is exact search, not HNSW.")
 lines.append("- Note: one row = one backend run + one ef_search sweep point.")
