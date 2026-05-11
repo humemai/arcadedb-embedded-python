@@ -223,7 +223,7 @@ def test_opencypher_id_filter(temp_db_path):
 
         result = db.query(
             "opencypher",
-            f"MATCH (n) WHERE ID(n) = '{alice_id}' RETURN n.name as name",
+            f"MATCH (n) WHERE ID(n) = {alice_id} RETURN n.name as name",
         )
         names = [record.get("name") for record in result]
 
