@@ -712,7 +712,7 @@ class TestVectorSQL:
             # Should return list of RIDs or similar
             assert len(res) > 0
         except Exception:
-            pass  # nosec B110 - best-effort probe; index API may expect type name instead
+            pass  # nosec B110
 
     def test_vector_neighbors_accepts_parameterized_index_and_vector(self, test_db):
         """SQL vectorNeighbors should accept bound index and vector parameters."""
@@ -742,7 +742,7 @@ class TestVectorSQL:
 
     def test_vector_delete_and_search_others_sql(self, test_db):
         """Test deleting vertices in a larger dataset using SQL."""
-        import random  # nosec B311 - synthetic vector data
+        import random  # nosec B311
 
         # Create schema
         test_db.command("sql", "CREATE VERTEX TYPE DocSql")
@@ -782,7 +782,7 @@ class TestVectorSQL:
                 # command(str, str, int, list) which has no Java overload.
                 test_db.command(
                     "sql",
-                    f"INSERT INTO DocSql SET id = {i}, embedding = {vec}",  # nosec B608
+                    f"INSERT INTO DocSql SET id = {i}, embedding = {vec}",
                 )
 
         # Delete every 10th vector

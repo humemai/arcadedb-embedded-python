@@ -941,7 +941,7 @@ class Database:
         except (AttributeError, RuntimeError):
             # JVM or referenced attributes already gone; nothing to do.
             return
-        except Exception:  # nosec B110 - finalizer must not propagate
+        except Exception:
             return
 
 
