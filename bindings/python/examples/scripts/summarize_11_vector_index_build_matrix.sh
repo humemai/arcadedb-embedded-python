@@ -65,6 +65,11 @@ def bytes_to_mib(value):
         return None
     return fvalue / (1024.0 ** 2)
 
+def normalize_mode(value, default="NONE"):
+    if value in (None, ""):
+        return default
+    return str(value).upper()
+
 def fmt(value):
     if value is None:
         return ""
@@ -219,6 +224,8 @@ for run_dir in run_dirs:
                 "dataset": dataset_name,
                 "backend": backend,
                 "run_label": normalized_run_label,
+                "quantization": normalize_mode(config.get("quantization"), "NONE"),
+                "encoding": normalize_mode(config.get("encoding"), "NONE"),
                 "lancedb_index_type": (
                     ((config.get("lancedb") or {}).get("index_type"))
                     if backend == "lancedb" and isinstance(config.get("lancedb"), dict)
@@ -252,7 +259,15 @@ if not rows:
     print("No matching results_*.json files found.", file=sys.stderr)
     sys.exit(2)
 
-rows.sort(key=lambda r: (str(r.get("dataset") or ""), str(r.get("backend") or ""), str(r.get("run_label") or "")))
+rows.sort(
+    key=lambda r: (
+        str(r.get("dataset") or ""),
+        str(r.get("backend") or ""),
+        str(r.get("quantization") or ""),
+        str(r.get("encoding") or ""),
+        str(r.get("run_label") or ""),
+    )
+)
 
 status_scoped = []
 for status in status_rows:
@@ -280,6 +295,8 @@ version_summary_lines = format_version_summary_lines(version_sets)
 COLUMNS = [
     "backend",
     "run_label",
+    "quantization",
+    "encoding",
     "lancedb_index_type",
     "lancedb_num_partitions",
     "seed",
@@ -315,6 +332,7 @@ if version_summary_lines:
         lines.append(f"  - {item}")
 if status_total > 0:
     lines.append(f"- Run status files: total={status_total}, success={status_success}, failed={status_failed}")
+lines.append("- Note: `quantization` and `encoding` reflect the Example 11 build configuration used for that row.")
 lines.append("- Note: LanceDB prefers pure `HNSW` when supported by the installed version; otherwise it falls back to single-partition `IVF_HNSW_SQ`.")
 lines.append("- Note: heuristic HNSW similarity only, not a formal metric: Faiss `HNSWFlat` ~= 100%; pgvector/Qdrant/Milvus HNSW ~= 85-95%; LanceDB pure `HNSW` ~= 90-95%; LanceDB single-partition `IVF_HNSW_SQ` ~= 75%; bruteforce is exact search, not HNSW.")
 lines.append("- Note: times are phase-level benchmark timings from each run result.")

@@ -17,7 +17,7 @@ source "$HELPERS_SH"
 
 DATASET="stackoverflow-medium"
 MEM_LIMIT="4g"
-THREADS=8
+THREADS=4
 RUNS=1
 SEED_START=0
 SERVER_FRACTION="0.8"
@@ -26,6 +26,8 @@ QUERY_LIMIT=1000
 QUERY_RUNS=1
 QUERY_ORDER="shuffled"
 EF_SEARCH_VALUES="100"
+BUILD_QUANTIZATION="NONE"
+BUILD_ENCODING="NONE"
 
 JVM_HEAP_FRACTION="0.80"
 JVM_ARGS=""
@@ -53,6 +55,15 @@ BACKENDS_RAW="arcadedb_sql"
 
 BUILD_LABEL_PREFIX="sweep11"
 SEARCH_LABEL_PREFIX="sweep12"
+
+normalize_build_mode() {
+    local raw="${1:-}"
+    raw="$(printf '%s' "$raw" | tr '[:lower:]' '[:upper:]')"
+    if [[ -z "$raw" ]]; then
+        raw="ANY"
+    fi
+    printf '%s\n' "$raw"
+}
 
 parse_mem_limit_to_mib() {
     local raw="${1:-}"
@@ -117,12 +128,39 @@ find_saved_build_result() {
         sort | head -n 1
 }
 
+build_result_config_value() {
+    local result_file="$1"
+    local field_name="$2"
+
+    python3 - "$result_file" "$field_name" << 'PY'
+import json
+import sys
+from pathlib import Path
+
+result_file, field_name = sys.argv[1:3]
+
+try:
+    payload = json.loads(Path(result_file).read_text(encoding="utf-8"))
+except Exception:
+    print("NONE")
+    raise SystemExit(0)
+
+config = payload.get("config") if isinstance(payload, dict) else {}
+value = config.get(field_name, "NONE") if isinstance(config, dict) else "NONE"
+if value in (None, ""):
+    value = "NONE"
+print(str(value).upper())
+PY
+}
+
 resolve_saved_build_dir() {
     local db_root="$1"
     local backend="$2"
     local dataset="$3"
     local run="$4"
     local build_prefix="$5"
+    local expected_quantization="$6"
+    local expected_encoding="$7"
 
     local run_tag
     run_tag="$(printf '%02d' "$run")"
@@ -142,18 +180,31 @@ resolve_saved_build_dir() {
     local dir=""
     local result_file=""
     local mem_mib=""
+    local actual_quantization=""
+    local actual_encoding=""
     for dir in "${build_dirs[@]}"; do
         result_file="$(find_saved_build_result "$dir" "$build_prefix" "$run" "$backend")"
         if [[ -z "$result_file" ]]; then
             continue
         fi
 
+        actual_quantization="$(build_result_config_value "$result_file" "quantization")"
+        actual_encoding="$(build_result_config_value "$result_file" "encoding")"
+
+        if [[ "$expected_quantization" != "ANY" && "$actual_quantization" != "$expected_quantization" ]]; then
+            continue
+        fi
+
+        if [[ "$expected_encoding" != "ANY" && "$actual_encoding" != "$expected_encoding" ]]; then
+            continue
+        fi
+
         mem_mib="$(build_dir_mem_mib "$dir")"
-        ranked+=("$(printf '%012d\t%s\t%s' "$mem_mib" "$dir" "$result_file")")
+        ranked+=("$(printf '%012d\t%s\t%s\t%s\t%s' "$mem_mib" "$dir" "$result_file" "$actual_quantization" "$actual_encoding")")
     done
 
     if [[ "${#ranked[@]}" -eq 0 ]]; then
-        echo "Found build directories for backend=$backend dataset=$dataset run=$run, but none contain saved ${build_prefix} results. Aborting." >&2
+        echo "Found build directories for backend=$backend dataset=$dataset run=$run, but none match build_quantization=$expected_quantization build_encoding=$expected_encoding for ${build_prefix}." >&2
         printf 'Checked directories:\n' >&2
         for dir in "${build_dirs[@]}"; do
             printf '  %s\n' "$dir" >&2
@@ -166,13 +217,15 @@ resolve_saved_build_dir() {
     local chosen_mem=""
     local chosen_dir=""
     local chosen_result=""
-    IFS=$'\t' read -r chosen_mem chosen_dir chosen_result <<< "${ranked[0]}"
+    local chosen_quantization=""
+    local chosen_encoding=""
+    IFS=$'\t' read -r chosen_mem chosen_dir chosen_result chosen_quantization chosen_encoding <<< "${ranked[0]}"
 
     if [[ "${#ranked[@]}" -gt 1 ]]; then
-        echo "Multiple saved ${build_prefix} build directories found for backend=$backend dataset=$dataset run=$run; choosing lowest-memory directory: $chosen_dir" >&2
+        echo "Multiple saved ${build_prefix} build directories found for backend=$backend dataset=$dataset run=$run; choosing lowest-memory directory: $chosen_dir (quantization=$chosen_quantization encoding=$chosen_encoding)" >&2
     fi
 
-    printf '%s\t%s\n' "$chosen_dir" "$chosen_result"
+    printf '%s\t%s\t%s\t%s\n' "$chosen_dir" "$chosen_result" "$chosen_quantization" "$chosen_encoding"
 }
 
 if [[ $# -gt 0 ]]; then
@@ -223,6 +276,9 @@ fi
 
 matrix_prepare_local_arcadedb_wheel "$EXAMPLES_DIR"
 
+BUILD_QUANTIZATION="$(normalize_build_mode "$BUILD_QUANTIZATION")"
+BUILD_ENCODING="$(normalize_build_mode "$BUILD_ENCODING")"
+
 if [[ "$QUERY_ORDER" != "fixed" && "$QUERY_ORDER" != "shuffled" ]]; then
     echo "QUERY_ORDER must be either 'fixed' or 'shuffled'" >&2
     exit 1
@@ -233,12 +289,29 @@ if [[ "$QUERY_RUNS" -lt 1 ]]; then
     exit 1
 fi
 
+case "$BUILD_QUANTIZATION" in
+    ANY | NONE | INT8 | BINARY | PRODUCT) ;;
+    *)
+        echo "BUILD_QUANTIZATION must be one of: ANY, NONE, INT8, BINARY, PRODUCT" >&2
+        exit 1
+        ;;
+esac
+
+case "$BUILD_ENCODING" in
+    ANY | NONE | INT8) ;;
+    *)
+        echo "BUILD_ENCODING must be one of: ANY, NONE, INT8" >&2
+        exit 1
+        ;;
+esac
+
 cd "$EXAMPLES_DIR"
 
 mem_tag="$(matrix_normalize_mem_tag "$MEM_LIMIT")"
 
 echo "Running matrix: runs=$RUNS backends=${BACKENDS[*]} dataset=$DATASET seed_start=$SEED_START"
 echo "Profile: threads=$THREADS mem-limit=$MEM_LIMIT k=$K query-limit=$QUERY_LIMIT query-runs=$QUERY_RUNS query-order=$QUERY_ORDER ef_search=$EF_SEARCH_VALUES"
+echo "Build filters: quantization=$BUILD_QUANTIZATION encoding=$BUILD_ENCODING"
 echo "Build label prefix: $BUILD_LABEL_PREFIX"
 echo "Search label prefix: $SEARCH_LABEL_PREFIX"
 
@@ -246,6 +319,8 @@ execution_idx=0
 for ((run = 1; run <= RUNS; run++)); do
     for backend in "${BACKENDS[@]}"; do
         normalized_build_run_label=""
+        build_quantization="NONE"
+        build_encoding="NONE"
         if [[ "$backend" == "bruteforce" ]]; then
             seed=$((SEED_START + execution_idx))
             build_run_label=$(printf "%s_r%02d_%s_s%05d" "$BUILD_LABEL_PREFIX" "$run" "$backend" "$seed")
@@ -253,8 +328,8 @@ for ((run = 1; run <= RUNS; run++)); do
             db_path="$DB_ROOT/backend=${backend}_dataset=${DATASET}_mem=${mem_tag}_run=${normalized_build_run_label}"
             mkdir -p "$db_path"
         else
-            build_selection="$(resolve_saved_build_dir "$DB_ROOT" "$backend" "$DATASET" "$run" "$BUILD_LABEL_PREFIX")" || exit 1
-            IFS=$'\t' read -r db_path build_result_file <<< "$build_selection"
+            build_selection="$(resolve_saved_build_dir "$DB_ROOT" "$backend" "$DATASET" "$run" "$BUILD_LABEL_PREFIX" "$BUILD_QUANTIZATION" "$BUILD_ENCODING")" || exit 1
+            IFS=$'\t' read -r db_path build_result_file build_quantization build_encoding <<< "$build_selection"
 
             build_result_name="$(basename "$build_result_file")"
             build_run_label="${build_result_name#results_}"
@@ -327,7 +402,7 @@ for ((run = 1; run <= RUNS; run++)); do
         fi
 
         echo
-        echo "[$((execution_idx + 1))/$((RUNS * ${#BACKENDS[@]}))] backend=$backend run=$run seed=$seed build_label=$build_run_label search_label=$search_run_label"
+        echo "[$((execution_idx + 1))/$((RUNS * ${#BACKENDS[@]}))] backend=$backend run=$run seed=$seed build_label=$build_run_label build_quantization=$build_quantization build_encoding=$build_encoding search_label=$search_run_label"
         echo "DB path: $db_path"
         echo "Command: ${cmd[*]}"
         set +e
@@ -353,6 +428,8 @@ for ((run = 1; run <= RUNS; run++)); do
       "query_runs": $QUERY_RUNS,
       "seed": $seed,
     "build_run_label": "$normalized_build_run_label",
+        "build_quantization": "$build_quantization",
+        "build_encoding": "$build_encoding",
       "search_run_label": "$search_run_label",
             "internal_search_run_label": "$internal_search_run_label",
       "collected_at_utc": "$collected_at"
