@@ -71,6 +71,28 @@ apply_jar_exclusions() {
     echo -e "${CYAN}📋 JAR count after exclusion: ${YELLOW}$(count_jars "$jars_dir")${NC}"
 }
 
+prune_windows_jre_artifacts() {
+    local jre_dir="$1"
+    local removed_count=0
+    local artifact_path
+
+    if [[ ! -d "$jre_dir" ]]; then
+        echo -e "${RED}❌ JRE directory not found for Windows cleanup: ${jre_dir}${NC}"
+        exit 1
+    fi
+
+    echo -e "${CYAN}🧹 Pruning Windows-only non-runtime JRE artifacts...${NC}"
+
+    while IFS= read -r artifact_path; do
+        [[ -n "$artifact_path" ]] || continue
+        echo -e "   - Removing: ${artifact_path}"
+        rm -f "$artifact_path"
+        removed_count=$((removed_count + 1))
+    done < <(find "$jre_dir" -type f \( -iname "*.pdb" -o -iname "*.lib" -o -iname "*.map" \))
+
+    echo -e "${CYAN}📋 Removed Windows JRE artifacts: ${YELLOW}${removed_count}${NC}"
+}
+
 # Check for Java (needed for jlink and JPype build)
 if ! command -v java &> /dev/null; then
     echo -e "${RED}❌ Java not found${NC}"
@@ -218,6 +240,12 @@ jlink \
 echo -e "${GREEN}✅ JRE built${NC}"
 JRE_SIZE=$(du -sh "$PY_BINDINGS_DIR/temp_jre" | cut -f1)
 echo -e "${CYAN}📊 JRE size: ${YELLOW}${JRE_SIZE}${NC}"
+
+if [[ "$PLATFORM" == windows/* ]]; then
+    prune_windows_jre_artifacts "$PY_BINDINGS_DIR/temp_jre"
+    JRE_SIZE=$(du -sh "$PY_BINDINGS_DIR/temp_jre" | cut -f1)
+    echo -e "${CYAN}📊 JRE size after Windows cleanup: ${YELLOW}${JRE_SIZE}${NC}"
+fi
 
 # Step 3: Copy JRE to package (JARs already filtered in place)
 echo -e "${CYAN}📦 Preparing package...${NC}"
