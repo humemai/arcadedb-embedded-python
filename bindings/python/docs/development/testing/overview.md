@@ -5,7 +5,7 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 ## Quick Statistics
 
 !!! success "Test Results"
-    - **Current package**: ✅ 290 passed
+    - **Current package**: ✅ 331 passed
     - Environment-specific skips may vary depending on optional components
 
 ## What's Tested
@@ -75,12 +75,21 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 
 | Test File | Description |
 | --------- | ----------- |
+| [`test_async_executor.py`](test-async-executor.md) | Async command/query execution and callback behavior |
+| [`test_core.py`](test-core.md) | Core database operations, CRUD, transactions, queries |
+| [`test_database_utils.py`](test-database-utils.md) | Database utility helpers and initialization behavior |
+| [`test_docs_examples.py`](test-docs-examples.md) | Executes representative Python snippets from the documentation site |
+| [`test_exporter.py`](test-exporter.md) | Database export formats and CSV result export helpers |
+| [`test_graph_api.py`](test-graph-api.md) | Graph wrapper behavior for vertices, edges, and traversal helpers |
+| [`test_importer_api.py`](test-importer.md) | Narrow `db.import_documents(...)` wrapper coverage |
+| [`test_numpy_support.py`](test-numpy-support.md) | NumPy integration and array conversion behavior |
+| [`test_resultset.py`](test-resultset.md) | Result and ResultSet iteration, accessors, and export helpers |
+| [`test_schema.py`](test-schema.md) | Schema, property, and index management behavior |
 | [`test_core.py`](test-core.md) | Core database operations, CRUD, transactions, queries |
 | [`test_server.py`](test-server.md) | Server mode, HTTP API, configuration |
 | [`test_concurrency.py`](test-concurrency.md) | File locking, thread safety, multi-process behavior |
 | [`test_server_patterns.py`](test-server-patterns.md) | Best practices for embedded + server mode |
 | [`test_import_database.py`](test-importer.md) | SQL `IMPORT DATABASE` scenarios and format coverage |
-| [`test_docs_examples.py`](test-docs-examples.md) | Executes representative Python snippets from the documentation site |
 | [`test_cypher.py`](test-opencypher.md) | OpenCypher query language |
 | [`test_graph_batch.py`](test-graph-batch.md) | Bulk graph-ingest helper coverage |
 | [`test_geo_predicate_sql.py`](test-geo-predicate-sql.md) | Geospatial SQL predicate semantics |
@@ -89,7 +98,11 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_graph_algorithms_sql.py`](test-graph-algorithms-sql.md) | SQL graph algorithm runtime coverage |
 | [`test_hash_index_schema.py`](test-hash-index-schema.md) | HASH index schema API behavior |
 | [`test_jvm_args.py`](test-jvm-args.md) | JVM args handling |
+| [`test_transaction_config.py`](test-transaction-config.md) | Transaction configuration and rollback semantics |
+| [`test_type_conversion.py`](test-type-conversion.md) | Python/Java type conversion coverage |
+| [`test_vector.py`](test-vector.md) | Vector API and nearest-neighbor search behavior |
 | [`test_vector_params_verification.py`](test-vector-params-verification.md) | Vector param validation |
+| [`test_vector_sql.py`](test-vector-sql.md) | SQL vector functions, index creation, and search flows |
 
 ## Common Testing Workflows
 
@@ -142,7 +155,7 @@ pytest -m "not slow"
 When the current bindings test suite passes, you should see a clean all-green summary.
 
 ```text
-======================== 290 passed ========================
+======================== 331 passed ========================
 ```
 
 ## Next Steps

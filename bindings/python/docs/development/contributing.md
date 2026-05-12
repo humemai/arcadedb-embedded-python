@@ -86,40 +86,55 @@ arcadedb/bindings/python/
 ├── src/
 │   └── arcadedb_embedded/        # Main package
 │       ├── __init__.py            # Package initialization
-│       ├── core.py                # Database, DatabaseFactory
-│       ├── server.py              # ArcadeDBServer
-│       ├── schema.py              # Schema management
-│       ├── results.py             # Query result handling
-│       ├── transactions.py        # Transaction management
-│       ├── vector.py              # Vector search support
-│       ├── graph.py               # Graph wrappers
-│       ├── exporter.py            # Data export (JSONL, GraphML, etc.)
+│       ├── _logging.py            # Internal logging helpers
 │       ├── async_executor.py      # Async command/query execution
-│       ├── type_conversion.py     # Python-Java type conversion
+│       ├── citation.py            # Citation DOI helpers
+│       ├── core.py                # Database, DatabaseFactory
 │       ├── exceptions.py          # Exception classes
+│       ├── exporter.py            # Data export (JSONL, GraphML, etc.)
+│       ├── graph.py               # Graph wrappers
+│       ├── graph_batch.py         # Bulk graph ingest helper
+│       ├── importer.py            # Import helpers
 │       ├── jvm.py                 # JVM startup logic
-│       ├── _version.py            # Version info
-│       └── jars/                  # JAR files (bundled/downloaded)
+│       ├── results.py             # Query result handling
+│       ├── schema.py              # Schema management
+│       ├── server.py              # ArcadeDBServer
+│       ├── transactions.py        # Transaction management
+│       ├── type_conversion.py     # Python-Java type conversion
+│       └── vector.py              # Vector search support
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py                # pytest fixtures
 │   ├── README.md                  # Testing documentation
+│   ├── test_async_executor.py     # Async execution tests
+│   ├── test_concurrency.py        # Concurrency tests
 │   ├── test_core.py               # Core tests
-│   ├── test_server.py             # Server tests
-│   ├── test_schema.py             # Schema tests
-│   ├── test_resultset.py          # Result handling tests
-│   ├── test_import_database.py    # Import database tests
+│   ├── test_cypher.py             # OpenCypher tests
+│   ├── test_database_utils.py     # Database utilities tests
+│   ├── test_docs_examples.py      # Docs example tests
 │   ├── test_exporter.py           # Exporter tests
+│   ├── test_geo_predicate_sql.py  # Geospatial SQL tests
+│   ├── test_graph_algorithms_sql.py # Graph algorithm SQL tests
+│   ├── test_graph_api.py          # Graph API tests
+│   ├── test_graph_batch.py        # GraphBatch tests
+│   ├── test_hash_index_schema.py  # HASH index schema tests
+│   ├── test_import_database.py    # Import database tests
+│   ├── test_importer_api.py       # Import helper tests
+│   ├── test_jvm_args.py           # JVM argument tests
+│   ├── test_logging_helper.py     # Logging helper tests
+│   ├── test_materialized_view_sql.py # Materialized view SQL tests
+│   ├── test_numpy_support.py      # NumPy integration tests
+│   ├── test_resultset.py          # Result handling tests
+│   ├── test_schema.py             # Schema tests
+│   ├── test_server.py             # Server tests
+│   ├── test_server_patterns.py    # Server pattern tests
+│   ├── test_timeseries_sql.py     # Timeseries SQL tests
+│   ├── test_transaction_config.py # Transaction tests
+│   ├── test_type_conversion.py    # Type conversion tests
 │   ├── test_vector.py             # Vector search tests
 │   ├── test_vector_sql.py         # Vector SQL tests
-│   ├── test_cypher.py             # OpenCypher tests
-│   ├── test_async_executor.py     # Async execution tests
-│   ├── test_type_conversion.py    # Type conversion tests
-│   ├── test_transaction_config.py # Transaction tests
-│   ├── test_concurrency.py        # Concurrency tests
-│   ├── test_database_utils.py     # Database utilities tests
-│   ├── test_numpy_support.py      # NumPy integration tests
-│   └── test_server_patterns.py    # Server pattern tests
+│   ├── test_vector_params_verification.py # Vector parameter validation tests
+│   └── test_wheel_platform_tag.py # Wheel platform tag tests
 ├── docs/                          # MkDocs documentation
 │   ├── getting-started/
 │   ├── guide/
