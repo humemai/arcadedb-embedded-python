@@ -62,28 +62,11 @@ remains the source of the core database.
 uv pip install arcadedb-embedded
 ```
 
-See [the Python
-README](bindings/python/README.md)
-for usage, examples, and build details.
-
 ## 🔗 Quick Links
 
 - Python README: [bindings/python/README.md](bindings/python/README.md)
 - PyPI:
   [https://pypi.org/project/arcadedb-embedded/](https://pypi.org/project/arcadedb-embedded/)
-
-## 🔄 Syncing Upstream
-
-This fork tracks ArcadeData/arcadedb through the local `upstream-main` mirror branch.
-
-- Check status: `./sync-upstream.sh --status`
-- Preview sync: `./sync-upstream.sh --dry-run`
-- Merge upstream: `./sync-upstream.sh`
-
-The sync keeps this fork's root `README.md`, `CLAUDE.md`, and the removed Java/Maven
-workflows under `.github/workflows/` from being overwritten or reintroduced, including
-the removed `meterian.yml` workflow. See the full sync notes in
-[bindings/python/docs/development/sync-upstream.md](bindings/python/docs/development/sync-upstream.md).
 
 ## 🧭 Upstream ArcadeDB (Java)
 
