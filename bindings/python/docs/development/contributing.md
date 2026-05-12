@@ -173,7 +173,7 @@ arcadedb/bindings/python/
 
 ```bash
 # Build the current package
-./scripts/build.sh base
+./scripts/build.sh
 
 # Output: dist/*.whl
 ```
@@ -182,18 +182,19 @@ arcadedb/bindings/python/
 
 1. Extracts ArcadeDB version from parent `pom.xml`
 2. Downloads appropriate JAR files with custom filtering
-3. Packages Python code with optimized JARs (see `scripts/jar_exclusions.txt`)
+3. Creates a bundled platform-specific JRE and stages optimized JARs (see `scripts/jar_exclusions.txt`)
 4. Runs tests in isolated Docker environment
 5. Creates wheel file in `dist/`
 
 ### Local Build
 
 ```bash
-# Download JARs with custom filtering
-python scripts/setup_jars.py
+# Build for the current platform
+./scripts/build.sh
 
-# Build wheel
-python -m build
+# Or target a specific supported platform on matching native hardware
+./scripts/build.sh darwin/arm64 3.12
+./scripts/build.sh windows/amd64 3.12
 
 # Install locally
 uv pip install dist/*.whl
