@@ -16,26 +16,38 @@ The ArcadeDB Python bindings are a **thin wrapper** around the ArcadeDB Java lib
 ```
 arcadedb_embedded/
 ├── __init__.py          # Package exports and version
-├── jvm.py               # JVM startup (bundled JRE, JAR discovery)
-├── core.py              # Database, DatabaseFactory, convenience helpers
-├── graph.py             # Document, Vertex, Edge wrappers
-├── schema.py            # Schema/Index/Property helpers
-├── type_conversion.py   # Java ↔ Python value conversion
+├── _logging.py          # Internal logging helpers
 ├── async_executor.py    # Async command/query + record wrapper
+├── citation.py          # Citation DOI helpers
+├── core.py              # Database, DatabaseFactory, convenience helpers
+├── exceptions.py        # ArcadeDBError (unified exceptions)
 ├── exporter.py          # Export (JSONL/GraphML/GraphSON + CSV helper)
-├── vector.py            # VectorIndex + array helpers
+├── graph.py             # Document, Vertex, Edge wrappers
+├── graph_batch.py       # High-throughput graph ingest wrapper
+├── importer.py          # Document import helpers and result payloads
+├── jvm.py               # JVM startup (bundled JRE, JAR discovery)
 ├── results.py           # ResultSet, Result (query results)
-├── transactions.py      # TransactionContext (ACID guard)
+├── schema.py            # Schema/Index/Property helpers
 ├── server.py            # ArcadeDBServer (HTTP/Studio)
-└── exceptions.py        # ArcadeDBError (unified exceptions)
+├── transactions.py      # TransactionContext (ACID guard)
+├── type_conversion.py   # Java ↔ Python value conversion
+└── vector.py            # VectorIndex + array helpers
 ```
 
 ### Module Responsibilities
 
 **`__init__.py`**
 
-- Central export surface (Database, AsyncExecutor, Schema, Exporter, VectorIndex, converters)
+- Central export surface (Database, AsyncExecutor, GraphBatch, Schema, Exporter, VectorIndex, converters, citation/import helpers)
 - Version metadata
+
+**`_logging.py`**
+
+- Internal logger access and swallowed-exception helpers for cleanup/finalizer paths
+
+**`citation.py`**
+
+- `cite()`: resolves version-specific DOI URLs for released Python package versions
 
 **`jvm.py`**
 
@@ -55,6 +67,16 @@ arcadedb_embedded/
 
 - Record wrappers: `Document`, `Vertex`, `Edge`
 - Property helpers, `new_edge()`, type-aware wrapping from Java records
+
+**`graph_batch.py`**
+
+- `GraphBatch`: builder-backed high-throughput graph ingest API
+- Batch vertex/edge creation plus flush/close lifecycle helpers
+
+**`importer.py`**
+
+- `import_documents()`: narrow Python wrapper around document import flows
+- `ImportResult`: normalized import result payload and statistics accessor
 
 **`schema.py`**
 

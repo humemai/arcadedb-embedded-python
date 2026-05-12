@@ -5,7 +5,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 !!! success "Test Coverage"
     Current bindings suite
 
-    - **Current package**: 290 passed
+    - **Current package**: 331 passed
     - All ArcadeDB features working (SQL, OpenCypher, Studio)
 
 ## Quick Navigation
@@ -188,22 +188,40 @@ pytest -v -rs
 
 ## Test Organization
 
+This is the current live test tree under `bindings/python/tests`. Exact test counts evolve, so this section lists files and responsibilities rather than hardcoding per-file totals.
+
 ```bash
 tests/
-├── test_core.py              # Core operations (13 tests)
-├── test_server.py            # Server mode (6 tests)
-├── test_concurrency.py       # Concurrency (4 tests)
-├── test_server_patterns.py   # Patterns (4 tests)
-├── test_graph_batch.py       # Bulk graph ingest helper
-├── test_graph_algorithms_sql.py  # shortestPath / dijkstra / astar
-├── test_geo_predicate_sql.py # Geospatial SQL predicates
-├── test_timeseries_sql.py    # Timeseries SQL coverage
-├── test_materialized_view_sql.py # Materialized view lifecycle
-├── test_hash_index_schema.py # HASH index schema API coverage
-├── test_import_database.py   # Import database tests
-├── test_docs_examples.py     # Validates runnable docs examples
-├── test_cypher.py            # OpenCypher (tests)
-└── conftest.py               # Shared fixtures
+├── conftest.py                         # Shared fixtures
+├── test_async_executor.py             # Async execution tests
+├── test_concurrency.py                # Concurrency tests
+├── test_core.py                       # Core operations
+├── test_cypher.py                     # OpenCypher tests
+├── test_database_utils.py             # Database utility tests
+├── test_docs_examples.py              # Runnable docs example tests
+├── test_exporter.py                   # Exporter tests
+├── test_geo_predicate_sql.py          # Geospatial SQL predicate tests
+├── test_graph_algorithms_sql.py       # shortestPath / dijkstra / astar
+├── test_graph_api.py                  # Graph API tests
+├── test_graph_batch.py                # Bulk graph ingest helper
+├── test_hash_index_schema.py          # HASH index schema tests
+├── test_import_database.py            # SQL import workflow tests
+├── test_importer_api.py               # Import helper wrapper tests
+├── test_jvm_args.py                   # JVM argument tests
+├── test_logging_helper.py             # Internal logging helper tests
+├── test_materialized_view_sql.py      # Materialized view lifecycle
+├── test_numpy_support.py              # NumPy integration tests
+├── test_resultset.py                  # Result handling tests
+├── test_schema.py                     # Schema tests
+├── test_server.py                     # Server tests
+├── test_server_patterns.py            # Embedded/server access patterns
+├── test_timeseries_sql.py             # Timeseries SQL coverage
+├── test_transaction_config.py         # Transaction config tests
+├── test_type_conversion.py            # Type conversion tests
+├── test_vector.py                     # Vector API tests
+├── test_vector_params_verification.py # Vector parameter validation tests
+├── test_vector_sql.py                 # Vector SQL tests
+└── test_wheel_platform_tag.py         # Wheel platform tag tests
 ```
 
 ## Next Steps
