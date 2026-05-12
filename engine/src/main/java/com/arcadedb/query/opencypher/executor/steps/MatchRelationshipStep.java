@@ -27,6 +27,7 @@ import com.arcadedb.graph.GraphTraversalProvider;
 import com.arcadedb.graph.GraphTraversalProviderRegistry;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.opencypher.ast.Direction;
+import com.arcadedb.query.opencypher.ast.Expression;
 import com.arcadedb.query.opencypher.ast.NodePattern;
 import com.arcadedb.query.opencypher.ast.RelationshipPattern;
 import com.arcadedb.query.opencypher.parser.CypherASTBuilder;
@@ -429,7 +430,7 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
 
             // Filter by target node properties if specified in the pattern
             if (targetNodePattern != null && targetNodePattern.hasProperties()) {
-              if (!matchesTargetProperties(targetVertex))
+              if (!matchesTargetProperties(targetVertex, lastResult))
                 continue;
             }
 
@@ -516,7 +517,7 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
 
             // Filter by target node properties if specified in the pattern
             if (targetNodePattern != null && targetNodePattern.hasProperties()) {
-              if (!matchesTargetProperties(targetVertex))
+              if (!matchesTargetProperties(targetVertex, lastResult))
                 continue;
             }
 
@@ -650,6 +651,10 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
    * has exactly one type, so if the current hop only matches type A and the existing edges in the
    * result are all type B, there is no uniqueness conflict. This allows hops with disjoint types
    * to use the fast path (and GAV/CSR) even when prior hops in the same pattern needed edge tracking.
+   * <p>
+   * Polymorphic: an existing edge of type {@code T} overlaps with the current hop's types
+   * {@code {T1, T2, ...}} when {@code T.instanceOf(Ti)} for any {@code Ti} (i.e., the current
+   * pattern can still produce that same edge through sub-type matching).
    */
   @SuppressWarnings("unchecked")
   private boolean resultContainsOverlappingEdges(final Result result) {
@@ -665,7 +670,7 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
         continue;
       final Object val = result.getProperty(prop);
       if (val instanceof Edge) {
-        if (currentTypes == null || currentTypes.contains(((Edge) val).getTypeName()))
+        if (currentTypes == null || edgeTypeMatchesAny((Edge) val, currentTypes))
           return true;
       }
       if (val instanceof TraversalPath)
@@ -673,11 +678,19 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
       if (val instanceof List) {
         for (final Object item : (List<Object>) val)
           if (item instanceof Edge) {
-            if (currentTypes == null || currentTypes.contains(((Edge) item).getTypeName()))
+            if (currentTypes == null || edgeTypeMatchesAny((Edge) item, currentTypes))
               return true;
           }
       }
     }
+    return false;
+  }
+
+  private static boolean edgeTypeMatchesAny(final Edge edge, final List<String> types) {
+    final var edgeType = edge.getType();
+    for (final String t : types)
+      if (edgeType.instanceOf(t))
+        return true;
     return false;
   }
 
@@ -870,16 +883,18 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
     return true;
   }
 
-  /**
-   * Checks if a target vertex matches the inline property constraints from the target node pattern.
-   */
-  private boolean matchesTargetProperties(final Vertex vertex) {
+  /** Checks if the target vertex satisfies the inline property map; Expression values are evaluated against currentResult. */
+  private boolean matchesTargetProperties(final Vertex vertex, final Result currentResult) {
     if (targetNodePattern == null || !targetNodePattern.hasProperties())
       return true;
 
     for (final Map.Entry<String, Object> entry : targetNodePattern.getProperties().entrySet()) {
       final Object actual = vertex.get(entry.getKey());
       Object expected = entry.getValue();
+
+      // Evaluate Expression-based property values (e.g., variable references from a prior WITH)
+      if (expected instanceof Expression && currentResult != null)
+        expected = ((Expression) expected).evaluate(currentResult, context);
 
       // Resolve parameter references (e.g., $param -> actual value from context)
       if (expected instanceof CypherASTBuilder.ParameterReference) {
@@ -949,14 +964,19 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
 
   /**
    * Checks if an edge matches the type filter.
+   * <p>
+   * Polymorphic: an edge of type {@code SUB} matches pattern {@code [:BASE]} when
+   * {@code SUB} extends {@code BASE} (mirrors the behavior of the native Java
+   * traversal API, which uses {@code getBucketIds(true)} for sub-type buckets,
+   * and of SQL {@code out('BASE')}).
    */
   private boolean matchesEdgeType(final Edge edge) {
     if (!pattern.hasTypes())
       return true;
 
-    final String edgeType = edge.getTypeName();
+    final var edgeType = edge.getType();
     for (final String type : pattern.getTypes())
-      if (type.equals(edgeType))
+      if (edgeType.instanceOf(type))
         return true;
     return false;
   }

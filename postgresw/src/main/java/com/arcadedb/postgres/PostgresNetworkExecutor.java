@@ -575,30 +575,42 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   /**
-   * Browse a result set and cache results up to the limit.
+   * Browse a result set and cache results up to the limit, then close the source ResultSet.
+   * <p>
+   * <b>Ownership:</b> this method takes ownership of the supplied ResultSet and closes it
+   * before returning, in both the natural-exhaustion and the limit-hit paths. The portal
+   * keeps only the materialized {@code List<Result>} (see {@code PostgresPortal#cachedResultSet}),
+   * never a reference to the underlying ResultSet. Multi-batch portal-suspension fetching
+   * from a partially-consumed ResultSet is therefore not supported by this implementation -
+   * a follow-up Execute on the same portal re-uses the cached list rather than pulling the
+   * next chunk from the source. This is unchanged behaviour from before the #4197 audit; the
+   * audit only made the close explicit, releasing the execution plan and unblocking parallel-scan
+   * worker threads that would otherwise stay parked on a full bounded queue.
    *
-   * @param resultSet           The result set to browse
+   * @param resultSet           The result set to browse (this method closes it)
    * @param limit               Maximum number of results to cache (0 = unlimited)
    * @param sendSuspendedOnLimit If true and limit is reached, sends PortalSuspended message.
    *                            Set to false for internal queries (like schema discovery) that
    *                            should not send protocol messages.
    */
   private List<Result> browseAndCacheResultSet(final ResultSet resultSet, final int limit, final boolean sendSuspendedOnLimit) {
-    final List<Result> cachedResultSet = new ArrayList<>();
-    while (resultSet.hasNext()) {
-      final Result row = resultSet.next();
-      if (row == null)
-        continue;
+    try (resultSet) {
+      final List<Result> cachedResultSet = new ArrayList<>();
+      while (resultSet.hasNext()) {
+        final Result row = resultSet.next();
+        if (row == null)
+          continue;
 
-      cachedResultSet.add(row);
+        cachedResultSet.add(row);
 
-      if (limit > 0 && cachedResultSet.size() >= limit) {
-        if (sendSuspendedOnLimit)
-          portalSuspendedResponse();
-        break;
+        if (limit > 0 && cachedResultSet.size() >= limit) {
+          if (sendSuspendedOnLimit)
+            portalSuspendedResponse();
+          break;
+        }
       }
+      return cachedResultSet;
     }
-    return cachedResultSet;
   }
 
   private Object[] getParams(PostgresPortal portal) {
@@ -747,19 +759,18 @@ public class PostgresNetworkExecutor extends Thread {
       final Set<String> propertyNames = row.getPropertyNames();
       for (final String p : propertyNames) {
         if (!columns.containsKey(p)) {
-          // Determine the PostgreSQL type based on the actual value
-          // For arrays/collections, use proper array type codes so JDBC drivers can parse them
-          // For scalar values, use VARCHAR since we serialize everything as text
+          // Determine the PostgreSQL type based on the actual value.
+          // Arrays/collections use proper array type codes so clients can parse them. Scalars
+          // default to VARCHAR for consistent text serialization, with one exception: Long values
+          // are advertised as INT8 so Postgres clients (psycopg, JDBC, ...) deserialize them as
+          // native integers. Without this, numeric scalars round-trip through clients as strings
+          // and a {@code WHERE id(n) IN $array} parameter loop silently mismatches Long vs. String.
           final Object value = row.getProperty(p);
           final PostgresType pgType = PostgresType.getTypeForValue(value);
-
-          // For array types, use the detected array type so clients can properly parse arrays
-          // For non-array types, use VARCHAR to ensure consistent text serialization
-          if (pgType.isArrayType()) {
+          if (pgType.isArrayType() || pgType == PostgresType.LONG)
             columns.put(p, pgType);
-          } else {
+          else
             columns.put(p, PostgresType.VARCHAR);
-          }
         }
       }
     }
@@ -1001,6 +1012,11 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   private void bindCommand() {
+    // Track read progress so a mid-message exception can drain the remaining Bind bytes
+    // and keep the channel aligned for the next message.
+    int totalParamValues = 0;
+    int paramsConsumed = 0;
+    boolean resultFormatSectionRead = false;
     try {
       // BIND
       final String portalName = readString();
@@ -1036,6 +1052,7 @@ public class PostgresNetworkExecutor extends Thread {
       }
 
       final int paramValuesCount = channel.readShort();
+      totalParamValues = paramValuesCount;
       if (DEBUG)
         LogManager.instance().log(this, Level.INFO, "PSQL: bind paramValuesCount=%d (thread=%s)",
             paramValuesCount, Thread.currentThread().threadId());
@@ -1074,6 +1091,7 @@ public class PostgresNetworkExecutor extends Thread {
             LogManager.instance().log(this, Level.INFO, "PSQL: bind deserializing param %d typeCode=%d formatCode=%d (thread=%s)",
                 i, typeCode, formatCode, Thread.currentThread().threadId());
           portal.parameterValues.add(PostgresType.deserialize(typeCode, formatCode, paramValue));
+          paramsConsumed = i + 1;
           if (DEBUG)
             LogManager.instance().log(this, Level.INFO, "PSQL: bind param %d deserialized (thread=%s)", i, Thread.currentThread().threadId());
         }
@@ -1092,6 +1110,7 @@ public class PostgresNetworkExecutor extends Thread {
           LogManager.instance().log(this, Level.INFO, "PSQL: bind resultFormats=%s (0=text, 1=binary) (thread=%s)",
               portal.resultFormats, Thread.currentThread().threadId());
       }
+      resultFormatSectionRead = true;
 
       if (errorInTransaction)
         return;
@@ -1109,6 +1128,23 @@ public class PostgresNetworkExecutor extends Thread {
       writeMessage("bind complete", null, '2', 4);
 
     } catch (final Exception e) {
+      // Best-effort drain of the remaining Bind message so the channel stays aligned
+      // for the next message in the pipelined client request (Describe, Execute, Sync).
+      try {
+        for (int i = paramsConsumed; i < totalParamValues; i++) {
+          final long sz = channel.readUnsignedInt();
+          if (sz > 0)
+            channel.readBytes(new byte[(int) sz]);
+        }
+        if (!resultFormatSectionRead) {
+          final int resultFormatCount = channel.readShort();
+          for (int i = 0; i < resultFormatCount; i++)
+            channel.readUnsignedShort();
+        }
+      } catch (final Exception ignored) {
+        // If even the drain fails the channel is unrecoverable; the error response below
+        // still goes out and the client will see the failure.
+      }
       setErrorInTx();
       writeError(ERROR_SEVERITY.ERROR, "Error on parsing bind message: " + e.getMessage(), "XX000");
     }
