@@ -93,6 +93,53 @@ prune_windows_jre_artifacts() {
     echo -e "${CYAN}📋 Removed Windows JRE artifacts: ${YELLOW}${removed_count}${NC}"
 }
 
+copy_tree_with_symlinks() {
+    local src_dir="$1"
+    local dest_dir="$2"
+    local python_bin="$3"
+
+    "$python_bin" - "$src_dir" "$dest_dir" << 'PY'
+import shutil
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+dest = Path(sys.argv[2])
+
+if dest.exists():
+    shutil.rmtree(dest)
+
+shutil.copytree(src, dest, symlinks=True)
+PY
+}
+
+print_windows_jre_diagnostics() {
+    local jre_dir="$1"
+    local python_bin="$2"
+    local label="$3"
+
+    echo -e "${CYAN}🔎 Windows JRE diagnostics (${label})...${NC}"
+
+    "$python_bin" - "$jre_dir" << 'PY'
+import os
+import sys
+from pathlib import Path
+
+jre_dir = Path(sys.argv[1])
+files = [path for path in jre_dir.rglob('*') if path.is_file()]
+symlinks = [path for path in jre_dir.rglob('*') if path.is_symlink()]
+
+print(f"   Files: {len(files)}")
+print(f"   Symlinks: {len(symlinks)}")
+
+largest = sorted(files, key=lambda path: path.stat().st_size, reverse=True)[:15]
+for path in largest:
+    size_mb = path.stat().st_size / 1024 / 1024
+    rel_path = path.relative_to(jre_dir)
+    print(f"   {size_mb:8.1f} MB  {rel_path}")
+PY
+}
+
 # Check for Java (needed for jlink and JPype build)
 if ! command -v java &> /dev/null; then
     echo -e "${RED}❌ Java not found${NC}"
@@ -245,6 +292,7 @@ if [[ "$PLATFORM" == windows/* ]]; then
     prune_windows_jre_artifacts "$PY_BINDINGS_DIR/temp_jre"
     JRE_SIZE=$(du -sh "$PY_BINDINGS_DIR/temp_jre" | cut -f1)
     echo -e "${CYAN}📊 JRE size after Windows cleanup: ${YELLOW}${JRE_SIZE}${NC}"
+    print_windows_jre_diagnostics "$PY_BINDINGS_DIR/temp_jre" "$PYTHON_WITH_BUILD" "temp_jre"
 fi
 
 # Step 3: Copy JRE to package (JARs already filtered in place)
@@ -253,7 +301,11 @@ echo -e "${CYAN}📦 Preparing package...${NC}"
 # Build and copy JRE
 rm -rf "$PY_BINDINGS_DIR/src/arcadedb_embedded/jre"
 mkdir -p "$PY_BINDINGS_DIR/src/arcadedb_embedded/jre"
-cp -R "$PY_BINDINGS_DIR/temp_jre"/* "$PY_BINDINGS_DIR/src/arcadedb_embedded/jre/"
+copy_tree_with_symlinks "$PY_BINDINGS_DIR/temp_jre" "$PY_BINDINGS_DIR/src/arcadedb_embedded/jre" "$PYTHON_WITH_BUILD"
+
+if [[ "$PLATFORM" == windows/* ]]; then
+    print_windows_jre_diagnostics "$PY_BINDINGS_DIR/src/arcadedb_embedded/jre" "$PYTHON_WITH_BUILD" "staged package jre"
+fi
 
 JAR_COUNT=$(ls -1 "$JARS_DIR"/*.jar | wc -l)
 echo -e "${GREEN}✅ Package prepared (${JAR_COUNT} JARs + JRE)${NC}"
