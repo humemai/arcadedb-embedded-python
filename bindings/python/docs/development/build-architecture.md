@@ -179,7 +179,7 @@ arcadedb-ha-raft-*.jar
 
 1. `.github/workflows/test-python-bindings.yml` (download-jars job)
 2. `bindings/python/scripts/Dockerfile.build` (Docker builds)
-3. `bindings/python/scripts/setup_jars.py` (documentation/validation)
+3. `bindings/python/scripts/build-native.sh` (native builds)
 
 **Result:** The wheel excludes optional Java components that are not part of the default Python distribution.
 
@@ -189,7 +189,6 @@ arcadedb-ha-raft-*.jar
 
 - `scripts/build-native.sh`: Filtered with bash on macOS
 - `scripts/Dockerfile.build`: Filtered with bash on Linux
-- `scripts/setup_jars.py`: Filtered with Python glob
 - **Problem:** Glob patterns varied across shells, causing duplication and inconsistency
 
 **After (Fixed):** Single upstream filter
@@ -264,7 +263,9 @@ else
   download_jars_from_docker
 fi
 
-# 2. Create platform-specific JRE via jlink
+# 2. Apply jar_exclusions.txt (CRLF-safe on Windows)
+
+# 3. Create platform-specific JRE via jlink
 jlink --output jre \
   --add-modules "$MODULES" \
   --strip-debug \
@@ -272,14 +273,17 @@ jlink --output jre \
   --no-header-files \
   --compress zip-6
 
-# 3. Copy JARs and JRE to package
-python scripts/setup_jars.py
+# 4. Remove Windows-only non-runtime artifacts when needed
 
-# 4. Build wheel
+# 5. Stage JRE into src/arcadedb_embedded/jre
+
+# 6. Build wheel
 python -m build --wheel
 ```
 
-**Simplification:** Removed ~30 lines of JAR filtering logic (now uses pre-filtered artifact)
+**Current behavior:** Native builds prefer the pre-filtered JAR artifact from CI, but still
+re-apply `jar_exclusions.txt` locally so fallback Docker downloads and Windows checkouts remain
+consistent.
 
 ## GitHub ARM64 Runners (linux/arm64)
 
