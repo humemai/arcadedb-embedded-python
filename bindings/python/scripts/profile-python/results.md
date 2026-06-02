@@ -8,8 +8,10 @@ This directory keeps one current benchmark artifact and one short summary.
 
 Run used to produce it:
 
+from `bindings/python`:
+
 ```bash
-cd /mnt/ssd2/repos/arcadedb-embedded-python/bindings/python && /mnt/ssd2/repos/arcadedb-embedded-python/.venv/bin/python scripts/profile-python/profile_bindings.py --preset full --runs 3 --records 5000 --person-count 2000 --vector-records 1500 --vector-k 10 --query-runs 100 --heap-size 4g
+python scripts/profile-python/profile_bindings.py --preset full --runs 3 --records 5000 --person-count 2000 --vector-records 1500 --vector-k 10 --query-runs 100 --heap-size 4g
 ```
 
 ## Current Numbers

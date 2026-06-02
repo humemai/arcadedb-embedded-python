@@ -31,7 +31,7 @@ Required fixes are done. Any further work is optional tuning.
 From `bindings/python`:
 
 ```bash
-/mnt/ssd2/repos/arcadedb-embedded-python/.venv/bin/python scripts/profile-python/profile_bindings.py --preset full --runs 3 --records 5000 --person-count 2000 --vector-records 1500 --vector-k 10 --query-runs 100 --heap-size 4g
+python scripts/profile-python/profile_bindings.py --preset full --runs 3 --records 5000 --person-count 2000 --vector-records 1500 --vector-k 10 --query-runs 100 --heap-size 4g
 ```
 
 ## Read The Report

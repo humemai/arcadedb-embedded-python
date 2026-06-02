@@ -254,7 +254,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--docs",
-        default="/mnt/ssd2/repos/arcadedb-embedded-python/bindings/python/docs",
+        default="./docs",
         help="Path to docs directory",
     )
     args = parser.parse_args()
