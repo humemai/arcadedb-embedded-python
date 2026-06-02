@@ -178,7 +178,7 @@ COPY bindings/python/pyproject.toml ./
 COPY bindings/python/README.md ./
 
 # Also copy repository pom.xml so scripts/extract_version.py can read it
-COPY ../../pom.xml /arcadedb/pom.xml
+COPY pom.xml /arcadedb/pom.xml
 
 # Install Python build dependencies
 RUN uv pip install --system build wheel setuptools jpype1
