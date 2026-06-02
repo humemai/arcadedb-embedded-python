@@ -19,8 +19,13 @@
 package com.arcadedb.server.ha.raft;
 
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -160,7 +165,7 @@ class RaftLogEntryCodecTest {
     }
     builder.append("}}");
     final String largeSchemaJson = builder.toString();
-    assertThat(largeSchemaJson.getBytes(java.nio.charset.StandardCharsets.UTF_8).length).isGreaterThan(65535);
+    assertThat(largeSchemaJson.getBytes(StandardCharsets.UTF_8).length).isGreaterThan(65535);
 
     final ByteString encoded = RaftLogEntryCodec.encodeSchemaEntry("testdb", largeSchemaJson, Map.of(), Map.of());
     final RaftLogEntryCodec.DecodedEntry decoded = RaftLogEntryCodec.decode(encoded);
@@ -205,7 +210,7 @@ class RaftLogEntryCodecTest {
   @Test
   void roundTripSchemaEntryWithEmbeddedWalCompresses() {
     final byte[] fakeWal = new byte[2048];
-    java.util.Arrays.fill(fakeWal, (byte) 42);
+    Arrays.fill(fakeWal, (byte) 42);
     final Map<Integer, Integer> fakeDelta = Map.of(1, 5);
 
     final ByteString encoded = RaftLogEntryCodec.encodeSchemaEntry("testdb",
@@ -261,8 +266,8 @@ class RaftLogEntryCodecTest {
   void decodeLegacyInstallDatabaseEntryWithoutFlag() throws Exception {
     // Hand-crafted byte layout matching the pre-forceSnapshot codec:
     // type byte + UTF(databaseName), no trailing boolean.
-    final java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-    try (final java.io.DataOutputStream dos = new java.io.DataOutputStream(baos)) {
+    final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    try (final DataOutputStream dos = new DataOutputStream(baos)) {
       dos.writeByte(RaftLogEntryType.INSTALL_DATABASE_ENTRY.getId());
       dos.writeUTF("legacydb");
     }
@@ -313,8 +318,8 @@ class RaftLogEntryCodecTest {
   @Test
   void decodeUnknownTypeReturnsNullTypeEntry() throws Exception {
     // Build an entry with an unknown type byte (99)
-    final java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-    try (final java.io.DataOutputStream dos = new java.io.DataOutputStream(baos)) {
+    final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    try (final DataOutputStream dos = new DataOutputStream(baos)) {
       dos.writeByte(99);
     }
     final ByteString unknown = ByteString.copyFrom(baos.toByteArray());
@@ -334,7 +339,7 @@ class RaftLogEntryCodecTest {
 
     final ByteString corruptedBS = ByteString.copyFrom(corrupted);
 
-    org.assertj.core.api.Assertions.assertThatThrownBy(() -> RaftLogEntryCodec.decode(corruptedBS))
+    Assertions.assertThatThrownBy(() -> RaftLogEntryCodec.decode(corruptedBS))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("trailing");
   }
@@ -349,7 +354,7 @@ class RaftLogEntryCodecTest {
 
     final ByteString corruptedBS = ByteString.copyFrom(corrupted);
 
-    org.assertj.core.api.Assertions.assertThatThrownBy(() -> RaftLogEntryCodec.decode(corruptedBS))
+    Assertions.assertThatThrownBy(() -> RaftLogEntryCodec.decode(corruptedBS))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("trailing");
   }
@@ -377,12 +382,12 @@ class RaftLogEntryCodecTest {
 
   @Test
   void bootstrapFingerprintEntryRejectsNullArguments() {
-    org.assertj.core.api.Assertions.assertThatThrownBy(
+    Assertions.assertThatThrownBy(
             () -> RaftLogEntryCodec.encodeBootstrapFingerprintEntry(null, "fp", 1L))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("databaseName");
 
-    org.assertj.core.api.Assertions.assertThatThrownBy(
+    Assertions.assertThatThrownBy(
             () -> RaftLogEntryCodec.encodeBootstrapFingerprintEntry("db", null, 1L))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("fingerprint");
@@ -399,8 +404,83 @@ class RaftLogEntryCodecTest {
 
     final ByteString corruptedBS = ByteString.copyFrom(corrupted);
 
-    org.assertj.core.api.Assertions.assertThatThrownBy(() -> RaftLogEntryCodec.decode(corruptedBS))
+    Assertions.assertThatThrownBy(() -> RaftLogEntryCodec.decode(corruptedBS))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("trailing");
+  }
+
+  // --- TimeSeries sealed-store blob section (issue #4382) ---
+
+  @Test
+  void roundTripSchemaEntryWithSealedBlobs() {
+    final byte[] sealed0 = new byte[1024];
+    for (int i = 0; i < sealed0.length; i++)
+      sealed0[i] = (byte) (i % 7);
+    final byte[] sealed1 = "TSIX-fake-sealed-store-content".getBytes(StandardCharsets.UTF_8);
+
+    final List<RaftLogEntryCodec.TsSealedBlob> blobs = List.of(
+        new RaftLogEntryCodec.TsSealedBlob("weather", 0, "weather_shard_0.ts.sealed", sealed0),
+        new RaftLogEntryCodec.TsSealedBlob("weather", 1, "weather_shard_1.ts.sealed", sealed1));
+
+    final ByteString encoded = RaftLogEntryCodec.encodeSchemaEntry("testdb", "{\"types\":{}}",
+        Map.of(), Map.of(), List.of(), List.of(), blobs);
+    final RaftLogEntryCodec.DecodedEntry decoded = RaftLogEntryCodec.decode(encoded);
+
+    assertThat(decoded.type()).isEqualTo(RaftLogEntryType.SCHEMA_ENTRY);
+    assertThat(decoded.sealedFileBlobs()).hasSize(2);
+    assertThat(decoded.sealedFileBlobs().get(0).typeName()).isEqualTo("weather");
+    assertThat(decoded.sealedFileBlobs().get(0).shardIndex()).isEqualTo(0);
+    assertThat(decoded.sealedFileBlobs().get(0).fileName()).isEqualTo("weather_shard_0.ts.sealed");
+    assertThat(decoded.sealedFileBlobs().get(0).bytes()).isEqualTo(sealed0);
+    assertThat(decoded.sealedFileBlobs().get(1).shardIndex()).isEqualTo(1);
+    assertThat(decoded.sealedFileBlobs().get(1).bytes()).isEqualTo(sealed1);
+  }
+
+  @Test
+  void schemaEntryWithoutSealedBlobsHasEmptyList() {
+    // Entries produced by the pre-#4382 codec (no blob section) must decode with an empty list.
+    final ByteString encoded = RaftLogEntryCodec.encodeSchemaEntry("testdb", "{}", Map.of(), Map.of());
+    final RaftLogEntryCodec.DecodedEntry decoded = RaftLogEntryCodec.decode(encoded);
+
+    assertThat(decoded.sealedFileBlobs()).isEmpty();
+  }
+
+  @Test
+  void schemaEntryWithEmbeddedWalAndSealedBlobsRoundtrip() {
+    final byte[] clearWal = new byte[] { 9, 8, 7, 6 };
+    final Map<Integer, Integer> delta = Map.of(2, -1);
+    final byte[] sealed = new byte[512];
+    Arrays.fill(sealed, (byte) 3);
+
+    final ByteString encoded = RaftLogEntryCodec.encodeSchemaEntry("testdb", "{\"schemaVersion\":2}",
+        Map.of(), Map.of(), List.of(clearWal), List.of(delta),
+        List.of(new RaftLogEntryCodec.TsSealedBlob("metrics", 0, "metrics_shard_0.ts.sealed", sealed)));
+    final RaftLogEntryCodec.DecodedEntry decoded = RaftLogEntryCodec.decode(encoded);
+
+    assertThat(decoded.walEntries()).hasSize(1);
+    assertThat(decoded.walEntries().get(0)).isEqualTo(clearWal);
+    assertThat(decoded.bucketDeltas().get(0)).isEqualTo(delta);
+    assertThat(decoded.sealedFileBlobs()).hasSize(1);
+    assertThat(decoded.sealedFileBlobs().get(0).bytes()).isEqualTo(sealed);
+  }
+
+  @Test
+  void corruptedSealedBlobFailsCrc() {
+    final byte[] sealed = new byte[256];
+    for (int i = 0; i < sealed.length; i++)
+      sealed[i] = (byte) i;
+
+    final ByteString encoded = RaftLogEntryCodec.encodeSchemaEntry("testdb", "{}",
+        Map.of(), Map.of(), List.of(), List.of(),
+        List.of(new RaftLogEntryCodec.TsSealedBlob("weather", 0, "weather_shard_0.ts.sealed", sealed)));
+
+    // Flip a byte inside the trailing compressed blob payload to corrupt it.
+    final byte[] corrupted = new byte[encoded.size()];
+    encoded.copyTo(corrupted, 0);
+    corrupted[corrupted.length - 1] ^= 0xFF;
+
+    Assertions.assertThatThrownBy(
+            () -> RaftLogEntryCodec.decode(ByteString.copyFrom(corrupted)))
+        .isInstanceOf(IllegalStateException.class);
   }
 }

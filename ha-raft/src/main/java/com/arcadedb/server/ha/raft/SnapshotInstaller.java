@@ -27,16 +27,20 @@ import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.KeyStore;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -107,6 +111,19 @@ public final class SnapshotInstaller {
   public static void install(final String databaseName, final String databasePath,
       final String leaderHttpAddr, final String clusterToken,
       final ArcadeDBServer server) throws IOException {
+    install(databaseName, databasePath, () -> leaderHttpAddr, clusterToken, server);
+  }
+
+  /**
+   * Overload that resolves the leader HTTP address on each retry attempt. Use this when the
+   * leader may not be known yet at the moment install is invoked (e.g. during bootstrap-mismatch
+   * recovery on startup, before Ratis has finished electing a leader). When the supplier returns
+   * null on a given attempt, that attempt is treated as a failure and the next retry will resolve
+   * again, giving leader election time to complete.
+   */
+  public static void install(final String databaseName, final String databasePath,
+      final Supplier<String> leaderHttpAddrSupplier, final String clusterToken,
+      final ArcadeDBServer server) throws IOException {
 
     final Path dbPath = Path.of(databasePath).normalize().toAbsolutePath();
     final Path snapshotNew = dbPath.resolve(SNAPSHOT_NEW_DIR);
@@ -126,7 +143,7 @@ public final class SnapshotInstaller {
     final int maxRetries = server.getConfiguration().getValueAsInteger(GlobalConfiguration.HA_SNAPSHOT_INSTALL_RETRIES);
     final long retryBaseMs = server.getConfiguration().getValueAsLong(GlobalConfiguration.HA_SNAPSHOT_INSTALL_RETRY_BASE_MS);
 
-    downloadWithRetry(databaseName, snapshotNew, leaderHttpAddr, clusterToken, maxRetries, retryBaseMs, server);
+    downloadWithRetry(databaseName, snapshotNew, leaderHttpAddrSupplier, clusterToken, maxRetries, retryBaseMs, server);
 
     // Mark download as complete
     Files.writeString(snapshotNew.resolve(SNAPSHOT_COMPLETE_FILE), "");
@@ -238,16 +255,15 @@ public final class SnapshotInstaller {
   static void downloadWithRetry(final String databaseName, final Path snapshotNewDir,
       final String leaderHttpAddr, final String clusterToken,
       final int maxRetries, final long retryBaseMs) throws IOException {
-    downloadWithRetry(databaseName, snapshotNewDir, leaderHttpAddr, clusterToken, maxRetries, retryBaseMs, null);
+    downloadWithRetry(databaseName, snapshotNewDir, () -> leaderHttpAddr, clusterToken, maxRetries, retryBaseMs, null);
   }
 
   static void downloadWithRetry(final String databaseName, final Path snapshotNewDir,
-      final String leaderHttpAddr, final String clusterToken,
+      final Supplier<String> leaderHttpAddrSupplier, final String clusterToken,
       final int maxRetries, final long retryBaseMs, final ArcadeDBServer server) throws IOException {
 
     final boolean useSSL = server != null && server.getConfiguration().getValueAsBoolean(GlobalConfiguration.NETWORK_USE_SSL);
     final String scheme = useSSL ? "https://" : "http://";
-    final String snapshotUrl = scheme + leaderHttpAddr + "/api/v1/ha/snapshot/" + databaseName;
     IOException lastException = null;
 
     for (int attempt = 0; attempt <= maxRetries; attempt++) {
@@ -267,6 +283,18 @@ public final class SnapshotInstaller {
         }
       }
 
+      // Resolve the leader address on every attempt: during bootstrap-mismatch recovery the
+      // first attempt typically races Ratis leader election and observes a null address.
+      final String leaderHttpAddr = leaderHttpAddrSupplier.get();
+      if (leaderHttpAddr == null) {
+        lastException = new IOException("Leader HTTP address not yet known (Raft election in progress)");
+        LogManager.instance().log(SnapshotInstaller.class, Level.WARNING,
+            "Snapshot download attempt %d/%d failed for '%s': %s",
+            null, attempt + 1, maxRetries + 1, databaseName, lastException.getMessage());
+        continue;
+      }
+
+      final String snapshotUrl = scheme + leaderHttpAddr + "/api/v1/ha/snapshot/" + databaseName;
       try {
         downloadSnapshot(snapshotNewDir, snapshotUrl, clusterToken, useSSL, server);
         return; // Success
@@ -290,7 +318,7 @@ public final class SnapshotInstaller {
     final HttpURLConnection connection;
     try {
       connection = (HttpURLConnection) new URI(snapshotUrl).toURL().openConnection();
-    } catch (final java.net.URISyntaxException e) {
+    } catch (final URISyntaxException e) {
       throw new IOException("Invalid snapshot URL: " + snapshotUrl, e);
     }
 
@@ -341,7 +369,7 @@ public final class SnapshotInstaller {
             throw new ReplicationException("Symlink detected at extraction target: " + targetFile);
 
           final long compressedStart = rawCounter.getCount();
-          try (final java.io.FileOutputStream fos = new java.io.FileOutputStream(targetFile.toFile())) {
+          try (final FileOutputStream fos = new FileOutputStream(targetFile.toFile())) {
             final long uncompressedBytes = copyWithLimit(zipIn, fos, MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES, zipEntry.getName());
 
             // Decompression-bomb defense: check ratio for entries large enough to matter.
@@ -412,7 +440,7 @@ public final class SnapshotInstaller {
    * and therefore under-estimates the ratio, which is the safe direction for the check.
    * Package-private for unit testing.
    */
-  static final class CountingInputStream extends java.io.FilterInputStream {
+  static final class CountingInputStream extends FilterInputStream {
     private long count;
 
     CountingInputStream(final InputStream in) {
@@ -482,7 +510,7 @@ public final class SnapshotInstaller {
       try (final DirectoryStream<Path> stream = Files.newDirectoryStream(newDir)) {
         for (final Path entry : stream) {
           final String name = entry.getFileName().toString();
-          if (name.equals(SNAPSHOT_COMPLETE_FILE))
+          if (SNAPSHOT_COMPLETE_FILE.equals(name))
             continue;
           Files.move(entry, dbDir.resolve(name), StandardCopyOption.REPLACE_EXISTING);
         }

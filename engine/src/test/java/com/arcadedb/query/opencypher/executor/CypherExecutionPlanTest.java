@@ -20,7 +20,6 @@ package com.arcadedb.query.opencypher.executor;
 
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseFactory;
-import com.arcadedb.query.sql.executor.ExecutionPlan;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
 import org.junit.jupiter.api.AfterEach;
@@ -273,6 +272,66 @@ class CypherExecutionPlanTest {
     assertThat(results.size()).isGreaterThanOrEqualTo(2);
   }
 
+  /**
+   * Regression test for issue #4366: EXPLAIN must not trigger the idempotency check
+   * because the underlying query is never executed. Without the fix, this throws
+   * {@code QueryNotIdempotentException}.
+   */
+  @Test
+  void shouldExplainNonIdempotentMultiStatementQuery() {
+    final long beforeCount = database.countType("Person", false);
+
+    final ResultSet resultSet = database.query("opencypher", """
+        EXPLAIN MERGE (a:Person {name: $src}) \
+        MERGE (b:Person {name: $dest}) \
+        CREATE (a)-[:KNOWS {since: $year}]->(b)""",
+        Map.of("src", "Alice", "dest", "Eve", "year", 2024));
+
+    assertThat((Object) resultSet).isNotNull();
+    assertThat(resultSet.hasNext()).isTrue();
+
+    // EXPLAIN must not modify the database
+    assertThat(database.countType("Person", false)).isEqualTo(beforeCount);
+  }
+
+  /**
+   * Regression test for issue #4366: PROFILE must work on non-idempotent queries
+   * when invoked through command(). Matches SQL parity where ProfileStatement
+   * is treated as idempotent at the wrapper level.
+   */
+  @Test
+  void shouldProfileNonIdempotentMultiStatementQueryViaCommand() {
+    database.transaction(() -> {
+      final ResultSet resultSet = database.command("opencypher", """
+          PROFILE MERGE (a:Person {name: $src}) \
+          MERGE (b:Person {name: $dest}) \
+          CREATE (a)-[:KNOWS {since: $year}]->(b)""",
+          Map.of("src", "Alice", "dest", "Frank", "year", 2024));
+
+      assertThat((Object) resultSet).isNotNull();
+      final var results = resultSet.stream().toList();
+      assertThat(results.size()).isGreaterThanOrEqualTo(1);
+    });
+  }
+
+  /**
+   * Regression test for issue #4366: EXPLAIN of a CREATE (non-idempotent) via the
+   * read-only query() path must not throw {@code QueryNotIdempotentException}.
+   */
+  @Test
+  void shouldExplainCreateQueryWithoutIdempotencyError() {
+    final long beforeCount = database.countType("Person", false);
+
+    final ResultSet resultSet = database.query("opencypher",
+        "EXPLAIN CREATE (p:Person {name: 'NewPerson'})");
+
+    assertThat((Object) resultSet).isNotNull();
+    assertThat(resultSet.hasNext()).isTrue();
+
+    // EXPLAIN must not modify the database
+    assertThat(database.countType("Person", false)).isEqualTo(beforeCount);
+  }
+
   @Test
   void shouldHandleEmptyResult() {
     final ResultSet resultSet = database.query("opencypher",
@@ -283,10 +342,9 @@ class CypherExecutionPlanTest {
 
   @Test
   void shouldExecuteCreateQuery() {
-    database.transaction(() -> {
+    database.transaction(() ->
       database.command("opencypher",
-          "CREATE (p:Person {name: 'Dave', age: 40})");
-    });
+          "CREATE (p:Person {name: 'Dave', age: 40})"));
 
     final ResultSet resultSet = database.query("opencypher",
         "MATCH (p:Person) WHERE p.name = 'Dave' RETURN p.age AS age");
@@ -299,10 +357,9 @@ class CypherExecutionPlanTest {
 
   @Test
   void shouldExecuteUpdateQuery() {
-    database.transaction(() -> {
+    database.transaction(() ->
       database.command("opencypher",
-          "MATCH (p:Person) WHERE p.name = 'Alice' SET p.age = 31");
-    });
+          "MATCH (p:Person) WHERE p.name = 'Alice' SET p.age = 31"));
 
     final ResultSet resultSet = database.query("opencypher",
         "MATCH (p:Person) WHERE p.name = 'Alice' RETURN p.age AS age");
@@ -315,10 +372,9 @@ class CypherExecutionPlanTest {
 
   @Test
   void shouldExecuteDeleteQuery() {
-    database.transaction(() -> {
+    database.transaction(() ->
       database.command("opencypher",
-          "MATCH (p:Person) WHERE p.name = 'Bob' DETACH DELETE p");
-    });
+          "MATCH (p:Person) WHERE p.name = 'Bob' DETACH DELETE p"));
 
     final ResultSet resultSet = database.query("opencypher",
         "MATCH (p:Person) RETURN count(p) AS total");
@@ -331,10 +387,9 @@ class CypherExecutionPlanTest {
 
   @Test
   void shouldExecuteMergeQuery() {
-    database.transaction(() -> {
+    database.transaction(() ->
       database.command("opencypher",
-          "MERGE (p:Person {name: 'Eve'}) ON CREATE SET p.age = 28");
-    });
+          "MERGE (p:Person {name: 'Eve'}) ON CREATE SET p.age = 28"));
 
     final ResultSet resultSet = database.query("opencypher",
         "MATCH (p:Person) WHERE p.name = 'Eve' RETURN p.age AS age");
@@ -347,10 +402,9 @@ class CypherExecutionPlanTest {
 
   @Test
   void shouldExecuteRemoveQuery() {
-    database.transaction(() -> {
+    database.transaction(() ->
       database.command("opencypher",
-          "MATCH (p:Person) WHERE p.name = 'Alice' REMOVE p.city");
-    });
+          "MATCH (p:Person) WHERE p.name = 'Alice' REMOVE p.city"));
 
     final ResultSet resultSet = database.query("opencypher",
         "MATCH (p:Person) WHERE p.name = 'Alice' RETURN p.city AS city");

@@ -21,7 +21,6 @@
 package com.arcadedb.query.sql.parser;
 
 import com.arcadedb.database.Identifiable;
-import com.arcadedb.query.sql.executor.BasicCommandContext;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.IndexSearchInfo;
 import com.arcadedb.query.sql.executor.MultiValue;
@@ -30,9 +29,12 @@ import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.utility.CodeUtils;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.stream.*;
+import java.util.stream.Collectors;
 
 public class InCondition extends BooleanExpression {
   public Expression            left;
@@ -134,10 +136,24 @@ public class InCondition extends BooleanExpression {
 
   protected static Object executeQuery(final SelectStatement rightStatement, final CommandContext context) {
     final ResultSet result = rightStatement.execute(context.getDatabase(), context.getInputParameters());
-    return result.stream().collect(Collectors.toSet());
+    return result.stream()
+        .map(r -> {
+          if (!r.isElement()) {
+            final Set<String> names = r.getPropertyNames();
+            if (names.size() == 1)
+              return r.getProperty(names.iterator().next());
+          }
+          return (Object) r;
+        })
+        .collect(Collectors.toSet());
   }
 
-  protected static boolean evaluateExpression(final Object iLeft, final Object iRight) {
+  protected static boolean evaluateExpression(Object iLeft, final Object iRight) {
+    if (iLeft instanceof Result r && !r.isElement()) {
+      final Set<String> names = r.getPropertyNames();
+      if (names.size() == 1)
+        iLeft = r.getProperty(names.iterator().next());
+    }
     if (MultiValue.isMultiValue(iRight)) {
       if (iRight instanceof Set<?> set)
         return set.contains(iLeft);

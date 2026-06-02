@@ -1754,6 +1754,21 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
   }
 
   /**
+   * FROM target given as a function call, e.g. {@code SELECT FROM cypherRID(:id)}. The function is evaluated at execution time and its result (a record, RID, or
+   * collection of them) is used as the source.
+   */
+  @Override
+  public FromItem visitFromFunctionCall(final SQLParser.FromFunctionCallContext ctx) {
+    final FromItem fromItem = new FromItem(-1);
+    fromItem.functionCall = (FunctionCall) visit(ctx.functionCall());
+
+    if (ctx.identifier() != null)
+      fromItem.alias = (Identifier) visit(ctx.identifier());
+
+    return fromItem;
+  }
+
+  /**
    * WHERE clause visitor.
    * Maps to WhereClause which contains a BooleanExpression.
    */
@@ -3464,13 +3479,13 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
   private static boolean isRecordAttributeName(final String name) {
     if (name == null)
       return false;
-    return name.equalsIgnoreCase(Property.RID_PROPERTY) ||
-        name.equalsIgnoreCase(Property.TYPE_PROPERTY) ||
-        name.equalsIgnoreCase(Property.IN_PROPERTY) ||
-        name.equalsIgnoreCase(Property.OUT_PROPERTY) ||
-        name.equalsIgnoreCase(Property.CAT_PROPERTY) ||
-        name.equalsIgnoreCase(Property.PROPERTY_TYPES_PROPERTY) ||
-        name.equalsIgnoreCase(Property.THIS_PROPERTY);
+    return Property.RID_PROPERTY.equalsIgnoreCase(name) ||
+        Property.TYPE_PROPERTY.equalsIgnoreCase(name) ||
+        Property.IN_PROPERTY.equalsIgnoreCase(name) ||
+        Property.OUT_PROPERTY.equalsIgnoreCase(name) ||
+        Property.CAT_PROPERTY.equalsIgnoreCase(name) ||
+        Property.PROPERTY_TYPES_PROPERTY.equalsIgnoreCase(name) ||
+        Property.THIS_PROPERTY.equalsIgnoreCase(name);
   }
 
   /**
@@ -4292,14 +4307,14 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     // where expression → MathExprContext → mathExpression (BaseContext) → baseExpression (ParenthesizedExprContext)
     // → statement
     Statement statementFromExpr = null;
-    if (ctx.expression() != null && ctx.expression() instanceof final SQLParser.MathExprContext mathExprCtx) {
+    if (ctx.expression() instanceof final SQLParser.MathExprContext mathExprCtx) {
       // Navigate the parse tree to find if this is a parenthesizedExpr with a statement
       final SQLParser.MathExpressionContext mathCtx = mathExprCtx.mathExpression();
 
-      if (mathCtx != null && mathCtx instanceof final SQLParser.BaseContext baseCtx) {
+      if (mathCtx instanceof final SQLParser.BaseContext baseCtx) {
         final SQLParser.BaseExpressionContext baseExprCtx = baseCtx.baseExpression();
 
-        if (baseExprCtx != null && baseExprCtx instanceof final SQLParser.ParenthesizedStmtContext parenCtx) {
+        if (baseExprCtx instanceof final SQLParser.ParenthesizedStmtContext parenCtx) {
           if (parenCtx.statement() != null && CollectionUtils.isEmpty(parenCtx.modifier())) {
             // Found a statement inside parentheses with no trailing modifiers - visit it directly
             statementFromExpr = (Statement) visit(parenCtx.statement());
@@ -4715,11 +4730,10 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     return stmt;
   }
 
-  // TODO: Complete MOVE VERTEX visitor implementation - temporarily disabled
-  // /**
-  //  * Visit MOVE VERTEX statement.
-  //  * Supports: MOVE VERTEX expr TO type:TypeName or TO TypeName or TO bucket:name
-  //  */
+  /**
+   * Visit MOVE VERTEX statement.
+   * Supports: MOVE VERTEX expr TO type:TypeName | TO bucket:name | TO bucket:id [SET|REMOVE|MERGE|CONTENT ...] [BATCH n]
+   */
   @Override
   public MoveVertexStatement visitMoveVertexStmt(final SQLParser.MoveVertexStmtContext ctx) {
     final MoveVertexStatement stmt = new MoveVertexStatement(-1);
@@ -4736,10 +4750,13 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       // Parenthesized SELECT statement wrapped in SubqueryExpression
       fromItem.statement = ((SubqueryExpression) sourceObj).getStatement();
     } else if (sourceObj instanceof final Expression expr) {
-      // Expression that contains a subquery - try to extract the SelectStatement
+      // Expression that contains a subquery, a RID literal or another simple form
 
-      // Check if the mathExpression is a SubqueryExpression
-      if (expr.mathExpression instanceof SubqueryExpression) {
+      if (expr.rid != null) {
+        // MOVE VERTEX #X:Y TO ...
+        fromItem.rids = new ArrayList<>();
+        fromItem.rids.add(expr.rid);
+      } else if (expr.mathExpression instanceof SubqueryExpression) {
         fromItem.statement = ((SubqueryExpression) expr.mathExpression).getStatement();
       } else {
         // Fallback: use the expression itself as identifier
@@ -4751,30 +4768,31 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     }
     stmt.source = fromItem;
 
-    // Target: TYPE:identifier or BUCKET:identifier or identifier (bucket name)
+    // Target: TYPE:identifier, BUCKET:name, bucket:name (single token), bucket:id (single token) or bare identifier (bucket name)
     if (moveCtx.TYPE() != null) {
       // TO TYPE:typename
       stmt.targetType = (Identifier) visit(moveCtx.identifier());
+    } else if (moveCtx.BUCKET_IDENTIFIER() != null) {
+      // TO bucket:name (lexed as a single BUCKET_IDENTIFIER token)
+      final String text = moveCtx.BUCKET_IDENTIFIER().getText();
+      stmt.targetBucket = new Bucket(text.substring("bucket:".length()));
+    } else if (moveCtx.BUCKET_NUMBER_IDENTIFIER() != null) {
+      // TO bucket:123 (lexed as a single BUCKET_NUMBER_IDENTIFIER token)
+      final String text = moveCtx.BUCKET_NUMBER_IDENTIFIER().getText();
+      stmt.targetBucket = new Bucket(Integer.parseInt(text.substring("bucket:".length())));
     } else if (moveCtx.BUCKET() != null) {
-      // TO BUCKET:bucketname
+      // TO BUCKET : bucketname (separated tokens, e.g. with spaces around the colon)
       final Identifier bucketId = (Identifier) visit(moveCtx.identifier());
       stmt.targetBucket = new Bucket(bucketId.getStringValue());
     } else {
-      // TO bucketname (without BUCKET: prefix)
+      // TO bucketname (without bucket: prefix)
       final Identifier bucketId = (Identifier) visit(moveCtx.identifier());
       stmt.targetBucket = new Bucket(bucketId.getStringValue());
     }
 
-    // SET clause (updateItems)
-    if (moveCtx.SET() != null) {
-      final UpdateOperations updateOps = new UpdateOperations(-1);
-      updateOps.type = UpdateOperations.TYPE_SET;
-      for (final SQLParser.UpdateItemContext itemCtx : moveCtx.updateItem()) {
-        final UpdateItem item = (UpdateItem) visit(itemCtx);
-        updateOps.updateItems.add(item);
-      }
-      stmt.updateOperations = updateOps;
-    }
+    // Update operations: SET, ADD, PUT, REMOVE, INCREMENT, MERGE, CONTENT
+    if (moveCtx.updateOperation() != null)
+      stmt.updateOperations = (UpdateOperations) visit(moveCtx.updateOperation());
 
     // BATCH clause
     if (moveCtx.BATCH() != null) {
@@ -6796,7 +6814,7 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     }
 
     // Add statements to IF block (before ELSE) or all statements if no ELSE
-    final int endIndex = (elseIndex != -1) ? elseIndex : allStatements.size();
+    final int endIndex = elseIndex != -1 ? elseIndex : allStatements.size();
     for (int i = 0; i < endIndex; i++) {
       stmt.statements.add((Statement) visit(allStatements.get(i)));
     }

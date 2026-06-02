@@ -36,6 +36,7 @@ import com.arcadedb.bolt.packstream.PackStreamReader;
 import com.arcadedb.bolt.packstream.PackStreamWriter;
 import com.arcadedb.bolt.structure.BoltStructureMapper;
 import com.arcadedb.database.Database;
+import com.arcadedb.database.DatabaseContext;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.exception.CommandParsingException;
 import com.arcadedb.index.Index;
@@ -231,7 +232,7 @@ public class BoltNetworkExecutor extends Thread {
       final Map<String, String> headers = readHttpHeaders();
       final String upgrade = headers.get("upgrade");
 
-      if (upgrade != null && "websocket".equalsIgnoreCase(upgrade)) {
+      if ("websocket".equalsIgnoreCase(upgrade)) {
         // WebSocket upgrade - Neo4j Desktop/Browser uses WebSocket transport for Bolt
         completeWebSocketUpgrade(headers);
 
@@ -938,6 +939,14 @@ public class BoltNetworkExecutor extends Thread {
         // Database name changed, need to switch
         database = null;
       } else {
+        // Update current user on the existing context to handle LOGOFF/LOGON re-authentication
+        // on the same connection without disrupting any open transactions.
+        if (user != null) {
+          final DatabaseContext.DatabaseContextTL ctx =
+              DatabaseContext.INSTANCE.getContextIfExists(((DatabaseInternal) database).getDatabasePath());
+          if (ctx != null)
+            ctx.setCurrentUser(user.getDatabaseUser(database));
+        }
         return true;
       }
     }
@@ -967,6 +976,8 @@ public class BoltNetworkExecutor extends Thread {
         state = State.FAILED;
         return false;
       }
+      if (user != null)
+        DatabaseContext.INSTANCE.init((DatabaseInternal) database).setCurrentUser(user.getDatabaseUser(database));
       return true;
     } catch (final Exception e) {
       final String message = e.getMessage() != null ? e.getMessage() : "Unknown error";

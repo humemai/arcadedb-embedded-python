@@ -28,9 +28,12 @@ import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.InternalResultSet;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.security.SecurityDatabaseUser;
 
-import java.lang.reflect.*;
-import java.util.*;
+import java.lang.reflect.InvocationTargetException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 
 public class ImportDatabaseStatement extends SimpleExecStatement {
 
@@ -45,6 +48,10 @@ public class ImportDatabaseStatement extends SimpleExecStatement {
 
   @Override
   public ResultSet executeSimple(final CommandContext context) {
+    // IMPORT DATABASE can create schema, overwrite data and read local files / remote URLs (SSRF/LFI surface), so it is
+    // restricted to administrative users. In embedded mode (no security configured) this check is a no-op.
+    context.getDatabase().checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SECURITY);
+
     final ResultInternal result = new ResultInternal(context.getDatabase());
     result.setProperty("operation", "import database");
 
@@ -57,7 +64,7 @@ public class ImportDatabaseStatement extends SimpleExecStatement {
       // the importer's commit() calls are intercepted for replication. In non-HA mode,
       // getWrappedDatabaseInstance() returns the database itself, so there is no change in behaviour.
       final Database db = context.getDatabase();
-      final Database effectiveDb = (db instanceof DatabaseInternal di) ? di.getWrappedDatabaseInstance() : db;
+      final Database effectiveDb = db instanceof DatabaseInternal di ? di.getWrappedDatabaseInstance() : db;
       final Object importer = clazz.getConstructor(Database.class, String.class).newInstance(effectiveDb, url != null ? url.getUrlString() : null);
 
       // TRANSFORM SETTINGS
@@ -77,6 +84,11 @@ public class ImportDatabaseStatement extends SimpleExecStatement {
     } catch (final ClassNotFoundException | NoSuchMethodException | IllegalAccessException | InstantiationException e) {
       throw new CommandExecutionException("Error on importing database, importer libs not found in classpath", e);
     } catch (final InvocationTargetException e) {
+      // SURFACE A SECURITY VIOLATION (SSRF/LFI GUARD IN THE IMPORTER) DIRECTLY SO IT MAPS TO HTTP 403 INSTEAD OF 500
+      for (Throwable cause = e.getTargetException(); cause != null; cause = cause.getCause())
+        if (cause instanceof SecurityException se)
+          throw se;
+
       if (e.getCause().getClass().getSimpleName().equals("IllegalArgumentException"))
         result.setProperty("result", "FAIL");
       else

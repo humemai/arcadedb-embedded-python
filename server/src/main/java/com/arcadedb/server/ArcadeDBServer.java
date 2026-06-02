@@ -40,6 +40,7 @@ import com.arcadedb.server.event.FileServerEventLog;
 import com.arcadedb.server.event.ServerEventLog;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.mcp.MCPConfiguration;
+import com.arcadedb.server.monitor.PoolMetrics;
 import com.arcadedb.server.monitor.ServerQueryProfiler;
 import com.arcadedb.server.plugin.PluginManager;
 import com.arcadedb.server.security.ServerSecurity;
@@ -70,6 +71,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.logging.Level;
 
@@ -96,7 +98,7 @@ public class ArcadeDBServer {
   private final       ConcurrentMap<String, ServerDatabase> databases                            = new ConcurrentHashMap<>();
   private final       List<ReplicationCallback>             testEventListeners                   = new ArrayList<>();
   private volatile    STATUS                                status                               = STATUS.OFFLINE;
-  private final       java.util.concurrent.atomic.AtomicBoolean snapshotInstallInProgress            = new java.util.concurrent.atomic.AtomicBoolean(false);
+  private final       AtomicBoolean snapshotInstallInProgress            = new AtomicBoolean(false);
   private             Function<LocalDatabase, DatabaseInternal> databaseWrapper;
 //  private             ServerMonitor                         serverMonitor;
 
@@ -205,7 +207,7 @@ public class ArcadeDBServer {
       new JvmThreadMetrics().bindTo(Metrics.globalRegistry);
       // Engine executor pools (query parallelism + sparse-vector scoring) - exposes
       // arcadedb.executor.pool.{size,active,...} gauges tagged with pool=<name>.
-      new com.arcadedb.server.monitor.PoolMetrics().bindTo(Metrics.globalRegistry);
+      new PoolMetrics().bindTo(Metrics.globalRegistry);
 
       if (configuration.getValueAsBoolean(GlobalConfiguration.SERVER_METRICS_LOGGING)) {
         LogManager.instance().log(this, Level.INFO, "- Logging metrics enabled...");
@@ -242,6 +244,22 @@ public class ArcadeDBServer {
 
     pluginManager.startPlugins(ServerPlugin.PluginInstallationPriority.AFTER_HTTP_ON);
 
+    // HA WAS REQUESTED (EXPLICITLY VIA ha.enabled=true OR IMPLICITLY VIA A NON-BLANK ha.serverList) BUT NO
+    // HAServerPlugin REGISTERED ITSELF. THE MOST COMMON CAUSE FOR EMBEDDED DEPLOYMENTS IS A MISSING
+    // arcadedb-ha-raft DEPENDENCY: SINCE THE APACHE RATIS MIGRATION THE HA IMPLEMENTATION LIVES IN A
+    // SEPARATE MODULE AND IS DISCOVERED VIA ServiceLoader, SO EMBEDDING arcadedb-server ALONE NO LONGER
+    // ENABLES HA. WARN LOUDLY INSTEAD OF SILENTLY RUNNING STANDALONE.
+    if ((configuration.getValueAsBoolean(GlobalConfiguration.HA_ENABLED) || configuration.isHAImplicitlyEnabled())
+        && haServer == null) {
+      final String haWarning = """
+          High availability was requested but no HA plugin was found on the classpath. \
+          The node will run STANDALONE (no replication). Since the Apache Ratis migration the HA implementation \
+          is in the separate 'arcadedb-ha-raft' module: add the 'arcadedb-ha-raft' dependency to your \
+          (embedded) application, or use the official server distribution/Docker image which bundles it.""";
+      LogManager.instance().log(this, Level.WARNING, haWarning);
+      getEventLog().reportEvent(ServerEventLog.EVENT_TYPE.WARNING, "HA", null, haWarning);
+    }
+
     loadDefaultDatabases();
 
     // RELOAD DATABASE IF A PLUGIN REGISTERED A NEW DATABASE (LIKE THE GREMLIN SERVER)
@@ -265,7 +283,7 @@ public class ArcadeDBServer {
     if ("production".equals(mode))
       logProductionChecklist();
 
-    if (!"production".equals(mode)) {
+    if (!"production".equals(mode) || GlobalConfiguration.STUDIO_ENABLED.getValueAsBoolean()) {
       final InputStream file = getClass().getClassLoader().getResourceAsStream("static/index.html");
       if (file != null) {
         final String studioHost = getStudioDisplayHost();
@@ -328,6 +346,13 @@ public class ArcadeDBServer {
     if (rootPassword != null && !rootPassword.isEmpty())
       LogManager.instance().log(this, Level.WARNING,
           "  - Root password: set via configuration [WARNING]. Consider using server-users.json instead");
+
+    // STUDIO
+    if (GlobalConfiguration.STUDIO_ENABLED.getValueAsBoolean())
+      LogManager.instance().log(this, Level.WARNING,
+          "  - Studio web tool: force-enabled (arcadedb.studio.enabled=true) [WARNING]. Restrict network access to it");
+    else
+      LogManager.instance().log(this, Level.INFO, "  - Studio web tool: disabled [OK]");
   }
 
   private void createDirectories() {
@@ -428,9 +453,8 @@ public class ArcadeDBServer {
           false);
     databases.clear();
 
-    CodeUtils.executeIgnoringExceptions(() -> {
-      LogManager.instance().log(this, Level.INFO, "- Stop JMX Metrics");
-    }, "Error on stopping JMX Metrics", false);
+    CodeUtils.executeIgnoringExceptions(() ->
+      LogManager.instance().log(this, Level.INFO, "- Stop JMX Metrics"), "Error on stopping JMX Metrics", false);
 
     LogManager.instance().log(this, Level.INFO, "ArcadeDB Server is down");
 
@@ -940,7 +964,7 @@ public class ArcadeDBServer {
     } else {
       // READ HOST FROM NETWORK INTERFACE
       hostAddress = configuration.getValueAsString(GlobalConfiguration.SERVER_HTTP_INCOMING_HOST);
-      if (hostAddress.equals("0.0.0.0")) {
+      if ("0.0.0.0".equals(hostAddress)) {
         try {
           hostAddress = ChannelBinary.getLocalIpAddress(true);
         } catch (Exception e) {

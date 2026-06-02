@@ -21,10 +21,11 @@ package com.arcadedb.function.sql.time;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.function.sql.SQLAggregatedFunction;
 import com.arcadedb.query.sql.executor.CommandContext;
+import com.arcadedb.utility.DateUtils;
 
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.Date;
 import java.util.List;
 
 /**
@@ -96,7 +97,7 @@ public class SQLFunctionRate extends SQLAggregatedFunction {
           // Counter reset detected: treat the current value as the increase from 0
           totalIncrease += currentValue;
         else
-          totalIncrease += (currentValue - prevValue);
+          totalIncrease += currentValue - prevValue;
         prevValue = currentValue;
       }
 
@@ -115,8 +116,11 @@ public class SQLFunctionRate extends SQLAggregatedFunction {
   }
 
   static long toEpochMillis(final Object ts) {
-    if (ts instanceof Date date)
-      return date.getTime();
-    return ((Number) ts).longValue();
+    // Accepts the timestamp as a Number (raw millis), java.util.Date, or a temporal (e.g.
+    // LocalDateTime, the representation FetchFromTimeSeriesStep exposes to SQL - issue #4385).
+    final Long millis = DateUtils.dateTimeToTimestamp(ts, ChronoUnit.MILLIS);
+    if (millis == null)
+      throw new IllegalArgumentException("Unsupported timestamp type: " + ts.getClass().getName());
+    return millis;
   }
 }

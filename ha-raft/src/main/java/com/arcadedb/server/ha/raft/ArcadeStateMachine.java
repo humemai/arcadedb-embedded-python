@@ -20,11 +20,15 @@ package com.arcadedb.server.ha.raft;
 
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Binary;
+import com.arcadedb.database.BootstrapFingerprint;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.WALFile;
 import com.arcadedb.exception.WALVersionGapException;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.schema.LocalSchema;
+import com.arcadedb.schema.LocalTimeSeriesType;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.ServerDatabase;
@@ -52,12 +56,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 
@@ -88,6 +96,15 @@ import java.util.logging.Level;
  */
 public class ArcadeStateMachine extends BaseStateMachine {
 
+  /**
+   * Test-only WAL gap counter. When non-null, incremented each time a follower detects a
+   * WAL page-version gap. Used by deterministic tests to verify no gap occurred.
+   * <p>
+   * Tests that set this MUST reset it to {@code null} in an {@code @AfterEach} method, otherwise
+   * it leaks into subsequent tests in the same JVM.
+   */
+  public static volatile AtomicInteger TEST_WAL_GAP_COUNTER = null;
+
   private final    SimpleStateMachineStorage storage          = new SimpleStateMachineStorage();
   private final    AtomicLong                lastAppliedIndex = new AtomicLong(-1);
   private final    AtomicLong                electionCount    = new AtomicLong(0);
@@ -117,8 +134,8 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * Populated when the entry is applied (locally on every peer), used by the catch-up decision
    * tree (locally bootstrapped vs leader-shipped vs late-newer-joiner refusal). Issue #4147.
    */
-  private final java.util.concurrent.ConcurrentHashMap<String, BootstrapBaseline> bootstrapBaselines =
-      new java.util.concurrent.ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, BootstrapBaseline> bootstrapBaselines =
+      new ConcurrentHashMap<>();
 
   /** Per-database bootstrap baseline as it appears in the committed Raft log entry. */
   public record BootstrapBaseline(String fingerprint, long lastTxId) {
@@ -126,6 +143,14 @@ public class ArcadeStateMachine extends BaseStateMachine {
 
   private final AtomicBoolean needsSnapshotDownload = new AtomicBoolean(false);
   private final AtomicBoolean catchingUp            = new AtomicBoolean(false);
+  // Set to true after applyTransaction catches an unexpected Throwable (OOM, NPE, etc.). The
+  // state machine's in-memory schema/page state can be inconsistent at that point (issue #4219:
+  // mid-load OOM leaves bucketMap cleared but not repopulated), so any subsequent apply
+  // attempt would surface as a cascade of "Bucket with id X was not found" errors before the
+  // async server.stop() completes. Once tripped, applyTransaction fails fast without touching
+  // database state and the recovery path is the asynchronous server shutdown plus a snapshot
+  // resync on the next start.
+  private final AtomicBoolean haltedAfterCriticalError = new AtomicBoolean(false);
 
 
   public void setServer(final ArcadeDBServer server) {
@@ -235,6 +260,13 @@ public class ArcadeStateMachine extends BaseStateMachine {
     final TermIndex termIndex = TermIndex.valueOf(entry);
     final long index = termIndex.getIndex();
 
+    // Refuse to apply once a prior entry tripped the critical-error halt. Continuing would
+    // operate on the inconsistent in-memory state left behind by the failed apply and cascade
+    // into additional SEVERE errors before the async server.stop() completes (#4219).
+    if (haltedAfterCriticalError.get())
+      return CompletableFuture.failedFuture(new ReplicationException(
+          "State machine halted after critical error at earlier index; refusing to apply index " + index));
+
     try {
       final RaftLogEntryCodec.DecodedEntry decoded = RaftLogEntryCodec.decode(data);
 
@@ -257,7 +289,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
       case INSTALL_DATABASE_ENTRY -> applyInstallDatabaseEntry(decoded);
       case DROP_DATABASE_ENTRY -> applyDropDatabaseEntry(decoded);
       case SECURITY_USERS_ENTRY -> applySecurityUsersEntry(decoded);
-      case BOOTSTRAP_FINGERPRINT_ENTRY -> applyBootstrapFingerprintEntry(decoded);
+      case BOOTSTRAP_FINGERPRINT_ENTRY -> applyBootstrapFingerprintEntry(decoded, index);
       }
 
       final long previousApplied = lastAppliedIndex.getAndSet(index);
@@ -299,6 +331,9 @@ public class ArcadeStateMachine extends BaseStateMachine {
           """
           CRITICAL: Unexpected error applying Raft log entry at index %d. \
           Shutting down to prevent state divergence.""", e, index);
+      // Trip the halt flag BEFORE starting the async server.stop() so the StateMachineUpdater's
+      // next applyTransaction call short-circuits instead of cascading on inconsistent state.
+      haltedAfterCriticalError.set(true);
       final Thread stopThread = new Thread(() -> {
         try {
           if (server != null)
@@ -365,9 +400,10 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // and Max, or reduce per-batch size.
       final long sinceLast = previousElectionTime > 0 ? now - previousElectionTime : -1;
       LogManager.instance().log(this, Level.WARNING,
-          "Leader churn: %s re-elected (term=%d, %d ms since last leader change). "
-              + "Likely cause: leader heartbeat blocked by bulk-load replication. "
-              + "Tune arcadedb.ha.electionTimeoutMin/Max higher or reduce batch size.",
+          """
+          Leader churn: %s re-elected (term=%d, %d ms since last leader change). \
+          Likely cause: leader heartbeat blocked by bulk-load replication. \
+          Tune arcadedb.ha.electionTimeoutMin/Max higher or reduce batch size.""",
           leaderName, currentTerm, sinceLast);
     } else {
       // Different node became leader. Normal failover (network, server restart, etc.).
@@ -551,6 +587,9 @@ public class ArcadeStateMachine extends BaseStateMachine {
     } catch (final WALVersionGapException e) {
       // Version gap: WAL page version > DB page version + 1 - an intermediate transaction
       // was never applied on this node. State has diverged; trigger snapshot resync.
+      final AtomicInteger gapCounter = TEST_WAL_GAP_COUNTER;
+      if (gapCounter != null)
+        gapCounter.incrementAndGet();
       LogManager.instance().log(this, Level.SEVERE,
           "WAL version gap on follower - state divergence detected, triggering snapshot resync (db=%s, txId=%d): %s",
           decoded.databaseName(), walTx.txId, e.getMessage());
@@ -602,9 +641,23 @@ public class ArcadeStateMachine extends BaseStateMachine {
           decoded.filesToAdd());
     }
 
+    // A TimeSeries compaction/maintenance entry carries only sealed-store blobs (+ the mutable-bucket
+    // clear WAL) and never changes the schema or creates/removes paginated files. For such entries we
+    // MUST NOT re-update + reload the schema: load() re-instantiates every TimeSeries engine (closing
+    // shard executors with a 30s awaitTermination) on the Raft apply thread, stalling replication.
+    // installSealedFileBytes already reopened the sealed store and the clear WAL applies to the live
+    // mutable-bucket pages, so neither the schema update nor the reload is needed.
+    final boolean sealedOnlyEntry = isEmptyMap(decoded.filesToAdd()) && isEmptyMap(decoded.filesToRemove())
+        && decoded.sealedFileBlobs() != null && !decoded.sealedFileBlobs().isEmpty();
+
     try {
       if (decoded.filesToAdd() != null)
         createNewFiles(db, decoded.filesToAdd());
+
+      // Install any TimeSeries sealed-store blobs BEFORE applying the WAL (issue #4382). The WAL
+      // below carries the mutable-bucket clear; installing the sealed file first guarantees a query
+      // never observes "cleared mutable + stale sealed" (the data-loss window).
+      applySealedBlobs(db, decoded.sealedFileBlobs());
 
       if (decoded.filesToRemove() != null)
         for (final Map.Entry<Integer, String> fileEntry : decoded.filesToRemove().entrySet()) {
@@ -613,7 +666,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
           db.getSchema().getEmbedded().removeFile(fileEntry.getKey());
         }
 
-      if (decoded.schemaJson() != null && !decoded.schemaJson().isEmpty())
+      if (!sealedOnlyEntry && decoded.schemaJson() != null && !decoded.schemaJson().isEmpty())
         db.getSchema().getEmbedded().update(new JSONObject(decoded.schemaJson()));
 
       // Apply WAL entries BEFORE the schema reload. New files created above are initially empty;
@@ -627,7 +680,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
         final List<Map<Integer, Integer>> bucketDeltas = decoded.bucketDeltas();
         for (int i = 0; i < walEntries.size(); i++) {
           final byte[] walData = walEntries.get(i);
-          final Map<Integer, Integer> bucketDelta = (bucketDeltas != null && i < bucketDeltas.size())
+          final Map<Integer, Integer> bucketDelta = bucketDeltas != null && i < bucketDeltas.size()
               ? bucketDeltas.get(i)
               : Collections.emptyMap();
           final WALFile.WALTransaction walTx = deserializeWalTransaction(walData);
@@ -641,7 +694,9 @@ public class ArcadeStateMachine extends BaseStateMachine {
 
       // Reload schema after WAL pages are on disk so new index files have valid content
       // and are correctly registered (page counts, type links, in-memory structures).
-      db.getSchema().getEmbedded().load(ComponentFile.MODE.READ_WRITE, true);
+      // Skipped for sealed-only TimeSeries compaction entries (see sealedOnlyEntry above).
+      if (!sealedOnlyEntry)
+        db.getSchema().getEmbedded().load(ComponentFile.MODE.READ_WRITE, true);
 
     } catch (final IOException e) {
       throw new RuntimeException("Failed to apply schema entry for database '" + decoded.databaseName() + "'", e);
@@ -668,7 +723,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
         return;
       final JSONObject types = root.getJSONObject("types");
 
-      final java.util.Set<String> shippedIndexNames = new java.util.HashSet<>();
+      final Set<String> shippedIndexNames = new HashSet<>();
       if (filesToAdd != null) {
         for (final String fullName : filesToAdd.values()) {
           final int firstDot = fullName.indexOf('.');
@@ -715,6 +770,44 @@ public class ArcadeStateMachine extends BaseStateMachine {
         continue;
       db.getFileManager().getOrCreateFile(fileId, databasePath + File.separator + fileName);
     }
+  }
+
+  /**
+   * Installs TimeSeries sealed-store blobs shipped by the leader (issue #4382): for each blob the
+   * full {@code .ts.sealed} file is replaced atomically and the in-memory sealed store reopened.
+   * Idempotent: re-applying the same blob (crash/restart replay) simply rewrites the identical file.
+   */
+  private void applySealedBlobs(final DatabaseInternal db, final List<RaftLogEntryCodec.TsSealedBlob> blobs)
+      throws IOException {
+    if (blobs == null || blobs.isEmpty())
+      return;
+    for (final RaftLogEntryCodec.TsSealedBlob blob : blobs) {
+      final LocalSchema schema = db.getSchema().getEmbedded();
+      if (!schema.existsType(blob.typeName())) {
+        // Should not happen: the type-creation entry has a lower Raft index and is applied first.
+        LogManager.instance().log(this, Level.SEVERE,
+            "Received TimeSeries sealed blob for unknown type '%s' (db=%s); skipping", null, blob.typeName(),
+            decodedDbName(db));
+        continue;
+      }
+      if (!(schema.getType(blob.typeName()) instanceof LocalTimeSeriesType tsType) || tsType.getEngine() == null) {
+        LogManager.instance().log(this, Level.SEVERE,
+            "Received TimeSeries sealed blob for non-timeseries or uninitialized type '%s' (db=%s); skipping", null,
+            blob.typeName(), decodedDbName(db));
+        continue;
+      }
+      tsType.getEngine().getShard(blob.shardIndex()).getSealedStore().installSealedFileBytes(blob.bytes());
+      HALog.log(this, HALog.DETAILED, "Installed TimeSeries sealed blob for %s shard %d (%d bytes) on db '%s'",
+          blob.typeName(), blob.shardIndex(), blob.bytes().length, decodedDbName(db));
+    }
+  }
+
+  private static String decodedDbName(final DatabaseInternal db) {
+    return db != null ? db.getName() : "?";
+  }
+
+  private static boolean isEmptyMap(final Map<?, ?> map) {
+    return map == null || map.isEmpty();
   }
 
   private void applyInstallDatabaseEntry(final RaftLogEntryCodec.DecodedEntry decoded) {
@@ -780,7 +873,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * </ul>
    * The committed baseline is recorded in {@link #bootstrapBaselines} for status export and tests.
    */
-  private void applyBootstrapFingerprintEntry(final RaftLogEntryCodec.DecodedEntry decoded) {
+  private void applyBootstrapFingerprintEntry(final RaftLogEntryCodec.DecodedEntry decoded, final long index) {
     final String dbName = decoded.databaseName();
     final String chosenFingerprint = decoded.bootstrapFingerprint();
     final long chosenLastTxId = decoded.bootstrapLastTxId();
@@ -792,13 +885,28 @@ public class ArcadeStateMachine extends BaseStateMachine {
     }
     bootstrapBaselines.put(dbName, new BootstrapBaseline(chosenFingerprint, chosenLastTxId));
 
+    // Re-application during log replay on restart: if we've persisted an applied index at or
+    // beyond this entry's index, the verification ran in a prior session and the local database
+    // has since been forward-replicated past the baseline by Ratis AppendEntries. Re-running
+    // the install path here would race leader-discovery (the StateMachineUpdater thread is
+    // inside applyTransaction and blocks Ratis leader-info notifications), exhaust the snapshot
+    // retry budget with null leader addresses, and trip the critical-error halt.
+    final long persistedApplied = readPersistedAppliedIndex();
+    if (persistedApplied >= index) {
+      HALog.log(this, HALog.BASIC,
+          "Bootstrap baseline for '%s' already applied (persistedAppliedIndex=%d >= entryIndex=%d); skipping verification",
+          dbName, persistedApplied, index);
+      return;
+    }
+
     if (!server.existsDatabase(dbName)) {
       // Late joiner with no local copy of this database. The follow-on INSTALL_DATABASE_ENTRY
       // (or natural Raft replay) will create the database and install the leader's snapshot;
       // we just record the baseline.
       LogManager.instance().log(this, Level.INFO,
-          "Bootstrap baseline recorded for '%s' (lastTxId=%d); database not yet present locally, "
-              + "will be created via leader-shipped snapshot",
+          """
+          Bootstrap baseline recorded for '%s' (lastTxId=%d); database not yet present locally, \
+          will be created via leader-shipped snapshot""",
           dbName, chosenLastTxId);
       return;
     }
@@ -810,14 +918,14 @@ public class ArcadeStateMachine extends BaseStateMachine {
     try {
       final ServerDatabase serverDb = server.getDatabase(dbName);
       final DatabaseInternal embedded = serverDb.getWrappedDatabaseInstance().getEmbedded();
-      if (!(embedded instanceof com.arcadedb.database.LocalDatabase localDb)) {
+      if (!(embedded instanceof LocalDatabase localDb)) {
         LogManager.instance().log(this, Level.WARNING,
             "BOOTSTRAP_FINGERPRINT_ENTRY for '%s': embedded database is not a LocalDatabase, skipping",
             dbName);
         return;
       }
       localPath = localDb.getDatabasePath();
-      localFingerprint = com.arcadedb.database.BootstrapFingerprint.compute(new File(localPath));
+      localFingerprint = BootstrapFingerprint.compute(new File(localPath));
       localLastTxId = localDb.getLastTransactionId();
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.WARNING,
@@ -842,11 +950,12 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // transactions on a single pod by re-bootstrapping from older peers.
     if (localLastTxId > chosenLastTxId) {
       LogManager.instance().log(this, Level.SEVERE,
-          "Database '%s': local lastTxId=%d is GREATER than cluster bootstrap lastTxId=%d. "
-              + "This peer's data is fresher than the cluster's chosen baseline (committed "
-              + "BOOTSTRAP_FINGERPRINT_ENTRY). Refusing to overwrite local data. To preserve it, "
-              + "stop the cluster, copy this peer's database directory to every other peer, then "
-              + "restart all peers.",
+          """
+          Database '%s': local lastTxId=%d is GREATER than cluster bootstrap lastTxId=%d. \
+          This peer's data is fresher than the cluster's chosen baseline (committed \
+          BOOTSTRAP_FINGERPRINT_ENTRY). Refusing to overwrite local data. To preserve it, \
+          stop the cluster, copy this peer's database directory to every other peer, then \
+          restart all peers.""",
           dbName, localLastTxId, chosenLastTxId);
       return;
     }
@@ -856,8 +965,9 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // place; at bootstrap time the Ratis log is empty on every peer so a transaction-level
     // delta cannot be served from it.
     LogManager.instance().log(this, Level.INFO,
-        "Database '%s' bootstrap mismatch (local lastTxId=%d / fp=%s..., baseline lastTxId=%d / fp=%s...); "
-            + "reinstalling from leader-shipped full snapshot",
+        """
+        Database '%s' bootstrap mismatch (local lastTxId=%d / fp=%s..., baseline lastTxId=%d / fp=%s...); \
+        reinstalling from leader-shipped full snapshot""",
         dbName, localLastTxId, localFingerprint.substring(0, Math.min(8, localFingerprint.length())),
         chosenLastTxId, chosenFingerprint.substring(0, Math.min(8, chosenFingerprint.length())));
     installFromLeaderForBootstrap(dbName);
@@ -885,13 +995,73 @@ public class ArcadeStateMachine extends BaseStateMachine {
         databasePath = server.getConfiguration().getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY)
             + File.separator + dbName;
       }
-      final String leaderHttpAddr = raftHAServer != null ? raftHAServer.getLeaderHttpAddress() : null;
-      final String clusterToken = raftHAServer != null ? raftHAServer.getClusterToken() : null;
-      SnapshotInstaller.install(dbName, databasePath, leaderHttpAddr, clusterToken, server);
+      // Resolve the leader address on each retry: the bootstrap-mismatch entry is applied
+      // during Raft log replay on startup, which can race ahead of leader election on this peer.
+      final RaftHAServer raft = raftHAServer;
+      final String clusterToken = raft != null ? raft.getClusterToken() : null;
+      SnapshotInstaller.install(dbName, databasePath,
+          () -> raft != null ? raft.getLeaderHttpAddress() : null,
+          clusterToken, server);
       LogManager.instance().log(this, Level.INFO,
           "Database '%s' reinstalled after bootstrap mismatch", dbName);
     } catch (final IOException e) {
       throw new RuntimeException("Failed to install snapshot for bootstrap-mismatched database '" + dbName + "'", e);
+    }
+  }
+
+  /**
+   * Operator-triggered emergency recovery: drop the local copy of {@code dbName} and re-acquire a
+   * fresh full snapshot from the current leader. This is the manual equivalent of the automatic
+   * snapshot install path ({@link #notifyInstallSnapshotFromLeader}) and uses the same crash-safe
+   * {@link SnapshotInstaller} machinery as {@link #installFromLeaderForBootstrap}.
+   * <p>
+   * The intended use case is a follower that has diverged from the leader (e.g. a
+   * {@link WALVersionGapException} reported "snapshot resync required"): the diverged page versions
+   * can never be reconciled by applying further deltas, so the only safe fix is to replace the local
+   * files with the leader's authoritative copy. After install the local database matches the leader's
+   * snapshot point; any Raft log entries replayed afterwards that predate the snapshot are skipped by
+   * the page-version guard in {@code applyChanges}, and forward replication resumes normally.
+   * <p>
+   * Runs synchronously on the caller thread (the HTTP worker thread). Refuses to run on the leader
+   * (it holds the authoritative copy) and when no leader is currently known.
+   *
+   * @param dbName name of the database to resync from the leader
+   * @throws ReplicationException if Raft HA is not enabled, this node is the leader, the leader is
+   *                              unknown, or the snapshot install fails
+   */
+  public void resyncDatabaseFromLeader(final String dbName) {
+    final RaftHAServer raft = raftHAServer;
+    if (raft == null)
+      throw new ReplicationException("Cannot resync database '" + dbName + "': Raft HA is not enabled");
+
+    if (raft.isLeader())
+      throw new ReplicationException("Cannot resync database '" + dbName
+          + "' on the leader: the leader holds the authoritative copy. Run the resync on the diverged follower.");
+
+    if (raft.getLeaderHttpAddress() == null)
+      throw new ReplicationException("Cannot resync database '" + dbName
+          + "': the leader is currently unknown (election in progress?). Retry once a leader is elected.");
+
+    LogManager.instance().log(this, Level.WARNING,
+        "Operator-triggered resync of database '%s' from leader: dropping local copy and re-acquiring full snapshot", dbName);
+
+    try {
+      final String databasePath;
+      if (server.existsDatabase(dbName)) {
+        final DatabaseInternal db = (DatabaseInternal) server.getDatabase(dbName);
+        databasePath = db.getDatabasePath();
+        db.getEmbedded().close();
+        server.removeDatabase(dbName);
+      } else {
+        databasePath = server.getConfiguration().getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY)
+            + File.separator + dbName;
+      }
+      // Resolve the leader address on each retry (it can change mid-operation if leadership moves).
+      final String clusterToken = raft.getClusterToken();
+      SnapshotInstaller.install(dbName, databasePath, raft::getLeaderHttpAddress, clusterToken, server);
+      LogManager.instance().log(this, Level.INFO, "Database '%s' resynced from leader on operator request", dbName);
+    } catch (final IOException e) {
+      throw new ReplicationException("Failed to resync database '" + dbName + "' from leader", e);
     }
   }
 
@@ -1018,9 +1188,14 @@ public class ArcadeStateMachine extends BaseStateMachine {
 
     tx.txId = buf.getLong();
     tx.timestamp = buf.getLong();
-    tx.forceApply = (tx.txId < 0); // negative txId signals compaction page replication
+    tx.forceApply = tx.txId < 0; // negative txId signals compaction page replication
     final int pageCount = buf.getInt();
     buf.getInt(); // segmentSize - not needed for deserialization
+
+    // Reject a corrupted/misaligned entry instead of blowing up with a cryptic NegativeArraySizeException (issue #4420):
+    // every WAL page occupies at least its 24-byte fixed header, so a page count exceeding the remaining bytes is corruption.
+    if (pageCount < 0 || (long) pageCount * 6 * Integer.BYTES > buf.remaining())
+      throw new ReplicationException("Corrupted WAL transaction entry: invalid page count " + pageCount);
 
     tx.pages = new WALFile.WALPage[pageCount];
 
@@ -1034,6 +1209,9 @@ public class ArcadeStateMachine extends BaseStateMachine {
       page.currentPageSize = buf.getInt();
 
       final int deltaSize = page.changesTo - page.changesFrom + 1;
+      if (deltaSize <= 0 || page.changesFrom < 0 || deltaSize > buf.remaining())
+        throw new ReplicationException("Corrupted WAL transaction entry: invalid delta range [" + page.changesFrom + ","
+            + page.changesTo + "] for page " + page.fileId + ":" + page.pageNumber);
       final byte[] content = new byte[deltaSize];
       buf.get(content);
       page.currentContent = new Binary(content);

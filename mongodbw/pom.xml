@@ -35,7 +35,7 @@
     <properties>
         <mongo-java-server.version>1.47.0</mongo-java-server.version>
         <mongo-java-driver.version>3.12.14</mongo-java-driver.version>
-        <netty.version>4.2.13.Final</netty.version>
+        <netty.version>4.2.14.Final</netty.version>
     </properties>
 
     <dependencies>
@@ -79,9 +79,10 @@
 
         <dependency>
             <groupId>com.arcadedb</groupId>
-            <artifactId>arcadedb-test-utils</artifactId>
+            <artifactId>arcadedb-server</artifactId>
             <version>${project.parent.version}</version>
             <scope>test</scope>
+            <type>test-jar</type>
         </dependency>
     </dependencies>
 

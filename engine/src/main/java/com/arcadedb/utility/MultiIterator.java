@@ -22,7 +22,7 @@ import com.arcadedb.database.Document;
 import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.graph.IterableGraph;
 
-import java.lang.reflect.*;
+import java.lang.reflect.Array;
 import java.util.*;
 
 /**
@@ -154,7 +154,7 @@ public class MultiIterator<T> implements ResettableIterator<T>, IterableGraph<T>
           if (iter instanceof ResettableIterator<?> iterator)
             size += iterator.countEntries();
           else
-            CollectionUtils.countEntries(iter);
+            size += CollectionUtils.countEntries(iter);
         } else
           size++;
     }

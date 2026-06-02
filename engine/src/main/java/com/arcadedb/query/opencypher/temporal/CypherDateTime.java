@@ -24,14 +24,12 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.time.temporal.IsoFields;
 import java.time.temporal.WeekFields;
 import java.util.Map;
 import java.util.Objects;
 
 import static com.arcadedb.query.opencypher.temporal.CypherDate.toInt;
-import static com.arcadedb.query.opencypher.temporal.CypherDate.toLong;
 
 /**
  * OpenCypher DateTime value wrapping java.time.ZonedDateTime.
@@ -278,8 +276,11 @@ public class CypherDateTime implements CypherTemporalValue {
 
   @Override
   public int compareTo(final CypherTemporalValue other) {
-    if (other instanceof CypherDateTime)
-      return value.toInstant().compareTo(((CypherDateTime) other).value.toInstant());
+    if (other instanceof CypherDateTime cdt)
+      return value.toInstant().compareTo(cdt.value.toInstant());
+    // Cross-type with naive LocalDateTime: treat it as UTC, mirroring datetime(localDatetimeValue).
+    if (other instanceof CypherLocalDateTime cld)
+      return value.toInstant().compareTo(cld.getValue().toInstant(ZoneOffset.UTC));
     throw new IllegalArgumentException("Cannot compare DateTime with " + other.getClass().getSimpleName());
   }
 

@@ -23,7 +23,7 @@ import com.arcadedb.database.Record;
 import com.arcadedb.engine.Bucket;
 import com.arcadedb.log.LogManager;
 
-import java.util.logging.*;
+import java.util.logging.Level;
 
 public class DatabaseAsyncCreateRecord implements DatabaseAsyncTask {
   public final Record            record;
@@ -50,6 +50,14 @@ public class DatabaseAsyncCreateRecord implements DatabaseAsyncTask {
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "Error on executing async create record operation (threadId=%d)", e,
           Thread.currentThread().threadId());
+
+      if (database.isTransactionActive()) {
+        try {
+          database.rollback();
+        } catch (final Exception re) {
+          LogManager.instance().log(this, Level.WARNING, "Error on rolling back active transaction", re);
+        }
+      }
 
       async.onError(e);
 

@@ -30,7 +30,8 @@ import com.arcadedb.query.sql.parser.Timeout;
 import com.arcadedb.query.sql.parser.Unwind;
 import com.arcadedb.query.sql.parser.WhereClause;
 
-import java.util.*;
+import java.util.List;
+import java.util.Set;
 
 /**
  * Created by luigidellaquila on 19/06/17.
@@ -38,8 +39,9 @@ import java.util.*;
 public class QueryPlanningInfo {
 
   protected Timeout timeout;
-  boolean distinct = false;
-  boolean expand   = false;
+  boolean distinct    = false;
+  boolean expand      = false;
+  String  expandAlias = null;
 
   Projection preAggregateProjection;
   Projection aggregateProjection;
@@ -85,6 +87,7 @@ public class QueryPlanningInfo {
     final QueryPlanningInfo result = new QueryPlanningInfo();
     result.distinct = this.distinct;
     result.expand = this.expand;
+    result.expandAlias = this.expandAlias;
     result.preAggregateProjection = this.preAggregateProjection;
     result.aggregateProjection = this.aggregateProjection;
     result.projection = this.projection;

@@ -25,8 +25,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.time.*;
-import java.time.temporal.*;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Date;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -41,7 +41,7 @@ class RemoteTypesIT extends BaseGraphServerTest {
 
   @Test
   void documentType() throws Exception {
-    testEachServer((serverIndex) -> {
+    testEachServer(serverIndex -> {
       final RemoteDatabase db = new RemoteDatabase("127.0.0.1", 2480 + serverIndex, DATABASE_NAME, "root",
           BaseGraphServerTest.DEFAULT_PASSWORD_FOR_TESTS);
 
@@ -109,10 +109,10 @@ class RemoteTypesIT extends BaseGraphServerTest {
       assertThat(v.get("oI")).isEqualTo(1);
       assertThat(v.get("oI")).isInstanceOf(Integer.class);
 
-      // DateTime properties (truncate to seconds since milliseconds are not preserved)
+      // DateTime properties: millisecond precision is preserved end-to-end over the remote wire.
       assertThat(v.get("fecha")).isInstanceOf(LocalDateTime.class);
       assertThat(v.getDate("fecha")).isInstanceOf(Date.class);
-      assertThat(v.getLocalDateTime("fecha")).isEqualTo(targetDate.truncatedTo(ChronoUnit.SECONDS));
+      assertThat(v.getLocalDateTime("fecha")).isEqualTo(targetDate);
     });
   }
 

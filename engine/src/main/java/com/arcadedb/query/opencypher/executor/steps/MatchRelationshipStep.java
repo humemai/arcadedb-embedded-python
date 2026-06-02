@@ -347,7 +347,7 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
               }
             } finally {
               if (context.isProfiling())
-                cost += (System.nanoTime() - begin);
+                cost += System.nanoTime() - begin;
             }
           }
         }
@@ -404,7 +404,7 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
               gavPathCount++;
           } finally {
             if (context.isProfiling())
-              cost += (System.nanoTime() - begin);
+              cost += System.nanoTime() - begin;
           }
         }
         // Exhausted — clear state so the outer loop fetches the next source
@@ -461,7 +461,7 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
               fastPathCount++;
           } finally {
             if (context.isProfiling())
-              cost += (System.nanoTime() - begin);
+              cost += System.nanoTime() - begin;
           }
         }
       }
@@ -580,7 +580,7 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
               standardPathCount++;
           } finally {
             if (context.isProfiling())
-              cost += (System.nanoTime() - begin);
+              cost += System.nanoTime() - begin;
           }
         }
       }
@@ -903,7 +903,8 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
           expected = context.getInputParameters().get(paramName);
       } else if (expected instanceof String) {
         final String s = (String) expected;
-        if (s.startsWith("$")) {
+        // Legacy parameter reference encoded as "$name"
+        if (s.startsWith("$") && s.length() > 1) {
           final String paramName = s.substring(1);
           if (context.getInputParameters() != null) {
             final Object paramValue = context.getInputParameters().get(paramName);
@@ -911,9 +912,6 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
               expected = paramValue;
           }
         }
-        // Handle string literals: remove quotes
-        else if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith("\"") && s.endsWith("\"")))
-          expected = s.substring(1, s.length() - 1);
       }
 
       if (actual == null || !actual.equals(expected)) {
@@ -999,7 +997,8 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
           expected = context.getInputParameters().get(paramName);
       } else if (expected instanceof String) {
         final String s = (String) expected;
-        if (s.startsWith("$")) {
+        // Legacy parameter reference encoded as "$name"
+        if (s.startsWith("$") && s.length() > 1) {
           final String paramName = s.substring(1);
           if (context.getInputParameters() != null) {
             final Object paramValue = context.getInputParameters().get(paramName);
@@ -1007,9 +1006,6 @@ public class MatchRelationshipStep extends AbstractExecutionStep {
               expected = paramValue;
           }
         }
-        // Handle string literals: remove quotes
-        else if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith("\"") && s.endsWith("\"")))
-          expected = s.substring(1, s.length() - 1);
       }
 
       if (actual == null || !actual.equals(expected)) {

@@ -228,7 +228,7 @@ public class MultiValue {
 
     try {
       if (iObject instanceof List<?> list)
-        return (list.get(iIndex));
+        return list.get(iIndex);
       else if (iObject instanceof Set<?> set) {
         int i = 0;
         for (final Object o : set) {
@@ -249,7 +249,7 @@ public class MultiValue {
         return Array.get(iObject, iIndex);
       } else if (iObject instanceof Iterator<?> || iObject instanceof Iterable<?>) {
 
-        final Iterator<Object> it = (iObject instanceof Iterable<?>) ?
+        final Iterator<Object> it = iObject instanceof Iterable<?> ?
             ((Iterable<Object>) iObject).iterator() :
             (Iterator<Object>) iObject;
         if (it.hasNext()) {
@@ -332,7 +332,7 @@ public class MultiValue {
     if (iObject instanceof Iterable<?>)
       return (Iterable<Object>) iObject;
     else if (iObject instanceof Collection<?>)
-      return ((Collection<Object>) iObject);
+      return (Collection<Object>) iObject;
     else if (iObject instanceof Map<?, ?>)
       return ((Map<?, Object>) iObject).values();
     else if (iObject.getClass().isArray())
@@ -798,5 +798,33 @@ public class MultiValue {
     final List<T> list = new ArrayList<>(1);
     list.add(item);
     return list;
+  }
+
+  /**
+   * Coerces a list-like value into a {@link List}. Returns the value itself if it is already a {@link List}, a wrapper view if it
+   * is an {@code Object[]}, a copy if it is a {@link Collection}, and a boxed copy if it is a primitive array such as
+   * {@code long[]} or {@code double[]}; returns {@code null} for any other (scalar) value. Query parameters that are JSON numeric
+   * arrays arrive as primitive arrays, so consumers needing Cypher/SQL list semantics use this to treat them uniformly.
+   * <p>
+   * For an {@code Object[]} the returned list is a fixed-size {@link Arrays#asList} view sharing the backing array - mutating it
+   * via {@link List#set} writes through to the array. Callers that need an independent copy must wrap the result themselves.
+   */
+  public static List<Object> getMultiValueAsList(final Object iObject) {
+    if (iObject == null)
+      return null;
+    if (iObject instanceof List)
+      return (List<Object>) iObject;
+    if (iObject instanceof Object[] objects)
+      return Arrays.asList(objects);
+    if (iObject instanceof Collection)
+      return new ArrayList<>((Collection<Object>) iObject);
+    if (iObject.getClass().isArray()) {
+      final int length = Array.getLength(iObject);
+      final List<Object> list = new ArrayList<>(length);
+      for (int i = 0; i < length; i++)
+        list.add(Array.get(iObject, i));
+      return list;
+    }
+    return null;
   }
 }

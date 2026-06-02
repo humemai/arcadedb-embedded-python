@@ -29,6 +29,7 @@ import com.arcadedb.database.Record;
 import com.arcadedb.database.TransactionContext;
 import com.arcadedb.database.TransactionIndexContext;
 import com.arcadedb.engine.BasePage;
+import com.arcadedb.engine.Bucket;
 import com.arcadedb.engine.Component;
 import com.arcadedb.engine.ComponentFactory;
 import com.arcadedb.engine.ComponentFile;
@@ -98,6 +99,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -207,14 +210,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
   // Inactivity rebuild timer (issue #3737): when mutations exist but haven't reached the threshold,
   // a timer triggers an async rebuild after a period of inactivity.
-  private volatile java.util.TimerTask inactivityRebuildTask;
-  private volatile java.util.Timer     inactivityTimer;
+  private volatile TimerTask inactivityRebuildTask;
+  private volatile Timer     inactivityTimer;
 
   // Compaction support
   private final    AtomicInteger           currentMutablePages;
   private final    int                     minPagesToScheduleACompaction;
   private          LSMVectorIndexCompacted compactedSubIndex;
-  private          boolean                 valid      = true;
+  private volatile boolean                 valid      = true;
   private volatile BUILD_STATE             buildState = BUILD_STATE.READY;
 
   // Page tracking for inserts (avoids getTotalPages() issue with transaction-local pages)
@@ -363,10 +366,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // a deliberate justification - silent double-processing is the failure mode we are blocking.
       if (vectorBuilder.encoding == VectorEncoding.INT8 && vectorBuilder.quantizationType == VectorQuantizationType.INT8)
         throw new IndexException(
-            "Combining encoding=INT8 with quantization=INT8 is redundant: the property is already byte-quantized "
-                + "at the wire level, so JVector's internal INT8 scalar quantization would re-quantize the "
-                + "dequantized floats. Pick one (encoding=INT8 for payload/storage savings, OR quantization=INT8 "
-                + "for index-internal compression) but not both.");
+            """
+            Combining encoding=INT8 with quantization=INT8 is redundant: the property is already byte-quantized \
+            at the wire level, so JVector's internal INT8 scalar quantization would re-quantize the \
+            dequantized floats. Pick one (encoding=INT8 for payload/storage savings, OR quantization=INT8 \
+            for index-internal compression) but not both.""");
 
       // Property-type / encoding consistency: the document property type is what callers actually
       // pass into put(); the encoding is what the index expects. A mismatch (e.g. ARRAY_OF_FLOATS
@@ -698,6 +702,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
       LogManager.instance().log(this, Level.FINE, "Searching FileManager for compacted files with prefix: %s", null, namePrefix);
 
       for (final ComponentFile file : database.getFileManager().getFiles()) {
+        // FileManager.getFiles() is a sparse list: dropped slots are null. Skip them
+        // (same defensive pattern used in discoverAndLoadGraphFile() below).
+        if (file == null)
+          continue;
+
         final String fileName = file.getComponentName();
         final String fileExt = file.getFileExtension();
 
@@ -751,8 +760,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
       return compactedIndex;
 
     } catch (final Exception e) {
-      LogManager.instance().log(this, Level.WARNING, "Error discovering compacted sub-index for %s: %s", indexName,
-          e.getMessage());
+      // A failure here orphans an existing compacted file on disk for the lifetime of the process,
+      // silently degrading kNN performance. Log at SEVERE with the stack trace so it is not missed.
+      LogManager.instance().log(this, Level.SEVERE, "Error discovering compacted sub-index for %s", e, indexName);
       return null;
     }
   }
@@ -1182,7 +1192,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     boolean documentScanPerformed = false;
     if (metadata.associatedBucketId != -1) {
       try {
-        final com.arcadedb.engine.Bucket bucket = database.getSchema().getBucketById(metadata.associatedBucketId);
+        final Bucket bucket = database.getSchema().getBucketById(metadata.associatedBucketId);
         final long docCount = database.countBucket(bucket.getName());
         if (ridToLatestVector.size() < docCount * 8 / 10) {
           LogManager.instance().log(this, Level.WARNING,
@@ -1612,7 +1622,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           database.getTransaction().setUseWAL(false);
         }
 
-        final ChunkCommitCallback chunkCallback = (bytesWritten) -> {
+        final ChunkCommitCallback chunkCallback = bytesWritten -> {
           LogManager.instance().log(this, Level.INFO,
               "Graph persistence chunk complete: %.1fMB written", bytesWritten / (1024.0 * 1024.0));
 
@@ -2220,7 +2230,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
       // CRITICAL FIX: Always write quantization type byte, even if NONE
       // This ensures readVectorFromOffset() can always read a consistent format
-      final VectorQuantizationType quantType = (qmeta != null) ? qmeta.getType() : VectorQuantizationType.NONE;
+      final VectorQuantizationType quantType = qmeta != null ? qmeta.getType() : VectorQuantizationType.NONE;
       final byte quantOrdinal = (byte) quantType.ordinal();
       bytesWritten += currentPage.writeByte(offsetFreeContent + bytesWritten, quantOrdinal);
 
@@ -2455,7 +2465,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // Set bit to 1
         final int byteIndex = i / 8;
         final int bitIndex = i % 8;
-        packed[byteIndex] |= (1 << bitIndex);
+        packed[byteIndex] |= 1 << bitIndex;
       }
     }
 
@@ -2694,6 +2704,15 @@ public class LSMVectorIndex implements Index, IndexInternal {
     return page;
   }
 
+  /** Map JVector similarity (larger = closer) back to a distance so ascending sort returns nearest first. */
+  static float scoreToDistance(final VectorSimilarityFunction similarityFunction, final float score) {
+    return switch (similarityFunction) {
+      case COSINE -> 2.0f * (1.0f - score);
+      case EUCLIDEAN -> score > 0 ? (1.0f / score) - 1.0f : Float.MAX_VALUE;
+      case DOT_PRODUCT -> -score;
+    };
+  }
+
   /**
    * Brute-force scan of delta vectors (inserted since last graph rebuild) and merge with graph search results.
    * Cost is negligible for small delta buffers (microseconds for ≤100 vectors).
@@ -2722,13 +2741,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
       final VectorFloat<?> deltaVf = vts.createFloatVector(delta.vector);
       final float score = metadata.similarityFunction.compare(queryVectorFloat, deltaVf);
-      final float distance = switch (metadata.similarityFunction) {
-        case COSINE -> 2.0f * (1.0f - score);
-        case EUCLIDEAN -> score;
-        case DOT_PRODUCT -> -score;
-        default -> score;
-      };
-      results.add(new Pair<>(bindRid(delta.rid), distance));
+      results.add(new Pair<>(bindRid(delta.rid), scoreToDistance(metadata.similarityFunction, score)));
       added = true;
     }
 
@@ -2768,13 +2781,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         continue;
 
       final float score = metadata.similarityFunction.compare(queryVectorFloat, vec);
-      final float distance = switch (metadata.similarityFunction) {
-        case COSINE -> 2.0f * (1.0f - score);
-        case EUCLIDEAN -> score;
-        case DOT_PRODUCT -> -score;
-        default -> score;
-      };
-      results.add(new Pair<>(bindRid(loc.rid), distance));
+      results.add(new Pair<>(bindRid(loc.rid), scoreToDistance(metadata.similarityFunction, score)));
       added = true;
     }
 
@@ -2890,14 +2897,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
         }
 
         // Perform search with optional RID filtering
-        final Bits bitsFilter = (allowedRIDs != null && !allowedRIDs.isEmpty()) ?
+        final Bits bitsFilter = allowedRIDs != null && !allowedRIDs.isEmpty() ?
             new RIDBitsFilter(allowedRIDs, ordinalToVectorId, vectorIndex) :
             Bits.ALL;
 
         // Use instance GraphSearcher with SearchScoreProvider for efSearch control
         final SearchResult searchResult;
         try (final GraphSearcher searcher = new GraphSearcher(graphIndex)) {
-          final ScoreFunction.ExactScoreFunction exactScoreFunction = (node) ->
+          final ScoreFunction.ExactScoreFunction exactScoreFunction = node ->
               metadata.similarityFunction.compare(queryVectorFloat, vectors.getVector(node));
 
           // Use exact scoring for graph traversal.
@@ -2957,22 +2964,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
               if (allowedRIDs != null && !allowedRIDs.isEmpty() && !allowedRIDs.contains(loc.rid))
                 continue;
 
-              // JVector returns similarity scores - convert to distance based on similarity function
-              // Note: JVector's COSINE returns (1 + cos(a,b)) / 2 mapped to [0, 1]
-              final float score = nodeScore.score;
-              final float distance = switch (metadata.similarityFunction) {
-                case COSINE ->
-                  // JVector COSINE score = (1 + cos) / 2, so cos = 2*score - 1, distance = 1 - cos
-                    2.0f * (1.0f - score);
-                case EUCLIDEAN ->
-                  // For euclidean, the score is already the distance
-                    score;
-                case DOT_PRODUCT ->
-                  // For dot product, higher score is better (closer), so negate it
-                    -score;
-                default -> score;
-              };
-              results.add(new Pair<>(bindRid(loc.rid), distance));
+              results.add(new Pair<>(bindRid(loc.rid), scoreToDistance(metadata.similarityFunction, nodeScore.score)));
             } else {
               skippedDeletedOrNull++;
             }
@@ -3107,7 +3099,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
         final SearchResult searchResult;
         try (final GraphSearcher searcher = new GraphSearcher(graphIndex)) {
-          final ScoreFunction.ExactScoreFunction exactScoreFunction = (node) ->
+          final ScoreFunction.ExactScoreFunction exactScoreFunction = node ->
               metadata.similarityFunction.compare(queryVectorFloat, vectors.getVector(node));
           final DefaultSearchScoreProvider ssp = new DefaultSearchScoreProvider(exactScoreFunction, exactScoreFunction);
 
@@ -3156,14 +3148,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           if (allowedRIDs != null && !allowedRIDs.isEmpty() && !allowedRIDs.contains(loc.rid))
             continue;
 
-          final float score = nodeScore.score;
-          final float distance = switch (metadata.similarityFunction) {
-            case COSINE -> 2.0f * (1.0f - score);
-            case EUCLIDEAN -> score;
-            case DOT_PRODUCT -> -score;
-            default -> score;
-          };
-          results.add(new Pair<>(bindRid(loc.rid), distance));
+          results.add(new Pair<>(bindRid(loc.rid), scoreToDistance(metadata.similarityFunction, nodeScore.score)));
         }
 
         LogManager.instance()
@@ -3274,13 +3259,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
         // Create a ReRanker that does NOT pull from disk - just returns PQ similarity
         // This is the critical optimization: we bypass RandomAccessVectorValues entirely
-        final ScoreFunction.ExactScoreFunction approxReranker = (ordinal) -> scoreFunction.similarityTo(ordinal);
+        final ScoreFunction.ExactScoreFunction approxReranker = ordinal -> scoreFunction.similarityTo(ordinal);
 
         // Wrap in a DefaultSearchScoreProvider (concrete implementation)
         final DefaultSearchScoreProvider ssp = new DefaultSearchScoreProvider(scoreFunction, approxReranker);
 
         // Create RID filter if needed
-        final Bits bitsFilter = (allowedRIDs != null && !allowedRIDs.isEmpty()) ?
+        final Bits bitsFilter = allowedRIDs != null && !allowedRIDs.isEmpty() ?
             new RIDBitsFilter(allowedRIDs, ordinalToVectorId, vectorIndex) :
             Bits.ALL;
 
@@ -3302,17 +3287,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             final int vectorId = ordinalToVectorId[ordinal];
             final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
             if (loc != null && !loc.deleted) {
-              // Convert similarity score to distance
-              // Note: JVector's COSINE returns (1 + cos(a,b)) / 2 mapped to [0, 1]
-              final float score = nodeScore.score;
-              final float distance = switch (metadata.similarityFunction) {
-                case COSINE ->
-                  // JVector COSINE score = (1 + cos) / 2, so cos = 2*score - 1, distance = 1 - cos
-                    2.0f * (1.0f - score);
-                case EUCLIDEAN -> score;
-                case DOT_PRODUCT -> -score;
-                default -> score;
-              };
+              final float distance = scoreToDistance(metadata.similarityFunction, nodeScore.score);
               results.add(new Pair<>(bindRid(loc.rid), distance));
             } else {
               skippedDeletedOrNull++;
@@ -4076,7 +4051,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
   @Override
   public void close() {
-    // Cancel inactivity rebuild timer (issue #3737)
+    // Invalidate first so a concurrent timer thread that wins the monitor after
+    // cancelInactivityRebuildTimer() nulls inactivityTimer cannot bypass the isValid()
+    // guard and resurrect a fresh Timer.
+    valid = false;
     cancelInactivityRebuildTimer();
 
     // Shut down the dedicated graph build pool to cancel any in-progress build operations.
@@ -4436,7 +4414,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       buildGraphFromScratchWithRetry(graphCallback);
 
       // Persist graph with chunking callback
-      final ChunkCommitCallback chunkCallback = (bytesWritten) -> {
+      final ChunkCommitCallback chunkCallback = bytesWritten -> {
         LogManager.instance().log(this, Level.INFO,
             "LSM Vector graph persistence chunk complete: %.1fMB written",
             bytesWritten / (1024.0 * 1024.0));
@@ -4645,7 +4623,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final int fileId = page.getPageId().getFileId();
 
       // Determine if this page is in the compacted or mutable file
-      final boolean isCompacted = (compactedSubIndex != null && fileId == compactedSubIndex.getFileId());
+      final boolean isCompacted = compactedSubIndex != null && fileId == compactedSubIndex.getFileId();
 
       // Read page header
       final int offsetFreeContent = page.readInt(OFFSET_FREE_CONTENT);
@@ -4822,7 +4800,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * effectively resetting the inactivity window.
    * When the timer fires, it triggers an async graph rebuild regardless of the mutation count.
    */
-  private void scheduleInactivityRebuild() {
+  private synchronized void scheduleInactivityRebuild() {
+    if (!isValid())
+      return; // Index closed or dropped - no point scheduling
+
     final int timeoutMs = getInactivityRebuildTimeoutMs();
     if (timeoutMs <= 0)
       return; // Disabled
@@ -4830,12 +4811,16 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (mutationsSinceSerialize.get() <= 0)
       return; // Nothing to rebuild
 
-    // Cancel any previously scheduled task (reset on new mutation)
-    final java.util.TimerTask existing = inactivityRebuildTask;
-    if (existing != null)
+    // Cancel any previously scheduled task (reset on new mutation) and purge the cancelled
+    // entry from the Timer's queue so a high write rate does not let cancelled tasks pile up.
+    final TimerTask existing = inactivityRebuildTask;
+    if (existing != null) {
       existing.cancel();
+      if (inactivityTimer != null)
+        inactivityTimer.purge();
+    }
 
-    final java.util.TimerTask task = new java.util.TimerTask() {
+    final TimerTask task = new TimerTask() {
       @Override
       public void run() {
         // Double-check: only rebuild if there are still pending mutations
@@ -4853,20 +4838,19 @@ public class LSMVectorIndex implements Index, IndexInternal {
           } else {
             // Small graph: synchronous rebuild on the timer thread.
             // Use tryAcquire to avoid blocking the timer thread indefinitely.
-            // If a large rebuild is already running, skip this small one - the next
-            // inactivity timeout or mutation threshold will pick it up.
-            if (mutationsSinceSerialize.get() > 0) {
-              if (REBUILD_SEMAPHORE.tryAcquire()) {
-                try {
-                  buildGraphFromScratch();
-                } finally {
-                  REBUILD_SEMAPHORE.release();
-                }
-              } else {
-                LogManager.instance().log(this, Level.INFO,
-                    "Skipping inactivity rebuild for index %s: another rebuild is already in progress",
-                    indexName);
+            // If another rebuild holds the permit, re-arm the timer so this index
+            // retries at the next interval rather than staying stuck with pending mutations.
+            if (REBUILD_SEMAPHORE.tryAcquire()) {
+              try {
+                buildGraphFromScratch();
+              } finally {
+                REBUILD_SEMAPHORE.release();
               }
+            } else {
+              LogManager.instance().log(this, Level.FINE,
+                  "Skipping inactivity rebuild for index %s: another rebuild is already in progress, will retry in %d ms",
+                  indexName, timeoutMs);
+              scheduleInactivityRebuild();
             }
           }
         } catch (final Exception e) {
@@ -4879,20 +4863,20 @@ public class LSMVectorIndex implements Index, IndexInternal {
     inactivityRebuildTask = task;
 
     if (inactivityTimer == null)
-      inactivityTimer = new java.util.Timer("VectorIndex-InactivityTimer-" + indexName, true);
+      inactivityTimer = new Timer("VectorIndex-InactivityTimer-" + indexName, true);
     inactivityTimer.schedule(task, timeoutMs);
   }
 
   /**
    * Cancel the inactivity rebuild timer if one is scheduled.
    */
-  private void cancelInactivityRebuildTimer() {
-    final java.util.TimerTask task = inactivityRebuildTask;
+  private synchronized void cancelInactivityRebuildTimer() {
+    final TimerTask task = inactivityRebuildTask;
     if (task != null) {
       task.cancel();
       inactivityRebuildTask = null;
     }
-    final java.util.Timer timer = inactivityTimer;
+    final Timer timer = inactivityTimer;
     if (timer != null) {
       timer.cancel();
       inactivityTimer = null;

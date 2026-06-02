@@ -42,7 +42,7 @@ public class HTTPTransactionIT extends BaseGraphServerTest {
 
   @Test
   void simpleTx() throws Exception {
-    testEachServer((serverIndex) -> {
+    testEachServer(serverIndex -> {
       // BEGIN
       HttpURLConnection connection = (HttpURLConnection) new URL(
           "http://127.0.0.1:248" + serverIndex + "/api/v1/begin/" + DATABASE_NAME).openConnection();
@@ -166,7 +166,7 @@ public class HTTPTransactionIT extends BaseGraphServerTest {
 
   @Test
   void checkUnique() throws Exception {
-    testEachServer((serverIndex) -> {
+    testEachServer(serverIndex -> {
       // BEGIN
       final HttpURLConnection connection = (HttpURLConnection) new URL(
           "http://127.0.0.1:248" + serverIndex + "/api/v1/begin/graph").openConnection();
@@ -220,7 +220,9 @@ public class HTTPTransactionIT extends BaseGraphServerTest {
           .isInstanceOf(IOException.class);
 
       String response = readError(connection2);
-      assertThat(connection2.getResponseCode()).isEqualTo(503);
+      // Issue #4350: DuplicatedKeyException must surface as 409 Conflict (client data conflict),
+      // not 503 Service Unavailable (which is retry-worthy and was triggering load-balancer retries).
+      assertThat(connection2.getResponseCode()).isEqualTo(409);
       connection2.disconnect();
       assertThat(response.contains("DuplicatedKeyException")).isTrue();
     });
@@ -259,7 +261,7 @@ public class HTTPTransactionIT extends BaseGraphServerTest {
 
   @Test
   void errorMissingIsolationLevel() throws Exception {
-    testEachServer((serverIndex) -> {
+    testEachServer(serverIndex -> {
       // BEGIN
       final HttpURLConnection connection = (HttpURLConnection) new URL(
           "http://127.0.0.1:248" + serverIndex + "/api/v1/begin/" + DATABASE_NAME).openConnection();

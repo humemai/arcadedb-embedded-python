@@ -73,6 +73,7 @@ import com.arcadedb.schema.Schema;
 import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.security.SecurityManager;
 import com.arcadedb.serializer.BinarySerializer;
+import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.HAReplicatedDatabase;
@@ -85,14 +86,16 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.ConcurrentModificationException;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
 import java.util.logging.Level;
@@ -126,6 +129,11 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   // cause concurrent user-transaction threads to buffer their WAL and lose it, producing
   // WALVersionGapException on followers (version gap from unreplicated writes).
   private static final ThreadLocal<Boolean>                     isSchemaCommitThread    = new ThreadLocal<>();
+  // Accumulates TimeSeries sealed-store blobs recorded during a runWithCompactionReplication session
+  // (issue #4382). Drained into the SCHEMA_ENTRY shipped at the end of the session so followers
+  // install the rewritten sealed files atomically with the buffered mutable-bucket clear WAL.
+  private static final ThreadLocal<List<RaftLogEntryCodec.TsSealedBlob>> compactionSealedBuffer =
+      ThreadLocal.withInitial(ArrayList::new);
 
   private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
@@ -344,7 +352,7 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
         if (getSchema().getEmbedded().isDirty())
           getSchema().getEmbedded().saveConfiguration();
       } catch (final Exception e) {
-        if (e instanceof java.util.ConcurrentModificationException)
+        if (e instanceof ConcurrentModificationException)
           LogManager.instance().log(this, Level.SEVERE,
               """
               Phase 2 commit failed AFTER successful Raft replication with a page version conflict (db=%s, txId=%s). \
@@ -1150,6 +1158,16 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   }
 
   @Override
+  public void recordTimeSeriesSealedChange(final String typeName, final int shardIndex, final String sealedFileName,
+      final byte[] sealedBytes) {
+    // Only meaningful while a runWithCompactionReplication session is active on this thread (it sets
+    // isSchemaCommitThread); outside such a session there is nothing to drain the buffer, so ignore.
+    if (!Boolean.TRUE.equals(isSchemaCommitThread.get()))
+      return;
+    compactionSealedBuffer.get().add(new RaftLogEntryCodec.TsSealedBlob(typeName, shardIndex, sealedFileName, sealedBytes));
+  }
+
+  @Override
   public boolean runWithCompactionReplication(final Callable<Boolean> compaction) throws IOException, InterruptedException {
     if (!isLeader()) {
       // Followers receive compacted state from the leader; running compaction independently
@@ -1175,50 +1193,69 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       return false;
     }
 
+    // Mark this thread so commits executed inside the compaction (e.g. the TimeSeries Phase-4c
+    // mutable-bucket clear) buffer their WAL into schemaWalBuffer instead of shipping a separate
+    // TX_ENTRY. They then ride the SCHEMA_ENTRY below, atomically with any sealed-store blobs and
+    // newly created files. Clear all buffers up-front so we only collect this session's entries.
+    schemaWalBuffer.get().clear();
+    schemaBucketDeltaBuffer.get().clear();
+    compactionSealedBuffer.get().clear();
+    isSchemaCommitThread.set(Boolean.TRUE);
     try {
       final boolean result = invokeCompaction(compaction);
       if (!result)
         return false;
 
-      final List<FileManager.FileChange> changes = proxied.getFileManager().getRecordedChanges();
-      if (changes == null)
-        return result;
-
       final Map<Integer, String> addFiles = new HashMap<>();
       final Map<Integer, String> removeFiles = new HashMap<>();
-      for (final FileManager.FileChange change : changes) {
-        if (change.create)
-          addFiles.put(change.fileId, change.fileName);
-        else
-          removeFiles.put(change.fileId, change.fileName);
-      }
+      final List<FileManager.FileChange> changes = proxied.getFileManager().getRecordedChanges();
+      if (changes != null)
+        for (final FileManager.FileChange change : changes) {
+          if (change.create)
+            addFiles.put(change.fileId, change.fileName);
+          else
+            removeFiles.put(change.fileId, change.fileName);
+        }
 
-      if (addFiles.isEmpty() && removeFiles.isEmpty())
-        return result;
+      // Buffered WAL from commits that ran inside the compaction (e.g. the TimeSeries mutable-bucket
+      // clear). These are correctly-versioned (positive txId) and apply over the existing follower
+      // pages without a version gap. Each pairs index-aligned with its bucket-delta map.
+      final List<byte[]> walEntries = new ArrayList<>(schemaWalBuffer.get());
+      final List<Map<Integer, Integer>> bucketDeltas = new ArrayList<>(schemaBucketDeltaBuffer.get());
 
-      // Serialize all pages of each newly created compaction file as synthetic WAL.
-      // txId=-1 on followers signals forceApply to bypass version-gap checks when writing
-      // pages whose version exceeds 1 (which is common after repeated page updates in compaction).
-      final List<byte[]> walEntries = new ArrayList<>();
+      // Synthetic WAL for genuinely new paginated files (e.g. LSM index compaction output).
+      // txId=-1 on followers signals forceApply to bypass version-gap checks. The TimeSeries sealed
+      // store is not a paginated file, so it contributes none here - it ships as a blob instead.
       for (final int fileId : addFiles.keySet()) {
         final byte[] wal = serializeFilePagesAsWal(fileId);
-        if (wal != null)
+        if (wal != null) {
           walEntries.add(wal);
+          bucketDeltas.add(Collections.<Integer, Integer>emptyMap());
+        }
       }
+
+      final List<RaftLogEntryCodec.TsSealedBlob> sealedBlobs = new ArrayList<>(compactionSealedBuffer.get());
+
+      if (addFiles.isEmpty() && removeFiles.isEmpty() && walEntries.isEmpty() && sealedBlobs.isEmpty())
+        return result;
 
       final String serializedSchema = proxied.getSchema().getEmbedded().toJSON().toString();
       requireRaftServer().getTransactionBroker()
-          .replicateSchema(getName(), serializedSchema, addFiles, removeFiles, walEntries, Collections.emptyList());
+          .replicateSchema(getName(), serializedSchema, addFiles, removeFiles, walEntries, bucketDeltas, sealedBlobs);
 
       HALog.log(this, HALog.DETAILED,
-          "Compaction for database '%s' replicated via Raft: addFiles=%d, removeFiles=%d, walEntries=%d",
-          getName(), addFiles.size(), removeFiles.size(), walEntries.size());
+          "Compaction for database '%s' replicated via Raft: addFiles=%d, removeFiles=%d, walEntries=%d, sealedBlobs=%d",
+          getName(), addFiles.size(), removeFiles.size(), walEntries.size(), sealedBlobs.size());
 
       if (HALog.isEnabled(HALog.DETAILED))
         logSchemaPayloadDiagnostics("compaction", serializedSchema, addFiles, removeFiles);
 
       return result;
     } finally {
+      isSchemaCommitThread.remove();
+      schemaWalBuffer.get().clear();
+      schemaBucketDeltaBuffer.get().clear();
+      compactionSealedBuffer.get().clear();
       proxied.getFileManager().stopRecordingChanges();
     }
   }
@@ -1240,6 +1277,12 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
    * {@link GlobalConfiguration#HA_QUORUM_TIMEOUT} so we never deadlock if a recorder thread
    * crashed without releasing the session; on timeout we proceed with the original ordering
    * race rather than locking up writes indefinitely.
+   * <p>
+   * Note: the TimeSeries compaction/append deadlock (issue #4458) is fixed at the source -
+   * {@code TimeSeriesShard.appendSamples} no longer holds the compaction read lock while calling
+   * this method, so Phase 4c can complete and end the recording session promptly. This timeout
+   * remains as a defensive safety net for any other recorder thread that crashes mid-session; it
+   * is intentionally retained, not dead code.
    */
   private void waitForActiveRecordingSession() {
     if (proxied.getFileManager().getRecordedChanges() == null)
@@ -1289,7 +1332,7 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       // entries shipped in this SCHEMA_ENTRY. addFiles values are full file names like
       // "BulkRace_0_<nanos>.13.65536.v0.umtidx"; the schema "indexes" key strips the trailing
       // dot-separated tail so we compare on a stable prefix.
-      final java.util.Set<String> shippedIndexNames = new java.util.HashSet<>();
+      final Set<String> shippedIndexNames = new HashSet<>();
       for (final String fullName : addFiles.values()) {
         final int firstDot = fullName.indexOf('.');
         shippedIndexNames.add(firstDot > 0 ? fullName.substring(0, firstDot) : fullName);
@@ -1516,7 +1559,7 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
 
     if (responseJson.has("result")) {
       final Object resultObj = responseJson.get("result");
-      if (resultObj instanceof com.arcadedb.serializer.json.JSONArray resultArray) {
+      if (resultObj instanceof JSONArray resultArray) {
         for (int i = 0; i < resultArray.length(); i++) {
           final Object item = resultArray.get(i);
           if (item instanceof JSONObject jsonObj)

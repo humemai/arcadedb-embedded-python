@@ -21,7 +21,7 @@ package com.arcadedb.function.sql.vector;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.exception.CommandSQLParsingException;
 import com.arcadedb.query.sql.executor.CommandContext;
-import java.util.List;
+import java.util.Locale;
 
 /**
  * Converts a vector to a human-readable string representation.
@@ -71,7 +71,7 @@ public class SQLFunctionVectorToString extends SQLFunctionVectorAbstract {
     if (params.length == 2 && params[1] != null) {
       if (params[1] instanceof String formatStr) {
         try {
-          format = Format.valueOf(formatStr.toUpperCase());
+          format = Format.valueOf(formatStr.toUpperCase(Locale.ROOT));
         } catch (final IllegalArgumentException e) {
           throw new CommandSQLParsingException("Unknown format: " + formatStr + ". Supported: COMPACT, PRETTY, PYTHON, MATLAB");
         }

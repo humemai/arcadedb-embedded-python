@@ -23,7 +23,7 @@ import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.remote.RemoteDatabase;
-import com.arcadedb.test.BaseGraphServerTest;
+import com.arcadedb.server.BaseGraphServerTest;
 import com.arcadedb.server.grpc.InsertOptions;
 import com.arcadedb.server.grpc.InsertOptions.ConflictMode;
 import com.arcadedb.server.grpc.InsertOptions.TransactionMode;
@@ -157,7 +157,7 @@ class RemoteGrpcDatabaseRegressionTest extends BaseGraphServerTest {
         Result r = rs.next();
         // System.out.println("Count all: r = " + r);
         Number n = r.getProperty("c");
-        c = (n == null) ? 0 : n.longValue();
+        c = n == null ? 0 : n.longValue();
       }
       return c;
     }

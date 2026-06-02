@@ -52,6 +52,7 @@ import com.arcadedb.server.grpc.InsertOptions.TransactionMode;
 import com.arcadedb.server.grpc.ProjectionSettings.ProjectionEncoding;
 import com.arcadedb.server.monitor.QueryProfile;
 import com.arcadedb.server.monitor.ServerQueryProfiler;
+import com.arcadedb.server.security.ServerSecurityUser;
 import io.micrometer.core.instrument.Metrics;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -64,13 +65,17 @@ import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import org.jspecify.annotations.NonNull;
 
+import com.arcadedb.utility.DateUtils;
+
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -202,8 +207,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // Check if this is an externally-managed transaction (started via beginTransaction RPC)
       final boolean hasTx = req.hasTransaction();
       final var tx = hasTx ? req.getTransaction() : null;
-      final String incomingTxId = (hasTx && tx != null) ? tx.getTransactionId() : null;
-      final TransactionContext txCtx = (incomingTxId != null && !incomingTxId.isBlank())
+      final String incomingTxId = hasTx && tx != null ? tx.getTransactionId() : null;
+      final TransactionContext txCtx = incomingTxId != null && !incomingTxId.isBlank()
           ? activeTransactions.get(incomingTxId) : null;
 
       if (txCtx != null) {
@@ -470,7 +475,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   public void createRecord(CreateRecordRequest req, StreamObserver<CreateRecordResponse> resp) {
     // Check for external transaction
     final String incomingTxId = req.hasTransaction() ? req.getTransaction().getTransactionId() : null;
-    final TransactionContext txCtx = (incomingTxId != null && !incomingTxId.isBlank())
+    final TransactionContext txCtx = incomingTxId != null && !incomingTxId.isBlank()
         ? activeTransactions.get(incomingTxId) : null;
 
     if (txCtx != null) {
@@ -480,7 +485,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         resp.onNext(future.get());
         resp.onCompleted();
       } catch (Exception e) {
-        final Throwable cause = (e instanceof ExecutionException && e.getCause() != null) ? e.getCause() : e;
+        final Throwable cause = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
         LogManager.instance().log(this, Level.SEVERE, "ERROR in createRecord (external tx)", cause);
         if (cause instanceof IllegalArgumentException)
           resp.onError(Status.INVALID_ARGUMENT.withDescription("CreateRecord: " + cause.getMessage()).asException());
@@ -539,13 +544,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
         if (props.containsKey("out")) {
           GrpcValue pv = props.get("out");
-          outStr = (pv.getKindCase() == GrpcValue.KindCase.STRING_VALUE) ? pv.getStringValue() :
+          outStr = pv.getKindCase() == GrpcValue.KindCase.STRING_VALUE ? pv.getStringValue() :
               String.valueOf(fromGrpcValue(pv));
         }
 
         if (props.containsKey("in")) {
           GrpcValue pv = props.get("in");
-          inStr = (pv.getKindCase() == GrpcValue.KindCase.STRING_VALUE) ? pv.getStringValue() :
+          inStr = pv.getKindCase() == GrpcValue.KindCase.STRING_VALUE ? pv.getStringValue() :
               String.valueOf(fromGrpcValue(pv));
         }
 
@@ -599,10 +604,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
       resp.onNext(LookupByRidResponse.newBuilder().setFound(true).setRecord(convertToGrpcRecord(el.getRecord(), db)).build());
       resp.onCompleted();
-// CURRENT IMPL EXPECTS AN EXCEPTION INSTEAD
-//    } catch (RecordNotFoundException e) {
-//      resp.onNext(LookupByRidResponse.newBuilder().setFound(false).build());
-//      resp.onCompleted();
+    } catch (RecordNotFoundException e) {
+      resp.onError(Status.NOT_FOUND.withDescription("LookupByRid: " + e.getMessage()).asException());
     } catch (Exception e) {
       resp.onError(Status.INTERNAL.withDescription("LookupByRid: " + e.getMessage()).asException());
     }
@@ -612,7 +615,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   public void updateRecord(final UpdateRecordRequest req, final StreamObserver<UpdateRecordResponse> resp) {
     // Check for external transaction
     final String incomingTxId = req.hasTransaction() ? req.getTransaction().getTransactionId() : null;
-    final TransactionContext txCtx = (incomingTxId != null && !incomingTxId.isBlank())
+    final TransactionContext txCtx = incomingTxId != null && !incomingTxId.isBlank()
         ? activeTransactions.get(incomingTxId) : null;
 
     if (txCtx != null) {
@@ -622,7 +625,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         resp.onNext(future.get());
         resp.onCompleted();
       } catch (Exception e) {
-        final Throwable cause = (e instanceof ExecutionException && e.getCause() != null) ? e.getCause() : e;
+        final Throwable cause = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
         LogManager.instance().log(this, Level.SEVERE, "ERROR in updateRecord (external tx)", cause);
         if (cause instanceof RecordNotFoundException)
           resp.onError(Status.NOT_FOUND.withDescription("Record not found: " + req.getRid()).asException());
@@ -692,7 +695,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
         props.forEach((k, v) -> {
           String key = k.trim().toLowerCase();
-          if (key.equals("@rid") || key.equals("@type") || key.equals("@cat")) {
+          if ("@rid".equals(key) || "@type".equals(key) || "@cat".equals(key)) {
             // Skip internal fields to prevent accidental overwrites
             LogManager.instance().log(this, Level.FINE, "Skipping internal field during update: %s", k);
             return;
@@ -719,7 +722,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
         props.forEach((k, v) -> {
           String key = k.trim().toLowerCase();
-          if (key.equals("@rid") || key.equals("@type") || key.equals("@cat")) {
+          if ("@rid".equals(key) || "@type".equals(key) || "@cat".equals(key)) {
             // Skip internal fields to prevent accidental overwrites
             LogManager.instance().log(this, Level.FINE, "Skipping internal field during update: %s", k);
             return;
@@ -758,7 +761,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   public void deleteRecord(DeleteRecordRequest req, StreamObserver<DeleteRecordResponse> resp) {
     // Check for external transaction
     final String incomingTxId = req.hasTransaction() ? req.getTransaction().getTransactionId() : null;
-    final TransactionContext txCtx = (incomingTxId != null && !incomingTxId.isBlank())
+    final TransactionContext txCtx = incomingTxId != null && !incomingTxId.isBlank()
         ? activeTransactions.get(incomingTxId) : null;
 
     if (txCtx != null) {
@@ -768,7 +771,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         resp.onNext(future.get());
         resp.onCompleted();
       } catch (Exception e) {
-        final Throwable cause = (e instanceof ExecutionException && e.getCause() != null) ? e.getCause() : e;
+        final Throwable cause = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
         LogManager.instance().log(this, Level.SEVERE, "ERROR in deleteRecord (external tx)", cause);
         if (cause instanceof RecordNotFoundException)
           resp.onError(Status.NOT_FOUND.withDescription("Record not found: " + req.getRid()).asException());
@@ -833,9 +836,58 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
   @Override
   public void executeQuery(ExecuteQueryRequest request, StreamObserver<ExecuteQueryResponse> responseObserver) {
+    // Force compression for streaming (usually beneficial)
+    CompressionAwareService.setResponseCompression(responseObserver, "gzip");
+
+    // If the client is inside an externally-managed transaction (started via beginTransaction RPC),
+    // route the query to that transaction's dedicated executor thread. ArcadeDB transactions are
+    // thread-bound: changes pending in the transaction (e.g. a record created via createRecord or
+    // executeCommand and not yet committed) are only visible to the thread that owns the
+    // transaction. Running the query on the gRPC worker thread would miss those in-flight
+    // changes and yield "Record not found" for a record the client just saved (issue #4260).
+    if (request.hasTransaction()) {
+      final String incomingTxId = request.getTransaction().getTransactionId();
+      LogManager.instance().log(this, Level.FINE, "executeQuery(): has Tx %s", incomingTxId);
+
+      final TransactionContext txCtx = incomingTxId != null && !incomingTxId.isBlank()
+          ? activeTransactions.get(incomingTxId) : null;
+      if (txCtx == null) {
+        responseObserver.onError(Status.INTERNAL
+            .withDescription("Query execution failed: Invalid transaction ID").asException());
+        return;
+      }
+
+      try {
+        final Future<ExecuteQueryResponse> future = txCtx.executor.submit(
+            () -> executeQueryInternal(request, txCtx.db));
+        final ExecuteQueryResponse response = future.get();
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
+      } catch (Exception e) {
+        final Throwable cause = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
+        LogManager.instance().log(this, Level.SEVERE, "Error executing query: %s", cause, cause.getMessage());
+        responseObserver.onError(Status.INTERNAL
+            .withDescription("Query execution failed: " + cause.getMessage()).asException());
+      }
+      return;
+    }
+
+    // No external transaction: run on the gRPC worker thread.
+    Database database = null;
+    try {
+      database = getDatabase(request.getDatabase(), request.getCredentials());
+      final ExecuteQueryResponse response = executeQueryInternal(request, database);
+      responseObserver.onNext(response);
+      responseObserver.onCompleted();
+    } catch (Exception e) {
+      LogManager.instance().log(this, Level.SEVERE, "Error executing query: %s", e, e.getMessage());
+      responseObserver.onError(Status.INTERNAL.withDescription("Query execution failed: " + e.getMessage()).asException());
+    }
+  }
+
+  private ExecuteQueryResponse executeQueryInternal(final ExecuteQueryRequest request, final Database database) {
     final QueryProfile profile = new QueryProfile();
     QueryProfile.pushCurrent(profile);
-    Database database = null;
     String profileLanguage = null;
     try {
       final long deserStart = System.nanoTime();
@@ -846,24 +898,6 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               .mode = %s""",
           projectionConfig.isInclude(),
           projectionConfig.getEnc());
-
-      // Force compression for streaming (usually beneficial)
-      CompressionAwareService.setResponseCompression(responseObserver, "gzip");
-
-      database = getDatabase(request.getDatabase(), request.getCredentials());
-
-      // Check if this is part of a transaction
-      if (request.hasTransaction()) {
-
-        LogManager.instance().log(this, Level.FINE, "executeQuery(): has Tx %s",
-            request.getTransaction().getTransactionId());
-
-        TransactionContext txCtx = activeTransactions.get(request.getTransaction().getTransactionId());
-        if (txCtx == null) {
-          throw new IllegalArgumentException("Invalid transaction ID");
-        }
-        database = txCtx.db;
-      }
 
       // Execute the query
       long startTime = System.currentTimeMillis();
@@ -881,7 +915,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       try (final ResultSet resultSet = database.query(language, request.getQuery(), queryParams)) {
 
         LogManager.instance()
-            .log(this, Level.FINE, "executeQuery(): to get resultSet = %s", (System.currentTimeMillis() - startTime));
+            .log(this, Level.FINE, "executeQuery(): to get resultSet = %s", System.currentTimeMillis() - startTime);
 
         // Build response
         QueryResult.Builder resultBuilder = QueryResult.newBuilder();
@@ -931,13 +965,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         LogManager.instance().log(this, Level.FINE, "executeQuery(): executionTime + response generation = %s",
             executionTime);
 
-        responseObserver.onNext(response);
-        responseObserver.onCompleted();
+        return response;
       }
-
-    } catch (Exception e) {
-      LogManager.instance().log(this, Level.SEVERE, "Error executing query: %s", e, e.getMessage());
-      responseObserver.onError(Status.INTERNAL.withDescription("Query execution failed: " + e.getMessage()).asException());
     } finally {
       recordGrpcProfile("grpc.query", profile, database != null ? database.getName() : request.getDatabase(),
           profileLanguage != null ? profileLanguage : request.getLanguage(), request.getQuery());
@@ -972,11 +1001,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   public void beginTransaction(BeginTransactionRequest request,
                                StreamObserver<BeginTransactionResponse> responseObserver) {
     final String reqDb = request.getDatabase();
-    final String user = (request.hasCredentials() ? request.getCredentials().getUsername() : null);
+    final String user = request.hasCredentials() ? request.getCredentials().getUsername() : null;
 
     LogManager.instance()
         .log(this, Level.FINE, "beginTransaction(): received request db=%s user=%s activeTxCount(before)=%s", reqDb,
-            (user != null ? user : "<none>"),
+            user != null ? user : "<none>",
             activeTransactions.size());
 
     // Declare txCtx outside try block so we can clean it up on failure
@@ -988,9 +1017,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       LogManager.instance().log(this, Level.FINE, """
               beginTransaction(): resolved database instance dbName=%s class=%s \
               hash=%s""",
-          (database != null ? database.getName() : "<null>"), (database != null ?
-              database.getClass().getSimpleName() : "<null>"),
-          (database != null ? System.identityHashCode(database) : 0));
+          database != null ? database.getName() : "<null>", database != null ?
+              database.getClass().getSimpleName() : "<null>",
+          database != null ? System.identityHashCode(database) : 0);
 
       // Generate transaction ID first so we can create the context
       final String transactionId = generateTransactionId();
@@ -1016,7 +1045,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
       LogManager.instance()
           .log(this, Level.FINE, "beginTransaction(): started txId=%s for db=%s activeTxCount(after)=%s", transactionId,
-              (database != null ? database.getName() : "<null>"), activeTransactions.size());
+              database != null ? database.getName() : "<null>", activeTransactions.size());
 
       final BeginTransactionResponse response = BeginTransactionResponse.newBuilder().setTransactionId(transactionId)
           .setTimestamp(System.currentTimeMillis()).build();
@@ -1028,10 +1057,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       if (txCtx != null) {
         txCtx.shutdown();
       }
-      Throwable cause = (t instanceof ExecutionException && t.getCause() != null) ? t.getCause() : t;
+      Throwable cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;
       LogManager.instance()
-          .log(this, Level.FINE, "beginTransaction(): FAILED db=%s user=%s err=%s", reqDb, (user != null ? user :
-                  "<none>"),
+          .log(this, Level.FINE, "beginTransaction(): FAILED db=%s user=%s err=%s", reqDb, user != null ? user :
+                  "<none>",
               cause.toString(), cause);
       LogManager.instance().log(this, Level.SEVERE, "Error beginning transaction: %s", cause, cause.getMessage());
       responseObserver.onError(Status.INTERNAL.withDescription("Failed to begin transaction: " + cause.getMessage()).asException());
@@ -1083,7 +1112,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       rsp.onNext(CommitTransactionResponse.newBuilder().setSuccess(true).setCommitted(true).build());
       rsp.onCompleted();
     } catch (Throwable t) {
-      Throwable cause = (t instanceof ExecutionException && t.getCause() != null) ? t.getCause() : t;
+      Throwable cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;
       LogManager.instance().log(this, Level.FINE, "commitTransaction(): commit FAILED txId=%s err=%s", txId,
           cause.toString(), cause);
       // tx is unusable; do not reinsert into the map
@@ -1138,7 +1167,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       rsp.onNext(RollbackTransactionResponse.newBuilder().setSuccess(true).setRolledBack(true).build());
       rsp.onCompleted();
     } catch (Throwable t) {
-      Throwable cause = (t instanceof ExecutionException && t.getCause() != null) ? t.getCause() : t;
+      Throwable cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;
       LogManager.instance().log(this, Level.FINE, "rollbackTransaction(): rollback FAILED txId=%s err=%s", txId,
           cause.toString(), cause);
       rsp.onError(Status.ABORTED.withDescription("Rollback failed: " + cause.getMessage()).asException());
@@ -1369,7 +1398,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       for (int j = i; j < end; j++)
         b.addRecords(all.get(j));
 
-      running += (end - i);
+      running += end - i;
       safeOnNext(scso, cancelled,
           b.setTotalRecordsInBatch(end - i).setRunningTotalEmitted(running).setIsLastBatch(end == all.size()).build());
     }
@@ -2193,6 +2222,16 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     }
   }
 
+  private boolean keyExists(final InsertContext ctx, final MutableDocument incoming) {
+    if (ctx.keyCols.isEmpty())
+      return false;
+    final String where = String.join(" AND ", ctx.keyCols.stream().map(k -> k + " = ?").toList());
+    final Object[] params = ctx.keyCols.stream().map(incoming::get).toArray();
+    try (final ResultSet rs = ctx.db.query("sql", "SELECT FROM " + ctx.opts.getTargetClass() + " WHERE " + where, params)) {
+      return rs.hasNext();
+    }
+  }
+
   // ---------- Core insert plumbing ----------
 
   private static final class Counts {
@@ -2243,6 +2282,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           applyGrpcRecord(v, r);
           if (ctx.opts.getConflictMode() == ConflictMode.CONFLICT_UPDATE && tryUpsertVertex(ctx, v)) {
             c.updated++;
+          } else if (ctx.opts.getConflictMode() == ConflictMode.CONFLICT_IGNORE && keyExists(ctx, v)) {
+            c.ignored++;
           } else {
             v.save();
             c.inserted++;
@@ -2272,6 +2313,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           applyGrpcRecord(d, r);
           if (ctx.opts.getConflictMode() == ConflictMode.CONFLICT_UPDATE && tryUpsertDocument(ctx, d)) {
             c.updated++;
+          } else if (ctx.opts.getConflictMode() == ConflictMode.CONFLICT_IGNORE && keyExists(ctx, d)) {
+            c.ignored++;
           } else {
             d.save();
             c.inserted++;
@@ -2418,7 +2461,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   private GrpcValue toGrpcValue(Object o, ProjectionConfig pc) {
 
     LogManager.instance().log(this, Level.FINE, "toGrpcValue(): Converting\n   value = %s\n   class = %s", o,
-        (o == null ? "null" : o.getClass().getName()));
+        o == null ? "null" : o.getClass().getName());
 
     if (o instanceof JsonElement je) {
       return gsonToGrpc(je);
@@ -2452,6 +2495,12 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
     // Issue #4149: emit Java time temporals as proto Timestamp instead of falling through to
     // String.valueOf(o), which silently dropped sub-millisecond precision.
+    if (o instanceof LocalDate ld) {
+      final long seconds = ld.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
+      return dbgEnc("toGrpcValue", o, GrpcValue.newBuilder()
+          .setTimestampValue(Timestamp.newBuilder().setSeconds(seconds).setNanos(0).build())
+          .setLogicalType("date").build(), null);
+    }
     if (o instanceof LocalDateTime ldt) {
       final Instant instant = ldt.toInstant(ZoneOffset.UTC);
       return dbgEnc("toGrpcValue", o, GrpcValue.newBuilder()
@@ -2505,7 +2554,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // ===== PROJECTION-AWARE Document handling =====
     if (o instanceof Document doc) {
 
-      final boolean inProjection = (pc != null && pc.include);
+      final boolean inProjection = pc != null && pc.include;
 
       if (!inProjection) {
         // Not a projection row: send as LINK if possible, else fall back
@@ -2545,8 +2594,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // 3.2 MAP mode
       if (enc == ProjectionEncoding.PROJECTION_AS_MAP) {
         LogManager.instance().log(this, Level.FINE, "GRPC-ENC [toGrpcValue] PROJECTION -> MAP rid=%s type=%s",
-            (doc.getIdentity() != null ? doc.getIdentity() : "null"), (doc.getType() != null ? doc.getTypeName() :
-                "null"));
+            doc.getIdentity() != null ? doc.getIdentity() : "null", doc.getType() != null ? doc.getTypeName() :
+                "null");
         GrpcMap.Builder mb = GrpcMap.newBuilder();
 
         // meta
@@ -2592,8 +2641,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // 3.3 JSON mode
       if (enc == ProjectionEncoding.PROJECTION_AS_JSON) {
         LogManager.instance().log(this, Level.FINE, "GRPC-ENC [toGrpcValue] PROJECTION -> JSON rid=%s type=%s",
-            (doc.getIdentity() != null ? doc.getIdentity() : "null"), (doc.getType() != null ? doc.getTypeName() :
-                "null"));
+            doc.getIdentity() != null ? doc.getIdentity() : "null", doc.getType() != null ? doc.getTypeName() :
+                "null");
 
         try {
 
@@ -2637,8 +2686,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // Safe fallback: send as MAP (typed GrpcValue tree)
           LogManager.instance().log(this, Level.WARNING,
               "GRPC-ENC [toGrpcValue] PROJECTION_AS_JSON failed for rid=%s type=%s, falling back to MAP; err=%s",
-              (doc.getIdentity() != null ? doc.getIdentity() : "null"), (doc.getType() != null ? doc.getTypeName() :
-                  "null"),
+              doc.getIdentity() != null ? doc.getIdentity() : "null", doc.getType() != null ? doc.getTypeName() :
+                  "null",
               t.toString());
 
           GrpcMap.Builder mb = GrpcMap.newBuilder();
@@ -2850,7 +2899,26 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // transaction management). Other wire protocols (HTTP, Postgres) do this as well.
         // Always call init() to ensure the context references the correct database instance,
         // since gRPC reuses threads from its pool and a stale context may exist.
-        DatabaseContext.INSTANCE.init((DatabaseInternal) db);
+        final DatabaseContext.DatabaseContextTL ctx = DatabaseContext.INSTANCE.init((DatabaseInternal) db);
+
+        // Propagate the authenticated user so HA-Raft can forward commands to the leader:
+        // forwardCommandToLeaderViaRaft reads proxied.getCurrentUserName() to set the
+        // X-ArcadeDB-Forwarded-User header. Without this, every command issued through a
+        // follower throws "Cannot forward command to leader: no authenticated user in the
+        // current security context". Mirrors PostgresNetworkExecutor.openDatabase().
+        final String authenticatedUser = resolvedUsername(credentials);
+        if (authenticatedUser != null && arcadeServer.getSecurity() != null) {
+          final ServerSecurityUser secUser = arcadeServer.getSecurity().getUser(authenticatedUser);
+          if (secUser != null)
+            ctx.setCurrentUser(secUser.getDatabaseUser(db));
+          else
+            // A race between credential validation and concurrent user mutation can land here.
+            // Leaving the user unset would silently break HA leader-forwarding, so surface it.
+            LogManager.instance().log(this, Level.WARNING,
+                "gRPC request authenticated as '%s' but server security has no matching user; HA leader-forwarding will fail for this request",
+                authenticatedUser);
+        }
+
         return db;
       }
     }
@@ -2902,22 +2970,31 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     }
   }
 
-  private void validateCredentials(DatabaseCredentials credentials) {
-    // Check if user is already authenticated via the interceptor (e.g., via Bearer token)
-    final String authenticatedUser = GrpcAuthInterceptor.USER_CONTEXT_KEY.get();
-    if (authenticatedUser != null && !authenticatedUser.isEmpty()) {
-      // User already authenticated via interceptor, no need to validate credentials
-      LogManager.instance().log(this, Level.FINE, """
-          validateCredentials(): user already authenticated via interceptor:\
-           %s""", authenticatedUser);
-      return;
+  /**
+   * Resolves the authenticated username for the current request. Prefers the interceptor-set
+   * gRPC context (Bearer or basic auth flows) and falls back to the credentials carried by the
+   * request payload. Single source of truth for username precedence; both
+   * {@link #validateCredentials(DatabaseCredentials)} and {@link #getDatabase(String, DatabaseCredentials)}
+   * delegate here so the rule cannot drift between callers.
+   */
+  private String resolvedUsername(final DatabaseCredentials credentials) {
+    final String contextUser = GrpcAuthInterceptor.USER_CONTEXT_KEY.get();
+    if (contextUser != null && !contextUser.isEmpty())
+      return contextUser;
+    if (credentials != null) {
+      final String credUser = credentials.getUsername();
+      if (credUser != null && !credUser.isEmpty())
+        return credUser;
     }
+    return null;
+  }
 
-    // Implement credential validation logic
-    // This is a placeholder - integrate with ArcadeDB's security system
-    if (credentials == null || credentials.getUsername().isEmpty()) {
+  private void validateCredentials(DatabaseCredentials credentials) {
+    final String authenticatedUser = resolvedUsername(credentials);
+    if (authenticatedUser == null)
       throw new IllegalArgumentException("Invalid credentials");
-    }
+
+    LogManager.instance().log(this, Level.FINE, "validateCredentials(): resolved user '%s'", authenticatedUser);
   }
 
   /**
@@ -3081,10 +3158,16 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     if (grpcValue == null)
       return null;
 
+    // Issue #4263: a property explicitly set to null travels over the wire as a GrpcValue with no
+    // kind set. Treat it as a real null regardless of the declared schema type, otherwise the STRING
+    // branch below would store the literal string "null" (String.valueOf(null)).
+    if (grpcValue.getKindCase() == GrpcValue.KindCase.KIND_NOT_SET)
+      return null;
+
     // Try schema
     Property prop = null;
     try {
-      prop = (dtype != null) ? dtype.getProperty(propName) : null;
+      prop = dtype != null ? dtype.getProperty(propName) : null;
     } catch (SchemaException ignore) {
     }
 
@@ -3184,11 +3267,19 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
       case DATE:
       case DATETIME:
-        // Prefer timestamp_value; else accept epoch ms in int64; else parse string
+        // Prefer timestamp_value; else accept epoch ms in int64; else parse string (epoch ms or ISO 8601)
         return switch (v.getKindCase()) {
           case TIMESTAMP_VALUE -> new Date(GrpcTypeConverter.tsToMillis(v.getTimestampValue()));
           case INT64_VALUE -> new Date(v.getInt64Value());
-          case STRING_VALUE -> new Date(Long.parseLong(v.getStringValue())); // or parse ISO if you emit it
+          case STRING_VALUE -> {
+            final String s = v.getStringValue();
+            try {
+              yield new Date(Long.parseLong(s));
+            } catch (NumberFormatException ignored) {
+              final Long millis = DateUtils.dateTimeToTimestamp(db, s, ChronoUnit.MILLIS);
+              yield millis != null ? new Date(millis) : null;
+            }
+          }
           default -> null;
         };
 
@@ -3215,7 +3306,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
                 prop.getOfType());
 
         String embeddedTypeName =
-            (v.getKindCase() == GrpcValue.KindCase.EMBEDDED_VALUE && !v.getEmbeddedValue().getType().isEmpty())
+            v.getKindCase() == GrpcValue.KindCase.EMBEDDED_VALUE && !v.getEmbeddedValue().getType().isEmpty()
                 ? v.getEmbeddedValue().getType()
                 : prop.getOfType();
 
@@ -3243,11 +3334,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         }
 
         final String source =
-            (v.getKindCase() == GrpcValue.KindCase.EMBEDDED_VALUE && !v.getEmbeddedValue().getType().isEmpty())
+            v.getKindCase() == GrpcValue.KindCase.EMBEDDED_VALUE && !v.getEmbeddedValue().getType().isEmpty()
                 ? "payload"
                 : "schema/discovered";
-        int fields = (v.getKindCase() == GrpcValue.KindCase.EMBEDDED_VALUE) ? v.getEmbeddedValue().getFieldsCount()
-            : (v.getKindCase() == GrpcValue.KindCase.MAP_VALUE) ? v.getMapValue().getEntriesCount() : 0;
+        int fields = v.getKindCase() == GrpcValue.KindCase.EMBEDDED_VALUE ? v.getEmbeddedValue().getFieldsCount()
+            : v.getKindCase() == GrpcValue.KindCase.MAP_VALUE ? v.getMapValue().getEntriesCount() : 0;
         LogManager.instance()
             .log(this, Level.FINE, "EMBEDDED: resolved embeddedTypeName='%s' (source=%s), fields=%s",
                 embeddedTypeName, source,
@@ -3259,7 +3350,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         try {
           embeddedType = db.getSchema().getType(embeddedTypeName);
           LogManager.instance().log(this, Level.FINE, "EMBEDDED: schema type lookup '%s' -> %s", embeddedTypeName,
-              (embeddedType != null ? "FOUND" : "NOT FOUND"));
+              embeddedType != null ? "FOUND" : "NOT FOUND");
         } catch (Exception e) {
           LogManager.instance()
               .log(this, Level.FINE, "EMBEDDED: schema type lookup failed for '%s': %s", embeddedTypeName,
@@ -3272,10 +3363,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           case EMBEDDED_VALUE:
             v.getEmbeddedValue().getFieldsMap().forEach((k, vv) -> {
               LogManager.instance().log(this, Level.FINE, "EMBEDDED: field '%s' raw kind=%s", k, vv.getKindCase());
-              Object j = (embeddedTypeFinal != null) ? toJavaForProperty(db, ed, embeddedTypeFinal, k, vv) :
+              Object j = embeddedTypeFinal != null ? toJavaForProperty(db, ed, embeddedTypeFinal, k, vv) :
                   fromGrpcValue(vv);
               LogManager.instance().log(this, Level.FINE, "EMBEDDED: field '%s' converted -> %s", k,
-                  (j == null ? "null" : j.getClass().getSimpleName()));
+                  j == null ? "null" : j.getClass().getSimpleName());
               ed.set(k, j);
             });
             break;
@@ -3283,10 +3374,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           case MAP_VALUE:
             v.getMapValue().getEntriesMap().forEach((k, vv) -> {
               LogManager.instance().log(this, Level.FINE, "EMBEDDED: field '%s' raw kind=%s", k, vv.getKindCase());
-              Object j = (embeddedTypeFinal != null) ? toJavaForProperty(db, ed, embeddedTypeFinal, k, vv) :
+              Object j = embeddedTypeFinal != null ? toJavaForProperty(db, ed, embeddedTypeFinal, k, vv) :
                   fromGrpcValue(vv);
               LogManager.instance().log(this, Level.FINE, "EMBEDDED: field '%s' converted -> %s", k,
-                  (j == null ? "null" : j.getClass().getSimpleName()));
+                  j == null ? "null" : j.getClass().getSimpleName());
               ed.set(k, j);
             });
             break;
@@ -3418,7 +3509,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   }
 
   private static String langOrDefault(String language) {
-    return (language == null || language.isEmpty()) ? "sql" : language;
+    return language == null || language.isEmpty() ? "sql" : language;
   }
 
   // ---- Debug helpers ----
@@ -3480,7 +3571,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
   private GrpcValue dbgEnc(String where, Object in, GrpcValue out, String ctx) {
     LogManager.instance()
-        .log(this, Level.FINE, "GRPC-ENC [%s]%s in=%s -> out=%s", where, (ctx == null ? "" : " " + ctx),
+        .log(this, Level.FINE, "GRPC-ENC [%s]%s in=%s -> out=%s", where, ctx == null ? "" : " " + ctx,
             summarizeJava(in),
             summarizeGrpc(out));
     return out;
@@ -3488,7 +3579,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
   private Object dbgDec(String where, GrpcValue in, Object out, String ctx) {
     LogManager.instance()
-        .log(this, Level.FINE, "GRPC-DEC [%s]%s in=%s -> out=%s", where, (ctx == null ? "" : " " + ctx),
+        .log(this, Level.FINE, "GRPC-DEC [%s]%s in=%s -> out=%s", where, ctx == null ? "" : " " + ctx,
             summarizeGrpc(in),
             summarizeJava(out));
     return out;

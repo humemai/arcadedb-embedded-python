@@ -34,7 +34,7 @@
     <name>ArcadeDB gRPC Client</name>
 
     <properties>
-        <jackson-databind.version>2.21.3</jackson-databind.version>
+        <jackson-databind.version>2.21.4</jackson-databind.version>
     </properties>
 
     <dependencies>
@@ -141,9 +141,16 @@
         </dependency>
         <dependency>
             <groupId>com.arcadedb</groupId>
-            <artifactId>arcadedb-test-utils</artifactId>
+            <artifactId>arcadedb-server</artifactId>
             <version>${project.parent.version}</version>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.arcadedb</groupId>
+            <artifactId>arcadedb-server</artifactId>
+            <version>${project.parent.version}</version>
+            <scope>test</scope>
+            <type>test-jar</type>
         </dependency>
 
         <dependency>

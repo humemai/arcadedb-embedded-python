@@ -34,7 +34,7 @@
     <name>ArcadeDB RedisW</name>
 
     <properties>
-        <jedis.version>7.5.0</jedis.version>
+        <jedis.version>7.5.2</jedis.version>
     </properties>
 
     <dependencies>
@@ -46,9 +46,10 @@
         </dependency>
         <dependency>
             <groupId>com.arcadedb</groupId>
-            <artifactId>arcadedb-test-utils</artifactId>
+            <artifactId>arcadedb-server</artifactId>
             <version>${project.parent.version}</version>
             <scope>test</scope>
+            <type>test-jar</type>
         </dependency>
         <dependency>
             <groupId>redis.clients</groupId>

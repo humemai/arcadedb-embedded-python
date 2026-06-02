@@ -27,10 +27,11 @@ import com.arcadedb.utility.FileUtils;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 
+import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 
@@ -84,7 +85,7 @@ class RaftBootstrapLateNewerJoinerIT extends BaseRaftHATest {
   }
 
   @Test
-  void lateNewerJoinerAdoptsClusterBaselineAndPreservesLocalLastTxId() throws IOException {
+  void lateNewerJoinerAdoptsClusterBaselineAndPreservesLocalLastTxId() throws Exception {
     final String dbName = getDatabaseName();
 
     // Phase 1: wait for the initial bootstrap baseline to commit and apply on every peer.
@@ -128,8 +129,10 @@ class RaftBootstrapLateNewerJoinerIT extends BaseRaftHATest {
 
     // Wipe server 2's Raft storage so Ratis re-ships log entries on rejoin (we want the apply
     // path, not InstallSnapshot, to be the carrier of BOOTSTRAP_FINGERPRINT_ENTRY).
-    final String rootPath = GlobalConfiguration.SERVER_ROOT_PATH.getValueAsString();
-    final File raftStorage = new File(rootPath + File.separator + "raft-storage-" + peerIdForIndex(LATE_JOINER_INDEX));
+    String raftDir = GlobalConfiguration.HA_RAFT_STORAGE_DIRECTORY.getValueAsString();
+    if (raftDir == null || raftDir.isBlank())
+      raftDir = GlobalConfiguration.SERVER_ROOT_PATH.getValueAsString();
+    final File raftStorage = new File(raftDir, "raft-storage-" + peerIdForIndex(LATE_JOINER_INDEX));
     FileUtils.deleteRecursively(raftStorage);
 
     try (final DataOutputStream out = new DataOutputStream(new FileOutputStream(lastTxIdFile))) {
@@ -172,7 +175,7 @@ class RaftBootstrapLateNewerJoinerIT extends BaseRaftHATest {
         .as("server 2's last-tx-id.bin must still exist (no snapshot reinstall happened)")
         .isTrue();
     final long onDiskLastTxId;
-    try (final java.io.DataInputStream in = new java.io.DataInputStream(new java.io.FileInputStream(lastTxIdFile))) {
+    try (final DataInputStream in = new DataInputStream(new FileInputStream(lastTxIdFile))) {
       onDiskLastTxId = in.readLong();
     }
     assertThat(onDiskLastTxId)

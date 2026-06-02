@@ -86,9 +86,9 @@ public enum GlobalConfiguration {
       final int cores = Runtime.getRuntime().availableProcessors();
 
       final String v = value.toString();
-      if (v.equalsIgnoreCase("default")) {
+      if ("default".equalsIgnoreCase(v)) {
         // NOT MUCH TO DO HERE, THIS IS THE DEFAULT OPTION
-      } else if (v.equalsIgnoreCase("high-performance")) {
+      } else if ("high-performance".equalsIgnoreCase(v)) {
         ASYNC_OPERATIONS_QUEUE_IMPL.setValue("fast");
         VECTOR_INDEX_GRAPH_BUILD_CACHE_SIZE.setValue(-1);
         VECTOR_INDEX_LOCATION_CACHE_SIZE.setValue(-1);
@@ -99,7 +99,7 @@ public enum GlobalConfiguration {
         else
           ASYNC_WORKER_THREADS.setValue(1);
 
-      } else if (v.equalsIgnoreCase("low-ram")) {
+      } else if ("low-ram".equalsIgnoreCase(v)) {
         MAX_PAGE_RAM.setValue(16); // 16 MB OF RAM FOR PAGE CACHE
         INDEX_COMPACTION_RAM_MB.setValue(16);
         INITIAL_PAGE_CACHE_SIZE.setValue(256);
@@ -108,15 +108,28 @@ public enum GlobalConfiguration {
         ASYNC_TX_BATCH_SIZE.setValue(8);
         PAGE_FLUSH_QUEUE.setValue(8);
         SQL_STATEMENT_CACHE.setValue(16);
+        OPENCYPHER_STATEMENT_CACHE.setValue(16);
+        OPENCYPHER_PLAN_CACHE.setValue(16);
+
+        ASYNC_WORKER_THREADS.setValue(1);
+        TX_WAL_FILES.setValue(1);
+
+        QUERY_PARALLELISM_POOL_THREADS.setValue(2);
+        QUERY_PARALLELISM_QUEUE_SIZE.setValue(64);
+        SPARSE_VECTOR_SCORING_POOL_THREADS.setValue(1);
+        SPARSE_VECTOR_SCORING_QUEUE_SIZE.setValue(64);
 
         ASYNC_OPERATIONS_QUEUE_IMPL.setValue("standard");
         SERVER_HTTP_IO_THREADS.setValue(cores > 8 ? 4 : 2);
+        SERVER_HTTP_WORKER_THREADS.setValue(16);
         VECTOR_INDEX_GRAPH_BUILD_CACHE_SIZE.setValue(10_000);
         VECTOR_INDEX_LOCATION_CACHE_SIZE.setValue(10_000);
 
+        POLYGLOT_ENGINE_ENABLED.setValue(false);
+
         PageManager.INSTANCE.configure();
 
-      } else if (v.equalsIgnoreCase("low-cpu")) {
+      } else if ("low-cpu".equalsIgnoreCase(v)) {
         ASYNC_WORKER_THREADS.setValue(1);
         ASYNC_OPERATIONS_QUEUE_IMPL.setValue("standard");
         SERVER_HTTP_IO_THREADS.setValue(cores > 8 ? 4 : 2);
@@ -231,55 +244,60 @@ public enum GlobalConfiguration {
       Runtime.getRuntime().availableProcessors() > 1 ? Runtime.getRuntime().availableProcessors() - 1 : 1),
 
   QUERY_PARALLELISM_POOL_THREADS("arcadedb.queryParallelismPoolThreads", SCOPE.JVM,
-      "Maximum number of threads in the JVM-wide pool that backs query-time parallelism "
-          + "(graph algorithms parallelForRange, parallel index scans, etc.). The same pool also "
-          + "serves any future feature that wants to fork query work; sizing it explicitly is the "
-          + "alternative to the JDK common ForkJoinPool, which is shared with user code and has no "
-          + "back-pressure. 0 = available cores (min 2)",
+      """
+      Maximum number of threads in the JVM-wide pool that backs query-time parallelism \
+      (graph algorithms parallelForRange, parallel index scans, etc.). The same pool also \
+      serves any future feature that wants to fork query work; sizing it explicitly is the \
+      alternative to the JDK common ForkJoinPool, which is shared with user code and has no \
+      back-pressure. 0 = available cores (min 2)""",
       Integer.class, 0),
 
   QUERY_PARALLELISM_QUEUE_SIZE("arcadedb.queryParallelismQueueSize", SCOPE.JVM,
-      "Maximum number of tasks that can wait in the QueryEngineManager pool's queue before the "
-          + "rejection policy fires. The default of 1024 lets bursts (e.g. dozens of concurrent graph "
-          + "algorithms forking thousands of chunks) absorb gracefully, while still bounding heap "
-          + "usage if a runaway producer overwhelms the workers. Once the queue is full, the "
-          + "rejection policy is CallerRuns: the submitter executes the task inline, which degrades "
-          + "parallelism but never fails the query.",
+      """
+      Maximum number of tasks that can wait in the QueryEngineManager pool's queue before the \
+      rejection policy fires. The default of 1024 lets bursts (e.g. dozens of concurrent graph \
+      algorithms forking thousands of chunks) absorb gracefully, while still bounding heap \
+      usage if a runaway producer overwhelms the workers. Once the queue is full, the \
+      rejection policy is CallerRuns: the submitter executes the task inline, which degrades \
+      parallelism but never fails the query.""",
       Integer.class, 1024),
 
   SPARSE_VECTOR_SCORING_POOL_THREADS("arcadedb.sparseVectorScoringPoolThreads", SCOPE.JVM,
-      "Maximum number of threads in the JVM-wide pool that backs LSM_SPARSE_VECTOR top-K "
-          + "fan-out (per-bucket parallel scoring on partitioned types and types with multiple "
-          + "buckets). Kept on its own pool rather than sharing the QueryEngineManager pool so "
-          + "long-running graph algorithms never queue scoring tasks behind seconds-long graph "
-          + "chunks. 0 = available cores (min 2). REQUIRES JVM RESTART: the pool is a lazy "
-          + "singleton constructed once on first use; later changes to this value have no effect "
-          + "until the JVM restarts.",
+      """
+      Maximum number of threads in the JVM-wide pool that backs LSM_SPARSE_VECTOR top-K \
+      fan-out (per-bucket parallel scoring on partitioned types and types with multiple \
+      buckets). Kept on its own pool rather than sharing the QueryEngineManager pool so \
+      long-running graph algorithms never queue scoring tasks behind seconds-long graph \
+      chunks. 0 = available cores (min 2). REQUIRES JVM RESTART: the pool is a lazy \
+      singleton constructed once on first use; later changes to this value have no effect \
+      until the JVM restarts.""",
       Integer.class, 0),
 
   SPARSE_VECTOR_SCORING_QUEUE_SIZE("arcadedb.sparseVectorScoringQueueSize", SCOPE.JVM,
-      "Maximum number of tasks that can wait in the sparse-vector scoring pool's queue before "
-          + "the CallerRuns rejection policy fires. Scoring fan-out is fine-grained (per-bucket "
-          + "topK calls), so the default of 1024 covers a wide range of workloads. Once the "
-          + "queue is full, the submitter executes the task inline, which degrades parallelism "
-          + "but never fails the query. REQUIRES JVM RESTART: same singleton lifecycle as "
-          + "SPARSE_VECTOR_SCORING_POOL_THREADS.",
+      """
+      Maximum number of tasks that can wait in the sparse-vector scoring pool's queue before \
+      the CallerRuns rejection policy fires. Scoring fan-out is fine-grained (per-bucket \
+      topK calls), so the default of 1024 covers a wide range of workloads. Once the \
+      queue is full, the submitter executes the task inline, which degrades parallelism \
+      but never fails the query. REQUIRES JVM RESTART: same singleton lifecycle as \
+      SPARSE_VECTOR_SCORING_POOL_THREADS.""",
       Integer.class, 1024),
 
   SPARSE_VECTOR_SCORING_TIMEOUT_SECONDS("arcadedb.sparseVectorScoringTimeoutSeconds", SCOPE.JVM,
-      "Wall-clock deadline for the parallel sparse-vector top-K fan-out. Computed once before "
-          + "the drain loop and shared across all per-bucket futures, so the worst case for N "
-          + "wedged buckets is a single timeoutSeconds (not N * timeoutSeconds). On expiry every "
-          + "still-pending future is cancelled and the query fails with a descriptive error. "
-          + "Catches the case where a bucket's index is stuck on a write lock during compaction, "
-          + "an HA replication race wedged a segment open, or a JVM-level pause stalled the worker "
-          + "thread. Set to 0 to disable the timeout (caller will block indefinitely; not "
-          + "recommended for production). Re-read on every query, so changes take effect without "
-          + "restart (unlike the pool sizing knobs above). Minimum recommended value: 5 seconds. "
-          + "Very short configured timeouts (e.g. 1-2s for integration tests) can produce "
-          + "spurious failures on a saturated host - a JVM GC pause or OS scheduling delay "
-          + "between deadline computation and the first future drain can consume the whole budget "
-          + "before any work runs.",
+      """
+      Wall-clock deadline for the parallel sparse-vector top-K fan-out. Computed once before \
+      the drain loop and shared across all per-bucket futures, so the worst case for N \
+      wedged buckets is a single timeoutSeconds (not N * timeoutSeconds). On expiry every \
+      still-pending future is cancelled and the query fails with a descriptive error. \
+      Catches the case where a bucket's index is stuck on a write lock during compaction, \
+      an HA replication race wedged a segment open, or a JVM-level pause stalled the worker \
+      thread. Set to 0 to disable the timeout (caller will block indefinitely; not \
+      recommended for production). Re-read on every query, so changes take effect without \
+      restart (unlike the pool sizing knobs above). Minimum recommended value: 5 seconds. \
+      Very short configured timeouts (e.g. 1-2s for integration tests) can produce \
+      spurious failures on a saturated host - a JVM GC pause or OS scheduling delay \
+      between deadline computation and the first future drain can consume the whole budget \
+      before any work runs.""",
       Integer.class, 30),
 
   ASYNC_OPERATIONS_QUEUE_IMPL("arcadedb.asyncOperationsQueueImpl", SCOPE.DATABASE,
@@ -357,6 +375,15 @@ public enum GlobalConfiguration {
       directory and path traversal (../) is blocked. Empty string means no restriction.""",
       String.class, ""),
 
+  OPENCYPHER_ID_BUCKET_BITS("arcadedb.opencypher.idBucketBits", SCOPE.JVM,
+      """
+      Number of bits reserved for the bucketId when packing a RID into the numeric value returned by the OpenCypher id() function (and SQL's .asCypherRID() method). \
+      Out of the 63 usable bits (the sign bit is always kept clear to preserve the Neo4j id(n) >= 0 semantics), this many go to the bucketId and the rest to the \
+      record position within the bucket. The default of 16 allows up to 65536 buckets and ~1.4e14 positions per bucket, covering the vast majority of use cases. \
+      Increase it for databases with many buckets, decrease it for buckets holding a very high number of records. Must be between 1 and 31. \
+      Changing this value alters the numeric id() output, so encode and decode must use the same setting.""",
+      Integer.class, 16, integerRangeAsStrings(1, 31)),
+
   // COMMAND
   COMMAND_TIMEOUT("arcadedb.command.timeout", SCOPE.DATABASE, "Default timeout for commands (in ms)", Long.class, 0),
 
@@ -380,6 +407,15 @@ public enum GlobalConfiguration {
   // USER CODE
   POLYGLOT_COMMAND_TIMEOUT("arcadedb.polyglotCommand.timeout", SCOPE.DATABASE, "Default timeout for polyglot commands (in ms)",
       Long.class, 10_000),
+
+  POLYGLOT_ENGINE_ENABLED("arcadedb.polyglotEngineEnabled", SCOPE.JVM,
+      """
+      Enable the GraalVM Polyglot Engine used to register scripting languages (js, python, ...) as query engines. \
+      When true (default), the shared Engine is created lazily on first use and all GraalVM languages found on \
+      the classpath are registered. When false, the Polyglot engine is not initialised and no polyglot language \
+      is registered: this saves tens of MB of heap and class-loading work on small footprints. The 'low-ram' \
+      profile sets this to false.""",
+      Boolean.class, true),
 
   QUERY_MAX_HEAP_ELEMENTS_ALLOWED_PER_OP("arcadedb.queryMaxHeapElementsAllowedPerOp", SCOPE.DATABASE, """
       Maximum number of elements (records) allowed in a single query for memory-intensive operations (eg. ORDER BY in heap). \
@@ -498,6 +534,12 @@ public enum GlobalConfiguration {
   SERVER_MODE("arcadedb.server.mode", SCOPE.SERVER, "Server mode between 'development', 'test' and 'production'", String.class,
       "development", Set.of((Object[]) new String[]{"development", "test", "production"})),
 
+  STUDIO_ENABLED("arcadedb.studio.enabled", SCOPE.SERVER,
+      """
+      Force-enable the Studio web tool (static content) even when the server runs in 'production' mode. In 'development' and \
+      'test' mode Studio is always served; in 'production' mode it is disabled by default and this setting can re-enable it""",
+      Boolean.class, false),
+
   // Metrics
   SERVER_METRICS("arcadedb.serverMetrics", SCOPE.SERVER, "True to enable metrics", Boolean.class, true),
 
@@ -544,7 +586,15 @@ public enum GlobalConfiguration {
 
   SERVER_HTTP_IO_THREADS("arcadedb.server.httpsIoThreads", SCOPE.SERVER,
       "Number of threads to use in the HTTP servers. The default number for most of the use cases is 2 threads per cpus (or 1 per virtual core)",
-      Integer.class, 0, null, (value) -> Runtime.getRuntime().availableProcessors()),
+      Integer.class, 0, null, value -> Runtime.getRuntime().availableProcessors()),
+
+  SERVER_HTTP_WORKER_THREADS("arcadedb.server.httpWorkerThreads", SCOPE.SERVER,
+      """
+      Maximum number of worker threads used by the embedded Undertow HTTP server to process blocking requests. \
+      Each idle thread reserves a stack (~512KB-1MB) and Thread metadata in heap, so lowering the value reduces \
+      memory footprint on small deployments. Default is 500 to preserve the legacy behaviour; the 'low-ram' \
+      profile lowers it to 16.""",
+      Integer.class, 500),
 
   SERVER_HTTP_SESSION_EXPIRE_TIMEOUT("arcadedb.server.httpSessionExpireTimeout", SCOPE.SERVER,
       "Timeout in seconds for a HTTP session (managing a transaction) to expire. This timeout is computed from the latest command against the session",
@@ -579,6 +629,18 @@ public enum GlobalConfiguration {
   SERVER_SECURITY_SALT_ITERATIONS("arcadedb.server.saltIterations", SCOPE.SERVER,
       "Number of iterations to generate the salt or user password. Changing this setting does not affect stored passwords",
       Integer.class, 65536),
+
+  SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS("arcadedb.server.security.importBlockLocalNetworks", SCOPE.SERVER,
+      "When enabled (default), the SQL `IMPORT DATABASE` command refuses HTTP(S) URLs that resolve to loopback, link-local, "
+          + "private (site-local), wildcard or multicast addresses. This mitigates Server-Side Request Forgery (SSRF) against "
+          + "cloud metadata endpoints (e.g. 169.254.169.254) and internal services. Disable only in trusted environments that "
+          + "legitimately import from internal hosts", Boolean.class, true),
+
+  SERVER_SECURITY_IMPORT_ALLOWED_LOCAL_PATHS("arcadedb.server.security.importAllowedLocalPaths", SCOPE.SERVER,
+      "Comma-separated list of directories the SQL `IMPORT DATABASE` command is allowed to read local files from (`file://` "
+          + "and plain paths). When empty (default) no restriction is applied. When set, any import from a path outside the "
+          + "listed directories is rejected, mitigating arbitrary local file read. `classpath://` resources are always allowed",
+      String.class, ""),
 
   // HA
   HA_ENABLED("arcadedb.ha.enabled", SCOPE.SERVER, "True if HA is enabled for the current server", Boolean.class, false),
@@ -684,6 +746,14 @@ public enum GlobalConfiguration {
       set to true for durable deployments.""",
       Boolean.class, false),
 
+  HA_RAFT_STORAGE_DIRECTORY("arcadedb.ha.raftStorageDirectory", SCOPE.SERVER,
+      """
+      Parent directory where Raft storage sub-folders (raft-storage-<nodeName>) are created. \
+      When empty (the default), the server root path is used, preserving the previous default layout. \
+      Set to an absolute path (e.g. /var/lib/arcadedb/raft) to decouple Raft persistence from \
+      the server installation directory, which is required for Kubernetes readOnlyRootFilesystem deployments.""",
+      String.class, ""),
+
   HA_SNAPSHOT_THRESHOLD("arcadedb.ha.snapshotThreshold", SCOPE.SERVER,
       """
       Number of Raft log entries after which the leader automatically takes a snapshot. \
@@ -717,6 +787,13 @@ public enum GlobalConfiguration {
       Must be identical on all cluster nodes. \
       If empty, a random token is auto-generated and stored in raft-storage at startup.""",
       String.class, ""),
+
+  HA_CLUSTER_TOKEN_PATH("arcadedb.ha.clusterTokenPath", SCOPE.SERVER,
+      """
+      Path to a file containing the shared secret for inter-node request forwarding authentication. \
+      Used to keep the secret off the command line (e.g. a Kubernetes Secret mounted on tmpfs). \
+      Read only when arcadedb.ha.clusterToken is not set; the file content is trimmed of surrounding whitespace.""",
+      String.class, null),
 
   HA_HEALTH_CHECK_INTERVAL("arcadedb.ha.healthCheckInterval", SCOPE.SERVER,
       "Interval in milliseconds for the Raft health monitor to check for CLOSED/EXCEPTION state and auto-recover. 0 disables.",
@@ -805,6 +882,15 @@ public enum GlobalConfiguration {
       Timeout in milliseconds for writing a snapshot to a follower. \
       If the transfer stalls beyond this duration, the connection is force-closed to free the semaphore slot.""",
       Long.class, 300_000L),
+
+  HA_TS_MAX_SEALED_INLINE_SIZE("arcadedb.ha.tsMaxSealedInlineSize", SCOPE.SERVER,
+      """
+      Maximum size in bytes of a TimeSeries sealed-store file that may be shipped inline inside a single \
+      Raft SCHEMA_ENTRY during compaction. When the projected sealed-store size would exceed this cap, the \
+      leader skips compacting that shard (data stays in the fully replicated mutable bucket) instead of \
+      producing an entry too large for the Raft transport. Kept below the Raft message size cap (64MB) with \
+      headroom for the schema JSON and the mutable-bucket clear WAL.""",
+      Long.class, 48 * 1024 * 1024L),
 
   HA_SNAPSHOT_WATCHDOG_TIMEOUT("arcadedb.ha.snapshotWatchdogTimeout", SCOPE.SERVER,
       """
@@ -973,6 +1059,17 @@ public enum GlobalConfiguration {
     else
       value = defValue;
     explicitlySet = false;
+  }
+
+  /**
+   * Builds the set of allowed values for an integer option constrained to the inclusive range {@code [fromInclusive, toInclusive]}. The values are stored as
+   * strings because {@link #setValue(Object)} validates against {@code value.toString()}.
+   */
+  private static Set<Object> integerRangeAsStrings(final int fromInclusive, final int toInclusive) {
+    final Set<Object> set = new HashSet<>();
+    for (int i = fromInclusive; i <= toInclusive; i++)
+      set.add(Integer.toString(i));
+    return set;
   }
 
   public static void dumpConfiguration(final PrintStream out) {

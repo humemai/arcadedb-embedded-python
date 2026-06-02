@@ -27,15 +27,16 @@ import com.arcadedb.server.ArcadeDBServer;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -186,7 +187,7 @@ public class ServerQueryProfiler {
     if (!dir.exists())
       return result;
 
-    final File[] files = dir.listFiles((f) -> f.getName().startsWith("profiler-run-") && f.getName().endsWith(".json"));
+    final File[] files = dir.listFiles(f -> f.getName().startsWith("profiler-run-") && f.getName().endsWith(".json"));
     if (files == null)
       return result;
 
@@ -227,6 +228,15 @@ public class ServerQueryProfiler {
     result.put("timeoutSeconds", timeoutSeconds);
     result.put("totalQueries", totalRecorded);
 
+    // Names of databases that have at least one recorded query in this window.
+    // The Studio summary cards use this to scope DB-specific deltas (queries, commands,
+    // writeTx, records, ...) to only the databases that were actually exercised, instead
+    // of summing across every database registered with the server.
+    final JSONArray profiledDbs = new JSONArray();
+    for (final String name : collectProfiledDatabaseNames())
+      profiledDbs.put(name);
+    result.put("profiledDatabases", profiledDbs);
+
     // Summary with snapshots
     final JSONObject summary = new JSONObject();
     if (snapshotStartProfiler != null) {
@@ -249,6 +259,17 @@ public class ServerQueryProfiler {
     result.put("queries", aggregateQueries());
 
     return result;
+  }
+
+  private Set<String> collectProfiledDatabaseNames() {
+    final LinkedHashSet<String> names = new LinkedHashSet<>();
+    final int count = Math.min(totalRecorded, MAX_ENTRIES);
+    for (int i = 0; i < count; i++) {
+      final ProfiledQueryEntry entry = entries[i];
+      if (entry != null && entry.database != null)
+        names.add(entry.database);
+    }
+    return names;
   }
 
   private JSONArray aggregateQueries() {
@@ -409,7 +430,7 @@ public class ServerQueryProfiler {
   }
 
   private void cleanOldFiles(final File dir) {
-    final File[] files = dir.listFiles((f) -> f.getName().startsWith("profiler-run-") && f.getName().endsWith(".json"));
+    final File[] files = dir.listFiles(f -> f.getName().startsWith("profiler-run-") && f.getName().endsWith(".json"));
     if (files == null || files.length <= MAX_PROFILER_FILES)
       return;
 

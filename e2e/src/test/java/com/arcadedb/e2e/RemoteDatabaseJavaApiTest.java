@@ -96,13 +96,11 @@ class RemoteDatabaseJavaApiTest extends ArcadeContainerTemplate {
     assertThat(friendOf.getOut()).isEqualTo(me);
     assertThat(friendOf.getIn()).isEqualTo(you);
 
-    me.getEdges(Vertex.DIRECTION.OUT, "FriendOf").forEach(e -> {
-      assertThat(e).isEqualTo(friendOf);
-    });
+    me.getEdges(Vertex.DIRECTION.OUT, "FriendOf").forEach(e ->
+      assertThat(e).isEqualTo(friendOf));
 
-    database.query("sql", "select expand(out('FriendOf')) from Person where name = 'me'").stream().forEach(r -> {
-      assertThat(r.<String>getProperty("name")).isEqualTo("you");
-    });
+    database.query("sql", "select expand(out('FriendOf')) from Person where name = 'me'").stream().forEach(r ->
+      assertThat(r.<String>getProperty("name")).isEqualTo("you"));
   }
 
   @Test
@@ -222,12 +220,12 @@ class RemoteDatabaseJavaApiTest extends ArcadeContainerTemplate {
 
     // Query the materialized view and verify it returns results
     final long viewCount = database.query("sql", "SELECT count() as count FROM HighAlcoholBeers")
-        .stream().findFirst().get().<Integer>getProperty("count");
+        .stream().findFirst().get().<Number>getProperty("count").longValue();
     assertThat(viewCount).isEqualTo(3042);
 
     // Verify count matches a direct query on the source type
     final long directCount = database.query("sql", "SELECT count() as count FROM Beer WHERE abv > 10")
-        .stream().findFirst().get().<Integer>getProperty("count");
+        .stream().findFirst().get().<Number>getProperty("count").longValue();
     assertThat(viewCount).isEqualTo(directCount);
 
     // Verify the brewery name was denormalized into the view (every row should have one)
@@ -237,7 +235,7 @@ class RemoteDatabaseJavaApiTest extends ArcadeContainerTemplate {
     // Refresh the view and re-verify the count is still consistent
     database.command("sql", "REFRESH MATERIALIZED VIEW HighAlcoholBeers");
     final long refreshedCount = database.query("sql", "SELECT count() as count FROM HighAlcoholBeers")
-        .stream().findFirst().get().<Integer>getProperty("count");
+        .stream().findFirst().get().<Number>getProperty("count").longValue();
     assertThat(refreshedCount).isEqualTo(directCount);
 
     // Drop and verify it's removed from the schema
@@ -256,12 +254,10 @@ class RemoteDatabaseJavaApiTest extends ArcadeContainerTemplate {
 
     LocalDateTime start = LocalDateTime.now();
 
-    IntStream.range(1, 100001).forEach(i -> {
+    IntStream.range(1, 100001).forEach(i ->
 
       database.command("sqlscript",
-          "INSERT INTO `TEXT_EMBEDDING` SET str = meow_%d, embedding = [0.1,0.2,0.3] RETURN embedding;".formatted(i));
-
-    });
+          "INSERT INTO `TEXT_EMBEDDING` SET str = meow_%d, embedding = [0.1,0.2,0.3] RETURN embedding;".formatted(i)));
 
     LocalDateTime end = LocalDateTime.now();
     System.out.println("Execution time: " + Duration.between(start, end).toSeconds() + " seconds");
@@ -318,15 +314,13 @@ class RemoteDatabaseJavaApiTest extends ArcadeContainerTemplate {
     LocalDateTime start = LocalDateTime.now();
     StringBuilder sb = new StringBuilder();
 
-    database.transaction(() -> {
+    database.transaction(() ->
       IntStream.range(1, 100001).forEach(i -> {
 
         database.command("sql",
             "INSERT INTO `TEXT_EMBEDDING` SET str = meow_%d, embedding = [0.1,0.2,0.3];".formatted(i));
 
-      });
-
-    });
+      }));
     LocalDateTime end = LocalDateTime.now();
     System.out.println("Execution time: " + Duration.between(start, end).toSeconds() + " seconds");
 

@@ -25,16 +25,17 @@ import com.arcadedb.gremlin.ArcadeGraph;
 import com.arcadedb.integration.exporter.Exporter;
 import com.arcadedb.integration.importer.OrientDBImporter;
 import com.arcadedb.schema.DocumentType;
-import com.arcadedb.test.TestServerHelper;
+import com.arcadedb.server.TestServerHelper;
 import com.arcadedb.utility.FileUtils;
 import org.apache.tinkerpop.gremlin.structure.io.IoCore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.io.*;
-import java.util.stream.*;
-import java.util.zip.*;
+import java.io.File;
+import java.io.FileInputStream;
+import java.util.stream.Collectors;
+import java.util.zip.GZIPInputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

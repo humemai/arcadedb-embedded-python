@@ -24,17 +24,23 @@ import com.arcadedb.exception.TransactionException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.HAServerPlugin;
+import com.arcadedb.server.ServerException;
 import com.arcadedb.server.http.HttpServer;
 
 import io.undertow.server.handlers.PathHandler;
 
 import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.Map;
 import java.util.logging.Level;
 
 /**
  * ServerPlugin implementation that bootstraps the Raft-based HA subsystem.
- * Discovered via Java ServiceLoader when {@code HA_ENABLED=true}.
+ * Discovered via Java ServiceLoader when either {@code HA_ENABLED=true} or
+ * {@code HA_SERVER_LIST} is non-blank (a configured server list implies HA intent).
  */
 public class RaftHAPlugin implements HAServerPlugin {
 
@@ -137,6 +143,7 @@ public class RaftHAPlugin implements HAServerPlugin {
     routes.addExactPath("/api/v1/cluster/stepdown", new PostStepDownHandler(httpServer, this));
     routes.addExactPath("/api/v1/cluster/leave", new PostLeaveHandler(httpServer, this));
     routes.addPrefixPath("/api/v1/cluster/verify/", new PostVerifyDatabaseHandler(httpServer, this));
+    routes.addPrefixPath("/api/v1/cluster/resync/", new PostResyncDatabaseHandler(httpServer, this));
     // Issue #4147: pre-bootstrap state RPC, used by the bootstrap leader at first cluster
     // formation to collect each peer's (fingerprint, lastTxId) per database.
     routes.addExactPath("/api/v1/cluster/bootstrap-state", new PostBootstrapStateHandler(httpServer, this));
@@ -171,8 +178,8 @@ public class RaftHAPlugin implements HAServerPlugin {
   }
 
   @Override
-  public java.util.Map<String, Object> getStats() {
-    return raftHAServer != null ? raftHAServer.getStats() : java.util.Collections.emptyMap();
+  public Map<String, Object> getStats() {
+    return raftHAServer != null ? raftHAServer.getStats() : Collections.emptyMap();
   }
 
   @Override
@@ -204,11 +211,11 @@ public class RaftHAPlugin implements HAServerPlugin {
       }
     }
     if (targetAddr == null)
-      throw new com.arcadedb.server.ServerException("Cannot find server '" + serverName + "' in the cluster");
+      throw new ServerException("Cannot find server '" + serverName + "' in the cluster");
 
     try {
-      final java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
-          new java.net.URL("http://" + targetAddr + "/api/v1/server").openConnection();
+      final HttpURLConnection conn = (HttpURLConnection)
+          new URL("http://" + targetAddr + "/api/v1/server").openConnection();
       conn.setRequestMethod("POST");
       conn.setDoOutput(true);
       conn.setRequestProperty("Content-Type", "application/json");
@@ -220,7 +227,7 @@ public class RaftHAPlugin implements HAServerPlugin {
       conn.getOutputStream().write("{\"command\":\"shutdown\"}".getBytes(StandardCharsets.UTF_8));
       conn.getResponseCode();
       conn.disconnect();
-    } catch (final java.io.IOException e) {
+    } catch (final IOException e) {
       throw new RuntimeException("Failed to shutdown remote server '" + serverName + "'", e);
     }
   }
@@ -273,12 +280,13 @@ public class RaftHAPlugin implements HAServerPlugin {
 
   private boolean isRaftEnabled() {
     return configuration != null
-        && configuration.getValueAsBoolean(GlobalConfiguration.HA_ENABLED);
+        && (configuration.getValueAsBoolean(GlobalConfiguration.HA_ENABLED)
+            || configuration.isHAImplicitlyEnabled());
   }
 
   private void validateConfiguration() {
     final String serverList = configuration.getValueAsString(GlobalConfiguration.HA_SERVER_LIST);
-    if (serverList == null || serverList.isEmpty())
+    if (serverList == null || serverList.isBlank())
       throw new RuntimeException("HA_SERVER_LIST must be configured for Raft HA");
 
     // Validate quorum early - will throw ConfigurationException for invalid values

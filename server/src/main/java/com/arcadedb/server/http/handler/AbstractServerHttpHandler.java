@@ -34,8 +34,10 @@ import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.HeaderValues;
 import io.undertow.util.Headers;
+import io.undertow.util.HttpString;
 import io.undertow.util.StatusCodes;
 
+import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.Deque;
 import java.util.concurrent.atomic.AtomicReference;
@@ -84,7 +86,7 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
     // Return 503 during snapshot installation to prevent cryptic errors
     if (httpServer.getServer().isSnapshotInstallInProgress()) {
       exchange.setStatusCode(503);
-      exchange.getResponseHeaders().put(io.undertow.util.HttpString.tryFromString("Retry-After"), "5");
+      exchange.getResponseHeaders().put(HttpString.tryFromString("Retry-After"), "5");
       exchange.getResponseSender().send(
           error2json("Server is installing a snapshot, please retry", "", null, null, null));
       return;
@@ -232,7 +234,10 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       LogManager.instance()
               .log(this, getUserSevereErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(),
                       e.getMessage());
-      sendErrorResponse(exchange, 503, "Found duplicate key in index", e,
+      // 409 Conflict (RFC 9110 §15.5.10): a unique-constraint violation is a client data conflict,
+      // not a transient server-availability problem. 503 told clients/load balancers the request was
+      // retry-worthy, amplifying the bad write. See issue #4350.
+      sendErrorResponse(exchange, 409, "Found duplicate key in index", e,
               e.getIndexName() + "|" + e.getKeys() + "|" + e.getCurrentIndexedRID());
     } catch (final RecordNotFoundException e) {
       LogManager.instance()
@@ -263,6 +268,16 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
         LogManager.instance().log(this, getUserSevereErrorLogLevel(), "Security error on command execution (%s): %s",
                 SecurityException.class.getSimpleName(), realException.getMessage());
         sendErrorResponse(exchange, 403, "Security error", realException, null);
+      } else if (realException instanceof DuplicatedKeyException dup) {
+        // Symmetric with the un-wrapped DuplicatedKeyException catch arm. Some code paths
+        // (e.g. script execution, command planners) wrap DuplicatedKeyException in
+        // CommandExecutionException; without this branch the response would degrade to 500.
+        // See issue #4350.
+        LogManager.instance()
+                .log(this, getUserSevereErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(),
+                        realException.getMessage());
+        sendErrorResponse(exchange, 409, "Found duplicate key in index", dup,
+                dup.getIndexName() + "|" + dup.getKeys() + "|" + dup.getCurrentIndexedRID());
       } else {
         LogManager.instance()
                 .log(this, getUserSevereErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(),
@@ -292,6 +307,16 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
                 .log(this, getUserSevereErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(),
                         realException.getMessage());
         sendErrorResponse(exchange, 400, "Cannot execute command", realException, null);
+      } else if (realException instanceof DuplicatedKeyException dup) {
+        // Same as the un-wrapped DuplicatedKeyException arm above, but reached when the
+        // exception was thrown inside the auto-commit transaction wrapper in
+        // DatabaseAbstractHandler (which wraps any Exception thrown by execute() in a
+        // TransactionException). Without this branch the response degrades to 500. See issue #4350.
+        LogManager.instance()
+                .log(this, getUserSevereErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(),
+                        realException.getMessage());
+        sendErrorResponse(exchange, 409, "Found duplicate key in index", dup,
+                dup.getIndexName() + "|" + dup.getKeys() + "|" + dup.getCurrentIndexedRID());
       } else {
         LogManager.instance()
                 .log(this, getUserSevereErrorLogLevel(), "Error on transaction execution (%s): %s", getClass().getSimpleName(),
@@ -362,7 +387,7 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       return false;
     final byte[] aBytes = a.getBytes(DatabaseFactory.getDefaultCharset());
     final byte[] bBytes = b.getBytes(DatabaseFactory.getDefaultCharset());
-    return java.security.MessageDigest.isEqual(aBytes, bBytes);
+    return MessageDigest.isEqual(aBytes, bBytes);
   }
 
   /**
@@ -384,10 +409,6 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   protected void checkRootUser(ServerSecurityUser user) {
     if (!"root".equals(user.getName()))
       throw new ServerSecurityException("Only root user is authorized to execute server commands");
-  }
-
-  protected String decode(final String command) {
-    return command.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#039;", "'");
   }
 
   protected String error2json(final String error, final String detail, final Throwable exception, final String exceptionArgs,

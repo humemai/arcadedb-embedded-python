@@ -30,7 +30,7 @@ import com.arcadedb.graph.Vertex;
 import com.arcadedb.index.IndexCursor;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.Type;
-import com.arcadedb.test.TestServerHelper;
+import com.arcadedb.server.TestServerHelper;
 import com.arcadedb.utility.FileUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,9 +38,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 
-import java.io.*;
-import java.text.*;
-import java.util.*;
+import java.io.File;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

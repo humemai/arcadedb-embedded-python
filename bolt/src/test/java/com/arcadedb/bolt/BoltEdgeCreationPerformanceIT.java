@@ -24,7 +24,7 @@ import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.Schema;
 import com.arcadedb.schema.Type;
-import com.arcadedb.test.BaseGraphServerTest;
+import com.arcadedb.server.BaseGraphServerTest;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -83,9 +83,8 @@ public class BoltEdgeCreationPerformanceIT extends BaseGraphServerTest {
         db.getSchema().createEdgeType("PERF_KNOWS");
       }
     });
-    db.transaction(() -> {
-      db.getSchema().getOrCreateTypeIndex(Schema.INDEX_TYPE.LSM_TREE, true, "PerfPerson", "id");
-    });
+    db.transaction(() ->
+      db.getSchema().getOrCreateTypeIndex(Schema.INDEX_TYPE.LSM_TREE, true, "PerfPerson", "id"));
 
     // Create Person vertices in batch
     db.transaction(() -> {

@@ -26,7 +26,7 @@ import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.remote.RemoteException;
-import com.arcadedb.test.BaseGraphServerTest;
+import com.arcadedb.server.BaseGraphServerTest;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -136,7 +136,7 @@ class ErrorHandlingIT extends BaseGraphServerTest {
   }
 
   @Test
-  @DisplayName("lookupByRID with non-existent RID throws appropriate exception")
+  @DisplayName("lookupByRID with non-existent RID throws RecordNotFoundException")
   void recordNotFound_throwsRecordNotFoundException() {
     // First insert a record to get a valid bucket ID
     database.command("sql", "INSERT INTO `" + TYPE + "` SET id = 'temp', name = 'temp'");
@@ -151,11 +151,9 @@ class ErrorHandlingIT extends BaseGraphServerTest {
     int bucketId = Integer.parseInt(ridStr.split(":")[0].substring(1));
     RID fakeRid = new RID(bucketId, 999999L);
 
-    // The server throws RecordNotFoundException or the client maps it to one
+    // gRPC must map server NOT_FOUND status to RecordNotFoundException, matching HTTP behaviour
     assertThatThrownBy(() -> database.lookupByRID(fakeRid))
-        .satisfiesAnyOf(
-            e -> assertThat(e).isInstanceOf(RecordNotFoundException.class),
-            e -> assertThat(e).hasMessageContaining("not found"));
+        .isInstanceOf(RecordNotFoundException.class);
   }
 
   @Test

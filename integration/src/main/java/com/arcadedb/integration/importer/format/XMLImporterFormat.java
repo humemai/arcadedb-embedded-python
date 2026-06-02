@@ -20,7 +20,6 @@ package com.arcadedb.integration.importer.format;
 
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.MutableDocument;
-import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.integration.importer.AnalyzedEntity;
 import com.arcadedb.schema.VertexType;
 import com.arcadedb.integration.importer.AnalyzedSchema;
@@ -37,9 +36,10 @@ import javax.xml.namespace.QName;
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamReader;
-import java.io.*;
-import java.util.*;
-import java.util.logging.*;
+import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.logging.Level;
 
 public class XMLImporterFormat implements FormatImporter {
   @Override
@@ -52,6 +52,9 @@ public class XMLImporterFormat implements FormatImporter {
       final XMLInputFactory xmlFactory = XMLInputFactory.newInstance();
       xmlFactory.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, "");
       xmlFactory.setProperty(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+      // DISABLE DTD PROCESSING AND EXTERNAL ENTITIES TO PREVENT XXE AND ENTITY-EXPANSION (BILLION LAUGHS) ATTACKS
+      xmlFactory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+      xmlFactory.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
       final XMLStreamReader xmlReader = xmlFactory.createXMLStreamReader(parser.getInputStream());
 
       int nestLevel = 0;
@@ -152,7 +155,7 @@ public class XMLImporterFormat implements FormatImporter {
         case XMLStreamReader.CHARACTERS:
         case XMLStreamReader.CDATA:
           final String text = xmlReader.getText();
-          if (!text.isEmpty() && !text.equals("\n")) {
+          if (!text.isEmpty() && !"\n".equals(text)) {
             final String trimmedText = text.trim();
             // Only update lastContent if there's actual non-whitespace content
             // This prevents whitespace between elements from erasing previously captured content
@@ -201,6 +204,9 @@ public class XMLImporterFormat implements FormatImporter {
       final XMLInputFactory xmlFactory = XMLInputFactory.newInstance();
       xmlFactory.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, "");
       xmlFactory.setProperty(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+      // DISABLE DTD PROCESSING AND EXTERNAL ENTITIES TO PREVENT XXE AND ENTITY-EXPANSION (BILLION LAUGHS) ATTACKS
+      xmlFactory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+      xmlFactory.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
 
       final XMLStreamReader xmlReader = xmlFactory.createXMLStreamReader(parser.getInputStream());
 
@@ -283,7 +289,7 @@ public class XMLImporterFormat implements FormatImporter {
         case XMLStreamReader.CHARACTERS:
         case XMLStreamReader.CDATA:
           final String text = xmlReader.getText();
-          if (!text.isEmpty() && !text.equals("\n")) {
+          if (!text.isEmpty() && !"\n".equals(text)) {
             final String trimmedText = text.trim();
             // Only update lastContent if there's actual non-whitespace content
             // This prevents whitespace between elements from erasing previously captured content

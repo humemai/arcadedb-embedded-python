@@ -18,7 +18,6 @@
  */
 package com.arcadedb.database;
 
-import com.arcadedb.database.Record;
 import com.arcadedb.engine.FileManager;
 import com.arcadedb.engine.PageManager;
 import com.arcadedb.engine.TransactionManager;
@@ -34,9 +33,10 @@ import com.arcadedb.security.SecurityManager;
 import com.arcadedb.serializer.BinarySerializer;
 import com.arcadedb.utility.ExcludeFromJacocoGeneratedReport;
 
-import java.io.*;
-import java.util.*;
-import java.util.concurrent.*;
+import java.io.IOException;
+import java.util.Collection;
+import java.util.Map;
+import java.util.concurrent.Callable;
 
 /**
  * Internal API, do not use as an end user.
@@ -190,6 +190,33 @@ public interface DatabaseInternal extends Database {
     } catch (final Exception e) {
       throw new IOException("Compaction failed", e);
     }
+  }
+
+  /**
+   * Returns true if this node is the current leader (or always true when not replicated, i.e. standalone).
+   * Used by engine-internal background work (e.g. the TimeSeries maintenance scheduler) to keep
+   * destructive maintenance leader-only without a compile dependency on the HA module.
+   */
+  default boolean isLeader() {
+    return true;
+  }
+
+  /**
+   * Registers the post-mutation bytes of a TimeSeries sealed-store file so the HA layer can ship them
+   * to followers as part of the current compaction/maintenance replication unit. No-op when standalone:
+   * the sealed store is a node-local derived artifact that does not need replication outside HA.
+   * Only meaningful while a {@link #runWithCompactionReplication(Callable)} session is active on the
+   * calling thread; the buffered blobs are drained and embedded in the SCHEMA_ENTRY shipped at the end
+   * of that session.
+   *
+   * @param typeName     the TimeSeries type owning the shard
+   * @param shardIndex   the shard index whose sealed store changed
+   * @param sealedFileName the sealed-store file name (relative to the database directory)
+   * @param sealedBytes  the full content of the sealed-store file after the mutation
+   */
+  default void recordTimeSeriesSealedChange(final String typeName, final int shardIndex, final String sealedFileName,
+      final byte[] sealedBytes) {
+    // no-op: standalone databases do not replicate the sealed store
   }
 
   /**

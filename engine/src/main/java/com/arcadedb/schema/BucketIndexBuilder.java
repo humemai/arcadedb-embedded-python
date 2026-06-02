@@ -29,10 +29,11 @@ import com.arcadedb.index.IndexInternal;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.security.SecurityDatabaseUser;
 
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
-import java.util.logging.*;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
 
 /**
  * Builder class for bucket indexes.
@@ -104,12 +105,15 @@ public class BucketIndexBuilder extends IndexBuilder<Index> {
           continue;
         }
 
-        final Property property = type.getPolymorphicPropertyIfExists(propertyName);
+        final boolean isByItem = propertyName.endsWith(" by item");
+        final String actualPropertyName = isByItem ? propertyName.substring(0, propertyName.length() - 8) : propertyName;
+
+        final Property property = type.getPolymorphicPropertyIfExists(actualPropertyName);
         if (property == null)
           throw new SchemaException(
-              "Cannot create the index on type '" + typeName + "." + propertyName + "' because the property does not exist");
+              "Cannot create the index on type '" + typeName + "." + actualPropertyName + "' because the property does not exist");
 
-        keyTypes[i++] = property.getType();
+        keyTypes[i++] = isByItem ? Type.STRING : property.getType();
       }
 
       return schema.recordFileChanges(() -> {
@@ -131,7 +135,7 @@ public class BucketIndexBuilder extends IndexBuilder<Index> {
 
           schema.saveConfiguration();
 
-        }, false, maxAttempts, null, (error) -> {
+        }, false, maxAttempts, null, error -> {
           final Index indexToRemove = result1.get();
           if (indexToRemove != null) {
             ((IndexInternal) indexToRemove).drop();
