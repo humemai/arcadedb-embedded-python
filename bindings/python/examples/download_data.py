@@ -724,19 +724,43 @@ def download_stackoverflow(size="small"):
               'large' (~10 GB subset), 'xlarge' (~50 GB subset), or
               'full' (~323 GB)
     """
+    required_xml_files = (
+        "Posts.xml",
+        "Users.xml",
+        "Comments.xml",
+        "Tags.xml",
+        "Badges.xml",
+        "PostLinks.xml",
+        "PostHistory.xml",
+        "Votes.xml",
+    )
+
+    def has_required_xml_files(dataset_dir: Path) -> bool:
+        return dataset_dir.exists() and all(
+            (dataset_dir / filename).exists() for filename in required_xml_files
+        )
+
     # Create data directory
     data_dir = Path(__file__).parent / "data"
     data_dir.mkdir(exist_ok=True)
 
     if size == "tiny":
         source_dir = data_dir / "stackoverflow-small"
-        if not source_dir.exists():
+        if not has_required_xml_files(source_dir):
+            print(
+                "[INFO] stackoverflow-small is missing required XML files; "
+                "downloading a fresh source dataset"
+            )
             download_stackoverflow(size="small")
         return create_stackoverflow_tiny(source_dir=source_dir)
 
     if size == "large":
         source_dir = data_dir / "stackoverflow-full"
-        if not source_dir.exists():
+        if not has_required_xml_files(source_dir):
+            print(
+                "[INFO] stackoverflow-full is missing required XML files; "
+                "downloading a fresh source dataset"
+            )
             download_stackoverflow(size="full")
         return create_stackoverflow_large(
             source_dir=source_dir,
@@ -747,7 +771,11 @@ def download_stackoverflow(size="small"):
 
     if size == "xlarge":
         source_dir = data_dir / "stackoverflow-full"
-        if not source_dir.exists():
+        if not has_required_xml_files(source_dir):
+            print(
+                "[INFO] stackoverflow-full is missing required XML files; "
+                "downloading a fresh source dataset"
+            )
             download_stackoverflow(size="full")
         return create_stackoverflow_large(
             source_dir=source_dir,
