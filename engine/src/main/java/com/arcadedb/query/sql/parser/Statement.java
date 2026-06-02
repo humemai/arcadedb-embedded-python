@@ -29,7 +29,8 @@ import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.query.OperationType;
 import com.arcadedb.utility.CollectionUtils;
 
-import java.util.*;
+import java.util.Map;
+import java.util.Set;
 
 public class Statement extends SimpleNode {
   // Only for internal use!!! (caching)
@@ -112,7 +113,7 @@ public class Statement extends SimpleNode {
    * @return an execution plan
    */
   public InternalExecutionPlan createExecutionPlan(final CommandContext context) {
-    return createExecutionPlan(context);
+    throw new UnsupportedOperationException("createExecutionPlan(CommandContext) is not implemented for " + getClass().getSimpleName());
   }
 
   public InternalExecutionPlan createExecutionPlanNoCache(final CommandContext context) {

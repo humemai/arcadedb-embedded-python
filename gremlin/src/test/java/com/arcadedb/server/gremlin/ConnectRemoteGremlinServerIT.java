@@ -19,7 +19,7 @@
 package com.arcadedb.server.gremlin;
 
 import com.arcadedb.gremlin.io.ArcadeIoRegistry;
-import com.arcadedb.test.BaseGraphServerTest;
+import com.arcadedb.server.BaseGraphServerTest;
 import org.apache.tinkerpop.gremlin.driver.Cluster;
 import org.apache.tinkerpop.gremlin.driver.remote.DriverRemoteConnection;
 import org.apache.tinkerpop.gremlin.process.traversal.AnonymousTraversalSource;
@@ -30,7 +30,8 @@ import org.apache.tinkerpop.gremlin.util.ser.GraphBinaryMessageSerializerV1;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
-import java.util.*;
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

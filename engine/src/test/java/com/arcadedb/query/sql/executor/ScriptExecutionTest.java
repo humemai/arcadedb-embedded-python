@@ -67,10 +67,9 @@ class ScriptExecutionTest extends TestHelper {
   void twoInserts() {
     String typeName = "testTwoInserts";
     database.getSchema().createDocumentType(typeName);
-    database.transaction(() -> {
+    database.transaction(() ->
       database.command("sqlscript",
-          "INSERT INTO " + typeName + " SET name = 'foo';INSERT INTO " + typeName + " SET name = 'bar';");
-    });
+          "INSERT INTO " + typeName + " SET name = 'foo';INSERT INTO " + typeName + " SET name = 'bar';"));
     ResultSet rs = database.query("sql", "SELECT count(*) as count from " + typeName);
     assertThat(rs.next().<Long>getProperty("count")).isEqualTo((Object) 2L);
   }
@@ -220,9 +219,8 @@ class ScriptExecutionTest extends TestHelper {
     database.getSchema().createDocumentType(typeName, 8);
 
     // AVOID RETRY, EXPECTING TO MISS SOME UPDATES
-    database.transaction(() -> {
-      database.newDocument(typeName).set("id", 0).save();
-    });
+    database.transaction(() ->
+      database.newDocument(typeName).set("id", 0).save());
 
     final int TOTAL = 1000;
     String script = """
@@ -243,9 +241,8 @@ class ScriptExecutionTest extends TestHelper {
     result.close();
 
     // USE RETRY, EXPECTING NO MISS OF UPDATES
-    database.transaction(() -> {
-      database.newDocument(typeName).set("id", 1).save();
-    });
+    database.transaction(() ->
+      database.newDocument(typeName).set("id", 1).save());
 
     //database.setTransactionIsolationLevel(Database.TRANSACTION_ISOLATION_LEVEL.REPEATABLE_READ);
 
@@ -278,9 +275,8 @@ class ScriptExecutionTest extends TestHelper {
         .create();
 
     // AVOID RETRY, EXPECTING TO MISS SOME UPDATES
-    database.transaction(() -> {
-      database.newDocument(typeName).set("id", 0).save();
-    });
+    database.transaction(() ->
+      database.newDocument(typeName).set("id", 0).save());
 
     String script = """
         LET $retries = 0;
@@ -303,9 +299,8 @@ class ScriptExecutionTest extends TestHelper {
     result.close();
 
     // USE RETRY, EXPECTING NO MISS OF UPDATES
-    database.transaction(() -> {
-      database.newDocument(typeName).set("id", 1).save();
-    });
+    database.transaction(() ->
+      database.newDocument(typeName).set("id", 1).save());
 
     database.setTransactionIsolationLevel(Database.TRANSACTION_ISOLATION_LEVEL.REPEATABLE_READ);
 
@@ -490,6 +485,39 @@ class ScriptExecutionTest extends TestHelper {
       assertThat((Integer) item.getProperty("result")).isEqualTo(8);
 
       rs.close();
+    });
+  }
+
+  // Issue #3871: SQLScript LET $x = SELECT ... ; DELETE FROM $x; resolves the variable to records for deletion
+  @Test
+  void deleteFromVariableInScript() {
+    database.getSchema().createDocumentType("Doc");
+    database.transaction(() -> {
+      database.command("sql", "INSERT INTO Doc SET name = 'a'");
+      database.command("sql", "INSERT INTO Doc SET name = 'b'");
+      assertThat(database.countType("Doc", true)).isEqualTo(2);
+
+      database.command("sqlscript",
+          """
+          LET $x = SELECT @rid FROM Doc;
+          DELETE FROM $x;\
+          """);
+
+      assertThat(database.countType("Doc", true)).isEqualTo(0);
+    });
+  }
+
+  // Issue #3871: DELETE FROM TypeName still works as a regression check for variable-target changes
+  @Test
+  void deleteFromTypeStillWorks() {
+    database.getSchema().createDocumentType("DocDeleteFromType");
+    database.transaction(() -> {
+      database.command("sql", "INSERT INTO DocDeleteFromType SET name = 'c'");
+      assertThat(database.countType("DocDeleteFromType", true)).isEqualTo(1);
+
+      database.command("sql", "DELETE FROM DocDeleteFromType");
+
+      assertThat(database.countType("DocDeleteFromType", true)).isEqualTo(0);
     });
   }
 

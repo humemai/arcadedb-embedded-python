@@ -29,10 +29,14 @@ import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Server-side hybrid retrieval fusion. Combines ranked output from two or more sub-pipelines into a
@@ -66,7 +70,7 @@ import java.util.Map;
 public class SQLFunctionVectorFuse extends SQLFunctionVectorAbstract {
   public static final String NAME = "vector.fuse";
 
-  private static final java.util.Set<String> OPTIONS = java.util.Set.of(
+  private static final Set<String> OPTIONS = Set.of(
       "fusion", "k", "weights", "groupBy", "groupSize", "limit");
 
   private static final long DEFAULT_K = 60L;
@@ -168,7 +172,7 @@ public class SQLFunctionVectorFuse extends SQLFunctionVectorAbstract {
   }
 
   private static Strategy parseStrategy(final String raw) {
-    final String name = raw == null ? "RRF" : raw.toUpperCase();
+    final String name = raw == null ? "RRF" : raw.toUpperCase(Locale.ROOT);
     try {
       return Strategy.valueOf(name);
     } catch (final IllegalArgumentException e) {
@@ -180,7 +184,7 @@ public class SQLFunctionVectorFuse extends SQLFunctionVectorAbstract {
   private static float[] parseWeights(final List<?> raw, final int count) {
     if (raw == null) {
       final float[] uniform = new float[count];
-      java.util.Arrays.fill(uniform, 1.0f);
+      Arrays.fill(uniform, 1.0f);
       return uniform;
     }
     if (raw.size() != count)
@@ -205,7 +209,7 @@ public class SQLFunctionVectorFuse extends SQLFunctionVectorAbstract {
   @SuppressWarnings("unchecked")
   private static List<RidScore> materializeSource(final String functionName, final Object src, final int sourceIdx) {
     if (src == null)
-      return java.util.Collections.emptyList();
+      return Collections.emptyList();
     if (!(src instanceof Iterable<?> iter))
       throw new CommandSQLParsingException(
           functionName + " source[" + sourceIdx + "] must be a list of rows, got: " + src.getClass().getSimpleName());

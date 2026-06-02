@@ -38,11 +38,9 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
 import io.undertow.server.HttpServerExchange;
 
-import java.io.*;
-import java.net.*;
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.logging.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 
 public class GetServerHandler extends AbstractServerHttpHandler {
   private static final DefaultServerMetrics           profilerRateMetrics = new DefaultServerMetrics();
@@ -91,36 +89,6 @@ public class GetServerHandler extends AbstractServerHttpHandler {
       haJSON.put("leader", ha.getLeaderName());
       haJSON.put("electionStatus", ha.getElectionStatus().toString());
       haJSON.put("network", ha.getStats());
-
-      if (!ha.isLeader()) {
-        // ASK TO THE LEADER THE NETWORK COMPOSITION
-        HttpURLConnection connection;
-        try {
-          connection = (HttpURLConnection) new URL(
-              "http://" + ha.getLeaderAddress() + "/api/v1/server?mode=cluster").openConnection();
-        } catch (RuntimeException e) {
-          throw e;
-        } catch (Exception e) {
-          throw new RuntimeException(e);
-        }
-
-        try {
-          connection.setRequestMethod("GET");
-          connection.setRequestProperty("Authorization", exchange.getRequestHeaders().get("Authorization").getFirst());
-          connection.connect();
-
-          JSONObject leaderResponse = new JSONObject(readResponse(connection));
-          final JSONObject network = leaderResponse.getJSONObject("ha").getJSONObject("network");
-          haJSON.getJSONObject("network").put("replicas", network.getJSONArray("replicas"));
-
-        } catch (RuntimeException e) {
-          throw e;
-        } catch (Exception e) {
-          throw new RuntimeException(e);
-        } finally {
-          connection.disconnect();
-        }
-      }
 
       final JSONArray databases = new JSONArray();
 
@@ -258,27 +226,12 @@ public class GetServerHandler extends AbstractServerHttpHandler {
     response.put("settings", settings);
   }
 
-  private String readResponse(final HttpURLConnection connection) throws IOException {
-    connection.setConnectTimeout(5000);
-    connection.setReadTimeout(5000);
-    final InputStream in = connection.getInputStream();
-    final Scanner scanner = new Scanner(in);
-
-    final StringBuilder buffer = new StringBuilder();
-
-    while (scanner.hasNext()) {
-      buffer.append(scanner.next().replace('\n', ' '));
-    }
-
-    return buffer.toString();
-  }
-
   private Object convertValue(final String key, Object value) {
     if (key.toLowerCase(Locale.ENGLISH).contains("password"))
       // MASK SENSITIVE DATA
       value = "*****";
 
-    if (key.equals("arcadedb.server.defaultDatabases")) {
+    if ("arcadedb.server.defaultDatabases".equals(key)) {
       final String defaultDatabases = (String) value;
       if (value != null && !defaultDatabases.isEmpty()) {
         // CREATE DEFAULT DATABASES
@@ -355,8 +308,9 @@ public class GetServerHandler extends AbstractServerHttpHandler {
           byDatabase.put(dbName, indexes);
       } catch (final RuntimeException e) {
         LogManager.instance().log(this, Level.FINE,
-            "Skipping sparse-vector metrics for database '%s' (likely being dropped, reopened, or "
-                + "concurrently unloaded): %s",
+            """
+            Skipping sparse-vector metrics for database '%s' (likely being dropped, reopened, or \
+            concurrently unloaded): %s""",
             dbName, e.getMessage());
       }
     }

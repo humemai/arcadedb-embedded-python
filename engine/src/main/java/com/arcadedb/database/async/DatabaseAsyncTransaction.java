@@ -64,6 +64,8 @@ public class DatabaseAsyncTransaction implements DatabaseAsyncTask {
       } catch (final ConcurrentModificationException e) {
         // RETRY
         lastException = e;
+        if (database.isTransactionActive())
+          database.rollback();
 
       } catch (final Exception e) {
         if (database.getTransaction().isActive())
@@ -78,8 +80,13 @@ public class DatabaseAsyncTransaction implements DatabaseAsyncTask {
       }
     }
 
-    if (lastException != null)
-      async.onError(lastException);
+    if (lastException != null) {
+      if (database.isTransactionActive())
+        database.rollback();
+      if (onErrorCallback != null)
+        onErrorCallback.call(lastException);
+      throw lastException;
+    }
   }
 
   @Override

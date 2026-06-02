@@ -42,12 +42,11 @@ import com.arcadedb.utility.IntHashSet;
 import com.arcadedb.utility.IntIntHashMap;
 import com.arcadedb.utility.RidHashSet;
 
-import java.io.*;
+import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
-import java.util.logging.*;
-import java.util.stream.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+import java.util.stream.Collectors;
 
 /**
  * Manage the transaction context. When the transaction begins, the modifiedPages map is initialized. This allows to always delegate
@@ -841,7 +840,7 @@ public class TransactionContext implements Transaction {
     immutableRecordsCache.values().removeIf(r -> r.getIdentity().getBucketId() == fileId);
 
     if (lockedFiles != null)
-      lockedFiles.remove(fileId);
+      lockedFiles.remove(Integer.valueOf(fileId));
 
     if (updatedRecords != null)
       // FILE DELETED: REMOVE ALL PENDING UPDATED OBJECTS
@@ -899,16 +898,19 @@ public class TransactionContext implements Transaction {
 
     final List<Integer> locked = database.getTransactionManager().tryLockFiles(files.toArray(), timeout, getRequester());
 
-    // CHECK IF ALL THE LOCKED FILES STILL EXIST. FILE MISSING CAN HAPPEN IN CASE OF INDEX COMPACTION OR DROP OF A BUCKET OR AN INDEX
+    // CHECK IF ALL THE LOCKED FILES STILL EXIST. FILE MISSING CAN HAPPEN IN CASE OF INDEX COMPACTION OR DROP OF A BUCKET OR AN INDEX.
+    // Transaction rollback is the caller's responsibility: commit1stPhase catches and rolls back; the explicit-lock path retries
+    // internally with refreshed file IDs (see LocalTransactionExplicitLock.lock()) since no modifications exist yet at that point.
     for (Integer f : locked)
       if (!database.getFileManager().existsFile(f)) {
-        // THE FILE HAS BEEN REMOVED, CHECK IF A NEW COMPACTION WAS EXECUTED
-        final Integer migratedFileIs = ((LocalSchema) database.getSchema()).getMigratedFileId(f);
-        if (migratedFileIs == null) {
-          database.getTransactionManager().unlockFilesInOrder(locked, getRequester());
-          rollback();
-          throw new ConcurrentModificationException("File with id '" + f + "' has been removed");
+        database.getTransactionManager().unlockFilesInOrder(locked, getRequester());
+        final Integer migrated = database.getSchema().getEmbedded().getMigratedFileId(f);
+        if (migrated != null) {
+          LogManager.instance().log(this, Level.FINE, "Found upgraded file '%d' to '%d' during transaction commit", f, migrated);
+          throw new ConcurrentModificationException(
+              "Error on commit transaction: file '" + f + "' has been migrated to '" + migrated + "' (likely by an index compaction). Please retry the operation.");
         }
+        throw new ConcurrentModificationException("File with id '" + f + "' has been removed");
       }
 
     return locked;
@@ -955,7 +957,7 @@ public class TransactionContext implements Transaction {
       modifiedFiles.forEach(left::add);
       left.removeAll(explicitLockedFiles);
 
-      final Set<String> resourceNames = left.stream().map((fileId -> database.getSchema().getFileById(fileId).getName()))
+      final Set<String> resourceNames = left.stream().map(fileId -> database.getSchema().getFileById(fileId).getName())
           .collect(Collectors.toSet());
 
       throw new TransactionException(

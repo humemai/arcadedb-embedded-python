@@ -30,7 +30,7 @@
     </parent>
 
     <properties>
-        <jline.version>4.1.0</jline.version>
+        <jline.version>4.1.3</jline.version>
     </properties>
 
     <artifactId>arcadedb-console</artifactId>
@@ -79,9 +79,10 @@
         </dependency>
         <dependency>
             <groupId>com.arcadedb</groupId>
-            <artifactId>arcadedb-test-utils</artifactId>
+            <artifactId>arcadedb-server</artifactId>
             <version>${project.parent.version}</version>
             <scope>test</scope>
+            <type>test-jar</type>
         </dependency>
     </dependencies>
 </project>

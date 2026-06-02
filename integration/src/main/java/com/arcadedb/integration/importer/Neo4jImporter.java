@@ -51,6 +51,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.zip.GZIPInputStream;
 
@@ -92,6 +93,9 @@ public class Neo4jImporter {
   private final        ImporterContext                context;
   private final        Map<String, Map<String, Type>> schemaProperties         = new HashMap<>();
   private final static SimpleDateFormat               dateTimeISO8601Format    = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
+  // Allow-list for imported labels: ASCII letters, digits, underscore, hyphen and space only. Excluding '.', '/' and '\'
+  // makes path-traversal sequences structurally impossible in the on-disk bucket file names derived from these labels.
+  private final static Pattern                        SAFE_LABEL               = Pattern.compile("[A-Za-z0-9_ -]+");
 
   // Neo4j ID -> packed ArcadeDB RID mapping, populated during vertex pass.
   // Uses primitive LongLongMap for numeric IDs (common case), falls back to HashMap for non-numeric IDs.
@@ -238,7 +242,7 @@ public class Neo4jImporter {
         break;
 
       case "relationship":
-        final String edgeLabel = json.has("label") && !json.isNull("label") ? json.getString("label") : null;
+        final String edgeLabel = json.has("label") && !json.isNull("label") ? validateLabel(json.getString("label")) : null;
         if (edgeLabel != null)
           database.getSchema().buildEdgeType().withName(edgeLabel).withTotalBuckets(bucketsPerType).withIgnoreIfExists(true)
               .create();
@@ -313,7 +317,7 @@ public class Neo4jImporter {
           if (context.parsed.get() > 0 && context.parsed.get() % 1_000_000 == 0) {
             final long elapsed = System.currentTimeMillis() - beginTimeVerticesCreation;
             log("- Status update: created %,d vertices, skipped %,d edges (%,d vertices/sec)", context.createdVertices.get(),
-                context.skippedEdges.get(), (context.createdVertices.get() / elapsed * 1000));
+                context.skippedEdges.get(), context.createdVertices.get() / elapsed * 1000);
           }
 
           final Pair<String, List<String>> type = typeNameFromLabels(json);
@@ -398,10 +402,10 @@ public class Neo4jImporter {
           if (context.parsed.get() > 0 && context.parsed.get() % 1_000_000 == 0) {
             final long elapsed = System.currentTimeMillis() - beginTimeEdgesCreation;
             log("- Status update: created %,d edges %s (%,d edges/sec)", context.createdEdges.get(), totalEdgesByType,
-                (context.createdEdges.get() / elapsed * 1000));
+                context.createdEdges.get() / elapsed * 1000);
           }
 
-          final String type = json.getString("label");
+          final String type = validateLabel(json.getString("label"));
           if (type == null) {
             log("- found edge in line %d without labels. Skip it.", lineNumber.get());
             context.warnings.incrementAndGet();
@@ -672,20 +676,28 @@ public class Neo4jImporter {
     if (nodeLabels != null && !nodeLabels.isEmpty()) {
       if (nodeLabels.length() > 1) {
         // MULTI LABEL, CREATE A NEW MIXED TYPE THAT EXTEND ALL THE LABELS BY USING INHERITANCE
-        final List<String> list = nodeLabels.toList().stream().map(String.class::cast).sorted(Comparator.naturalOrder())
-            .collect(Collectors.toList());
+        final List<String> list = nodeLabels.toList().stream().map(String.class::cast).map(Neo4jImporter::validateLabel)
+            .sorted(Comparator.naturalOrder()).collect(Collectors.toList());
         return new Pair<>(String.join(Labels.LABEL_SEPARATOR, list), list);
       } else
-        return new Pair<>((String) nodeLabels.get(0), null);
+        return new Pair<>(validateLabel((String) nodeLabels.get(0)), null);
     }
     return null;
+  }
+
+  // Validates untrusted import labels against a strict allow-list before they become on-disk bucket file names. Only
+  // letters, digits, underscore, hyphen and space are accepted; path separators and '..' cannot appear by construction.
+  private static String validateLabel(final String label) {
+    if (label != null && !SAFE_LABEL.matcher(label).matches())
+      throw new ImportException("Invalid label: must not contain path separators or '..'");
+    return label;
   }
 
   private void log(final String text, final Object... args) {
     if (args.length == 0)
       System.out.println(text);
     else
-      System.out.printf((text) + "%n", args);
+      System.out.printf(text + "%n", args);
   }
 
   private void error(final String text, final Object... args) {
@@ -719,30 +731,30 @@ public class Neo4jImporter {
 
     String state = null;
     for (final String arg : args) {
-      if (arg.equals("-?"))
+      if ("-?".equals(arg))
         printHelp();
-      else if (arg.equals("-d"))
+      else if ("-d".equals(arg))
         state = "databasePath";
-      else if (arg.equals("-i"))
+      else if ("-i".equals(arg))
         state = "inputFile";
-      else if (arg.equals("-o"))
+      else if ("-o".equals(arg))
         overwriteDatabase = true;
-      else if (arg.equals("-b"))
+      else if ("-b".equals(arg))
         state = "batchSize";
-      else if (arg.equals("-decimalType"))
+      else if ("-decimalType".equals(arg))
         state = "decimalType";
-      else if (arg.equals("-bucketBits"))
+      else if ("-bucketBits".equals(arg))
         state = "bucketBits";
       else if (state != null) {
-        if (state.equals("databasePath"))
+        if ("databasePath".equals(state))
           databasePath = arg;
-        else if (state.equals("inputFile"))
+        else if ("inputFile".equals(state))
           inputFile = arg;
-        else if (state.equals("batchSize"))
+        else if ("batchSize".equals(state))
           batchSize = Integer.parseInt(arg);
-        else if (state.equals("decimalType"))
+        else if ("decimalType".equals(state))
           typeForDecimals = Type.valueOf(arg.toUpperCase(Locale.ENGLISH));
-        else if (state.equals("bucketBits")) {
+        else if ("bucketBits".equals(state)) {
           bucketBits = Integer.parseInt(arg);
           if (bucketBits < 1 || bucketBits > 32)
             syntaxError("bucketBits must be between 1 and 32");

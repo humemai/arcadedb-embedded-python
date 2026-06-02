@@ -32,12 +32,13 @@ import com.arcadedb.log.LogManager;
 import com.arcadedb.utility.LockManager;
 
 import java.io.*;
-import java.nio.channels.*;
+import java.nio.channels.ClosedByInterruptException;
+import java.nio.channels.ClosedChannelException;
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
-import java.util.logging.*;
-import java.util.stream.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
+import java.util.stream.Stream;
 
 public class TransactionManager {
   private static final long MAX_LOG_FILE_SIZE = 64 * 1024 * 1024;
@@ -251,6 +252,7 @@ public class TransactionManager {
         }
 
         long lastTxId = -1;
+        boolean walGapDetected = false;
 
         while (true) {
           int lowerTx = -1;
@@ -270,24 +272,54 @@ public class TransactionManager {
             // FINISHED
             break;
 
-          lastTxId = lowerTxId;
-
-          applyChanges(walPositions[lowerTx], Collections.emptyMap(), true);
+          try {
+            applyChanges(walPositions[lowerTx], Collections.emptyMap(), false);
+            // Only advance lastTxId after a successful apply, otherwise a failed transaction
+            // would wrongly increment the next-tx counter past data that was never written.
+            lastTxId = lowerTxId;
+          } catch (WALVersionGapException e) {
+            LogManager.instance().log(this, Level.SEVERE,
+                "Recovery aborted for database '%s': version gap in WAL (txId=%d). WAL files have been preserved for manual inspection. No further transactions will be replayed.",
+                null, database, lowerTxId);
+            walGapDetected = true;
+            break;
+          }
 
           walPositions[lowerTx] = activeWALFilePool[lowerTx].getTransaction(walPositions[lowerTx].endPositionInLog);
         }
 
-        // CONTINUE FROM LAST TXID
-        transactionIds.set(lastTxId + 1);
+        // Only update the next-tx counter if recovery actually applied a transaction. When
+        // lastTxId is still -1 the counter must keep the persistedLastTxId value loaded by the
+        // constructor; overwriting it with 0 would lose recency and risk transaction-id reuse.
+        if (lastTxId != -1)
+          transactionIds.set(lastTxId + 1);
 
-        // REMOVE ALL WAL FILES
-        for (final WALFile file : activeWALFilePool) {
-          try {
-            file.drop();
-            LogManager.instance().log(this, Level.FINE, "Dropped WAL file '%s'", null, file);
-          } catch (final IOException e) {
-            LogManager.instance().log(this, Level.SEVERE, "Error on dropping WAL file '%s'", e, file);
+        if (!walGapDetected) {
+          // REMOVE ALL WAL FILES
+          for (final WALFile file : activeWALFilePool) {
+            if (file == null)
+              continue;
+            try {
+              file.drop();
+              LogManager.instance().log(this, Level.FINE, "Dropped WAL file '%s'", null, file);
+            } catch (final IOException e) {
+              LogManager.instance().log(this, Level.SEVERE, "Error on dropping WAL file '%s'", e, file);
+            }
           }
+        } else {
+          // Close WAL files without deleting: preserve for manual inspection after gap detection
+          for (final WALFile file : activeWALFilePool) {
+            if (file == null)
+              continue;
+            try {
+              file.close();
+            } catch (final IOException e) {
+              LogManager.instance().log(this, Level.WARNING, "Error on closing WAL file '%s'", e, file);
+            }
+          }
+          LogManager.instance().log(this, Level.SEVERE,
+              "WAL files for database '%s' have been preserved in '%s' for manual inspection.",
+              null, database, database.getDatabasePath());
         }
         createWALFilePool();
         database.getPageManager().removeAllReadPagesOfDatabase(database);
@@ -330,12 +362,19 @@ public class TransactionManager {
       final PageId pageId = new PageId(database, txPage.fileId, txPage.pageNumber);
 
       if (!database.getFileManager().existsFile(txPage.fileId)) {
-        // Referencing a deleted file is expected during Raft replay and crash recovery -
-        // schema changes may delete files before their prior TX entries are replayed.
-        // Always skip to avoid aborting the entire multi-page transaction.
-        LogManager.instance()
-            .log(this, Level.FINE,
-                "Skipping page for deleted file %d during transaction apply", null, txPage.fileId);
+        // Referencing a missing file is expected in two safe cases:
+        // 1. LSM compaction migrated the file to a new ID - data is already in the new file.
+        // 2. A schema change (DROP TYPE / DROP INDEX) deleted the file intentionally.
+        // In both cases we skip. For case 1 the migration map is populated so we can log at FINE.
+        // For case 2 (or any unexpected missing file) we log at WARNING so operators notice.
+        final Integer migratedTo = database.getSchema().getEmbedded().getMigratedFileId(txPage.fileId);
+        if (migratedTo != null)
+          LogManager.instance().log(this, Level.FINE,
+              "Skipping page for compaction-migrated file %d (now %d) during transaction apply", null, txPage.fileId, migratedTo);
+        else
+          LogManager.instance().log(this, Level.INFO,
+              "Skipping page for missing file %d during transaction apply, file was deleted or migration map is incomplete", null,
+              txPage.fileId);
         continue;
       }
 
@@ -522,7 +561,7 @@ public class TransactionManager {
     final File f = lastTxIdFile();
     if (f == null || !f.isFile())
       return -1L;
-    try (final java.io.DataInputStream in = new java.io.DataInputStream(new java.io.FileInputStream(f))) {
+    try (final DataInputStream in = new DataInputStream(new FileInputStream(f))) {
       return in.readLong();
     } catch (final IOException e) {
       LogManager.instance().log(this, Level.WARNING,
@@ -543,7 +582,7 @@ public class TransactionManager {
     if (value < 0)
       return;
     final File tmp = new File(f.getParentFile(), f.getName() + ".tmp");
-    try (final java.io.DataOutputStream out = new java.io.DataOutputStream(new java.io.FileOutputStream(tmp))) {
+    try (final DataOutputStream out = new DataOutputStream(new FileOutputStream(tmp))) {
       out.writeLong(value);
     } catch (final IOException e) {
       LogManager.instance().log(this, Level.WARNING,

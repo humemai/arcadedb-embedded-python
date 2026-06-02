@@ -50,6 +50,8 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -76,11 +78,12 @@ public class RemoteHttpComponent extends RWLockContext {
   private final   Integer                     txRetries;
   private         int                         apiVersion                = 1;
   private         CONNECTION_STRATEGY         connectionStrategy        = CONNECTION_STRATEGY.ROUND_ROBIN;
-  private         Pair<String, Integer>       leaderServer;
-  private         int                         currentReplicaServerIndex = -1;
-  private         int                         timeout;
-  protected       String                      currentServer;
-  protected       int                         currentPort;
+  private volatile Pair<String, Integer>       leaderServer;
+  private          int                         currentReplicaServerIndex = -1;
+  private          int                         timeout;
+  protected        String                      currentServer;
+  protected        int                         currentPort;
+  private         Pair<String, Integer>       stickyTransactionServer;
 
   public enum CONNECTION_STRATEGY {
     STICKY, ROUND_ROBIN, FIXED
@@ -140,10 +143,10 @@ public class RemoteHttpComponent extends RWLockContext {
     final long watchdogMs = Math.max(timeout * 1000L, 30_000L);
     try {
       return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-          .get(watchdogMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+          .get(watchdogMs, TimeUnit.MILLISECONDS);
     } catch (final java.util.concurrent.TimeoutException e) {
       throw new IOException("HTTP request watchdog timeout after " + watchdogMs + "ms: " + request.uri(), e);
-    } catch (final java.util.concurrent.ExecutionException e) {
+    } catch (final ExecutionException e) {
       final Throwable cause = e.getCause();
       if (cause instanceof IOException ioe)
         throw ioe;
@@ -183,6 +186,18 @@ public class RemoteHttpComponent extends RWLockContext {
     this.connectionStrategy = connectionStrategy;
   }
 
+  protected void setStickyTransactionServer(final Pair<String, Integer> server) {
+    this.stickyTransactionServer = server;
+  }
+
+  private Pair<String, Integer> getStickyPin() {
+    return connectionStrategy == CONNECTION_STRATEGY.STICKY ? stickyTransactionServer : null;
+  }
+
+  Pair<String, Integer> getLeaderServer() {
+    return leaderServer;
+  }
+
   List<Pair<String, Integer>> getReplicaServerList() {
     return replicaServerList;
   }
@@ -191,6 +206,8 @@ public class RemoteHttpComponent extends RWLockContext {
     return stats.toMap();
   }
 
+  // Routing for query/command traffic. RemoteDatabase.begin/commit/rollback build
+  // their URLs through getUrl() instead - any STICKY routing change must update both paths.
   Object httpCommand(final String method,
       final String extendedURL,
       final String operation,
@@ -203,8 +220,11 @@ public class RemoteHttpComponent extends RWLockContext {
 
     Exception lastException = null;
 
+    final Pair<String, Integer> stickyPin = getStickyPin();
+    final boolean stickyPinned = stickyPin != null;
+
     int maxRetry =
-        leaderIsPreferable || connectionStrategy == CONNECTION_STRATEGY.FIXED ?
+        leaderIsPreferable || connectionStrategy == CONNECTION_STRATEGY.FIXED || stickyPinned ?
             sameServerErrorRetries :
             haServerErrorRetries == 0 ? getReplicaServerList().size() + 1 : haServerErrorRetries;
     if (maxRetry < 1)
@@ -213,6 +233,8 @@ public class RemoteHttpComponent extends RWLockContext {
     Pair<String, Integer> connectToServer;
     if (connectionStrategy == CONNECTION_STRATEGY.FIXED)
       connectToServer = new Pair<>(originalServer, originalPort);
+    else if (stickyPinned)
+      connectToServer = stickyPin;
     else
       connectToServer = leaderIsPreferable && leaderServer != null ? leaderServer : new Pair<>(currentServer, currentPort);
 
@@ -294,7 +316,7 @@ public class RemoteHttpComponent extends RWLockContext {
 
         if (response.statusCode() != 200) {
           lastException = manageException(response, payloadCommand != null ? payloadCommand : operation);
-          if (lastException instanceof RuntimeException && lastException.getMessage().equals("Empty payload received")) {
+          if (lastException instanceof RuntimeException && "Empty payload received".equals(lastException.getMessage())) {
             LogManager.instance()
                 .log(this, Level.FINE, "Empty payload received, retrying (retry=%d/%d)...", null, retry, maxRetry);
             continue;
@@ -316,18 +338,24 @@ public class RemoteHttpComponent extends RWLockContext {
         if (!autoReconnect || retry + 1 >= maxRetry)
           break;
 
-        if (connectionStrategy == CONNECTION_STRATEGY.FIXED) {
+        if (connectionStrategy == CONNECTION_STRATEGY.FIXED || stickyPinned) {
           LogManager.instance()
               .log(this, Level.WARNING, "Remote server (%s:%d) seems unreachable, retrying...",
                   connectToServer.getFirst(), connectToServer.getSecond());
         } else {
+          if (this instanceof RemoteDatabase remoteDb && remoteDb.getSessionId() != null) {
+            remoteDb.setSessionId(null);
+            throw new TransactionException("Server failover during active transaction", e);
+          }
+
           if (!reloadClusterConfiguration())
             throw new RemoteException("Error on executing remote operation " + operation + ", no server available", e);
 
           final Pair<String, Integer> currentConnectToServer = connectToServer;
+          final Pair<String, Integer> snapshotLeader = leaderServer;
 
-          if (leaderIsPreferable && !currentConnectToServer.equals(leaderServer)) {
-            connectToServer = leaderServer;
+          if (leaderIsPreferable && snapshotLeader != null && !currentConnectToServer.equals(snapshotLeader)) {
+            connectToServer = snapshotLeader;
           } else
             connectToServer = getNextReplicaAddress();
 
@@ -343,8 +371,8 @@ public class RemoteHttpComponent extends RWLockContext {
         throw new RemoteException("Request interrupted", e);
       } catch (final NeedRetryException e) {
         // Election in progress - retry with delay.
-        final int maxElectionRetries = (this instanceof RemoteDatabase db) ? db.getElectionRetryCount() : 3;
-        final long delayMs = (this instanceof RemoteDatabase db) ? db.getElectionRetryDelayMs() : 2000L;
+        final int maxElectionRetries = this instanceof RemoteDatabase db ? db.getElectionRetryCount() : 3;
+        final long delayMs = this instanceof RemoteDatabase db ? db.getElectionRetryDelayMs() : 2000L;
         if (retry + 1 >= maxRetry || retry >= maxElectionRetries) {
           lastException = e;
           break;
@@ -385,7 +413,7 @@ public class RemoteHttpComponent extends RWLockContext {
   }
 
   public List<String> getReplicaAddresses() {
-    return replicaServerList.stream().map((e) -> e.getFirst() + ":" + e.getSecond()).collect(Collectors.toList());
+    return replicaServerList.stream().map(e -> e.getFirst() + ":" + e.getSecond()).collect(Collectors.toList());
   }
 
   HttpRequest.Builder createRequestBuilder(final String httpMethod, final String url) {
@@ -534,8 +562,14 @@ public class RemoteHttpComponent extends RWLockContext {
     return leaderServer != null;
   }
 
+  // Routing for raw httpClient.send() callers (RemoteDatabase.begin/commit/rollback).
+  // Regular query/command traffic flows through httpCommand() - any STICKY routing
+  // change must update both paths.
   protected String getUrl(final String command) {
-    return protocol + "://" + currentServer + ":" + currentPort + "/api/v" + apiVersion + "/" + command;
+    final Pair<String, Integer> pin = getStickyPin();
+    final String host = pin != null ? pin.getFirst() : currentServer;
+    final int port = pin != null ? pin.getSecond() : currentPort;
+    return protocol + "://" + host + ":" + port + "/api/v" + apiVersion + "/" + command;
   }
 
   String getRequestPayload(final JSONObject jsonRequest) {
@@ -593,11 +627,11 @@ public class RemoteHttpComponent extends RWLockContext {
         return new NoSuchElementException(detail);
       } else if (exception.equals(SecurityException.class.getName())) {
         return new SecurityException(detail);
-      } else if (exception.equals("com.arcadedb.server.security.ServerSecurityException")) {
+      } else if ("com.arcadedb.server.security.ServerSecurityException".equals(exception)) {
         return new SecurityException(detail);
       } else if (exception.equals(ConnectException.class.getName())) {
         return new NeedRetryException(detail);
-      } else if (exception.equals("com.arcadedb.server.ha.ReplicationException")) {
+      } else if ("com.arcadedb.server.ha.ReplicationException".equals(exception)) {
         return new NeedRetryException(detail);
       } else if (exception.equals(NeedRetryException.class.getName())) {
         return new NeedRetryException(detail);

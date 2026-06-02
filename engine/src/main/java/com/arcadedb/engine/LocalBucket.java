@@ -31,7 +31,6 @@ import com.arcadedb.exception.ConcurrentModificationException;
 import com.arcadedb.exception.DatabaseIsReadOnlyException;
 import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.exception.RecordNotFoundException;
-import com.arcadedb.exception.SchemaException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.LocalEdgeType;
@@ -42,10 +41,10 @@ import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.FileUtils;
 import com.arcadedb.utility.IntIntHashMap;
 
-import java.io.*;
+import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.atomic.*;
-import java.util.logging.*;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
 
 import static com.arcadedb.database.Binary.INT_SERIALIZED_SIZE;
 import static com.arcadedb.database.Binary.LONG_SERIALIZED_SIZE;
@@ -164,6 +163,14 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
 
   /**
    * Called at load time.
+   * <p>
+   * Free-space statistics are NOT pre-warmed here. {@link #findAvailableSpace} already calls
+   * {@link #gatherPageStatistics()} lazily on the first allocation that needs it, so a leader
+   * still gets reuse for free; a follower that only applies leader-shipped pages via the state
+   * machine never triggers it at all. Pre-warming here would scan up to all pages of every
+   * bucket during {@link com.arcadedb.schema.LocalSchema#load} - which on a follower under
+   * heavy bulk-load fires repeatedly per LSM compaction SCHEMA_ENTRY and exhausts the heap
+   * (issue #4219).
    */
   public LocalBucket(final DatabaseInternal database, final String name, final String filePath, final int id,
                      final ComponentFile.MODE mode, final int pageSize, final int version) throws IOException {
@@ -178,8 +185,6 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
     // by default and bypassed the user-DML guard. Schema JSON still maps primary->external by name (which is
     // an orthogonal concern), but the write guard now no longer depends on schema-load ordering.
     this.purpose = purposeForVersion(version);
-    if (this.reuseSpaceMode.ordinal() >= REUSE_SPACE_MODE.HIGH.ordinal())
-      gatherPageStatistics();
   }
 
   private static Purpose purposeForVersion(final int version) {
@@ -1327,7 +1332,7 @@ public class LocalBucket extends PaginatedComponent implements Bucket {
         if (recordSize[0] == RECORD_PLACEHOLDER_POINTER)
           size = LONG_SERIALIZED_SIZE + (int) recordSize[1];
         else if (recordSize[0] == FIRST_CHUNK || recordSize[0] == NEXT_CHUNK) {
-          final int chunkSize = page.readInt((recordPositionInPage + (int) recordSize[1]));
+          final int chunkSize = page.readInt(recordPositionInPage + (int) recordSize[1]);
           size = chunkSize + (int) recordSize[1] + INT_SERIALIZED_SIZE + LONG_SERIALIZED_SIZE; // LONG = nextChunkPointer
         } else if (recordSize[0] < RECORD_PLACEHOLDER_CONTENT)
           // PLACEHOLDER CONTENT, CONSIDER THE RECORD SIZE (CONVERTED FROM NEGATIVE NUMBER) + VARINT SIZE

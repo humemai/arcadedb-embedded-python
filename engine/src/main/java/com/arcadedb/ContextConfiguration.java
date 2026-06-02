@@ -21,9 +21,11 @@ package com.arcadedb;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.SystemVariableResolver;
 
-import java.io.*;
-import java.util.*;
-import java.util.concurrent.*;
+import java.io.Serializable;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Represents a context configuration where custom setting could be defined for the context only. If not defined, globals will be
@@ -161,6 +163,17 @@ public class ContextConfiguration implements Serializable {
     if (v == null)
       return false;
     return v instanceof Boolean b ? b : Boolean.parseBoolean(v.toString());
+  }
+
+  /**
+   * Returns {@code true} when HA is implicitly opted-in by a non-blank {@code HA_SERVER_LIST}.
+   * Combined with an explicit {@code HA_ENABLED=true}, this determines whether the Raft plugin
+   * is discovered and started. Kept here as the single source of truth so the {@code server}
+   * and {@code ha-raft} modules stay in sync.
+   */
+  public boolean isHAImplicitlyEnabled() {
+    final String serverList = getValueAsString(GlobalConfiguration.HA_SERVER_LIST);
+    return serverList != null && !serverList.isBlank();
   }
 
   public String getValueAsString(final String iName, final String iDefaultValue) {

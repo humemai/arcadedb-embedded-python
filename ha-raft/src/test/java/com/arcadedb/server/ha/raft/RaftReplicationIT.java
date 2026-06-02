@@ -25,6 +25,7 @@ import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.schema.Schema;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.TestServerHelper;
 import com.arcadedb.utility.FileUtils;
@@ -77,7 +78,7 @@ class RaftReplicationIT {
             final var type = db.getSchema().buildVertexType().withName("TestVertex").withTotalBuckets(3).create();
             type.createProperty("id", Long.class);
             type.createProperty("name", String.class);
-            db.getSchema().createTypeIndex(com.arcadedb.schema.Schema.INDEX_TYPE.LSM_TREE, true, "TestVertex", "id");
+            db.getSchema().createTypeIndex(Schema.INDEX_TYPE.LSM_TREE, true, "TestVertex", "id");
           });
         }
       } else {
@@ -300,6 +301,37 @@ class RaftReplicationIT {
       final RaftHAServer raftHA = ((RaftHAPlugin) server.getHA()).getRaftHAServer();
       final String replicas = raftHA.getReplicaAddresses();
       assertThat(replicas).isNotEmpty();
+    }
+  }
+
+  @Test
+  void httpAddressesFallBackToLocalPortWhenNotConfigured() {
+    // Reproduces a HA_SERVER_LIST that omits the HTTP port (host:raftPort only): the parsed
+    // httpAddresses map is empty, which previously left leaderAddress null and replicaAddresses
+    // empty and also broke DDL forwarding to the leader. The server must still report HTTP
+    // endpoints by combining each peer's Raft host with this node's HTTP listening port.
+    for (final ArcadeDBServer server : servers)
+      ((RaftHAPlugin) server.getHA()).getRaftHAServer().getHttpAddresses().clear();
+
+    for (final ArcadeDBServer server : servers) {
+      final RaftHAServer raftHA = ((RaftHAPlugin) server.getHA()).getRaftHAServer();
+      final int localHttpPort = server.getHttpServer().getPort();
+
+      // Leader address is derived (host known from Raft, port from this node) instead of null.
+      // Poll because a follower may briefly not yet know the leader right after election.
+      Awaitility.await()
+          .atMost(15, TimeUnit.SECONDS)
+          .pollInterval(200, TimeUnit.MILLISECONDS)
+          .until(() -> {
+            final String addr = raftHA.getLeaderHttpAddress();
+            return addr != null && addr.startsWith("localhost:");
+          });
+
+      // Replica addresses are no longer empty.
+      assertThat(raftHA.getReplicaAddresses()).isNotEmpty();
+
+      // For the local peer the derivation is exact: its own Raft host plus its own HTTP port.
+      assertThat(raftHA.getPeerHttpAddress(raftHA.getLocalPeerId())).isEqualTo("localhost:" + localHttpPort);
     }
   }
 

@@ -45,7 +45,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -4776,6 +4775,70 @@ public class SelectStatementExecutionTest extends TestHelper {
       assertThat(rs.hasNext()).as("IN (SELECT ...) must return results without any index").isTrue();
       rs.next();
       assertThat(rs.hasNext()).isFalse();
+    }
+  }
+
+  // Issue #3872: SELECT $x LET $x = {"a": 1}.a resolves the trailing selector on a map literal
+  @Test
+  void letWithMapLiteralTrailingSelector() {
+    try (final ResultSet rs = database.query("sql", "SELECT $x LET $x = {\"a\": 1}.a")) {
+      assertThat(rs.hasNext()).isTrue();
+      final Result result = rs.next();
+      assertThat((Object) result.getProperty("$x")).isEqualTo(1);
+    }
+  }
+
+  // Issue #3872: SELECT $x LET $x = (SELECT 1 AS a).a resolves the trailing selector on a subquery result
+  @Test
+  void letWithSubqueryTrailingSelector() {
+    try (final ResultSet rs = database.query("sql", "SELECT $x LET $x = (SELECT 1 AS a).a")) {
+      assertThat(rs.hasNext()).isTrue();
+      final Result result = rs.next();
+      final Object val = result.getProperty("$x");
+      assertThat(val).isInstanceOf(List.class);
+      @SuppressWarnings("unchecked")
+      final List<Object> list = (List<Object>) val;
+      assertThat(list).containsExactly(1);
+    }
+  }
+
+  // Issue #3872: LET with a map literal and no trailing selector remains unchanged (regression check)
+  @Test
+  void letWithMapLiteralNoSelector() {
+    try (final ResultSet rs = database.query("sql", "SELECT $x LET $x = {\"a\": 1}")) {
+      assertThat(rs.hasNext()).isTrue();
+      final Result result = rs.next();
+      assertThat((Object) result.getProperty("$x")).isNotNull();
+    }
+  }
+
+  // Issue #3872: LET with a subquery and no trailing selector remains unchanged (regression check)
+  @Test
+  void letWithSubqueryNoSelector() {
+    try (final ResultSet rs = database.query("sql", "SELECT $x LET $x = (SELECT 1 AS a)")) {
+      assertThat(rs.hasNext()).isTrue();
+      final Result result = rs.next();
+      assertThat((Object) result.getProperty("$x")).isNotNull();
+    }
+  }
+
+  // Issue #3878: SELECT (true = true) AS result evaluates equality operator inside a projection
+  @Test
+  void selectWithEqualityInProjection() {
+    try (final ResultSet rs = database.query("sql", "SELECT (true = true) as result")) {
+      assertThat(rs.hasNext()).isTrue();
+      final Result result = rs.next();
+      assertThat((Boolean) result.getProperty("result")).isTrue();
+    }
+  }
+
+  // Issue #3878: SELECT if((true = true), 1, 2) evaluates an if() projection whose argument contains an equality operator
+  @Test
+  void selectWithIfFunctionContainingEquality() {
+    try (final ResultSet rs = database.query("sql", "SELECT if((true = true), 1, 2) as val")) {
+      assertThat(rs.hasNext()).isTrue();
+      final Result result = rs.next();
+      assertThat((Integer) result.getProperty("val")).isEqualTo(1);
     }
   }
 

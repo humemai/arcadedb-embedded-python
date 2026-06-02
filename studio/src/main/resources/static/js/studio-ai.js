@@ -28,6 +28,12 @@ var aiCurrentXhr = null;
 var aiCommandBlockCounter = 0;
 var aiMode = globalStorageLoad("ai-mode", "auto");
 
+// Protocol version this Studio bundle speaks to the AI server. Sent on every
+// /api/v1/ai/chat request so the server can manage breaking changes without
+// forcing all browsers and servers to upgrade in lock-step. Keep in sync with
+// AiProtocol.CURRENT_VERSION on the Java side.
+var AI_PROTOCOL_VERSION = 1;
+
 function initAi() {
   // Check if AI is configured
   jQuery.ajax({
@@ -40,6 +46,17 @@ function initAi() {
   .done(function(data) {
     aiConfigured = data.configured === true;
     if (aiConfigured) {
+      // Surface an obvious warning if our bundle's protocol version isn't in the
+      // server's supported list. We still try to send the request; the server
+      // returns a clear protocol_unsupported error if it really can't speak v1.
+      if (Array.isArray(data.supportedProtocolVersions)
+          && data.supportedProtocolVersions.indexOf(AI_PROTOCOL_VERSION) === -1) {
+        globalNotify("AI Assistant",
+          "This Studio bundle uses protocol v" + AI_PROTOCOL_VERSION
+            + " but the server supports " + data.supportedProtocolVersions.join(", ")
+            + ". Reload Studio or update the server.",
+          "warning");
+      }
       $("#aiInactivePanel").hide();
       $("#aiActivePanel").show();
       initSearchableDbSelect("aiDbSelectContainer");
@@ -392,7 +409,7 @@ function aiSendMessageStreaming(db, message) {
       "Content-Type": "application/json",
       "Authorization": globalCredentials
     },
-    body: JSON.stringify({ database: db, message: message, chatId: aiCurrentChatId, mode: aiMode }),
+    body: JSON.stringify({ database: db, message: message, chatId: aiCurrentChatId, mode: aiMode, protocolVersion: AI_PROTOCOL_VERSION }),
     signal: controller.signal
   })
   .then(function(response) {
@@ -506,7 +523,7 @@ function aiSendMessageLegacy(db, message) {
   aiCurrentXhr = jQuery.ajax({
     type: "POST",
     url: "api/v1/ai/chat",
-    data: JSON.stringify({ database: db, message: message, chatId: aiCurrentChatId, mode: aiMode }),
+    data: JSON.stringify({ database: db, message: message, chatId: aiCurrentChatId, mode: aiMode, protocolVersion: AI_PROTOCOL_VERSION }),
     contentType: "application/json",
     beforeSend: function(xhr) {
       xhr.setRequestHeader("Authorization", globalCredentials);
@@ -593,6 +610,11 @@ function aiUpdateLiveTools(liveId, toolCalls) {
         : '<i class="fa fa-check ms-1" style="color: #28a745; font-size: 0.7rem;"></i>')
       : '<i class="fa fa-spinner fa-spin ms-1" style="font-size: 0.7rem;"></i>';
     html += '<div style="padding: 2px 0;"><i class="fa ' + icon + ' me-1" style="width: 14px; text-align: center;"></i>' + label + statusIcon + '</div>';
+    if (tc._done && tc.error) {
+      console.warn("AI tool '" + tc.tool + "' failed:", tc.error, tc);
+      html += '<div style="padding: 2px 0 6px 20px; color: #dc3545; font-size: 0.75rem; white-space: pre-wrap; word-break: break-word;">' +
+        escapeHtml(tc.error) + '</div>';
+    }
   }
   el.innerHTML = html;
 
@@ -731,6 +753,9 @@ function aiRenderToolCallLog(toolCalls) {
       ? '<i class="fa fa-circle-exclamation ms-1" style="color: #dc3545; font-size: 0.7rem;" title="' + escapeHtml(tc.error) + '"></i>'
       : '<i class="fa fa-check ms-1" style="color: #28a745; font-size: 0.7rem;"></i>';
     html += '<div style="padding: 2px 0;"><i class="fa ' + icon + ' me-1" style="width: 14px; text-align: center;"></i>' + label + statusIcon + '</div>';
+    if (tc.error)
+      html += '<div style="padding: 2px 0 6px 20px; color: #dc3545; font-size: 0.75rem; white-space: pre-wrap; word-break: break-word;">' +
+        escapeHtml(tc.error) + '</div>';
   }
   html += '</div>';
   return html;

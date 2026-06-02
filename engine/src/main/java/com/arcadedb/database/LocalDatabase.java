@@ -47,6 +47,7 @@ import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.exception.InvalidDatabaseInstanceException;
 import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.exception.RecordNotFoundException;
+import com.arcadedb.exception.SerializationException;
 import com.arcadedb.exception.TransactionException;
 import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.GraphBatch;
@@ -100,6 +101,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
+import java.nio.BufferUnderflowException;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
@@ -1143,10 +1145,24 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       final LocalBucket bucket = schema.getBucketById(record.getIdentity().getBucketId());
 
       if (record instanceof Document document) {
-        indexer.deleteDocument(document);
-        // Cascade-delete EXTERNAL property values living in paired external buckets. This must run BEFORE the primary
-        // record is deleted, so the buffer is still readable. Both deletes ride the same transaction.
-        cascadeDeleteExternalValues(document);
+        try {
+          indexer.deleteDocument(document);
+          // Cascade-delete EXTERNAL property values living in paired external buckets. This must run BEFORE the primary
+          // record is deleted, so the buffer is still readable. Both deletes ride the same transaction.
+          cascadeDeleteExternalValues(document);
+        } catch (final SerializationException | NegativeArraySizeException | BufferUnderflowException
+                       | IndexOutOfBoundsException | IllegalArgumentException e) {
+          // The record buffer is corrupted (e.g. written by a version affected by issue #4319 in HA), so its indexed
+          // keys and EXTERNAL pointers cannot be read for cleanup. A malformed buffer surfaces as one of a small family
+          // of exceptions depending on which field decodes wrong: out-of-range length (SerializationException /
+          // NegativeArraySizeException), a content offset past the end (IllegalArgumentException "Invalid position"), or
+          // a truncated read (BufferUnderflowException / IndexOutOfBoundsException) - see issues #4420 and #4432.
+          // Proceed with the physical deletion anyway so the stuck record can finally be removed; leftover index/external
+          // entries are best-effort and a database check can repair them afterwards.
+          LogManager.instance().log(this, Level.WARNING,
+              "Cannot read record %s for index/external cleanup on delete (corrupted buffer): %s. Deleting the record anyway; "
+                  + "run a database check to repair any dangling index entries.", record.getIdentity(), e.getMessage());
+        }
       }
 
       if (record instanceof Edge edge) {
@@ -1568,7 +1584,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   @Deprecated
   @Override
   public ResultSet execute(final String language, final String script, final Map<String, Object> params) {
-    if (!language.equalsIgnoreCase("sql"))
+    if (!"sql".equalsIgnoreCase(language))
       throw new CommandExecutionException("Language '" + language + "' does not support script");
     return command("sqlscript", script, params);
   }
@@ -1576,7 +1592,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   @Deprecated
   @Override
   public ResultSet execute(final String language, final String script, final Object... args) {
-    if (!language.equalsIgnoreCase("sqlscript") && !language.equalsIgnoreCase("sql"))
+    if (!"sqlscript".equalsIgnoreCase(language) && !"sql".equalsIgnoreCase(language))
       throw new CommandExecutionException("Language '" + language + "' does not support script");
     return command("sqlscript", script, args);
   }
@@ -1971,6 +1987,9 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         PageManager.INSTANCE.removeModifiedPagesOfDatabase(this);
 
       PageManager.INSTANCE.waitAllPagesOfDatabaseAreFlushed(this);
+
+      if (!drop)
+        fileManager.syncFiles();
 
       open = false;
 

@@ -21,9 +21,9 @@ package com.arcadedb.query.opencypher.executor.steps;
 import com.arcadedb.database.Document;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.MutableDocument;
+import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.graph.Edge;
-import com.arcadedb.graph.MutableEdge;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.opencypher.Labels;
@@ -132,7 +132,7 @@ public class MergeStep extends AbstractExecutionStep {
               buffer.addAll(mergedResults);
             } finally {
               if (context.isProfiling())
-                cost += (System.nanoTime() - begin);
+                cost += System.nanoTime() - begin;
             }
           }
 
@@ -152,7 +152,7 @@ public class MergeStep extends AbstractExecutionStep {
               mergedStandalone = true;
             } finally {
               if (context.isProfiling())
-                cost += (System.nanoTime() - begin);
+                cost += System.nanoTime() - begin;
             }
           }
           finished = true;
@@ -176,6 +176,13 @@ public class MergeStep extends AbstractExecutionStep {
    */
   private List<Result> executeMerge(final Result inputResult) {
     final PathPattern pathPattern = mergeClause.getPathPattern();
+
+    // Cypher null-propagation: a named path variable that was explicitly bound
+    // to null by a prior step (e.g. an unmatched OPTIONAL MATCH) is not an
+    // unbound free variable - it is a concrete null.  Merging a pattern that
+    // references a null endpoint or relationship is undefined, so drop the row.
+    if (inputResult != null && hasNullBoundPathVariable(pathPattern, inputResult))
+      return List.of();
 
     // Check if we're already in a transaction
     final boolean wasInTransaction = context.getDatabase().isTransactionActive();
@@ -253,24 +260,38 @@ public class MergeStep extends AbstractExecutionStep {
     // Find ALL matching nodes
     final List<Vertex> matches = findAllNodes(nodePattern, baseResult);
 
-    if (!matches.isEmpty()) {
-      final List<Result> results = new ArrayList<>();
-      for (final Vertex v : matches) {
-        final ResultInternal r = copyResult(baseResult);
-        if (variable != null)
-          r.setProperty(variable, v);
-        r.setProperty("  wasCreated", false);
-        results.add(r);
-      }
-      return results;
-    }
+    if (!matches.isEmpty())
+      return buildMatchResults(matches, variable, baseResult);
 
-    // No match - create one
-    final Vertex vertex = createVertex(nodePattern, baseResult);
-    if (variable != null)
-      baseResult.setProperty(variable, vertex);
-    baseResult.setProperty("  wasCreated", true);
-    return List.of(baseResult);
+    // No match - create one.  If a UNIQUE-index collision is raised on create
+    // (issue #4351: another row in the same batch/transaction already produced
+    // the same key, or a concurrent transaction did), re-run the match so MERGE
+    // keeps its atomic match-or-create semantics instead of surfacing the raw
+    // DuplicatedKeyException.
+    try {
+      final Vertex vertex = createVertex(nodePattern, baseResult);
+      if (variable != null)
+        baseResult.setProperty(variable, vertex);
+      baseResult.setProperty("  wasCreated", true);
+      return List.of(baseResult);
+    } catch (final DuplicatedKeyException e) {
+      final List<Vertex> retryMatches = findAllNodes(nodePattern, baseResult);
+      if (retryMatches.isEmpty())
+        throw e;
+      return buildMatchResults(retryMatches, variable, baseResult);
+    }
+  }
+
+  private List<Result> buildMatchResults(final List<Vertex> matches, final String variable, final ResultInternal baseResult) {
+    final List<Result> results = new ArrayList<>(matches.size());
+    for (final Vertex v : matches) {
+      final ResultInternal r = copyResult(baseResult);
+      if (variable != null)
+        r.setProperty(variable, v);
+      r.setProperty("  wasCreated", false);
+      results.add(r);
+    }
+    return results;
   }
 
   /**
@@ -283,7 +304,18 @@ public class MergeStep extends AbstractExecutionStep {
     final List<Result> found = findAllMatchingPaths(pathPattern, baseResult);
     if (!found.isEmpty())
       return found;
-    return createNewPath(pathPattern, baseResult);
+
+    // Issue #4351: when path creation collides on a UNIQUE index (most often a
+    // node endpoint already inserted earlier in the same batch), re-run the
+    // path match so MERGE preserves its atomic match-or-create semantics.
+    try {
+      return createNewPath(pathPattern, baseResult);
+    } catch (final DuplicatedKeyException e) {
+      final List<Result> retry = findAllMatchingPaths(pathPattern, baseResult);
+      if (retry.isEmpty())
+        throw e;
+      return retry;
+    }
   }
 
   /**
@@ -291,11 +323,365 @@ public class MergeStep extends AbstractExecutionStep {
    * Traversal starts from any already-bound anchor node and follows edges to
    * discover the remaining pattern; unbound intermediate and endpoint nodes are
    * matched by label/property only after being reached via a qualifying edge.
+   * <p>
+   * If a bound anchor exists at any position other than index 0 (e.g.
+   * {@code MERGE (n)-[:in]->(parent)} where {@code parent} is already bound by
+   * a preceding MATCH), traversal starts at that anchor and walks the path
+   * outward via the anchor's incident edges (O(degree)) instead of doing a
+   * full edge-type scan (O(total edges of type)) - fix for issue #4226.
+   * <p>
+   * When the pattern is a single-relationship path and the unbound endpoint has
+   * properties covered by an index, the walker switches to an index seek over
+   * the unbound side and verifies the edge to the anchor. This keeps the per-
+   * MERGE cost independent of the anchor's degree (reopened follow-up for
+   * issue #4226: the production scenario has parents that accumulate thousands
+   * of children over time and the anchor walk became O(parent.degree) per
+   * MERGE).
    */
   private List<Result> findAllMatchingPaths(final PathPattern pathPattern, final ResultInternal baseResult) {
     final List<Result> results = new ArrayList<>();
-    traverseFromNode(pathPattern, 0, null, copyResult(baseResult), results);
+
+    final int anchorIdx = findBoundAnchorIndex(pathPattern, baseResult);
+    if (anchorIdx < 0) {
+      // No bound anchor: the existing forward walker scans the relevant edge
+      // type. The optimizer's MATCH-path is responsible for index-based seeds.
+      traverseFromNode(pathPattern, 0, null, copyResult(baseResult), results);
+      return results;
+    }
+
+    // Prefer an index seek over the unbound endpoint when the schema offers
+    // one; falls back to the anchor walk when no usable index exists.
+    if (tryFindPathByIndexSeek(pathPattern, anchorIdx, baseResult, results))
+      return results;
+
+    if (anchorIdx == 0) {
+      // Anchor is at the start: the forward walker already picks up the
+      // binding from currentResult and walks the anchor's outgoing edges.
+      traverseFromNode(pathPattern, 0, null, copyResult(baseResult), results);
+      return results;
+    }
+
+    final Vertex anchorVertex = (Vertex) baseResult.getProperty(pathPattern.getNode(anchorIdx).getVariable());
+    traverseFromAnchor(pathPattern, anchorIdx, anchorVertex, copyResult(baseResult), results);
     return results;
+  }
+
+  /**
+   * Single-edge MERGE optimization: if the unbound endpoint exposes properties
+   * covered by an index, seek the candidates via the index and verify the edge
+   * to the bound anchor instead of walking every incident edge of the anchor.
+   * <p>
+   * Returns {@code true} when the index path was applied (regardless of how
+   * many matches it produced; an empty result means no matching path exists
+   * and {@link #mergePathAll(PathPattern, ResultInternal)} should create the
+   * pattern). Returns {@code false} when no usable index was found, so the
+   * caller falls back to the anchor walk.
+   */
+  private boolean tryFindPathByIndexSeek(final PathPattern pathPattern, final int anchorIdx,
+      final ResultInternal baseResult, final List<Result> results) {
+    if (pathPattern.getRelationshipCount() != 1)
+      return false; // longer paths fall back to anchor walk
+
+    final int unboundIdx = anchorIdx == 0 ? 1 : 0;
+    final NodePattern unboundPattern = pathPattern.getNode(unboundIdx);
+
+    // The candidate side must carry exactly one label so we know which type to
+    // look up; multi-label patterns and label-less nodes can't drive an index.
+    if (!unboundPattern.hasLabels() || unboundPattern.getLabels().size() != 1)
+      return false;
+    if (!unboundPattern.hasProperties())
+      return false;
+
+    // If the user pre-bound the candidate variable to a vertex, both ends are
+    // known: let the anchor walk verify the edge connecting them.
+    if (unboundPattern.getVariable() != null) {
+      final Object existing = baseResult.getProperty(unboundPattern.getVariable());
+      if (existing instanceof Vertex)
+        return false;
+    }
+
+    final RelationshipPattern relPattern = pathPattern.getRelationship(0);
+    if (!relPattern.hasTypes())
+      return false; // can't filter candidate's edges without a relationship type
+
+    final String label = unboundPattern.getLabels().get(0);
+    if (!context.getDatabase().getSchema().existsType(label))
+      return false;
+
+    final DocumentType type = context.getDatabase().getSchema().getType(label);
+    if (type == null)
+      return false;
+
+    final Map<String, Object> unboundProps = evaluateProperties(unboundPattern.getProperties(), baseResult);
+    final Iterator<Identifiable> indexIter = tryFindByIndex(type, label, unboundProps);
+    if (indexIter == null)
+      return false; // no usable index, fall back to anchor walk
+
+    final NodePattern anchorPattern = pathPattern.getNode(anchorIdx);
+    final Vertex anchorVertex = (Vertex) baseResult.getProperty(anchorPattern.getVariable());
+    if (!matchesNodePattern(anchorVertex, anchorPattern, baseResult))
+      return true; // anchor doesn't satisfy its own constraints: no paths exist
+
+    final String relType = relPattern.getFirstType();
+    final Map<String, Object> relProps = relPattern.hasProperties()
+        ? evaluateProperties(relPattern.getProperties(), baseResult) : null;
+    final Direction dir = relPattern.getDirection();
+
+    while (indexIter.hasNext()) {
+      final Identifiable identifiable = indexIter.next();
+      if (identifiable == null)
+        continue;
+      final Vertex candidate = resolveVertex(identifiable);
+      if (candidate == null)
+        continue;
+
+      // tryFindByIndex enforces leftmost-prefix coverage; the query may carry
+      // extra properties or labels not in the index, so re-verify the node.
+      if (!matchesNodePattern(candidate, unboundPattern, baseResult))
+        continue;
+
+      final Edge matchingEdge = findEdgeBetweenForMerge(candidate, anchorVertex, unboundIdx, dir, relType, relProps);
+      if (matchingEdge == null)
+        continue;
+
+      final ResultInternal r = copyResult(baseResult);
+      if (anchorPattern.getVariable() != null)
+        r.setProperty(anchorPattern.getVariable(), anchorVertex);
+      if (unboundPattern.getVariable() != null)
+        r.setProperty(unboundPattern.getVariable(), candidate);
+      if (relPattern.getVariable() != null)
+        r.setProperty(relPattern.getVariable(), matchingEdge);
+      r.setProperty("  wasCreated", false);
+      addPathBinding(r, pathPattern);
+      results.add(r);
+    }
+
+    return true;
+  }
+
+  /**
+   * Returns an edge between {@code candidate} and {@code anchor} satisfying the
+   * pattern direction and properties, walking {@code candidate}'s edges (which
+   * are expected to be few - the index point-lookup typically returns a small
+   * set). Returns {@code null} when no such edge exists.
+   *
+   * @param unboundIdx position of {@code candidate} in the pattern: 0 means the
+   *                   candidate is on the left of the edge, 1 means on the right.
+   */
+  private Edge findEdgeBetweenForMerge(final Vertex candidate, final Vertex anchor, final int unboundIdx,
+      final Direction dir, final String relType, final Map<String, Object> relProps) {
+    if (dir == Direction.OUT || dir == Direction.BOTH) {
+      // Pattern: node0 -OUT-> node1.  Candidate side dictates the lookup direction.
+      final Vertex.DIRECTION candDir = unboundIdx == 0 ? Vertex.DIRECTION.OUT : Vertex.DIRECTION.IN;
+      final Vertex.DIRECTION otherEnd = unboundIdx == 0 ? Vertex.DIRECTION.IN : Vertex.DIRECTION.OUT;
+      final Edge e = findFirstEdgeTo(candidate, anchor, candDir, otherEnd, relType, relProps);
+      if (e != null)
+        return e;
+    }
+    if (dir == Direction.IN || dir == Direction.BOTH) {
+      // Pattern: node0 <-IN- node1.  Mirror of the OUT case.
+      final Vertex.DIRECTION candDir = unboundIdx == 0 ? Vertex.DIRECTION.IN : Vertex.DIRECTION.OUT;
+      final Vertex.DIRECTION otherEnd = unboundIdx == 0 ? Vertex.DIRECTION.OUT : Vertex.DIRECTION.IN;
+      final Edge e = findFirstEdgeTo(candidate, anchor, candDir, otherEnd, relType, relProps);
+      if (e != null)
+        return e;
+    }
+    return null;
+  }
+
+  private Edge findFirstEdgeTo(final Vertex from, final Vertex target,
+      final Vertex.DIRECTION fromDir, final Vertex.DIRECTION otherEnd,
+      final String relType, final Map<String, Object> relProps) {
+    for (final Edge edge : from.getEdges(fromDir, relType)) {
+      if (!target.equals(edge.getVertex(otherEnd)))
+        continue;
+      if (relProps != null && !matchesProperties(edge, relProps))
+        continue;
+      return edge;
+    }
+    return null;
+  }
+
+  /**
+   * Returns the index of the first node in {@code pathPattern} whose variable
+   * is already bound to a {@link Vertex} in {@code baseResult}, or -1 if none.
+   */
+  private int findBoundAnchorIndex(final PathPattern pathPattern, final ResultInternal baseResult) {
+    for (int i = 0; i <= pathPattern.getRelationshipCount(); i++) {
+      final NodePattern node = pathPattern.getNode(i);
+      if (node.getVariable() == null)
+        continue;
+      final Object bound = baseResult.getProperty(node.getVariable());
+      if (bound instanceof Vertex)
+        return i;
+    }
+    return -1;
+  }
+
+  /**
+   * A variable explicitly bound to null by an upstream step (typically an
+   * unmatched OPTIONAL MATCH) differs from one that is absent: the former
+   * triggers Cypher null-propagation, the latter is an unbound free variable.
+   * {@link Result#hasProperty(String)} disambiguates the two cases.
+   */
+  private boolean hasNullBoundPathVariable(final PathPattern pathPattern, final Result inputResult) {
+    for (int i = 0; i <= pathPattern.getRelationshipCount(); i++) {
+      final String nodeVar = pathPattern.getNode(i).getVariable();
+      if (nodeVar != null && inputResult.hasProperty(nodeVar) && inputResult.getProperty(nodeVar) == null)
+        return true;
+    }
+    for (int i = 0; i < pathPattern.getRelationshipCount(); i++) {
+      final String relVar = pathPattern.getRelationship(i).getVariable();
+      if (relVar != null && inputResult.hasProperty(relVar) && inputResult.getProperty(relVar) == null)
+        return true;
+    }
+    return false;
+  }
+
+  /**
+   * Walks the path starting from a known anchor at position {@code anchorIdx}.
+   * The right side ({@code anchorIdx..lastIdx}) is enumerated first by walking
+   * the anchor's outgoing edges (O(degree)); for each right-side completion,
+   * the left side ({@code 0..anchorIdx}) is enumerated by walking the anchor's
+   * incoming edges of the previous relationship in reverse.
+   */
+  private void traverseFromAnchor(final PathPattern pathPattern, final int anchorIdx, final Vertex anchorVertex,
+      final ResultInternal baseResult, final List<Result> results) {
+    final NodePattern anchorPattern = pathPattern.getNode(anchorIdx);
+    if (!matchesNodePattern(anchorVertex, anchorPattern, baseResult))
+      return;
+
+    final ResultInternal anchored = copyResult(baseResult);
+    if (anchorPattern.getVariable() != null)
+      anchored.setProperty(anchorPattern.getVariable(), anchorVertex);
+
+    final int lastIdx = pathPattern.getRelationshipCount();
+
+    if (anchorIdx == lastIdx) {
+      walkLeft(pathPattern, anchorIdx, anchorVertex, anchored, results);
+      return;
+    }
+
+    final List<Result> rightResults = new ArrayList<>();
+    walkRight(pathPattern, anchorIdx, anchorVertex, anchored, rightResults);
+    for (final Result rr : rightResults)
+      walkLeft(pathPattern, anchorIdx, anchorVertex, (ResultInternal) rr, results);
+  }
+
+  /**
+   * Recursively extends the path forward from {@code nodeIdx} (which is bound
+   * to {@code currentVertex}) toward the terminal node, accumulating bindings
+   * in {@code rightResults} when {@code nodeIdx} reaches the last node.
+   */
+  private void walkRight(final PathPattern pathPattern, final int nodeIdx, final Vertex currentVertex,
+      final ResultInternal current, final List<Result> rightResults) {
+    if (nodeIdx == pathPattern.getRelationshipCount()) {
+      rightResults.add(current);
+      return;
+    }
+
+    final RelationshipPattern relPattern = pathPattern.getRelationship(nodeIdx);
+    if (!relPattern.hasTypes())
+      return;
+
+    final String relType = relPattern.getFirstType();
+    final Map<String, Object> relProps = relPattern.hasProperties()
+        ? evaluateProperties(relPattern.getProperties(), current) : null;
+    final NodePattern nextPattern = pathPattern.getNode(nodeIdx + 1);
+    final Direction dir = relPattern.getDirection();
+
+    if (dir == Direction.OUT || dir == Direction.BOTH)
+      walkRightDir(pathPattern, nodeIdx, currentVertex, relPattern, relType, relProps, nextPattern,
+          Vertex.DIRECTION.OUT, Vertex.DIRECTION.IN, current, rightResults);
+    if (dir == Direction.IN || dir == Direction.BOTH)
+      walkRightDir(pathPattern, nodeIdx, currentVertex, relPattern, relType, relProps, nextPattern,
+          Vertex.DIRECTION.IN, Vertex.DIRECTION.OUT, current, rightResults);
+  }
+
+  private void walkRightDir(final PathPattern pathPattern, final int nodeIdx, final Vertex currentVertex,
+      final RelationshipPattern relPattern, final String relType, final Map<String, Object> relProps,
+      final NodePattern nextPattern, final Vertex.DIRECTION edgeDir, final Vertex.DIRECTION otherEnd,
+      final ResultInternal current, final List<Result> rightResults) {
+    for (final Edge edge : currentVertex.getEdges(edgeDir, relType)) {
+      if (relProps != null && !matchesProperties(edge, relProps))
+        continue;
+      final Vertex nextV = edge.getVertex(otherEnd);
+      if (!matchesNodePattern(nextV, nextPattern, current))
+        continue;
+      if (nextPattern.getVariable() != null) {
+        final Object preBound = current.getProperty(nextPattern.getVariable());
+        if (preBound instanceof Vertex pb && !pb.equals(nextV))
+          continue;
+      }
+      final ResultInternal next = copyResult(current);
+      if (nextPattern.getVariable() != null)
+        next.setProperty(nextPattern.getVariable(), nextV);
+      if (relPattern.getVariable() != null)
+        next.setProperty(relPattern.getVariable(), edge);
+      walkRight(pathPattern, nodeIdx + 1, nextV, next, rightResults);
+    }
+  }
+
+  /**
+   * Recursively extends the path backward from {@code nodeIdx} (which is
+   * bound to {@code currentVertex}) toward index 0, emitting a final result
+   * into {@code results} when index 0 is reached.
+   */
+  private void walkLeft(final PathPattern pathPattern, final int nodeIdx, final Vertex currentVertex,
+      final ResultInternal current, final List<Result> results) {
+    if (nodeIdx == 0) {
+      final ResultInternal r = copyResult(current);
+      r.setProperty("  wasCreated", false);
+      addPathBinding(r, pathPattern);
+      results.add(r);
+      return;
+    }
+
+    final RelationshipPattern relPattern = pathPattern.getRelationship(nodeIdx - 1);
+    if (!relPattern.hasTypes())
+      return;
+
+    final String relType = relPattern.getFirstType();
+    final Map<String, Object> relProps = relPattern.hasProperties()
+        ? evaluateProperties(relPattern.getProperties(), current) : null;
+    final NodePattern prevPattern = pathPattern.getNode(nodeIdx - 1);
+    final Direction dir = relPattern.getDirection();
+
+    // The edge at index (nodeIdx-1) goes prev -[dir]-> current.  Walking
+    // backward means following current's edges in the opposite direction:
+    // dir == OUT  → current.IN edges,  prev = edge.OUT
+    // dir == IN   → current.OUT edges, prev = edge.IN
+    // dir == BOTH → walk both
+    if (dir == Direction.OUT || dir == Direction.BOTH)
+      walkLeftDir(pathPattern, nodeIdx, currentVertex, relPattern, relType, relProps, prevPattern,
+          Vertex.DIRECTION.IN, Vertex.DIRECTION.OUT, current, results);
+    if (dir == Direction.IN || dir == Direction.BOTH)
+      walkLeftDir(pathPattern, nodeIdx, currentVertex, relPattern, relType, relProps, prevPattern,
+          Vertex.DIRECTION.OUT, Vertex.DIRECTION.IN, current, results);
+  }
+
+  private void walkLeftDir(final PathPattern pathPattern, final int nodeIdx, final Vertex currentVertex,
+      final RelationshipPattern relPattern, final String relType, final Map<String, Object> relProps,
+      final NodePattern prevPattern, final Vertex.DIRECTION edgeDir, final Vertex.DIRECTION otherEnd,
+      final ResultInternal current, final List<Result> results) {
+    for (final Edge edge : currentVertex.getEdges(edgeDir, relType)) {
+      if (relProps != null && !matchesProperties(edge, relProps))
+        continue;
+      final Vertex prevV = edge.getVertex(otherEnd);
+      if (!matchesNodePattern(prevV, prevPattern, current))
+        continue;
+      if (prevPattern.getVariable() != null) {
+        final Object preBound = current.getProperty(prevPattern.getVariable());
+        if (preBound instanceof Vertex pb && !pb.equals(prevV))
+          continue;
+      }
+      final ResultInternal next = copyResult(current);
+      if (prevPattern.getVariable() != null)
+        next.setProperty(prevPattern.getVariable(), prevV);
+      if (relPattern.getVariable() != null)
+        next.setProperty(relPattern.getVariable(), edge);
+      walkLeft(pathPattern, nodeIdx - 1, prevV, next, results);
+    }
   }
 
   /**
@@ -701,16 +1087,7 @@ public class MergeStep extends AbstractExecutionStep {
   private boolean matchesProperties(final Document doc, final Map<String, Object> properties) {
     for (final Map.Entry<String, Object> entry : properties.entrySet()) {
       final String key = entry.getKey();
-      Object expectedValue = entry.getValue();
-
-      // Handle string literals: remove quotes
-      if (expectedValue instanceof String) {
-        final String strValue = (String) expectedValue;
-        if (strValue.startsWith("'") && strValue.endsWith("'"))
-          expectedValue = strValue.substring(1, strValue.length() - 1);
-        else if (strValue.startsWith("\"") && strValue.endsWith("\""))
-          expectedValue = strValue.substring(1, strValue.length() - 1);
-      }
+      final Object expectedValue = entry.getValue();
 
       final Object actualValue = doc.get(key);
       if (actualValue == null)
@@ -777,37 +1154,32 @@ public class MergeStep extends AbstractExecutionStep {
     // Ensure edge type exists (Cypher auto-creates types)
     context.getDatabase().getSchema().getOrCreateEdgeType(type);
 
-    final MutableEdge edge = fromVertex.newEdge(type, toVertex);
-
+    // Evaluate edge properties BEFORE creating the edge so they are passed to newEdge() and set
+    // before the internal save()/validation. Otherwise edges with mandatory properties fail
+    // validation inside newEdge() (issue #4413).
+    final Object[] edgeProperties;
     if (relPattern.hasProperties()) {
       final Map<String, Object> evaluatedProperties = evaluateProperties(relPattern.getProperties(), result);
-      setProperties(edge, evaluatedProperties);
-    }
+      final List<Object> keyValues = new ArrayList<>(evaluatedProperties.size() * 2);
+      for (final Map.Entry<String, Object> entry : evaluatedProperties.entrySet()) {
+        keyValues.add(entry.getKey());
+        keyValues.add(TemporalUtil.toCoreJavaType(entry.getValue()));
+      }
+      edgeProperties = keyValues.toArray();
+    } else
+      edgeProperties = null;
 
-    edge.save();
-    return edge;
+    return edgeProperties != null
+        ? fromVertex.newEdge(type, toVertex, edgeProperties)
+        : fromVertex.newEdge(type, toVertex);
   }
 
   /**
    * Sets properties on a document from a property map.
    */
   private void setProperties(final MutableDocument document, final Map<String, Object> properties) {
-    for (final Map.Entry<String, Object> entry : properties.entrySet()) {
-      final String key = entry.getKey();
-      Object value = entry.getValue();
-
-      // Handle string literals: remove quotes
-      if (value instanceof String) {
-        final String strValue = (String) value;
-        if (strValue.startsWith("'") && strValue.endsWith("'")) {
-          value = strValue.substring(1, strValue.length() - 1);
-        } else if (strValue.startsWith("\"") && strValue.endsWith("\"")) {
-          value = strValue.substring(1, strValue.length() - 1);
-        }
-      }
-
-      document.set(key, TemporalUtil.toCoreJavaType(value));
-    }
+    for (final Map.Entry<String, Object> entry : properties.entrySet())
+      document.set(entry.getKey(), TemporalUtil.toCoreJavaType(entry.getValue()));
   }
 
   /**

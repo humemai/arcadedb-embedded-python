@@ -19,7 +19,7 @@
 package com.arcadedb.remote.grpc;
 
 import com.arcadedb.GlobalConfiguration;
-import com.arcadedb.test.BaseGraphServerTest;
+import com.arcadedb.server.BaseGraphServerTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -139,10 +139,9 @@ class RemoteGrpcTransactionExplicitLockIT extends BaseGraphServerTest {
   @Test
   void shouldRequireTypeOrBucketForLock() {
     // LOCK command requires TYPE or BUCKET - empty lock is not valid
-    database.transaction(() -> {
+    database.transaction(() ->
       // Just perform operations without explicit locking
-      database.command("sql", "CREATE VERTEX TestVertex SET id = 5");
-    });
+      database.command("sql", "CREATE VERTEX TestVertex SET id = 5"));
   }
 
   @Test

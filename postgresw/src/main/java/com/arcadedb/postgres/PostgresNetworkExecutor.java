@@ -64,7 +64,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -296,13 +295,13 @@ public class PostgresNetworkExecutor extends Thread {
             if (schemaColumns != null)
               portal.columns = schemaColumns;
           }
-          writeRowDescription(portal.columns);
+          writeRowDescription(portal.columns, portal.resultFormats);
           portal.rowDescriptionSent = true;
         } else
           writeNoData();
       } else {
         if (portal.columns != null) {
-          writeRowDescription(portal.columns);
+          writeRowDescription(portal.columns, portal.resultFormats);
           portal.rowDescriptionSent = true;
         }
       }
@@ -380,7 +379,7 @@ public class PostgresNetworkExecutor extends Thread {
                 if (schemaColumns != null)
                   portal.columns = schemaColumns;
               }
-              writeRowDescription(portal.columns);
+              writeRowDescription(portal.columns, portal.resultFormats);
               portal.rowDescriptionSent = true;
               profile.addSerializationNanos(System.nanoTime() - serStart);
             }
@@ -406,7 +405,7 @@ public class PostgresNetworkExecutor extends Thread {
           // we need to send it now before the data rows
           if (!portal.rowDescriptionSent) {
             portal.columns = dataRowColumns;
-            writeRowDescription(portal.columns);
+            writeRowDescription(portal.columns, portal.resultFormats);
             portal.rowDescriptionSent = true;
           }
 
@@ -422,7 +421,7 @@ public class PostgresNetworkExecutor extends Thread {
 
           // Use the columns that were sent in RowDescription for consistency
           final Map<String, PostgresType> columnsToUse = portal.columns != null ? portal.columns : dataRowColumns;
-          writeDataRows(portal.cachedResultSet, columnsToUse);
+          writeDataRows(portal.cachedResultSet, columnsToUse, portal.resultFormats);
           writeCommandComplete(portal.query, portal.cachedResultSet.size());
           profile.addSerializationNanos(System.nanoTime() - serStart);
         } else {
@@ -489,20 +488,20 @@ public class PostgresNetworkExecutor extends Thread {
           upperCaseText.startsWith("RELEASE ") ||
           upperCaseText.startsWith("ROLLBACK TO ")) {
         resultSet = new IteratorResultSet(Collections.emptyIterator());
-      } else if (query.query.equalsIgnoreCase("SELECT VERSION()") ||
-          query.query.equalsIgnoreCase("SELECT PG_CATALOG.VERSION()"))
+      } else if ("SELECT VERSION()".equalsIgnoreCase(query.query) ||
+          "SELECT PG_CATALOG.VERSION()".equalsIgnoreCase(query.query))
         resultSet = new IteratorResultSet(createResultSet("version", buildServerVersionString()).iterator());
-      else if (query.query.equalsIgnoreCase("SELECT CURRENT_SCHEMA()") ||
-          query.query.equalsIgnoreCase("SELECT PG_CATALOG.CURRENT_SCHEMA()"))
+      else if ("SELECT CURRENT_SCHEMA()".equalsIgnoreCase(query.query) ||
+          "SELECT PG_CATALOG.CURRENT_SCHEMA()".equalsIgnoreCase(query.query))
         resultSet = new IteratorResultSet(createResultSet("current_schema", database.getName()).iterator());
-      else if (upperCaseText.equals("SHOW TRANSACTION ISOLATION LEVEL")) {
+      else if ("SHOW TRANSACTION ISOLATION LEVEL".equals(upperCaseText)) {
         final Database.TRANSACTION_ISOLATION_LEVEL dbIsolationLevel = database.getTransactionIsolationLevel();
         final String level = dbIsolationLevel.name().replace('_', ' ');
         resultSet = new IteratorResultSet(createResultSet("LEVEL", level).iterator());
       } else if (upperCaseText.startsWith("SHOW ")) {
         final String varName = query.query.substring(5).trim().toLowerCase(Locale.ENGLISH);
         resultSet = new IteratorResultSet(createResultSet(varName, getShowConfigValue(varName)).iterator());
-      } else if (upperCaseText.equals("BEGIN") || upperCaseText.equals("BEGIN TRANSACTION")) {
+      } else if ("BEGIN".equals(upperCaseText) || "BEGIN TRANSACTION".equals(upperCaseText)) {
         explicitTransactionStarted = true;
         database.begin();
         resultSet = new IteratorResultSet(Collections.emptyIterator());
@@ -616,7 +615,7 @@ public class PostgresNetworkExecutor extends Thread {
   private Object[] getParams(PostgresPortal portal) {
     Object[] parameters = portal.parameterValues != null ? portal.parameterValues.toArray() : new Object[0];
 
-    if (portal.language.equals("cypher") || portal.language.equals("opencypher")) {
+    if ("cypher".equals(portal.language) || "opencypher".equals(portal.language)) {
       Object[] parametersCypher = new Object[parameters.length * 2];
       for (int i = 0; i < parameters.length; i++) {
         parametersCypher[i * 2] = "" + (i + 1);
@@ -760,14 +759,13 @@ public class PostgresNetworkExecutor extends Thread {
       for (final String p : propertyNames) {
         if (!columns.containsKey(p)) {
           // Determine the PostgreSQL type based on the actual value.
-          // Arrays/collections use proper array type codes so clients can parse them. Scalars
-          // default to VARCHAR for consistent text serialization, with one exception: Long values
-          // are advertised as INT8 so Postgres clients (psycopg, JDBC, ...) deserialize them as
-          // native integers. Without this, numeric scalars round-trip through clients as strings
-          // and a {@code WHERE id(n) IN $array} parameter loop silently mismatches Long vs. String.
+          // Arrays/collections use proper array type codes; native scalar types (numeric, boolean,
+          // temporal) are advertised with their native OID so Postgres clients (psycopg, JDBC, ...)
+          // deserialize them as native values instead of strings. Without this, typed scalars
+          // round-trip through clients as strings and parameter comparisons fail silently.
           final Object value = row.getProperty(p);
           final PostgresType pgType = PostgresType.getTypeForValue(value);
-          if (pgType.isArrayType() || pgType == PostgresType.LONG)
+          if (pgType.isArrayType() || pgType.isNativeScalarType())
             columns.put(p, pgType);
           else
             columns.put(p, PostgresType.VARCHAR);
@@ -882,10 +880,14 @@ public class PostgresNetworkExecutor extends Thread {
     if (query == null || !query.toUpperCase(Locale.ENGLISH).trim().startsWith("SELECT"))
       return null;
     final Map<String, PostgresType> schemaColumns = getColumnsFromQuerySchema(query);
-    return (schemaColumns != null && !schemaColumns.isEmpty()) ? schemaColumns : null;
+    return schemaColumns != null && !schemaColumns.isEmpty() ? schemaColumns : null;
   }
 
   private void writeRowDescription(final Map<String, PostgresType> columns) {
+    writeRowDescription(columns, null);
+  }
+
+  private void writeRowDescription(final Map<String, PostgresType> columns, final List<Integer> resultFormats) {
     if (columns == null)
       return;
 
@@ -896,6 +898,7 @@ public class PostgresNetworkExecutor extends Thread {
 //    final ByteBuffer bufferDescription = ByteBuffer.allocate(64 * 1024).order(ByteOrder.BIG_ENDIAN);
     final Binary bufferDescription = new Binary();
 
+    int colIndex = 0;
     for (final Map.Entry<String, PostgresType> col : columns.entrySet()) {
       final String columnName = col.getKey();
       final PostgresType columnType = col.getValue();
@@ -913,8 +916,10 @@ public class PostgresNetworkExecutor extends Thread {
       bufferDescription.putShort((short) columnType.size);
       // The type modifier (see pg_attribute.atttypmod). The meaning of the modifier is type-specific.
       bufferDescription.putInt(-1);
-      // The format code being used for the field. Currently will be zero (text) or one (binary). In a RowDescription returned from the statement variant of Describe, the format code is not yet known and will always be zero.
-      bufferDescription.putShort((short) 0);
+      // The format code being used for the field (0=text, 1=binary). Comes from the Bind message's
+      // result-column formats when present; defaults to 0 (text) otherwise. Types that lack a
+      // binary encoder (arrays) are forced to text so the announced format and DataRow agree.
+      bufferDescription.putShort(effectiveResultFormat(resultFormats, colIndex++, columnType));
     }
 
     bufferDescription.flip();
@@ -924,7 +929,39 @@ public class PostgresNetworkExecutor extends Thread {
     }, 'T', 4 + 2 + bufferDescription.limit());
   }
 
+  /**
+   * Returns the wire format code (0=text, 1=binary) requested for the column at {@code colIndex}.
+   * Mirrors the Postgres protocol rules for the {@code formats} list in a Bind message:
+   * empty list -> text, single entry -> applies to all columns, otherwise per-column.
+   */
+  private static short resolveResultFormat(final List<Integer> resultFormats, final int colIndex) {
+    if (resultFormats == null || resultFormats.isEmpty())
+      return 0;
+    if (resultFormats.size() == 1)
+      return resultFormats.get(0).shortValue();
+    if (colIndex < resultFormats.size())
+      return resultFormats.get(colIndex).shortValue();
+    return 0;
+  }
+
+  /**
+   * Same as {@link #resolveResultFormat} but forces text (0) for columns whose type lacks a
+   * binary encoder. Used by both RowDescription and DataRow so the announced format code and the
+   * written bytes always agree, even when the client requested binary.
+   */
+  private static short effectiveResultFormat(final List<Integer> resultFormats, final int colIndex,
+      final PostgresType columnType) {
+    if (!columnType.hasBinaryEncoding())
+      return 0;
+    return resolveResultFormat(resultFormats, colIndex);
+  }
+
   private void writeDataRows(final List<Result> resultSet, final Map<String, PostgresType> columns) throws IOException {
+    writeDataRows(resultSet, columns, null);
+  }
+
+  private void writeDataRows(final List<Result> resultSet, final Map<String, PostgresType> columns,
+      final List<Integer> resultFormats) throws IOException {
     if (resultSet.isEmpty())
       return;
 
@@ -934,6 +971,7 @@ public class PostgresNetworkExecutor extends Thread {
     for (final Result row : resultSet) {
       bufferValues.putShort((short) columns.size()); // Int16 The number of column values that follow (possibly zero).
 
+      int colIndex = 0;
       for (final Map.Entry<String, PostgresType> postgresTypeEntry : columns.entrySet()) {
         final String propertyName = postgresTypeEntry.getKey();
 
@@ -982,7 +1020,11 @@ public class PostgresNetworkExecutor extends Thread {
           }
         };
 
-        postgresTypeEntry.getValue().serializeAsText(postgresTypeEntry.getValue(), bufferValues, value);
+        final PostgresType columnType = postgresTypeEntry.getValue();
+        if (effectiveResultFormat(resultFormats, colIndex++, columnType) == 1)
+          columnType.serializeAsBinary(columnType, bufferValues, value);
+        else
+          columnType.serializeAsText(columnType, bufferValues, value);
       }
 
       bufferValues.flip();
@@ -1083,7 +1125,7 @@ public class PostgresNetworkExecutor extends Thread {
           }
 
           // Determine type code - use UNSPECIFIED (0) if not declared in PARSE
-          final long typeCode = (portal.parameterTypes != null && i < portal.parameterTypes.size())
+          final long typeCode = portal.parameterTypes != null && i < portal.parameterTypes.size()
               ? portal.parameterTypes.get(i)
               : 0L; // UNSPECIFIED type
 
@@ -1209,13 +1251,13 @@ public class PostgresNetworkExecutor extends Thread {
       } else if (upperCaseText.startsWith("SET ")) {
         setConfiguration(portal.query);
         portal.ignoreExecution = true;
-      } else if (upperCaseText.equals("SELECT VERSION()") || upperCaseText.equals("SELECT PG_CATALOG.VERSION()")) {
+      } else if ("SELECT VERSION()".equals(upperCaseText) || "SELECT PG_CATALOG.VERSION()".equals(upperCaseText)) {
         createResultSet(portal, "version", buildServerVersionString());
 
-      } else if (upperCaseText.equals("SELECT CURRENT_SCHEMA()") || upperCaseText.equals("SELECT PG_CATALOG.CURRENT_SCHEMA()")) {
+      } else if ("SELECT CURRENT_SCHEMA()".equals(upperCaseText) || "SELECT PG_CATALOG.CURRENT_SCHEMA()".equals(upperCaseText)) {
         createResultSet(portal, "current_schema", database.getName());
 
-      } else if (upperCaseText.equals("SHOW TRANSACTION ISOLATION LEVEL")) {
+      } else if ("SHOW TRANSACTION ISOLATION LEVEL".equals(upperCaseText)) {
         final Database.TRANSACTION_ISOLATION_LEVEL dbIsolationLevel = database.getTransactionIsolationLevel();
         final String level = dbIsolationLevel.name().replace('_', ' ');
         createResultSet(portal, "LEVEL", level);
@@ -1226,9 +1268,8 @@ public class PostgresNetworkExecutor extends Thread {
 
       } else if ("dbvis".equals(connectionProperties.get("application_name"))) {
         // SPECIAL CASES
-        if (portal.query.equals(
-            "SELECT nspname AS TABLE_SCHEM, NULL AS TABLE_CATALOG FROM pg_catalog.pg_namespace  WHERE nspname <> 'pg_toast' AND (nspname !~ '^pg_temp_'  OR nspname = (pg_catalog.current_schemas(true))[1]) AND (nspname !~ '^pg_toast_temp_'  OR nspname = replace((pg_catalog.current_schemas(true))[1], 'pg_temp_', 'pg_toast_temp_'))  ORDER BY TABLE_SCHEM")
-            || portal.query.equals("SELECT     COLLATION_SCHEMA,     COLLATION_NAME FROM     INFORMATION_SCHEMA.COLLATIONS")) {
+        if ("SELECT nspname AS TABLE_SCHEM, NULL AS TABLE_CATALOG FROM pg_catalog.pg_namespace  WHERE nspname <> 'pg_toast' AND (nspname !~ '^pg_temp_'  OR nspname = (pg_catalog.current_schemas(true))[1]) AND (nspname !~ '^pg_toast_temp_'  OR nspname = replace((pg_catalog.current_schemas(true))[1], 'pg_temp_', 'pg_toast_temp_'))  ORDER BY TABLE_SCHEM".equals(portal.query)
+            || "SELECT     COLLATION_SCHEMA,     COLLATION_NAME FROM     INFORMATION_SCHEMA.COLLATIONS".equals(portal.query)) {
           // SPECIAL CASE DB VISUALIZER
 
           portal.executed = true;
@@ -1277,8 +1318,7 @@ public class PostgresNetworkExecutor extends Thread {
             portal.columns.put("REF_GENERATION", PostgresType.VARCHAR);
           }
         }
-      } else if (portal.query.equals(
-          "select distinct GRANTEE as USER_NAME, 'N' as IS_EXPIRED, 'N' as IS_LOCKED from INFORMATION_SCHEMA.USAGE_PRIVILEGES order by GRANTEE asc")) {
+      } else if ("select distinct GRANTEE as USER_NAME, 'N' as IS_EXPIRED, 'N' as IS_LOCKED from INFORMATION_SCHEMA.USAGE_PRIVILEGES order by GRANTEE asc".equals(portal.query)) {
         portal.executed = true;
         portal.cachedResultSet = new ArrayList<>();
         final Map<String, Object> map = new HashMap<>();
@@ -1293,8 +1333,7 @@ public class PostgresNetworkExecutor extends Thread {
         portal.columns.put("IS_EXPIRED", PostgresType.CHAR);
         portal.columns.put("IS_LOCKED", PostgresType.CHAR);
 
-      } else if (portal.query.equals(
-          "select CHARACTER_SET_NAME as CHARSET_NAME, -1 as MAX_LENGTH from INFORMATION_SCHEMA.CHARACTER_SETS order by CHARACTER_SET_NAME asc")) {
+      } else if ("select CHARACTER_SET_NAME as CHARSET_NAME, -1 as MAX_LENGTH from INFORMATION_SCHEMA.CHARACTER_SETS order by CHARACTER_SET_NAME asc".equals(portal.query)) {
         portal.executed = true;
         portal.cachedResultSet = new ArrayList<>();
         final Map<String, Object> map = new HashMap<>();
@@ -1307,10 +1346,8 @@ public class PostgresNetworkExecutor extends Thread {
         portal.columns.put("CHARSET_NAME", PostgresType.VARCHAR);
         portal.columns.put("MAX_LENGTH", PostgresType.INTEGER);
       } else if (//
-          portal.query.equals(
-              "select NSPNAME as SCHEMA_NAME, case when lower(NSPNAME)='pg_catalog' then 'Y' else 'N' end as IS_PUBLIC, case when lower(NSPNAME)='information_schema' then 'Y' else 'N' end as IS_SYSTEM, 'N' as IS_EMPTY from PG_CATALOG.PG_NAMESPACE order by NSPNAME asc")
-              || portal.query.equals(
-              "select SCHEMA_NAME, case when lower(SCHEMA_NAME)='pg_catalog' then 'Y' else 'N' end as IS_PUBLIC, case when lower(SCHEMA_NAME)='information_schema' then 'Y' else 'N' end as IS_SYSTEM, 'N' as IS_EMPTY from INFORMATION_SCHEMA.SCHEMATA order by SCHEMA_NAME asc")) {
+          "select NSPNAME as SCHEMA_NAME, case when lower(NSPNAME)='pg_catalog' then 'Y' else 'N' end as IS_PUBLIC, case when lower(NSPNAME)='information_schema' then 'Y' else 'N' end as IS_SYSTEM, 'N' as IS_EMPTY from PG_CATALOG.PG_NAMESPACE order by NSPNAME asc".equals(portal.query)
+              || "select SCHEMA_NAME, case when lower(SCHEMA_NAME)='pg_catalog' then 'Y' else 'N' end as IS_PUBLIC, case when lower(SCHEMA_NAME)='information_schema' then 'Y' else 'N' end as IS_SYSTEM, 'N' as IS_EMPTY from INFORMATION_SCHEMA.SCHEMATA order by SCHEMA_NAME asc".equals(portal.query)) {
 
         portal.executed = true;
         portal.cachedResultSet = new ArrayList<>();
@@ -1330,8 +1367,7 @@ public class PostgresNetworkExecutor extends Thread {
         portal.columns.put("IS_PUBLIC", PostgresType.CHAR);
         portal.columns.put("IS_SYSTEM", PostgresType.CHAR);
         portal.columns.put("IS_EMPTY", PostgresType.CHAR);
-      } else if (portal.query.equals(
-          "SELECT nspname AS TABLE_SCHEM, NULL AS TABLE_CATALOG FROM pg_catalog.pg_namespace  WHERE nspname <> 'pg_toast' AND (nspname !~ '^pg_temp_'  OR nspname = (pg_catalog.current_schemas(true))[1]) AND (nspname !~ '^pg_toast_temp_'  OR nspname = replace((pg_catalog.current_schemas(true))[1], 'pg_temp_', 'pg_toast_temp_'))  AND nspname LIKE E'%' ORDER BY TABLE_SCHEM")) {
+      } else if ("SELECT nspname AS TABLE_SCHEM, NULL AS TABLE_CATALOG FROM pg_catalog.pg_namespace  WHERE nspname <> 'pg_toast' AND (nspname !~ '^pg_temp_'  OR nspname = (pg_catalog.current_schemas(true))[1]) AND (nspname !~ '^pg_toast_temp_'  OR nspname = replace((pg_catalog.current_schemas(true))[1], 'pg_temp_', 'pg_toast_temp_'))  AND nspname LIKE E'%' ORDER BY TABLE_SCHEM".equals(portal.query)) {
 
         portal.executed = true;
         portal.cachedResultSet = new ArrayList<>();
@@ -1360,10 +1396,10 @@ public class PostgresNetworkExecutor extends Thread {
           case "sql":
             final SQLQueryEngine sqlEngine = (SQLQueryEngine) database.getQueryEngine("sql");
             portal.sqlStatement = sqlEngine.parse(query.query, (DatabaseInternal) database);
-            if (portal.query.equalsIgnoreCase("BEGIN") || portal.query.equalsIgnoreCase("BEGIN TRANSACTION")) {
+            if ("BEGIN".equalsIgnoreCase(portal.query) || "BEGIN TRANSACTION".equalsIgnoreCase(portal.query)) {
               explicitTransactionStarted = true;
               setEmptyResultSet(portal);
-            } else if (portal.query.equalsIgnoreCase("COMMIT")) {
+            } else if ("COMMIT".equalsIgnoreCase(portal.query)) {
               explicitTransactionStarted = false;
               setEmptyResultSet(portal);
             }
@@ -1414,8 +1450,8 @@ public class PostgresNetworkExecutor extends Thread {
 
     // Use case-insensitive comparison for parameter names
     final String paramName = parts[0].toLowerCase(Locale.ENGLISH);
-    if (paramName.equals("datestyle")) {
-      if (parts[1].equalsIgnoreCase("ISO"))
+    if ("datestyle".equals(paramName)) {
+      if ("ISO".equalsIgnoreCase(parts[1]))
         database.getSchema().setDateTimeFormat(DateUtils.DATE_TIME_ISO_8601_FORMAT);
       else
         LogManager.instance().log(this, Level.INFO, "datestyle '%s' not supported", parts[1]);
@@ -1720,7 +1756,7 @@ public class PostgresNetworkExecutor extends Thread {
       return "UPDATE " + resultSetCount;
     } else if (upperCaseText.startsWith("DELETE")) {
       return "DELETE " + resultSetCount;
-    } else if (upperCaseText.equals("BEGIN") || upperCaseText.equals("BEGIN TRANSACTION")) {
+    } else if ("BEGIN".equals(upperCaseText) || "BEGIN TRANSACTION".equals(upperCaseText)) {
       return "BEGIN";
     } else {
       return "";

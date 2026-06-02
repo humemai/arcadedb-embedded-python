@@ -37,8 +37,8 @@
         <gremlin.version>3.8.1</gremlin.version>
         <translation.version>1.0.4</translation.version>
         <snakeyaml.version>2.6</snakeyaml.version>
-        <netty.version>4.2.13.Final</netty.version>
-        <commons-configuration2.version>2.14.0</commons-configuration2.version>
+        <netty.version>4.2.14.Final</netty.version>
+        <commons-configuration2.version>2.15.1</commons-configuration2.version>
         <commons-beanutils.version>1.11.0</commons-beanutils.version>
         <commons-lang3.version>3.20.0</commons-lang3.version>
         <groovy.version>4.0.28</groovy.version>
@@ -54,9 +54,10 @@
         </dependency>
         <dependency>
             <groupId>com.arcadedb</groupId>
-            <artifactId>arcadedb-test-utils</artifactId>
+            <artifactId>arcadedb-server</artifactId>
             <version>${project.parent.version}</version>
             <scope>test</scope>
+            <type>test-jar</type>
         </dependency>
         <dependency>
             <groupId>com.arcadedb</groupId>

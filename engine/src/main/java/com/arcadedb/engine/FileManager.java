@@ -20,11 +20,14 @@ package com.arcadedb.engine;
 
 import com.arcadedb.log.LogManager;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
-import java.util.logging.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class FileManager {
   private final        ComponentFile.MODE                        mode;
@@ -156,7 +159,7 @@ public class FileManager {
   }
 
   public void stopRecordingChanges() {
-    if (recordedChanges != null && java.util.logging.Logger.getLogger(getClass().getName()).isLoggable(Level.FINE)) {
+    if (recordedChanges != null && Logger.getLogger(getClass().getName()).isLoggable(Level.FINE)) {
       final StringBuilder dump = new StringBuilder();
       for (final FileChange c : recordedChanges) {
         if (!dump.isEmpty())
@@ -170,7 +173,21 @@ public class FileManager {
     recordedChanges = null;
   }
 
-  public void close() {
+  public void syncFiles() {
+    for (final ComponentFile f : fileNameMap.values()) {
+      if (f instanceof PaginatedComponentFile pcf) {
+        try {
+          pcf.force(true);
+        } catch (final IOException e) {
+          // Log at SEVERE: the caller proceeds to delete WAL files, so a failed fsync here
+          // leaves committed data unrecoverable on a subsequent OS crash.
+          LogManager.instance().log(this, Level.SEVERE, "Error on syncing file '%s' to disk", e, f.getFileName());
+        }
+      }
+    }
+  }
+
+  public synchronized void close() {
     for (final ComponentFile f : fileNameMap.values())
       f.close();
 
@@ -180,29 +197,33 @@ public class FileManager {
   }
 
   public void dropFile(final int fileId) throws IOException {
-    final ComponentFile file = fileIdMap.remove(fileId);
-    if (file != null) {
-      fileNameMap.remove(file.getComponentName());
-      files.set(fileId, null);
-      modificationCount.incrementAndGet();
-      file.drop();
+    final ComponentFile file;
+    synchronized (this) {
+      file = fileIdMap.remove(fileId);
+      if (file != null) {
+        fileNameMap.remove(file.getComponentName());
+        files.set(fileId, null);
+        modificationCount.incrementAndGet();
 
-      final FileChange entry = new FileChange(false, fileId, file.getFileName());
-      if (recordedChanges != null) {
-        if (recordedChanges.remove(entry)) {
-          LogManager.instance().log(this, Level.FINE,
-              "dropFile fileId=%d cancels prior CREATE entry (componentName='%s', fileName='%s')",
-              null, fileId, file.getComponentName(), file.getFileName());
-          // JUST ADDED: REMOVE THE ENTRY
-          return;
+        final FileChange entry = new FileChange(false, fileId, file.getFileName());
+        if (recordedChanges != null) {
+          if (recordedChanges.remove(entry)) {
+            LogManager.instance().log(this, Level.FINE,
+                "dropFile fileId=%d cancels prior CREATE entry (componentName='%s', fileName='%s')",
+                null, fileId, file.getComponentName(), file.getFileName());
+            // JUST ADDED: REMOVE THE ENTRY
+          } else {
+            recordedChanges.add(entry);
+            LogManager.instance().log(this, Level.FINE,
+                "recorded DROP fileId=%d fileName='%s' componentName='%s'",
+                null, fileId, file.getFileName(), file.getComponentName());
+          }
         }
-
-        recordedChanges.add(entry);
-        LogManager.instance().log(this, Level.FINE,
-            "recorded DROP fileId=%d fileName='%s' componentName='%s'",
-            null, fileId, file.getFileName(), file.getComponentName());
       }
     }
+
+    if (file != null)
+      file.drop();
   }
 
   public FileManagerStats getStats() {
@@ -212,8 +233,8 @@ public class FileManager {
     return stats;
   }
 
-  public List<ComponentFile> getFiles() {
-    return Collections.unmodifiableList(files);
+  public synchronized List<ComponentFile> getFiles() {
+    return Collections.unmodifiableList(new ArrayList<>(files));
   }
 
   /**
@@ -244,22 +265,11 @@ public class FileManager {
     if (file != null)
       return file;
 
-    file = new PaginatedComponentFile(filePath, mode);
-    registerFile(file);
+    synchronized (this) {
+      file = fileNameMap.get(fileName);
+      if (file != null)
+        return file;
 
-    if (recordedChanges != null) {
-      recordedChanges.add(new FileChange(true, file.getFileId(), file.getFileName()));
-      LogManager.instance().log(this, Level.FINE,
-          "recorded CREATE fileId=%d fileName='%s' componentName='%s'",
-          null, file.getFileId(), file.getFileName(), file.getComponentName());
-    }
-
-    return file;
-  }
-
-  public ComponentFile getOrCreateFile(final int fileId, final String filePath) throws IOException {
-    ComponentFile file = fileIdMap.get(fileId);
-    if (file == null) {
       file = new PaginatedComponentFile(filePath, mode);
       registerFile(file);
 
@@ -269,9 +279,32 @@ public class FileManager {
             "recorded CREATE fileId=%d fileName='%s' componentName='%s'",
             null, file.getFileId(), file.getFileName(), file.getComponentName());
       }
-    }
 
-    return file;
+      return file;
+    }
+  }
+
+  public ComponentFile getOrCreateFile(final int fileId, final String filePath) throws IOException {
+    ComponentFile file = fileIdMap.get(fileId);
+    if (file != null)
+      return file;
+
+    synchronized (this) {
+      file = fileIdMap.get(fileId);
+      if (file == null) {
+        file = new PaginatedComponentFile(filePath, mode);
+        registerFile(file);
+
+        if (recordedChanges != null) {
+          recordedChanges.add(new FileChange(true, file.getFileId(), file.getFileName()));
+          LogManager.instance().log(this, Level.FINE,
+              "recorded CREATE fileId=%d fileName='%s' componentName='%s'",
+              null, file.getFileId(), file.getFileName(), file.getComponentName());
+        }
+      }
+
+      return file;
+    }
   }
 
   public synchronized int newFileId() {

@@ -95,10 +95,13 @@ public class SourceDiscovery {
 
   public Source getSource() throws IOException {
     final Source source;
-    if (url.startsWith("http://") || url.startsWith("https://"))
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      ImportSecurityValidator.validateRemoteURL(url);
       source = getSourceFromURL(url);
-    else
+    } else {
+      ImportSecurityValidator.validateLocalURL(url);
       source = getSourceFromFile(url);
+    }
     return source;
   }
 
@@ -220,16 +223,16 @@ public class SourceDiscovery {
     }
 
     if (knownFileType != null) {
-      if (knownFileType.equalsIgnoreCase("csv")) {
+      if ("csv".equalsIgnoreCase(knownFileType)) {
         settings.options.put("delimiter", knownDelimiter);
         return new CSVImporterFormat();
-      } else if (knownFileType.equalsIgnoreCase("json")) {
+      } else if ("json".equalsIgnoreCase(knownFileType)) {
         return new JSONImporterFormat();
-      } else if (knownFileType.equalsIgnoreCase("jsonl")) {
+      } else if ("jsonl".equalsIgnoreCase(knownFileType)) {
         return new JsonlImporterFormat();
-      } else if (knownFileType.equalsIgnoreCase("xml")) {
+      } else if ("xml".equalsIgnoreCase(knownFileType)) {
         return new XMLImporterFormat();
-      } else if (knownFileType.equalsIgnoreCase("graphml")) {
+      } else if ("graphml".equalsIgnoreCase(knownFileType)) {
 
         try {
           final Class<FormatImporter> clazz = (Class<FormatImporter>) Class.forName(
@@ -240,7 +243,7 @@ public class SourceDiscovery {
           LogManager.instance().log(this, Level.SEVERE, "Impossible to find importer for 'graphml' ", e);
         }
 
-      } else if (knownFileType.equalsIgnoreCase("graphson")) {
+      } else if ("graphson".equalsIgnoreCase(knownFileType)) {
 
         try {
           final Class<FormatImporter> clazz = (Class<FormatImporter>) Class.forName(

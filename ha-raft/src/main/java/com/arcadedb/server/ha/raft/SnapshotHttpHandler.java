@@ -37,6 +37,7 @@ import java.io.FileInputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
@@ -218,7 +219,7 @@ public class SnapshotHttpHandler implements HttpHandler {
       final RaftHAServer raftHAServer = haPlugin != null ? haPlugin.getRaftHAServer() : null;
       final String expectedToken = raftHAServer != null ? raftHAServer.getClusterToken() : null;
       if (expectedToken != null && !expectedToken.isEmpty()
-          && java.security.MessageDigest.isEqual(
+          && MessageDigest.isEqual(
           expectedToken.getBytes(), clusterTokenHeader.getFirst().getBytes())) {
         final ServerSecurityUser rootUser = server.getSecurity().getUser("root");
         if (rootUser == null) {
@@ -280,6 +281,16 @@ public class SnapshotHttpHandler implements HttpHandler {
       for (final ComponentFile file : new ArrayList<>(files))
         if (file != null)
           addFileToZip(zipOut, file.getOSFile());
+
+      // TimeSeries sealed-store files (.ts.sealed) use raw FileChannel I/O and are NOT registered with
+      // the FileManager, so they are absent from getFiles(). Add them explicitly so a snapshot-syncing
+      // follower also receives the compacted time-series data instead of only the mutable buckets
+      // (issue #4382).
+      final File dbDir = new File(db.getDatabasePath());
+      final File[] sealedFiles = dbDir.listFiles((d, name) -> name.endsWith(".ts.sealed"));
+      if (sealedFiles != null)
+        for (final File sealedFile : sealedFiles)
+          addFileToZip(zipOut, sealedFile);
 
       zipOut.finish();
       HALog.log(this, HALog.BASIC, "Database snapshot for '%s' sent successfully", databaseName);

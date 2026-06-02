@@ -27,10 +27,13 @@ import com.arcadedb.query.sql.SQLQueryEngine;
 import com.arcadedb.query.sql.SQLScriptQueryEngine;
 
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.logging.*;
+import java.util.logging.Level;
 
 /**
  * JVM-wide registry of query-language engines plus the default executor any query-time
@@ -55,7 +58,7 @@ import java.util.logging.*;
  */
 public class QueryEngineManager {
   private static final QueryEngineManager                         INSTANCE        = new QueryEngineManager();
-  private final        Map<String, QueryEngine.QueryEngineFactory> implementations = new HashMap<>();
+  private final        Map<String, QueryEngine.QueryEngineFactory> implementations = new LinkedHashMap<>();
   private final        ThreadPoolExecutor                          executorService;
   // Per-pool counter the {@link RejectedExecutionHandler} below increments every time the queue
   // saturates and the task falls back to the caller. ThreadPoolExecutor itself doesn't expose
@@ -103,8 +106,9 @@ public class QueryEngineManager {
       final long last = lastSaturationWarnMs.get();
       if (now - last > SATURATION_WARN_INTERVAL_MS && lastSaturationWarnMs.compareAndSet(last, now)) {
         LogManager.instance().log(this, Level.WARNING,
-            "Query parallelism pool saturated: queue full (capacity=%d, threads=%d), running task on caller thread (cumulative caller-runs fallbacks=%d). "
-                + "Consider raising arcadedb.queryParallelismPoolThreads or arcadedb.queryParallelismQueueSize if this persists.",
+            """
+            Query parallelism pool saturated: queue full (capacity=%d, threads=%d), running task on caller thread (cumulative caller-runs fallbacks=%d). \
+            Consider raising arcadedb.queryParallelismPoolThreads or arcadedb.queryParallelismQueueSize if this persists.""",
             executor.getQueue().remainingCapacity() + executor.getQueue().size(), executor.getMaximumPoolSize(), fallbacks);
       }
       if (!executor.isShutdown())
@@ -113,9 +117,14 @@ public class QueryEngineManager {
     pool.allowCoreThreadTimeOut(true);
     executorService = pool;
 
-    // REGISTER ALL THE SUPPORTED LANGUAGE FROM POLYGLOT ENGINE
-    for (final String language : PolyglotQueryEngine.PolyglotQueryEngineFactory.getSupportedLanguages())
-      register(new PolyglotQueryEngine.PolyglotQueryEngineFactory(language));
+    // REGISTER ALL THE SUPPORTED LANGUAGE FROM POLYGLOT ENGINE.
+    // Guarded by POLYGLOT_ENGINE_ENABLED: when disabled we skip the iteration completely, so
+    // GraalPolyglotEngine.getSupportedLanguages() is never invoked and the shared Engine - which
+    // pulls in Truffle and every GraalVM language jar on the classpath - is never created.
+    if (GlobalConfiguration.POLYGLOT_ENGINE_ENABLED.getValueAsBoolean()) {
+      for (final String language : PolyglotQueryEngine.PolyglotQueryEngineFactory.getSupportedLanguages())
+        register(new PolyglotQueryEngine.PolyglotQueryEngineFactory(language));
+    }
 
     register(new JavaQueryEngine.JavaQueryEngineFactory());
     register(new SQLQueryEngine.SQLQueryEngineFactory());
@@ -208,10 +217,6 @@ public class QueryEngineManager {
   }
 
   public List<String> getAvailableLanguages() {
-    final List<String> available = new ArrayList<>();
-    for (final QueryEngine.QueryEngineFactory impl : implementations.values()) {
-      available.add(impl.getLanguage());
-    }
-    return available;
+    return new ArrayList<>(implementations.keySet());
   }
 }

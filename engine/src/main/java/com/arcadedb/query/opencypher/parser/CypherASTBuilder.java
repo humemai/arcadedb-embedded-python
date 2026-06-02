@@ -1017,8 +1017,9 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
   }
 
   public WhereClause visitWhereClause(final Cypher25Parser.WhereClauseContext ctx) {
-    // Parse the WHERE condition as a boolean expression
-    final BooleanExpression condition = parseBooleanExpression(ctx.expression());
+    // Parse the WHERE condition as a boolean expression, then simplify boolean constants
+    final BooleanExpression parsed = parseBooleanExpression(ctx.expression());
+    final BooleanExpression condition = (BooleanExpression) AST_REWRITER.rewrite(parsed);
     return new WhereClause(condition);
   }
 
@@ -1950,15 +1951,15 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     }
 
     // Null
-    if (text.equalsIgnoreCase("null")) {
+    if ("null".equalsIgnoreCase(text)) {
       return null;
     }
 
     // Boolean
-    if (text.equalsIgnoreCase("true")) {
+    if ("true".equalsIgnoreCase(text)) {
       return Boolean.TRUE;
     }
-    if (text.equalsIgnoreCase("false")) {
+    if ("false".equalsIgnoreCase(text)) {
       return Boolean.FALSE;
     }
 

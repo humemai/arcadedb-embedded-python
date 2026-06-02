@@ -23,7 +23,7 @@ import net.jpountz.lz4.LZ4Compressor;
 import net.jpountz.lz4.LZ4Factory;
 import net.jpountz.lz4.LZ4FastDecompressor;
 
-import java.util.*;
+import java.util.Arrays;
 
 /**
  * Compression implementation that uses the popular LZ4 algorithm. Two compressors are exposed: the default
@@ -85,8 +85,8 @@ public class LZ4Compression implements Compression {
     final int decompressedLength = data.size() - data.position();
     final int maxCompressedLength = compressor.maxCompressedLength(decompressedLength);
     final byte[] compressed = new byte[maxCompressedLength];
-    final int compressedLength = compressor.compress(data.getContent(), data.position(), data.size(), compressed, 0,
-        maxCompressedLength);
+    final int compressedLength = compressor.compress(data.getContent(), data.getContentBeginOffset() + data.position(),
+        decompressedLength, compressed, 0, maxCompressedLength);
 
     return new Binary(compressed, compressedLength);
   }
@@ -108,7 +108,7 @@ public class LZ4Compression implements Compression {
       return EMPTY_BINARY;
 
     final byte[] decompressed = new byte[decompressedLength];
-    decompressor.decompress(data.getContent(), data.position(), decompressed, 0, decompressedLength);
+    decompressor.decompress(data.getContent(), data.getContentBeginOffset() + data.position(), decompressed, 0, decompressedLength);
     return new Binary(decompressed);
   }
 }

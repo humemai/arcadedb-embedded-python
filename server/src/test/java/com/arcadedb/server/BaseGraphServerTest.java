@@ -32,7 +32,6 @@ import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.Schema;
 import com.arcadedb.schema.VertexType;
 import com.arcadedb.serializer.json.JSONObject;
-import com.arcadedb.server.HAServerPlugin;
 import com.arcadedb.utility.FileUtils;
 import org.awaitility.Awaitility;
 import org.awaitility.core.ConditionTimeoutException;
@@ -64,7 +63,7 @@ import java.util.logging.Level;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * This class has been copied under Console project to avoid complex dependencies.
+ * Base class for graph database multi-server and HA testing with graph schema population and verification utilities.
  */
 public abstract class BaseGraphServerTest extends StaticBaseServerTest {
   protected static final String VERTEX1_TYPE_NAME = "V1";
@@ -271,9 +270,10 @@ public abstract class BaseGraphServerTest extends StaticBaseServerTest {
       }
 
     final ByteArrayOutputStream os = new ByteArrayOutputStream();
-    final PrintWriter output = new PrintWriter(new BufferedOutputStream(os));
-    new Exception().printStackTrace(output);
-    output.flush();
+    try (final PrintWriter output = new PrintWriter(new BufferedOutputStream(os))) {
+      new Exception().printStackTrace(output);
+      output.flush();
+    }
     final String out = os.toString();
     assertThat(out.contains("ArcadeDB")).as("Some thread is still up & running: \n" + out).isFalse();
   }
@@ -298,9 +298,14 @@ public abstract class BaseGraphServerTest extends StaticBaseServerTest {
       final ContextConfiguration config = new ContextConfiguration();
       config.setValue(GlobalConfiguration.SERVER_NAME, Constants.PRODUCT + "_" + i);
       config.setValue(GlobalConfiguration.SERVER_DATABASE_DIRECTORY, "./target/databases" + i);
-      config.setValue(GlobalConfiguration.HA_SERVER_LIST, getServerAddresses());
       config.setValue(GlobalConfiguration.SERVER_HTTP_INCOMING_HOST, "localhost");
-      config.setValue(GlobalConfiguration.HA_ENABLED, getServerCount() > 1);
+      // HA_SERVER_LIST and HA_ENABLED are only meaningful for multi-server tests. Setting the
+      // server list unconditionally would auto-enable HA via ContextConfiguration.isHAImplicitlyEnabled(),
+      // which would start Raft for every single-server test and corrupt their write path.
+      if (getServerCount() > 1) {
+        config.setValue(GlobalConfiguration.HA_SERVER_LIST, getServerAddresses());
+        config.setValue(GlobalConfiguration.HA_ENABLED, true);
+      }
       //config.setValue(GlobalConfiguration.NETWORK_SOCKET_TIMEOUT, 2000);
 
       onServerConfiguration(config);
@@ -498,7 +503,7 @@ public abstract class BaseGraphServerTest extends StaticBaseServerTest {
         try {
           callback.call();
         } catch (final Exception e) {
-          e.printStackTrace();
+          LogManager.instance().log(BaseGraphServerTest.this, Level.SEVERE, "Error in asynchronous callback", e);
         }
       }
     }, 1);

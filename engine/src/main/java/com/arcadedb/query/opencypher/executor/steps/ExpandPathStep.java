@@ -20,8 +20,10 @@ package com.arcadedb.query.opencypher.executor.steps;
 
 import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.graph.Vertex;
+import com.arcadedb.query.opencypher.ast.Expression;
 import com.arcadedb.query.opencypher.ast.NodePattern;
 import com.arcadedb.query.opencypher.ast.RelationshipPattern;
+import com.arcadedb.query.opencypher.parser.CypherASTBuilder;
 import com.arcadedb.query.opencypher.traversal.TraversalPath;
 import com.arcadedb.query.opencypher.ast.PathMode;
 import com.arcadedb.query.opencypher.traversal.VariableLengthPathTraverser;
@@ -195,7 +197,7 @@ public class ExpandPathStep extends AbstractExecutionStep {
 
               // Filter by target node properties if specified
               if (targetNodePattern != null && targetNodePattern.hasProperties()) {
-                if (!matchesTargetProperties(targetVertex))
+                if (!matchesTargetProperties(targetVertex, lastResult))
                   continue;
               }
 
@@ -237,7 +239,7 @@ public class ExpandPathStep extends AbstractExecutionStep {
               buffer.add(result);
             } finally {
               if (context.isProfiling())
-                cost += (System.nanoTime() - begin);
+                cost += System.nanoTime() - begin;
             }
           } else {
             // Get next source vertex from previous step
@@ -255,7 +257,7 @@ public class ExpandPathStep extends AbstractExecutionStep {
 
             // Check if target variable is already bound (e.g., from a previous MATCH)
             final Object targetObj = lastResult.getProperty(targetVariable);
-            boundTarget = (targetObj instanceof Vertex) ? (Vertex) targetObj : null;
+            boundTarget = targetObj instanceof Vertex vertex ? vertex : null;
 
             if (sourceObj instanceof Vertex) {
               final Vertex sourceVertex = (Vertex) sourceObj;
@@ -341,18 +343,43 @@ public class ExpandPathStep extends AbstractExecutionStep {
     return true;
   }
 
-  private boolean matchesTargetProperties(final Vertex vertex) {
+  private boolean matchesTargetProperties(final Vertex vertex, final Result currentResult) {
     for (final Map.Entry<String, Object> entry : targetNodePattern.getProperties().entrySet()) {
       final Object actual = vertex.get(entry.getKey());
       Object expected = entry.getValue();
-      // Handle string literals: remove quotes
-      if (expected instanceof String) {
+
+      // Evaluate Expression-based property values (e.g., variable references from a prior WITH)
+      if (expected instanceof Expression && currentResult != null)
+        expected = ((Expression) expected).evaluate(currentResult, context);
+
+      // Resolve parameter references (e.g., $country -> actual value from context)
+      if (expected instanceof CypherASTBuilder.ParameterReference) {
+        final String paramName = ((CypherASTBuilder.ParameterReference) expected).getName();
+        if (context.getInputParameters() != null)
+          expected = context.getInputParameters().get(paramName);
+      } else if (expected instanceof String) {
         final String s = (String) expected;
-        if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith("\"") && s.endsWith("\"")))
-          expected = s.substring(1, s.length() - 1);
+        // Legacy parameter reference encoded as "$name"
+        if (s.startsWith("$") && s.length() > 1) {
+          final String paramName = s.substring(1);
+          if (context.getInputParameters() != null) {
+            final Object paramValue = context.getInputParameters().get(paramName);
+            if (paramValue != null)
+              expected = paramValue;
+          }
+        }
       }
-      if (actual == null || !actual.equals(expected))
+
+      if (actual == null)
         return false;
+      if (!actual.equals(expected)) {
+        // Numeric type-safe comparison (Integer vs Long, etc.)
+        if (actual instanceof Number && expected instanceof Number) {
+          if (((Number) actual).longValue() != ((Number) expected).longValue())
+            return false;
+        } else
+          return false;
+      }
     }
     return true;
   }

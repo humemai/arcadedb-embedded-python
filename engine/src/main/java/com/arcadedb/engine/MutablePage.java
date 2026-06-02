@@ -23,8 +23,8 @@ import com.arcadedb.database.Binary;
 import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.database.TrackableBinary;
 
-import java.nio.*;
-import java.util.*;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 /**
  * Mutable page that accepts updates. It keeps track of the modified bytes.
@@ -220,7 +220,8 @@ public class MutablePage extends BasePage implements TrackableContent {
               + destPosition + " length=" + length + " pageSize=" + size + ")");
     startPosition += PAGE_HEADER_SIZE;
     destPosition += PAGE_HEADER_SIZE;
-    updateModifiedRange(startPosition, destPosition + length);
+    if (length > 0)
+      updateModifiedRange(Math.min(startPosition, destPosition), Math.max(startPosition, destPosition) + length - 1);
     content.move(startPosition, destPosition, length);
   }
 

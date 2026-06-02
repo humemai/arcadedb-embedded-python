@@ -43,11 +43,14 @@ import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.CollectionUtils;
 import com.arcadedb.utility.FileUtils;
 
-import java.io.*;
+import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
-import java.util.logging.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
 
 public class LocalDocumentType implements DocumentType {
   protected       String                            name;
@@ -129,6 +132,14 @@ public class LocalDocumentType implements DocumentType {
     return set;
   }
 
+  /**
+   * Enforces the UPDATE_SCHEMA permission for any schema-mutating operation. No-op in embedded mode or when no
+   * current user is bound to the thread (e.g. schema load at startup, replication apply).
+   */
+  protected void checkForSchemaMutation() {
+    ((DatabaseInternal) schema.getDatabase()).checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
+  }
+
   @Override
   public DocumentType addSuperType(final String superName) {
     return addSuperType(schema.getType(superName));
@@ -163,6 +174,7 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public DocumentType removeSuperType(final DocumentType superType) {
+    checkForSchemaMutation();
     recordFileChanges(() -> {
       if (!superTypes.remove(superType))
         // ALREADY REMOVED SUPER TYPE
@@ -180,6 +192,7 @@ public class LocalDocumentType implements DocumentType {
   }
 
   public void rename(final String newName) {
+    checkForSchemaMutation();
     if (schema.existsType(newName))
       throw new IllegalArgumentException("Type with name '" + newName + "' already exists");
 
@@ -281,6 +294,7 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public DocumentType setSuperTypes(List<DocumentType> newSuperTypes) {
+    checkForSchemaMutation();
     if (newSuperTypes == null)
       newSuperTypes = Collections.emptyList();
 
@@ -321,6 +335,7 @@ public class LocalDocumentType implements DocumentType {
    * Sets the list of aliases for the type. Any previous configuration will be lost.
    */
   public LocalDocumentType setAliases(final Set<String> aliases) {
+    checkForSchemaMutation();
     final Set<String> newAliases = new HashSet<>(aliases);
     newAliases.removeAll(this.aliases);
     for (String alias : newAliases) {
@@ -434,7 +449,7 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public LocalProperty createProperty(final String propertyName, final Type propertyType, final String ofType) {
-    ((DatabaseInternal) schema.getDatabase()).checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
+    checkForSchemaMutation();
 
     if (properties.containsKey(propertyName))
       throw new SchemaException(
@@ -530,6 +545,7 @@ public class LocalDocumentType implements DocumentType {
    */
   @Override
   public Property dropProperty(final String propertyName) {
+    checkForSchemaMutation();
     for (final TypeIndex index : getAllIndexes(true)) {
       if (index.getPropertyNames().contains(propertyName))
         throw new SchemaException(
@@ -613,6 +629,7 @@ public class LocalDocumentType implements DocumentType {
 
   @Override
   public DocumentType addBucket(final Bucket bucket) {
+    checkForSchemaMutation();
     recordFileChanges(() -> {
       addBucketInternal(bucket);
       return null;
@@ -622,6 +639,7 @@ public class LocalDocumentType implements DocumentType {
 
   @Override
   public DocumentType removeBucket(final Bucket bucket) {
+    checkForSchemaMutation();
     recordFileChanges(() -> {
       removeBucketInternal(bucket);
       return null;
@@ -698,9 +716,10 @@ public class LocalDocumentType implements DocumentType {
     if (!lastRepartitionWarnMs.compareAndSet(last, now))
       return;
     LogManager.instance().log(this, Level.WARNING,
-        "Type '%s' has needsRepartition=true; partition-aware bucket pruning is disabled until "
-            + "`REBUILD TYPE %s WITH repartition = true` runs. Queries continue to return correct "
-            + "results but fan out across all %d buckets.",
+        """
+        Type '%s' has needsRepartition=true; partition-aware bucket pruning is disabled until \
+        `REBUILD TYPE %s WITH repartition = true` runs. Queries continue to return correct \
+        results but fan out across all %d buckets.""",
         null, name, name, buckets.size());
   }
 
@@ -797,11 +816,11 @@ public class LocalDocumentType implements DocumentType {
   @Override
   public DocumentType setBucketSelectionStrategy(final String selectionStrategyName, final Object... args) {
     BucketSelectionStrategy selectionStrategy;
-    if (selectionStrategyName.equalsIgnoreCase("thread"))
+    if ("thread".equalsIgnoreCase(selectionStrategyName))
       selectionStrategy = new ThreadBucketSelectionStrategy();
-    else if (selectionStrategyName.equalsIgnoreCase("round-robin"))
+    else if ("round-robin".equalsIgnoreCase(selectionStrategyName))
       selectionStrategy = new RoundRobinBucketSelectionStrategy();
-    else if (selectionStrategyName.equalsIgnoreCase("partitioned")) {
+    else if ("partitioned".equalsIgnoreCase(selectionStrategyName)) {
       final List<String> convertedParams = new ArrayList<>(args.length);
       for (int i = 0; i < args.length; i++)
         convertedParams.add(FileUtils.getStringContent(args[i]));
@@ -863,7 +882,7 @@ public class LocalDocumentType implements DocumentType {
     if (r != null && filterByProperties != null) {
       // FILTER BY PROPERTY NAMES
       r = new ArrayList<>(r);
-      r.removeIf((idx) -> !idx.getPropertyNames().equals(filterByProperties));
+      r.removeIf(idx -> !idx.getPropertyNames().equals(filterByProperties));
     }
 
     if (superTypes.isEmpty()) {
@@ -1351,9 +1370,10 @@ public class LocalDocumentType implements DocumentType {
         // but was set when the bucket was created. Reads of EXTERNAL properties for records in this primary
         // bucket would silently fail - so we surface the configuration mismatch loudly and explicitly.
         LogManager.instance().log(this, Level.SEVERE,
-            "Cannot find external bucket '%s' for type '%s' primary bucket '%s'. If the bucket was tiered to a "
-                + "secondary path, set 'arcadedb.externalPropertyBucketPath' to the same value used at creation "
-                + "time before reopening the database. EXTERNAL property reads on this type will fail until fixed.",
+            """
+            Cannot find external bucket '%s' for type '%s' primary bucket '%s'. If the bucket was tiered to a \
+            secondary path, set 'arcadedb.externalPropertyBucketPath' to the same value used at creation \
+            time before reopening the database. EXTERNAL property reads on this type will fail until fixed.""",
             null, entry.getValue(), name, entry.getKey());
         continue;
       }
@@ -1376,17 +1396,19 @@ public class LocalDocumentType implements DocumentType {
       if (schema.getTypeByBucketId(candidate.getFileId()) != null) {
         // candidate is some other type's primary bucket; refuse to repurpose, just log so the operator sees it.
         LogManager.instance().log(this, Level.WARNING,
-            "Heuristic recovery for type '%s': bucket '%s' looks like a paired external bucket by name but is"
-                + " already a primary bucket of another user type. Skipping adoption.",
+            """
+            Heuristic recovery for type '%s': bucket '%s' looks like a paired external bucket by name but is\
+             already a primary bucket of another user type. Skipping adoption.""",
             null, name, candidateName);
         continue;
       }
       candidate.setPurpose(LocalBucket.Purpose.EXTERNAL_PROPERTY);
       externalBucketIdByPrimaryBucketId.put(primaryBucket.getFileId(), candidate.getFileId());
       LogManager.instance().log(this, Level.WARNING,
-          "Heuristic recovery for type '%s': adopted bucket '%s' as the external-property bucket for primary"
-              + " '%s'. The schema.json was missing the matching externalBuckets entry; it will be re-saved on"
-              + " the next schema mutation.",
+          """
+          Heuristic recovery for type '%s': adopted bucket '%s' as the external-property bucket for primary\
+           '%s'. The schema.json was missing the matching externalBuckets entry; it will be re-saved on\
+           the next schema mutation.""",
           null, name, candidateName, primaryBucket.getName());
     }
   }
@@ -1546,7 +1568,7 @@ public class LocalDocumentType implements DocumentType {
     type.put("indexes", indexes);
 
     final BucketSelectionStrategy strategy = getBucketSelectionStrategy();
-    if (!strategy.getName().equals(RoundRobinBucketSelectionStrategy.NAME))
+    if (!RoundRobinBucketSelectionStrategy.NAME.equals(strategy.getName()))
       // WRITE ONLY IF NOT DEFAULT
       type.put("bucketSelectionStrategy", strategy.toJSON());
 
@@ -1596,6 +1618,7 @@ public class LocalDocumentType implements DocumentType {
   }
 
   DocumentType addSuperType(final DocumentType superType, final boolean createIndexes) {
+    checkForSchemaMutation();
     if (this.equals(superType))
       return this;
 

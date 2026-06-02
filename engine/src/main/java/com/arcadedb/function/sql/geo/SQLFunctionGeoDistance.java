@@ -24,6 +24,8 @@ import com.arcadedb.query.sql.executor.CommandContext;
 import org.locationtech.spatial4j.shape.Point;
 import org.locationtech.spatial4j.shape.Shape;
 
+import java.util.Locale;
+
 /**
  * SQL function geo.distance: computes the Haversine distance between two points.
  * Points may be WKT strings or Spatial4j Shape/Point objects.
@@ -50,7 +52,7 @@ public class SQLFunctionGeoDistance extends SQLFunctionAbstract {
     final double[] p1 = extractPointCoords(iParams[0]);
     final double[] p2 = extractPointCoords(iParams[1]);
 
-    final String unit = (iParams.length >= 3 && iParams[2] != null) ? iParams[2].toString() : "m";
+    final String unit = iParams.length >= 3 && iParams[2] != null ? iParams[2].toString() : "m";
 
     final double deltaLat = Math.toRadians(p2[1] - p1[1]);
     final double deltaLon = Math.toRadians(p2[0] - p1[0]);
@@ -61,7 +63,7 @@ public class SQLFunctionGeoDistance extends SQLFunctionAbstract {
 
     double distance = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * EARTH_RADIUS_KM;
 
-    return switch (unit.toLowerCase()) {
+    return switch (unit.toLowerCase(Locale.ROOT)) {
       case "km" -> distance;
       case "m" -> distance * 1000;
       case "mi" -> distance * 0.621371192;
