@@ -143,7 +143,7 @@ Execute a query and return results. Queries are read-only and don't require a tr
 
 - `language` (str): Query language - `"sql"`, `"opencypher"`, `"mongo"`, `"graphql"`
 - `command` (str): Query string
-- `*args`: Optional parameters to bind to the query
+- `*args`: Optional positional parameters, or one mapping for named parameters
 
 **Returns:**
 
@@ -163,6 +163,13 @@ for record in result:
 
 # Parameterized query
 result = db.query("sql", "SELECT FROM Person WHERE age > ?", 25)
+
+# Named parameters
+result = db.query(
+    "sql",
+    "SELECT FROM Person WHERE age IN :ages ORDER BY age",
+    {"ages": [25, 30, 35]},
+)
 
 # OpenCypher query
 result = db.query("opencypher", """
@@ -195,7 +202,7 @@ Execute a command (write operation). Commands modify data and **require a transa
 
 - `language` (str): Command language (usually `"sql"` or `"opencypher"`)
 - `command` (str): Command string
-- `*args`: Optional parameters
+- `*args`: Optional positional parameters, or one mapping for named parameters
 
 **Returns:**
 
@@ -223,7 +230,11 @@ db.command(
 # Data operations must be in a transaction
 with db.transaction():
     db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)
-    db.command("sql", "UPDATE Person SET age = 31 WHERE name = 'Alice'")
+    db.command(
+        "sql",
+        "UPDATE Person SET age = :age WHERE name = :name",
+        {"age": 31, "name": "Alice"},
+    )
     db.command("sql", "DELETE FROM Person WHERE name = 'Alice'")
 ```
 

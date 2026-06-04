@@ -137,11 +137,19 @@ result = db.query(
     {"name": "Alice", "min_age": 25}
 )
 
+# Named collection parameter
+result = db.query(
+    "sql",
+    "SELECT FROM Person WHERE age IN :ages ORDER BY age",
+    {"ages": [25, 30, 35]}
+)
+
 # Positional parameters
 result = db.query(
     "sql",
     "SELECT FROM Person WHERE name = ? AND age > ?",
-    ["Alice", 25]
+    "Alice",
+    25,
 )
 ```
 

@@ -4,8 +4,9 @@ ArcadeDB Python Bindings - Core Database Classes
 Database and DatabaseFactory classes for embedded database access.
 """
 
+from collections.abc import Mapping
 from os import PathLike
-from typing import Any, List, Mapping, Optional
+from typing import Any, List, Optional
 
 from .exceptions import ArcadeDBError
 from .graph import Document, Edge, Vertex
@@ -14,6 +15,7 @@ from .importer import ImportResult
 from .importer import import_documents as run_document_import
 from .jvm import start_jvm
 from .results import ResultSet
+from .type_conversion import convert_python_to_java
 from .transactions import TransactionContext
 from .vector import to_java_float_array
 
@@ -50,6 +52,8 @@ class Database:
         for arg in args:
             if np is not None and isinstance(arg, np.ndarray):
                 converted_args.append(to_java_float_array(arg))
+            elif isinstance(arg, Mapping):
+                converted_args.append(convert_python_to_java(arg))
             else:
                 converted_args.append(arg)
 

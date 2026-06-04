@@ -302,6 +302,12 @@ results = db.query(
     25, datetime(2024, 1, 1)  # Python types converted to Java
 )
 
+results = db.query(
+    "sql",
+    "SELECT FROM User WHERE age IN :ages",
+    {"ages": [25, 30, 35]}  # dict/list converted to Java Map/List
+)
+
 # Reading results (automatically converted back to Python)
 for result in results:
     name = result.get("name")         # str
