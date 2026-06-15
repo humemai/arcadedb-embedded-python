@@ -5,9 +5,12 @@ Tests cover:
 - New SQL vector functions introduced in recent ArcadeDB versions
 """
 
-import arcadedb_embedded as arcadedb
+import math
+
 import jpype.types as jtypes
 import pytest
+
+import arcadedb_embedded as arcadedb
 from arcadedb_embedded import create_database
 
 
@@ -101,6 +104,106 @@ class TestVectorSQL:
         res = next(rs).get("res")
         assert abs(res[0] - 0.6) < 0.001
         assert abs(res[1] - 0.8) < 0.001
+
+    def test_vector_has_null(self, test_db):
+        """vector.hasNull / vectorHasNull detect NaN/null elements in a vector."""
+        # Clean vector -> False (both the dotted name and the camelCase alias).
+        rs = test_db.query("sql", "SELECT vectorHasNull([1.0, 2.0, 3.0]) as res")
+        assert next(rs).get("res") is False
+
+        rs = test_db.query("sql", "SELECT `vector.hasNull`([1.0, 2.0, 3.0]) as res")
+        assert next(rs).get("res") is False
+
+        # sqrt(-1.0) yields NaN -> True.
+        rs = test_db.query("sql", "SELECT vectorHasNull([1.0, sqrt(-1.0), 3.0]) as res")
+        assert next(rs).get("res") is True
+
+    def test_vector_l2_norm_aliases(self, test_db):
+        """vector.l2Norm / vectorL2Norm are aliases of vectorMagnitude."""
+        # magnitude([3, 4]) == 5
+        for expr in (
+            "vectorL2Norm([3.0, 4.0])",
+            "`vector.l2Norm`([3.0, 4.0])",
+            "vectorMagnitude([3.0, 4.0])",
+        ):
+            rs = test_db.query("sql", f"SELECT {expr} as res")
+            assert abs(next(rs).get("res") - 5.0) < 0.001
+
+    def test_vector_clamp(self, test_db):
+        """vectorClamp / vector.clamp limit each element to the [min, max] range."""
+        rs = test_db.query("sql", "SELECT vectorClamp([1.0, 5.0, 10.0], 2, 8) as res")
+        assert next(rs).get("res") == [2.0, 5.0, 8.0]
+
+        rs = test_db.query(
+            "sql", "SELECT `vector.clamp`([1.0, 5.0, 10.0], 2, 8) as res"
+        )
+        assert next(rs).get("res") == [2.0, 5.0, 8.0]
+
+    def test_vector_manhattan_distance(self, test_db):
+        """vectorManhattanDistance / vectorL1Distance compute the L1 (sum-of-abs) distance."""
+        v1 = [1.0, 0.0]
+        v2 = [0.0, 1.0]
+        # |1-0| + |0-1| == 2
+        for name in (
+            "vectorManhattanDistance",
+            "vectorL1Distance",
+            "`vector.manhattanDistance`",
+            "`vector.l1Distance`",
+        ):
+            rs = test_db.query("sql", f"SELECT {name}({v1}, {v2}) as res")
+            assert abs(next(rs).get("res") - 2.0) < 0.001
+
+    def test_vector_add_subtract_scalar_broadcast(self, test_db):
+        """vectorAdd / vectorSubtract broadcast a scalar operand across the vector."""
+        # vector + scalar and the commutative scalar + vector
+        rs = test_db.query("sql", "SELECT vectorAdd([1.0, 2.0, 3.0], 4.0) as res")
+        assert next(rs).get("res") == [5.0, 6.0, 7.0]
+        rs = test_db.query("sql", "SELECT vectorAdd(4.0, [1.0, 2.0, 3.0]) as res")
+        assert next(rs).get("res") == [5.0, 6.0, 7.0]
+
+        # subtraction preserves operand order
+        rs = test_db.query("sql", "SELECT vectorSubtract([1.0, 2.0, 3.0], 1.0) as res")
+        assert next(rs).get("res") == [0.0, 1.0, 2.0]
+        rs = test_db.query("sql", "SELECT vectorSubtract(10.0, [1.0, 2.0, 3.0]) as res")
+        assert next(rs).get("res") == [9.0, 8.0, 7.0]
+
+    def test_vector_score_transform_modes(self, test_db):
+        """vector.scoreTransform supports LN (== LOG) and TANH modes."""
+        rs = test_db.query("sql", "SELECT `vector.scoreTransform`(2.5, 'LN') as res")
+        assert abs(next(rs).get("res") - math.log(2.5)) < 1e-5
+
+        rs = test_db.query("sql", "SELECT `vector.scoreTransform`(2.5, 'LOG') as res")
+        assert abs(next(rs).get("res") - math.log(2.5)) < 1e-5
+
+        rs = test_db.query("sql", "SELECT `vector.scoreTransform`(0.5, 'TANH') as res")
+        assert abs(next(rs).get("res") - math.tanh(0.5)) < 1e-5
+
+    def test_vector_multi_score_fusion(self, test_db):
+        """vector.multiScore fuses a list of scores; MAX returns the largest."""
+        rs = test_db.query(
+            "sql", "SELECT `vector.multiScore`([0.2, 0.8], 'MAX') as res"
+        )
+        assert abs(next(rs).get("res") - 0.8) < 0.001
+
+    def test_vector_sparsity_modes(self, test_db):
+        """vector.sparsity reports a default sparsity ratio plus L0 / GMEAN modes."""
+        # default: 1 zero out of 4 elements -> 0.25
+        rs = test_db.query(
+            "sql", "SELECT `vector.sparsity`([0.0, 1.0, 2.0, 3.0]) as res"
+        )
+        assert abs(next(rs).get("res") - 0.25) < 1e-5
+
+        # L0: count of elements >= threshold (0.5) -> 3
+        rs = test_db.query(
+            "sql", "SELECT `vector.sparsity`([0.0, 1.0, 2.0, 3.0], 0.5, 'L0') as res"
+        )
+        assert next(rs).get("res") == 3
+
+        # GMEAN: geometric mean (1*2*4)^(1/3) == 2.0
+        rs = test_db.query(
+            "sql", "SELECT `vector.sparsity`([1.0, 2.0, 4.0], 0.0, 'GMEAN') as res"
+        )
+        assert abs(next(rs).get("res") - 2.0) < 1e-5
 
     def test_sql_create_index_builds_vector_graph_immediately_by_default(self, test_db):
         """SQL LSM_VECTOR creation should be queryable immediately."""

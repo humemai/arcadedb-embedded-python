@@ -240,6 +240,21 @@ rows = db.query(
     - `SELECT vectorNeighbors('Doc[embedding]', [0.1,0.2], 5) AS res`
 - Math/distance helpers: `vectorCosineSimilarity`, `vectorL2Distance`,
   `vectorDotProduct`, `vectorNormalize`, `vectorAdd`, `vectorSum`, etc.
+- Every `vector.xxx` function is also reachable as a camelCase alias (`vector.l2Norm`
+  ⇔ `vectorL2Norm`), so both spellings resolve to the same function.
+- Distance: `vectorL2Distance` (Euclidean), `vectorManhattanDistance` /
+  `vectorL1Distance` (L1, sum of absolute differences).
+- Norms: `vectorL2Norm` / `vectorMagnitude` (Euclidean length), `vectorLInfNorm`
+  (max absolute element).
+- Element-wise math: `vectorAdd`, `vectorSubtract`, `vectorMultiply`, `vectorScale`,
+  and `vectorClamp(v, min, max)` to bound each element to a range. `vectorAdd` and
+  `vectorSubtract` also broadcast a scalar operand (e.g. `vectorAdd([1,2,3], 4)`).
+- Quality checks: `vectorHasNull(v)` returns `true` when a vector contains a
+  NaN/null element (useful for guarding embeddings before indexing).
+- Stats: `vectorStdDev`, `vectorVariance`, and `vector.sparsity(v[, threshold, mode])`
+  where `mode` is the default ratio, `L0` (count of significant elements), or `GMEAN`.
+- Score shaping: `vector.scoreTransform(score, mode)` with modes such as `LN`/`LOG`
+  and `TANH`, and `vector.multiScore(scores, fusion)` (e.g. `MAX`) to fuse score lists.
 - Quantization via SQL: `METADATA {"quantization": "INT8"}` is the recommended path for
   embedded usage.
 
