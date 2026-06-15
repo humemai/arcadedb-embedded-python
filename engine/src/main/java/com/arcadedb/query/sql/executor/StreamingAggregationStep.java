@@ -23,6 +23,7 @@ import com.arcadedb.query.sql.parser.Expression;
 import com.arcadedb.query.sql.parser.GroupBy;
 import com.arcadedb.query.sql.parser.Projection;
 import com.arcadedb.query.sql.parser.ProjectionItem;
+import com.arcadedb.schema.Type;
 
 import java.util.Arrays;
 import java.util.NoSuchElementException;
@@ -61,21 +62,28 @@ public class StreamingAggregationStep extends AbstractExecutionStep {
     }
 
     return new ResultSet() {
-      int fetched = 0;
+      int    fetched = 0;
+      Result next    = null;
 
       @Override
       public boolean hasNext() {
-        return fetched < nRecords && !finished;
+        if (next != null)
+          return true;
+        if (fetched >= nRecords || finished)
+          return false;
+        // Eagerly compute the next group so hasNext() never lies: it returns true only when a
+        // result is actually available (issue #4589). On empty input computeNextGroup returns null.
+        next = computeNextGroup(context, nRecords);
+        return next != null;
       }
 
       @Override
       public Result next() {
-        if (fetched >= nRecords || finished)
+        if (!hasNext())
           throw new NoSuchElementException();
 
-        final Result result = computeNextGroup(context, nRecords);
-        if (result == null)
-          throw new NoSuchElementException();
+        final Result result = next;
+        next = null;
         fetched++;
         return result;
       }
@@ -138,7 +146,8 @@ public class StreamingAggregationStep extends AbstractExecutionStep {
     final Object[] keyValues = new Object[groupBy.getItems().size()];
     int idx = 0;
     for (final Expression item : groupBy.getItems())
-      keyValues[idx++] = item.execute(row, context);
+      // Normalise numeric values so numerically-equal keys with different numeric types are not split (issue #4516).
+      keyValues[idx++] = Type.normalizeNumberForKey(item.execute(row, context));
     return keyValues;
   }
 

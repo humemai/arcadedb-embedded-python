@@ -958,7 +958,32 @@ command
       | allocationCommand
       | showCommand
       | terminateCommand
+      | transactionCommand
+      | sessionCommand
    )
+   ;
+
+// ISO/IEC 39075 (GQL) session management.
+// SESSION SET binds a named query parameter on the current server session; later commands in the same
+// session see it as $name unless they supply their own value. RESET clears the session parameters; CLOSE
+// closes the session (rolls back its transaction and invalidates it). These require a server session - in
+// embedded use they report an actionable error.
+sessionCommand
+   : SESSION SET parameter["ANY"] EQ expression
+   | SESSION RESET
+   | SESSION CLOSE
+   ;
+
+// ISO/IEC 39075 (GQL) transaction control - issue #4141 section 2.
+// GQL standardizes only the bare statements; the optional ISOLATION clause is an ArcadeDB
+// extension (mirrors SQL 'BEGIN ISOLATION <level>') exposing the engine transaction isolation level.
+// GQL access-mode (READ ONLY / READ WRITE) is intentionally NOT parsed: ArcadeDB's begin() has no
+// read-only transaction mode, so accepting those tokens would be cosmetic and unenforced. Until then
+// 'START TRANSACTION READ ONLY' reports an actionable "Unexpected input 'READ'" parse error.
+transactionCommand
+   : START TRANSACTION (ISOLATION symbolicNameString)?
+   | COMMIT
+   | ROLLBACK
    ;
 
 createCommand
@@ -2189,9 +2214,11 @@ unescapedSymbolicNameString_
    | CASE
    | CHANGE
    | CIDR
+   | CLOSE
    | COLLECT
    | COMMAND
    | COMMANDS
+   | COMMIT
    | COMPOSITE
    | CONCURRENT
    | CONSTRAINT
@@ -2294,6 +2321,7 @@ unescapedSymbolicNameString_
    | INTEGER16
    | INTEGER8
    | IS
+   | ISOLATION
    | JOIN
    | KEY
    | LABEL
@@ -2373,12 +2401,14 @@ unescapedSymbolicNameString_
    | REPORT
    | REQUIRE
    | REQUIRED
+   | RESET
    | RESTRICT
    | RETRY
    | RETURN
    | REVOKE
    | ROLE
    | ROLES
+   | ROLLBACK
    | ROW
    | ROWS
    | RULE
@@ -2394,6 +2424,7 @@ unescapedSymbolicNameString_
    | SEEK
    | SERVER
    | SERVERS
+   | SESSION
    | SET
    | SETTING
    | SETTINGS

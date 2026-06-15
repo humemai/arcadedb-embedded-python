@@ -25,7 +25,7 @@
     <groupId>com.arcadedb</groupId>
     <artifactId>arcadedb-parent</artifactId>
     <packaging>pom</packaging>
-    <version>26.6.1</version>
+    <version>26.7.1-SNAPSHOT</version>
 
     <name>ArcadeDB</name>
     <url>https://arcadedata.com/</url>
@@ -58,7 +58,7 @@
 
         <docker.plugin.version>1.2.2</docker.plugin.version>
         <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
-        <jacoco-maven-plugin.version>0.8.14</jacoco-maven-plugin.version>
+        <jacoco-maven-plugin.version>0.8.15</jacoco-maven-plugin.version>
         <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
         <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
         <maven-assembly-plugin.version>3.8.0</maven-assembly-plugin.version>
@@ -78,8 +78,10 @@
         <maven-enforcer-plugin.version>3.4.1</maven-enforcer-plugin.version>
 
         <testcontainers.version>2.0.5</testcontainers.version>
-        <logback-classic.version>1.5.33</logback-classic.version>
-        <micrometer.version>1.16.5</micrometer.version>
+        <logback-classic.version>1.5.34</logback-classic.version>
+        <micrometer.version>1.17.0</micrometer.version>
+        <micrometer-tracing.version>1.7.0</micrometer-tracing.version>
+        <opentelemetry.version>1.62.0</opentelemetry.version>
         <postgres.version>42.7.11</postgres.version>
 
         <assertj-core.version>3.27.7</assertj-core.version>
@@ -97,8 +99,8 @@
         <protobuf-maven-plugin.version>5.1.4</protobuf-maven-plugin.version>
         <grpc.version>1.79.0</grpc.version>
         <protoc.version>4.33.0</protoc.version>
-        <protobuf-java.version>4.35.0</protobuf-java.version>
-        <com.google.api.grpc.version>2.71.0</com.google.api.grpc.version>
+        <protobuf-java.version>4.35.1</protobuf-java.version>
+        <com.google.api.grpc.version>2.72.0</com.google.api.grpc.version>
         <javax.annotation-api.version>1.3.2</javax.annotation-api.version>
 
         <maven-enforcer-plugin.version>3.4.1</maven-enforcer-plugin.version>
@@ -131,6 +133,7 @@
         <module>server</module>
         <module>ha-raft</module>
         <module>metrics</module>
+        <module>tracing</module>
         <module>integration</module>
         <module>console</module>
         <module>gremlin</module>
@@ -493,12 +496,43 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- OpenTelemetry + Micrometer Tracing BOMs: consumed only by the optional `tracing`
+                 module so the OTel SDK stays off the core/server compile classpath. -->
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-tracing-bom</artifactId>
+                <version>${micrometer-tracing.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-bom</artifactId>
+                <version>${opentelemetry.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <!-- Override jboss-threads transitive dependency from undertow-core
                  to remove sun.misc.Unsafe usage (terminally deprecated in Java 25) -->
             <dependency>
                 <groupId>org.jboss.threads</groupId>
                 <artifactId>jboss-threads</artifactId>
                 <version>${jboss-threads.version}</version>
+            </dependency>
+            <!-- Pin protobuf-java across all modules. Transitive deps (e.g. opentelemetry-proto
+                 pulled by micrometer-registry-otlp in the metrics module) drag in an older
+                 protobuf-java than the gRPC gencode was compiled against, which fails at runtime
+                 with "Detected incompatible Protobuf Gencode/Runtime versions" since the runtime
+                 must not be older than the linked gencode. -->
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java</artifactId>
+                <version>${protobuf-java.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java-util</artifactId>
+                <version>${protobuf-java.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

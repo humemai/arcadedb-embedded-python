@@ -27,7 +27,9 @@ import com.arcadedb.query.opencypher.ast.ComparisonExpression;
 import com.arcadedb.query.opencypher.ast.CreateClause;
 import com.arcadedb.query.opencypher.ast.CypherAdminStatement;
 import com.arcadedb.query.opencypher.ast.CypherDDLStatement;
+import com.arcadedb.query.opencypher.ast.CypherSessionStatement;
 import com.arcadedb.query.opencypher.ast.CypherStatement;
+import com.arcadedb.query.opencypher.ast.CypherTransactionStatement;
 import com.arcadedb.query.opencypher.ast.DeleteClause;
 import com.arcadedb.query.opencypher.ast.Direction;
 import com.arcadedb.query.opencypher.ast.ExistsExpression;
@@ -121,7 +123,37 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
       return handleShowCommand(ctx.showCommand());
     if (ctx.alterCommand() != null)
       return handleAlterCommand(ctx.alterCommand());
+    if (ctx.transactionCommand() != null)
+      return handleTransactionCommand(ctx.transactionCommand());
+    if (ctx.sessionCommand() != null)
+      return handleSessionCommand(ctx.sessionCommand());
     throw new CommandParsingException("Unsupported command type");
+  }
+
+  private CypherSessionStatement handleSessionCommand(final Cypher25Parser.SessionCommandContext ctx) {
+    if (ctx.SET() != null) {
+      final String parameterName = stripBackticks(ctx.parameter().parameterName().getText());
+      final Expression value = expressionBuilder.parseExpression(ctx.expression());
+      return new CypherSessionStatement(CypherSessionStatement.Kind.SET, parameterName, value);
+    }
+    if (ctx.RESET() != null)
+      return new CypherSessionStatement(CypherSessionStatement.Kind.RESET);
+    if (ctx.CLOSE() != null)
+      return new CypherSessionStatement(CypherSessionStatement.Kind.CLOSE);
+    throw new CommandParsingException("Unsupported session command");
+  }
+
+  private CypherTransactionStatement handleTransactionCommand(final Cypher25Parser.TransactionCommandContext ctx) {
+    if (ctx.START() != null) {
+      final String isolationLevel = ctx.symbolicNameString() != null ?
+          stripBackticks(ctx.symbolicNameString().getText()) : null;
+      return new CypherTransactionStatement(CypherTransactionStatement.Kind.BEGIN, isolationLevel);
+    }
+    if (ctx.COMMIT() != null)
+      return new CypherTransactionStatement(CypherTransactionStatement.Kind.COMMIT);
+    if (ctx.ROLLBACK() != null)
+      return new CypherTransactionStatement(CypherTransactionStatement.Kind.ROLLBACK);
+    throw new CommandParsingException("Unsupported transaction command");
   }
 
   private CypherStatement handleCreateCommand(final Cypher25Parser.CreateCommandContext ctx) {

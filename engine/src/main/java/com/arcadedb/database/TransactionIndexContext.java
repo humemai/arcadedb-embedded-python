@@ -263,18 +263,21 @@ public class TransactionIndexContext {
 
       modifiedFiles.add(index.getFileId());
 
-      if (index.isUnique()) {
-        // LOCK ALL THE FILES IMPACTED BY THE INDEX KEYS TO CHECK FOR UNIQUE CONSTRAINT
-        // TODO: OPTIMIZE LOCKING IF STRATEGY IS PARTITIONED: LOCK ONLY THE RELEVANT INDEX
-        final DocumentType type = schema.getType(index.getTypeName());
-        for (final int bid : type.getBucketIds(false))
-          modifiedFiles.add(bid);
+      // Lock only the data bucket this index entry belongs to (not all buckets of the type).
+      // Guard against -1, returned by composite (TypeIndex) or metadata-less indexes, which is not a valid file id.
+      final int associatedBucketId = index.getAssociatedBucketId();
 
+      if (index.isUnique()) {
+        // Cross-bucket uniqueness is serialised through the per-bucket index file locks below.
+        if (associatedBucketId >= 0)
+          modifiedFiles.add(associatedBucketId);
+
+        final DocumentType type = schema.getType(index.getTypeName());
         for (final TypeIndex typeIndex : type.getAllIndexes(true))
           for (final IndexInternal idx : typeIndex.getIndexesOnBuckets())
             modifiedFiles.add(idx.getFileId());
-      } else
-        modifiedFiles.add(index.getAssociatedBucketId());
+      } else if (associatedBucketId >= 0)
+        modifiedFiles.add(associatedBucketId);
     }
   }
 
@@ -394,18 +397,20 @@ public class TransactionIndexContext {
             return;
 
           try {
-//            database.lookupByRID(firstEntry.getIdentity(), true);
-            // NO EXCEPTION = FOUND
+            // PROBE THE EXISTING RECORD: IF IT LOADS, THE KEY IS A REAL DUPLICATE; OTHERWISE THE INDEX ENTRY IS DANGLING (e.g. it
+            // points to a record or bucket that no longer exists - see issue #4501) AND MUST BE REPAIRED INSTEAD OF FAILING THE WRITE.
+            database.lookupByRID(firstEntry.getIdentity(), true);
+            // NO EXCEPTION = RECORD EXISTS = REAL DUPLICATED KEY
             throw new DuplicatedKeyException(idx.getName(), Arrays.toString(key.keyValues), firstEntry.getIdentity());
 
           } catch (final RecordNotFoundException e) {
-            // INDEX DIRTY, THE RECORD WA DELETED, REMOVE THE ENTRY IN THE INDEX TO FIX IT
+            // INDEX DIRTY: THE RECORD WAS DELETED OR ITS BUCKET IS GONE, REMOVE THE DANGLING ENTRY TO FIX THE INDEX
             LogManager.instance()
-                .log(this, Level.WARNING, "Found entry in index '%s' with key %s pointing to the deleted record %s. Overriding it.",
-                    idx.getName(),
-                    Arrays.toString(key.keyValues), firstEntry.getIdentity());
+                .log(this, Level.WARNING,
+                    "Found entry in index '%s' with key %s pointing to the missing record %s. Removing the dangling entry to repair the index.",
+                    idx.getName(), Arrays.toString(key.keyValues), firstEntry.getIdentity());
 
-            idx.remove(key.keyValues);
+            idx.remove(key.keyValues, firstEntry.getIdentity());
           }
         }
       }

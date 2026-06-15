@@ -2474,6 +2474,72 @@ class GraphAnalyticalViewTest extends TestHelper {
     gav.drop();
   }
 
+  /**
+   * Regression for #4512: the slow path of getNeighborsFromCSR (taken whenever an overlay is present)
+   * must filter base CSR neighbours through the overlay's deleted-edge set. Otherwise getVertices(...)
+   * returns ghost edges and disagrees with countEdges(...) on the same view after an edge delete.
+   */
+  @Test
+  void getVerticesExcludesEdgesDeletedInOverlay() {
+    database.getSchema().createVertexType("Person");
+    database.getSchema().createEdgeType("FOLLOWS");
+
+    database.begin();
+    final MutableVertex alice = database.newVertex("Person").set("name", "Alice").save();
+    final MutableVertex bob = database.newVertex("Person").set("name", "Bob").save();
+    final MutableVertex charlie = database.newVertex("Person").set("name", "Charlie").save();
+    alice.newEdge("FOLLOWS", bob);
+    alice.newEdge("FOLLOWS", charlie);
+    bob.newEdge("FOLLOWS", charlie);
+    database.commit();
+
+    final GraphAnalyticalView gav = GraphAnalyticalView.builder(database)
+        .withName("get-vertices-del-edge")
+        .withVertexTypes("Person")
+        .withEdgeTypes("FOLLOWS")
+        .withUpdateMode(GraphAnalyticalView.UpdateMode.SYNCHRONOUS)
+        .build();
+
+    final int aliceId = gav.getNodeId(alice.getIdentity());
+    final int bobId = gav.getNodeId(bob.getIdentity());
+    final int charlieId = gav.getNodeId(charlie.getIdentity());
+
+    // Before deletion: alice -> {bob, charlie}, charlie <- {alice, bob}
+    assertThat(gav.getVertices(aliceId, Vertex.DIRECTION.OUT, "FOLLOWS")).containsExactlyInAnyOrder(bobId, charlieId);
+    assertThat(gav.getVertices(charlieId, Vertex.DIRECTION.IN, "FOLLOWS")).containsExactlyInAnyOrder(aliceId, bobId);
+
+    // Delete one edge: alice -> bob. This activates the overlay (slow path of getNeighborsFromCSR).
+    database.begin();
+    alice.getIdentity().asVertex().getEdges(Vertex.DIRECTION.OUT, "FOLLOWS").forEach(e -> {
+      if (e.getIn().equals(bob.getIdentity()))
+        e.delete();
+    });
+    database.commit();
+
+    // OUT direction: bob must no longer appear among alice's out-neighbours.
+    final int[] aliceOut = gav.getVertices(aliceId, Vertex.DIRECTION.OUT, "FOLLOWS");
+    assertThat(aliceOut).containsExactly(charlieId);
+    assertThat(aliceOut).doesNotContain(bobId);
+    // getVertices() and countEdges() must agree on the same view.
+    assertThat((long) aliceOut.length).isEqualTo(gav.countEdges(aliceId, Vertex.DIRECTION.OUT, "FOLLOWS"));
+
+    // IN direction: alice must no longer appear among bob's in-neighbours.
+    final int[] bobIn = gav.getVertices(bobId, Vertex.DIRECTION.IN, "FOLLOWS");
+    assertThat(bobIn).isEmpty();
+    assertThat((long) bobIn.length).isEqualTo(gav.countEdges(bobId, Vertex.DIRECTION.IN, "FOLLOWS"));
+
+    // BOTH direction on alice: only the surviving alice -> charlie edge remains.
+    final int[] aliceBoth = gav.getVertices(aliceId, Vertex.DIRECTION.BOTH, "FOLLOWS");
+    assertThat(aliceBoth).containsExactly(charlieId);
+    assertThat((long) aliceBoth.length).isEqualTo(gav.countEdges(aliceId, Vertex.DIRECTION.BOTH, "FOLLOWS"));
+
+    // Untouched edges remain intact.
+    assertThat(gav.getVertices(charlieId, Vertex.DIRECTION.IN, "FOLLOWS")).containsExactlyInAnyOrder(aliceId, bobId);
+    assertThat(gav.getVertices(bobId, Vertex.DIRECTION.OUT, "FOLLOWS")).containsExactly(charlieId);
+
+    gav.drop();
+  }
+
   @Test
   void incrementalDeleteVertex() {
     database.getSchema().createVertexType("Person");
@@ -3885,6 +3951,66 @@ class GraphAnalyticalViewTest extends TestHelper {
   }
 
   @Test
+  void syncEdgePropertyUpdateReflectedInDijkstra() {
+    // Issue #4513: in SYNCHRONOUS mode DeltaCollector.onAfterUpdate only handled Vertex updates,
+    // so edge property changes (e.g. weight updates read by Dijkstra) were silently dropped from
+    // the view until the next compaction. The fix forces a rebuild when a covered edge's property
+    // changes so the columnar edge stores (read directly by the array-based algorithms) stay correct.
+    database.getSchema().createVertexType("Node");
+    database.getSchema().createEdgeType("ROAD").createProperty("weight", Type.DOUBLE);
+
+    database.begin();
+    final MutableVertex a = database.newVertex("Node").set("name", "A").save();
+    final MutableVertex b = database.newVertex("Node").set("name", "B").save();
+    final MutableVertex c = database.newVertex("Node").set("name", "C").save();
+    // Two routes from A to C: direct A->C (cost 10) and indirect A->B->C (cost 1+1=2).
+    a.newEdge("ROAD", c, "weight", 10.0);
+    final RID edgeABrid = a.newEdge("ROAD", b, "weight", 1.0).getIdentity();
+    b.newEdge("ROAD", c, "weight", 1.0);
+    database.commit();
+
+    final GraphAnalyticalView gav = GraphAnalyticalView.builder(database)
+        .withName("sync-edge-prop-4513")
+        .withVertexTypes("Node")
+        .withEdgeTypes("ROAD")
+        .withEdgeProperties("weight")
+        .withUpdateMode(GraphAnalyticalView.UpdateMode.SYNCHRONOUS)
+        .build();
+
+    final int idA = gav.getNodeId(a.getIdentity());
+    final int idC = gav.getNodeId(c.getIdentity());
+
+    // Initially the indirect route A->B->C (cost 2) is the shortest.
+    double[] dist = GraphAlgorithms.dijkstraSingleSource(gav, idA, "weight", Vertex.DIRECTION.OUT, "ROAD");
+    assertThat(dist[idC]).isEqualTo(2.0);
+
+    final long initialBuildTimestamp = gav.getBuildTimestamp();
+
+    // Raise the A->B weight to 100 so the indirect route (cost 101) becomes more expensive
+    // than the direct A->C edge (cost 10).
+    database.begin();
+    edgeABrid.asEdge().modify().set("weight", 100.0).save();
+    database.commit();
+
+    // The edge property update must trigger a rebuild so the new weight is visible to Dijkstra.
+    final long deadline = System.currentTimeMillis() + 10_000;
+    while (gav.getBuildTimestamp() == initialBuildTimestamp && System.currentTimeMillis() < deadline) {
+      try {
+        Thread.sleep(50);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+        break;
+      }
+    }
+
+    // After the rebuild Dijkstra must read the updated weight; the direct edge (cost 10) now wins.
+    dist = GraphAlgorithms.dijkstraSingleSource(gav, idA, "weight", Vertex.DIRECTION.OUT, "ROAD");
+    assertThat(dist[idC]).isEqualTo(10.0);
+
+    gav.drop();
+  }
+
+  @Test
   void edgePropertyMemoryAccounted() {
     database.getSchema().createVertexType("Node");
     database.getSchema().createEdgeType("LINK").createProperty("weight", Type.DOUBLE);
@@ -4256,6 +4382,56 @@ class GraphAnalyticalViewTest extends TestHelper {
     // With undirected edges and the ordering constraint, should find exactly one triangle
     assertThat(results).hasSize(1);
     assertThat(results).containsExactly("Alice-Bob-Charlie");
+
+    gav.drop();
+  }
+
+  /**
+   * Regression for issue #4585: getDegrees() must zero the caller's buffer before filling it.
+   * Callers reuse buffers (zero-GC pattern), so a missing CSR or an oversized buffer must not leave
+   * stale values that the overlay would then accumulate onto.
+   */
+  @Test
+  void getDegreesClearsReusedBuffer() {
+    // A -> B -> C
+    database.getSchema().createVertexType("Person");
+    database.getSchema().createEdgeType("FOLLOWS");
+
+    database.begin();
+    final MutableVertex a = database.newVertex("Person").set("name", "Alice").save();
+    final MutableVertex b = database.newVertex("Person").set("name", "Bob").save();
+    final MutableVertex c = database.newVertex("Person").set("name", "Charlie").save();
+    a.newEdge("FOLLOWS", b);
+    b.newEdge("FOLLOWS", c);
+    database.commit();
+
+    final GraphAnalyticalView gav = new GraphAnalyticalView(database);
+    gav.build(new String[] { "Person" }, new String[] { "FOLLOWS" });
+
+    final int nodeCount = gav.getNodeCount();
+    assertThat(nodeCount).isEqualTo(3);
+
+    // Case 1: oversized buffer pre-filled with stale sentinel values. The CSR fast path only writes
+    // indices [0, nodeCount); the tail must be zeroed, not left stale.
+    final int[] degrees = new int[nodeCount + 3];
+    Arrays.fill(degrees, 999);
+    gav.getDegrees(degrees, Vertex.DIRECTION.OUT, "FOLLOWS");
+
+    final int idA = gav.getNodeId(a.getIdentity());
+    final int idB = gav.getNodeId(b.getIdentity());
+    final int idC = gav.getNodeId(c.getIdentity());
+    assertThat(degrees[idA]).isEqualTo(1); // A -> B
+    assertThat(degrees[idB]).isEqualTo(1); // B -> C
+    assertThat(degrees[idC]).isEqualTo(0); // C has no outgoing
+    for (int i = nodeCount; i < degrees.length; i++)
+      assertThat(degrees[i]).as("tail index %d must be zeroed", i).isEqualTo(0);
+
+    // Case 2: missing CSR for the requested edge type (no edges of that type in the view). The whole
+    // buffer must come back zeroed instead of retaining stale values.
+    Arrays.fill(degrees, 999);
+    gav.getDegrees(degrees, Vertex.DIRECTION.OUT, "NONEXISTENT");
+    for (int i = 0; i < degrees.length; i++)
+      assertThat(degrees[i]).as("missing-CSR index %d must be zeroed", i).isEqualTo(0);
 
     gav.drop();
   }

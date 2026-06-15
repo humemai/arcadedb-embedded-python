@@ -239,6 +239,10 @@ CIDR
    : C I D R
    ;
 
+CLOSE
+   : C L O S E
+   ;
+
 COLLECT
    : C O L L E C T
    ;
@@ -261,6 +265,10 @@ COMMAND
 
 COMMANDS
    : C O M M A N D S
+   ;
+
+COMMIT
+   : C O M M I T
    ;
 
 COMPOSITE
@@ -692,6 +700,10 @@ IS
    : I S
    ;
 
+ISOLATION
+   : I S O L A T I O N
+   ;
+
 JOIN
    : J O I N
    ;
@@ -1036,6 +1048,10 @@ RENAME
    : R E N A M E
    ;
 
+RESET
+   : R E S E T
+   ;
+
 REGEQ
    : '=~'
    ;
@@ -1108,6 +1124,10 @@ ROLES
    : R O L E S
    ;
 
+ROLLBACK
+   : R O L L B A C K
+   ;
+
 ROW
    : R O W
    ;
@@ -1174,6 +1194,10 @@ SERVER
 
 SERVERS
    : S E R V E R S
+   ;
+
+SESSION
+   : S E S S I O N
    ;
 
 SET

@@ -34,109 +34,154 @@ public interface CypherStatement {
 
   /**
    * Returns the list of MATCH clauses in this statement.
+   * Defaults to an empty list for non-query (control/admin/DDL/session) statements.
    *
    * @return list of MATCH clauses (may be empty)
    */
-  List<MatchClause> getMatchClauses();
+  default List<MatchClause> getMatchClauses() {
+    return List.of();
+  }
 
   /**
    * Returns the WHERE clause if present.
+   * Defaults to null for non-query (control/admin/DDL/session) statements.
    *
    * @return WHERE clause or null
    */
-  WhereClause getWhereClause();
+  default WhereClause getWhereClause() {
+    return null;
+  }
 
   /**
    * Returns the RETURN clause.
+   * Defaults to null for non-query (control/admin/DDL/session) statements.
    *
    * @return RETURN clause (required in most queries)
    */
-  ReturnClause getReturnClause();
+  default ReturnClause getReturnClause() {
+    return null;
+  }
 
   /**
    * Returns true if this statement contains CREATE operations.
+   * Defaults to false for non-query (control/admin/DDL/session) statements.
    *
    * @return true if contains CREATE
    */
-  boolean hasCreate();
+  default boolean hasCreate() {
+    return false;
+  }
 
   /**
    * Returns true if this statement contains MERGE operations.
+   * Defaults to false for non-query (control/admin/DDL/session) statements.
    *
    * @return true if contains MERGE
    */
-  boolean hasMerge();
+  default boolean hasMerge() {
+    return false;
+  }
 
   /**
    * Returns true if this statement contains DELETE operations.
+   * Defaults to false for non-query (control/admin/DDL/session) statements.
    *
    * @return true if contains DELETE
    */
-  boolean hasDelete();
+  default boolean hasDelete() {
+    return false;
+  }
 
   /**
    * Returns the ORDER BY clause if present.
+   * Defaults to null for non-query (control/admin/DDL/session) statements.
    *
    * @return ORDER BY clause or null
    */
-  OrderByClause getOrderByClause();
+  default OrderByClause getOrderByClause() {
+    return null;
+  }
 
   /**
    * Returns the SKIP value if present.
+   * Defaults to null for non-query (control/admin/DDL/session) statements.
    *
    * @return SKIP value or null
    */
-  Expression getSkip();
+  default Expression getSkip() {
+    return null;
+  }
 
   /**
    * Returns the LIMIT value if present.
+   * Defaults to null for non-query (control/admin/DDL/session) statements.
    *
    * @return LIMIT value or null
    */
-  Expression getLimit();
+  default Expression getLimit() {
+    return null;
+  }
 
   /**
    * Returns the CREATE clause if present.
+   * Defaults to null for non-query (control/admin/DDL/session) statements.
    *
    * @return CREATE clause or null
    */
-  CreateClause getCreateClause();
+  default CreateClause getCreateClause() {
+    return null;
+  }
 
   /**
    * Returns the SET clause if present.
+   * Defaults to null for non-query (control/admin/DDL/session) statements.
    *
    * @return SET clause or null
    */
-  SetClause getSetClause();
+  default SetClause getSetClause() {
+    return null;
+  }
 
   /**
    * Returns the DELETE clause if present.
+   * Defaults to null for non-query (control/admin/DDL/session) statements.
    *
    * @return DELETE clause or null
    */
-  DeleteClause getDeleteClause();
+  default DeleteClause getDeleteClause() {
+    return null;
+  }
 
   /**
    * Returns the MERGE clause if present.
+   * Defaults to null for non-query (control/admin/DDL/session) statements.
    *
    * @return MERGE clause or null
    */
-  MergeClause getMergeClause();
+  default MergeClause getMergeClause() {
+    return null;
+  }
 
   /**
    * Returns the UNWIND clauses if present.
+   * Defaults to an empty list for non-query (control/admin/DDL/session) statements.
    *
    * @return list of UNWIND clauses (may be empty)
    */
-  List<UnwindClause> getUnwindClauses();
+  default List<UnwindClause> getUnwindClauses() {
+    return List.of();
+  }
 
   /**
    * Returns the WITH clauses if present.
    * WITH clauses enable query chaining by projecting and transforming results.
+   * Defaults to an empty list for non-query (control/admin/DDL/session) statements.
    *
    * @return list of WITH clauses (may be empty)
    */
-  List<WithClause> getWithClauses();
+  default List<WithClause> getWithClauses() {
+    return List.of();
+  }
 
   /**
    * Returns all clauses in the order they appear in the query.
@@ -216,6 +261,27 @@ public interface CypherStatement {
    * A query with FINISH never returns rows, even when MATCH would otherwise produce results.
    */
   default boolean hasFinishClause() {
+    return false;
+  }
+
+  /**
+   * Returns true when this is a server/session control statement (transaction control such as
+   * {@code START TRANSACTION}/{@code COMMIT}/{@code ROLLBACK}, or session management such as
+   * {@code SESSION SET}/{@code RESET}/{@code CLOSE}).
+   * <p>
+   * These statements sit on two deliberately decoupled axes, which this single predicate names so the
+   * split no longer needs parallel comments at each call site (issue #4505):
+   * <ul>
+   *   <li>{@link #isReadOnly()} returns {@code false}, so they are <em>not</em> idempotent: HA routes them
+   *       to the leader and Bolt sends them through {@code command()} (the only path that dispatches them).</li>
+   *   <li>They read and write no data of their own, so the MCP permission axis
+   *       ({@code OpenCypherQueryEngine.getOperationTypes()}) gates them as least-privilege
+   *       {@code OperationType.READ}; the work they wrap is gated separately by its own operation types.</li>
+   * </ul>
+   *
+   * @return true for transaction-control / session-management statements, false otherwise
+   */
+  default boolean isServerControlStatement() {
     return false;
   }
 }

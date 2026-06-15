@@ -57,12 +57,8 @@ public class SQLFunctionVectorLInfNorm extends SQLFunctionVectorAbstract {
 
     // Calculate L∞ norm: max absolute value
     float maxAbs = 0.0f;
-    for (final float value : vector) {
-      final float abs = Math.abs(value);
-      if (abs > maxAbs) {
-        maxAbs = abs;
-      }
-    }
+    for (final float value : vector)
+      maxAbs = Math.max(maxAbs, Math.abs(value));
 
     return maxAbs;
   }

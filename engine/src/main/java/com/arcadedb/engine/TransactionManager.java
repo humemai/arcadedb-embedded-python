@@ -97,7 +97,9 @@ public class TransactionManager {
                   LogManager.instance().setContext(logContext);
 
                 checkWALFiles();
-                cleanWALFiles(true, false);
+                // Runtime WAL rotation: fsync the data files before a rotated WAL is dropped, so a power
+                // loss cannot lose pages that were only write()'n to the OS cache (issue #4509).
+                cleanWALFiles(true, false, true);
               } finally {
                 taskExecuting.countDown();
               }
@@ -245,16 +247,24 @@ public class TransactionManager {
       }
 
       if (activeWALFilePool.length > 0) {
+        long lastTxId = -1;
+        boolean walGapDetected = false;
+
         final WALFile.WALTransaction[] walPositions = new WALFile.WALTransaction[activeWALFilePool.length];
         for (int i = 0; i < activeWALFilePool.length; ++i) {
           final WALFile file = activeWALFilePool[i];
           walPositions[i] = file.getFirstTransaction();
+          // A torn first record followed by intact transactions is corruption, not a clean empty/EOF file:
+          // stopping silently would drop committed data (issue #4508). Abort recovery and preserve the WAL.
+          if (walPositions[i] == null && file.findNextValidTransactionPosition(0) >= 0) {
+            LogManager.instance().log(this, Level.SEVERE,
+                "Recovery aborted for database '%s': corrupt transaction record at the start of WAL file '%s' followed by valid transactions. WAL files have been preserved for manual inspection. No further transactions will be replayed.",
+                null, database, file);
+            walGapDetected = true;
+          }
         }
 
-        long lastTxId = -1;
-        boolean walGapDetected = false;
-
-        while (true) {
+        while (!walGapDetected) {
           int lowerTx = -1;
           long lowerTxId = -1;
 
@@ -285,7 +295,19 @@ public class TransactionManager {
             break;
           }
 
-          walPositions[lowerTx] = activeWALFilePool[lowerTx].getTransaction(walPositions[lowerTx].endPositionInLog);
+          final WALFile walFile = activeWALFilePool[lowerTx];
+          final long nextPos = walPositions[lowerTx].endPositionInLog;
+          final WALFile.WALTransaction nextTx = walFile.getTransaction(nextPos);
+          if (nextTx == null && walFile.findNextValidTransactionPosition(nextPos) >= 0) {
+            // A record is corrupt but intact transactions follow it: stopping here would silently drop
+            // committed data. Abort recovery and preserve the WAL files for manual inspection (issue #4508).
+            LogManager.instance().log(this, Level.SEVERE,
+                "Recovery aborted for database '%s': corrupt transaction record in WAL file '%s' at offset %d followed by valid transactions. WAL files have been preserved for manual inspection. No further transactions will be replayed.",
+                null, database, walFile, nextPos);
+            walGapDetected = true;
+            break;
+          }
+          walPositions[lowerTx] = nextTx;
         }
 
         // Only update the next-tx counter if recovery actually applied a transaction. When
@@ -419,7 +441,29 @@ public class TransactionManager {
                     + txPage.currentPageVersion + ") does not match with existent version (" + page.getVersion() + ") fileId="
                     + txPage.fileId);
           }
-          // forceApply: compaction page replication - write at the leader's version regardless of gap
+          // forceApply (compaction page replication) bypasses the version gap, but ONLY when the WAL
+          // entry rewrites the WHOLE content region. The follower's page is at version N while this
+          // entry carries N+K with K>1: it never saw the intermediate transactions, so the bytes
+          // outside [changesFrom, changesTo] do not correspond to the leader's baseline. Applying a
+          // partial delta would leave those bytes stale yet force the version forward to N+K, so every
+          // later MVCC check would pass over a silently corrupted page that then spreads across the
+          // cluster (issue #4510). A full-page payload (what serializeFilePagesAsWal ships) covers the
+          // entire content region, so it is safe regardless of the gap; a partial one is rejected here
+          // so the follower recovers via a full snapshot instead.
+          final int deltaSize = txPage.changesTo - txPage.changesFrom + 1;
+          final boolean fullPage =
+              txPage.changesFrom == BasePage.PAGE_HEADER_SIZE && deltaSize == file.getPageSize() - BasePage.PAGE_HEADER_SIZE;
+          if (!fullPage) {
+            LogManager.instance().log(this, Level.SEVERE,
+                "Refusing forceApply of partial delta for page %s over a stale baseline (WAL v.%d, db v.%d) fileId=%d: bytes outside the delta range would stay stale while the version is forced forward. A full-page snapshot is required.",
+                null, pageId, txPage.currentPageVersion, page.getVersion(), txPage.fileId);
+            if (ignoreErrors)
+              continue;
+            throw new WALVersionGapException(
+                "Refusing forceApply of partial delta for page " + pageId + " over a stale baseline (WAL v."
+                    + txPage.currentPageVersion + ", db v." + page.getVersion()
+                    + "): a full page is required to safely bypass the version gap, fileId=" + txPage.fileId);
+          }
         }
 
         LogManager.instance().log(this, Level.FINE, "Updating page %s versionInLog=%d versionInDB=%d (txId=%d)", null, pageId,
@@ -738,6 +782,25 @@ public class TransactionManager {
   }
 
   private boolean cleanWALFiles(final boolean dropFiles, final boolean force) {
+    return cleanWALFiles(dropFiles, force, false);
+  }
+
+  /**
+   * Removes inactive WAL files, either dropping them ({@code dropFiles}) or just closing them.
+   *
+   * @param dropFiles       when true the WAL files are physically deleted, otherwise only closed
+   * @param force           when true a file is removed even if it still has pages pending to flush
+   * @param syncDataOnDrop  when true the data files touched by the WAL are fsync'd before the WAL is dropped.
+   *                        {@code WALFile.notifyPageFlushed()} decrements the pending-pages counter right after a
+   *                        {@code write()} that only reaches the OS page cache, so {@code pendingPagesToFlush == 0}
+   *                        does not mean the data is durable. Dropping the WAL at that point would, on a power loss
+   *                        before the OS writes the dirty pages back, lose committed transactions and silently
+   *                        corrupt later transactions on the same pages (issue #4509). Used by the runtime WAL
+   *                        rotation path; the clean-close path already fsyncs via {@code FileManager.syncFiles()}
+   *                        before it gets here.
+   */
+  private boolean cleanWALFiles(final boolean dropFiles, final boolean force, final boolean syncDataOnDrop) {
+    boolean dataSynced = false;
     for (final Iterator<WALFile> it = inactiveWALFilePool.iterator(); it.hasNext(); ) {
       final WALFile file = it.next();
 
@@ -748,9 +811,15 @@ public class TransactionManager {
           statsPagesWritten.addAndGet((Long) fileStats.get("pagesWritten"));
           statsBytesWritten.addAndGet((Long) fileStats.get("bytesWritten"));
 
-          if (dropFiles)
+          if (dropFiles) {
+            // Make the data pages durable before the WAL that protects them is deleted. fsync once, lazily,
+            // right before the first WAL file is actually dropped in this pass (issue #4509).
+            if (syncDataOnDrop && !dataSynced) {
+              database.getFileManager().syncFiles();
+              dataSynced = true;
+            }
             file.drop();
-          else
+          } else
             file.close();
 
         } catch (final IOException e) {

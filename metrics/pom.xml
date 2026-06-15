@@ -25,7 +25,7 @@
     <parent>
         <groupId>com.arcadedb</groupId>
         <artifactId>arcadedb-parent</artifactId>
-        <version>26.6.1</version>
+        <version>26.7.1-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -34,7 +34,7 @@
     <name>ArcadeDB Metrics</name>
 
     <properties>
-        <micrometer.version>1.16.5</micrometer.version>
+        <micrometer.version>1.17.0</micrometer.version>
     </properties>
 
     <dependencies>
@@ -47,6 +47,11 @@
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
+            <version>${micrometer.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-otlp</artifactId>
             <version>${micrometer.version}</version>
         </dependency>
         <dependency>

@@ -23,8 +23,10 @@ import org.junit.jupiter.api.Test;
 
 import java.time.ZoneId;
 import java.util.Map;
+import java.util.TimeZone;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for OpenCypher date functions.
@@ -128,6 +130,28 @@ class OpenCypherDateFunctionsTest {
     assertThat(fn.execute(new Object[]{null, "year"}, null)).isNull();
   }
 
+  @Test
+  void dateFieldIsoWeekAtYearBoundary() {
+    final DateField fn = new DateField();
+
+    // 2023-01-01 (Sunday) belongs to ISO-8601 week 52 of the week-based-year 2022, not week 0.
+    // Pin the timezone so the millis -> local-date conversion is deterministic.
+    final TimeZone previous = TimeZone.getDefault();
+    try {
+      TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+
+      final long jan1_2023 = 1672531200000L; // 2023-01-01 00:00:00 UTC
+      assertThat(fn.execute(new Object[]{jan1_2023, "weekofyear"}, null)).isEqualTo(52L);
+      assertThat(fn.execute(new Object[]{jan1_2023, "week"}, null)).isEqualTo(52L);
+
+      // 2023-01-02 (Monday) is the start of ISO week 1
+      final long jan2_2023 = 1672617600000L; // 2023-01-02 00:00:00 UTC
+      assertThat(fn.execute(new Object[]{jan2_2023, "weekofyear"}, null)).isEqualTo(1L);
+    } finally {
+      TimeZone.setDefault(previous);
+    }
+  }
+
   // ============ DateFields tests ============
 
   @Test
@@ -202,6 +226,25 @@ class OpenCypherDateFunctionsTest {
   void dateConvertNullHandling() {
     final DateConvert fn = new DateConvert();
     assertThat(fn.execute(new Object[]{null, "ms", "s"}, null)).isNull();
+  }
+
+  @Test
+  void dateConvertDaysToMillis() {
+    final DateConvert fn = new DateConvert();
+
+    // 100 days to milliseconds: well within long range, must be exact and positive
+    final long result = (Long) fn.execute(new Object[]{100L, "d", "ms"}, null);
+    assertThat(result).isEqualTo(100L * 86_400_000L);
+  }
+
+  @Test
+  void dateConvertOverflowThrows() {
+    final DateConvert fn = new DateConvert();
+
+    // 1_000_000_000_000 days * 86_400_000 ms overflows long: must throw, not silently return a negative number
+    assertThatThrownBy(() -> fn.execute(new Object[]{1_000_000_000_000L, "d", "ms"}, null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("overflow");
   }
 
   // ============ DateToISO8601 tests ============

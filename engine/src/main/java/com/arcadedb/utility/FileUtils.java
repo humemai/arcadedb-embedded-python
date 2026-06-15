@@ -42,6 +42,7 @@ import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.logging.Level;
 import java.util.zip.GZIPOutputStream;
@@ -153,7 +154,10 @@ public class FileUtils {
   }
 
   public static void checkValidName(final String iFileName) throws IOException {
-    if (iFileName.contains("..") || iFileName.contains(File.separator))
+    // Reject both '/' and '\' on every platform (the OS/JVM treat both as separators) and the '.'/'..' directory sentinels.
+    // The substring ".." is allowed inside a name (e.g. "a..b"); only a name equal to ".." is a traversal.
+    if (iFileName == null || iFileName.isEmpty() || iFileName.indexOf('/') > -1 || iFileName.indexOf('\\') > -1
+        || iFileName.equals(".") || iFileName.equals(".."))
       throw new IOException("Invalid file name '" + iFileName + "'");
   }
 
@@ -453,7 +457,7 @@ public class FileUtils {
     int line = 1;
     for (int i = 0; i < text.length(); i++) {
       final char current = text.charAt(i);
-      final Character next = i + 1 < text.length() ? text.charAt(i) : null;
+      final Character next = i + 1 < text.length() ? text.charAt(i + 1) : null;
       if (current == '\n') {
         ++line;
         result.append(String.format("\n%-" + maxLineDigits + "d: ", line));
@@ -491,17 +495,17 @@ public class FileUtils {
   }
 
   public static byte[] readFileAsBytes(final File file) throws IOException {
-    final byte[] bytes = new byte[(int) file.length()];
-    try (FileInputStream fis = new FileInputStream(file)) {
-      fis.read(bytes);
-    }
-    return bytes;
+    return Files.readAllBytes(file.toPath());
   }
 
   public static byte[] readFileAsBytes(final File file, final int maxBytes) throws IOException {
     final byte[] bytes = new byte[maxBytes];
     try (FileInputStream fis = new FileInputStream(file)) {
-      fis.read(bytes);
+      // readNBytes() loops until the buffer is filled or EOF is reached: FileInputStream.read() may return fewer bytes than requested
+      final int read = fis.readNBytes(bytes, 0, maxBytes);
+      if (read < maxBytes)
+        // file shorter than maxBytes: shrink the result to the bytes actually read instead of returning trailing zeros
+        return Arrays.copyOf(bytes, read);
     }
     return bytes;
   }

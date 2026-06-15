@@ -29,6 +29,7 @@ import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.exception.TransactionException;
 import com.arcadedb.network.binary.QuorumNotReachedException;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
+import com.arcadedb.serializer.json.JSONException;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.Pair;
 import org.junit.jupiter.api.AfterEach;
@@ -37,15 +38,20 @@ import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.ConnectException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -225,6 +231,66 @@ class RemoteHttpComponentTest {
     final Exception result = component.manageException(response, "test");
 
     assertThat(result).isInstanceOf(RecordNotFoundException.class);
+  }
+
+  // Regression tests for issue #4551: manageException must not throw StringIndexOutOfBoundsException
+  // while parsing the RID out of a RecordNotFoundException detail message.
+
+  @Test
+  void manageExceptionRecordNotFoundNoHash() {
+    // detail without '#': begin == -1, the old code did substring(-1, end) -> StringIndexOutOfBoundsException
+    final JSONObject json = new JSONObject();
+    json.put("exception", RecordNotFoundException.class.getName());
+    json.put("detail", "Record not found");
+
+    final HttpResponse<String> response = createMockResponse(404, json.toString());
+    final Exception result = component.manageException(response, "test");
+
+    assertThat(result).isInstanceOf(RecordNotFoundException.class);
+    assertThat(((RecordNotFoundException) result).getRID()).isNull();
+    assertThat(result.getMessage()).isEqualTo("Record not found");
+  }
+
+  @Test
+  void manageExceptionRecordNotFoundNoTrailingSpace() {
+    // detail with '#' but no trailing space after the RID: end == -1, the old code did substring(begin, -1) -> throws
+    final JSONObject json = new JSONObject();
+    json.put("exception", RecordNotFoundException.class.getName());
+    json.put("detail", "Cannot find record #12:7");
+
+    final HttpResponse<String> response = createMockResponse(404, json.toString());
+    final Exception result = component.manageException(response, "test");
+
+    assertThat(result).isInstanceOf(RecordNotFoundException.class);
+    assertThat(((RecordNotFoundException) result).getRID()).isNotNull();
+    assertThat(((RecordNotFoundException) result).getRID().toString()).isEqualTo("#12:7");
+  }
+
+  @Test
+  void manageExceptionRecordNotFoundNullDetail() {
+    // No detail field: detail defaults to "Unknown" (no '#') -> must not throw, RID null
+    final JSONObject json = new JSONObject();
+    json.put("exception", RecordNotFoundException.class.getName());
+
+    final HttpResponse<String> response = createMockResponse(404, json.toString());
+    final Exception result = component.manageException(response, "test");
+
+    assertThat(result).isInstanceOf(RecordNotFoundException.class);
+    assertThat(((RecordNotFoundException) result).getRID()).isNull();
+  }
+
+  @Test
+  void manageExceptionRecordNotFoundMalformedRid() {
+    // detail with a '#' but a malformed RID token: RID parsing fails -> fall back to null RID, still typed exception
+    final JSONObject json = new JSONObject();
+    json.put("exception", RecordNotFoundException.class.getName());
+    json.put("detail", "Record #notARid not found");
+
+    final HttpResponse<String> response = createMockResponse(404, json.toString());
+    final Exception result = component.manageException(response, "test");
+
+    assertThat(result).isInstanceOf(RecordNotFoundException.class);
+    assertThat(((RecordNotFoundException) result).getRID()).isNull();
   }
 
   @Test
@@ -639,5 +705,248 @@ class RemoteHttpComponentTest {
     component.setStickyTransactionServer(new Pair<>("leader-host", 2480));
 
     assertThat(component.getUrl("command")).isEqualTo("http://localhost:2480/api/v1/command");
+  }
+
+  // Regression tests for issue #4550: getLeaderAddress NPE when leaderServer is null
+
+  @Test
+  void getLeaderAddressReturnsNullWhenNoLeader() {
+    // TestableRemoteHttpComponent keeps requestClusterConfiguration() as a no-op,
+    // so leaderServer stays null after construction.
+    assertThat(component.getLeaderAddress()).isNull();
+  }
+
+  @Test
+  void getLeaderAddressFormatsAddressWhenLeaderIsKnown() throws Exception {
+    final Field f = RemoteHttpComponent.class.getDeclaredField("leaderServer");
+    f.setAccessible(true);
+    f.set(component, new Pair<>("db-leader.example.com", 2480));
+
+    assertThat(component.getLeaderAddress()).isEqualTo("db-leader.example.com:2480");
+  }
+
+  // Regression tests for issue #4579: getNextReplicaAddress AIOOBE race when the replica list shrinks
+  // (cleared/repopulated by requestClusterConfiguration) between the size check and the get().
+
+  @SuppressWarnings("unchecked")
+  private Pair<String, Integer> invokeGetNextReplicaAddress(final RemoteHttpComponent c) throws Exception {
+    final Method m = RemoteHttpComponent.class.getDeclaredMethod("getNextReplicaAddress");
+    m.setAccessible(true);
+    try {
+      return (Pair<String, Integer>) m.invoke(c);
+    } catch (final InvocationTargetException e) {
+      throw (e.getCause() instanceof Exception ex) ? ex : new RuntimeException(e.getCause());
+    }
+  }
+
+  private void invokePublishReplicaServerList(final RemoteHttpComponent c, final List<Pair<String, Integer>> list)
+      throws Exception {
+    final Method m = RemoteHttpComponent.class.getDeclaredMethod("publishReplicaServerList", List.class);
+    m.setAccessible(true);
+    m.invoke(c, list);
+  }
+
+  @Test
+  void getNextReplicaAddressReturnsLeaderWhenNoReplicas() throws Exception {
+    final Field f = RemoteHttpComponent.class.getDeclaredField("leaderServer");
+    f.setAccessible(true);
+    f.set(component, new Pair<>("leader-host", 2480));
+
+    invokePublishReplicaServerList(component, new ArrayList<>());
+
+    assertThat(invokeGetNextReplicaAddress(component)).isEqualTo(new Pair<>("leader-host", 2480));
+  }
+
+  @Test
+  void getNextReplicaAddressCyclesRoundRobin() throws Exception {
+    final List<Pair<String, Integer>> replicas = new ArrayList<>(List.of(
+        new Pair<>("r0", 2480), new Pair<>("r1", 2480), new Pair<>("r2", 2480)));
+    invokePublishReplicaServerList(component, replicas);
+
+    assertThat(invokeGetNextReplicaAddress(component)).isEqualTo(new Pair<>("r0", 2480));
+    assertThat(invokeGetNextReplicaAddress(component)).isEqualTo(new Pair<>("r1", 2480));
+    assertThat(invokeGetNextReplicaAddress(component)).isEqualTo(new Pair<>("r2", 2480));
+    // Wraps around back to the first replica.
+    assertThat(invokeGetNextReplicaAddress(component)).isEqualTo(new Pair<>("r0", 2480));
+  }
+
+  @Test
+  void publishReplicaServerListResetsRoundRobinCursor() throws Exception {
+    invokePublishReplicaServerList(component, new ArrayList<>(List.of(
+        new Pair<>("r0", 2480), new Pair<>("r1", 2480), new Pair<>("r2", 2480))));
+
+    // Advance the cursor near the end of the list.
+    invokeGetNextReplicaAddress(component);
+    invokeGetNextReplicaAddress(component);
+    invokeGetNextReplicaAddress(component);
+
+    // A topology change shrinks the cluster to a single replica. The cursor must reset so the next
+    // read does not address a stale, out-of-range index.
+    invokePublishReplicaServerList(component, new ArrayList<>(List.of(new Pair<>("only", 2480))));
+
+    assertThat(invokeGetNextReplicaAddress(component)).isEqualTo(new Pair<>("only", 2480));
+    assertThat(invokeGetNextReplicaAddress(component)).isEqualTo(new Pair<>("only", 2480));
+  }
+
+  /**
+   * Reproduces issue #4579: one thread continuously rebuilds the replica list with sizes that vary
+   * (including empty) while another thread calls getNextReplicaAddress(). The pre-fix reader re-read
+   * the replicaServerList field three times (isEmpty / size / get), so a list shrunk between those
+   * reads produced an ArrayIndexOutOfBoundsException. The fixed reader snapshots the reference once and
+   * never goes out of bounds.
+   */
+  @Test
+  void getNextReplicaAddressIsRaceFreeWhenReplicaListRebuilt() throws Exception {
+    final Field f = RemoteHttpComponent.class.getDeclaredField("leaderServer");
+    f.setAccessible(true);
+    f.set(component, new Pair<>("leader-host", 2480));
+
+    invokePublishReplicaServerList(component, new ArrayList<>(List.of(
+        new Pair<>("r0", 2480), new Pair<>("r1", 2480), new Pair<>("r2", 2480))));
+
+    final int iterations = 200_000;
+    final AtomicReference<Throwable> failure = new AtomicReference<>();
+
+    final Thread rebuilder = new Thread(() -> {
+      try {
+        for (int i = 0; i < iterations && failure.get() == null; i++) {
+          final int size = i % 5; // cycles 0..4, including the empty list that triggered the AIOOBE
+          final List<Pair<String, Integer>> list = new ArrayList<>(size);
+          for (int j = 0; j < size; j++)
+            list.add(new Pair<>("r" + j, 2480));
+          invokePublishReplicaServerList(component, list);
+        }
+      } catch (final Throwable t) {
+        failure.compareAndSet(null, t);
+      }
+    });
+
+    final Thread reader = new Thread(() -> {
+      try {
+        for (int i = 0; i < iterations && failure.get() == null; i++)
+          invokeGetNextReplicaAddress(component);
+      } catch (final Throwable t) {
+        failure.compareAndSet(null, t);
+      }
+    });
+
+    rebuilder.start();
+    reader.start();
+    rebuilder.join();
+    reader.join();
+
+    assertThat(failure.get()).isNull();
+  }
+
+  // Regression tests for issue #4580: httpCommand's catch-all must not bury a malformed server
+  // response or a callback-side bug as a generic RemoteException.
+
+  /**
+   * A HTTP 200 with a body that is not valid JSON is a protocol/transport problem. It must surface as a
+   * clearly-labelled RemoteException ("Malformed server response") carrying the JSONException as cause, so it
+   * is distinguishable from a network failure or a callback bug.
+   */
+  @Test
+  void httpCommandMalformedJsonResponseThrowsLabelledRemoteException() throws Exception {
+    withOneShotHttp200Server("this is { not : valid : json", port -> {
+      final TestableRemoteHttpComponent c = new TestableRemoteHttpComponent("127.0.0.1", port, "root", "test");
+      try {
+        assertThatThrownBy(() -> c.httpCommand("GET", null, "server", null, null, null, false, false,
+            (response, json) -> json))
+            .isInstanceOf(RemoteException.class)
+            .hasMessageContaining("Malformed server response")
+            .hasCauseInstanceOf(JSONException.class);
+      } finally {
+        c.close();
+      }
+    });
+  }
+
+  /**
+   * A RuntimeException thrown from inside the callback (e.g. a NPE or any client-side bug) must propagate
+   * unchanged - same type, same message, original stack trace - instead of being wrapped as a generic
+   * RemoteException that hides the real cause.
+   */
+  @Test
+  void httpCommandCallbackRuntimeExceptionPropagatesUnchanged() throws Exception {
+    withOneShotHttp200Server("{}", port -> {
+      final TestableRemoteHttpComponent c = new TestableRemoteHttpComponent("127.0.0.1", port, "root", "test");
+      try {
+        assertThatThrownBy(() -> c.httpCommand("GET", null, "server", null, null, null, false, false,
+            (response, json) -> {
+              throw new IllegalStateException("callback boom");
+            }))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("callback boom");
+      } finally {
+        c.close();
+      }
+    });
+  }
+
+  /**
+   * A checked exception thrown from the callback (declared by the {@link RemoteHttpComponent.Callback}
+   * interface) is still wrapped as a RemoteException: it cannot propagate as-is and there is no more specific
+   * type to surface. This documents the preserved behaviour for the non-RuntimeException case.
+   */
+  @Test
+  void httpCommandCallbackCheckedExceptionWrappedAsRemoteException() throws Exception {
+    withOneShotHttp200Server("{}", port -> {
+      final TestableRemoteHttpComponent c = new TestableRemoteHttpComponent("127.0.0.1", port, "root", "test");
+      try {
+        assertThatThrownBy(() -> c.httpCommand("GET", null, "server", null, null, null, false, false,
+            (response, json) -> {
+              throw new java.text.ParseException("checked failure", 0);
+            }))
+            .isInstanceOf(RemoteException.class)
+            .hasCauseInstanceOf(java.text.ParseException.class);
+      } finally {
+        c.close();
+      }
+    });
+  }
+
+  @FunctionalInterface
+  private interface ServerAction {
+    void run(int port) throws Exception;
+  }
+
+  /**
+   * Starts a single-shot loopback HTTP server that replies to one request with "HTTP/1.1 200 OK" and the
+   * given body, then runs {@code action} against its port. The server thread drains the request headers
+   * before writing the response so the client does not block on the request body.
+   */
+  private void withOneShotHttp200Server(final String responseBody, final ServerAction action) throws Exception {
+    try (final ServerSocket serverSocket = new ServerSocket(0)) {
+      final int port = serverSocket.getLocalPort();
+
+      final Thread serverThread = new Thread(() -> {
+        try (final Socket client = serverSocket.accept()) {
+          final InputStream in = client.getInputStream();
+          final byte[] buf = new byte[8192];
+          int total = 0;
+          while (total < buf.length) {
+            final int n = in.read(buf, total, buf.length - total);
+            if (n < 0)
+              break;
+            total += n;
+            if (new String(buf, 0, total, StandardCharsets.ISO_8859_1).contains("\r\n\r\n"))
+              break;
+          }
+          final byte[] body = responseBody.getBytes(StandardCharsets.UTF_8);
+          final byte[] header = ("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + body.length
+              + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1);
+          client.getOutputStream().write(header);
+          client.getOutputStream().write(body);
+          client.getOutputStream().flush();
+        } catch (final Exception ignored) {
+          // best-effort: the test assertions cover the client side
+        }
+      });
+      serverThread.setDaemon(true);
+      serverThread.start();
+
+      action.run(port);
+    }
   }
 }

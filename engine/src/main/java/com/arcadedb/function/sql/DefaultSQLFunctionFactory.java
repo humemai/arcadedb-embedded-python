@@ -118,23 +118,20 @@ import com.arcadedb.function.sql.time.SQLFunctionRowNumber;
 import com.arcadedb.function.sql.time.SQLFunctionTsFirst;
 import com.arcadedb.function.sql.time.SQLFunctionTsLast;
 import com.arcadedb.function.sql.time.SQLFunctionPromQL;
-import com.arcadedb.function.sql.vector.SQLFunctionDenseVectorToSparse;
-import com.arcadedb.function.sql.vector.SQLFunctionMultiVectorScore;
-import com.arcadedb.function.sql.vector.SQLFunctionSparseVectorCreate;
-import com.arcadedb.function.sql.vector.SQLFunctionSparseVectorDot;
-import com.arcadedb.function.sql.vector.SQLFunctionSparseVectorToDense;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorAdd;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorApproxDistance;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorAvg;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorBoost;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorClip;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorCosineSimilarity;
+import com.arcadedb.function.sql.vector.SQLFunctionVectorDenseToSparse;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorDequantizeInt8;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorDimension;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorDiscover;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorDotProduct;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorHasInf;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorHasNaN;
+import com.arcadedb.function.sql.vector.SQLFunctionVectorHasNull;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorHybridScore;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorIsNormalized;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorL1Distance;
@@ -145,6 +142,7 @@ import com.arcadedb.function.sql.vector.SQLFunctionVectorMagnitude;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorMax;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorMin;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorMmr;
+import com.arcadedb.function.sql.vector.SQLFunctionVectorMultiScore;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorMultiply;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorFuse;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorNeighbors;
@@ -158,6 +156,9 @@ import com.arcadedb.function.sql.vector.SQLFunctionVectorRecommend;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorRerank;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorScale;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorScoreTransform;
+import com.arcadedb.function.sql.vector.SQLFunctionVectorSparseCreate;
+import com.arcadedb.function.sql.vector.SQLFunctionVectorSparseDot;
+import com.arcadedb.function.sql.vector.SQLFunctionVectorSparseToDense;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorSparsity;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorStdDev;
 import com.arcadedb.function.sql.vector.SQLFunctionVectorSubtract;
@@ -318,11 +319,14 @@ public final class DefaultSQLFunctionFactory extends SQLFunctionFactoryTemplate 
     register(SQLFunctionVectorSubtract.NAME, new SQLFunctionVectorSubtract());
     register(SQLFunctionVectorMultiply.NAME, new SQLFunctionVectorMultiply());
     register(SQLFunctionVectorScale.NAME, new SQLFunctionVectorScale());
-    // Vector Aggregations
-    register(SQLFunctionVectorSum.NAME, new SQLFunctionVectorSum());
-    register(SQLFunctionVectorAvg.NAME, new SQLFunctionVectorAvg());
-    register(SQLFunctionVectorMin.NAME, new SQLFunctionVectorMin());
-    register(SQLFunctionVectorMax.NAME, new SQLFunctionVectorMax());
+    // Vector Aggregations: registered as classes (not instances) so a fresh, isolated instance is created
+    // per query. These functions accumulate per-row state in instance fields; sharing a single instance
+    // leaked that state across independent queries (issue #3099: repeated SELECT vector.sum(...) returned
+    // increasing results) and was not thread-safe for concurrent queries.
+    register(SQLFunctionVectorSum.NAME, SQLFunctionVectorSum.class);
+    register(SQLFunctionVectorAvg.NAME, SQLFunctionVectorAvg.class);
+    register(SQLFunctionVectorMin.NAME, SQLFunctionVectorMin.class);
+    register(SQLFunctionVectorMax.NAME, SQLFunctionVectorMax.class);
     // Reranking Functions
     register(SQLFunctionVectorRRFScore.NAME, new SQLFunctionVectorRRFScore());
     register(SQLFunctionVectorNormalizeScores.NAME, new SQLFunctionVectorNormalizeScores());
@@ -335,12 +339,12 @@ public final class DefaultSQLFunctionFactory extends SQLFunctionFactoryTemplate 
     register(SQLFunctionVectorHybridScore.NAME, new SQLFunctionVectorHybridScore());
     register(SQLFunctionVectorScoreTransform.NAME, new SQLFunctionVectorScoreTransform());
     // Sparse Vectors
-    register(SQLFunctionSparseVectorCreate.NAME, new SQLFunctionSparseVectorCreate());
-    register(SQLFunctionSparseVectorDot.NAME, new SQLFunctionSparseVectorDot());
-    register(SQLFunctionSparseVectorToDense.NAME, new SQLFunctionSparseVectorToDense());
-    register(SQLFunctionDenseVectorToSparse.NAME, new SQLFunctionDenseVectorToSparse());
+    register(SQLFunctionVectorSparseCreate.NAME, new SQLFunctionVectorSparseCreate());
+    register(SQLFunctionVectorSparseDot.NAME, new SQLFunctionVectorSparseDot());
+    register(SQLFunctionVectorSparseToDense.NAME, new SQLFunctionVectorSparseToDense());
+    register(SQLFunctionVectorDenseToSparse.NAME, new SQLFunctionVectorDenseToSparse());
     // Multi-Vector Operations
-    register(SQLFunctionMultiVectorScore.NAME, new SQLFunctionMultiVectorScore());
+    register(SQLFunctionVectorMultiScore.NAME, new SQLFunctionVectorMultiScore());
     // Quantization & Optimization
     register(SQLFunctionVectorQuantizeInt8.NAME, new SQLFunctionVectorQuantizeInt8());
     register(SQLFunctionVectorQuantizeBinary.NAME, new SQLFunctionVectorQuantizeBinary());
@@ -356,6 +360,7 @@ public final class DefaultSQLFunctionFactory extends SQLFunctionFactoryTemplate 
     register(SQLFunctionVectorIsNormalized.NAME, new SQLFunctionVectorIsNormalized());
     register(SQLFunctionVectorHasNaN.NAME, new SQLFunctionVectorHasNaN());
     register(SQLFunctionVectorHasInf.NAME, new SQLFunctionVectorHasInf());
+    register(SQLFunctionVectorHasNull.NAME, new SQLFunctionVectorHasNull());
     register(SQLFunctionVectorClip.NAME, new SQLFunctionVectorClip());
     register(SQLFunctionVectorToString.NAME, new SQLFunctionVectorToString());
     // Existing

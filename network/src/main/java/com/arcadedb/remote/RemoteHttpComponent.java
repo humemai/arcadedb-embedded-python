@@ -34,6 +34,7 @@ import com.arcadedb.log.LogManager;
 import com.arcadedb.network.HostUtil;
 import com.arcadedb.network.binary.QuorumNotReachedException;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
+import com.arcadedb.serializer.json.JSONException;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.Pair;
 import com.arcadedb.utility.RWLockContext;
@@ -69,7 +70,7 @@ public class RemoteHttpComponent extends RWLockContext {
   private final   int                         originalPort;
   private final   String                      userName;
   private final   String                      userPassword;
-  private final   List<Pair<String, Integer>> replicaServerList         = new ArrayList<>();
+  private volatile List<Pair<String, Integer>> replicaServerList        = new ArrayList<>();
   protected final HttpClient                  httpClient;
   protected final DatabaseStats               stats                     = new DatabaseStats();
   protected final ContextConfiguration        configuration;
@@ -79,7 +80,7 @@ public class RemoteHttpComponent extends RWLockContext {
   private         int                         apiVersion                = 1;
   private         CONNECTION_STRATEGY         connectionStrategy        = CONNECTION_STRATEGY.ROUND_ROBIN;
   private volatile Pair<String, Integer>       leaderServer;
-  private          int                         currentReplicaServerIndex = -1;
+  private volatile int                         currentReplicaServerIndex = -1;
   private          int                         timeout;
   protected        String                      currentServer;
   protected        int                         currentPort;
@@ -325,7 +326,15 @@ public class RemoteHttpComponent extends RWLockContext {
           throw lastException;
         }
 
-        final JSONObject jsonResponse = new JSONObject(response.body());
+        // The server returned HTTP 200 but the body is not valid JSON: this is a protocol/transport
+        // problem, not a callback bug. Surface it as a clearly-labelled RemoteException (issue #4580)
+        // so it is not confused with a network failure or buried as a generic error.
+        final JSONObject jsonResponse;
+        try {
+          jsonResponse = new JSONObject(response.body());
+        } catch (final JSONException e) {
+          throw new RemoteException("Malformed server response for operation '" + operation + "'", e);
+        }
 
         if (callback == null)
           return null;
@@ -385,10 +394,14 @@ public class RemoteHttpComponent extends RWLockContext {
         }
         LogManager.instance().log(this, Level.WARNING,
             "Election in progress, retrying after %dms (retry=%d/%d)...", null, delayMs, retry, maxRetry);
-      } catch (final RemoteException | DuplicatedKeyException | TransactionException | TimeoutException |
-                     SecurityException | RecordNotFoundException e) {
+      } catch (final RuntimeException e) {
+        // Propagate any RuntimeException unchanged (issue #4580): a callback-side bug (e.g. NPE), a
+        // malformed-response RemoteException, or a typed ArcadeDB exception (DuplicatedKeyException,
+        // TransactionException, TimeoutException, SecurityException, RecordNotFoundException, ...) must
+        // keep its original type and stack trace instead of being buried as a generic RemoteException.
         throw e;
       } catch (final Exception e) {
+        // Only checked exceptions thrown by the callback reach here: wrap them as a RemoteException.
         throw new RemoteException("Error on executing remote operation " + operation + " (cause: " + e.getMessage() + ")", e);
       }
     }
@@ -409,7 +422,8 @@ public class RemoteHttpComponent extends RWLockContext {
   }
 
   public String getLeaderAddress() {
-    return leaderServer.getFirst() + ":" + leaderServer.getSecond();
+    final Pair<String, Integer> snapshot = leaderServer;
+    return snapshot != null ? snapshot.getFirst() + ":" + snapshot.getSecond() : null;
   }
 
   public List<String> getReplicaAddresses() {
@@ -457,14 +471,14 @@ public class RemoteHttpComponent extends RWLockContext {
           .log(this, Level.WARNING, "Unable to fetch cluster configuration from %s:%d, using direct connection (%s)",
               null, currentServer, currentPort, e.getMessage());
       leaderServer = new Pair<>(originalServer, originalPort);
-      replicaServerList.clear();
+      publishReplicaServerList(new ArrayList<>());
       return;
     }
 
     try {
       if (!response.has("ha")) {
         leaderServer = new Pair<>(originalServer, originalPort);
-        replicaServerList.clear();
+        publishReplicaServerList(new ArrayList<>());
         return;
       }
 
@@ -478,8 +492,10 @@ public class RemoteHttpComponent extends RWLockContext {
 
       final String cfgReplicaServers = (String) ha.get("replicaAddresses");
 
-      // PARSE SERVER LISTS
-      replicaServerList.clear();
+      // PARSE SERVER LISTS INTO A FRESH LIST, THEN PUBLISH IT ATOMICALLY (SEE publishReplicaServerList).
+      // Never mutate the live list in place: a concurrent getNextReplicaAddress() could observe a
+      // non-empty size and then read past the end after a clear() (issue #4579).
+      final List<Pair<String, Integer>> newReplicaServerList = new ArrayList<>();
 
       if (cfgReplicaServers != null && !cfgReplicaServers.isEmpty()) {
         final String[] serverEntries = cfgReplicaServers.split(",");
@@ -489,12 +505,14 @@ public class RemoteHttpComponent extends RWLockContext {
             final String sHost = serverParts[0];
             final int sPort = Integer.parseInt(serverParts[1]);
 
-            replicaServerList.add(new Pair(sHost, sPort));
+            newReplicaServerList.add(new Pair(sHost, sPort));
           } catch (Exception e) {
             LogManager.instance().log(this, Level.SEVERE, "Invalid replica server address '%s'", null, serverEntry);
           }
         }
       }
+
+      publishReplicaServerList(newReplicaServerList);
 
       LogManager.instance()
           .log(this, Level.FINE, "Remote Database configured with leader=%s and replicas=%s strategy=%s",
@@ -509,27 +527,44 @@ public class RemoteHttpComponent extends RWLockContext {
           .log(this, Level.WARNING, "Unable to parse cluster configuration, using direct connection (%s)",
               null, e.getMessage());
       leaderServer = new Pair<>(originalServer, originalPort);
-      replicaServerList.clear();
+      publishReplicaServerList(new ArrayList<>());
     }
   }
 
+  /**
+   * Atomically replaces the replica server list with a freshly built one and resets the round-robin cursor.
+   * The list reference is volatile, so readers (e.g. {@link #getNextReplicaAddress}) that snapshot it observe
+   * either the complete old list or the complete new one, never an intermediate cleared state (issue #4579).
+   */
+  private void publishReplicaServerList(final List<Pair<String, Integer>> newList) {
+    this.replicaServerList = newList;
+    this.currentReplicaServerIndex = -1;
+  }
+
   private Pair<String, Integer> getNextReplicaAddress() {
-    if (replicaServerList.isEmpty())
+    // Snapshot the reference once: a concurrent publishReplicaServerList() may swap it at any time, but the
+    // local snapshot is stable for the size check and the get() below, so it can never go out of bounds.
+    final List<Pair<String, Integer>> snapshot = replicaServerList;
+    final int size = snapshot.size();
+    if (size == 0)
       return leaderServer;
 
-    ++currentReplicaServerIndex;
-    if (currentReplicaServerIndex > replicaServerList.size() - 1)
-      currentReplicaServerIndex = 0;
+    int index = currentReplicaServerIndex + 1;
+    if (index < 0 || index >= size)
+      index = 0;
+    currentReplicaServerIndex = index;
 
-    return replicaServerList.get(currentReplicaServerIndex);
+    return snapshot.get(index);
   }
 
   boolean reloadClusterConfiguration() {
     final Pair<String, Integer> oldLeader = leaderServer;
 
-    // ASK REPLICA FIRST
-    for (int replicaIdx = 0; replicaIdx < replicaServerList.size(); ++replicaIdx) {
-      final Pair<String, Integer> connectToServer = replicaServerList.get(replicaIdx);
+    // ASK REPLICA FIRST. Snapshot the reference: requestClusterConfiguration() below may swap the
+    // live list mid-loop, so iterate over the stable snapshot taken here (issue #4579).
+    final List<Pair<String, Integer>> snapshot = replicaServerList;
+    for (int replicaIdx = 0; replicaIdx < snapshot.size(); ++replicaIdx) {
+      final Pair<String, Integer> connectToServer = snapshot.get(replicaIdx);
 
       currentServer = connectToServer.getFirst();
       currentPort = connectToServer.getSecond();
@@ -607,9 +642,22 @@ public class RemoteHttpComponent extends RWLockContext {
         final int sep = detail.lastIndexOf('.');
         return new ServerIsNotTheLeaderException(sep > -1 ? detail.substring(0, sep) : detail, exceptionArgs);
       } else if (exception.equals(RecordNotFoundException.class.getName())) {
+        // PARSE THE RID OUT OF THE DETAIL MESSAGE (e.g. "Record #12:7 not found"). BE ROBUST: THE MESSAGE MAY NOT CONTAIN A '#',
+        // MAY NOT HAVE A TRAILING SPACE AFTER THE RID, OR MAY CARRY A MALFORMED TOKEN (see issue #4551). FALL BACK TO A null RID.
+        RID rid = null;
         final int begin = detail.indexOf("#");
-        final int end = detail.indexOf(" ", begin);
-        return new RecordNotFoundException(detail, new RID(detail.substring(begin, end)));
+        if (begin > -1) {
+          int end = detail.indexOf(" ", begin);
+          if (end < 0)
+            end = detail.length();
+          try {
+            rid = new RID(detail.substring(begin, end));
+          } catch (final Exception e) {
+            // INVALID RID FORMAT: KEEP rid null SO THE TYPED EXCEPTION IS STILL RETURNED
+            rid = null;
+          }
+        }
+        return new RecordNotFoundException(detail, rid);
       } else if (exception.equals(QuorumNotReachedException.class.getName())) {
         return new QuorumNotReachedException(detail);
       } else if (exception.equals(DuplicatedKeyException.class.getName()) && exceptionArgs != null) {

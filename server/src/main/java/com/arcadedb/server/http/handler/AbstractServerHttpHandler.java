@@ -20,6 +20,7 @@ package com.arcadedb.server.http.handler;
 
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.DatabaseFactory;
+import com.arcadedb.database.ProtocolContext;
 import com.arcadedb.exception.*;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
@@ -30,16 +31,22 @@ import com.arcadedb.server.http.IdempotencyCache;
 import com.arcadedb.server.security.ApiTokenConfiguration;
 import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.transport.RequestReplyReceiverContext;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.HeaderValues;
 import io.undertow.util.Headers;
 import io.undertow.util.HttpString;
+import io.undertow.util.PathTemplateMatch;
 import io.undertow.util.StatusCodes;
 
 import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.Deque;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
@@ -92,7 +99,38 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       return;
     }
 
+    // Always-on RED timer: capture the start of the worker-thread (or IO-thread for handlers that
+    // do not dispatch) request handling. Recorded in the finally block below into the
+    // arcadedb.http.requests Micrometer timer. When no tracer is registered this is metrics-only.
+    final long httpStartNanos = System.nanoTime();
+    ProtocolContext.set("http");
+
+    // Span-only Observation wrapping request handling. With no tracer registered the server's
+    // ObservationRegistry has no handlers, so this is a zero-overhead no-op and the default
+    // (tracing-disabled) behavior is unchanged. When the optional tracing plugin attaches a tracer
+    // the same code emits an OTLP span (continuing an inbound traceparent when present). HTTP
+    // latency metrics remain on the dedicated arcadedb.http.requests timer recorded in finally.
+    final Observation observation = Observation.createNotStarted("arcadedb.http.server.requests",
+            () -> {
+              // Built lazily: the supplier is only invoked when a tracer is attached, so the
+              // default (tracing-disabled) path allocates nothing. The carrier lets the tracing
+              // handler read an inbound W3C traceparent header to continue an upstream trace.
+              final RequestReplyReceiverContext<HttpServerExchange, Object> ctx = new RequestReplyReceiverContext<>(
+                  (carrier, key) -> carrier.getRequestHeaders().getFirst(key));
+              ctx.setCarrier(exchange);
+              return ctx;
+            }, httpServer.getServer().getObservationRegistry())
+        .lowCardinalityKeyValue("method", exchange.getRequestMethod().toString())
+        .lowCardinalityKeyValue("path", pathTemplate(exchange))
+        .lowCardinalityKeyValue("db", databaseTag(exchange));
+    observation.start();
+    // Open the scope inside the try so that if a misbehaving handler throws on scope-open the
+    // catch/finally still runs: the observation is stopped (not leaked) and the request is answered
+    // with an error rather than propagating an uncaught exception.
+    Observation.Scope observationScope = null;
+
     try {
+      observationScope = observation.openScope();
       LogManager.instance().setContext(httpServer.getServer().getServerName());
 
       exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
@@ -339,8 +377,66 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
               .log(this, getErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(), e.getMessage());
       sendErrorResponse(exchange, 500, "Internal error", e, null);
     } finally {
+      // Finalize the optional tracing span. Each step is isolated so a failure in the optional
+      // tracing layer can never skip the core cleanup or the RED timer below; closing the scope is
+      // attempted independently to avoid thread-local context leaking across pooled worker threads.
+      try {
+        observation.lowCardinalityKeyValue("status", Integer.toString(exchange.getStatusCode()));
+      } catch (final Throwable t) {
+        LogManager.instance().log(this, Level.WARNING, "Error tagging tracing observation", t);
+      }
+      try {
+        if (observationScope != null)
+          observationScope.close();
+      } catch (final Throwable t) {
+        LogManager.instance().log(this, Level.WARNING, "Error closing tracing observation scope", t);
+      }
+      try {
+        observation.stop();
+      } catch (final Throwable t) {
+        LogManager.instance().log(this, Level.WARNING, "Error stopping tracing observation", t);
+      }
+
+      ProtocolContext.clear();
       LogManager.instance().setContext(null);
+
+      Timer.builder("arcadedb.http.requests")
+          .description("HTTP request duration")
+          .tag("method", exchange.getRequestMethod().toString())
+          .tag("path", pathTemplate(exchange))
+          .tag("status", Integer.toString(exchange.getStatusCode()))
+          .tag("db", databaseTag(exchange))
+          .publishPercentileHistogram()
+          .register(Metrics.globalRegistry)
+          .record(System.nanoTime() - httpStartNanos, TimeUnit.NANOSECONDS);
     }
+  }
+
+  /**
+   * Returns a bounded, low-cardinality path tag for the request: the route template
+   * (e.g. {@code /command/{database}}) resolved by the Undertow routing handler, never the raw URI
+   * carrying the concrete database name. Falls back to the relative path for fixed routes
+   * registered without a path template.
+   */
+  private static String pathTemplate(final HttpServerExchange exchange) {
+    final PathTemplateMatch match = exchange.getAttachment(PathTemplateMatch.ATTACHMENT_KEY);
+    if (match != null)
+      return match.getMatchedTemplate();
+    return exchange.getRelativePath();
+  }
+
+  /**
+   * Returns the database name resolved from the route's {@code {database}} path parameter, or
+   * {@code none} for routes that are not database-scoped (e.g. {@code /ready}, {@code /server}).
+   */
+  private static String databaseTag(final HttpServerExchange exchange) {
+    final PathTemplateMatch match = exchange.getAttachment(PathTemplateMatch.ATTACHMENT_KEY);
+    if (match != null) {
+      final String db = match.getParameters().get("database");
+      if (db != null)
+        return db;
+    }
+    return "none";
   }
 
   /**

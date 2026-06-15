@@ -412,7 +412,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           }).sum();
         }
       } catch (Exception e) {
-        throw new DatabaseOperationException("Error calculating database size", e.getCause());
+        throw new DatabaseOperationException("Error calculating database size", e);
       }
     });
   }
@@ -778,7 +778,9 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       if (record != null)
         return true;
 
-      return schema.getBucketById(rid.getBucketId()).existsRecord(rid);
+      // A dangling RID can reference a bucket that no longer exists: the record simply does not exist. See issue #4501.
+      final LocalBucket bucket = schema.getBucketById(rid.getBucketId(), false);
+      return bucket != null && bucket.existsRecord(rid);
     });
   }
 
@@ -808,7 +810,14 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         loadRecordContent = loadContent;
 
       if (loadRecordContent || type == null) {
-        final Binary buffer = schema.getBucketById(rid.getBucketId()).getRecord(rid);
+        // A dangling index entry can reference an RID whose bucket no longer exists (e.g. the record/bucket
+        // was removed but the index entry survived). Treat it as a missing record so callers that already
+        // handle RecordNotFoundException (like index scans) can skip it, instead of aborting with a
+        // SchemaException ("Bucket with id 'NNN' was not found"). See issue #4501.
+        final LocalBucket bucket = schema.getBucketById(rid.getBucketId(), false);
+        if (bucket == null)
+          throw new RecordNotFoundException("Record " + rid + " not found", rid);
+        final Binary buffer = bucket.getRecord(rid);
         record = recordFactory.newImmutableRecord(wrappedDatabaseInstance, type, rid, buffer.copyOfContent(), null);
         record = invokeAfterReadEvents(record);
         if (record == null)
@@ -990,6 +999,11 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       final TransactionContext transaction = getTransaction();
       transaction.updateRecordInCache(record);
       transaction.updateBucketRecordDelta(bucket.getFileId(), +1);
+
+      // TRACK USER DOCUMENTS (NOT INTERNAL RECORDS LIKE EDGE SEGMENTS) SO A ROLLBACK CAN RESET THEIR IDENTITY AND ALLOW
+      // A CLEAN RE-INSERT INSTEAD OF AN UPDATE OF A MISSING RECORD (ISSUE #4562).
+      if (record instanceof MutableDocument)
+        transaction.registerNewRecord(record);
 
       if (record instanceof MutableDocument doc)
         indexer.createDocument(doc, doc.getType(), bucket);
@@ -1550,14 +1564,24 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   public ResultSet command(final String language, final String query) {
     checkDatabaseIsOpen(true, "Cannot execute command on a read only database");
     stats.commands.incrementAndGet();
-    return getQueryEngine(language).command(query, new ContextConfiguration());
+    final long start = QueryMetricsRecorder.Holder.startNanos();
+    try (final QueryTracer.Span span = QueryTracer.Holder.begin(name, language, "command", query)) {
+      return getQueryEngine(language).command(query, new ContextConfiguration());
+    } finally {
+      QueryMetricsRecorder.Holder.record(start, name, language, "command");
+    }
   }
 
   @Override
   public ResultSet command(final String language, final String query, final Object... parameters) {
     checkDatabaseIsOpen(true, "Cannot execute command on a read only database");
     stats.commands.incrementAndGet();
-    return getQueryEngine(language).command(query, new ContextConfiguration(), parameters);
+    final long start = QueryMetricsRecorder.Holder.startNanos();
+    try (final QueryTracer.Span span = QueryTracer.Holder.begin(name, language, "command", query)) {
+      return getQueryEngine(language).command(query, new ContextConfiguration(), parameters);
+    } finally {
+      QueryMetricsRecorder.Holder.record(start, name, language, "command");
+    }
   }
 
   @Override
@@ -1565,7 +1589,12 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       final Object... parameters) {
     checkDatabaseIsOpen(true, "Cannot execute command on a read only database");
     stats.commands.incrementAndGet();
-    return getQueryEngine(language).command(query, configuration, parameters);
+    final long start = QueryMetricsRecorder.Holder.startNanos();
+    try (final QueryTracer.Span span = QueryTracer.Holder.begin(name, language, "command", query)) {
+      return getQueryEngine(language).command(query, configuration, parameters);
+    } finally {
+      QueryMetricsRecorder.Holder.record(start, name, language, "command");
+    }
   }
 
   @Override
@@ -1578,7 +1607,12 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       final Map<String, Object> parameters) {
     checkDatabaseIsOpen(true, "Cannot execute command on a read only database");
     stats.commands.incrementAndGet();
-    return getQueryEngine(language).command(query, configuration, parameters);
+    final long start = QueryMetricsRecorder.Holder.startNanos();
+    try (final QueryTracer.Span span = QueryTracer.Holder.begin(name, language, "command", query)) {
+      return getQueryEngine(language).command(query, configuration, parameters);
+    } finally {
+      QueryMetricsRecorder.Holder.record(start, name, language, "command");
+    }
   }
 
   @Deprecated
@@ -1604,21 +1638,36 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   public ResultSet query(final String language, final String query) {
     checkDatabaseIsOpen();
     stats.queries.incrementAndGet();
-    return getQueryEngine(language).query(query, new ContextConfiguration());
+    final long start = QueryMetricsRecorder.Holder.startNanos();
+    try (final QueryTracer.Span span = QueryTracer.Holder.begin(name, language, "query", query)) {
+      return getQueryEngine(language).query(query, new ContextConfiguration());
+    } finally {
+      QueryMetricsRecorder.Holder.record(start, name, language, "query");
+    }
   }
 
   @Override
   public ResultSet query(final String language, final String query, final Object... parameters) {
     checkDatabaseIsOpen();
     stats.queries.incrementAndGet();
-    return getQueryEngine(language).query(query, new ContextConfiguration(), parameters);
+    final long start = QueryMetricsRecorder.Holder.startNanos();
+    try (final QueryTracer.Span span = QueryTracer.Holder.begin(name, language, "query", query)) {
+      return getQueryEngine(language).query(query, new ContextConfiguration(), parameters);
+    } finally {
+      QueryMetricsRecorder.Holder.record(start, name, language, "query");
+    }
   }
 
   @Override
   public ResultSet query(final String language, final String query, final Map<String, Object> parameters) {
     checkDatabaseIsOpen();
     stats.queries.incrementAndGet();
-    return getQueryEngine(language).query(query, new ContextConfiguration(), parameters);
+    final long start = QueryMetricsRecorder.Holder.startNanos();
+    try (final QueryTracer.Span span = QueryTracer.Holder.begin(name, language, "query", query)) {
+      return getQueryEngine(language).query(query, new ContextConfiguration(), parameters);
+    } finally {
+      QueryMetricsRecorder.Holder.record(start, name, language, "query");
+    }
   }
 
   @Override
@@ -2072,13 +2121,18 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     lockFile = new File(databasePath + "/database.lck");
 
     if (lockFile.exists()) {
+      if (mode == ComponentFile.MODE.READ_ONLY) {
+        // A READ_ONLY open cannot perform recovery: reject WITHOUT acquiring the exclusive write lock, so the OS file
+        // lock on database.lck is never taken (and therefore cannot be leaked). The marker is left untouched so the
+        // next READ_WRITE open still recovers.
+        lockFile = null;
+        throw new DatabaseMetadataException("Database needs recovery but has been open in read only mode");
+      }
+
       lockDatabase();
 
       // RECOVERY
       LogManager.instance().log(this, Level.WARNING, "Database '%s' was not closed properly last time", null, name);
-
-      if (mode == ComponentFile.MODE.READ_ONLY)
-        throw new DatabaseMetadataException("Database needs recovery but has been open in read only mode");
 
       // RESET THE COUNT OF RECORD IN CASE THE DATABASE WAS NOT CLOSED PROPERLY
       for (Bucket b : schema.getBuckets())
@@ -2117,8 +2171,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         serializer.setDateImplementation(configuration.getValue(GlobalConfiguration.DATE_IMPLEMENTATION));
         serializer.setDateTimeImplementation(configuration.getValue(GlobalConfiguration.DATE_TIME_IMPLEMENTATION));
 
-        if (mode == ComponentFile.MODE.READ_WRITE)
-          checkForRecovery();
+        checkForRecovery();
 
         if (security != null)
           security.updateSchema(this);
@@ -2139,10 +2192,61 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     } catch (final Exception e) {
       open = false;
 
+      // ISSUE #4511: RELEASE THE FILE LOCK AND CLOSE THE I/O RESOURCES ACQUIRED BEFORE THE FAILURE, OTHERWISE THE
+      // DATABASE STAYS PERMANENTLY UNOPENABLE WITHIN THIS JVM (AND THE LOCK FILE CANNOT BE REMOVED ON WINDOWS).
+      releaseResourcesOnOpenFailure();
+
       if (e instanceof DatabaseOperationException exception)
         throw exception;
 
+      // PRESERVE THE READ_ONLY-NEEDS-RECOVERY REJECTION (AND ANY OTHER METADATA ERROR) SO THE CALLER SEES THE REASON
+      // INSTEAD OF AN OPAQUE WRAPPED MESSAGE.
+      if (e instanceof DatabaseMetadataException exception)
+        throw exception;
+
       throw new DatabaseOperationException("Error on creating new database instance", e);
+    }
+  }
+
+  /**
+   * Releases the resources acquired during {@link #openInternal()} when the open fails partway through (issue #4511).
+   * In particular it releases the JVM file lock and closes the lock-file I/O channels, the {@link FileManager} and the
+   * {@link TransactionManager}. The {@code database.lck} marker is intentionally left on disk so the next open still
+   * performs recovery. Every step is best-effort and isolated so a failure in one does not skip the others.
+   */
+  private void releaseResourcesOnOpenFailure() {
+    try {
+      if (lockFile != null) {
+        if (lockFileLock != null) {
+          lockFileLock.release();
+          lockFileLock = null;
+        }
+        if (lockFileIOChannel != null) {
+          lockFileIOChannel.close();
+          lockFileIOChannel = null;
+        }
+        if (lockFileIO != null) {
+          lockFileIO.close();
+          lockFileIO = null;
+        }
+      }
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.WARNING, "Error on releasing lock file '%s' after a failed open", e, lockFile);
+    }
+
+    try {
+      if (fileManager != null)
+        fileManager.close();
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.WARNING, "Error on closing file manager after a failed open of database '%s'", e, name);
+    }
+
+    try {
+      if (transactionManager != null)
+        transactionManager.close(false);
+    } catch (final Exception e) {
+      LogManager.instance()
+          .log(this, Level.WARNING, "Error on closing transaction manager after a failed open of database '%s'", e, name);
     }
   }
 

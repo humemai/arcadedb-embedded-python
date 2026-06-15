@@ -84,20 +84,25 @@ public class RedisNetworkExecutor extends Thread {
 
   @Override
   public void run() {
-    while (!shutdown) {
-      try {
-        executeCommand(parseNext());
+    ProtocolContext.set("redis");
+    try {
+      while (!shutdown) {
+        try {
+          executeCommand(parseNext());
 
-        replyToClient(value);
+          replyToClient(value);
 
-      } catch (final EOFException | SocketException e) {
-        LogManager.instance().log(this, Level.FINE, "Redis wrapper: Error on reading request", e);
-        close();
-      } catch (final SocketTimeoutException e) {
-        // IGNORE IT
-      } catch (final IOException e) {
-        LogManager.instance().log(this, Level.SEVERE, "Redis wrapper: Error on reading request", e);
+        } catch (final EOFException | SocketException e) {
+          LogManager.instance().log(this, Level.FINE, "Redis wrapper: Error on reading request", e);
+          close();
+        } catch (final SocketTimeoutException e) {
+          // IGNORE IT
+        } catch (final IOException e) {
+          LogManager.instance().log(this, Level.SEVERE, "Redis wrapper: Error on reading request", e);
+        }
       }
+    } finally {
+      ProtocolContext.clear();
     }
   }
 
@@ -135,7 +140,13 @@ public class RedisNetworkExecutor extends Thread {
 
       final String cmdString = ((String) cmd).toUpperCase(Locale.ENGLISH);
 
-      try {
+      // Redis maps commands directly to engine operations rather than going through
+      // Database.query/command, so the engine-boundary span never fires for it. Open one here so
+      // Redis is traced like the other protocols (protocol=redis comes from ProtocolContext, set in
+      // run()). No query language applies to a native Redis command, so language is null. No-op
+      // unless the tracing plugin is active.
+      try (final QueryTracer.Span span = QueryTracer.Holder.begin(
+          selectedDatabase != null ? selectedDatabase.getName() : null, null, "command", cmdString)) {
         switch (cmdString) {
           case "DECR":
             decrBy(list);

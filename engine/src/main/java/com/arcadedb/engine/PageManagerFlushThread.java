@@ -26,6 +26,7 @@ import com.arcadedb.exception.DatabaseMetadataException;
 import com.arcadedb.log.LogManager;
 
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -49,8 +50,13 @@ public class PageManagerFlushThread extends Thread {
   private final        AtomicReference<PagesToFlush>                            nextPagesToFlush    = new AtomicReference<>();
   private final        ConcurrentHashMap<Database, ConcurrentLinkedQueue<PagesToFlush>> deferredByDatabase = new ConcurrentHashMap<>();
 
-  /** O(1) index: pageId → most recent MutablePage in the flush queue or currently being flushed. */
-  private final        ConcurrentHashMap<PageId, MutablePage> pageIndex = new ConcurrentHashMap<>();
+  /**
+   * O(1) index: pageId → most recent MutablePage in the flush queue or currently being flushed.
+   * <p>
+   * Package-private (instead of private) so the white-box regression test for issue #4544 can set up
+   * and assert on entries directly.
+   */
+  final                ConcurrentHashMap<PageId, MutablePage> pageIndex = new ConcurrentHashMap<>();
 
   public static class PagesToFlush {
     public final BasicDatabase     database;
@@ -172,7 +178,7 @@ public class PageManagerFlushThread extends Thread {
                   LogManager.instance().log(this, Level.FINE, "Skipping page flush for closed database '%s'",
                       pagesToFlush.database.getName());
                   for (final MutablePage remaining : pagesToFlush.pages)
-                    pageIndex.remove(remaining.getPageId(), remaining);
+                    removeFromFlushIndex(remaining);
                   break;
                 }
                 try {
@@ -183,10 +189,9 @@ public class PageManagerFlushThread extends Thread {
                 } finally {
                   // Remove from index AFTER flushing: the page is now on disk and will be
                   // found in the read cache (putPageInReadCache was called at commit time).
-                  // Use remove(key, value) so that a NEWER version of the same page (committed
-                  // by a later TX while this batch was queued) is NOT removed from the index.
-                  // BasePage.equals() compares both pageId and version, so this is safe.
-                  pageIndex.remove(page.getPageId(), page);
+                  // Reference identity ensures a NEWER MutablePage for the same PageId (queued
+                  // by a later TX while this batch was waiting) is NOT removed from the index.
+                  removeFromFlushIndex(page);
                 }
               }
             }
@@ -226,7 +231,7 @@ public class PageManagerFlushThread extends Thread {
             } catch (final IOException e) {
               LogManager.instance().log(this, Level.WARNING, "Error on flushing deferred page '%s' to disk", e, page);
             } finally {
-              pageIndex.remove(page.getPageId(), page);
+              removeFromFlushIndex(page);
             }
           }
         }
@@ -272,6 +277,20 @@ public class PageManagerFlushThread extends Thread {
     join();
   }
 
+  /**
+   * Removes a just-flushed page from the {@link #pageIndex}, but ONLY if the indexed value is still the
+   * exact same instance that was flushed. A later transaction may have queued a NEWER {@link MutablePage}
+   * for the same {@link PageId}; that newer entry must survive so reads keep seeing the latest version.
+   * <p>
+   * Reference identity ({@code indexed == page}) is used here on purpose instead of {@code remove(key, value)}:
+   * {@link BasePage#equals} keys on the mutable {@code version} field, which is an unreliable discriminator
+   * for a hash-map value (issue #4544). The atomic {@code computeIfPresent} guarantees the check-and-remove
+   * happens as a single operation under the same concurrency guarantees as {@code remove(key, value)}.
+   */
+  void removeFromFlushIndex(final MutablePage page) {
+    pageIndex.computeIfPresent(page.getPageId(), (id, indexed) -> indexed == page ? null : indexed);
+  }
+
   public CachedPage getCachedPageFromMutablePageInQueue(final PageId pageId) {
     final MutablePage page = pageIndex.get(pageId);
     if (page != null)
@@ -290,5 +309,38 @@ public class PageManagerFlushThread extends Thread {
 
     // Also clean index entries for pages currently being flushed
     pageIndex.entrySet().removeIf(e -> database.equals(e.getKey().getDatabase()));
+  }
+
+  /** Drops every pending {@link MutablePage} of a single dropped file from the queue, the deferred batches and the index. */
+  public void removeAllPagesOfFile(final Database database, final int fileId) {
+    for (final PagesToFlush pagesToFlush : queue.stream().toList())
+      removePagesOfFileFromBatch(pagesToFlush, database, fileId);
+
+    // Also drain batches deferred while the database is suspended (e.g. during a backup): they are
+    // no longer in the main queue, so their MutablePages would otherwise leak until the unsuspend flush.
+    final ConcurrentLinkedQueue<PagesToFlush> deferred = deferredByDatabase.get(database);
+    if (deferred != null)
+      for (final PagesToFlush pagesToFlush : deferred)
+        removePagesOfFileFromBatch(pagesToFlush, database, fileId);
+
+    // Finally clean any index entry for a page currently being flushed.
+    pageIndex.entrySet()
+        .removeIf(e -> database.equals(e.getKey().getDatabase()) && e.getKey().getFileId() == fileId);
+  }
+
+  private void removePagesOfFileFromBatch(final PagesToFlush pagesToFlush, final Database database, final int fileId) {
+    // pages is null for the SHUTDOWN_THREAD marker.
+    if (pagesToFlush.pages == null || !database.equals(pagesToFlush.database))
+      return;
+
+    synchronized (pagesToFlush.pages) {
+      for (final Iterator<MutablePage> it = pagesToFlush.pages.iterator(); it.hasNext(); ) {
+        final MutablePage page = it.next();
+        if (page.getPageId().getFileId() == fileId) {
+          pageIndex.remove(page.getPageId());
+          it.remove();
+        }
+      }
+    }
   }
 }

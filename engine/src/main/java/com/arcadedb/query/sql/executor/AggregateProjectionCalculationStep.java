@@ -25,6 +25,7 @@ import com.arcadedb.query.sql.parser.Expression;
 import com.arcadedb.query.sql.parser.GroupBy;
 import com.arcadedb.query.sql.parser.Projection;
 import com.arcadedb.query.sql.parser.ProjectionItem;
+import com.arcadedb.schema.Type;
 
 import java.util.*;
 
@@ -42,6 +43,11 @@ public class AggregateProjectionCalculationStep extends ProjectionCalculationSte
     private final int hashCode;
 
     GroupByKey(final Object[] values) {
+      // Normalise numeric values to a canonical form so that numerically-equal keys represented with different
+      // numeric types (e.g. Integer(1) vs Long(1), or BigDecimal("1") vs BigDecimal("1.0")) end up in the same
+      // group instead of being split (issue #4516).
+      for (int i = 0; i < values.length; i++)
+        values[i] = Type.normalizeNumberForKey(values[i]);
       this.values = values;
       this.hashCode = Arrays.hashCode(values);
     }
@@ -98,12 +104,12 @@ public class AggregateProjectionCalculationStep extends ProjectionCalculationSte
 
       @Override
       public boolean hasNext() {
-        return localNext <= nRecords && nextItem < finalResults.size();
+        return localNext < nRecords && nextItem < finalResults.size();
       }
 
       @Override
       public Result next() {
-        if (localNext > nRecords || nextItem >= finalResults.size()) {
+        if (localNext >= nRecords || nextItem >= finalResults.size()) {
           throw new NoSuchElementException();
         }
         final Result result = finalResults.get(nextItem);
@@ -197,12 +203,12 @@ public class AggregateProjectionCalculationStep extends ProjectionCalculationSte
         }
       }
 
-      // Memory optimization: Clear the element reference from the input Result after processing
-      // This releases the full Document object and allows it to be garbage collected
-      // We've already extracted all needed values into the key and preAggr
-      if (next instanceof ResultInternal) {
-        ((ResultInternal) next).setElement(null);
-      }
+      // NOTE: we must NOT clear the element reference of the input Result here (issue #4590).
+      // Doing so is a destructive side effect on a row we do not own exclusively: when the same
+      // Result instance is referenced elsewhere (e.g. a materialized LET variable, a shared
+      // ResultSet replayed via reset(), or a parallel sub-plan) later reads of getElement()
+      // would silently return null. The local "next" reference is released at the end of each
+      // loop iteration anyway, so the previous micro-optimization provided no real GC benefit.
     } finally {
       if (context.isProfiling())
         cost += System.nanoTime() - begin;

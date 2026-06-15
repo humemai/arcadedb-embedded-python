@@ -82,6 +82,7 @@ public class ArcadeGraph implements Graph, Closeable {
   //private final   ArcadeVariableFeatures graphVariables = new ArcadeVariableFeatures();
   private final        ArcadeGraphTransaction      transaction;
   protected final      BasicDatabase               database;
+  private final        boolean                     sharedDatabase;
   protected final      BaseConfiguration           configuration  = new BaseConfiguration();
   private final static Iterator<Vertex>            EMPTY_VERTICES = Collections.emptyIterator();
   private final static Iterator<Edge>              EMPTY_EDGES    = Collections.emptyIterator();
@@ -115,13 +116,19 @@ public class ArcadeGraph implements Graph, Closeable {
     }
 
     this.database = db;
+    this.sharedDatabase = false;
 
     this.transaction = new ArcadeGraphTransaction(this);
     init();
   }
 
   protected ArcadeGraph(final BasicDatabase database) {
+    this(database, false);
+  }
+
+  protected ArcadeGraph(final BasicDatabase database, final boolean sharedDatabase) {
     this.database = database;
+    this.sharedDatabase = sharedDatabase;
     this.transaction = new ArcadeGraphTransaction(this);
     init();
   }
@@ -149,6 +156,15 @@ public class ArcadeGraph implements Graph, Closeable {
     return new ArcadeGraph(database);
   }
 
+  /**
+   * Opens a graph backed by a database whose lifecycle is managed externally (e.g. by ArcadeDBServer).
+   * Closing this graph will NOT close the underlying database, preventing unintended shutdown of a
+   * shared server-managed database.
+   */
+  public static ArcadeGraph openShared(final BasicDatabase database) {
+    return new ArcadeGraph(database, true);
+  }
+
 
   public ArcadeGremlin gremlin(final String query) {
     return new ArcadeGremlin(this, query);
@@ -156,6 +172,11 @@ public class ArcadeGraph implements Graph, Closeable {
 
   /**
    * Returns a Gremlin traversal. This traversal is executed outside the database's transaction if any.
+   * <p>
+   * The resolved traversal is cached for the lifetime of this instance. When the remote cluster topology is
+   * unknown at the time of the first call (no leader and no replicas, e.g. mid-failover), the slower embedded
+   * fallback is cached: callers that need to re-resolve the topology after a failover must recreate the
+   * {@code ArcadeGraph} instance.
    */
   public GraphTraversalSource traversal() {
     if (traversal != null)
@@ -165,12 +186,21 @@ public class ArcadeGraph implements Graph, Closeable {
       try {
         final List<String> remoteAddresses = new ArrayList<>();
 
-        remoteAddresses.add(remoteDatabase.getLeaderAddress());
+        final String leaderAddress = remoteDatabase.getLeaderAddress();
+        if (leaderAddress != null)
+          remoteAddresses.add(leaderAddress);
         remoteAddresses.addAll(remoteDatabase.getReplicaAddresses());
+
+        if (remoteAddresses.isEmpty()) {
+          // No leader and no replicas are known (e.g. non-HA server or mid-failover): fall back to the
+          // slower remote implementation rather than building a cluster with no contact points.
+          traversal = Graph.super.traversal();
+          return traversal;
+        }
 
         final String[] hosts = new String[remoteAddresses.size()];
         for (int i = 0; i < remoteAddresses.size(); i++)
-          hosts[i] = HostUtil.parseHostAddress(remoteAddresses.getFirst(), "" + GREMLIN_SERVER_PORT)[0];
+          hosts[i] = HostUtil.parseHostAddress(remoteAddresses.get(i), "" + GREMLIN_SERVER_PORT)[0];
 
         final GraphBinaryMessageSerializerV1 serializer = new GraphBinaryMessageSerializerV1(
             new TypeSerializerRegistry.Builder().addRegistry(new ArcadeIoRegistry()));
@@ -404,11 +434,16 @@ public class ArcadeGraph implements Graph, Closeable {
     }
 
     if (this.database != null) {
-      if (this.database.isTransactionActive())
-        this.database.commit();
-
-      this.database.close();
-
+      if (sharedDatabase) {
+        // Database lifecycle is managed externally; do not close it.
+        // Roll back any open transaction to avoid leaving stale state.
+        if (this.database.isTransactionActive())
+          this.database.rollback();
+      } else {
+        if (this.database.isTransactionActive())
+          this.database.commit();
+        this.database.close();
+      }
     }
   }
 

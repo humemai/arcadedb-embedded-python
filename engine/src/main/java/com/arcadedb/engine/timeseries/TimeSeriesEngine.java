@@ -261,10 +261,12 @@ public class TimeSeriesEngine implements AutoCloseable {
     final Iterator<Object[]> iter = iterateQuery(fromTs, toTs, null, tagFilter);
     final AggregationResult result = new AggregationResult();
 
+    final long singleBucketTs = singleBucketAnchor(fromTs);
+
     while (iter.hasNext()) {
       final Object[] row = iter.next();
       final long ts = (long) row[0];
-      final long bucketTs = bucketIntervalMs > 0 ? (ts / bucketIntervalMs) * bucketIntervalMs : fromTs;
+      final long bucketTs = bucketIntervalMs > 0 ? Math.floorDiv(ts, bucketIntervalMs) * bucketIntervalMs : singleBucketTs;
       final double value;
 
       if (columnIndex + 1 < row.length && row[columnIndex + 1] instanceof Number)
@@ -329,8 +331,8 @@ public class TimeSeriesEngine implements AutoCloseable {
     final long firstBucket;
     final int maxBuckets;
     if (useFlatMode && actualMin <= actualMax) {
-      firstBucket = (actualMin / bucketIntervalMs) * bucketIntervalMs;
-      final long computedBuckets = (actualMax - firstBucket) / bucketIntervalMs + 2;
+      firstBucket = Math.floorDiv(actualMin, bucketIntervalMs) * bucketIntervalMs;
+      final long computedBuckets = Math.floorDiv(actualMax - firstBucket, bucketIntervalMs) + 2;
       if (computedBuckets > MultiColumnAggregationResult.MAX_FLAT_BUCKETS)
         // Will trigger map-mode fallback in MultiColumnAggregationResult constructor
         maxBuckets = MultiColumnAggregationResult.MAX_FLAT_BUCKETS + 1;
@@ -410,7 +412,7 @@ public class TimeSeriesEngine implements AutoCloseable {
             if (tagFilter != null && !tagFilter.matches(row))
               continue;
             final long ts = (long) row[0];
-            final long bucketTs = (ts / bucketIntervalMs) * bucketIntervalMs;
+            final long bucketTs = Math.floorDiv(ts, bucketIntervalMs) * bucketIntervalMs;
             for (int r = 0; r < reqCount; r++) {
               if (isCount[r])
                 rowValues[r] = 1.0;
@@ -438,6 +440,8 @@ public class TimeSeriesEngine implements AutoCloseable {
 
       final double[] rowValues = new double[reqCount];
 
+      final long singleBucketTs = singleBucketAnchor(fromTs);
+
       for (final TimeSeriesShard shard : shards) {
         // Hold the compaction read lock for sealed+mutable reads to prevent data loss
         // if compaction completes between reading the two layers.
@@ -451,7 +455,7 @@ public class TimeSeriesEngine implements AutoCloseable {
             if (tagFilter != null && !tagFilter.matches(row))
               continue;
             final long ts = (long) row[0];
-            final long bucketTs = bucketIntervalMs > 0 ? (ts / bucketIntervalMs) * bucketIntervalMs : fromTs;
+            final long bucketTs = bucketIntervalMs > 0 ? Math.floorDiv(ts, bucketIntervalMs) * bucketIntervalMs : singleBucketTs;
 
             for (int r = 0; r < reqCount; r++) {
               if (isCount[r])
@@ -519,7 +523,14 @@ public class TimeSeriesEngine implements AutoCloseable {
         numericColIndices.add(c);
     }
 
-    for (final DownsamplingTier tier : tiers) {
+    // Process tiers oldest-cutoff-first (afterMs ascending). The doc contract promises this order, but the
+    // configured list is not guaranteed sorted: an unsorted list could downsample the same block twice in
+    // one pass (a fine-granularity tier touching old data first, then a coarse tier touching it again).
+    // Sort a defensive copy so behaviour is deterministic regardless of how the tiers were declared (#4599).
+    final List<DownsamplingTier> orderedTiers = new ArrayList<>(tiers);
+    orderedTiers.sort(Comparator.comparingLong(DownsamplingTier::afterMs));
+
+    for (final DownsamplingTier tier : orderedTiers) {
       final long cutoffTs = nowMs - tier.afterMs();
       runSealedMaintenanceReplicated(
           shard -> shard.getSealedStore().downsampleBlocks(cutoffTs, tier.granularityMs(), tsColIdx, tagColIndices,
@@ -663,6 +674,16 @@ public class TimeSeriesEngine implements AutoCloseable {
     }
   }
 
+  /**
+   * Resolves the bucket-timestamp anchor for single-bucket aggregation (when {@code bucketIntervalMs <= 0}).
+   * The caller-supplied {@code fromTs} can be the {@link Long#MIN_VALUE} "no lower bound" sentinel; anchoring
+   * the single bucket to that sentinel would make downstream consumers misformat it as a real epoch. In that
+   * case the bucket is anchored at the Unix epoch ({@code 0L}) instead.
+   */
+  static long singleBucketAnchor(final long fromTs) {
+    return fromTs == Long.MIN_VALUE ? 0L : fromTs;
+  }
+
   private void accumulateToBucket(final AggregationResult result, final long bucketTs, final double value,
       final AggregationType type) {
     final int idx = result.findBucketIndex(bucketTs);
@@ -673,8 +694,10 @@ public class TimeSeriesEngine implements AutoCloseable {
         case SUM -> existing + value;
         case COUNT -> existing + 1;
         case AVG -> existing + value; // accumulate sum, divide by count later
-        case MIN -> Math.min(existing, value);
-        case MAX -> Math.max(existing, value);
+        // NaN policy (issue #4596): NaN is treated as absent and skipped, so a real value always
+        // wins over a NaN running value (e.g. when the bucket was seeded with a NaN first sample).
+        case MIN -> Double.isNaN(value) ? existing : Double.isNaN(existing) ? value : Math.min(existing, value);
+        case MAX -> Double.isNaN(value) ? existing : Double.isNaN(existing) ? value : Math.max(existing, value);
       };
       result.updateValue(idx, merged);
       result.updateCount(idx, count + 1);
