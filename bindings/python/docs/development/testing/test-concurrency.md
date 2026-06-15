@@ -121,7 +121,7 @@ db1.close()
 
 ### 2. Thread-Safe Operations
 
-**Test:** `test_thread_safe_operations`
+**Test:** `test_thread_safety`
 
 Demonstrates that multiple threads can safely access the same database instance.
 
@@ -296,7 +296,7 @@ db2 = arcadedb.open_database("./mydb")  # ✅ Works!
 
 ### 4. Multi-Process Limitations
 
-**Test:** `test_multiprocess_limitation`
+**Test:** `test_concurrent_access_limitation`
 
 Explicitly demonstrates why multiple processes cannot access the same database directly, and shows the solution.
 
@@ -406,7 +406,7 @@ pytest tests/test_concurrency.py -v
 
 # Run specific test
 pytest tests/test_concurrency.py::test_file_lock_mechanism -v
-pytest tests/test_concurrency.py::test_thread_safe_operations -v
+pytest tests/test_concurrency.py::test_thread_safety -v
 
 # Run with output to see details
 pytest tests/test_concurrency.py -v -s

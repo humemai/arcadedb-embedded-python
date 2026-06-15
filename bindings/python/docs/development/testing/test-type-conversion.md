@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py){ .md-button }
 
-There are 10 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), datetime types, Decimal, collections (list, set, dict), binary, and round-trip verification.
+There are 10 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), date/datetime, Decimal, collections (list, set, dict), nested structures, the `property_names` accessor, and the `Result.to_dict()` / `Result.to_json()` helpers.
 
 ## Key Types
 
@@ -14,314 +14,249 @@ There are 10 tests covering Python ↔ Java type conversion: primitives (int, fl
 
 **Pattern:**
 ```python
-vertex = db.new_vertex("Test")
+# test_basic_type_conversion inserts via SQL and verifies Python types on read
+with db.transaction():
+    db.command(
+        "sql",
+        """
+        INSERT INTO TypeTest SET
+            string_val = 'hello', int_val = 42,
+            long_val = 9223372036854775807, float_val = 3.14,
+            double_val = 2.71828, bool_val = true, null_val = null
+        """,
+    )
 
-# Store primitives
-vertex.set("int_val", 42)
-vertex.set("float_val", 3.14)
-vertex.set("str_val", "hello")
-vertex.set("bool_val", True)
-vertex.set("none_val", None)
-vertex.save()
-
-# Retrieve and verify types
-result = db.query("sql", "SELECT FROM Test").first()
-assert result.get("int_val") == 42
-assert result.get("float_val") == 3.14
-assert result.get("str_val") == "hello"
-assert result.get("bool_val") is True
-assert result.get("none_val") is None
-```
-
----
-
-### test_datetime_conversion
-
-Tests datetime type conversion.
-
-**What it tests:**
-
-- datetime → LocalDateTime
-- date → LocalDate
-- time → LocalTime
-- Timezone handling
-
-**Pattern:**
-```python
-from datetime import datetime, date, time
-
-vertex = db.new_vertex("Event")
-
-# Store date/time
-vertex.set("timestamp", datetime(2024, 1, 15, 14, 30, 0))
-vertex.set("event_date", date(2024, 1, 15))
-vertex.set("start_time", time(14, 30, 0))
-vertex.save()
-
-# Retrieve
-result = db.query("sql", "SELECT FROM Event").first()
-assert result.get("timestamp") == datetime(2024, 1, 15, 14, 30, 0)
-assert result.get("event_date") == date(2024, 1, 15)
-assert result.get("start_time") == time(14, 30, 0)
+record = db.query("sql", "SELECT FROM TypeTest").first()
+assert record.get("string_val") == "hello"
+assert record.get("int_val") == 42
+assert record.get("long_val") == 9223372036854775807
+assert abs(record.get("float_val") - 3.14) < 0.01
+assert record.get("bool_val") is True
+assert record.get("null_val") is None
 ```
 
 ---
 
 ### test_decimal_conversion
 
-Tests high-precision decimal conversion.
+Tests BigDecimal → Python `Decimal` conversion.
 
 **What it tests:**
 
-- Decimal → BigDecimal
-- Precision preservation
-- Financial calculations
+- A `DECIMAL` property round-trips to a Python `Decimal`
+- Precision preservation (`Decimal("99.95")`)
 
 **Pattern:**
 ```python
-from decimal import Decimal
+db.command("sql", "CREATE PROPERTY DecimalTest.price DECIMAL")
+with db.transaction():
+    db.command("sql", "INSERT INTO DecimalTest SET price = 99.95")
 
-vertex = db.new_vertex("Product")
-
-# Store decimal (for money)
-vertex.set("price", Decimal("19.99"))
-vertex.set("tax", Decimal("1.60"))
-vertex.save()
-
-# Retrieve
-result = db.query("sql", "SELECT FROM Product").first()
-price = result.get("price")
-tax = result.get("tax")
-
+price = db.query("sql", "SELECT FROM DecimalTest").first().get("price")
 assert isinstance(price, Decimal)
-assert price == Decimal("19.99")
-assert tax == Decimal("1.60")
+assert price == Decimal("99.95")
 ```
 
 ---
 
-### test_list_conversion
+### test_date_conversion
 
-Tests list type conversion.
+Tests Java `Date` / `LocalDate` → Python `date` / `datetime` conversion.
 
 **What it tests:**
 
-- list → ArrayList
-- Order preservation
-- Nested lists
-- Mixed types in lists
+- A `DATE` property (`date('2024-01-15')`) converts to a Python `date`/`datetime`
+- A `DATETIME` property (`sysdate()`) converts to a Python `datetime`
 
 **Pattern:**
 ```python
-vertex = db.new_vertex("User")
+db.command("sql", "CREATE PROPERTY DateTest.created_date DATE")
+db.command("sql", "CREATE PROPERTY DateTest.created_datetime DATETIME")
+with db.transaction():
+    db.command(
+        "sql",
+        "INSERT INTO DateTest SET created_date = date('2024-01-15'), created_datetime = sysdate()",
+    )
 
-# Store lists
-vertex.set("tags", ["python", "java", "database"])
-vertex.set("scores", [95, 87, 92])
-vertex.set("nested", [[1, 2], [3, 4]])
-vertex.save()
-
-# Retrieve
-result = db.query("sql", "SELECT FROM User").first()
-assert result.get("tags") == ["python", "java", "database"]
-assert result.get("scores") == [95, 87, 92]
-assert result.get("nested") == [[1, 2], [3, 4]]
+record = db.query("sql", "SELECT FROM DateTest").first()
+assert isinstance(record.get("created_date"), (date, datetime))
+assert isinstance(record.get("created_datetime"), datetime)
 ```
 
 ---
 
-### test_set_conversion
+### test_collection_conversion
 
-Tests set type conversion.
+Tests Java collections (List, Map) → Python `list` / `dict` conversion.
 
 **What it tests:**
 
-- set → HashSet
-- Uniqueness preserved
-- Order not guaranteed
+- An inline SQL list (`['python', 'database', 'graph']`) becomes a Python `list`
+- An inline SQL map becomes a Python `dict` with correct keys/values
 
 **Pattern:**
 ```python
-vertex = db.new_vertex("User")
+with db.transaction():
+    db.command(
+        "sql",
+        """
+        INSERT INTO CollectionTest SET
+            tags = ['python', 'database', 'graph'],
+            metadata = {'version': 1, 'active': true, 'name': 'test'}
+        """,
+    )
 
-# Store set
-vertex.set("roles", {"admin", "user", "moderator"})
-vertex.save()
-
-# Retrieve
-result = db.query("sql", "SELECT FROM User").first()
-roles = result.get("roles")
-
-assert isinstance(roles, set)
-assert len(roles) == 3
-assert "admin" in roles
+record = db.query("sql", "SELECT FROM CollectionTest").first()
+assert isinstance(record.get("tags"), list)
+assert isinstance(record.get("metadata"), dict)
+assert record.get("metadata")["version"] == 1
 ```
 
 ---
 
-### test_dict_conversion
+### test_nested_collection_conversion
 
-Tests dictionary type conversion.
+Tests conversion of nested collections.
 
 **What it tests:**
 
-- dict → HashMap
-- Nested dictionaries
-- Key/value preservation
-- Complex structures
+- A nested SQL structure (`users` list of dicts + `settings` dict) converts recursively
+- Nested list-of-dicts and nested dicts preserve their values
 
 **Pattern:**
 ```python
-vertex = db.new_vertex("User")
+with db.transaction():
+    db.command(
+        "sql",
+        """
+        INSERT INTO NestedTest SET
+            nested_data = {
+                'users': [{'name': 'Alice', 'age': 30}, {'name': 'Bob', 'age': 25}],
+                'settings': {'theme': 'dark', 'notifications': true}
+            }
+        """,
+    )
 
-# Store dict
-vertex.set("profile", {
-    "firstName": "Alice",
-    "lastName": "Smith",
-    "age": 30,
-    "address": {
-        "city": "New York",
-        "zip": "10001"
-    }
-})
-vertex.save()
-
-# Retrieve
-result = db.query("sql", "SELECT FROM User").first()
-profile = result.get("profile")
-
-assert profile["firstName"] == "Alice"
-assert profile["address"]["city"] == "New York"
+nested = db.query("sql", "SELECT FROM NestedTest").first().get("nested_data")
+assert nested["users"][0]["name"] == "Alice"
+assert nested["settings"]["theme"] == "dark"
 ```
 
 ---
 
-### test_binary_conversion
+### test_property_names
 
-Tests binary data conversion.
+Tests the `Result.property_names` property.
 
 **What it tests:**
 
-- bytes → byte[]
-- Binary data preservation
-- Large binary data
+- `record.property_names` returns a `list` of the record's property names
 
 **Pattern:**
 ```python
-vertex = db.new_vertex("File")
-
-# Store binary
-binary_data = b"Hello World \x00\x01\x02"
-vertex.set("data", binary_data)
-vertex.save()
-
-# Retrieve
-result = db.query("sql", "SELECT FROM File").first()
-retrieved = result.get("data")
-
-assert isinstance(retrieved, bytes)
-assert retrieved == binary_data
+record = db.query("sql", "SELECT FROM PropsTest").first()
+prop_names = record.property_names
+assert isinstance(prop_names, list)
+assert "name" in prop_names
+assert "score" in prop_names
 ```
 
 ---
 
-### test_none_null_conversion
+### test_to_dict_conversion
 
-Tests None/null handling.
+Tests the `Result.to_dict()` method.
 
 **What it tests:**
 
-- None → null
-- null → None
-- Optional properties
-- Distinguishing None from missing
+- `to_dict(convert_types=True)` returns a Python `dict` with converted values
+- `to_dict(convert_types=False)` returns a `dict` (values may remain Java objects)
 
 **Pattern:**
 ```python
-vertex = db.new_vertex("User")
+record = db.query("sql", "SELECT FROM DictTest").first()
 
-# Store None
-vertex.set("middle_name", None)
-vertex.save()
+data = record.to_dict(convert_types=True)
+assert data["name"] == "test"
+assert data["count"] == 42
+assert isinstance(data["tags"], list)
 
-# Retrieve
-result = db.query("sql", "SELECT FROM User").first()
-assert result.get("middle_name") is None
+data_raw = record.to_dict(convert_types=False)
+assert isinstance(data_raw, dict)
 ```
 
 ---
 
-### test_large_integer_conversion
+### test_to_json_conversion
 
-Tests large integer handling.
+Tests the `Result.to_json()` method.
 
 **What it tests:**
 
-- Small int → Integer
-- Large int → Long
-- Int range handling
+- `to_json()` returns a JSON `str` containing the stored field values
 
 **Pattern:**
 ```python
-vertex = db.new_vertex("Test")
-
-# Small integer
-vertex.set("small", 42)
-
-# Large integer (> 2^31)
-vertex.set("large", 2 ** 40)
-vertex.save()
-
-# Retrieve
-result = db.query("sql", "SELECT FROM Test").first()
-assert result.get("small") == 42
-assert result.get("large") == 2 ** 40
+record = db.query("sql", "SELECT FROM JsonTest").first()
+json_str = record.to_json()
+assert isinstance(json_str, str)
+assert "test" in json_str
+assert "42" in json_str
 ```
 
 ---
 
-### test_round_trip_conversion
+### test_python_to_java_conversion
 
-Tests full round-trip preservation.
+Tests converting Python types to Java when setting properties via `new_document()`.
 
 **What it tests:**
 
-- Python → Java → Python
-- All types preserved
-- No data loss
-- Value equality
+- `doc.set(...)` for `str`, `int`, `Decimal`, and `bool`
+- `convert_python_to_java()` for `list`, `dict`, and `set`
+- Round-trip retrieval (price may come back as `Decimal` or `float`; a set may convert to list/collection)
 
 **Pattern:**
 ```python
-from datetime import datetime
-from decimal import Decimal
+from arcadedb_embedded.type_conversion import convert_python_to_java
 
-# Original data
-original = {
-    "int": 42,
-    "float": 3.14,
-    "str": "hello",
-    "bool": True,
-    "datetime": datetime.now(),
-    "decimal": Decimal("19.99"),
-    "list": [1, 2, 3],
-    "dict": {"key": "value"},
-    "none": None
-}
+with db.transaction():
+    doc = db.new_document("PyToJavaTest")
+    doc.set("name", "test")
+    doc.set("count", 42)
+    doc.set("price", Decimal("99.95"))
+    doc.set("active", True)
+    doc.set("tags", convert_python_to_java(["a", "b", "c"]))
+    doc.set("metadata", convert_python_to_java({"key": "value"}))
+    doc.set("unique_items", convert_python_to_java({"x", "y", "z"}))
+    doc.save()
+```
 
-# Store
-vertex = db.new_vertex("Test")
-for key, value in original.items():
-    vertex.set(key, value)
-vertex.save()
+---
 
-# Retrieve
-result = db.query("sql", "SELECT FROM Test").first()
+### test_array_conversion
 
-# Verify all values match
-for key, original_value in original.items():
-    retrieved_value = result.get(key)
-    assert retrieved_value == original_value, f"{key}: {retrieved_value} != {original_value}"
+Tests Java list → Python list conversion for `LIST` properties.
+
+**What it tests:**
+
+- `LIST` properties populated via `convert_python_to_java()` round-trip to Python `list`
+- Order and contents are preserved (`numbers`, `names`)
+
+**Pattern:**
+```python
+from arcadedb_embedded.type_conversion import convert_python_to_java
+
+db.command("sql", "CREATE PROPERTY ArrayTest.numbers LIST")
+with db.transaction():
+    doc = db.new_document("ArrayTest")
+    doc.set("numbers", convert_python_to_java([1, 2, 3, 4, 5]))
+    doc.set("names", convert_python_to_java(["Alice", "Bob", "Charlie"]))
+    doc.save()
+
+record = db.query("sql", "SELECT FROM ArrayTest").first()
+assert record.get("numbers")[0] == 1
+assert "Alice" in record.get("names")
 ```
 
 ## Test Patterns

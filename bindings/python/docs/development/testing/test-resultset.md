@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_resultset.py){ .md-button }
 
-There are 12 tests that exercise list/DataFrame conversion, chunking, counting, first/one helpers, iteration, empty handling, reusability, and metadata access.
+There are 13 tests that exercise list/DataFrame conversion, chunking, counting, first/one helpers, iteration, repr, complex queries, empty handling, reusability, RID/vertex helpers, and JSON array serialization.
 
 ## What the tests cover
 
@@ -62,6 +62,10 @@ Iterating a `ResultSet` consumes it: first iteration returns two `ReuseTest` row
 ### get_rid and get_vertex
 
 For a `Person` vertex, `get_rid()` returns a string starting with `#`, and `get_vertex()` returns the underlying Java vertex with `name == 'Alice'`.
+
+### to_json with arrays
+
+Inserts a `JsonArrayTest` row with `tags = ['a', 'b', 'c']` and asserts `to_json()` serializes the list property as a JSON array.
 
 ## Handy patterns from the tests
 

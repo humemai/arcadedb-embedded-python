@@ -2,127 +2,83 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_numpy_support.py){ .md-button }
 
-There are 3 tests covering NumPy array storage, retrieval, and vector search integration.
+There are 3 tests covering automatic conversion of NumPy arrays passed into `db.command()`, `db.query()`, and regular transactions. Each test is guarded by `@pytest.mark.skipif(not HAS_NUMPY, ...)`.
 
 ## Coverage
 
-- Array storage (float32, float64) as vector properties
-- Array retrieval and conversion to NumPy
-- HNSW similarity search with NumPy vectors
+- Automatic NumPy array conversion when used as a `db.command()` parameter
+- Automatic NumPy array conversion when used as a `db.query()` parameter
+- NumPy array conversion in regular transactions (no batch context), including `arcadedb.to_java_float_array()`
 
-### test_store_and_retrieve_numpy_array
+### test_numpy_array_conversion_in_command
 
-Tests storing and retrieving NumPy arrays.
+Tests automatic conversion of NumPy arrays in `db.command()`.
 
 **What it tests:**
 
-- Storing NumPy array as vector property
-- Array type preservation
-- Round-trip conversion
+- Inserting a `np.float32` array directly as a bound `?` parameter
+- Round-trip retrieval against an `ARRAY_OF_FLOATS` property
+- Approximate float equality of the stored values
 
 **Pattern:**
 
 ```python
-# Create NumPy array
-embedding = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+db.command("sql", "CREATE VERTEX TYPE VectorData")
+db.command("sql", "CREATE PROPERTY VectorData.vector ARRAY_OF_FLOATS")
 
-# Store in database
-vertex = db.new_vertex("Document")
-vertex.set("embedding", embedding.tolist())
-vertex.save()
+vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
 
-# Retrieve
-result = db.query("sql", "SELECT FROM Document").first()
-stored_embedding = result.get("embedding")
+with db.transaction():
+    db.command("sql", "INSERT INTO VectorData SET vector = ?", vec)
 
-# Verify
-np.testing.assert_array_almost_equal(embedding, stored_embedding)
+result = db.query("sql", "SELECT FROM VectorData").first()
+stored_vec = result.get("vector")
+assert len(stored_vec) == 3
+assert abs(stored_vec[0] - 0.1) < 0.0001
 ```
 
 ---
 
-### test_numpy_vector_search
+### test_numpy_array_conversion_in_query
 
-Tests vector similarity search with NumPy arrays.
+Tests automatic conversion of NumPy arrays in `db.query()`.
 
 **What it tests:**
 
-- Creating HNSW (JVector) index on vector property
-- Inserting NumPy-generated embeddings
-- Performing similarity search
-- Retrieving nearest neighbors
+- Passing a `np.float32` array as a bound `?` parameter in a `WHERE` clause
+- That the call succeeds without raising
 
 **Pattern:**
 
 ```python
-import numpy as np
+with db.transaction():
+    db.command("sql", "INSERT INTO VectorData SET vector = ?", [0.1, 0.2, 0.3])
 
-# Create schema with HNSW (JVector) index
-db.command("sql", "CREATE VERTEX TYPE Document")
-db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
-
-db.command(
-    "sql",
-    'CREATE INDEX ON Document (embedding) LSM_VECTOR METADATA {"dimensions": 128}',
-)
-
-# Insert vectors
-for i in range(100):
-    embedding = np.random.rand(128).astype(np.float32)
-
-    vertex = db.new_vertex("Document")
-    vertex.set("docId", i)
-    vertex.set("embedding", embedding.tolist())
-    vertex.save()
-
-# Search for similar vectors
-query_vector = np.random.rand(128).astype(np.float32)
-query_literal = "[" + ", ".join(str(float(v)) for v in query_vector.tolist()) + "]"
-
-results = db.query(
-    "sql",
-    f"SELECT expand(vectorNeighbors('Document[embedding]', {query_literal}, 5))",
-).to_list()
-
-for result in results:
-    print(result.get("docId"))
+vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+db.query("sql", "SELECT FROM VectorData WHERE vector = ?", vec)
 ```
 
 ---
 
-### test_numpy_dtype_conversion
+### test_numpy_array_conversion_in_transaction
 
-Tests NumPy dtype handling.
+Tests NumPy array conversion in regular transactions (no batch context).
 
 **What it tests:**
 
-- float32 → Java float[] conversion
-- float64 → Java double[] conversion
-- int32 → Java int[] conversion
-- Type preservation during round-trip
+- Converting `np.float32` arrays via `arcadedb.to_java_float_array()`
+- Inserting into both a vertex type (`VectorData`) and a document type (`DocData`) within one transaction
+- Round-trip retrieval of both `ARRAY_OF_FLOATS` properties
 
 **Pattern:**
 
 ```python
-import numpy as np
+vec1_java = arcadedb.to_java_float_array(np.array([0.1, 0.2, 0.3], dtype=np.float32))
+vec2_java = arcadedb.to_java_float_array(np.array([0.4, 0.5, 0.6], dtype=np.float32))
 
-# Test float32
-vec_f32 = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-vertex.set("vec_f32", vec_f32.tolist())
-
-# Test float64
-vec_f64 = np.array([1.0, 2.0, 3.0], dtype=np.float64)
-vertex.set("vec_f64", vec_f64.tolist())
-
-# Test int32
-vec_int = np.array([1, 2, 3], dtype=np.int32)
-vertex.set("vec_int", vec_int.tolist())
-
-vertex.save()
-
-# Retrieve and verify types
-result = db.query("sql", "SELECT FROM Document").first()
-assert isinstance(result.get("vec_f32"), list)
+with db.transaction():
+    db.command("sql", "INSERT INTO VectorData SET vector = ?", vec1_java)
+    db.command("sql", "INSERT INTO DocData SET embedding = ?", vec2_java)
 ```
 
 ## Test Patterns

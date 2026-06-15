@@ -7,19 +7,18 @@ Covers JVM argument construction for the embedded runtime.
 ## What's Covered
 
 - Defaults when no explicit JVM args are provided.
-- Merging custom `jvm_args` / env fallback while preserving mandatory flags:
+- Merging the `ARCADEDB_JVM_ARGS` env fallback while preserving mandatory flags:
     - `-Djava.awt.headless=true`
     - `--add-modules=jdk.incubator.vector`
     - `--enable-native-access=ALL-UNNAMED`
     - `-Dfile.encoding=UTF8`
-    - `--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED`
-    - `--add-opens=java.base/java.nio.channels.spi=ALL-UNNAMED`
-    - `--add-opens=java.base/java.lang=ALL-UNNAMED`
     - `-Dpolyglot.engine.WarnInterpreterOnly=false`
     - `-XX:+UseCompactObjectHeaders`
+- Keeping the maximum value when multiple `-Xmx` flags are supplied.
 - Ensuring a default heap (`-Xmx4g`) is injected if the user omits it.
-- Avoiding duplicate flags when the user already provides them.
+- Respecting the user's explicit choice and avoiding duplicate flags when they already provide them.
 - `ARCADEDB_JVM_ERROR_FILE` handling via `-XX:ErrorFile=...`.
+- `common_pool_parallelism`: injecting `-Djava.util.concurrent.ForkJoinPool.common.parallelism=<n>`, overriding any env-provided value, and rejecting values below 1.
 
 ## Run
 

@@ -2,365 +2,248 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_transaction_config.py){ .md-button }
 
-here are 9 tests covering transaction isolation levels, WAL configuration, retry logic, timeouts, read-only transactions, nesting, and rollback scenarios.
+There are 9 tests covering WAL flush modes, read-your-writes, auto-transaction control, and combinations of these settings (plus error handling on a closed database).
 
 ## Key Config Options
 
-- Isolation: READ_COMMITTED, REPEATABLE_READ
-- WAL: Write-Ahead Log settings
-- Retry: Automatic retry on conflicts
-- Timeout: Transaction timeout configuration
-- Read-only: Optimized read transactions
+- WAL flush: `set_wal_flush("no" | "yes_nometadata" | "yes_full")`
+- Read-your-writes: `set_read_your_writes(bool)`
+- Auto-transaction: `set_auto_transaction(bool)`
 
-### test_transaction_isolation_level
+### test_set_wal_flush_modes
 
-Tests transaction isolation levels.
+Tests all valid WAL flush modes.
 
 **What it tests:**
 
-- READ_COMMITTED: Other changes visible
-- REPEATABLE_READ: Consistent snapshot
-- Isolation level enforcement
+- `set_wal_flush("no")` (default / maximum performance)
+- `set_wal_flush("yes_nometadata")`
+- `set_wal_flush("yes_full")` (maximum durability)
+- Resetting back to `"no"`
 
 **Pattern:**
-
 ```python
-# READ_COMMITTED
-with db.transaction(isolation_level="READ_COMMITTED"):
-    # Changes from other transactions visible
-    pass
-
-# REPEATABLE_READ
-with db.transaction(isolation_level="REPEATABLE_READ"):
-    # Consistent snapshot throughout transaction
-    pass
+temp_db.set_wal_flush("no")
+temp_db.set_wal_flush("yes_nometadata")
+temp_db.set_wal_flush("yes_full")
+temp_db.set_wal_flush("no")
 ```
 
 ---
 
-### test_transaction_wal_configuration
+### test_set_wal_flush_invalid_mode
 
-Tests Write-Ahead Log settings.
+Tests that invalid WAL flush modes raise `ValueError`.
 
 **What it tests:**
 
-- Enabling/disabling WAL
-- WAL performance impact
-- Durability vs speed tradeoff
+- An unknown mode (`"invalid_mode"`) raises `ValueError` matching "Invalid WAL flush mode"
+- An uppercase mode (`"YES_FULL"`) is rejected; the mode must be lowercase
 
 **Pattern:**
-
 ```python
-# With WAL (durable)
-with db.transaction(use_wal=True):
-    vertex = db.new_vertex("User")
-    vertex.set("name", "Alice")
-    vertex.save()
+with pytest.raises(ValueError, match="Invalid WAL flush mode"):
+    temp_db.set_wal_flush("invalid_mode")
 
-# Without WAL (faster, less durable)
-with db.transaction(use_wal=False):
-    for i in range(1000):
-        vertex = db.new_vertex("User")
-        vertex.set("userId", i)
-        vertex.save()
+with pytest.raises(ValueError, match="Invalid WAL flush mode"):
+    temp_db.set_wal_flush("YES_FULL")  # Must be lowercase
 ```
 
 ---
 
-### test_transaction_retry_on_conflict
+### test_set_read_your_writes
 
-Tests automatic retry configuration.
+Tests read-your-writes configuration.
 
 **What it tests:**
 
-- Retry on write conflicts
-- Max retry attempts
-- Exponential backoff
-- Success after retries
+- Enabling read-your-writes (`True`, the default)
+- Disabling it (`False`, for better concurrency)
+- Re-enabling it
 
 **Pattern:**
 ```python
-# Automatic retry on conflict
-with db.transaction(retry_on_conflict=True, max_retries=3):
-    vertex = db.new_vertex("Counter")
-
-    # Read current value
-    count = vertex.get("count") or 0
-
-    # Increment (may conflict)
-    vertex.set("count", count + 1)
-    vertex.save()
+temp_db.set_read_your_writes(True)
+temp_db.set_read_your_writes(False)
+temp_db.set_read_your_writes(True)
 ```
 
 ---
 
-### test_transaction_timeout
+### test_set_auto_transaction
 
-Tests transaction timeout configuration.
+Tests auto-transaction configuration.
 
 **What it tests:**
 
-- Setting timeout in seconds
-- Timeout exception raised
-- Cleanup after timeout
+- Enabling auto-transaction (`True`, the default)
+- Disabling it (`False`, for manual control)
+- Re-enabling it
 
 **Pattern:**
 ```python
+temp_db.set_auto_transaction(True)
+temp_db.set_auto_transaction(False)
+temp_db.set_auto_transaction(True)
+```
+
+---
+
+### test_transaction_config_with_operations
+
+Tests config methods alongside normal operations.
+
+**What it tests:**
+
+- Configuring durability (`set_wal_flush("yes_full")`, `set_read_your_writes(True)`) then writing inside a transaction
+- Switching to performance mode (`set_wal_flush("no")`, `set_read_your_writes(False)`) and writing more
+- Verifying counts via `SELECT count(*)` queries (2, then 3)
+
+**Pattern:**
+```python
+temp_db.command("sql", "CREATE VERTEX TYPE ConfigTest")
+temp_db.set_wal_flush("yes_full")
+temp_db.set_read_your_writes(True)
+
+with temp_db.transaction():
+    temp_db.command("sql", "CREATE VERTEX ConfigTest SET name = 'test1'")
+    temp_db.command("sql", "CREATE VERTEX ConfigTest SET name = 'test2'")
+
+count = next(temp_db.query("sql", "SELECT count(*) as cnt FROM ConfigTest")).get("cnt")
+assert count == 2
+```
+
+---
+
+### test_manual_transaction_mode
+
+Tests manual transaction control with auto-transaction disabled.
+
+**What it tests:**
+
+- `set_auto_transaction(False)` requires explicit `db.transaction()` contexts
+- Writes inside the context are persisted (count == 2)
+- Auto-transaction is re-enabled in a `finally` block
+
+**Pattern:**
+```python
+temp_db.command("sql", "CREATE VERTEX TYPE ManualTest")
+temp_db.set_auto_transaction(False)
 try:
-    with db.transaction(timeout=5):  # 5 second timeout
-        # Long-running operation
-        time.sleep(10)
-except TransactionTimeoutException:
-    print("Transaction timed out")
+    with temp_db.transaction():
+        temp_db.command("sql", "CREATE VERTEX ManualTest SET name = 'manual1'")
+        temp_db.command("sql", "CREATE VERTEX ManualTest SET name = 'manual2'")
+finally:
+    temp_db.set_auto_transaction(True)
 ```
 
 ---
 
-### test_read_only_transaction
+### test_wal_flush_with_bulk_operations
 
-Tests read-only transaction optimization.
+Tests WAL flush modes with chunked bulk inserts.
 
 **What it tests:**
 
-- Creating read-only transaction
-- Attempts to write raise error
-- Performance benefits
+- Bulk inserting with `set_wal_flush("yes_full")` in 200-record chunks up to 500
+- Switching to `set_wal_flush("no")` and continuing up to 1000
+- Verifying counts (500, then 1000)
 
 **Pattern:**
 ```python
-# Read-only transaction (optimized)
-with db.transaction(read_only=True):
-    results = db.query("sql", "SELECT FROM User")
-    users = list(results)
+temp_db.command("sql", "CREATE VERTEX TYPE BatchTest")
+temp_db.set_wal_flush("yes_full")
 
-    # Write attempt raises error
-    try:
-        vertex = db.new_vertex("User")
-        vertex.save()  # Error!
-    except Exception as e:
-        print(f"Write not allowed: {e}")
+chunk_size = 200
+total = 500
+for start in range(0, total, chunk_size):
+    with temp_db.transaction():
+        for i in range(start, min(start + chunk_size, total)):
+            temp_db.command(
+                "sql", "CREATE VERTEX BatchTest SET value = :value", {"value": i}
+            )
 ```
 
 ---
 
-### test_transaction_rollback_on_error
+### test_config_methods_on_closed_database
 
-Tests automatic rollback on exceptions.
+Tests that config methods raise on a closed database.
 
 **What it tests:**
 
-- Exception triggers rollback
-- No changes persisted
-- Database state unchanged
+- `set_wal_flush(...)`, `set_read_your_writes(...)`, and `set_auto_transaction(...)`
+    each raise `ArcadeDBError` matching "closed" after `db.close()`
 
 **Pattern:**
 ```python
-initial_count = db.count_type("User")
+db = create_database(temp_db_path)
+db.close()
 
-try:
-    with db.transaction():
-        # Create some records
-        for i in range(10):
-            vertex = db.new_vertex("User")
-            vertex.set("userId", i)
-            vertex.save()
-
-        # Raise error
-        raise ValueError("Something went wrong")
-except ValueError:
-    pass
-
-# Verify rollback
-assert db.count_type("User") == initial_count
+with pytest.raises(ArcadeDBError, match="closed"):
+    db.set_wal_flush("no")
 ```
 
 ---
 
-### test_manual_rollback
+### test_combined_config_changes
 
-Tests explicit rollback call.
-
-**What it tests:**
-
-- Manual `db.rollback()` call
-- Changes discarded
-- Transaction can continue after rollback
-
-**Pattern:**
-```python
-with db.transaction():
-    vertex = db.new_vertex("User")
-    vertex.set("name", "Alice")
-    vertex.save()
-
-    # Decide to rollback
-    db.rollback()
-
-    # Continue with different operation
-    vertex = db.new_vertex("User")
-    vertex.set("name", "Bob")
-    vertex.save()
-
-# Only Bob saved
-```
-
----
-
-### test_nested_transaction_behavior
-
-Tests nested transaction handling.
+Tests changing multiple config settings together.
 
 **What it tests:**
 
-- Nested transactions not supported (or use savepoints)
-- Inner transaction behavior
-- Rollback scope
+- Starting with durability settings (`yes_full`, read-your-writes on, auto-transaction on)
+- Switching to performance settings (`no`, read-your-writes off) and writing more
+- Verifying the final count (2) and restoring durability settings
 
 **Pattern:**
 ```python
-with db.transaction():
-    vertex1 = db.new_vertex("User")
-    vertex1.set("name", "Alice")
-    vertex1.save()
+temp_db.set_wal_flush("yes_full")
+temp_db.set_read_your_writes(True)
+temp_db.set_auto_transaction(True)
+temp_db.command("sql", "CREATE VERTEX TYPE Combined")
 
-    # Nested transaction (may not be supported)
-    try:
-        with db.transaction():
-            vertex2 = db.new_vertex("User")
-            vertex2.set("name", "Bob")
-            vertex2.save()
-    except Exception as e:
-        print(f"Nested transactions: {e}")
-```
+with temp_db.transaction():
+    temp_db.command("sql", "CREATE VERTEX Combined SET value = 1")
 
----
+temp_db.set_wal_flush("no")
+temp_db.set_read_your_writes(False)
 
-### test_transaction_performance_impact
-
-Tests performance of different configurations.
-
-**What it tests:**
-
-- WAL enabled vs disabled speed
-- Batch size impact
-- Read-only performance
-
-**Pattern:**
-```python
-import time
-
-# With WAL
-start = time.time()
-with db.transaction(use_wal=True):
-    for i in range(1000):
-        vertex = db.new_vertex("User")
-        vertex.set("userId", i)
-        vertex.save()
-wal_time = time.time() - start
-
-# Without WAL
-start = time.time()
-with db.transaction(use_wal=False):
-    for i in range(1000):
-        vertex = db.new_vertex("User")
-        vertex.set("userId", i)
-        vertex.save()
-no_wal_time = time.time() - start
-
-print(f"WAL: {wal_time:.2f}s, No WAL: {no_wal_time:.2f}s")
-print(f"Speedup: {wal_time / no_wal_time:.1f}x")
-```
-
-## Test Patterns
-
-### Basic Configuration
-
-```python
-with db.transaction(
-    isolation_level="READ_COMMITTED",
-    use_wal=True,
-    timeout=30
-):
-    # Operations
-    pass
-```
-
-### Retry on Conflict
-
-```python
-with db.transaction(retry_on_conflict=True, max_retries=5):
-    # Operations that may conflict
-    pass
-```
-
-### Read-Only
-
-```python
-with db.transaction(read_only=True):
-    # Only read operations
-    results = db.query("sql", "SELECT FROM User")
-```
-
-### Performance Tuning
-
-```python
-# Fast bulk insert (no WAL)
-with db.transaction(use_wal=False):
-    for item in large_dataset:
-        vertex = db.new_vertex("Type")
-        # Set properties
-        vertex.save()
+with temp_db.transaction():
+    temp_db.command("sql", "CREATE VERTEX Combined SET value = 2")
 ```
 
 ## Common Assertions
 
 ```python
-# Transaction committed
-initial = db.count_type("User")
-with db.transaction():
-    vertex = db.new_vertex("User")
-    vertex.save()
-assert db.count_type("User") == initial + 1
+# Invalid WAL mode rejected
+with pytest.raises(ValueError, match="Invalid WAL flush mode"):
+    db.set_wal_flush("invalid_mode")
 
-# Transaction rolled back
-initial = db.count_type("User")
-try:
-    with db.transaction():
-        vertex = db.new_vertex("User")
-        vertex.save()
-        raise ValueError()
-except ValueError:
-    pass
-assert db.count_type("User") == initial  # No change
+# Config methods raise on a closed database
+with pytest.raises(ArcadeDBError, match="closed"):
+    db.set_wal_flush("no")
 
-# Read-only enforcement
-with db.transaction(read_only=True):
-    try:
-        vertex = db.new_vertex("User")
-        vertex.save()
-        assert False, "Should have raised error"
-    except Exception:
-        pass  # Expected
+# Records written under any flush mode are persisted
+count = next(db.query("sql", "SELECT count(*) as cnt FROM ConfigTest")).get("cnt")
+assert count == 2
 ```
 
-## Configuration Options
+## Configuration Methods
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `isolation_level` | str | READ_COMMITTED | Isolation level |
-| `use_wal` | bool | True | Enable Write-Ahead Log |
-| `retry_on_conflict` | bool | False | Auto-retry on conflicts |
-| `max_retries` | int | 3 | Max retry attempts |
-| `timeout` | int | None | Timeout in seconds |
-| `read_only` | bool | False | Read-only transaction |
+| Method | Argument | Notes |
+|--------|----------|-------|
+| `set_wal_flush(mode)` | `"no"`, `"yes_nometadata"`, `"yes_full"` | Lowercase only; invalid modes raise `ValueError` |
+| `set_read_your_writes(flag)` | `bool` | Default `True` |
+| `set_auto_transaction(flag)` | `bool` | Default `True`; when `False`, use explicit `db.transaction()` |
 
 ## Key Takeaways
 
-1. **Use WAL for durability** - Disable only for bulk loads
-2. **Set timeouts** - Prevent long-running transactions
-3. **Retry on conflicts** - For concurrent workloads
-4. **Read-only for reads** - Performance optimization
-5. **Handle rollbacks** - Always check transaction success
+1. **WAL flush modes** - `"yes_full"` for durability, `"no"` for performance
+2. **Lowercase modes only** - Uppercase or unknown modes raise `ValueError`
+3. **Read-your-writes** - Toggle for concurrency vs immediate visibility
+4. **Manual transactions** - Disable auto-transaction and use `db.transaction()` contexts
+5. **Closed database** - Config methods raise `ArcadeDBError` once closed
 
 ## See Also
 

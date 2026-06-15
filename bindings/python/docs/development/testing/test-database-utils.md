@@ -2,246 +2,152 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_database_utils.py){ .md-button }
 
-There are 5 tests covering database creation helpers, schema initialization, test data generation, cleanup utilities, and type counting.
+There are 5 tests covering the `count_type`, `is_transaction_active`, and `drop` database utility methods, an integration test combining several methods, and error handling on a closed database.
 
-### test_create_test_database
+### test_count_type
 
-Tests database creation helper functions.
-
-**What it tests:**
-
-- Creating clean test database
-- Cleanup of existing database
-- Context manager support
-
-**Pattern:**
-```python
-# Create database with helper
-db = create_test_database("./test_db")
-
-assert db is not None
-assert os.path.exists("./test_db")
-```
-
----
-
-### test_populate_test_data
-
-Tests test data population utilities.
+Tests `Database.count_type()`.
 
 **What it tests:**
 
-- Generating test vertices
-- Creating test edges
-- Populating with realistic data
-- Configurable record counts
+- Counting records for a populated type (`User` == 10, `Product` == 5)
+- Counting a non-existent type returns `0`
 
 **Pattern:**
 ```python
-from test_utils import populate_users, populate_posts
-
-# Populate test users
-populate_users(db, count=100)
-assert db.count_type("User") == 100
-
-# Populate test posts
-populate_posts(db, user_count=100, posts_per_user=5)
-assert db.count_type("Post") == 500
-```
-
----
-
-### test_count_all_types
-
-Tests counting records across all types.
-
-**What it tests:**
-
-- Getting count for each type
-- Summing total records
-- Empty database handling
-
-**Pattern:**
-```python
-from test_utils import count_all_types
-
-# Get counts
-counts = count_all_types(db)
-
-assert counts["User"] == 100
-assert counts["Post"] == 500
-
-total = sum(counts.values())
-assert total == 600
-```
-
----
-
-### test_cleanup_database
-
-Tests database cleanup utilities.
-
-**What it tests:**
-
-- Removing all records
-- Dropping all types
-- Full database cleanup
-- Cleanup without errors
-
-**Pattern:**
-```python
-from test_utils import cleanup_database
-
-# Populate database
-populate_users(db, 100)
-
-# Clean up
-cleanup_database(db)
-
-# Verify empty
-assert db.count_type("User") == 0
-```
-
----
-
-### test_schema_initialization_helper
-
-Tests schema setup helpers.
-
-**What it tests:**
-
-- Creating common schema patterns
-- Social network schema
-- Document store schema
-- E-commerce schema templates
-
-**Pattern:**
-```python
-from test_utils import init_social_schema
-
-# Initialize social network schema
-init_social_schema(db)
-
-# Verify schema created
-type_names = {r.get("name") for r in db.query("sql", "SELECT name FROM schema:types")}
-assert "User" in type_names
-assert "Post" in type_names
-assert "Follows" in type_names
-assert "Likes" in type_names
-```
-
-## Test Patterns
-
-### Database Setup
-
-```python
-from test_utils import create_test_database, init_social_schema
-
-with create_test_database("./test_db") as db:
-    init_social_schema(db)
-    # ... continue with test ...
-```
-
-### Data Population
-
-```python
-from test_utils import populate_users, populate_edges
-
-with db:  # Assuming db is created in context
-    # Create users
-    user_count = populate_users(db, 100)
-
-    # Create relationships
-    edge_count = populate_edges(db, "Follows", density=0.1)
-```
-
-### Cleanup
-
-```python
-from test_utils import cleanup_database
-
-with create_test_database("./test_db") as db:
-    try:
-        # Test operations
-        pass
-    finally:
-        cleanup_database(db)
-        # Database automatically closed by context manager
-```
-
-## Utility Functions Reference
-
-### create_test_database
-
-```python
-def create_test_database(path: str) -> Database:
-    """Create a test database with cleanup."""
-    if os.path.exists(path):
-        shutil.rmtree(path)
-    return arcadedb.create_database(path)
-```
-
-### populate_users
-
-```python
-def populate_users(db: Database, count: int) -> int:
-    """Populate database with test users."""
+with arcadedb.create_database(temp_db_path) as db:
+    db.command("sql", "CREATE DOCUMENT TYPE User")
     with db.transaction():
-        for i in range(count):
-            vertex = db.new_vertex("User")
-            vertex.set("userId", i)
-            vertex.set("username", f"user{i}")
-            vertex.set("age", 18 + i % 50)
-            vertex.save()
-    return count
+        for i in range(10):
+            db.command("sql", f"INSERT INTO User SET name = 'User{i}'")
+
+    assert db.count_type("User") == 10
+    assert db.count_type("NonExistent") == 0
 ```
 
-### count_all_types
+---
 
+### test_is_transaction_active
+
+Tests `Database.is_transaction_active()`.
+
+**What it tests:**
+
+- `False` before any transaction
+- `True` inside a `db.transaction()` context
+- `False` again after the transaction completes
+
+**Pattern:**
 ```python
-def count_all_types(db: Database) -> dict:
-    """Get record count for all types."""
-    counts = {}
-    for row in db.query("sql", "SELECT name FROM schema:types"):
-        type_name = row.get("name")
-        counts[type_name] = db.count_type(type_name)
-    return counts
+with arcadedb.create_database(temp_db_path) as db:
+    assert not db.is_transaction_active()
+    with db.transaction():
+        assert db.is_transaction_active()
+    assert not db.is_transaction_active()
 ```
 
-### cleanup_database
+---
 
+### test_drop_database
+
+Tests `Database.drop()`.
+
+**What it tests:**
+
+- Creating and populating a type, then verifying the count
+- `db.drop()` removes the database
+- The database reports `is_open()` as `False` after the drop
+
+**Pattern:**
 ```python
-def cleanup_database(db: Database):
-    """Remove all records from database."""
-    for row in db.query("sql", "SELECT name FROM schema:types"):
-        type_name = row.get("name")
-        db.command("sql", f"DELETE FROM {type_name}")
+db = arcadedb.create_database(temp_db_path)
+db.command("sql", "CREATE DOCUMENT TYPE Test")
+with db.transaction():
+    db.command("sql", "INSERT INTO Test SET value = 1")
+
+db.drop()
+assert not db.is_open()
+```
+
+---
+
+### test_database_methods_integration
+
+Exercises several utility methods together.
+
+**What it tests:**
+
+- Creating `VERTEX TYPE Person` and `EDGE TYPE Knows`
+- `count_type("Person")` == 2 after inserting two vertices
+- `ResultSet.first()` returns the first ordered row
+- `ResultSet.to_list()` materializes the rows into a list
+
+**Pattern:**
+```python
+with arcadedb.create_database(temp_db_path) as db:
+    db.command("sql", "CREATE VERTEX TYPE Person")
+    db.command("sql", "CREATE EDGE TYPE Knows")
+    with db.transaction():
+        db.command("sql", "CREATE VERTEX Person SET name = 'Alice'")
+        db.command("sql", "CREATE VERTEX Person SET name = 'Bob'")
+
+    assert db.count_type("Person") == 2
+    first = db.query("sql", "SELECT FROM Person ORDER BY name").first()
+    assert first.get("name") == "Alice"
+
+    people = db.query("sql", "SELECT FROM Person ORDER BY name").to_list()
+    assert len(people) == 2
+```
+
+---
+
+### test_error_handling_new_methods
+
+Tests error handling on a closed database.
+
+**What it tests:**
+
+- Calling `count_type(...)` on a closed database raises `ArcadeDBError`
+- Calling `is_transaction_active()` on a closed database raises `ArcadeDBError`
+
+**Pattern:**
+```python
+db = arcadedb.create_database(temp_db_path)
+db.close()
+
+with pytest.raises(arcadedb.ArcadeDBError):
+    db.count_type("Test")
+
+with pytest.raises(arcadedb.ArcadeDBError):
+    db.is_transaction_active()
 ```
 
 ## Common Assertions
 
 ```python
-# Database created
-assert db is not None
-assert os.path.exists(db_path)
+# Type counting
+assert db.count_type("User") == 10
+assert db.count_type("NonExistent") == 0
 
-# Data populated
-assert db.count_type("User") > 0
+# Transaction state
+assert not db.is_transaction_active()
 
-# Schema initialized
-assert any(r.get("name") == "User" for r in db.query("sql", "SELECT name FROM schema:types"))
+# Dropped database is closed
+db.drop()
+assert not db.is_open()
 
-# Database cleaned
-assert sum(count_all_types(db).values()) == 0
+# ResultSet helpers
+assert db.query("sql", "SELECT FROM Person ORDER BY name").first().get("name") == "Alice"
+assert len(db.query("sql", "SELECT FROM Person ORDER BY name").to_list()) == 2
 ```
 
 ## Key Takeaways
 
-1. **Use helpers** - Reduce boilerplate in tests
-2. **Always cleanup** - Use try/finally blocks
-3. **Parameterize counts** - Make tests configurable
-4. **Reusable schemas** - Create common patterns
-5. **Check empty** - Verify cleanup worked
+1. **`count_type`** - Returns `0` for unknown types instead of raising
+2. **`is_transaction_active`** - Tracks the active transaction state
+3. **`drop`** - Closes the database; `is_open()` returns `False` afterward
+4. **`ResultSet.first()` / `to_list()`** - Convenient row access helpers
+5. **Closed database** - Utility methods raise `ArcadeDBError` once closed
 
 ## See Also
 

@@ -5,7 +5,8 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 ## Quick Statistics
 
 !!! success "Test Results"
-    - **Current package**: ✅ 331 passed
+    - **Current package**: the full suite passes cleanly
+    - Test counts evolve over time; run `pytest -v -rs` for the latest totals
     - Environment-specific skips may vary depending on optional components
 
 ## What's Tested
@@ -82,10 +83,10 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_exporter.py`](test-exporter.md) | Database export formats and CSV result export helpers |
 | [`test_graph_api.py`](test-graph-api.md) | Graph wrapper behavior for vertices, edges, and traversal helpers |
 | [`test_importer_api.py`](test-importer.md) | Narrow `db.import_documents(...)` wrapper coverage |
+| `test_logging_helper.py` | Logging helper configuration behavior |
 | [`test_numpy_support.py`](test-numpy-support.md) | NumPy integration and array conversion behavior |
 | [`test_resultset.py`](test-resultset.md) | Result and ResultSet iteration, accessors, and export helpers |
 | [`test_schema.py`](test-schema.md) | Schema, property, and index management behavior |
-| [`test_core.py`](test-core.md) | Core database operations, CRUD, transactions, queries |
 | [`test_server.py`](test-server.md) | Server mode, HTTP API, configuration |
 | [`test_concurrency.py`](test-concurrency.md) | File locking, thread safety, multi-process behavior |
 | [`test_server_patterns.py`](test-server-patterns.md) | Best practices for embedded + server mode |
@@ -103,6 +104,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_vector.py`](test-vector.md) | Vector API and nearest-neighbor search behavior |
 | [`test_vector_params_verification.py`](test-vector-params-verification.md) | Vector param validation |
 | [`test_vector_sql.py`](test-vector-sql.md) | SQL vector functions, index creation, and search flows |
+| `test_wheel_platform_tag.py` | Built wheel platform tag verification |
 
 ## Common Testing Workflows
 
@@ -137,7 +139,7 @@ pytest -vv -s
 
 ## Test Markers
 
-Tests are organized with pytest markers:
+Tests are organized with pytest markers (`server`, `integration`, `graph_export`):
 
 ```bash
 # Run only server tests
@@ -146,8 +148,8 @@ pytest -m server
 # Run only OpenCypher tests
 pytest -k cypher
 
-# Run all except slow tests
-pytest -m "not slow"
+# Run all except server tests
+pytest -m "not server"
 ```
 
 ## Expected Output
@@ -155,7 +157,7 @@ pytest -m "not slow"
 When the current bindings test suite passes, you should see a clean all-green summary.
 
 ```text
-======================== 331 passed ========================
+======================== passed ========================
 ```
 
 ## Next Steps

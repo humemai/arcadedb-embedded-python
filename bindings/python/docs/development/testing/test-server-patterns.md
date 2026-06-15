@@ -24,6 +24,10 @@ Creates server-managed database with 20 items, then spawns 5 threads concurrentl
 
 Uses `with arcadedb.create_server(...) as server:` for automatic start/stop, creates database, inserts note, verifies count.
 
+### 4) pattern 1: embedded first requires close
+
+Creates a database in standalone embedded mode and populates it, then closes it to release the file lock, moves it into the server's `databases/` directory, starts the server, and accesses it via `server.get_database(...)`. Demonstrates that the embedded database MUST be closed before the server can access it.
+
 ### 5) embedded performance comparison
 
 Creates both standalone and server-managed databases with 500 complex multi-field records and runs 100 varied queries (filters, aggregations, date ranges, LIKE patterns). Measures time and ops/sec. Asserts server-managed performance is similar (within 1.5x, typically 0.99x) to standalone. Validates that embedded access through server is direct JVM call, not HTTP.

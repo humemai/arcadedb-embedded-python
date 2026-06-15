@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_exporter.py){ .md-button }
 
-There are 5 test classes with 12+ tests covering JSONL (with type/edge filters), GraphML/GraphSON (skipped if GraphSON support is unavailable), CSV, round-trip (export→import), bulk insert (chunked transactions), and all data types.
+There are 5 test classes with 17 tests covering JSONL (with type/edge filters), GraphML/GraphSON (skipped if GraphSON support is unavailable), CSV, round-trip (export→import), bulk insert (chunked transactions), and all data types.
 
 ## Test Classes & Cases
 
@@ -48,7 +48,7 @@ Fixture `sample_db` creates 20 users, 15 movies, 10 actors, 50 Rated edges, 30 A
 
 ### TestAllDataTypes
 
-Test class exists (last line ~876) but content not shown in excerpt. Likely tests STRING, INTEGER, BOOLEAN, LIST, MAP, DATETIME, BINARY preservation.
+- **export_all_data_types**: Creates a `DataTypeTest` document type exercising STRING, BOOLEAN, INTEGER, LONG, FLOAT, DOUBLE, DATE, DATETIME, DECIMAL, LIST, EMBEDDED, and LINK properties, then exports to JSONL and asserts `totalRecords == 4` (3 docs + 1 vertex).
 
 ## Quick Patterns
 

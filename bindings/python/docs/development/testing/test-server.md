@@ -2,7 +2,9 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_server.py){ .md-button }
 
-There are 4 tests covering server creation, database operations, custom config, and context managers. For advanced patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
+There are 5 tests covering server creation, database operations, custom config, context managers, and the default host. For advanced patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
+
+Note: the first four tests construct the server directly with the `ArcadeDBServer` class, are marked `@pytest.mark.server`, and are skipped unless server support is available.
 
 ## Quick Example
 
@@ -42,10 +44,20 @@ server.stop()
 **Test:** `test_server_creation`
 
 ```python
-server = arcadedb.create_server(root_path="./databases")
-server.start()
+from arcadedb_embedded import ArcadeDBServer
 
+server = ArcadeDBServer(
+    root_path="./databases",
+    root_password="mypassword",
+    config={"http_port": 2480},
+)
+
+assert not server.is_started()
+server.start()
 assert server.is_started()
+
+assert server.get_http_port() == 2480
+assert "http://" in server.get_studio_url()
 
 server.stop()
 assert not server.is_started()
@@ -97,9 +109,25 @@ assert server.get_http_port() == 8080
 **Test:** `test_server_context_manager`
 
 ```python
-with arcadedb.create_server(root_path="./databases") as server:
-    server.start()
+with ArcadeDBServer(root_path="./databases", root_password="mypassword") as server:
+    # Server auto-starts in the context manager
+    assert server.is_started()
     # Server automatically stopped on exit
+```
+
+### 5. Default Host
+
+**Test:** `test_default_host_is_localhost`
+
+Verifies that the default host is `localhost` (binding to all interfaces must be
+opt-in). The server is not started here; the assertion is made on the
+publicly-observable Studio URL, which is a faithful proxy for the configured host.
+
+```python
+from arcadedb_embedded.server import ArcadeDBServer
+
+server = ArcadeDBServer(root_path="./databases", root_password="mypassword")
+assert server.get_studio_url().startswith("http://localhost:")
 ```
 
 ## Running These Tests

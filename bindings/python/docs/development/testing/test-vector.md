@@ -25,8 +25,8 @@ What the tests cover:
 - `test_lsm_vector_search_with_filter` – `allowed_rids` filtering
 - `test_lsm_vector_delete_and_search_others` – deletes vertices, ensures others are still found
 - `test_lsm_vector_search_ef_search` – adjusts `ef_search`
-- `test_get_vector_index_lsm` – fetches index metadata
-- `test_lsm_index_size` – asserts index file presence/size
+- `test_get_vector_index_lsm` – retrieves an existing index via `schema:indexes` metadata
+- `test_lsm_index_size` – asserts `index.get_size()` (0 before inserts, 2 after)
 - `test_lsm_persistence` – reopen DB and reuse the index
 - Distance suites – cosine/euclidean correctness for orthogonal/parallel/opposite/high-dim vectors
 - `test_lsm_vector_search_comprehensive` – end-to-end search path

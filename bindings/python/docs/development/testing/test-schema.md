@@ -6,41 +6,63 @@
 
 Schema tests cover:
 
-- ✅ **Type Creation** - Vertex, edge, and document types
+- ✅ **Type Creation** - Document, vertex, and edge types, plus `get_or_create_*` variants
+- ✅ **IndexType enum** - Includes current Java index values (`GEOSPATIAL`, `HASH`)
 - ✅ **Type Queries** - Getting types and checking existence
 - ✅ **Type Query Stability** - Repeated `get_types()` calls stay duplicate-free
 - ✅ **Type Deletion** - Removing types from schema
-- ✅ **Property Creation** - Adding properties to types
+- ✅ **Property Creation** - Adding properties to types, plus `get_or_create_property`
 - ✅ **Property Deletion** - Removing properties
-- ✅ **Index Creation** - LSM_TREE, HNSW, FULL_TEXT indexes
+- ✅ **Index Creation** - LSM_TREE, unique, composite, FULL_TEXT indexes
 - ✅ **Index Queries** - Getting and listing indexes
 - ✅ **Index Deletion** - Removing indexes
-- ✅ **Property Types** - All ArcadeDB property types
-- ✅ **Vector Indexes** - HNSW (JVector) configuration and operations
+- ✅ **Property Types** - All ArcadeDB property types, including LIST/MAP
+- ✅ **Vector Indexes** - Retrieval/listing via Schema API and LSM vector index operations
 
 ## Test Classes
 
 ### TestTypeCreation
 
-Tests creating vertex, edge, and document types.
+Tests creating document, vertex, and edge types, plus the `get_or_create_*` variants.
 
 **Tests:**
 
+- `test_create_document_type()` - Basic document type creation
 - `test_create_vertex_type()` - Basic vertex type creation
 - `test_create_edge_type()` - Basic edge type creation
-- `test_create_document_type()` - Basic document type creation
-- `test_create_type_with_buckets()` - Custom bucket count
+- `test_create_type_with_buckets()` - Custom bucket count (`buckets=5`)
+- `test_duplicate_type_creation_fails()` - Re-creating a type raises `ArcadeDBError`
+- `test_get_or_create_document_type_new()` - `get_or_create` for a new document type
+- `test_get_or_create_document_type_existing()` - `get_or_create` for an existing document type
+- `test_get_or_create_vertex_type_new()` - `get_or_create` for a new vertex type
+- `test_get_or_create_vertex_type_existing()` - `get_or_create` for an existing vertex type
+- `test_get_or_create_edge_type_new()` - `get_or_create` for a new edge type
+- `test_get_or_create_edge_type_existing()` - `get_or_create` for an existing edge type
 
 **Pattern:**
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    # Basic type
-    db.schema.create_vertex_type("User")
+    schema = db.schema
+
+    # Basic types
+    schema.create_vertex_type("Person")
+    schema.create_edge_type("Knows")
 
     # With buckets
-    db.schema.create_vertex_type("Product", buckets=10)
+    schema.create_document_type("DocWithBuckets", buckets=5)
+
+    # Idempotent variant
+    schema.get_or_create_vertex_type("NewVertex")
 ```
+
+---
+
+### IndexType enum (module-level)
+
+**Test:**
+
+- `test_index_type_enum_includes_new_java_index_types()` - Asserts the Python `IndexType` enum exposes current Java values: `IndexType.GEOSPATIAL.value == "GEOSPATIAL"` and `IndexType.HASH.value == "HASH"`
 
 ---
 
@@ -50,28 +72,30 @@ Tests querying schema for types.
 
 **Tests:**
 
-- `test_get_type()` - Get type by name
-- `test_exists_type()` - Check if type exists
-- `test_get_types()` - List all types
+- `test_exists_type_true()` - `exists_type` returns `True` for an existing type
+- `test_exists_type_false()` - `exists_type` returns `False` for a non-existent type
+- `test_get_type_existing()` - `get_type` returns the type object for an existing type
+- `test_get_type_non_existent()` - `get_type` returns `None` for a non-existent type
+- `test_get_types()` - `get_types` lists all types
 - `test_get_types_has_no_duplicates_across_repeated_calls()` - Repeated calls stay stable and duplicate-free
-- `test_get_type_properties()` - List type properties
 
 **Pattern:**
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("User")
+    schema = db.schema
+    schema.create_vertex_type("User")
 
     # Get type
-    user_type = db.schema.get_type("User")
+    user_type = schema.get_type("User")
 
     # Check existence
-    if db.schema.exists_type("User"):
+    if schema.exists_type("User"):
         print("User type exists")
 
     # List all types
-    for type_obj in db.schema.get_types():
-        print(type_obj.get_name())
+    for type_obj in schema.get_types():
+        print(type_obj.getName())
 ```
 
 ---
@@ -82,19 +106,20 @@ Tests removing types from schema.
 
 **Tests:**
 
-- `test_delete_type()` - Remove type
-- `test_delete_type_with_data()` - Remove type with records
+- `test_drop_type()` - `drop_type` removes a type
+- `test_drop_non_existent_type_fails()` - Dropping a non-existent type raises `ArcadeDBError`
 
 **Pattern:**
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("Temp")
+    schema = db.schema
+    schema.create_document_type("TempType")
 
-    # Delete type
-    db.schema.delete_type("Temp")
+    # Drop type
+    schema.drop_type("TempType")
 
-    assert not db.schema.exists_type("Temp")
+    assert not schema.exists_type("TempType")
 ```
 
 ---
@@ -105,30 +130,36 @@ Tests adding properties to types.
 
 **Tests:**
 
-- `test_create_property()` - Basic property
-- `test_create_property_with_type()` - Typed property
-- `test_create_list_property()` - List property
-- `test_create_embedded_property()` - Embedded property
-- `test_property_constraints()` - Mandatory, not null, defaults
+- `test_create_simple_property()` - Basic STRING property
+- `test_create_integer_property()` - INTEGER property
+- `test_create_list_property()` - LIST property using `of_type=PropertyType.STRING`
+- `test_create_multiple_properties()` - Several properties on the same type
+- `test_create_property_on_non_existent_type_fails()` - Raises `ArcadeDBError`
+- `test_get_or_create_property_new()` - `get_or_create_property` for a new property
+- `test_get_or_create_property_existing()` - `get_or_create_property` for an existing property
 
 **Pattern:**
 
 ```python
-with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("User")
+from arcadedb_embedded import PropertyType
 
-    user_type = db.schema.get_type("User")
+with arcadedb.create_database("./test_db") as db:
+    schema = db.schema
+    schema.create_vertex_type("User")
 
     # Basic property
-    user_type.create_property("name", "STRING")
+    schema.create_property("User", "name", PropertyType.STRING)
 
-    # With constraints
-    name_prop = user_type.get("name")
-    name_prop.set_mandatory(True)
-    name_prop.set_not_null(True)
+    # Typed property
+    schema.create_property("User", "age", PropertyType.INTEGER)
 
     # List property
-    user_type.create_property("tags", "LIST", of_type="STRING")
+    schema.create_property(
+        "User", "tags", PropertyType.LIST, of_type=PropertyType.STRING
+    )
+
+    # Idempotent variant
+    schema.get_or_create_property("User", "email", PropertyType.STRING)
 ```
 
 ---
@@ -139,27 +170,24 @@ Tests removing properties from types.
 
 **Tests:**
 
-- `test_delete_property()` - Remove property
-- `test_delete_property_with_data()` - Remove property with data
+- `test_drop_property()` - `drop_property` removes a property (verified by re-creating it)
+- `test_drop_property_from_non_existent_type_fails()` - Raises `ArcadeDBError`
 
 **Pattern:**
 
 ```python
+from arcadedb_embedded import PropertyType
+
 with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("User")
+    schema = db.schema
+    schema.create_vertex_type("User")
+    schema.create_property("User", "temp", PropertyType.STRING)
 
-    user_type = db.schema.get_type("User")
-    user_type.create_property("temp", "STRING")
+    # Drop property
+    schema.drop_property("User", "temp")
 
-    # Delete property
-    user_type.drop_property("temp")
-
-    # Verify deletion
-    try:
-        user_type.get("temp")
-        assert False, "Property should have been deleted"
-    except (AttributeError, KeyError):
-        pass  # Expected
+    # Property no longer exists; it can be created again
+    schema.create_property("User", "temp", PropertyType.STRING)
 ```
 
 ---
@@ -170,35 +198,37 @@ Tests creating indexes on types.
 
 **Tests:**
 
-- `test_create_lsm_index()` - LSM_TREE index
-- `test_create_unique_index()` - Unique index
+- `test_create_simple_index()` - Single-property index
+- `test_create_unique_index()` - Unique index (`unique=True`)
 - `test_create_composite_index()` - Multi-property index
-- `test_create_fulltext_index()` - Full-text search index
+- `test_create_full_text_index()` - `IndexType.FULL_TEXT` index
+- `test_create_lsm_tree_index()` - Explicit `IndexType.LSM_TREE` index
+- `test_get_or_create_index_new()` - `get_or_create_index` for a new index
+- `test_get_or_create_index_existing()` - `get_or_create_index` for an existing index
 
 **Pattern:**
 
 ```python
+from arcadedb_embedded import IndexType, PropertyType
+
 with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("User")
-    user_type = db.schema.get_type("User")
-    user_type.create_property("username", "STRING")
-    user_type.create_property("email", "STRING")
+    schema = db.schema
+    schema.create_vertex_type("User")
+    schema.create_property("User", "username", PropertyType.STRING)
 
     # Unique index
-    db.schema.create_index("User", ["username"], unique=True)
+    schema.create_index("User", ["username"], unique=True)
 
     # Composite index
-    db.schema.create_vertex_type("Event")
-    event_type = db.schema.get_type("Event")
-    event_type.create_property("userId", "STRING")
-    event_type.create_property("timestamp", "DATETIME")
-    db.schema.create_index("Event", ["userId", "timestamp"])
+    schema.create_vertex_type("Person")
+    schema.create_property("Person", "firstName", PropertyType.STRING)
+    schema.create_property("Person", "lastName", PropertyType.STRING)
+    schema.create_index("Person", ["firstName", "lastName"])
 
     # Full-text index
-    db.schema.create_vertex_type("Article")
-    article_type = db.schema.get_type("Article")
-    article_type.create_property("content", "STRING")
-    db.schema.create_index("Article", ["content"], index_type="FULL_TEXT")
+    schema.create_document_type("Article")
+    schema.create_property("Article", "content", PropertyType.STRING)
+    schema.create_index("Article", ["content"], index_type=IndexType.FULL_TEXT)
 ```
 
 ---
@@ -209,29 +239,28 @@ Tests querying indexes.
 
 **Tests:**
 
-- `test_get_indexes()` - List all indexes
-- `test_get_type_indexes()` - Get indexes for type
-- `test_get_index_properties()` - Get indexed properties
+- `test_exists_index_true()` - `exists_index` returns `True` for an existing index
+- `test_exists_index_false()` - `exists_index` returns `False` for a non-existent index
+- `test_get_indexes()` - `get_indexes` lists all indexes
 
 **Pattern:**
 
 ```python
+from arcadedb_embedded import PropertyType
+
 with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("User")
-    user_type = db.schema.get_type("User")
-    user_type.create_property("username", "STRING")
-    user_type.create_property("email", "STRING")
-    db.schema.create_index("User", ["username"], unique=True)
-    db.schema.create_index("User", ["email"], unique=True)
+    schema = db.schema
+    schema.create_vertex_type("User")
+    schema.create_property("User", "email", PropertyType.STRING)
+    schema.create_index("User", ["email"], unique=True)
 
     # Get all indexes
-    for index in db.schema.get_indexes():
-        print(index.get_name())
+    for index in schema.get_indexes():
+        print(index.getName(), index.getTypeName())
 
-    # Get indexes for type
-    indexes = user_type.get_indexes()
-    for index in indexes:
-        print(f"Index: {index.get_property_names()}")
+    # Check existence by index name (format: Type[property])
+    name = schema.get_indexes()[0].getName()
+    assert schema.exists_index(name)
 ```
 
 ---
@@ -242,28 +271,29 @@ Tests removing indexes.
 
 **Tests:**
 
-- `test_delete_index()` - Remove index
-- `test_delete_index_by_name()` - Remove by index name
+- `test_drop_index()` - `drop_index` removes an index by its name
+- `test_drop_non_existent_index_fails()` - Dropping a non-existent index raises `ArcadeDBError`
 
 **Pattern:**
 
 ```python
+from arcadedb_embedded import PropertyType
+
 with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("User")
-    user_type = db.schema.get_type("User")
-    user_type.create_property("email", "STRING")
+    schema = db.schema
+    schema.create_vertex_type("User")
+    schema.create_property("User", "temp", PropertyType.STRING)
+    schema.create_index("User", ["temp"])
 
-    # Create index
-    db.schema.create_index("User", ["email"], unique=True)
+    # Look up the generated index name, then drop it
+    index_name = next(
+        idx.getName()
+        for idx in schema.get_indexes()
+        if "User" in idx.getTypeName() and "temp" in idx.getName()
+    )
+    schema.drop_index(index_name)
 
-    # Verify index exists
-    assert len(user_type.get_indexes()) > 0
-
-    # Delete index
-    db.schema.drop_index("User[email]")
-
-    # Verify deletion
-    assert len(user_type.get_indexes()) == 0
+    assert schema.exists_index(index_name) is False
 ```
 
 ---
@@ -274,34 +304,43 @@ Tests all ArcadeDB property types.
 
 **Tests:**
 
-- `test_string_property()` - STRING type
-- `test_integer_property()` - INTEGER type
-- `test_long_property()` - LONG type
-- `test_float_property()` - FLOAT type
-- `test_double_property()` - DOUBLE type
-- `test_boolean_property()` - BOOLEAN type
-- `test_date_property()` - DATE type
-- `test_datetime_property()` - DATETIME type
-- `test_binary_property()` - BINARY type
-- `test_list_property()` - LIST type
-- `test_map_property()` - MAP type
+- `test_all_property_types()` - Creates one property for each scalar `PropertyType`: BOOLEAN, BYTE, SHORT, INTEGER, LONG, FLOAT, DOUBLE, DECIMAL, STRING, BINARY, DATE, DATETIME
+- `test_complex_property_types()` - Creates LIST properties (with `of_type`) and a MAP property
 
 **Pattern:**
 
 ```python
-with arcadedb.create_database("./test_db") as db:
-    type_obj = db.schema.create_vertex_type("AllTypes")
+from arcadedb_embedded import PropertyType
 
-    # Create all property types
-    type_obj.create_property("name", "STRING")
-    type_obj.create_property("age", "INTEGER")
-    type_obj.create_property("score", "DOUBLE")
-    type_obj.create_property("active", "BOOLEAN")
-    type_obj.create_property("birthDate", "DATE")
-    type_obj.create_property("created", "DATETIME")
-    type_obj.create_property("tags", "LIST", of_type="STRING")
-    type_obj.create_property("metadata", "MAP")
+with arcadedb.create_database("./test_db") as db:
+    schema = db.schema
+    schema.create_document_type("AllTypes")
+
+    # Scalar types
+    schema.create_property("AllTypes", "intProp", PropertyType.INTEGER)
+    schema.create_property("AllTypes", "stringProp", PropertyType.STRING)
+    schema.create_property("AllTypes", "dateProp", PropertyType.DATE)
+
+    # Complex types
+    schema.create_property(
+        "AllTypes", "tags", PropertyType.LIST, of_type=PropertyType.STRING
+    )
+    schema.create_property("AllTypes", "metadata", PropertyType.MAP)
 ```
+
+---
+
+### TestVectorIndexSchemaOps
+
+Tests vector-index retrieval and listing via the Schema API.
+
+**Tests:**
+
+- `test_get_index_by_name_existing()` - `get_index_by_name` returns an existing index
+- `test_get_index_by_name_non_existent()` - `get_index_by_name` returns `None` for a missing index
+- `test_list_vector_indexes_empty()` - `list_vector_indexes` returns an empty list when no vector indexes exist
+- `test_get_vector_index_non_existent()` - `get_vector_index` returns `None` when no index exists on the property
+- `test_get_vector_index_wrong_type()` - `get_vector_index` returns `None` for a non-vector index
 
 ---
 
@@ -311,31 +350,46 @@ Tests complete schema workflows.
 
 **Tests:**
 
-- `test_complete_schema_setup()` - Full schema creation
-- `test_schema_migration()` - Evolving schema
-- `test_schema_export_import()` - Schema serialization
+- `test_create_complete_graph_schema()` - Creates vertex/edge types with properties and indexes (including a `FULL_TEXT` index on `Post.content`)
+- `test_schema_modification_workflow()` - Adds properties and indexes to an existing type
+- `test_get_or_create_idempotent_schema_creation()` - `get_or_create_*` methods are idempotent across repeated calls
 
 **Pattern:**
 
 ```python
+from arcadedb_embedded import IndexType, PropertyType
+
 with arcadedb.create_database("./test_db") as db:
-    # Complete schema setup
+    schema = db.schema
+
     # Create types
-    user_type = db.schema.create_vertex_type("User")
-    post_type = db.schema.create_vertex_type("Post")
-    likes_type = db.schema.create_edge_type("Likes")
+    schema.create_vertex_type("User")
+    schema.create_vertex_type("Post")
+    schema.create_edge_type("Follows")
+    schema.create_edge_type("Wrote")
 
     # Add properties
-    user_type.create_property("username", "STRING")
-    user_type.create_property("email", "STRING")
-    post_type.create_property("title", "STRING")
-    post_type.create_property("content", "STRING")
+    schema.create_property("User", "username", PropertyType.STRING)
+    schema.create_property("User", "email", PropertyType.STRING)
+    schema.create_property("Post", "content", PropertyType.STRING)
 
     # Create indexes
-    db.schema.create_index("User", ["username"], unique=True)
-    db.schema.create_index("User", ["email"], unique=True)
-    db.schema.create_index("Post", ["title"])
+    schema.create_index("User", ["username"], unique=True)
+    schema.create_index("User", ["email"], unique=True)
+    schema.create_index("Post", ["content"], index_type=IndexType.FULL_TEXT)
 ```
+
+---
+
+### TestLSMVectorIndexSchemaOps
+
+Tests LSM vector index schema operations created via `db.create_vector_index(...)`.
+
+**Tests:**
+
+- `test_list_lsm_vector_indexes()` - After `create_vector_index("Doc", "embedding", dimensions=3)`, `list_vector_indexes()` includes the new index
+- `test_get_lsm_vector_index_existing()` - `get_vector_index("Doc", "embedding")` returns a `VectorIndex` instance
+- `test_get_lsm_vector_index_persistence()` - `get_vector_index` can load a persisted LSM index; `get_size()` reflects inserted vectors
 
 ## Test Patterns
 
@@ -351,69 +405,65 @@ with arcadedb.create_database("./test_db") as db:
 ### Property Definition
 
 ```python
+from arcadedb_embedded import PropertyType
+
 with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("User")
+    schema = db.schema
+    schema.create_vertex_type("User")
 
-    user_type = db.schema.get_type("User")
-
-    # Add property
-    user_type.create_property("name", "STRING")
-
-    # Set constraints
-    prop = user_type.get("name")
-    prop.set_mandatory(True)
-    prop.set_not_null(True)
+    # Add properties
+    schema.create_property("User", "name", PropertyType.STRING)
+    schema.create_property(
+        "User", "tags", PropertyType.LIST, of_type=PropertyType.STRING
+    )
 ```
 
 ### Index Creation
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("User")
-    db.schema.create_property("User", "username", "STRING")
+    schema = db.schema
+    schema.create_vertex_type("User")
+    schema.create_property("User", "username", PropertyType.STRING)
 
     # Unique index
-    db.schema.create_index("User", ["username"], unique=True)
+    schema.create_index("User", ["username"], unique=True)
 ```
 
 ## Common Assertions
 
 ```python
+from arcadedb_embedded import PropertyType
+
 with arcadedb.create_database("./test_db") as db:
-    db.schema.create_vertex_type("User")
-    db.schema.create_property("User", "name", "STRING")
-    db.schema.create_property("User", "age", "INTEGER")
+    schema = db.schema
+    schema.create_vertex_type("User")
+    schema.create_property("User", "name", PropertyType.STRING)
 
     # Type exists
-    assert db.schema.exists_type("User")
+    assert schema.exists_type("User")
 
-    # Type has property
-    user_type = db.schema.get_type("User")
-    assert user_type.get("name") is not None
+    # Type object is retrievable
+    assert schema.get_type("User") is not None
 
     # Index exists (after creating one)
-    db.schema.create_index("User", ["name"])
-    indexes = user_type.get_indexes()
-    assert len(indexes) > 0
-
-    # Property type
-    prop = user_type.get("age")
-    assert str(prop.get_type()) == "INTEGER"
+    schema.create_index("User", ["name"])
+    assert len(schema.get_indexes()) > 0
 ```
 
 ## Key Takeaways
 
 1. **Schema ops are auto-transactional** - No wrapper needed for type/property/index creation
-2. **Check existence** - Use `exists_type()` before creating
-3. **Set constraints** - Use `set_mandatory()`, `set_not_null()`
+2. **Check existence** - Use `exists_type()` / `exists_index()` before creating
+3. **Use `get_or_create_*`** - Idempotent type/property/index creation
 4. **Index frequently queried** - Properties used in WHERE clauses
-5. **Use appropriate types** - Match property types to data
-6. **Configure JVector** - Tune `max_connections`, `beam_width`, `dimensions`, and
-   optional query-time `ef_search` overrides for vectors
+5. **Use `PropertyType` / `IndexType` enums** - Match property and index types to your data
+6. **Vector indexes via the Schema API** - Use `create_vector_index()`, then
+   `list_vector_indexes()` and `get_vector_index()` to retrieve them
 
 ## See Also
 
 - **[Schema API](../../api/schema.md)** - Full API reference
 - **[Example 02: Social Network](../../examples/02_social_network_graph.md)** - Schema patterns
-- **[Example 03: Vector Search](../../examples/03_vector_search.md)** - HNSW indexes
+- **[Example 03: Vector Search](../../examples/03_vector_search.md)** - Vector indexes
 - **[Architecture Guide](../architecture.md)** - Schema design principles

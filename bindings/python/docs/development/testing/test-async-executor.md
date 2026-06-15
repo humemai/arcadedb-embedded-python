@@ -2,200 +2,90 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_async_executor.py){ .md-button }
 
-The file contains **8 tests** covering asynchronous operations and parallel execution.
+The file contains **8 tests** covering asynchronous SQL command/query execution and executor configuration.
 
 ## Overview
 
 AsyncExecutor tests cover:
 
-- ✅ **Parallel execution** – configurable worker threads
+- ✅ **Async SQL commands** – `async_exec.command("sql", ...)` with positional and named args
+- ✅ **Async SQL queries** – `async_exec.query("sql", ...)` with a per-row callback
 - ✅ **Auto-commit cadence** – `set_commit_every()` batching
-- ✅ **Per-operation callbacks** – verifies callback counts
-- ✅ **Status checks** – `is_pending()` used after completion
-- ✅ **Baseline perf timing** – async vs sync insert timings (informational)
+- ✅ **Parallel execution** – `set_parallel_level()` worker threads
+- ✅ **Configuration getters** – `get_parallel_level()`, `get_commit_every()`, `get_back_pressure()`, `get_transaction_sync()`, `get_thread_count()`
+- ✅ **Status checks** – `is_pending()` / `is_processing()` and `is_closed()`
+- ✅ **Callbacks** – per-operation `error_callback` plus global `on_ok()` / `on_error()`
+- ✅ **Lifecycle** – idempotent `close()` and owned-executor shutdown on `db.close()`
 
 ## Test Coverage
 
-### Configuration Tests
+### Command and Query Tests
 
-#### test_async_executor_basic_create
+#### test_async_executor_sql_command_insert
 
-Basic async record creation with 100 vertices (commit every 25).
+Configures `set_parallel_level(4).set_commit_every(1)`, issues 200 async `INSERT INTO Item` commands (positional `args`, a no-op `callback`), then `wait_completion()` and asserts the inserted count is greater than zero.
 
-**What it tests:**
+#### test_async_executor_query_callback_collects_rows
 
-- Getting async executor from database
-- Creating records asynchronously
-- `wait_completion()` blocks until done
-- Closing executor shuts down workers
+Inserts 20 `Person` rows synchronously, then runs an async `SELECT id FROM Person ORDER BY id` via `async_exec.query(...)` with a per-row callback that appends each `id`; asserts the collected ids equal `range(20)`.
 
-**Pattern:**
-```python
-async_exec = db.async_executor()
-async_exec.set_commit_every(25)  # Batch writes into transactions
+### Lifecycle Tests
 
-for i in range(100):
-    vertex = db.new_vertex("User")
-    vertex.set("id", i)
-    async_exec.create_record(vertex)
+#### test_database_close_closes_owned_async_executor
 
-async_exec.wait_completion()
-async_exec.close()
-```
+Runs one async command, then closes the owning database and asserts the executor's `is_closed()` returns `True` (the database shuts down its owned executor).
 
----
+#### test_async_executor_close_is_idempotent
 
-#### test_async_executor_with_commit_every
-
-Automatic commit batching every 50 records; verifies 200 created.
-
-**What it tests:**
-
-- `set_commit_every(50)` commits every 50 records
-- Creating 200 records triggers 4 auto-commits
-- All records persisted after completion
-
-**Pattern:**
-```python
-async_exec = db.async_executor()
-async_exec.set_commit_every(50)
-
-for i in range(200):
-    vertex = db.new_vertex("Item")
-    vertex.set("id", i)
-    async_exec.create_record(vertex)
-
-async_exec.wait_completion()
-async_exec.close()
-```
-
----
-
-#### test_async_executor_with_parallel_level
-
-Uses 4 workers, 500 records; measures elapsed time (informational) and asserts count.
-
-**What it tests:**
-
-- `set_parallel_level(4)` sets 4 worker threads
-- Creates 500 records with parallel execution
-- Verifies all records created
-
-**Pattern:**
-```python
-async_exec = db.async_executor()
-async_exec.set_parallel_level(4)
-async_exec.set_commit_every(100)
-
-for i in range(500):
-    vertex = db.new_vertex("Product")
-    vertex.set("productId", i)
-    async_exec.create_record(vertex)
-
-async_exec.wait_completion()
-async_exec.close()
-```
-
----
-
-#### test_async_executor_method_chaining
-
-Chains `set_parallel_level(2)`, `set_commit_every(25)`, `set_back_pressure(75)`; asserts 100 created.
-
-**What it tests:**
-
-- Chaining `set_parallel_level()`, `set_commit_every()`, `set_back_pressure()`
-- All configurations applied correctly
-- Records created with chained settings
-
-**Pattern:**
-```python
-async_exec = (db.async_executor()
-    .set_parallel_level(2)
-    .set_commit_every(25)
-    .set_back_pressure(75)
-)
-
-# Use configured executor
-for i in range(100):
-    vertex = db.new_vertex("Task")
-    vertex.set("id", i)
-    async_exec.create_record(vertex)
-
-async_exec.wait_completion()
-async_exec.close()
-```
+Calls `close()` twice and asserts `is_closed()` is `True` with no error.
 
 ### Status Tracking Tests
 
-#### test_async_executor_is_pending
+#### test_async_executor_pending_and_processing_flags
 
-Queues 1000 records with `set_commit_every(100)` and uses `is_pending()` after `wait_completion()` to confirm the queue is empty (no assertion during in-flight phase due to timing variability).
+Uses `set_commit_every(100)`, asserts `is_pending()` is initially `False`, queues 1000 commands, observes `is_processing()` during the in-flight phase, then after `wait_completion()` asserts `is_pending()` is `False`.
+
+#### test_async_executor_getters_and_sync_modes
+
+Sets `set_parallel_level(3)`, `set_commit_every(123)`, `set_back_pressure(40)`, `set_transaction_use_wal(False)`, `set_transaction_sync("yes_nometadata")`, then asserts the corresponding getters (`get_parallel_level()`, `get_commit_every()`, `get_back_pressure()`, `is_transaction_use_wal()`, `get_transaction_sync()`, `get_thread_count()`).
 
 ### Callback Tests
 
-#### test_async_executor_callback
+#### test_async_executor_command_error_callback
 
-Per-operation callback collects created IDs; asserts 10 callbacks fired and 10 records exist.
+Issues an async command against a missing type with a per-operation `error_callback`; asserts the error callback was invoked.
 
-**Pattern:**
-```python
-created_count = 0
+#### test_async_executor_global_callbacks
 
-def on_created(record):
-    nonlocal created_count
-    created_count += 1
+Registers global `on_ok(...)` and `on_error(...)` handlers, issues 5 successful inserts, and asserts the success callback fired at least once.
 
-async_exec = db.async_executor()
-
-for i in range(10):
-    vertex = db.new_vertex("User")
-    vertex.set("name", f"User{i}")
-    async_exec.create_record(vertex, callback=on_created)
-
-async_exec.wait_completion()
-async_exec.close()
-
-assert created_count == 10
-```
-
----
-
-#### test_async_executor_global_callback
-
-Documents JPype proxy issues with global callbacks; uses per-operation callbacks as a workaround and asserts 20 successes.
-
-### Performance Tests
-
-#### test_async_vs_sync_performance
-
-Times 1000 synchronous inserts vs async (4 workers, commit every 250); prints speedup but only sanity-checks that async run completes and records are present (no enforced speedup assertion).
-
-## Test Pattern (mirrors `test_async_executor_basic_create`)
+## Test Pattern (mirrors `test_async_executor_sql_command_insert`)
 
 ```python
 db = arcadedb.create_database(str(db_path))
-db.command("sql", "CREATE VERTEX TYPE User")
+db.command("sql", "CREATE DOCUMENT TYPE Item")
 
-async_exec = db.async_executor().set_commit_every(25)
-for i in range(100):
-    v = db.new_vertex("User")
-    v.set("id", i)
-    v.set("name", f"User{i}")
-    async_exec.create_record(v)
+async_exec = db.async_executor().set_parallel_level(4).set_commit_every(1)
+for i in range(200):
+    async_exec.command(
+        "sql",
+        "INSERT INTO Item SET id = ?, name = ?",
+        callback=lambda _r: None,
+        args=(i, f"Item{i}"),
+    )
 
 async_exec.wait_completion()
 async_exec.close()
-assert db.count_type("User") == 100
+assert db.query("sql", "SELECT count(*) as c FROM Item").first().get("c") > 0
 ```
 
 ## Key Takeaways
 
 1. Call `wait_completion()` before `close()` to flush worker threads.
-2. Tune `set_commit_every()` and `set_parallel_level()` per workload (tests use 25/50/100/250 and 2–4 workers).
-3. Prefer per-operation callbacks; global callbacks hit JPype proxy issues (documented in tests).
-4. `is_pending()` is checked after completion to ensure queues are empty.
-5. For application code, prefer async SQL/OpenCypher command/query flows; record helpers remain useful for low-level tests and wrappers.
+2. Tune `set_commit_every()` and `set_parallel_level()` per workload (tests use commit-every 1/100 and 2–4 workers).
+3. Use per-operation `error_callback` or global `on_ok()` / `on_error()` handlers to observe outcomes.
+4. `is_pending()` / `is_processing()` track queue state; `is_pending()` is `False` after completion.
+5. Closing the owning database also closes its owned async executor; `close()` is idempotent.
 
 ## See Also
 
