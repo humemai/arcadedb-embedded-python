@@ -39,6 +39,7 @@ test = [
     "pytest>=7.0.0",
     "pytest-cov",
     "numpy>=1.20.0",
+    "requests>=2.0.0",  # HTTP API / docs-example tests
 ]
 dev = [
     "black",
@@ -47,6 +48,7 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov",
     "numpy>=1.20.0",
+    "requests>=2.0.0",  # HTTP API / docs-example tests
     "bandit>=1.9.0",
 ]
 vector = [
