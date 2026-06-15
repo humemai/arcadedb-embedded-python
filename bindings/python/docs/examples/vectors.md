@@ -194,6 +194,17 @@ with arcadedb.open_database("./vector_demo") as db:
         """,
         query_vector,
     )
+
+    # Manhattan / L1 distance (sum of absolute differences).
+    # vectorManhattanDistance and vectorL1Distance are aliases.
+    results = db.query(
+        "sql",
+        """
+        SELECT vectorManhattanDistance(embedding, ?) as score
+        FROM Product
+        """,
+        query_vector,
+    )
 ```
 
 ### Nearest Neighbors
