@@ -116,8 +116,8 @@ The Python bindings use an **automated versioning system** that extracts version
 For Python-only bug fixes that don't require a new ArcadeDB version:
 
 ```bash
-# Build with Python patch number
-./scripts/build.sh base --python-patch 1
+# Compute the version with a Python patch number
+python scripts/extract_version.py --python-patch 1
 
 # Results in version: 25.9.1.post1 (if base ArcadeDB version is 25.9.1)
 ```
@@ -175,7 +175,7 @@ vim pom.xml  # Change to X.Y.Z+1-SNAPSHOT
 
 # 3. Test thoroughly
 cd bindings/python
-./scripts/build.sh full && pytest
+./scripts/build.sh && pytest
 
 # 4. Commit and create hotfix release
 git commit -am "Hotfix: description"

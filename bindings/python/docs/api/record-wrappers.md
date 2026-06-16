@@ -60,9 +60,10 @@ doc.set("active", True)
 doc.set("name", "Bob").set("age", 25).save()
 ```
 
-#### `get(key) -> Any`
+#### `get(key, convert_types: bool = True) -> Any`
 
-Get a property value.
+Get a property value. With `convert_types=True` (default) Java types are converted to
+Python types; pass `False` to get the raw Java-backed value (equivalent to `get_raw`).
 
 ```python
 name = doc.get("name")
@@ -131,10 +132,11 @@ with db.transaction():
     db.command("sql", "DELETE FROM Note WHERE title = 'Test'")
 ```
 
-#### `to_dict() -> dict`
+#### `to_dict(convert_types: bool = True) -> dict`
 
 Convert the document to a Python dictionary of its properties (metadata like RID/type
-is not included). Use `get_rid()` for the record ID if needed.
+is not included). Use `get_rid()` for the record ID if needed. Pass
+`convert_types=False` to keep raw Java-backed values.
 
 **Performance note:** `to_dict()` eagerly converts the full document into Python
 data. For large scans or repeated wrapper access, prefer `get()` when you only need
@@ -148,12 +150,22 @@ print(doc_dict)
 rid = doc.get_rid()
 ```
 
-#### `get_identity() -> str`
+#### `get_identity()`
 
-Get the Record ID (RID) of the document.
+Get the record identity (the underlying Java RID object). For a string RID, use
+`get_rid()` or wrap with `str(...)`.
 
 ```python
-rid = doc.get_identity()
+identity = doc.get_identity()
+print(str(identity))  # Output: #1:0
+```
+
+#### `get_rid() -> str`
+
+Get the Record ID (RID) as a string.
+
+```python
+rid = doc.get_rid()
 print(rid)  # Output: #1:0
 ```
 
@@ -295,20 +307,20 @@ edge.get_property_names()  # ['since', 'strength']
 
 #### `get_in() -> Vertex`
 
-Get the incoming (destination) vertex of the edge.
+Get the incoming (destination/head) vertex of the edge — wraps `getInVertex()`.
 
 ```python
-source = edge.get_in()
-print(f"Source: {source.get('name')}")
+destination = edge.get_in()
+print(f"Destination: {destination.get('name')}")
 ```
 
 #### `get_out() -> Vertex`
 
-Get the outgoing (source) vertex of the edge.
+Get the outgoing (source/tail) vertex of the edge — wraps `getOutVertex()`.
 
 ```python
-target = edge.get_out()
-print(f"Target: {target.get('name')}")
+source = edge.get_out()
+print(f"Source: {source.get('name')}")
 ```
 
 ## Best Practices

@@ -94,7 +94,8 @@ Set number of parallel worker threads (1-16).
 
 - **CPU-bound**: Match CPU cores (4-8)
 - **I/O-bound**: Can exceed cores (8-16)
-- **Default**: 4
+- **Default**: Number of CPU cores
+- Raises `ValueError` if `level` is not between 1 and 16
 
 **Example:**
 
@@ -139,14 +140,14 @@ async_exec = db.async_executor().set_commit_every(10000)
 ### set_transaction_use_wal
 
 ```python
-async_exec.set_transaction_use_wal(enabled: bool) -> AsyncExecutor
+async_exec.set_transaction_use_wal(use_wal: bool) -> AsyncExecutor
 ```
 
 Enable or disable Write-Ahead Log for transactions.
 
 **Parameters:**
 
-- `enabled` (bool): True to enable WAL (durability), False for speed
+- `use_wal` (bool): True to enable WAL (durability), False for speed
 
 **Returns:**
 
@@ -166,14 +167,14 @@ async_exec = db.async_executor().set_transaction_use_wal(False)
 ### set_back_pressure
 
 ```python
-async_exec.set_back_pressure(threshold: int) -> AsyncExecutor
+async_exec.set_back_pressure(percentage: int) -> AsyncExecutor
 ```
 
 Set queue back-pressure threshold (0-100).
 
 **Parameters:**
 
-- `threshold` (int): Percentage (0=disabled, 100=always)
+- `percentage` (int): Percentage (0-100). Raises `ValueError` if outside 0-100
 
 **Returns:**
 
@@ -209,107 +210,61 @@ async_exec = (db.async_executor()
 
 ## Operation Methods
 
-### create_record
+The async executor schedules SQL/OpenCypher work and a small set of record-level graph
+and time-series operations. There are no `create_record`/`update_record`/`delete_record`
+methods; perform inserts, updates, and deletes through `command(...)` with SQL.
+
+### command
 
 ```python
-async_exec.create_record(
-    record,
-    callback: Optional[Callable] = None
+async_exec.command(
+    language: str,
+    command_text: str,
+    callback: Optional[Callable[[Any], None]] = None,
+    args: Optional[Sequence[Any]] = None,
+    error_callback: Optional[Callable[[Exception], None]] = None,
+    **params,
 )
 ```
 
-Schedule asynchronous record creation.
-
-!!! note "Wrapper-specific API"
-    `AsyncExecutor.create_record()` and `update_record()` operate on record wrapper
-    objects. For non-async CRUD examples elsewhere in the docs, prefer SQL/OpenCypher.
+Execute an async command (INSERT/UPDATE/DELETE/DDL). The callback is optional.
 
 **Parameters:**
 
-- `record`: Document, Vertex, or Edge object to create
-- `callback` (Optional[Callable]): Success callback
+- `language` (str): Command language (`"sql"`, `"opencypher"`, etc.)
+- `command_text` (str): Command string
+- `callback` (Optional[Callable]): Optional callback invoked with each result row
+- `args` (Optional[Sequence]): Positional parameters (use `?` placeholders)
+- `error_callback` (Optional[Callable]): Optional per-operation error callback
+- `**params`: Named parameters (use `:name` placeholders)
+
+!!! note "args vs. params"
+    Pass either positional `args` or named `**params`, not both. Mixing them raises
+    `ValueError`.
 
 **Example:**
 
 ```python
 async_exec = db.async_executor()
 
+# Async inserts via SQL (no create_record helper exists)
 for i in range(10000):
-    vertex = db.new_vertex("User")
-    vertex.set("userId", i)
-    vertex.set("name", f"User {i}")
-    async_exec.create_record(vertex)
+    async_exec.command(
+        "sql",
+        "INSERT INTO User SET userId = :id, name = :name",
+        id=i,
+        name=f"User {i}",
+    )
 
-async_exec.wait_completion()
-async_exec.close()
-```
+# Async update
+async_exec.command("sql", "UPDATE User SET active = true WHERE active = false")
 
----
-
-### update_record
-
-```python
-async_exec.update_record(
-    record,
-    callback: Optional[Callable] = None
+# Async delete with positional args
+async_exec.command(
+    "sql",
+    "DELETE FROM LogEntry WHERE timestamp < ?",
+    args=[cutoff_date],
 )
-```
-
-Schedule asynchronous record update.
-
-**Parameters:**
-
-- `record`: Document, Vertex, or Edge object to update
-- `callback` (Optional[Callable]): Success callback
-
-**Example:**
-
-```python
-# Query records
-results = list(db.query("sql", "SELECT FROM User WHERE active = false"))
-
-async_exec = db.async_executor()
-
-for result in results:
-    element = result.get_element()
-    mutable = element.modify()
-    mutable.set("active", True)
-    async_exec.update_record(mutable)
-
-async_exec.wait_completion()
-async_exec.close()
-```
-
----
-
-### delete_record
-
-```python
-async_exec.delete_record(
-    record,
-    callback: Optional[Callable] = None
-)
-```
-
-Schedule asynchronous record deletion.
-
-**Parameters:**
-
-- `record`: Document, Vertex, or Edge object to delete
-- `callback` (Optional[Callable]): Success callback
-
-**Example:**
-
-```python
-# Delete old records
-to_delete = list(db.query("sql", "SELECT FROM LogEntry WHERE timestamp < ?",
-                            cutoff_date))
-
-async_exec = db.async_executor()
-
-for result in to_delete:
-    element = result.get_element()
-    async_exec.delete_record(element)
 
 async_exec.wait_completion()
 async_exec.close()
@@ -322,69 +277,106 @@ async_exec.close()
 ```python
 async_exec.query(
     language: str,
-    query: str,
-    callback: Callable,
-    **params
+    query_text: str,
+    callback: Callable[[Any], None],
+    args: Optional[Sequence[Any]] = None,
+    error_callback: Optional[Callable[[Exception], None]] = None,
+    **params,
 )
 ```
 
-Execute async query.
+Execute an async query with a callback invoked for each result row.
 
 **Parameters:**
 
-- `language` (str): Query language ("sql", "opencypher", etc.)
-- `query` (str): Query string
-- `callback` (Callable): Callback for query results
-- `**params`: Query parameters
+- `language` (str): Query language (`"sql"`, `"opencypher"`, etc.)
+- `query_text` (str): Query string
+- `callback` (Callable): Callback receiving each result row
+- `args` (Optional[Sequence]): Positional parameters
+- `error_callback` (Optional[Callable]): Optional per-operation error callback
+- `**params`: Named parameters
 
 **Example:**
 
 ```python
-def process_results(resultset):
-    for result in resultset:
-        print(result.get("name"))
+def process_row(row):
+    print(row.get("name"))
 
 async_exec = db.async_executor()
-async_exec.query("sql", "SELECT FROM User WHERE age > 18", process_results)
+async_exec.query("sql", "SELECT FROM User WHERE age > 18", process_row)
 async_exec.wait_completion()
 async_exec.close()
 ```
 
 ---
 
-### command
+### new_edge
 
 ```python
-async_exec.command(
-    language: str,
-    command: str,
-    callback: Callable,
-    **params
+async_exec.new_edge(
+    source_vertex,
+    edge_type: str,
+    destination_vertex_or_rid,
+    light: bool = False,
+    callback: Optional[Callable[[Any, bool, bool], None]] = None,
+    **properties,
 )
 ```
 
-Execute async command.
+Asynchronously create an edge between an existing source vertex and a destination
+vertex (or RID string). The optional callback receives `(edge, created_source_vertex,
+created_dest_vertex)`.
 
-**Parameters:**
+---
 
-- `language` (str): Command language ("sql", etc.)
-- `command` (str): Command string
-- `callback` (Callable): Callback for command results
-- `**params`: Command parameters
+### transaction
+
+```python
+async_exec.transaction(
+    tx_block: Callable[[], None],
+    retries: Optional[int] = None,
+    ok_callback: Optional[Callable[[], None]] = None,
+    error_callback: Optional[Callable[[Exception], None]] = None,
+    slot: Optional[int] = None,
+)
+```
+
+Run `tx_block` inside an async transaction scope, optionally with automatic retries and
+completion callbacks.
+
+---
+
+### scan_type
+
+```python
+async_exec.scan_type(
+    type_name: str,
+    callback: Callable[[Any], bool],
+    polymorphic: bool = True,
+    error_callback: Optional[Callable[[Any, Exception], bool]] = None,
+)
+```
+
+Asynchronously scan all records of a type, invoking `callback` per record. Returning
+`False` from the callback stops the scan.
 
 ## Status Methods
 
 ### wait_completion
 
 ```python
-async_exec.wait_completion(timeout: Optional[float] = None)
+async_exec.wait_completion(timeout_ms: Optional[int] = None)
 ```
 
 Wait for all pending operations to complete.
 
 **Parameters:**
 
-- `timeout` (Optional[float]): Max wait time in seconds (None = forever)
+- `timeout_ms` (Optional[int]): Max wait time in milliseconds (None = forever)
+
+**Raises:**
+
+- `TimeoutError`: If the timeout elapses before completion
 
 **Note:** Always call before closing executor or database.
 
@@ -393,14 +385,13 @@ Wait for all pending operations to complete.
 ```python
 async_exec = db.async_executor()
 
-# Queue operations
+# Queue operations via SQL
 for i in range(10000):
-    vertex = db.new_vertex("User")
-    vertex.set("userId", i)
-    async_exec.create_record(vertex)
+    async_exec.command("sql", "INSERT INTO User SET userId = :id", id=i)
 
-# Wait for all to complete
+# Wait for all to complete (wait forever, or pass milliseconds)
 async_exec.wait_completion()
+async_exec.wait_completion(30000)  # wait at most 30 seconds
 
 # Now safe to close
 async_exec.close()
@@ -477,13 +468,15 @@ async_exec = (db.async_executor()
 # Measure performance
 start = time.time()
 
-# Create 100K vertices asynchronously
+# Create 100K vertices asynchronously via SQL
 for i in range(100000):
-    vertex = db.new_vertex("Product")
-    vertex.set("productId", i)
-    vertex.set("name", f"Product {i}")
-    vertex.set("price", i * 10.5)
-    async_exec.create_record(vertex)
+    async_exec.command(
+        "sql",
+        "INSERT INTO Product SET productId = :id, name = :name, price = :price",
+        id=i,
+        name=f"Product {i}",
+        price=i * 10.5,
+    )
 
 # Wait for completion
 async_exec.wait_completion()
@@ -518,9 +511,7 @@ sync_time = time.time() - start
 start = time.time()
 async_exec = db.async_executor().set_parallel_level(8)
 for i in range(10000):
-    vertex = db.new_vertex("User")
-    vertex.set("userId", i)
-    async_exec.create_record(vertex)
+    async_exec.command("sql", "INSERT INTO User SET userId = :id", id=i)
 async_exec.wait_completion()
 async_exec.close()
 async_time = time.time() - start

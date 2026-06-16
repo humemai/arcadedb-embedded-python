@@ -45,16 +45,16 @@ with arcadedb.create_database("./mydb") as db:
 ```python
 schema.create_vertex_type(
     name: str,
-    buckets: int = 3
-) -> VertexType
+    buckets: Optional[int] = None
+) -> Any
 ```
 
-Create a new vertex type.
+Create a new vertex type. Returns the underlying Java `VertexType` object.
 
 **Parameters:**
 
 - `name` (str): Name of the vertex type
-- `buckets` (int): Number of buckets (default: 3)
+- `buckets` (Optional[int]): Number of buckets (engine default 3 when omitted)
 
 **Returns:**
 
@@ -78,16 +78,16 @@ product_type = schema.create_vertex_type("Product", buckets=10)
 ```python
 schema.create_edge_type(
     name: str,
-    buckets: int = 3
-) -> EdgeType
+    buckets: Optional[int] = None
+) -> Any
 ```
 
-Create a new edge type.
+Create a new edge type. Returns the underlying Java `EdgeType` object.
 
 **Parameters:**
 
 - `name` (str): Name of the edge type
-- `buckets` (int): Number of buckets (default: 3)
+- `buckets` (Optional[int]): Number of buckets (engine default 3 when omitted)
 
 **Returns:**
 
@@ -111,16 +111,16 @@ purchased_type = schema.create_edge_type("Purchased", buckets=5)
 ```python
 schema.create_document_type(
     name: str,
-    buckets: int = 3
-) -> DocumentType
+    buckets: Optional[int] = None
+) -> Any
 ```
 
-Create a new document type.
+Create a new document type. Returns the underlying Java `DocumentType` object.
 
 **Parameters:**
 
 - `name` (str): Name of the document type
-- `buckets` (int): Number of buckets (default: 3)
+- `buckets` (Optional[int]): Number of buckets (engine default 3 when omitted)
 
 **Returns:**
 
@@ -142,76 +142,101 @@ event_type = schema.create_document_type("Event", buckets=8)
 ### create_property
 
 ```python
-type_obj.create_property(
+schema.create_property(
+    type_name: str,
     property_name: str,
-    property_type: str,
+    property_type: Union[str, PropertyType],
     of_type: Optional[str] = None
-) -> Property
+) -> Any
 ```
 
-Create a property on a type.
+Create a property on a type. Returns the underlying Java `Property` object.
 
 **Parameters:**
 
+- `type_name` (str): Name of the type
 - `property_name` (str): Name of the property
-- `property_type` (str): ArcadeDB type (see types below)
-- `of_type` (Optional[str]): Element type for collections
+- `property_type` (str or `PropertyType`): ArcadeDB type (see types below)
+- `of_type` (Optional[str]): Element type for `LIST`/`MAP` collections
 
 **Returns:**
 
-- `Property`: Created property
+- Java `Property` object
 
 **Property Types:**
+
+The `PropertyType` enum (importable as `from arcadedb_embedded import PropertyType`)
+defines the supported values:
 
 - **Primitives**: `STRING`, `INTEGER`, `LONG`, `SHORT`, `BYTE`, `BOOLEAN`, `FLOAT`, `DOUBLE`, `DECIMAL`, `DATE`, `DATETIME`
 - **Binary**: `BINARY`
 - **Collections**: `LIST`, `MAP`, `EMBEDDED`
 - **Links**: `LINK`
+- **Vectors**: `ARRAY_OF_FLOATS`
+
+Either the enum member or its string name may be passed.
 
 **Example:**
 
 ```python
 # Schema operations are auto-transactional
-user_type = schema.create_vertex_type("User")
+schema.create_vertex_type("User")
 
 # String property
-user_type.create_property("name", "STRING")
+schema.create_property("User", "name", "STRING")
 
-# Integer property
-user_type.create_property("age", "INTEGER")
+# Integer property (enum form)
+from arcadedb_embedded import PropertyType
+schema.create_property("User", "age", PropertyType.INTEGER)
 
 # Date property
-user_type.create_property("birthDate", "DATE")
+schema.create_property("User", "birthDate", "DATE")
 
 # List property
-user_type.create_property("tags", "LIST", of_type="STRING")
+schema.create_property("User", "tags", "LIST", of_type="STRING")
 
 # Embedded property
-user_type.create_property("profile", "EMBEDDED")
+schema.create_property("User", "profile", "EMBEDDED")
 ```
 
 ---
 
-### Property with Constraints
+### get_or_create_property
 
 ```python
-# Schema operations are auto-transactional
-user_type = schema.create_vertex_type("User")
-
-# Required property
-name_prop = user_type.create_property("name", "STRING")
-name_prop.set_mandatory(True)
-name_prop.set_not_null(True)
-
-# Property with default
-status_prop = user_type.create_property("status", "STRING")
-status_prop.set_default("active")
-
-# Property with min/max
-age_prop = user_type.create_property("age", "INTEGER")
-age_prop.set_min(0)
-age_prop.set_max(150)
+schema.get_or_create_property(
+    type_name: str,
+    property_name: str,
+    property_type: Union[str, PropertyType],
+    of_type: Optional[str] = None
+) -> Any
 ```
+
+Get an existing property or create it if it doesn't exist. Same parameters as
+`create_property`. Returns the underlying Java `Property` object.
+
+```python
+prop = schema.get_or_create_property("User", "email", "STRING")
+```
+
+---
+
+### drop_property
+
+```python
+schema.drop_property(type_name: str, property_name: str)
+```
+
+Drop a property from a type.
+
+```python
+schema.drop_property("User", "old_field")
+```
+
+!!! note "Property constraints"
+    Constraints such as mandatory, not-null, default, and min/max are configured on the
+    returned Java `Property` object (for example `prop.setMandatory(True)`) or via SQL
+    DDL. The Python `Schema` wrapper itself only exposes property creation/removal.
 
 ## Index Creation
 
@@ -282,6 +307,13 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 
 **Vector (JVector) Parameters:**
 
+!!! note
+    `schema.create_index()` only accepts `type_name`, `property_names`, `unique`, and
+    `index_type`. It does **not** take the JVector tuning parameters below. To configure a
+    vector index from Python, use [`db.create_vector_index()`](database.md#create_vector_index)
+    (which exposes `max_connections`, `beam_width`, `dimensions`, etc.), or SQL
+    `CREATE INDEX ... LSM_VECTOR METADATA {...}`.
+
 - **max_connections**: Max connections per node (default: 16; typical 8-32). Maps to
   JVector `maxConnections`.
 - **beam_width**: Beam width for build/search (default: 100; typical 64-200). Maps to
@@ -307,7 +339,9 @@ Get a type by name.
 
 **Returns:**
 
-- `Optional[Type]`: Type object, or None if not found
+- `Optional[Type]`: Java `DocumentType`/`VertexType`/`EdgeType` object, or `None` if not
+  found. Methods on this object are the underlying Java methods exposed by JPype
+  (camelCase, e.g. `getName()`, `countType(True)`).
 
 **Example:**
 
@@ -315,7 +349,7 @@ Get a type by name.
 # Check if type exists
 user_type = schema.get_type("User")
 if user_type:
-    print(f"User type exists with {user_type.count_records()} records")
+    print(f"User type exists: {user_type.getName()}")
 else:
     print("User type not found")
 ```
@@ -357,48 +391,39 @@ Get all types.
 
 **Returns:**
 
-- `List[Type]`: All types in schema
+- `List[Any]`: All types in the schema as Java type objects
 
 **Example:**
 
 ```python
 for type_obj in schema.get_types():
-    print(f"Type: {type_obj.get_name()}")
-    print(f"  Records: {type_obj.count_records()}")
-    print(f"  Properties: {[p.get_name() for p in type_obj.get_properties()]}")
+    print(f"Type: {type_obj.getName()}")
 ```
 
 ---
 
 ### Type Methods
 
+`get_type()` and `get_types()` return the raw Java type objects. Their methods are the
+underlying Java methods exposed by JPype using camelCase names (for example `getName()`,
+`getProperties()`, `getIndexesByProperties(...)`).
+
 ```python
 type_obj = schema.get_type("User")
 
-# Get type info
-name = type_obj.get_name()
-count = type_obj.count_records()
-buckets = type_obj.get_buckets()
+# Get type info (Java methods via JPype)
+name = type_obj.getName()
 
-# Get properties
-properties = type_obj.get_properties()
-for prop in properties:
-    print(f"{prop.get_name()}: {prop.get_type()}")
-
-# Get specific property
-username_prop = type_obj.get("username")
-if username_prop:
-    print(f"Type: {username_prop.get_type()}")
-    print(f"Mandatory: {username_prop.is_mandatory()}")
-    print(f"Not Null: {username_prop.is_not_null()}")
-
-# Get indexes
-indexes = type_obj.get_indexes()
-for index in indexes:
-    print(f"Index: {index.get_name()}")
-    print(f"  Properties: {index.get_property_names()}")
-    print(f"  Unique: {index.is_unique()}")
+# Get properties (Java Property objects)
+for prop in type_obj.getProperties():
+    print(f"{prop.getName()}: {prop.getType()}")
 ```
+
+!!! tip "Prefer SQL for inspection"
+    For schema inspection in application code, prefer SQL such as
+    `db.query("sql", "SELECT FROM schema:types")` /
+    `db.query("sql", "SELECT FROM schema:indexes")`, which returns Python-friendly
+    `Result` rows instead of raw Java objects.
 
 ## Complete Example
 
@@ -409,70 +434,50 @@ import arcadedb_embedded as arcadedb
 with arcadedb.create_database("./social_network") as db:
     # Create schema (auto-transactional)
     # User vertex type
-    user_type = db.schema.create_vertex_type("User")
-    user_type.create_property("username", "STRING")
-    user_type.create_property("email", "STRING")
-    user_type.create_property("age", "INTEGER")
-    user_type.create_property("tags", "LIST", of_type="STRING")
-    user_type.create_property("createdAt", "DATETIME")
-
-    # Make username required and unique
-    username_prop = user_type.get("username")
-    username_prop.set_mandatory(True)
-    username_prop.set_not_null(True)
+    db.schema.create_vertex_type("User")
+    db.schema.create_property("User", "username", "STRING")
+    db.schema.create_property("User", "email", "STRING")
+    db.schema.create_property("User", "age", "INTEGER")
+    db.schema.create_property("User", "tags", "LIST", of_type="STRING")
+    db.schema.create_property("User", "createdAt", "DATETIME")
 
     # Post vertex type
-    post_type = db.schema.create_vertex_type("Post")
-    post_type.create_property("title", "STRING")
-    post_type.create_property("content", "STRING")
-    post_type.create_property("timestamp", "DATETIME")
+    db.schema.create_vertex_type("Post")
+    db.schema.create_property("Post", "title", "STRING")
+    db.schema.create_property("Post", "content", "STRING")
+    db.schema.create_property("Post", "timestamp", "DATETIME")
 
     # Follows edge type
-    follows_type = db.schema.create_edge_type("Follows")
-    follows_type.create_property("since", "DATETIME")
+    db.schema.create_edge_type("Follows")
+    db.schema.create_property("Follows", "since", "DATETIME")
 
     # Likes edge type
-    likes_type = db.schema.create_edge_type("Likes")
-    likes_type.create_property("timestamp", "DATETIME")
+    db.schema.create_edge_type("Likes")
+    db.schema.create_property("Likes", "timestamp", "DATETIME")
 
     # Create indexes
     db.schema.create_index("User", ["username"], unique=True)
     db.schema.create_index("Post", ["timestamp"])
 
-    # Verify schema
+    # Verify schema (get_types() returns raw Java type objects)
     print("\n📋 Schema Summary:")
     for type_obj in db.schema.get_types():
-        print(f"\nType: {type_obj.get_name()}")
-        print(f"  Records: {type_obj.count_records()}")
-
-        properties = type_obj.get_properties()
-        if properties:
-            print(f"  Properties:")
-            for prop in properties:
-                print(f"    - {prop.get_name()}: {prop.get_type()}")
-
-        indexes = type_obj.get_indexes()
-        if indexes:
-            print(f"  Indexes:")
-            for index in indexes:
-                unique_str = " (UNIQUE)" if index.is_unique() else ""
-                print(f"    - {index.get_name()}{unique_str}")
+        print(f"\nType: {type_obj.getName()}")
+        for prop in type_obj.getProperties():
+            print(f"    - {prop.getName()}: {prop.getType()}")
 ```
 
 ## Schema Evolution
 
 ```python
-# Add property to existing type (auto-transactional)
-user_type = schema.get_type("User")
-if not user_type.get("phoneNumber"):
-    user_type.create_property("phoneNumber", "STRING")
+# Add property to an existing type (auto-transactional)
+if db.schema.get_type("User").getProperty("phoneNumber") is None:
+    db.schema.create_property("User", "phoneNumber", "STRING")
     print("✅ Added phoneNumber property")
 
-# Add index to existing type (auto-transactional)
-if not any(idx.get_property_names() == ["email"]
-            for idx in schema.get_type("User").get_indexes()):
-    schema.create_index("User", ["email"], unique=True)
-    print("✅ Added email index")
+# get_or_create_* helpers make evolution idempotent
+db.schema.get_or_create_property("User", "phoneNumber", "STRING")
+db.schema.get_or_create_index("User", ["email"], unique=True)
 ```
 
 ## Best Practices
@@ -524,19 +529,19 @@ schema.create_vertex_type("BigData", buckets=buckets)
 
 ### 5. Set Property Constraints
 
+Property constraints are not exposed by the Python `Schema` wrapper. Apply them via SQL
+DDL, or on the Java `Property` object returned by `create_property` (camelCase methods):
+
 ```python
-# ✅ Good: Define constraints (schema ops are auto-transactional)
-user_type = schema.create_vertex_type("User")
+# ✅ Recommended: SQL DDL for constraints (schema ops are auto-transactional)
+db.schema.create_vertex_type("User")
+db.command("sql", "CREATE PROPERTY User.username STRING (mandatory true, notnull true)")
+db.command("sql", "CREATE PROPERTY User.age INTEGER (min 0, max 150)")
 
-    # Required username
-    username = user_type.create_property("username", "STRING")
-    username.set_mandatory(True)
-    username.set_not_null(True)
-
-    # Valid age range
-    age = user_type.create_property("age", "INTEGER")
-    age.set_min(0)
-    age.set_max(150)
+# Or configure the returned Java Property object directly
+username = db.schema.create_property("User", "nickname", "STRING")
+username.setMandatory(True)
+username.setNotNull(True)
 ```
 
 ## Common Patterns
@@ -551,9 +556,9 @@ def init_schema(db):
         return
 
     # Schema operations are auto-transactional
-    user_type = db.schema.create_vertex_type("User")
-    user_type.create_property("username", "STRING")
-    user_type.create_property("email", "STRING")
+    db.schema.create_vertex_type("User")
+    db.schema.create_property("User", "username", "STRING")
+    db.schema.create_property("User", "email", "STRING")
 
     db.schema.create_index("User", ["username"], unique=True)
 
@@ -567,32 +572,18 @@ init_schema(db)
 
 ```python
 def export_schema(db):
-    """Export schema to dict"""
+    """Export schema to dict (get_types() yields raw Java type objects)."""
     schema_dict = {}
 
     for type_obj in db.schema.get_types():
-        type_name = type_obj.get_name()
-        schema_dict[type_name] = {
-            "type": type_obj.__class__.__name__,
-            "properties": {},
-            "indexes": []
-        }
+        type_name = str(type_obj.getName())
+        schema_dict[type_name] = {"properties": {}, "indexes": []}
 
-        # Export properties
-        for prop in type_obj.get_properties():
-            schema_dict[type_name]["properties"][prop.get_name()] = {
-                "type": str(prop.get_type()),
-                "mandatory": prop.is_mandatory(),
-                "not_null": prop.is_not_null()
-            }
-
-        # Export indexes
-        for index in type_obj.get_indexes():
-            schema_dict[type_name]["indexes"].append({
-                "name": index.get_name(),
-                "properties": list(index.get_property_names()),
-                "unique": index.is_unique()
-            })
+        # Export properties (Java Property objects via JPype)
+        for prop in type_obj.getProperties():
+            schema_dict[type_name]["properties"][str(prop.getName())] = str(
+                prop.getType()
+            )
 
     return schema_dict
 
@@ -601,23 +592,23 @@ schema_export = export_schema(db)
 print(json.dumps(schema_export, indent=2))
 ```
 
+!!! tip
+    For schema export you can also query `db.query("sql", "SELECT FROM schema:types")`
+    and `db.query("sql", "SELECT FROM schema:indexes")`, which return Python `Result`
+    rows instead of raw Java objects.
+
 ### 3. Schema Migration
 
 ```python
 def migrate_schema_v1_to_v2(db):
-    """Migrate schema from v1 to v2"""
-    user_type = db.schema.get_type("User")
+    """Migrate schema from v1 to v2 (idempotent via get_or_create_*)."""
+    # Add new property if missing
+    db.schema.get_or_create_property("User", "status", "STRING")
+    print("✅ Ensured status property")
 
-    # Add new property
-    if not user_type.get("status"):
-        user_type.create_property("status", "STRING")
-        print("✅ Added status property")
-
-    # Add new index
-    if not any(idx.get_property_names() == ["status"]
-                for idx in user_type.get_indexes()):
-        db.schema.create_index("User", ["status"])
-        print("✅ Added status index")
+    # Add new index if missing
+    db.schema.get_or_create_index("User", ["status"])
+    print("✅ Ensured status index")
 
 # Use it
 migrate_schema_v1_to_v2(db)
@@ -636,11 +627,10 @@ if not schema.exists_type("User"):
 ### Property Not Found
 
 ```python
-# ✅ Good: Check property exists
+# ✅ Good: Check property exists on the Java type object (camelCase JPype methods)
 user_type = schema.get_type("User")
-email_prop = user_type.get("email")
-if email_prop:
-    print(f"Email type: {email_prop.get_type()}")
+if user_type is not None and user_type.existsProperty("email"):
+    print(f"Email type: {user_type.getProperty('email').getType()}")
 else:
     print("Email property not found")
 ```

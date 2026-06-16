@@ -44,7 +44,7 @@ Create an ArcadeDB server instance.
 - `config` (Optional[Dict[str, Any]]): Configuration dictionary (default: `None`)
     - `http_port` (int): HTTP API port (default: 2480)
     - `binary_port` (int): Binary protocol port (default: 2424)
-    - `host` (str): Host to bind to (default: "0.0.0.0")
+    - `host` (str): Host to bind to (default: "localhost"). Pass "0.0.0.0" explicitly to expose the server on all IPv4 interfaces, or "::" for all IPv6 interfaces.
     - `mode` (str): Server mode - "development" or "production" (default: "development")
     - Additional ArcadeDB configuration keys (see Advanced Configuration)
 
@@ -311,7 +311,7 @@ with arcadedb.create_server() as server:
 config = {
     "http_port": 2480,           # HTTP API port
     "binary_port": 2424,         # Binary protocol port (for Java clients)
-    "host": "0.0.0.0",           # Bind address (0.0.0.0 = all interfaces)
+    "host": "localhost",         # Bind address (default loopback; "0.0.0.0" = all IPv4 interfaces)
     "mode": "development",       # "development" or "production"
 }
 

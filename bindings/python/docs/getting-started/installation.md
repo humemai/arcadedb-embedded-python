@@ -29,9 +29,9 @@ installed, with some variation by platform, version, and filesystem allocation:
 
 - ✅ **No Java Installation Required**: Bundled platform-specific JRE
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
-- ✅ **Query Languages**: SQL, OpenCypher, MongoDB
+- ✅ **Query Languages**: SQL, OpenCypher
 - ✅ **Studio Web UI**: Visual database explorer and query editor
-- ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
+- ✅ **Wire Protocols**: HTTP REST, PostgreSQL, Redis, Bolt (Neo4j)
 - ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 

@@ -9,7 +9,8 @@ This example loads the Stack Overflow tables and runs a fixed analytical SQL sui
 Example 08 is the table OLAP benchmark.
 
 - It loads the same eight tables used by Example 07.
-- It builds `Id` indexes after load.
+- It builds a fixed set of indexes after load: a unique `Id` index per table plus
+  secondary indexes on selected columns (defined in `INDEX_DEFS`).
 - It runs one fixed list of ten SQL queries.
 - It can repeat the suite with fixed or shuffled order.
 
@@ -183,7 +184,9 @@ The benchmark measures query execution, but the setup path still matters for con
 - SQLite uses batched inserts.
 - DuckDB bulk-loads CSV via `COPY`.
 - PostgreSQL bulk-loads CSV via `COPY ... FROM STDIN`.
-- After load, all engines build `Id` indexes for the benchmark tables.
+- After load, the ArcadeDB, SQLite, and PostgreSQL paths build the `INDEX_DEFS` set
+  (a unique `Id` index per table plus secondary indexes on selected columns). The DuckDB
+  path skips manual secondary indexes for this benchmark.
 
 ## Result Notes
 

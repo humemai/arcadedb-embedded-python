@@ -27,7 +27,9 @@ When you execute a query, ArcadeDB returns a `ResultSet` that can be iterated to
 
 ## ResultSet Class
 
-Iterable wrapper for query results. Supports both Python iteration (`for`) and manual iteration (`has_next()`/`next()`).
+Iterable wrapper for query results. `ResultSet` is a Python iterator: iterate it with a
+`for` loop, `next()`, or materialize it with helpers like `to_list()`, `first()`, and
+`one()`.
 
 ### Creation
 
@@ -49,7 +51,8 @@ result_set = db.command("sql", "SELECT * FROM Person LIMIT 10")
 
 ### Iteration
 
-**Python-style iteration (recommended):**
+`ResultSet` implements the Python iterator protocol (`__iter__`/`__next__`), so each
+iteration yields a `Result`. Iteration consumes the underlying result set.
 
 ```python
 # Using for loop (most Pythonic)
@@ -60,84 +63,161 @@ for result in result_set:
 
 # As iterator
 result_set = db.query("sql", "SELECT FROM Product")
-results = list(result_set)  # Convert to list
-```
+results = list(result_set)  # Convert to list of Result objects
 
-**Manual iteration:**
-
-```python
-# Check and iterate manually
-while result_set.has_next():
-    result = result_set.next()
-    print(result.to_dict())
+# Or use the built-in next()
+result_set = db.query("sql", "SELECT FROM Document")
+first = next(result_set)  # Raises StopIteration when exhausted
 ```
 
 ---
 
-### `has_next() -> bool`
+### `to_list(convert_types: bool = True) -> List[Dict[str, Any]]`
 
-Check if there are more results available.
+Convert all results to a list of dictionaries.
+
+**Parameters:**
+
+- `convert_types` (bool): Convert Java types to Python types (default: `True`)
 
 **Returns:**
 
-- `bool`: `True` if more results exist, `False` otherwise
+- `List[Dict[str, Any]]`: List of dictionaries with result data
 
 **Example:**
 
 ```python
-result_set = db.query("sql", "SELECT FROM User LIMIT 5")
-
-count = 0
-while result_set.has_next():
-    result = result_set.next()
-    count += 1
-
-print(f"Found {count} results")
+results = db.query("sql", "SELECT FROM User LIMIT 10")
+users = results.to_list()
+print(users[0])
+# {'name': 'Alice', 'age': 30, 'email': 'alice@example.com'}
 ```
 
 ---
 
-### `next() -> Result`
+### `iter_dicts(convert_types: bool = True) -> Iterator[Dict[str, Any]]`
 
-Get the next result.
+Iterate results as dictionaries.
+
+**Parameters:**
+
+- `convert_types` (bool): Convert Java types to Python types (default: `True`)
+
+**Yields:**
+
+- Result rows as dictionaries
+
+---
+
+### `to_dataframe(convert_types: bool = True)`
+
+Convert results to a pandas DataFrame. Requires pandas to be installed.
+
+**Parameters:**
+
+- `convert_types` (bool): Convert Java types to Python types (default: `True`)
 
 **Returns:**
 
-- `Result`: Next result object
+- pandas DataFrame
 
 **Raises:**
 
-- `StopIteration`: When no more results available
+- `ImportError`: If pandas is not installed
 
 **Example:**
 
 ```python
-result_set = db.query("sql", "SELECT FROM Document")
-
-if result_set.has_next():
-    first = result_set.next()
-    print(first.to_dict())
+results = db.query("sql", "SELECT FROM User")
+df = results.to_dataframe()
+print(df.describe())
 ```
 
 ---
 
-### `close()`
+### `iter_chunks(size: int = 1000, convert_types: bool = True) -> Iterator[List[Dict[str, Any]]]`
 
-Close the result set and release resources.
+Iterate results in chunks for memory-efficient processing.
+
+**Parameters:**
+
+- `size` (int): Chunk size (default: `1000`)
+- `convert_types` (bool): Convert Java types to Python types (default: `True`)
+
+**Yields:**
+
+- Lists of dictionaries (up to `size` elements each)
 
 **Example:**
 
 ```python
-result_set = db.query("sql", "SELECT FROM LargeTable")
-
-try:
-    for result in result_set:
-        process(result)
-finally:
-    result_set.close()  # Ensure cleanup
+results = db.query("sql", "SELECT FROM User")
+for chunk in results.iter_chunks(size=1000):
+    process_batch(chunk)  # chunk is a list of dicts
 ```
 
-**Note:** In most cases, result sets are automatically cleaned up when they go out of scope. Explicit closing is only needed for long-running operations or very large result sets.
+---
+
+### `count() -> int`
+
+Count the remaining results without building a list.
+
+**Returns:**
+
+- `int`: Number of remaining results
+
+**Note:** This consumes the remaining rows from the current result set. After calling
+`count()`, the iterator is exhausted.
+
+**Example:**
+
+```python
+count = db.query("sql", "SELECT FROM User").count()
+print(f"Found {count} users")
+```
+
+---
+
+### `first() -> Optional[Result]`
+
+Get the first result, or `None` if there are no results.
+
+**Returns:**
+
+- `Result` or `None`
+
+**Example:**
+
+```python
+user = db.query("sql", "SELECT FROM User WHERE id = 1").first()
+if user:
+    print(user.get("name"))
+```
+
+---
+
+### `one() -> Result`
+
+Get a single result, raising `ValueError` if there is not exactly one.
+
+**Returns:**
+
+- `Result`: The single result
+
+**Raises:**
+
+- `ValueError`: If zero or multiple results
+
+**Example:**
+
+```python
+user = db.query(
+    "sql",
+    "SELECT FROM User WHERE email = ?",
+    "alice@example.com",
+).one()
+print(user.get("name"))
+```
 
 ---
 
@@ -160,13 +240,14 @@ for result in result_set:
 
 ---
 
-### `get(name: str) -> Any`
+### `get(name: str, convert_types: bool = True) -> Any`
 
 Get the value of a property by name.
 
 **Parameters:**
 
 - `name` (str): Property name
+- `convert_types` (bool): Convert Java types to Python types (default: `True`)
 
 **Returns:**
 
@@ -248,9 +329,31 @@ for result in result_set:
 
 ---
 
-### `to_dict() -> Dict[str, Any]`
+### `get_rid() -> Optional[str]`
+
+Get the Record ID (RID) of the result, if available.
+
+**Returns:**
+
+- `str` (e.g. `"#10:5"`) or `None`
+
+**Example:**
+
+```python
+result = db.query("sql", "SELECT FROM User LIMIT 1").first()
+print(result.get_rid())
+# #10:5
+```
+
+---
+
+### `to_dict(convert_types: bool = True) -> Dict[str, Any]`
 
 Convert the result to a Python dictionary.
+
+**Parameters:**
+
+- `convert_types` (bool): Convert Java types to Python types (default: `True`)
 
 **Returns:**
 

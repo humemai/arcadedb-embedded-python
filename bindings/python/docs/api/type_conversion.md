@@ -36,24 +36,29 @@ java_value = convert_python_to_java(python_value)
 
 Convert Python value to Java object for ArcadeDB.
 
+This function only converts the types listed below explicitly. All other Python
+values (`bool`, `int`, `float`, `str`, `bytes`, and any Java objects) are returned
+as-is so that JPype performs the conversion automatically.
+
 **Supported Conversions:**
 
 | Python Type | Java Type |
 |-------------|-----------|
 | `None` | `null` |
-| `bool` | `Boolean` |
-| `int` | `Integer` or `Long` |
-| `float` | `Double` |
-| `str` | `String` |
-| `bytes` | `byte[]` |
-| `datetime` | `LocalDateTime` |
-| `date` | `LocalDate` |
-| `time` | `LocalTime` |
 | `Decimal` | `BigDecimal` |
-| `list` | `ArrayList` |
-| `tuple` | `ArrayList` |
 | `set` | `HashSet` |
 | `dict` | `HashMap` |
+| `list` | `ArrayList` |
+| `tuple` | `ArrayList` |
+| `datetime` | `java.util.Date` |
+| `date` | `LocalDate` |
+
+**Notes:**
+
+- `datetime` is converted to a `java.util.Date` built from its epoch milliseconds.
+- `date` is converted to a `LocalDate`. If the Java types are unavailable it is
+  combined with `time.min` and converted as a `datetime`.
+- Collection elements, set members, and map keys/values are converted recursively.
 
 **Example:**
 
@@ -104,17 +109,24 @@ Convert Java object to Python value.
 |-----------|-------------|
 | `null` | `None` |
 | `Boolean` | `bool` |
+| `String`, `Character` | `str` |
 | `Integer`, `Long`, `Short`, `Byte` | `int` |
 | `Float`, `Double` | `float` |
-| `String` | `str` |
-| `byte[]` | `bytes` |
-| `LocalDateTime` | `datetime` |
-| `LocalDate` | `date` |
-| `LocalTime` | `time` |
 | `BigDecimal` | `Decimal` |
-| `List`, `ArrayList` | `list` |
-| `Set`, `HashSet` | `set` |
-| `Map`, `HashMap` | `dict` |
+| `BigInteger` | `int` |
+| `java.util.Date` | `datetime` |
+| `LocalDate` | `date` |
+| `LocalDateTime` | `datetime` |
+| `Instant`, `ZonedDateTime` | `datetime` (UTC) |
+| `Map` | `dict` |
+| `Set` | `set` |
+| `List`, `Collection` | `list` |
+
+**Notes:**
+
+- `Instant` and `ZonedDateTime` are returned as timezone-aware `datetime` objects in UTC.
+- Other indexable Java objects (such as primitive arrays) are converted element-by-element to a `list`.
+- Unrecognized Java objects (for example `Vertex`, `Edge`, `Document`) are returned unchanged.
 
 **Example:**
 

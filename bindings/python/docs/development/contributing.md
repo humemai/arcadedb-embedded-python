@@ -10,7 +10,7 @@ git clone https://github.com/humemai/arcadedb-embedded-python.git
 cd arcadedb-embedded-python/bindings/python
 
 # Build the package (requires Docker)
-./scripts/build.sh base
+./scripts/build.sh
 
 # Install in development mode
 uv pip install -e .
@@ -82,7 +82,7 @@ python -c "import arcadedb_embedded; print('✅ Setup successful!')"
 ## Project Structure
 
 ```
-arcadedb/bindings/python/
+arcadedb-embedded-python/bindings/python/
 ├── src/
 │   └── arcadedb_embedded/        # Main package
 │       ├── __init__.py            # Package initialization
@@ -150,18 +150,20 @@ arcadedb/bindings/python/
 │   ├── 06_vector_search_recommendations.py
 │   ├── download_data.py           # Data download helper
 │   ├── data/                      # Example datasets
-│   └── benchmark-vector/          # Vector benchmark suite
+│   └── scripts/                   # Example helper scripts
 ├── pyproject.toml                 # Package configuration
 ├── setup.py                       # Setup configuration
-├── build.sh                       # Build script
 ├── scripts/                       # Build and maintenance helpers
-│   ├── jar_exclusions.txt         # JAR optimization list
+│   ├── build.sh                   # Main build entrypoint
 │   ├── build-native.sh            # Native build script
+│   ├── build_and_install_locally.sh # Local build + install helper
 │   ├── ensure-build-tools.sh      # Build tools setup
 │   ├── extract_version.py         # Version extraction
 │   ├── fix_markdown.py            # Docs formatter
+│   ├── jar_exclusions.txt         # JAR optimization list
 │   ├── list_image_jars_by_size.sh # Image JAR inspection helper
 │   ├── setup_jars.py              # JAR staging script
+│   ├── verify_wheel_platform_tag.py # Wheel platform tag verifier
 │   ├── write_version.py           # Version writing
 │   └── Dockerfile.build           # Build container
 └── mkdocs.yml                     # Documentation config
@@ -274,7 +276,7 @@ def test_create_database(tmp_path):
 
         # Verify
         result = db.query("sql", "SELECT FROM schema:types WHERE name = 'User'")
-        assert result.has_next()
+        assert result.first() is not None
     finally:
         db.close()
 
@@ -294,7 +296,7 @@ def test_transaction_rollback(tmp_path):
 
         # Verify rollback
         result = db.query("sql", "SELECT FROM User")
-        assert not result.has_next()
+        assert result.first() is None
     finally:
         db.close()
 ```
@@ -581,8 +583,8 @@ result = db.query("sql",
 
 ```bash
 # Fork on GitHub first
-git clone https://github.com/YOUR_USERNAME/arcadedb.git
-cd arcadedb/bindings/python
+git clone https://github.com/YOUR_USERNAME/arcadedb-embedded-python.git
+cd arcadedb-embedded-python/bindings/python
 
 # Add upstream
 git remote add upstream https://github.com/humemai/arcadedb-embedded-python.git
@@ -719,7 +721,7 @@ python scripts/extract_version.py
 
 ```bash
 # Build the package
-./scripts/build.sh base
+./scripts/build.sh
 
 # Verify wheels
 ls -lh dist/
@@ -729,7 +731,7 @@ ls -lh dist/
 
 ```bash
 # Test the wheel
-uv pip install dist/arcadedb_embed-*.whl
+uv pip install dist/arcadedb_embedded-*.whl
 python -c "import arcadedb_embedded; print('✅ Package OK')"
 ```
 

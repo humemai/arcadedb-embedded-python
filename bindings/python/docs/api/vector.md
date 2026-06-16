@@ -88,7 +88,7 @@ Convert a Java array or ArrayList to a Python array.
 from arcadedb_embedded import to_python_array
 
 # Get vector from vertex
-vertex = result_set.next()
+vertex = result_set.first()
 java_vec = vertex.get("embedding")
 
 # Convert to NumPy array
@@ -280,10 +280,10 @@ also the default. If you explicitly disable eager preparation, the first call to
 
 - `List[Tuple[record, float]]`: List of `(record, distance)` tuples
     - `record`: Matched ArcadeDB record object (Vertex, Document, or Edge)
-    - `distance`: Similarity score (float)
-        - Cosine: lower = more similar
-        - Euclidean: higher = more similar
-        - Inner product: lower = more similar (negative dot product)
+    - `distance`: Distance score (float), lower is better for all functions
+        - Cosine: cosine distance, range [0, 2] (0 = identical)
+        - Euclidean: squared Euclidean distance, range [0, ∞) (0 = identical)
+        - Inner product / dot product: negative dot product (lower = more similar)
     - Range depends on `distance_function`
 
 **Example:**
@@ -327,7 +327,7 @@ rows = db.query(
 | Function | Range | Similarity direction |
 |----------|-------|----------------------|
 | cosine | [0, 2] | lower is better (0 = identical) |
-| euclidean | (0, 1] | higher is better (1 = identical) |
+| euclidean | [0, ∞) | lower is better (0 = identical, squared distance) |
 | inner_product | (-∞, ∞) | lower is better (negative dot product) |
 
 - Vertex must have the vector property populated

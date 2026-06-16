@@ -18,7 +18,7 @@ indexing for fast semantic similarity search. You'll learn:
 ## What You'll Learn
 
 - Generate embeddings using sentence-transformers (all-MiniLM-L6-v2, paraphrase-MiniLM-L6-v2)
-- Create and populate HNSW (JVector) vector indexes with custom edge types
+- Create and populate HNSW (JVector) vector indexes on Movie embedding properties
 - Graph-based collaborative filtering (full vs sampled modes)
 - Vector-based semantic similarity search
 - Performance comparison: 4 recommendation methods
@@ -53,26 +53,24 @@ python 05_csv_import_graph.py --dataset movielens-small --import-jsonl ./exports
 ## Usage
 
 ```bash
-# Recommended: Import from JSONL export (fastest setup)
-python 06_vector_search_recommendations.py \
-    --source-db my_test_databases/movielens_graph_small_db \
-    --db-path my_test_databases/movielens_graph_small_db_vectors
-
-# Use existing graph database
-python 06_vector_search_recommendations.py \
-    --source-db my_test_databases/movielens_graph_small_db \
-    --db-path my_test_databases/movielens_graph_small_db_vectors
-
-# Import from JSONL
+# Recommended: Import from JSONL export (fresh working database)
 python 06_vector_search_recommendations.py \
     --import-jsonl ./exports/movielens_graph_small_db.jsonl.tgz \
+    --db-path my_test_databases/movielens_vector_db
+
+# Copy from an existing graph database (created by Example 05)
+python 06_vector_search_recommendations.py \
     --source-db my_test_databases/movielens_graph_small_db \
-    --db-path my_test_databases/movielens_graph_small_db_vectors
+    --db-path my_test_databases/movielens_vector_db
+
+# Reuse an already-built working database at --db-path (no --import-jsonl/--source-db)
+python 06_vector_search_recommendations.py \
+    --db-path my_test_databases/movielens_vector_db
 
 # Force re-generation of embeddings
 python 06_vector_search_recommendations.py \
     --source-db my_test_databases/movielens_graph_small_db \
-    --db-path my_test_databases/movielens_graph_small_db_vectors \
+    --db-path my_test_databases/movielens_vector_db \
     --force-embed
 
 # See all options
@@ -81,11 +79,16 @@ python 06_vector_search_recommendations.py --help
 
 **Key options:**
 
-- `--source-db SOURCE_DB` - Source graph database path (required)
-- `--db-path DB_PATH` - Working database path for vectors (required)
-- `--import-jsonl IMPORT_JSONL` - Import from JSONL file (optional)
+- `--db-path DB_PATH` - Working database path (default: `./my_test_databases/movielens_vector_db`)
+- `--import-jsonl IMPORT_JSONL` - Create the working DB by importing this JSONL export
+- `--source-db SOURCE_DB` - Create the working DB by copying this existing graph database
 - `--heap-size SIZE` - JVM max heap size (e.g. `8g`, `4096m`)
-- `--force-embed` - Force re-generation of embeddings (optional)
+- `--force-embed` - Force re-generation of embeddings
+- `--limit LIMIT` - Limit number of movies to embed (for debugging)
+
+Provide `--import-jsonl` or `--source-db` to (re)create the working database fresh;
+with neither, the script reuses an existing database at `--db-path` (and errors if none
+exists).
 
 **Recommendations:**
 
@@ -222,49 +225,57 @@ python 06_vector_search_recommendations.py --help
 #### Small Dataset
 
 ```
-Graph-Based Full:
-1. Five Easy Pieces (1970) (4.9★, 5 users)
-2. Thin Red Line, The (1998) (4.8★, 5 users)
-⏱️  0.307s
+1. Graph-Based Full (collaborative filtering - comprehensive):
+   Results (full mode):
+   1. Five Easy Pieces (1970) (Rating: 4.9, Votes: 5)
+   2. Thin Red Line, The (1998) (Rating: 4.8, Votes: 5)
+   ⏱️  0.307s
 
-Graph-Based Fast:
-1. Five Easy Pieces (1970) (4.9★, 5 users)
-2. Thin Red Line, The (1998) (4.8★, 5 users)
-⏱️  0.169s (1.8× faster)
+2. Graph-Based Fast (collaborative filtering - sampled):
+   Results (fast mode):
+   1. Five Easy Pieces (1970) (Rating: 4.9, Votes: 5)
+   2. Thin Red Line, The (1998) (Rating: 4.8, Votes: 5)
+   ⏱️  0.169s
 
-Vector (all-MiniLM-L6-v2):
-1. Ice Guardians (2016) (distance: 0.1365)
-2. Ordinary Decent Criminal (2000) (distance: 0.2077)
-⏱️  0.145s
+3. Vector (all-MiniLM-L6-v2):
+   Results:
+   1. Ice Guardians (2016) (Score: 0.8635)
+   2. Ordinary Decent Criminal (2000) (Score: 0.7923)
+   ⏱️  0.145s
 
-Vector (paraphrase-MiniLM-L6-v2):
-1. Ice Guardians (2016) (distance: 0.0306)
-2. Death and the Maiden (1994) (distance: 0.0887)
-⏱️  0.009s (16× faster than full graph)
+4. Vector (paraphrase-MiniLM-L6-v2):
+   Results:
+   1. Ice Guardians (2016) (Score: 0.9694)
+   2. Death and the Maiden (1994) (Score: 0.9113)
+   ⏱️  0.009s
 ```
 
 #### Large Dataset
 
 ```
-Graph-Based Full:
-1. O Pátio das Cantigas (1942) (5.0★, 11 users)
-2. Farmer & Chase (1997) (5.0★, 7 users)
-⏱️  43.694s
+1. Graph-Based Full (collaborative filtering - comprehensive):
+   Results (full mode):
+   1. O Pátio das Cantigas (1942) (Rating: 5.0, Votes: 11)
+   2. Farmer & Chase (1997) (Rating: 5.0, Votes: 7)
+   ⏱️  43.694s
 
-Graph-Based Fast:
-1. Local Hero (1983) (5.0★, 5 users)
-2. Little Shop of Horrors (1986) (5.0★, 5 users)
-⏱️  0.242s (180× faster!)
+2. Graph-Based Fast (collaborative filtering - sampled):
+   Results (fast mode):
+   1. Local Hero (1983) (Rating: 5.0, Votes: 5)
+   2. Little Shop of Horrors (1986) (Rating: 5.0, Votes: 5)
+   ⏱️  0.242s
 
-Vector (all-MiniLM-L6-v2):
-1. Arranged (2007) (distance: 0.1365)
-2. Banyo (2005) (distance: 0.1388)
-⏱️  0.041s
+3. Vector (all-MiniLM-L6-v2):
+   Results:
+   1. Arranged (2007) (Score: 0.8635)
+   2. Banyo (2005) (Score: 0.8612)
+   ⏱️  0.041s
 
-Vector (paraphrase-MiniLM-L6-v2):
-1. Arranged (2007) (distance: 0.0306)
-2. Banyo (2005) (distance: 0.0719)
-⏱️  0.029s (1,500× faster than full graph!)
+4. Vector (paraphrase-MiniLM-L6-v2):
+   Results:
+   1. Arranged (2007) (Score: 0.9694)
+   2. Banyo (2005) (Score: 0.9281)
+   ⏱️  0.029s
 ```
 
 ## Performance Summary
@@ -326,24 +337,24 @@ db.command(
 )
 ```
 
-**Key parameters:**
+**Key parts of the statement:**
 
-- **vertex_type:** The vertex type to index (e.g., "Movie")
-- **vector_property:** Property containing the embedding vectors
-- **dimensions:** Vector dimensionality (384 for sentence-transformers models)
-- **distance_function:** "cosine" for cosine distance (0-2 range, lower is better)
-- **buildGraphNow:** `true` by default in SQL metadata. Set it to `false` only when you
-    intentionally want lazy graph preparation.
+- **`Movie (embedding_v1)`:** The vertex type and embedding property to index
+  (the script also builds a second index on `embedding_v2`).
+- **`LSM_VECTOR`:** The vector index type (an HNSW-style JVector graph index).
+- **`dimensions`:** Vector dimensionality (384 for the sentence-transformers models used).
+- **`similarity`:** `"COSINE"` for cosine distance (lower distance is better).
 
-The Python object API can still create indexes, but SQL is the cleaner default and is
-what this example encourages.
+`create_sql_vector_index()` also prints `metric=cosine, max_connections=32,
+beam_width=256` to describe the underlying JVector graph build. The Python object API can
+still create indexes, but SQL is the cleaner default and is what this example uses.
 
 ## Output
 
 The script outputs:
 
-1. **Dependency check** - Verifies sentence-transformers and numpy
-2. **Database setup** - Copy or import source database
+1. **Dependency check** - Verifies sentence-transformers is installed
+2. **Database setup** - Import from JSONL, copy from source, or reuse existing database
 3. **Embedding generation** - Progress bars for both models
 4. **Index creation** - JVector index building with timing
 5. **Recommendation comparison** - 4 methods × 5 query movies

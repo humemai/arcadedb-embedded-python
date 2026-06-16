@@ -58,10 +58,10 @@ All query languages supported by the underlying ArcadeDB engine can be used via
 
 **ResultSet & Results:**
 
-- ✅ Pythonic iteration (`__iter__`, `__next__`)
-- ✅ `has_next()`, `next()`
-- ✅ `get()`, `has_property()`, `get_property_names()`
-- ✅ `to_json()`, `to_dict()` (Python enhancement)
+- ✅ Pythonic iteration (`ResultSet.__iter__`, `__next__`)
+- ✅ `ResultSet` helpers: `first()`, `one()`, `count()`, `to_list()`, `iter_dicts()`, `iter_chunks()`, `to_dataframe()`
+- ✅ `Result.get()`, `has_property()`, `get_property_names()`
+- ✅ `Result.to_json()`, `to_dict()` (Python enhancement)
 
 #### 3. Graph API
 
@@ -127,7 +127,7 @@ Full Pythonic Schema API available via `db.schema`:
 
 #### 5. Server Mode
 
-- ✅ `ArcadeDBServer(root_path, config)` - Server initialization
+- ✅ `ArcadeDBServer(root_path, root_password, config)` / `create_server(...)` - Server initialization
 - ✅ `start()`, `stop()`, context manager support
 - ✅ `get_database()`, `create_database()` - Database management
 - ✅ `get_studio_url()`, `get_http_port()`

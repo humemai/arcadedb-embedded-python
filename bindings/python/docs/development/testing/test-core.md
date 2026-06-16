@@ -95,7 +95,8 @@ for result in result_set:
 # Graph traversal
 vertex = db.new_vertex("Person")
 vertex.set("name", "Alice").save()
-friends = vertex.out("Knows")  # Traverse edges
+knows_edges = vertex.get_out_edges("Knows")  # outgoing "Knows" edges
+friends = [edge.get_in() for edge in knows_edges]  # neighbor vertices
 ```
 
 ## Related Documentation

@@ -334,7 +334,7 @@ Rollback the current transaction.
 ### new_vertex
 
 ```python
-db.new_vertex(type_name: str) -> MutableVertex
+db.new_vertex(type_name: str) -> Vertex
 ```
 
 Create a new vertex (graph node) through the wrapper API. **Requires a transaction.**
@@ -345,7 +345,7 @@ Create a new vertex (graph node) through the wrapper API. **Requires a transacti
 
 **Returns:**
 
-- `MutableVertex`: Java vertex object with `.set()`, `.save()` methods
+- `Vertex`: Python `Vertex` wrapper with `.set()`, `.save()` methods
 
 **Raises:**
 
@@ -392,7 +392,7 @@ with db.transaction():
 ### new_document
 
 ```python
-db.new_document(type_name: str) -> MutableDocument
+db.new_document(type_name: str) -> Document
 ```
 
 Create a new document (non-graph record) through the wrapper API. **Requires a transaction.**
@@ -403,7 +403,7 @@ Create a new document (non-graph record) through the wrapper API. **Requires a t
 
 **Returns:**
 
-- `MutableDocument`: Java document object
+- `Document`: Python `Document` wrapper
 
 **Compatibility example:**
 

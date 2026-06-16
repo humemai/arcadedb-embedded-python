@@ -137,7 +137,7 @@ except ArcadeDBError as e:
 ```python
 try:
     result = db.query("sql", "SELECT FROM Person LIMIT 1")
-    person = result.next()
+    person = result.first()
 
     # Property might not exist
     phone = person.get("phone_number")  # Typo or missing
@@ -273,10 +273,7 @@ def get_user_safely(db, email):
     """Get user with fallback on error."""
     try:
         result = db.query("sql", f"SELECT FROM User WHERE email = '{email}'")
-        if result.has_next():
-            return result.next()
-        else:
-            return None
+        return result.first()  # Result or None if no rows
 
     except ArcadeDBError as e:
         print(f"Warning: Database query failed: {e}")

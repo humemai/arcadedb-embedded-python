@@ -83,13 +83,16 @@ METADATA {
   "maxConnections": <max_connections>,
   "beamWidth": <beam_width>,
   "quantization": <quant>,
+  "encoding": <enc>,
   "storeVectorsInGraph": <store_vectors_in_graph>,
   "addHierarchy": <add_hierarchy>
 }
 ```
 
-This is the exact Example 11 build path for ArcadeDB. The Python object helper exists,
-but the benchmark and the recommended docs path use SQL.
+The `"quantization"` and `"encoding"` lines are only emitted when the corresponding
+`--quantization`/`--encoding` value is not `NONE`. When `--encoding INT8` is used the
+`vector` property is created as `BINARY` (and ingested as INT8-quantized bytes) rather
+than `ARRAY_OF_FLOATS`.
 
 ### FAISS
 

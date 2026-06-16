@@ -72,8 +72,10 @@ python 05_csv_import_graph.py --help
 - `--batch-size BATCH_SIZE` - Batch size for operations (default: 5000)
 - `--parallel PARALLEL` - Async executor threads (default: 4, not recommended)
 - `--export` - Export graph database to JSONL after creation
+- `--export-path EXPORT_PATH` - Export filename (default: `{db_name}.jsonl.tgz`)
+- `--db-name DB_NAME` - Database name (default derived from dataset, e.g. `movielens_graph_small_db`)
 - `--source-db SOURCE_DB` - Custom source database path
-- `--import-jsonl IMPORT_JSONL` - Import from JSONL export instead of CSV
+- `--import-jsonl IMPORT_JSONL` - Import from JSONL export instead of using the source document DB
 
 **Recommendations:**
 
@@ -89,12 +91,12 @@ python 05_csv_import_graph.py --help
 
 **User**
 
-- Properties: `userId` (LONG, indexed), `name` (STRING)
+- Properties: `userId` (INTEGER, indexed)
 - Count: 610 (small) / 330,000 (large)
 
 **Movie**
 
-- Properties: `movieId` (LONG, indexed), `title` (STRING), `genres` (STRING), `imdbId` (STRING), `tmdbId` (STRING)
+- Properties: `movieId` (INTEGER, indexed), `title` (STRING), `genres` (STRING), `imdbId` (STRING), `tmdbId` (INTEGER)
 - Count: 9,742 (small) / 86,537 (large)
 
 ### Edge Types
@@ -230,97 +232,147 @@ Total Roundtrip (Export + Import):
 
 ## Graph Queries
 
-The example includes 10 comprehensive graph queries (8 SQL + 2 OpenCypher):
+The example includes 10 comprehensive graph queries (8 SQL + 2 OpenCypher), run by
+`run_and_validate_queries()` and validated against the per-dataset baselines in
+`EXPECTED_RESULTS`:
 
-### Query 1: Count Vertices by Type
+### Query 1: Movies rated by User #1 (SQL - Basic Traversal)
 
 ```sql
-SELECT labels()[0] as type, count(*) as count
-FROM V
-GROUP BY type
-ORDER BY count DESC
+SELECT expand(out('RATED')) FROM User WHERE userId = 1
 ```
 
-### Query 2: Count Edges by Type
+### Query 2: Movies rated 5.0 by User #1 (SQL - Edge Property Filter)
 
 ```sql
-SELECT labels()[0] as type, count(*) as count
-FROM E
-GROUP BY type
-ORDER BY count DESC
+SELECT expand(outE('RATED')[rating = 5.0].inV())
+FROM User WHERE userId = 1
 ```
 
-### Query 3: Sample User Ratings
+### Query 3: Rating statistics for top 5 active users (SQL - Aggregations)
 
 ```sql
-MATCH {type: User, where: (userId = 1)}-RATED->{type: Movie}
-RETURN $patternPathEdges
+SELECT u.userId as userId,
+       COUNT(e) as num_ratings,
+       AVG(e.rating) as avg_rating,
+       MIN(e.rating) as min_rating,
+       MAX(e.rating) as max_rating
+FROM (
+  MATCH {type: User, as: u}.outE('RATED'){as: e} RETURN u,e
+)
+GROUP BY u.userId
+ORDER BY num_ratings DESC
 LIMIT 5
 ```
 
-### Query 4: Sample User Tags
+### Query 4: Top 10 most rated movies (SQL - Aggregations)
 
 ```sql
-MATCH {type: User, where: (userId = 2)}-TAGGED->{type: Movie}
-RETURN $patternPathEdges
-LIMIT 5
-```
-
-### Query 5: High-Rated Movies
-
-```sql
-MATCH {type: User}-RATED->{type: Movie, as: m}
-RETURN m.title, m.movieId, m.genres
-ORDER BY m.movieId
+SELECT m.movieId as movieId, m.title as title,
+       COUNT(e) as num_ratings, AVG(e.rating) as avg_rating
+FROM (
+  MATCH {type: Movie, as: m}.inE('RATED'){as: e} RETURN m, e
+)
+GROUP BY m.movieId, m.title
+ORDER BY num_ratings DESC
 LIMIT 10
 ```
 
-### Query 6: Collaborative Filtering (Most Complex)
+### Query 5: Top 10 most tagged movies (SQL - Aggregations)
 
 ```sql
-MATCH {type: User, where: (userId = 1)}-RATED->{type: Movie}<-RATED-{type: User, as: otherUser}
-RETURN otherUser.userId, count(*) as shared_movies
-GROUP BY otherUser.userId
+SELECT m.movieId as movieId, m.title as title, COUNT(e) as num_tags
+FROM (
+  MATCH {type: Movie, as: m}.inE('TAGGED'){as: e} RETURN m, e
+)
+GROUP BY m.movieId, m.title
+ORDER BY num_tags DESC
+LIMIT 10
+```
+
+### Query 6: Users who rated same movies as User #1 (SQL - MATCH Pattern)
+
+```sql
+SELECT friend.userId as other_user, movie.title as common_movie,
+       a.rating as my_rating, b.rating as their_rating
+FROM (
+  MATCH {type: User, where: (userId = 1), as: me}
+        .outE('RATED'){as: a}
+        .inV(){as: movie}
+        .inE('RATED'){as: b}
+        .outV(){as: friend, where: (userId != 1)}
+  RETURN me, friend, movie, a, b
+)
+```
+
+### Query 7: Users with similar taste to User #1 (SQL - MATCH + Aggregation)
+
+Same as Query 6 but filters both edges to `rating >= 4.5` and aggregates
+`count(*) as shared_high_ratings` grouped by `friend.userId`.
+
+### Query 8: Rating distribution across all ratings (SQL - Aggregation)
+
+```sql
+SELECT rating, count(*) as frequency
+FROM RATED
+WHERE rating IS NOT NULL
+GROUP BY rating
+ORDER BY rating
+```
+
+### Query 9: User #1's top-rated movies (OpenCypher - Basic Pattern)
+
+```cypher
+MATCH (u:User {userId: 1})-[r:RATED]->(m:Movie)
+WHERE r.rating >= 4.0
+RETURN m.title as title, r.rating as rating
+ORDER BY rating DESC
+```
+
+### Query 10: Users who rated same movies as User #1 (OpenCypher - Pattern)
+
+```cypher
+MATCH (u:User {userId: 1})-[:RATED]->(m:Movie)<-[:RATED]-(other:User)
+WHERE other.userId <> 1
+RETURN other.userId as other_user, count(*) as shared_movies
 ORDER BY shared_movies DESC
-LIMIT 10
 ```
 
-### Query 7-8: Additional SQL Patterns
-
-- Query 7: Users with similar taste (SQL MATCH + aggregation)
-- Query 8: Rating distribution (SQL aggregation, filters NULL ratings)
-
-### Query 9-10: OpenCypher Patterns
-
-- Query 9: User's top-rated movies (OpenCypher traversal with filtering)
-- Query 10: Collaborative filtering (OpenCypher aggregation)
-
-**Note:** These queries use OpenCypher patterns as an alternative to SQL MATCH syntax.
+**Note:** Queries 1-8 use SQL (including SQL `MATCH` patterns); Queries 9-10 use
+OpenCypher as an alternative pattern syntax.
 
 ## Code Walkthrough
 
 ### Step 1: Create Graph Schema
 
 ```python
-# Create vertex types
-db.command("sql", "CREATE VERTEX TYPE User IF NOT EXISTS")
-db.command("sql", "CREATE PROPERTY User.userId LONG")
-db.command("sql", "CREATE PROPERTY User.name STRING")
+# create_schema() runs each DDL statement wrapped in try/except so the
+# schema build is idempotent (re-running a CREATE is a no-op):
+schema_commands = [
+    "CREATE VERTEX TYPE User",
+    "CREATE VERTEX TYPE Movie",
+    "CREATE EDGE TYPE RATED",
+    "CREATE EDGE TYPE TAGGED",
+    "CREATE PROPERTY User.userId INTEGER",
+    "CREATE PROPERTY Movie.movieId INTEGER",
+    "CREATE PROPERTY Movie.title STRING",
+    "CREATE PROPERTY Movie.genres STRING",
+    "CREATE PROPERTY Movie.imdbId STRING",
+    "CREATE PROPERTY Movie.tmdbId INTEGER",
+    "CREATE PROPERTY RATED.rating FLOAT",
+    "CREATE PROPERTY RATED.timestamp LONG",
+    "CREATE PROPERTY TAGGED.tag STRING",
+    "CREATE PROPERTY TAGGED.timestamp LONG",
+]
+for command in schema_commands:
+    try:
+        db.command("sql", command)
+    except Exception:
+        pass
+
+# Indexes (unless --no-index): created BEFORE bulk edge creation
 db.command("sql", "CREATE INDEX ON User (userId) UNIQUE_HASH")
-
-db.command("sql", "CREATE VERTEX TYPE Movie IF NOT EXISTS")
-db.command("sql", "CREATE PROPERTY Movie.movieId LONG")
-db.command("sql", "CREATE PROPERTY Movie.title STRING")
 db.command("sql", "CREATE INDEX ON Movie (movieId) UNIQUE_HASH")
-
-# Create edge types
-db.command("sql", "CREATE EDGE TYPE RATED IF NOT EXISTS")
-db.command("sql", "CREATE PROPERTY RATED.rating FLOAT")
-db.command("sql", "CREATE PROPERTY RATED.timestamp LONG")
-
-db.command("sql", "CREATE EDGE TYPE TAGGED IF NOT EXISTS")
-db.command("sql", "CREATE PROPERTY TAGGED.tag STRING")
-db.command("sql", "CREATE PROPERTY TAGGED.timestamp LONG")
 ```
 
 Because the graph is directed, user-to-movie traversals should normally be expressed as
@@ -330,86 +382,86 @@ that explicitly in SQL MATCH or OpenCypher.
 ### Step 2: Create Vertices (SQL)
 
 ```python
-# The example uses VertexCreator class for efficient batch creation
+# The example uses a VertexCreator class for batch creation. Users come from
+# the distinct userIds in the source Rating type. The synchronous SQL path
+# inserts user vertices in batched transactions:
 class VertexCreator:
     def _create_users(self, total_users: int):
-        """Create User vertices from Rating data."""
-        # Use paginated query to avoid memory issues
-        last_rid = None
-        while True:
-            query = f"""SELECT DISTINCT userId FROM Rating
-                        WHERE @rid > {last_rid} LIMIT {batch_size}"""
-            users = list(db.query("sql", query))
-            if not users:
-                break
+        """Create User vertices from distinct Rating.userId values."""
+        with arcadedb.open_database(str(source_db_path)) as source_db:
+            query = (
+                "SELECT userId FROM (SELECT DISTINCT userId FROM Rating) "
+                "ORDER BY userId"
+            )
+            batch_user_ids = []
+            for record in source_db.query("sql", query):
+                batch_user_ids.append(record.get("userId"))
+                if len(batch_user_ids) >= self.batch_size:
+                    with self.db.transaction():
+                        for uid in batch_user_ids:
+                            self.db.command(
+                                "sql", "INSERT INTO User SET userId = ?", uid
+                            )
+                    batch_user_ids = []
+            # ... handle remaining batch ...
 
-            for record in users:
-                user_id = record.get("userId")
-                db.command(
-                    "sql",
-                    "INSERT INTO User SET userId = ?, name = ?",
-                    user_id,
-                    f"User {user_id}",
-                )
-
-            last_rid = users[-1].get_identity()
-
-# See full implementation in Python file for production-ready patterns
+# See full implementation in the Python file for the Java-API and async paths.
 ```
 
 ### Step 3: Create Edges with Foreign Key Resolution
 
 ```python
-# Create RATED edges with efficient index lookups
+# EdgeCreator paginates the source Rating type (database-level streaming),
+# resolves User/Movie RIDs once per batch via a cache (IN [...] lookups that
+# use the userId/movieId indexes), then creates edges directly between RIDs.
 class EdgeCreator:
     def _create_rated_edges(self, total_ratings: int):
-        """Create RATED edges from Rating documents."""
-        last_rid = None
+        """Create RATED edges from Rating records."""
+        last_rid = "#-1:-1"
         while True:
-            # Paginated query
-            query = f"""SELECT * FROM Rating
-                        WHERE @rid > {last_rid} LIMIT {batch_size}"""
-            ratings = list(db.query("sql", query))
-            if not ratings:
+            query = f"""
+                SELECT *, @rid as rid FROM Rating
+                WHERE timestamp IS NOT NULL AND @rid > {last_rid}
+                LIMIT {self.batch_size}
+            """
+            chunk = list(source_db.query("sql", query))
+            if not chunk:
                 break
 
-            for rating_doc in ratings:
-                user_id = rating_doc.get("userId")
-                movie_id = rating_doc.get("movieId")
-                db.command(
-                    "sql",
-                    """
-                    CREATE EDGE RATED
-                    FROM (SELECT FROM User WHERE userId = ?)
-                    TO (SELECT FROM Movie WHERE movieId = ?)
-                    SET rating = ?, timestamp = ?
-                    """,
-                    user_id,
-                    movie_id,
-                    rating_doc.get("rating"),
-                    rating_doc.get("timestamp"),
-                )
+            with self.db.transaction():
+                # Build {userId: rid} and {movieId: rid} caches for this batch
+                user_cache, movie_cache = self._build_vertex_cache(chunk)
+                for record in chunk:
+                    user_rid = user_cache.get(record.get("userId"))
+                    movie_rid = movie_cache.get(record.get("movieId"))
+                    if user_rid and movie_rid:
+                        self.db.command(
+                            "sql",
+                            f"CREATE EDGE RATED FROM {user_rid} TO {movie_rid} "
+                            f"SET rating = {record.get('rating')}, "
+                            f"timestamp = {record.get('timestamp')}",
+                        )
 
-            last_rid = ratings[-1].get_identity()
+            last_rid = chunk[-1].get("rid")
 
-# See full implementation in Python file with batch processing
+# See full implementation in the Python file (Java-API and SQL variants).
 ```
 
 ### Step 4: Run Validation Queries
 
 ```python
-# Verify vertex counts
-user_count = db.query("sql", "SELECT count(*) as c FROM User").first().get("c")
-movie_count = db.query("sql", "SELECT count(*) as c FROM Movie").first().get("c")
+# Verify vertex counts (validate_counts_and_samples)
+user_count = list(db.query("sql", "SELECT count(*) as count FROM User"))[0].get("count")
+movie_count = list(db.query("sql", "SELECT count(*) as count FROM Movie"))[0].get("count")
 
 # Verify edge counts
-rated_count = db.query("sql", "SELECT count(*) as c FROM RATED").first().get("c")
-tagged_count = db.query("sql", "SELECT count(*) as c FROM TAGGED").first().get("c")
+rated_count = list(db.query("sql", "SELECT count(*) as count FROM RATED"))[0].get("count")
+tagged_count = list(db.query("sql", "SELECT count(*) as count FROM TAGGED"))[0].get("count")
 
-print(f"✅ Users:  {user_count:,}")
-print(f"✅ Movies: {movie_count:,}")
-print(f"✅ RATED:  {rated_count:,}")
-print(f"✅ TAGGED: {tagged_count:,}")
+print(f"  Users:  {user_count:,}")
+print(f"  Movies: {movie_count:,}")
+print(f"  RATED:  {rated_count:,}")
+print(f"  TAGGED: {tagged_count:,}")
 ```
 
 ## Running the Benchmark
@@ -480,10 +532,12 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g")
 ### Parallel Processing
 
 ```bash
---parallel 4         # CSV import parallelism (Example 04)
+--parallel 4         # Async executor parallel level (1-16, default 4)
 ```
 
-**Note:** Parallel async does NOT help for graph creation in embedded mode. Use synchronous Java API (`--no-async`) for best performance.
+**Note:** This only affects the Java-API async path. Parallel async does NOT help for
+graph creation in embedded mode (and has no effect in `--method sql`, which is always
+synchronous). Use synchronous Java API (`--no-async`) for best performance.
 
 ## Next Steps
 

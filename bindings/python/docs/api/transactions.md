@@ -243,7 +243,7 @@ with db.transaction():
 
     # Query within transaction (sees uncommitted changes)
     result = db.query("sql", "SELECT COUNT(*) as cnt FROM Item")
-    count = result.next().get("cnt")
+    count = result.first().get("cnt")
     print(f"Created {count} items")
 
 # All commits together or none commit
@@ -406,7 +406,7 @@ with db.transaction():
 
     # Validation check
     result = db.query("sql", "SELECT COUNT(*) as cnt FROM Product")
-    count = result.next().get("cnt")
+    count = result.first().get("cnt")
 
     if count < 5:
         # Trigger rollback by raising exception
@@ -483,14 +483,14 @@ def reader_thread():
     """Reader sees consistent data."""
     # Read before transaction commits
     result = db.query("sql", "SELECT balance FROM Account WHERE name = 'Alice'")
-    balance = result.next().get("balance")
+    balance = result.first().get("balance")
     print(f"Balance: {balance}")  # Sees old value (1000)
 
     time.sleep(1)  # Wait for writer to commit
 
     # Read after transaction commits
     result = db.query("sql", "SELECT balance FROM Account WHERE name = 'Alice'")
-    balance = result.next().get("balance")
+    balance = result.first().get("balance")
     print(f"Balance: {balance}")  # Sees new value (2000)
 
 # Start threads
@@ -521,7 +521,7 @@ db = arcadedb.open_database("./mydb")
 
 # Data is still there
 result = db.query("sql", "SELECT FROM Critical WHERE data = 'important'")
-assert result.has_next()
+assert result.first() is not None
 print("Data survived!")
 ```
 
@@ -588,7 +588,7 @@ except Exception as e:
 with db.transaction():
     # Read
     result = db.query("sql", "SELECT FROM Counter WHERE name = 'page_views'")
-    counter = result.next()
+    counter = result.first()
 
     # Modify
     current_value = counter.get("value")
@@ -608,7 +608,7 @@ with db.transaction():
     # Check if exists
     result = db.query("sql", "SELECT FROM User WHERE email = 'alice@example.com'")
 
-    if result.has_next():
+    if result.first() is not None:
         print("User already exists")
     else:
         # Create if not exists
@@ -633,10 +633,9 @@ def update_with_retry(db, rid, new_value, max_retries=3):
             with db.transaction():
                 # Read current version
                 result = db.query("sql", f"SELECT FROM {rid}")
-                if not result.has_next():
+                record = result.first()
+                if record is None:
                     raise ValueError("Record not found")
-
-                record = result.next()
 
                 # Update (ArcadeDB handles version checking)
                 db.command("sql", f"UPDATE {rid} SET value = '{new_value}'")

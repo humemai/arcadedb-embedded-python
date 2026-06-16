@@ -228,7 +228,7 @@ errors=$(grep -oE 'errors="[0-9]+"' test-results.xml | grep -oE '[0-9]+')
 
 ```dockerfile
 # Stage 1: java-builder (downloads JARs from ArcadeDB image)
-FROM arcadedb/arcadedb:24.11.1 AS java-builder
+FROM arcadedata/arcadedb:24.11.1 AS java-builder
 # Downloads the upstream JAR set to /jars
 
 # Stage 2: jre-builder (filters JARs, creates JRE)
@@ -325,7 +325,7 @@ bindings/python/
 ├── scripts/Dockerfile.build    # Docker builds (Linux)
 ├── scripts/setup_jars.py       # Copies JARs/JRE to package
 ├── pyproject.toml              # Package metadata, dependencies
-└── src/arcadedb/
+└── src/arcadedb_embedded/
     └── jre/                    # Bundled JRE (created during build)
         ├── bin/java            # Platform-specific Java binary
         ├── lib/                # JRE libraries

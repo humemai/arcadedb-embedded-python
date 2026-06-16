@@ -29,7 +29,8 @@ The example defines these tables directly in `TABLE_DEFS`.
 | `Tag` | `Tags.xml` | `Id`, `TagName`, `Count`, `ExcerptPostId`, `WikiPostId` |
 | `PostHistory` | `PostHistory.xml` | `Id`, `PostHistoryTypeId`, `PostId`, `RevisionGUID`, `CreationDate`, `UserId`, `UserDisplayName`, `Comment`, `Text`, `CloseReasonId` |
 
-Each backend also creates a unique `Id` index for every table.
+After load, the ArcadeDB, SQLite, and PostgreSQL backends create a unique `Id` index for
+every table. The DuckDB path skips manual secondary indexes for this benchmark.
 
 ## Supported Backends
 

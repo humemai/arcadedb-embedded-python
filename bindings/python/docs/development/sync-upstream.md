@@ -14,7 +14,8 @@ This fork tracks `ArcadeData/arcadedb` through the local `upstream-main` branch.
 
 - Updates `upstream-main` to match `upstream/main`
 - Merges `upstream-main` into `main`
-- Preserves this fork's root `README.md` and `CLAUDE.md`
+- Preserves this fork's root `README.md`
+- Keeps fork-excluded files (such as `CLAUDE.md`) out of the fork
 - Keeps removed upstream workflows from being reintroduced:
   `.github/workflows/mvn-test.yml`, `.github/workflows/mvn-deploy.yml`,
   `.github/workflows/mvn-release.yml`, `.github/workflows/license-compliance.yml`, and

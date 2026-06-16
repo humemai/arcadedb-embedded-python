@@ -63,7 +63,7 @@ Documentation is versioned using [mike](https://github.com/jimporter/mike) and a
 
 ### How It Works
 
-1. **Create a GitHub Release** with tag like `python-X.Y.Z`
+1. **Create a GitHub Release** with tag like `X.Y.Z`
 2. **GitHub Actions** automatically:
     - Builds documentation with MkDocs
     - Deploys version `X.Y.Z` to GitHub Pages
@@ -80,18 +80,18 @@ Documentation is versioned using [mike](https://github.com/jimporter/mike) and a
 **Automatic deployment** (recommended):
 
 ```bash
-# 1. Make documentation changes on python-embedded branch
+# 1. Make documentation changes on main branch
 # 2. Build and test wheels
-./scripts/build.sh base
+./scripts/build.sh
 pytest
 
 # 3. Commit and push changes
 git add .
 git commit -m "Release version X.Y.Z"
-git push origin python-embedded
+git push origin main
 
 # 4. Create GitHub Release (creates tag automatically)
-gh release create python-X.Y.Z \
+gh release create X.Y.Z \
   --title "Python Bindings vX.Y.Z" \
   --notes "Release notes"
 
@@ -141,8 +141,8 @@ Documentation versions **match PyPI package versions**:
 
 | Release Tag | Docs Version | PyPI Packages |
 |-------------|--------------|---------------|
-| `python-X.Y.Z` | `X.Y.Z` | `arcadedb-embedded==X.Y.Z` |
-| Example: `v25.9.1-python` | `25.9.1` | `arcadedb-embedded==25.9.1` |
+| `X.Y.Z` | `X.Y.Z` | `arcadedb-embedded==X.Y.Z` |
+| Example: `25.9.1` | `25.9.1` | `arcadedb-embedded==25.9.1` |
 
 This ensures users always see documentation matching their installed package version.
 

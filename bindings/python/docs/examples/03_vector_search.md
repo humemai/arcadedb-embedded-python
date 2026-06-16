@@ -21,9 +21,11 @@ Create a vertex type with an embedding property:
 ```python
 db.command("sql", "CREATE VERTEX TYPE Article")
 db.command("sql", "CREATE PROPERTY Article.title STRING")
+db.command("sql", "CREATE PROPERTY Article.content STRING")
+db.command("sql", "CREATE PROPERTY Article.category STRING")
 db.command("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
-db.command("sql", "CREATE PROPERTY Article.id INTEGER")
-db.command("sql", "CREATE INDEX ON Article (id) UNIQUE")
+db.command("sql", "CREATE PROPERTY Article.id STRING")
+db.command("sql", "CREATE INDEX ON Article (id) UNIQUE_HASH")
 ```
 
 Vector properties must use the `ARRAY_OF_FLOATS` type.
@@ -52,11 +54,25 @@ with db.transaction():
     for doc in documents:
         db.command(
             "sql",
-            "INSERT INTO Article SET title = ?, embedding = ?",
-            doc["title"],
-            arcadedb.to_java_float_array(doc["embedding"]),
+            """
+            INSERT INTO Article SET
+                id = :id,
+                title = :title,
+                content = :content,
+                category = :category,
+                embedding = :embedding
+            """,
+            {
+                "id": doc["id"],
+                "title": doc["title"],
+                "content": doc["content"],
+                "category": doc["category"],
+                "embedding": arcadedb.to_java_float_array(doc["embedding"]),
+            },
         )
 ```
+
+Inserts are committed in batches (every 1,000 documents).
 
 ### 4. Creating Vector Index
 
@@ -77,47 +93,60 @@ db.command(
 )
 ```
 
-**Parameters:**
+**Metadata:**
 - `dimensions`: Must match embedding model size
-- `distance_function`: `cosine` (for normalized vectors), `euclidean`, or `inner_product`
-- `buildGraphNow`: Defaults to `true` in SQL metadata. Set it to `false` only if you
-   intentionally want to defer preparation to the first query.
+- `similarity`: `COSINE` (best for normalized vectors)
+
+The index is `LSM_VECTOR` (JVector / HNSW-style graph). The LSM index automatically
+indexes the existing records when it is created.
 
 ### 5. Semantic Search
 
 Find the k most similar documents to a query embedding with SQL nearest-neighbor
-queries. This keeps search in the query layer, where filtering and score shaping are
-easy to express.
+queries. The index name, the query embedding, and `k` are passed as positional query
+parameters to `vectorNeighbors(?, ?, ?)`:
 
 ```python
-query_embedding = create_mock_embedding(category, "query")
-qvec_literal = "[" + ", ".join(str(float(x)) for x in query_embedding.tolist()) + "]"
-rows = db.query(
+index_name = "Article[embedding]"
+query_embedding = create_mock_embedding(category, f"query{query_num}")
+most_similar = db.query(
     "sql",
     (
         "SELECT title, category, distance, (1 - distance) AS score "
-        "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
-        f"{qvec_literal}, 5))) ORDER BY distance"
+        "FROM (SELECT expand(vectorNeighbors(?, ?, ?))) ORDER BY distance"
     ),
+    index_name,
+    query_embedding,
+    5,
 ).to_list()
 
-for hit in rows:
+for hit in most_similar:
     print(f"{hit.get('title')}: {hit.get('distance'):.4f}")
 ```
 
-The example also shows a filtered query in the same category:
+The example also shows a filtered query in the same category (it retrieves 50
+neighbors, then filters by category and limits to 5):
 
 ```python
-filtered_rows = db.query(
+filtered_hits = db.query(
     "sql",
     (
         "SELECT title, category, distance, (1 - distance) AS score "
-        "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
-        f"{qvec_literal}, 50))) WHERE category = ? ORDER BY distance LIMIT 5"
+        "FROM (SELECT expand(vectorNeighbors(?, ?, ?))) "
+        "WHERE category = ? ORDER BY distance LIMIT 5"
     ),
+    index_name,
+    query_embedding,
+    50,
     category,
 ).to_list()
 ```
+
+The example then demonstrates two more workloads: an INT8-encoded dense-vector index
+(an `LSM_VECTOR` index with `"encoding": "INT8"` on a `BINARY` property) and a
+sparse-vector index (`LSM_SPARSE_VECTOR` on token/weight arrays, queried with
+`` `vector.sparseNeighbors` ``). Both are wrapped in `try`/`except` and skipped if the
+runtime does not support them.
 
 ## Example Output
 
@@ -126,8 +155,8 @@ Step 5: Creating vector index...
    💡 JVector Parameters:
       • dimensions: 384 (matches embedding size)
       • distance_function: cosine (best for normalized vectors)
-      • max_connections: 16 (connections per node, higher = more accurate but slower)
-      • beam_width: 100 (search quality, higher = more accurate)
+      • max_connections: 32 (connections per node, higher = more accurate but slower)
+      • beam_width: 256 (search quality, higher = more accurate)
    ✅ Created JVector vector index
 
 Step 6: Performing semantic similarity searches...

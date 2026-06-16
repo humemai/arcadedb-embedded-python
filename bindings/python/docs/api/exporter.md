@@ -21,7 +21,7 @@ from arcadedb_embedded.exporter import export_database
 export_database(
     db,
     file_path: str,
-    format: str = "jsonl",
+    export_format: str = "jsonl",
     overwrite: bool = False,
     include_types: Optional[List[str]] = None,
     exclude_types: Optional[List[str]] = None,
@@ -36,7 +36,7 @@ Export the full database using ArcadeDB's Java exporter. Supported formats are
 
 - `db`: Database instance
 - `file_path`: Output file path (non-absolute paths are stored under exports/)
-- `format`: Export format (`"jsonl"`, `"graphml"`, `"graphson"`)
+- `export_format`: Export format (`"jsonl"`, `"graphml"`, `"graphson"`)
 - `overwrite`: Overwrite output if it already exists
 - `include_types`: Export only specific types
 - `exclude_types`: Exclude specific types
@@ -79,7 +79,7 @@ export_database(
 )
 
 # GraphML export (requires GraphML module in the packaged jars)
-export_database(db, "graph.graphml.tgz", format="graphml", overwrite=True)
+export_database(db, "graph.graphml.tgz", export_format="graphml", overwrite=True)
 
 db.close()
 ```

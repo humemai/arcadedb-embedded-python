@@ -109,7 +109,7 @@ with arcadedb.create_database("./social_network_db") as db:
     db.command("sql", "CREATE PROPERTY FRIEND_OF.closeness STRING")
 
     # Create indexes for performance
-    db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE")
+    db.command("sql", "CREATE INDEX ON Person (name) NOTUNIQUE_HASH")
 ```
 
 ## Query Examples
@@ -216,13 +216,16 @@ ORDER BY friend_count DESC, name
 ```
 
 ```cypher
--- 6. Find outgoing connections within 3 steps from Alice (Cypher)
-MATCH (alice:Person {name: 'Alice Johnson'})
-    -[:FRIEND_OF*1..3]->(connected:Person)
+-- 6. Find connections within 3 steps from Alice (Cypher)
+MATCH (alice:Person {name: 'Alice Johnson'})-[:FRIEND_OF*1..3]-(connected:Person)
 WHERE connected.name <> 'Alice Johnson'
 RETURN DISTINCT connected.name as name, connected.city as city
-ORDER BY connected.name
+ORDER BY name
 ```
+
+### Gremlin Queries
+
+The example also runs the same six traversals using Gremlin (e.g. `g.V().hasLabel('Person').has('name', 'Alice Johnson').out('FRIEND_OF')...`), demonstrating projections with `project()`/`by()`, aggregations with `count()`, and variable-length paths with `repeat().times(3).emit()`.
 
 ## NULL Value Handling in Graphs
 
@@ -316,7 +319,7 @@ with arcadedb.open_database("./social_network_db") as db:
     - Try modifying the sample data in the code
 
 3. **Experiment with queries:**
-    - Modify the Cypher queries in `demonstrate_cypher_queries()`
+    - Modify the OpenCypher queries in `demonstrate_opencypher_queries()`
     - Add new relationship types (WORKS_WITH, LIVES_NEAR)
     - Try different traversal patterns and depths
     - Add relationship scoring (strength, trust level)

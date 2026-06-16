@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/04_csv_import_documents.py){ .md-button }
 
-**Production-ready CSV import with SQL import, automatic type inference, NULL handling, and index
+**Bulk CSV import with explicit schema mapping, WAL-off ingest, NULL handling, and index
 optimization**
 
 ## Overview
@@ -10,24 +10,27 @@ optimization**
 This example demonstrates importing real-world CSV data from the MovieLens dataset into
 ArcadeDB documents. You'll learn production-ready patterns for:
 
-- **Automatic type inference** - Java analyzes CSV and infers optimal ArcadeDB types
-- **SQL import workflow** - Python drives import through `IMPORT DATABASE`
+- **Explicit schema mapping** - Each document type's columns are mapped to fixed
+  ArcadeDB types (LONG, DOUBLE, STRING)
+- **Bulk INSERT ingest** - Python parses the CSV and runs batched `INSERT INTO ... SET`
+- **WAL-off ingest** - WAL is disabled during the bulk load, then re-enabled
 - **NULL value handling** - Import and query missing data across all types
 - **Batch processing** - Optimize import performance with commit batching
 - **Index optimization** - Create indexes AFTER import for maximum throughput
 - **Performance analysis** - Measure query speedup with statistical validation
 - **Result validation** - Verify indexes return identical results with actual data samples
+- **Optional export/roundtrip** - Export to JSONL and re-import to validate integrity
 
 ## What You'll Learn
 
-- Automatic type inference by the Java-side SQL import path (LONG, DOUBLE, STRING)
-- SQL-driven import from Python via `db.command("sql", "IMPORT DATABASE ...")`
+- Explicit per-type schema mapping (LONG, DOUBLE, STRING)
+- Bulk INSERT ingest from Python via `csv.DictReader` + batched `db.command("sql", ...)`
 - NULL value import from empty CSV cells
 - Query performance measurement (10 runs with statistics)
 - Index creation timing (before vs after import)
-- Composite indexes for multi-column queries
+- Full-text (Lucene) indexing on the genres field
 - **Result validation with actual data samples**
-- Production import patterns for large datasets
+- Optional JSONL export and `IMPORT DATABASE` roundtrip validation
 
 ## Prerequisites
 
@@ -55,27 +58,29 @@ python download_data.py movielens-small # movielens small dataset
 - **movielens-large**: ~86,000 movies, ~33M ratings (~265 MB) - Realistic performance testing
 - **movielens-small**: ~9,700 movies, ~100,000 ratings (~1 MB) - Quick testing
 
-Both datasets include intentional NULL values for testing:
+Empty cells in the CSV files are imported as SQL NULL. After each file is loaded the
+example counts NULLs in the columns that can be empty:
 
-- `movies.csv`: ~2% NULL genres, ~0.5% NULL titles
-- `ratings.csv`: ~3% NULL timestamps, ~1% NULL ratings
-- `links.csv`: ~5% NULL imdbId, ~8% NULL tmdbId
-- `tags.csv`: ~5% NULL tags, ~2% NULL timestamps
+- `movies.csv`: NULL `genres`
+- `ratings.csv`: NULL `timestamp`
+- `links.csv`: NULL `imdbId`, NULL `tmdbId`
+- `tags.csv`: NULL `tag`
 
 ## Dataset Structure
 
-**MovieLens Large** - 4 CSV files:
+Each dataset has 4 CSV files imported into 4 document types:
 
-| File | Records | Columns | Description |
-|------|---------|---------|-------------|
-| `movies.csv` | 86,537 | movieId, title, genres | Movie metadata |
-| `ratings.csv` | 33,832,162 | userId, movieId, rating, timestamp | User ratings |
-| `links.csv` | 86,537 | movieId, imdbId, tmdbId | External IDs (with NULLs) |
-| `tags.csv` | 2,328,315 | userId, movieId, tag, timestamp | User tags (with NULLs) |
+| File | Columns | Document type |
+|------|---------|---------------|
+| `movies.csv` | movieId, title, genres | `Movie` |
+| `ratings.csv` | userId, movieId, rating, timestamp | `Rating` |
+| `links.csv` | movieId, imdbId, tmdbId | `Link` |
+| `tags.csv` | userId, movieId, tag, timestamp | `Tag` |
 
-**Total records**: 36,333,551 documents
+**movielens-large**: ~86K movies, ~33M ratings (~265 MB).
+**movielens-small**: ~9K movies, ~100K ratings (~1 MB).
 
-For quick testing with the smaller dataset (124,003 records), use: `python download_data.py movielens-small`
+For quick testing, use: `python download_data.py movielens-small`
 
 ## Usage
 
@@ -110,67 +115,80 @@ python 04_csv_import_documents.py --help
 - Batch size: 5000-50000 (larger = faster imports, more memory)
 - Export: Use `--export` to create reproducible benchmark databases
 
-## Type Inference by Java
+## Explicit Schema Mapping
 
-The example uses **automatic type inference** by the Java-side SQL import path, which analyzes
-the data and selects optimal ArcadeDB types:
+The example defines an **explicit schema** for each document type before ingest. Columns
+are mapped to fixed ArcadeDB types in `import_csv_documents_via_sql()`:
 
-### Example Inference Results (movielens-large)
+### Schema mapping (`schema_by_type`)
 
 ```
 📋 Movie (movies.csv):
-   • movieId: LONG (e.g., '1')
-   • title: STRING (e.g., 'Toy Story (1995)')
-   • genres: STRING (e.g., 'Adventure|Animation|Children|Comedy|Fantasy')
+   • movieId: LONG
+   • title: STRING
+   • genres: STRING
 
 📋 Rating (ratings.csv):
-   • userId: LONG (e.g., '1')
-   • movieId: LONG (e.g., '1')
-   • rating: DOUBLE (e.g., '4.0')
-   • timestamp: LONG (e.g., '964982703')
+   • userId: LONG
+   • movieId: LONG
+   • rating: DOUBLE
+   • timestamp: LONG
 
 📋 Link (links.csv):
-   • movieId: LONG (e.g., '1')
-   • imdbId: LONG (e.g., '')         ← NULL value
-   • tmdbId: LONG (e.g., '862')
+   • movieId: LONG
+   • imdbId: LONG
+   • tmdbId: LONG
 
 📋 Tag (tags.csv):
-   • userId: LONG (e.g., '2')
-   • movieId: LONG (e.g., '60756')
-   • tag: STRING (e.g., 'funny')
-   • timestamp: LONG (e.g., '1445714994')
+   • userId: LONG
+   • movieId: LONG
+   • tag: STRING
+   • timestamp: LONG
 ```
+
+The script creates each document type with `CREATE DOCUMENT TYPE`, then issues one
+`CREATE PROPERTY` per column with these types. During parsing, empty cells become
+`None` (SQL NULL), LONG columns are parsed with `int()`, and DOUBLE columns with
+`float()`.
 
 ## Code Walkthrough
 
-### Step 1: Check Dataset Availability
+### Step 0: Check Dataset Availability (auto-download)
 
 ```python
-data_dir = Path(__file__).parent / "data" / "movielens-small"
-if not data_dir.exists():
-    print("❌ MovieLens dataset not found!")
-    print("💡 Please download the dataset first:")
-    print("   python download_data.py")
-    exit(1)
+data_dir = Path(__file__).parent / "data" / args.dataset
+if not check_dataset_exists(data_dir):
+    print(f"❌ Dataset not found at: {data_dir}")
+    download_dataset(args.dataset)  # runs download_data.py as a subprocess
 ```
 
-### Step 2: Let the SQL Import Path Infer Types Automatically
+`check_dataset_exists()` verifies that `movies.csv`, `ratings.csv`, `links.csv`, and
+`tags.csv` are all present; if not, the script downloads the dataset automatically.
 
-The Java-side import path behind SQL `IMPORT DATABASE` automatically analyzes the CSV data
-and infers optimal ArcadeDB types (LONG, DOUBLE, STRING). No manual type inference code
-is needed.
+### Enable WAL-off ingest mode
 
-This example still creates the target schema intentionally so the import target and
-index plan stay explicit.
-
-### Step 3: Import CSV Files Directly
+Before importing, the script puts the database into a faster bulk-load mode and disables
+WAL on the async executor:
 
 ```python
-# Import with batch commits for performance
-import_options = {
-    "commitEvery": args.batch_size,  # Batch size for commits
-}
-stats = import_csv_documents_via_sql(db, movies_csv, "Movie", **import_options)
+db.set_read_your_writes(False)
+async_exec = db.async_executor()
+async_exec.set_commit_every(args.batch_size)
+async_exec.set_transaction_use_wal(False)
+```
+
+WAL is re-enabled after the ratings import (`set_transaction_use_wal(True)` and
+`set_read_your_writes(True)`).
+
+### Import CSV files with bulk INSERT
+
+`import_csv_documents_via_sql(database, csv_path, doc_type)` creates the document type
+and its properties from the explicit schema, then parses the CSV with `csv.DictReader`
+and runs batched `INSERT INTO ... SET ... = ?` statements inside transactions
+(flushing every `args.batch_size` rows):
+
+```python
+stats = import_csv_documents_via_sql(db, movies_csv, "Movie")
 
 # Check for NULL values (using .first() for efficiency)
 null_genres = (
@@ -185,33 +203,19 @@ if null_genres > 0:
     print("   💡 Empty CSV cells correctly imported as SQL NULL")
 ```
 
-**Performance results (small dataset):**
-
-- Movies: 105,891 records/sec
-- Ratings: 484,788 records/sec (largest file, highly optimized)
-- Links: 374,692 records/sec
-- Tags: 167,409 records/sec
-- **Total: 356,330 records/sec average**
-
-**Performance results (large dataset):**
-
-- Movies: 288,457 records/sec
-- Ratings: 908,832 records/sec (largest file, highly optimized)
-- Links: 697,879 records/sec
-- Tags: 739,148 records/sec
-- **Total: 890,528 records/sec average**
-
-**Key insight:** Larger datasets show better performance due to more efficient batch processing and reduced per-record overhead.
+The function returns a dict with `documents` (row count via `SELECT count(*)`),
+`errors`, and `duration_ms`; the script then prints the records/sec rate for each file.
 
 ### Step 8: Query Performance WITHOUT Indexes
 
 ```python
-test_queries = [
+TEST_QUERIES = [
     ("Find movie by ID", "SELECT FROM Movie WHERE movieId = 500"),
     ("Find user's ratings", "SELECT FROM Rating WHERE userId = 414 ORDER BY movieId, rating LIMIT 10"),
     ("Find movie ratings", "SELECT FROM Rating WHERE movieId = 500 ORDER BY userId, rating LIMIT 10"),
     ("Count user's ratings", "SELECT count(*) as count FROM Rating WHERE userId = 414"),
-    ("Find movies by genre", "SELECT FROM Movie WHERE genres LIKE '%Action%' ORDER BY movieId LIMIT 10"),
+    ("Find movies by genre (LIKE with LIMIT)", "SELECT FROM Movie WHERE genres LIKE '%Action%' ORDER BY movieId LIMIT 10"),
+    ("Count ALL Action movies (LIKE, no LIMIT)", "SELECT count(*) as count FROM Movie WHERE genres LIKE '%Action%'"),
 ]
 
 # Run each query 10 times for statistical reliability
@@ -230,12 +234,23 @@ for query_name, query in test_queries:
 
 ### Step 9: Create Indexes (AFTER Import)
 
+The script first calls `wait_for_compaction()`, then creates these indexes via the
+`create_indexes()` helper (which retries on compaction/index conflicts):
+
 ```python
-db.command("sql", "CREATE INDEX ON Movie (movieId) UNIQUE")
-db.command("sql", "CREATE INDEX ON Rating (userId, movieId) NOTUNIQUE")  # Composite!
-db.command("sql", "CREATE INDEX ON Link (movieId) UNIQUE")
-db.command("sql", "CREATE INDEX ON Tag (movieId) NOTUNIQUE")
+indexes = [
+    ("Movie", "movieId", "UNIQUE"),
+    ("Movie", "genres", "FULL_TEXT"),   # Lucene full-text search on genres
+    ("Rating", "userId", "NOTUNIQUE"),
+    ("Rating", "movieId", "NOTUNIQUE"),
+    ("Link", "movieId", "UNIQUE"),
+    ("Tag", "movieId", "NOTUNIQUE"),
+]
+success_count, failed_indexes = create_indexes(db, indexes)
 ```
+
+After creation the script queries `schema:indexes` and validates that every expected
+index exists, raising `RuntimeError` if any are missing.
 
 **Why create indexes AFTER import?**
 
@@ -255,81 +270,56 @@ Same queries, now with indexes active. Results show dramatic speedup!
 ```
 🚀 Performance Improvement Summary:
 ======================================================================
-Query                          Before (ms)     After (ms)      Speedup
+Query                          Before (s)      After (s)       Speedup
 ======================================================================
-Find movie by ID               39.1±7.6        0.7±1.9         58.1x
-                                     (98.3% time saved)
-Find user's ratings            16003.9±79.4    1.1±0.4         14,836x
-                                     (100.0% time saved)
-Find movie ratings             16524.8±124.2   153.1±22.2      107.9x
-                                     (99.1% time saved)
-Count user's ratings           16004.3±138.3   0.8±1.4         19,604x
-                                     (100.0% time saved)
-Find movies by genre           1.0±1.0         0.8±0.3         1.3x
-                                     (23.7% time saved)
-Count ALL Action movies        58.7±8.4        65.1±18.0       0.9x
-                                     (-10.8% time saved)
+Find movie by ID               0.039±0.008     0.001±0.002     58.1x
+      (98.3% time saved)
+...
 ======================================================================
 ```
+
+The exact numbers vary by machine and dataset. Each query's average and standard
+deviation are printed in seconds (formatted as `avg±std`), along with the speedup and
+percent time saved. Times are measured over 10 runs per query (`num_runs=10`).
 
 **Key findings:**
 
-- ✅ Composite indexes show **massive gains** (up to 19,604x speedup!)
-- ✅ Single column lookups are **very fast** (58.1x speedup)
+- ✅ Single-column and `NOTUNIQUE` indexes can yield large lookup/count speedups
 - ✅ Standard deviation shows **query stability**
+- ✅ `LIKE` scans without a LIMIT (e.g. counting all Action movies) may not speed up
 
 ## NULL Value Handling
 
-The example demonstrates comprehensive NULL handling:
+The example demonstrates NULL handling: empty CSV cells are imported as SQL NULL, and
+after each file the script counts NULLs in columns that can be empty (`genres`,
+`timestamp`, `imdbId`, `tmdbId`, `tag`).
 
-### Import Results
+### Import Results (illustrative format)
 
 ```
 Step 2: Importing movies.csv → Movie documents...
-   ✅ Imported 86,537 movies
+   ✅ Imported <N> movies
+   💡 Errors: 0
    🔍 NULL values detected:
-      • genres: 2,584 NULL values (3.0%)
-   💡 Empty CSV cells correctly imported as SQL NULL
-
-Step 4: Importing ratings.csv → Rating documents...
-   ✅ Imported 33,832,162 ratings
-   🔍 NULL values detected:
-      • timestamp: 675,782 NULL values (2.0%)
-   💡 Empty CSV cells correctly imported as SQL NULL
-
-Step 5: Importing links.csv → Link documents...
-   ✅ Imported 86,537 links
-   🔍 NULL values detected:
-      • imdbId: 8,628 NULL values (10.0%)
-      • tmdbId: 13,026 NULL values (15.1%)
-   💡 Empty CSV cells correctly imported as SQL NULL
-
-Step 6: Importing tags.csv → Tag documents...
-   ✅ Imported 2,328,315 tags
-   🔍 NULL values detected:
-      • tag: 116,644 NULL values (5.0%)
+      • genres: <count> NULL values (<pct>%)
    💡 Empty CSV cells correctly imported as SQL NULL
 ```
+
+Each import step prints the imported count, the error count, the elapsed time, and the
+records/sec rate; NULL detection is printed only when the relevant column has NULLs.
 
 ### NULL Values in Aggregations
 
-```
-💬 Top 10 most common tags:
-    1. 'None' (116,644 uses)          ← NULL tags appear as 'None'
-    2. 'sci-fi' (13,612 uses)
-    ...
-
-🎭 Top 10 genres by movie count:
-    1. Drama (11,857 movies)
-    ...
-    6. None (2,584 movies)          ← NULL genres appear as 'None'
-```
-
-**Total NULL values**: ~799,638 across all fields (LONG and STRING types)
+In Step 12, NULL `tag` or `genres` values surface as `'None'` in the
+`GROUP BY` aggregation output (because Python `str(None)` is `'None'`); NULL `rating`
+values are printed on a dedicated `NULL` line in the rating distribution.
 
 ## Index Architecture
 
-ArcadeDB uses **LSM-Tree (Log-Structured Merge Tree)** for all indexes - a single unified backend that handles all data types efficiently.
+ArcadeDB exposes multiple index engines (LSM_TREE, HASH, FULL_TEXT, VECTOR). The
+default `UNIQUE` / `NOTUNIQUE` indexes use the **LSM-Tree (Log-Structured Merge Tree)**
+backend, while the `genres` index in this example uses the Lucene-backed `FULL_TEXT`
+engine.
 
 ### How LSM-Tree Works
 
@@ -383,10 +373,10 @@ The example includes comprehensive data analysis:
 ### Record Counts
 
 ```python
-SELECT count(*) as count FROM Movie     # 9,742 movies
-SELECT count(*) as count FROM Rating    # 100,836 ratings
-SELECT count(*) as count FROM Link      # 9,742 links
-SELECT count(*) as count FROM Tag       # 3,683 tags
+SELECT count(*) as count FROM Movie
+SELECT count(*) as count FROM Rating
+SELECT count(*) as count FROM Link
+SELECT count(*) as count FROM Tag
 ```
 
 ### Rating Statistics
@@ -398,8 +388,6 @@ SELECT
     min(rating) as min_rating,
     max(rating) as max_rating
 FROM Rating
-
-# Results: 100,836 ratings, avg 3.50 ★, range 0.5-5.0
 ```
 
 ### Rating Distribution
@@ -409,13 +397,6 @@ SELECT rating, count(*) as count
 FROM Rating
 GROUP BY rating
 ORDER BY rating
-
-# Results:
-# 0.5 ★ : 1,370
-# 1.0 ★ : 2,811
-# ...
-# 4.0 ★ : 26,818  (most common)
-# 5.0 ★ : 13,211
 ```
 
 ### Top Genres
@@ -427,8 +408,6 @@ WHERE genres <> '(no genres listed)'
 GROUP BY genres
 ORDER BY count DESC
 LIMIT 10
-
-# Results: Drama (1,022), Comedy (922), Comedy|Drama (429), ...
 ```
 
 ### Most Active Users
@@ -439,18 +418,18 @@ FROM Rating
 GROUP BY userId
 ORDER BY rating_count DESC
 LIMIT 10
-
-# Results: User 414 (2,698 ratings), User 599 (2,478), ...
 ```
+
+Step 12 also prints sample movies, the top 10 most-tagged movies (with titles looked
+up by `movieId`), and the top 10 most common tags.
 
 ## Best Practices Demonstrated
 
-### ✅ Type Inference by Java
+### ✅ Explicit Schema Mapping
 
-- Java-side SQL import path automatically analyzes data and selects optimal types
-- Handles LONG, DOUBLE, STRING intelligently based on actual values
-- No manual type inference code needed
-- Schema-on-write simplifies development
+- Each document type's columns are mapped to fixed types in `schema_by_type`
+- LONG for integer-like columns, DOUBLE for decimals, STRING for text
+- Schema is created with `CREATE DOCUMENT TYPE` + `CREATE PROPERTY` before ingest
 
 ### ✅ Schema Definition
 
@@ -460,17 +439,16 @@ LIMIT 10
 
 ### ✅ Import Optimization
 
-- Use `commit_every` parameter for batching
-- Larger batches = faster imports (balance with memory)
-- Movies: commit_every=1000 (smaller batches)
-- Ratings: commit_every=5000 (larger dataset, bigger batches)
+- Bulk `INSERT INTO ... SET` with batched commits (every `args.batch_size` rows)
+- WAL disabled during ingest (`set_transaction_use_wal(False)`), re-enabled afterward
+- Larger batches = faster imports (balance with memory); `--batch-size` defaults to 5000
 
 ### ✅ Index Strategy
 
-- **CREATE INDEXES AFTER IMPORT** (2-3x faster total time)
-- Use composite indexes for multi-column queries
-- Order matters: most selective column first
-- Index creation timing: ~0.2 seconds for 124K records
+- **CREATE INDEXES AFTER IMPORT** (avoids per-insert index maintenance)
+- Wait for background compaction first (`wait_for_compaction()`)
+- Use `UNIQUE` / `NOTUNIQUE` (LSM-tree) indexes and a `FULL_TEXT` index on `genres`
+- Retry index creation on compaction/index conflicts (`create_indexes()` helper)
 
 ### ✅ Performance Measurement
 
@@ -513,53 +491,52 @@ python 04_csv_import_documents.py --dataset movielens-large --heap-size 8g
 **Expected output:**
 
 - Automatic dataset download if needed
-- Step-by-step import progress
+- Step-by-step import progress (Steps 0-14)
 - NULL value detection for all 4 files
-- Performance statistics (before/after indexes)
+- Performance statistics (before/after indexes, 10 runs each)
+- Index creation and validation against `schema:indexes`
 - Data analysis queries with results
-- Total time: ~2-3 minutes (movielens-large) or ~5 seconds (movielens-small)
+- Full-text search demonstration on `genres`
+- Optional JSONL export and roundtrip validation (with `--export`)
+- Total script run time printed at the end (varies by machine/dataset)
 
 **Database location:**
 
 - Small dataset: `./my_test_databases/movielens_small_db/`
 - Large dataset: `./my_test_databases/movielens_large_db/`
+- Custom: `./my_test_databases/{--db-name}/`
 
 The database is preserved for inspection after the example completes.
 
-**Database size:**
+⚠️ **Note**: The database directory is larger than the source CSVs due to:
 
-- **movielens-large**: ~2.0 GB database from ~971 MB CSV files (~2.1x expansion)
-- **movielens-small**: ~27 MB database from ~3.2 MB CSV files (~8.4x expansion)
-
-⚠️ **Note**: Database files are larger than source CSVs due to:
-
-- Index structures (LSM-tree, hash, or other index data depending on what you create)
+- Index structures (LSM-tree and Lucene full-text)
 - Transaction logs and metadata
 - Internal data structures for document storage
 - WAL (Write-Ahead Log) files for durability
 
 ## Key Takeaways
 
-1. ✅ **Automatic type inference** by Java provides intelligent LONG/DOUBLE/STRING selection
-2. ✅ **Schema-on-write** simplifies development (no manual schema creation needed)
-3. ✅ **NULL value handling** works seamlessly across all data types (STRING, INTEGER, etc.)
-4. ✅ **Batch processing** (`commit_every`) dramatically improves import performance
-5. ✅ **Create indexes AFTER import** - 2-3x faster than indexing during import
-6. ✅ **Indexes** provide massive performance gains (up to 14,836x speedup!). For
-   exact-match lookups, prefer `UNIQUE_HASH` / `NOTUNIQUE_HASH`; for ranges and ordered
-   scans, prefer `UNIQUE` / `NOTUNIQUE` (`LSM_TREE`).
+1. ✅ **Explicit schema mapping** assigns LONG/DOUBLE/STRING per column before ingest
+2. ✅ **Bulk INSERT ingest** with WAL disabled during the load (re-enabled afterward)
+3. ✅ **NULL value handling** works across types - empty CSV cells become SQL NULL
+4. ✅ **Batch processing** (`--batch-size` / `commitEvery`) improves import performance
+5. ✅ **Create indexes AFTER import** - avoids per-insert index maintenance
+6. ✅ **Indexes** provide large speedups for lookups and counts. For exact-match
+   lookups, prefer `UNIQUE_HASH` / `NOTUNIQUE_HASH`; for ranges and ordered scans,
+   prefer `UNIQUE` / `NOTUNIQUE` (`LSM_TREE`).
 7. ✅ **Statistical validation** (10 runs) ensures reliable performance measurements
-8. ✅ **Result validation** compares actual data values, not just row counts
-9. ✅ **Multi-bucket architecture** creates 15 buckets per type, 1 index file per bucket per property
+8. ✅ **Result validation** compares actual data values against an embedded baseline
+9. ✅ **Optional export/import roundtrip** (`--export`) verifies data integrity
 10. ✅ **Database persistence** - reopen and query immediately, no rebuild needed!
 
 ## Next Steps
 
 - **Try Example 05**: Graph import (MovieLens as vertices and edges)
-- **Experiment**: Modify `commit_every` values to see performance impact
+- **Experiment**: Modify `--batch-size` to see performance impact
 - **Add queries**: Try your own analysis queries on the dataset
 - **Index tuning**: Create different index combinations and measure speedup
-- **Type testing**: Change type inference rules and observe import behavior
+- **Export/roundtrip**: Run with `--export` to validate export → import integrity
 
 ## Related Examples
 

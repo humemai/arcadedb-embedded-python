@@ -6,7 +6,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 
 | Package | Wheel Size | Installed Size | Java Required | Studio UI | Query Languages |
 |---------|-----------|------------------------------|---------------|-----------|----------------|
-| **arcadedb-embedded** | ~74MB | ~101-103MB | ❌ No | ✅ | SQL, OpenCypher, MongoDB |
+| **arcadedb-embedded** | ~74MB | ~101-103MB | ❌ No | ✅ | SQL, OpenCypher |
 
 **Installation:**
 
@@ -46,9 +46,9 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 
 - ✅ **No Java Installation Required**: Platform-specific JRE bundled (~63MB uncompressed)
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
-- ✅ **Query Languages**: SQL, OpenCypher, MongoDB (all included)
+- ✅ **Query Languages**: SQL, OpenCypher (all included)
 - ✅ **Studio Web UI**: Visual database explorer and query editor
-- ✅ **Wire Protocols**: HTTP REST, PostgreSQL, MongoDB, Redis
+- ✅ **Wire Protocols**: HTTP REST, PostgreSQL, Redis, Bolt (Neo4j)
 - ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 

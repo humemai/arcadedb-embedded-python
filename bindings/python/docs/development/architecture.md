@@ -295,11 +295,11 @@ Schema (schema.py)
 
 AsyncExecutor (async_executor.py)
     ├─ set_parallel_level()/set_commit_every()/set_back_pressure()
-    ├─ create_record()/update_record()/delete_record()/create_edge_between()
+    ├─ command()/query()/scan_type()/new_edge()/transaction()
     └─ wait_completion()/close()
 
 Record wrappers (graph.py)
-    ├─ Vertex → new_edge(), modify(), get_out_edges() (todo), property helpers
+    ├─ Vertex → new_edge(), modify(), get_out_edges()/get_in_edges()/get_both_edges(), property helpers
     ├─ Edge → get_out(), get_in(), modify()
     └─ Document → get()/set()/save()/delete()/modify(), to_dict(), get_rid()
 
@@ -521,7 +521,7 @@ The Python binding is distributed as a **single, self-contained package** (`arca
 
 **Features:**
 
-- **Bundled JRE**: Includes a minimal Java 25 Runtime Environment (JRE) via the `arcadedb-embedded-jre` package.
+- **Bundled JRE**: Includes a minimal Java 25 Runtime Environment (JRE) bundled directly in the wheel.
 - **Full Feature Set**: Includes all ArcadeDB engines (SQL, OpenCypher, GraphQL, MongoDB).
 - **Zero Configuration**: No external Java installation required.
 
@@ -617,7 +617,7 @@ class TestDatabase(unittest.TestCase):
             vertex.save()
 
         result = self.db.query("sql", "SELECT count(*) as count FROM User")
-        count = result.next().get("count")
+        count = result.first().get("count")
         self.assertEqual(count, 1)
 ```
 

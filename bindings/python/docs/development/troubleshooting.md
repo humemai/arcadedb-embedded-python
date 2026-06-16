@@ -988,7 +988,7 @@ name = row.get("name") or "Unknown"
 ```python
 # Create type first
 result = db.query("sql", "SELECT FROM schema:types WHERE name = 'User'")
-if not result.has_next():
+if result.first() is None:
     db.command("sql", "CREATE VERTEX TYPE User")
 
 # Then insert data
@@ -1025,7 +1025,7 @@ db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 # Check if exists first
 result = db.query("sql", "SELECT FROM User WHERE email = :email", {"email": "alice@example.com"})
 
-if result.has_next():
+if result.first() is not None:
     with db.transaction():
         db.command(
             "sql",

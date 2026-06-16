@@ -8,13 +8,13 @@ This comprehensive example demonstrates ArcadeDB's document capabilities using a
 
 The example creates a task management system showcasing:
 
-- **Rich Data Types** - STRING, BOOLEAN, INTEGER, FLOAT, DECIMAL, DATE, DATETIME, LIST with element types, and Arrays
+- **Rich Data Types** - STRING, BOOLEAN, INTEGER, FLOAT, DECIMAL, DATE, DATETIME, and LIST
 - **NULL Handling** - INSERT with NULL, UPDATE to NULL, queries with IS NULL/IS NOT NULL
 - **SQL Operations** - Complete CRUD workflow with ArcadeDB SQL
-- **Built-in Functions** - date() for date literals, uuid() for unique IDs, sysdate() for dynamic timestamps
+- **Python uuid4()** - Generating unique task IDs in Python and storing them as STRING
 - **Record Types** - Understanding Documents vs Vertices vs Edges
 - **Schema Flexibility** - Typed properties for performance with schema-optional flexibility
-- **Type Safety** - Validated array data with element type specification
+- **ResultSet helpers** - `to_list()`, `first()`, and `count_type()` with automatic type conversion
 
 ## Key Learning Points
 
@@ -117,11 +117,11 @@ Understanding when to use different record types:
 The example demonstrates:
 
 - **NULL Values** - Optional fields with IS NULL/IS NOT NULL queries
-- **Type-Safe Arrays** - LIST with of_type parameter for validated collections
+- **LIST Properties** - `CREATE PROPERTY Task.tags LIST` storing string arrays
 - **DECIMAL Handling** - Java BigDecimal conversion via float(str(value))
 - **DATETIME Literals** - String literals automatically parsed to DATETIME type
 - **Schema-Optional Flexibility** - Define properties for performance, add ad-hoc fields when needed
-- **Query Optimization** - Using typed properties and indexes
+- **Aggregation Queries** - GROUP BY on priority and completion status, plus `count_type()`
 
 ## Running the Example
 

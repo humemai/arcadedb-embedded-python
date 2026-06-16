@@ -38,7 +38,7 @@ The CI/CD workflows now support building and releasing across **4 platforms** fo
 
 - **Artifacts**: `wheel-{platform}-py{version}` (20 artifacts)
 - **Publish Job**:
-    - `publish-pypi`: Collects all 20 wheels and publishes to `arcadedb-embedded`
+    - `publish`: Collects all 20 wheels and publishes to `arcadedb-embedded`
 
 ## GitHub Repository Setup Required
 
@@ -142,8 +142,8 @@ Previously used QEMU for linux/arm64:
 cd bindings/python
 
 # Build for specific platform (requires Docker for Linux builds)
-./scripts/build.sh --platform linux/amd64
-./scripts/build.sh --platform darwin/arm64
+./scripts/build.sh linux/amd64
+./scripts/build.sh darwin/arm64
 
 # Check the wheels
 ls -lh dist/
@@ -156,7 +156,7 @@ cd bindings/python
 
 for platform in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
   echo "Building $platform..."
-    ./scripts/build.sh --platform "$platform"
+    ./scripts/build.sh "$platform"
 done
 
 # Should have 4 wheels

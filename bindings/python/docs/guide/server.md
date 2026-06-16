@@ -68,7 +68,7 @@ server = arcadedb.create_server(
 | `root_path` | `"./databases"` | Directory for database storage |
 | `root_password` | None | Root user password (recommended) |
 | `http_port` | 2480 | HTTP API/Studio port (binding pins to a single port; Java default is the 2480-2489 range) |
-| `host` | "0.0.0.0" | Host to bind to |
+| `host` | "localhost" | Host to bind to |
 | `mode` | "development" | Server mode (`development` or `production`) |
 
 ## Server Info Endpoint
