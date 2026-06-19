@@ -50,7 +50,7 @@ def olap_queries(table):
 
 
 # --- backends: return dict(load_s, read, insert, update, delete, olap_one, close) ----------
-def be_sqlite(df):
+def be_sqlite(df, workload):
     import sqlite3, tempfile
     rows = _tuples(df)
     con = sqlite3.connect(tempfile.mkdtemp(prefix="tb_sqlite_") + "/db.sqlite")
@@ -71,7 +71,7 @@ def be_sqlite(df):
     )
 
 
-def be_duckdb(df):
+def be_duckdb(df, workload):
     import duckdb, tempfile
     con = duckdb.connect(tempfile.mkdtemp(prefix="tb_duckdb_") + "/db.duckdb")
     con.execute(f"PRAGMA threads={os.cpu_count()}")
@@ -84,7 +84,7 @@ def be_duckdb(df):
     return dict(
         load_s=load_s,
         read=lambda i: con.execute("SELECT * FROM posts WHERE id=?", [i]).fetchone(),
-        insert=lambda r: con.execute("INSERT OR IGNORE INTO posts VALUES (?,?,?,?,?,?)", list(r)),
+        insert=lambda r: con.execute("INSERT INTO posts VALUES (?,?,?,?,?,?)", list(r)),
         update=lambda i, s: con.execute("UPDATE posts SET score=? WHERE id=?", [s, i]),
         delete=lambda i: con.execute("DELETE FROM posts WHERE id=?", [i]),
         olap_one=lambda q: con.execute(q).fetchall(),
@@ -92,16 +92,16 @@ def be_duckdb(df):
     )
 
 
-def be_arcadedb(df):
+def be_arcadedb(df, workload):
     import arcadedb_embedded as arcadedb, tempfile
     rows = _tuples(df)
     ctx = arcadedb.create_database(tempfile.mkdtemp(prefix="tb_arcadedb_") + "/db")
     db = ctx.__enter__()
     db.command("sql", "CREATE DOCUMENT TYPE Post")
-    for c, t in [("id", "INTEGER"), ("post_type", "INTEGER"), ("owner_user_id", "INTEGER"),
+    for c, t in [("id", "LONG"), ("post_type", "INTEGER"), ("owner_user_id", "LONG"),
                  ("score", "INTEGER"), ("view_count", "INTEGER"), ("title", "STRING")]:
         db.command("sql", f"CREATE PROPERTY Post.{c} {t}")
-    db.command("sql", "CREATE INDEX ON Post (id) UNIQUE")
+    db.command("sql", "CREATE INDEX ON Post (id) UNIQUE_HASH")  # fast point lookups (ex 07)
     t0 = time.time()
     db.begin()
     for n, r in enumerate(rows):
@@ -111,6 +111,10 @@ def be_arcadedb(df):
         if (n + 1) % 5000 == 0:
             db.commit(); db.begin()
     db.commit()
+    # OLAP: index the grouped/filtered columns (ex 08 INDEX_DEFS) so ArcadeDB isn't full-scanning
+    if workload == "olap":
+        for c in ("post_type", "owner_user_id", "score"):
+            db.command("sql", f"CREATE INDEX ON Post ({c}) NOTUNIQUE")
     load_s = time.time() - t0
 
     def _tx(fn):
@@ -123,7 +127,9 @@ def be_arcadedb(df):
         load_s=load_s,
         read=lambda i: db.query("sql", "SELECT FROM Post WHERE id=:i", {"i": i}).to_list(),
         insert=lambda r: _tx(lambda: db.command(
-            "sql", "INSERT INTO Post SET id=:id, score=:s", {"id": r[0], "s": r[3]})),
+            "sql", "INSERT INTO Post SET id=:id, post_type=:pt, owner_user_id=:o, "
+            "score=:s, view_count=:v, title=:t",
+            {"id": r[0], "pt": r[1], "o": r[2], "s": r[3], "v": r[4], "t": r[5]})),
         update=lambda i, s: _tx(lambda: db.command(
             "sql", "UPDATE Post SET score=:s WHERE id=:i", {"s": s, "i": i})),
         delete=lambda i: _tx(lambda: db.command("sql", "DELETE FROM Post WHERE id=:i", {"i": i})),
@@ -188,9 +194,10 @@ def main():
 
     df = load_posts(args.data_dir, args.limit)
     ids = df["id"].astype(int).tolist()
-    be = BACKENDS[args.backend](df)
+    be = BACKENDS[args.backend](df, args.workload)
     res = {"backend": args.backend, "lib_version": be["version"], "lane": "tabular",
-           "workload": args.workload, "n_rows": len(df), "load_s": round(be["load_s"], 3)}
+           "workload": args.workload, "n_rows": len(df), "load_s": round(be["load_s"], 3),
+           "olap_indexed": args.backend == "arcadedb" and args.workload == "olap"}
     if args.workload == "oltp":
         res.update(run_oltp(be, ids, args.ops))
     else:

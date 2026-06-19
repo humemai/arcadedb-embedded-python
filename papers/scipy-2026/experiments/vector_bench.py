@@ -54,7 +54,12 @@ def recall_at_ks(retrieved, gt, ks):
 
 
 # --- backends: each returns (build_time, search_fn, cold_start) -----------------
-def backend_arcadedb(vecs, dim):
+# Shared HNSW params (matched across ArcadeDB + Chroma for a fair comparison; mirror ex 11/12)
+M = 16              # maxConnections / hnsw:M
+EF_CONSTRUCTION = 100  # beamWidth / hnsw:construction_ef
+
+
+def backend_arcadedb(vecs, dim, ef_search):
     import arcadedb_embedded as arcadedb
     import tempfile
     t0 = time.time()
@@ -63,7 +68,7 @@ def backend_arcadedb(vecs, dim):
     db = ctx.__enter__()
     cold = time.time() - t0
 
-    db.command("sql", "CREATE DOCUMENT TYPE Article")
+    db.command("sql", "CREATE VERTEX TYPE Article")  # ex 11 uses a vertex type
     db.command("sql", "CREATE PROPERTY Article.vid INTEGER")
     db.command("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
 
@@ -72,7 +77,7 @@ def backend_arcadedb(vecs, dim):
     for vid in range(len(vecs)):
         db.command("sql", "INSERT INTO Article SET vid = :v, embedding = :e",
                    {"v": vid, "e": arcadedb.to_java_float_array(vecs[vid])})
-        if (vid + 1) % 2000 == 0:
+        if (vid + 1) % 10000 == 0:
             db.commit()
             db.begin()
     db.commit()
@@ -80,27 +85,32 @@ def backend_arcadedb(vecs, dim):
 
     t0 = time.time()
     db.command("sql", f'''CREATE INDEX ON Article (embedding) LSM_VECTOR
-                          METADATA {{ "dimensions": {dim}, "similarity": "COSINE" }}''')
+                          METADATA {{ "dimensions": {dim}, "similarity": "COSINE",
+                          "maxConnections": {M}, "beamWidth": {EF_CONSTRUCTION},
+                          "storeVectorsInGraph": false, "addHierarchy": true }}''')
     index_t = time.time() - t0
 
     def search(qvec, k):
         rows = db.query(
             "sql",
-            "SELECT vid, distance FROM (SELECT expand(vectorNeighbors(?, ?, ?))) "
+            "SELECT vid, distance FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?))) "
             "ORDER BY distance",
-            "Article[embedding]", arcadedb.to_java_float_array(qvec), k,
+            "Article[embedding]", arcadedb.to_java_float_array(qvec), k, ef_search,
         ).to_list()
         return [int(r["vid"]) for r in rows]
 
     return insert_t, index_t, cold, search, lambda: ctx.__exit__(None, None, None)
 
 
-def backend_chroma(vecs, dim):
+def backend_chroma(vecs, dim, ef_search):
     import chromadb
     import tempfile
     path = tempfile.mkdtemp(prefix="vb_chroma_")
     client = chromadb.PersistentClient(path=path)
-    col = client.create_collection("articles", metadata={"hnsw:space": "cosine"})
+    # match ArcadeDB's HNSW config (M, ef_construction, ef_search) for fairness
+    col = client.create_collection("articles", metadata={
+        "hnsw:space": "cosine", "hnsw:M": M,
+        "hnsw:construction_ef": EF_CONSTRUCTION, "hnsw:search_ef": ef_search})
 
     str_ids = [str(i) for i in range(len(vecs))]  # id = vector_id (unique)
     emb = vecs.tolist()
@@ -138,6 +148,7 @@ def main():
     ap.add_argument("--name", required=True)
     ap.add_argument("--corpus", default="all")
     ap.add_argument("--ks", default=KS_DEFAULT)
+    ap.add_argument("--ef-search", type=int, default=100, help="matched across backends")
     ap.add_argument("--limit", type=int, default=0, help="smoke: cap #vectors (0=all)")
     ap.add_argument("--max-queries", type=int, default=0, help="smoke: cap #queries (0=all)")
     args = ap.parse_args()
@@ -151,7 +162,11 @@ def main():
         queries = [(q, gt) for q, gt in queries if q < args.limit]
     if args.max_queries:
         queries = queries[:args.max_queries]
-    insert_t, index_t, cold, search, close = BACKENDS[args.backend](vecs, meta["dim"])
+    insert_t, index_t, cold, search, close = BACKENDS[args.backend](vecs, meta["dim"], args.ef_search)
+
+    # warmup (untimed) — avoids penalizing JVM/JIT cold start vs Chroma
+    for qvid, _ in queries[:min(50, len(queries))]:
+        search(vecs[qvid], kmax)
 
     lat, recs = [], {k: [] for k in ks}
     for qvid, gt in queries:
@@ -168,6 +183,7 @@ def main():
     result = {
         "backend": args.backend, "lib_version": lib_version(args.backend),
         "dataset": args.name, "corpus": args.corpus, "model": meta.get("model", "?"),
+        "hnsw_M": M, "hnsw_ef_construction": EF_CONSTRUCTION, "ef_search": args.ef_search,
         "n_vectors": meta["count"], "dim": meta["dim"], "n_queries": len(queries),
         "cold_start_s": round(cold, 3),
         "insert_s": round(insert_t, 3), "index_s": round(index_t, 3),

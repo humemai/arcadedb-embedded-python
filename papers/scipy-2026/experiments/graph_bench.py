@@ -40,7 +40,7 @@ OLAP = [
 ]
 
 
-def be_kuzu(users, posts, posted, answers):
+def be_kuzu(users, posts, posted, answers, workload):
     import kuzu
     db = kuzu.Database(tempfile.mkdtemp(prefix="gb_kuzu_") + "/db")
     conn = kuzu.Connection(db)
@@ -74,43 +74,56 @@ def be_kuzu(users, posts, posted, answers):
                 version=kuzu.__version__)
 
 
-def be_arcadedb(users, posts, posted, answers):
+GAV_NAME = "gbOlap"
+
+
+def be_arcadedb(users, posts, posted, answers, workload):
     import arcadedb_embedded as arcadedb
     ctx = arcadedb.create_database(tempfile.mkdtemp(prefix="gb_arcadedb_") + "/db")
     db = ctx.__enter__()
     for v in ("User", "Post"):
         db.command("sql", f"CREATE VERTEX TYPE {v}")
-        db.command("sql", f"CREATE PROPERTY {v}.id INTEGER")
-        db.command("sql", f"CREATE INDEX ON {v} (id) UNIQUE")
+        db.command("sql", f"CREATE PROPERTY {v}.id LONG")
+        db.command("sql", f"CREATE INDEX ON {v} (id) UNIQUE_HASH")  # fast point lookups (ex 09)
     db.command("sql", "CREATE EDGE TYPE POSTED")
     db.command("sql", "CREATE EDGE TYPE ANSWERS")
 
+    pf = db.async_executor().get_parallel_level() > 1
     t0 = time.time()
-    db.begin()
-    n = 0
-    for u in users:
-        db.command("sql", "CREATE VERTEX User SET id=:i", {"i": u}); n += 1
-        if n % 5000 == 0:
-            db.commit(); db.begin()
-    for p in posts:
-        db.command("sql", "CREATE VERTEX Post SET id=:i", {"i": p}); n += 1
-        if n % 5000 == 0:
-            db.commit(); db.begin()
-    db.commit()
-    db.begin()
-    n = 0
-    for u, p in posted:
-        db.command("sql", "CREATE EDGE POSTED FROM (SELECT FROM User WHERE id=:u) "
-                   "TO (SELECT FROM Post WHERE id=:p)", {"u": u, "p": p}); n += 1
-        if n % 2000 == 0:
-            db.commit(); db.begin()
-    for a, q in answers:
-        db.command("sql", "CREATE EDGE ANSWERS FROM (SELECT FROM Post WHERE id=:a) "
-                   "TO (SELECT FROM Post WHERE id=:q)", {"a": a, "q": q}); n += 1
-        if n % 2000 == 0:
-            db.commit(); db.begin()
-    db.commit()
+    # vertices + edges via the tuned graph batch loader (ex 09), not per-row SQL
+    for vtype, ids in (("User", users), ("Post", posts)):
+        with db.graph_batch(batch_size=max(1, len(ids)), expected_edge_count=0,
+                            bidirectional=False, commit_every=max(1, len(ids)),
+                            use_wal=False, parallel_flush=pf) as b:
+            b.create_vertices(vtype, [{"id": i} for i in ids])
+    urid = {int(r["id"]): r["rid"] for r in
+            db.query("sql", "SELECT id, @rid as rid FROM User").to_list()}
+    prid = {int(r["id"]): r["rid"] for r in
+            db.query("sql", "SELECT id, @rid as rid FROM Post").to_list()}
+    for etype, edges, frm, to in (("POSTED", posted, urid, prid),
+                                  ("ANSWERS", answers, prid, prid)):
+        with db.graph_batch(batch_size=max(1, len(edges)), expected_edge_count=max(1, len(edges)),
+                            bidirectional=False, commit_every=max(1, len(edges)),
+                            use_wal=False, parallel_flush=pf) as b:
+            for a, c in edges:
+                b.new_edge(frm[a], etype, to[c])
     load_s = time.time() - t0
+
+    gav_build_s = 0.0
+    if workload == "olap":  # GAV accelerates the SAME OpenCypher queries (ex 10)
+        g0 = time.time()
+        db.command("sql", f"CREATE GRAPH ANALYTICAL VIEW {GAV_NAME} "
+                   "VERTEX TYPES (User, Post) EDGE TYPES (POSTED, ANSWERS) "
+                   "PROPERTIES (id) UPDATE MODE OFF")
+        while True:
+            row = db.query("sql", "SELECT FROM schema:graphAnalyticalViews WHERE name = ?",
+                           GAV_NAME).first()
+            if row is not None and row.get("status") == "READY":
+                break
+            if time.time() - g0 > 1800:
+                raise RuntimeError("GAV did not reach READY")
+            time.sleep(0.25)
+        gav_build_s = time.time() - g0
 
     def query(q):
         return len(db.query("opencypher", q).to_list())
@@ -122,7 +135,7 @@ def be_arcadedb(users, posts, posted, answers):
         except Exception:
             db.rollback()
 
-    return dict(load_s=load_s, query=query, write=write,
+    return dict(load_s=load_s, gav_build_s=gav_build_s, query=query, write=write,
                 close=lambda: ctx.__exit__(None, None, None),
                 version=getattr(arcadedb, "__version__", "?"))
 
@@ -172,10 +185,13 @@ def main():
     args = ap.parse_args()
 
     users, posts, posted, answers = load_graph(args.data_dir, args.limit)
-    be = BACKENDS[args.backend](users, posts, posted, answers)
+    be = BACKENDS[args.backend](users, posts, posted, answers, args.workload)
     res = {"backend": args.backend, "lib_version": be["version"], "lane": "graph",
            "workload": args.workload, "n_users": len(users), "n_posts": len(posts),
            "n_posted": len(posted), "n_answers": len(answers), "load_s": round(be["load_s"], 3)}
+    if be.get("gav_build_s"):
+        res["gav_build_s"] = round(be["gav_build_s"], 3)
+        res["gav"] = True
     res.update(run_oltp(be, users, posts, args.ops) if args.workload == "oltp" else run_olap(be))
     be["close"]()
     print("RESULT " + json.dumps(res))
