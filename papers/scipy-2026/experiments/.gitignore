@@ -1,0 +1,6 @@
+# generated / downloaded artifacts — not committed
+results/
+datasets/raw/
+datasets/prepared/
+__pycache__/
+*.pyc
