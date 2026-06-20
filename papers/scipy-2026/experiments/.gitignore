@@ -5,6 +5,7 @@ datasets/prepared/
 __pycache__/
 *.pyc
 
-# generated figure images (regenerated from sources / mini results; final ones go in the PR)
-figures/*.png
-figures/*.svg
+# Conceptual figures (architecture, hybrid_workflow) ARE committed — they're paper assets.
+# Only the retired result bar-charts are ignored (results go in tables, not figures).
+figures/fig_*.png
+figures/fig_*.svg
