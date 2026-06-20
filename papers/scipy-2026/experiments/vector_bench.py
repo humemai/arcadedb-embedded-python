@@ -64,7 +64,7 @@ def backend_arcadedb(vecs, dim, ef_search):
     import tempfile
     t0 = time.time()
     db_path = tempfile.mkdtemp(prefix="vb_arcadedb_") + "/db"
-    ctx = arcadedb.create_database(db_path)
+    ctx = arcadedb.create_database(db_path, jvm_kwargs={"heap_size": os.environ.get("ARCADEDB_HEAP", "4g")})
     db = ctx.__enter__()
     cold = time.time() - t0
 

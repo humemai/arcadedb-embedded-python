@@ -95,7 +95,8 @@ def be_duckdb(df, workload):
 def be_arcadedb(df, workload):
     import arcadedb_embedded as arcadedb, tempfile
     rows = _tuples(df)
-    ctx = arcadedb.create_database(tempfile.mkdtemp(prefix="tb_arcadedb_") + "/db")
+    ctx = arcadedb.create_database(tempfile.mkdtemp(prefix="tb_arcadedb_") + "/db",
+                                   jvm_kwargs={"heap_size": os.environ.get("ARCADEDB_HEAP", "4g")})
     db = ctx.__enter__()
     db.command("sql", "CREATE DOCUMENT TYPE Post")
     for c, t in [("id", "LONG"), ("post_type", "INTEGER"), ("owner_user_id", "LONG"),

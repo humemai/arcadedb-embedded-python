@@ -31,7 +31,8 @@ RESULTS = os.path.join(HERE, "results")
 MEMDIR = os.path.join(RESULTS, "mem")
 
 CPUSET = "0-7"
-MEM_BY_TIER = {"tiny": "8g", "small": "8g", "medium": "16g"}
+MEM_BY_TIER = {"tiny": "8g", "small": "8g", "medium": "32g"}   # ceiling; we report actual peak
+HEAP_BY_TIER = {"tiny": "6g", "small": "6g", "medium": "16g"}  # JVM -Xmx (arcadedb only); default 4g OOMs at 1.24M
 SAMPLE_INTERVAL = 0.25
 
 LANE_BACKENDS = {
@@ -107,11 +108,12 @@ def build_jobs(datasets, lanes):
     return jobs
 
 
-def run_one(job, rep, mem, image_ids):
+def run_one(job, rep, mem, heap, image_ids):
     run_id = f"{job['run_id']}_r{rep}"
     image = f"scipy-bench:{job['be']}"
     image_ids.setdefault(image, sh(["docker", "inspect", "--format", "{{.Id}}", image]))
     cmd = ["docker", "run", "-d", "--cpuset-cpus", CPUSET, "--memory", mem, "--memory-swap", mem,
+           "-e", f"ARCADEDB_HEAP={heap}",
            "-v", f"{HERE}:/work", "-w", "/work", "-v", f"{DATA}:/data:ro", image, "python"] + job["args"]
     cid = sh(cmd)
     if len(cid) < 12:
@@ -140,6 +142,8 @@ def run_one(job, rep, mem, image_ids):
                 "peak_anon_mib": round(peak_box[1] / 1048576, 1),
                 "image_id": image_ids[image][:19], "mem_series": f"mem/{run_id}.csv",
                 "ts_utc": datetime.now(timezone.utc).isoformat()})
+    if job["be"] == "arcadedb":
+        res["arcadedb_heap"] = heap
     tag = f"{job['lane']}/{job['be']}/{job['ds']}" + (f"/{job['wl']}" if job['wl'] else "")
     extra = (f"recall@10={res.get('recall@10')}" if job["lane"] == "vector"
              else f"oltp={res.get('oltp_ops_per_s')}ops/s" if job["wl"] == "oltp"
@@ -196,12 +200,16 @@ def main():
           f"(cpuset={CPUSET}, datasets={datasets}, lanes={lanes})")
 
     rows, image_ids = [], {}
+    os.makedirs(RESULTS, exist_ok=True)
+    jsonl = open(os.path.join(RESULTS, "runs.jsonl"), "a")  # crash-safe incremental log
     for job in jobs:
         mem = MEM_BY_TIER.get(job["ds"], "8g")
+        heap = HEAP_BY_TIER.get(job["ds"], "6g")
         for rep in range(1, args.reps + 1):
-            r = run_one(job, rep, mem, image_ids)
+            r = run_one(job, rep, mem, heap, image_ids)
             if r:
                 rows.append(r)
+                jsonl.write(json.dumps(r) + "\n"); jsonl.flush()
 
     capture_meta(rows, args, image_ids)
     if rows:

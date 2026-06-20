@@ -67,7 +67,8 @@ def main():
 
     import tempfile
     t_build = time.time()
-    with arcadedb.create_database(tempfile.mkdtemp(prefix="hybrid_") + "/db") as db:
+    with arcadedb.create_database(tempfile.mkdtemp(prefix="hybrid_") + "/db",
+                                  jvm_kwargs={"heap_size": os.environ.get("ARCADEDB_HEAP", "4g")}) as db:
         db.command("sql", "CREATE VERTEX TYPE Question")
         for c, t in [("id", "LONG"), ("title", "STRING"), ("score", "INTEGER"),
                      ("embedding", "ARRAY_OF_FLOATS")]:

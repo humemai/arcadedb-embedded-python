@@ -79,7 +79,8 @@ GAV_NAME = "gbOlap"
 
 def be_arcadedb(users, posts, posted, answers, workload):
     import arcadedb_embedded as arcadedb
-    ctx = arcadedb.create_database(tempfile.mkdtemp(prefix="gb_arcadedb_") + "/db")
+    ctx = arcadedb.create_database(tempfile.mkdtemp(prefix="gb_arcadedb_") + "/db",
+                                   jvm_kwargs={"heap_size": os.environ.get("ARCADEDB_HEAP", "4g")})
     db = ctx.__enter__()
     for v in ("User", "Post"):
         db.command("sql", f"CREATE VERTEX TYPE {v}")
