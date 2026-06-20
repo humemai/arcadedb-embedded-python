@@ -4,3 +4,7 @@ datasets/raw/
 datasets/prepared/
 __pycache__/
 *.pyc
+
+# generated figure images (regenerated from sources / mini results; final ones go in the PR)
+figures/*.png
+figures/*.svg

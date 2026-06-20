@@ -1,0 +1,17 @@
+digraph hybrid {
+  rankdir=LR;
+  graph [fontname="Helvetica", fontsize=12,
+         label="One in-process ArcadeDB  (pip install arcadedb-embedded — no server, no ETL)",
+         labelloc=t];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        fillcolor="#eef3fb", color="#33557a", margin="0.18,0.12"];
+  edge [fontname="Helvetica", fontsize=9, color="#33557a", penwidth=1.4];
+
+  q [label="seed question\n(embedding)", shape=note, fillcolor="#f6f6f6", color="#888888"];
+  v [label="① VECTOR\nvectorNeighbors()\n→ 200 similar questions\n33 ms"];
+  s [label="② SQL\nfilter  Score ≥ 1\n→ 50 questions\n48 ms"];
+  g [label="③ GRAPH  (MATCH)\nanswers + authors' reputation\n→ 10 results · 101 ms"];
+  r [label="ranked answers\n+ author reputation", fillcolor="#eafbea", color="#2e7d32"];
+
+  q -> v -> s -> g -> r;
+}

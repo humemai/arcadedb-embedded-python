@@ -181,7 +181,7 @@ def main():
 
     lat = np.array(lat)
     result = {
-        "backend": args.backend, "lib_version": lib_version(args.backend),
+        "backend": args.backend, "lib_version": lib_version(args.backend), "lane": "vector",
         "dataset": args.name, "corpus": args.corpus, "model": meta.get("model", "?"),
         "hnsw_M": M, "hnsw_ef_construction": EF_CONSTRUCTION, "ef_search": args.ef_search,
         "n_vectors": meta["count"], "dim": meta["dim"], "n_queries": len(queries),
