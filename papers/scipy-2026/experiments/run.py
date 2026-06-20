@@ -8,7 +8,7 @@ sidecar samples the container's cgroup memory over time and reads the exact kern
 Lanes:
   vector  : arcadedb, chroma            (vector_bench.py; uses <ds>/vectors)
   tabular : sqlite, duckdb, arcadedb    (tabular_bench.py; uses <ds>/prepared) x {oltp,olap}
-  graph   : kuzu, arcadedb              (graph_bench.py;   uses <ds>/prepared) x {oltp,olap}
+  graph   : ladybug, arcadedb          (graph_bench.py;   uses <ds>/prepared) x {oltp,olap}
 
 Outputs: results/runs.csv, results/mem/<run>.csv, results/manifest.json, results/ENV.md.
 Validate on laptop:  python run.py --datasets tiny --reps 2
@@ -38,7 +38,7 @@ SAMPLE_INTERVAL = 0.25
 LANE_BACKENDS = {
     "vector": ["arcadedb", "chroma"],
     "tabular": ["sqlite", "duckdb", "arcadedb"],
-    "graph": ["kuzu", "arcadedb"],
+    "graph": ["ladybug", "arcadedb"],
 }
 LANE_WORKLOADS = {"vector": [None], "tabular": ["oltp", "olap"], "graph": ["oltp", "olap"]}
 
@@ -71,7 +71,20 @@ def read_anon(cg):
     return None
 
 
-def sample_memory(cid, stop, series, peak_box):
+def read_cpu_stat(cg):
+    """cgroup v2 cpu.stat: cumulative usage/user/system in microseconds (per-container totals)."""
+    out = {}
+    try:
+        for line in open(os.path.join(cg, "cpu.stat")):
+            parts = line.split()
+            if len(parts) == 2 and parts[0] in ("usage_usec", "user_usec", "system_usec"):
+                out[parts[0]] = int(parts[1])
+    except Exception:
+        pass
+    return out
+
+
+def sample_memory(cid, stop, series, peak_box, cpu_box):
     cg, t0 = None, time.time()
     while not stop.is_set():
         cg = cg or cgroup_dir(cid)
@@ -84,6 +97,9 @@ def sample_memory(cid, stop, series, peak_box):
                 peak_box[0] = max(peak_box[0], pk)
             if anon is not None:
                 peak_box[1] = max(peak_box[1], anon)
+            cpu = read_cpu_stat(cg)  # cumulative; keep the latest non-empty reading
+            if cpu:
+                cpu_box[0] = cpu
         time.sleep(SAMPLE_INTERVAL)
 
 
@@ -113,13 +129,13 @@ def run_one(job, rep, mem, heap, image_ids):
     image = f"scipy-bench:{job['be']}"
     image_ids.setdefault(image, sh(["docker", "inspect", "--format", "{{.Id}}", image]))
     cmd = ["docker", "run", "-d", "--cpuset-cpus", CPUSET, "--memory", mem, "--memory-swap", mem,
-           "-e", f"ARCADEDB_HEAP={heap}",
+           "-e", f"ARCADEDB_HEAP={heap}", "-e", f"RUN_LABEL={run_id}", "-e", "LAT_DIR=/work/results/lat",
            "-v", f"{HERE}:/work", "-w", "/work", "-v", f"{DATA}:/data:ro", image, "python"] + job["args"]
     cid = sh(cmd)
     if len(cid) < 12:
         print(f"  [{run_id}] FAILED to start"); return None
-    series, peak_box, stop = [], [0, 0], threading.Event()
-    sampler = threading.Thread(target=sample_memory, args=(cid, stop, series, peak_box))
+    series, peak_box, cpu_box, stop = [], [0, 0], [{}], threading.Event()
+    sampler = threading.Thread(target=sample_memory, args=(cid, stop, series, peak_box, cpu_box))
     sampler.start()
     rc = int(sh(["docker", "wait", cid]) or "1")
     stop.set(); sampler.join()
@@ -137,9 +153,13 @@ def run_one(job, rep, mem, heap, image_ids):
         f.write("t_s,current_mib,anon_mib\n")
         for t, cur, anon in series:
             f.write(f"{t},{cur / 1048576:.1f},{anon / 1048576:.1f}\n")
+    cpu = cpu_box[0]
     res.update({"dataset": job["ds"], "rep": rep, "cpuset": CPUSET, "mem_limit": mem,
                 "peak_mib": round(peak_box[0] / 1048576, 1),
                 "peak_anon_mib": round(peak_box[1] / 1048576, 1),
+                "cpu_total_s": round(cpu.get("usage_usec", 0) / 1e6, 3),
+                "cpu_user_s": round(cpu.get("user_usec", 0) / 1e6, 3),
+                "cpu_system_s": round(cpu.get("system_usec", 0) / 1e6, 3),
                 "image_id": image_ids[image][:19], "mem_series": f"mem/{run_id}.csv",
                 "ts_utc": datetime.now(timezone.utc).isoformat()})
     if job["be"] == "arcadedb":

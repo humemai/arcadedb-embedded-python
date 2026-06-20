@@ -8,12 +8,12 @@ declare -A PKGS=(
   [arcadedb]="arcadedb-embedded==26.6.1 numpy pandas pyarrow"
   [sqlite]="pandas pyarrow"
   [duckdb]="duckdb==1.5.4 pandas pyarrow"
-  [kuzu]="kuzu==0.11.3 pandas pyarrow"
+  [ladybug]="real_ladybug==0.15.3 pandas pyarrow"
   [chroma]="chromadb==1.5.9 numpy"
 )
 
 targets=("$@")
-[ ${#targets[@]} -eq 0 ] && targets=(arcadedb sqlite duckdb kuzu chroma)
+[ ${#targets[@]} -eq 0 ] && targets=(arcadedb sqlite duckdb ladybug chroma)
 
 for be in "${targets[@]}"; do
   echo "=== building scipy-bench:$be  (${PKGS[$be]}) ==="
