@@ -76,7 +76,7 @@ def main():
             w(f"| {TIER_LABEL[ds]} | {be} | {cell_str(g, ol, 'oltp_ops_per_s')} "
               f"| {cell_str(g, ap, 'olap_total_ms', '{:.1f}')} "
               f"| {cell_str(g, ol, 'ingest_s', '{:.2f}')} "
-              f"| {mean_only(g, ol, 'peak_mib', '{:.0f}')} "
+              f"| {cell_str(g, ol, 'peak_mib', '{:.0f}')} "
               f"| {mean_only(g, ol, 'db_size_mb', '{:.1f}')} |")
     w("")
 
@@ -90,11 +90,11 @@ def main():
         for be in ["ladybug", "arcadedb"]:
             ol = ("graph", be, ds, "oltp")
             ap = ("graph", be, ds, "olap")
-            gav = mean_only(g, ap, "gav_build_s", "{:.2f}")
+            gav = cell_str(g, ap, "gav_build_s", "{:.2f}")
             w(f"| {TIER_LABEL[ds]} | {be} | {cell_str(g, ol, 'oltp_ops_per_s')} "
               f"| {cell_str(g, ap, 'olap_total_ms', '{:.1f}')} | {gav} "
               f"| {cell_str(g, ol, 'ingest_s', '{:.2f}')} "
-              f"| {mean_only(g, ol, 'peak_mib', '{:.0f}')} "
+              f"| {cell_str(g, ol, 'peak_mib', '{:.0f}')} "
               f"| {mean_only(g, ol, 'db_size_mb', '{:.1f}')} |")
     w("")
 
@@ -111,7 +111,7 @@ def main():
               f"| {cell_str(g, c, 'build_s', '{:.1f}')} "
               f"| {cell_str(g, c, 'q_mean_ms', '{:.2f}')} "
               f"| {cell_str(g, c, 'recall@10', '{:.3f}')} "
-              f"| {mean_only(g, c, 'peak_mib', '{:.0f}')} "
+              f"| {cell_str(g, c, 'peak_mib', '{:.0f}')} "
               f"| {mean_only(g, c, 'db_size_mb', '{:.1f}')} |")
     w("")
 
@@ -142,8 +142,8 @@ def main():
     w("## Query latency distribution (medium tier, ms)\n")
     w("Per-operation latency percentiles over all timed ops (5 reps pooled per cell shown as "
       "the mean of per-rep summaries). p99 captures tail behavior.\n")
-    w("| Lane / op | Backend | mean | p50 | p95 | p99 | max |")
-    w("|-----------|---------|-----:|----:|----:|----:|----:|")
+    w("| Lane / op | Backend | p50 | p99 | max |")
+    w("|-----------|---------|----:|----:|----:|")
     lat_rows = [
         ("vector query", "vector", "chroma", "", "q"),
         ("vector query", "vector", "arcadedb", "", "q"),
@@ -158,9 +158,7 @@ def main():
     for label, lane, be, wl, op in lat_rows:
         c = (lane, be, "medium", wl)
         w(f"| {label} | {be} "
-          f"| {mean_only(g, c, f'{op}_mean_ms', '{:.3f}')} "
           f"| {mean_only(g, c, f'{op}_p50_ms', '{:.3f}')} "
-          f"| {mean_only(g, c, f'{op}_p95_ms', '{:.3f}')} "
           f"| {mean_only(g, c, f'{op}_p99_ms', '{:.3f}')} "
           f"| {mean_only(g, c, f'{op}_max_ms', '{:.2f}')} |")
     w("")

@@ -49,6 +49,8 @@ def main():
     ap.add_argument("--topn", type=int, default=200, help="vector candidates")
     ap.add_argument("--sql-keep", type=int, default=50, help="questions kept after SQL filter")
     ap.add_argument("--topk", type=int, default=10, help="final answers returned")
+    ap.add_argument("--warmup", type=int, default=5, help="untimed warmup iterations")
+    ap.add_argument("--query-reps", type=int, default=20, help="timed warm query iterations")
     args = ap.parse_args()
 
     dim, emb = load_question_embeddings(args.vectors_dir, args.name)
@@ -86,20 +88,31 @@ def main():
             db.command("sql", f"CREATE EDGE TYPE {e}")
 
         # --- load vertices (SQL inserts; embeddings via to_java_float_array) ---
+        # Commit periodically across ALL loops so the transaction buffer/WAL stays bounded
+        # (a single giant transaction blows up super-linearly at scale).
+        BATCH = 5000
+        n = 0
         db.begin()
-        for i, r in enumerate(q.itertuples(index=False)):
+        for r in q.itertuples(index=False):
             db.command("sql", "INSERT INTO Question SET id=:i, title=:t, score=:s, embedding=:e",
                        {"i": int(r.id), "t": (r.title if isinstance(r.title, str) else ""),
                         "s": int(r.score) if pd.notna(r.score) else 0,
                         "e": arcadedb.to_java_float_array(emb[int(r.id)])})
-            if (i + 1) % 2000 == 0:
+            n += 1
+            if n % BATCH == 0:
                 db.commit(); db.begin()
         for r in a.itertuples(index=False):
             db.command("sql", "INSERT INTO Answer SET id=:i, score=:s",
                        {"i": int(r.id), "s": int(r.score) if pd.notna(r.score) else 0})
+            n += 1
+            if n % BATCH == 0:
+                db.commit(); db.begin()
         for r in u.itertuples(index=False):
             db.command("sql", "INSERT INTO Userx SET id=:i, reputation=:r",
                        {"i": int(r.id), "r": int(r.reputation) if pd.notna(r.reputation) else 0})
+            n += 1
+            if n % BATCH == 0:
+                db.commit(); db.begin()
         db.commit()
         db.command("sql", f'''CREATE INDEX ON Question (embedding) LSM_VECTOR
             METADATA {{ "dimensions": {dim}, "similarity": "COSINE",
@@ -130,58 +143,83 @@ def main():
 
         # ===================== THE HYBRID WORKFLOW =====================
         # seed = a popular (highest-score) question's vector — "find more like this"
+        import statistics as st
         seed_qid = int(q.sort_values("score", ascending=False).iloc[0].id)
         seed = arcadedb.to_java_float_array(emb[seed_qid])
 
-        # 1) VECTOR: semantically similar questions
-        t = time.time()
-        cands = db.query("sql",
-            "SELECT id, score, distance FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?))) "
-            "ORDER BY distance",
-            "Question[embedding]", seed, args.topn, 100).to_list()
-        vec_s = time.time() - t
+        _dbg = bool(os.environ.get("HYB_DEBUG"))
 
-        # 2) SQL: filter/rank those candidates by Score
-        cand_ids = [int(c["id"]) for c in cands]
-        id_list = "[" + ",".join(str(i) for i in cand_ids) + "]"
-        t = time.time()
-        filt = db.query("sql",
-            f"SELECT id, title, score FROM Question WHERE id IN {id_list} "
-            f"AND score >= {args.score_min} ORDER BY score DESC LIMIT {args.sql_keep}").to_list()
-        sql_s = time.time() - t
+        def _d(msg):
+            if _dbg:
+                print(f"    .. {msg} (+{time.time()-t0:.1f}s)", flush=True)
 
-        # 3) GRAPH: traverse to answers + answerers' reputation via ArcadeDB's MATCH.
-        # (We use SQL MATCH here, not OpenCypher: ArcadeDB's OpenCypher returns 0 on a
-        #  multi-edge pattern combined with a WHERE ... IN [list] filter, while SQL MATCH —
-        #  the form examples 13/22 use, and the GAV-accelerated path — handles it correctly.
-        #  ArcadeDB OpenCypher is still used for simpler graph queries in the comparison lane.)
-        fids = "[" + ",".join(str(int(r["id"])) for r in filt) + "]"
-        t = time.time()
-        hits = db.query("sql",
-            f"SELECT qid, aid, ascore, rep FROM ("
-            f" MATCH {{type:Question, as:q, where:(id IN {fids})}}-HAS_ANSWER->"
-            f"{{type:Answer, as:ans}}-AUTHORED_BY->{{type:Userx, as:usr}} "
-            f" RETURN q.id AS qid, ans.id AS aid, ans.score AS ascore, usr.reputation AS rep"
-            f") ORDER BY ascore DESC LIMIT {args.topk}").to_list()
-        cyp_s = time.time() - t
+        def run_once():
+            global t0
+            t0 = time.time()
+            # 1) VECTOR: semantically similar questions
+            _d("vector start")
+            t = time.time()
+            cands = db.query("sql",
+                "SELECT id, score, distance FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?))) "
+                "ORDER BY distance",
+                "Question[embedding]", seed, args.topn, 100).to_list()
+            vt = time.time() - t
+            # 2) SQL: filter/rank those candidates by Score
+            _d(f"vector done ({len(cands)} cands); sql start")
+            id_list = "[" + ",".join(str(int(c["id"])) for c in cands) + "]"
+            t = time.time()
+            filt = db.query("sql",
+                f"SELECT id, title, score FROM Question WHERE id IN {id_list} "
+                f"AND score >= {args.score_min} ORDER BY score DESC LIMIT {args.sql_keep}").to_list()
+            stime = time.time() - t
+            _d(f"sql done ({len(filt)} kept); graph start")
+            # 3) GRAPH: traverse to answers + answerers' reputation via ArcadeDB's SQL MATCH.
+            # (SQL MATCH, not OpenCypher: ArcadeDB OpenCypher returns 0 on a multi-edge pattern
+            #  combined with a WHERE ... IN [list] filter; SQL MATCH handles it and is GAV-accelerated.)
+            fids = "[" + ",".join(str(int(r["id"])) for r in filt) + "]"
+            t = time.time()
+            hits = db.query("sql",
+                f"SELECT qid, aid, ascore, rep FROM ("
+                f" MATCH {{type:Question, as:q, where:(id IN {fids})}}-HAS_ANSWER->"
+                f"{{type:Answer, as:ans}}-AUTHORED_BY->{{type:Userx, as:usr}} "
+                f" RETURN q.id AS qid, ans.id AS aid, ans.score AS ascore, usr.reputation AS rep"
+                f") ORDER BY ascore DESC LIMIT {args.topk}").to_list()
+            gt = time.time() - t
+            return vt, stime, gt, cands, filt, hits
 
+        # warm up (untimed) so we report steady-state latency, not a single cold run
+        for i in range(args.warmup):
+            vt, stime, gt, *_ = run_once()
+            print(f"[warmup {i+1}/{args.warmup}] vec={vt*1000:.1f} sql={stime*1000:.1f} "
+                  f"graph={gt*1000:.1f} ms", flush=True)
+        vs, ss, gs, ts = [], [], [], []
+        for i in range(args.query_reps):
+            vt, stime, gt, cands, filt, hits = run_once()
+            vs.append(vt * 1000); ss.append(stime * 1000); gs.append(gt * 1000)
+            ts.append((vt + stime + gt) * 1000)
+            print(f"[rep {i+1}/{args.query_reps}] vec={vt*1000:.1f} sql={stime*1000:.1f} "
+                  f"graph={gt*1000:.1f} ms", flush=True)
+
+        def stat(arr):
+            return round(st.mean(arr), 2), round(st.pstdev(arr) if len(arr) > 1 else 0.0, 2)
+        vm, vsd = stat(vs); sm, ssd = stat(ss); gm, gsd = stat(gs); tm, tsd = stat(ts)
         result = {
             "showcase": "vector->sql->graph(MATCH)", "dataset": args.name,
             "lib_version": getattr(arcadedb, "__version__", "?"),
             "n_questions": len(q), "n_answers": len(a), "n_users": len(u),
             "n_asked": len(asked), "n_has_answer": len(has_ans), "n_answered": len(answered),
-            "build_s": round(build_s, 3),
-            "vector_ms": round(vec_s * 1000, 2), "sql_ms": round(sql_s * 1000, 2),
-            "graph_ms": round(cyp_s * 1000, 2),
-            "hybrid_total_ms": round((vec_s + sql_s + cyp_s) * 1000, 2),
+            "build_s": round(build_s, 3), "warmup": args.warmup, "query_reps": args.query_reps,
+            "vector_ms": vm, "vector_ms_std": vsd, "sql_ms": sm, "sql_ms_std": ssd,
+            "graph_ms": gm, "graph_ms_std": gsd,
+            "hybrid_total_ms": tm, "hybrid_total_ms_std": tsd,
             "vec_candidates": len(cands), "sql_filtered": len(filt), "graph_hits": len(hits),
             "systems": 1, "processes": 1, "etl_steps": 0,
         }
-    print("\n=== Hybrid workflow (one in-process ArcadeDB, three languages) ===")
-    print(f"  1. vector  → {len(cands)} similar questions   ({result['vector_ms']} ms)")
-    print(f"  2. sql     → {len(filt)} after Score filter    ({result['sql_ms']} ms)")
-    print(f"  3. graph   → {len(hits)} answers+authors (MATCH) ({result['graph_ms']} ms)")
-    print(f"  total hybrid latency: {result['hybrid_total_ms']} ms; 1 system, 0 ETL steps")
+    print(f"\n=== Hybrid workflow (one in-process ArcadeDB; warm, {args.query_reps} reps) ===")
+    print(f"  1. vector  → {len(cands)} similar questions   ({vm} ± {vsd} ms)")
+    print(f"  2. sql     → {len(filt)} after Score filter    ({sm} ± {ssd} ms)")
+    print(f"  3. graph   → {len(hits)} answers+authors        ({gm} ± {gsd} ms)")
+    print(f"  total hybrid latency: {tm} ± {tsd} ms; build {result['build_s']}s; 1 system, 0 ETL")
     if hits:
         print(f"  sample hit: {hits[0]}")
     print("RESULT " + json.dumps(result))

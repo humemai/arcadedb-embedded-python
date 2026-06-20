@@ -1,29 +1,27 @@
 digraph arch {
   rankdir=LR;
-  graph [fontname="Helvetica", fontsize=12, labelloc=t,
-         label="A single OS process — pip install arcadedb-embedded (no server, no Java install)"];
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
-        fillcolor="#eef3fb", color="#33557a", margin="0.16,0.10"];
-  edge [color="#33557a", penwidth=1.4];
+  graph [fontname="Helvetica", margin=0, pad="0.12", ranksep="0.40", nodesep="0.28"];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=20,
+        fillcolor="#eef3fb", color="#33557a", margin="0.24,0.16"];
+  edge [color="#33557a", penwidth=2.2];
 
   subgraph cluster_py {
     label="Python process"; labeljust=l; style="rounded,dashed"; color="#888888";
-    fontname="Helvetica"; fontsize=11;
+    fontname="Helvetica"; fontsize=20;
 
     code [label="your Python code\n(numpy · pandas)", fillcolor="#f6f6f6", color="#888888"];
-    api  [label="arcadedb_embedded\nPythonic API"];
-    jp   [label="JPype\nin-process bridge"];
+    api  [label="arcadedb_embedded API\n(JPype in-process bridge)"];
 
     subgraph cluster_jvm {
       label="bundled JRE — JVM, in-process"; labeljust=l; style="rounded,filled";
-      fillcolor="#fcf7ef"; color="#b08d57"; fontname="Helvetica"; fontsize=11;
-      eng  [label="ArcadeDB engine\nACID · OLTP-first", fillcolor="#e6edfb"];
-      doc  [label="Documents / OLTP\n(SQL)", fillcolor="#eafbea", color="#2e7d32"];
-      gr   [label="Property graph\n(Cypher · MATCH · GAV)", fillcolor="#eafbea", color="#2e7d32"];
+      fillcolor="#fcf7ef"; color="#b08d57"; fontname="Helvetica"; fontsize=20;
+      eng  [label="ArcadeDB engine\nACID · transactional", fillcolor="#e6edfb"];
+      doc  [label="Documents\n(SQL)", fillcolor="#eafbea", color="#2e7d32"];
+      gr   [label="Property graph\n(Cypher · GAV)", fillcolor="#eafbea", color="#2e7d32"];
       vec  [label="Vectors\n(HNSW)", fillcolor="#eafbea", color="#2e7d32"];
     }
   }
 
-  code -> api -> jp -> eng;
+  code -> api -> eng;
   eng -> doc; eng -> gr; eng -> vec;
 }
