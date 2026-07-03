@@ -125,7 +125,9 @@ class FullTextMultiPropertyTest extends TestHelper {
       database.command("sql", "CREATE DOCUMENT TYPE Article");
       database.command("sql", "CREATE PROPERTY Article.title STRING");
       database.command("sql", "CREATE PROPERTY Article.body STRING");
-      database.command("sql", "CREATE INDEX ON Article (title, body) FULL_TEXT");
+      // This test asserts exact term-coordination scores, so pin CLASSIC similarity: new full-text indexes default to BM25
+      // (issue #4687).
+      database.command("sql", "CREATE INDEX ON Article (title, body) FULL_TEXT METADATA {\"similarity\": \"CLASSIC\"}");
 
       // Doc1: matches "java" and "programming" in both title AND body
       database.command("sql", "INSERT INTO Article SET title = 'Java Programming', body = 'Learn Java programming basics'");
@@ -158,6 +160,61 @@ class FullTextMultiPropertyTest extends TestHelper {
       // Doc3 should have lower score than docs matching both terms
       assertThat(scores.get("Java Programming")).isGreaterThan(scores.get("Database Design"));
       assertThat(scores.get("Java Guide")).isGreaterThan(scores.get("Database Design"));
+    });
+  }
+
+  /**
+   * Issue #4733: creating a multi-property FULL_TEXT index over a type that already holds records must build without error and
+   * index the existing rows (matchable by SEARCH_INDEX), exactly as it does when the index is created before the rows are
+   * inserted. The build path previously routed puts through the underlying single-key LSM-Tree index, crashing with
+   * "Index 1 out of bounds for length 1" and skipping tokenization.
+   */
+  @Test
+  void createMultiPropertyIndexOverExistingDataBM25() {
+    createMultiPropertyIndexOverExistingData("BM25");
+  }
+
+  @Test
+  void createMultiPropertyIndexOverExistingDataClassic() {
+    createMultiPropertyIndexOverExistingData("CLASSIC");
+  }
+
+  private void createMultiPropertyIndexOverExistingData(final String similarity) {
+    database.transaction(() -> {
+      database.command("sql", "CREATE DOCUMENT TYPE Article");
+      database.command("sql", "CREATE PROPERTY Article.title STRING");
+      database.command("sql", "CREATE PROPERTY Article.body STRING");
+
+      // Populate the type BEFORE the index exists.
+      database.command("sql", "INSERT INTO Article SET title = 'java database', body = 'tutorial'");
+      database.command("sql", "INSERT INTO Article SET title = 'python', body = 'java programming guide'");
+      // A record with one of the two indexed properties absent: the build must still produce a positional key array.
+      database.command("sql", "INSERT INTO Article SET title = 'standalone title'");
+    });
+
+    // Building the multi-property full-text index over the now-populated type must not throw.
+    database.transaction(() -> database.command("sql",
+        "CREATE INDEX ON Article (title, body) FULL_TEXT METADATA {\"similarity\": \"" + similarity + "\"}"));
+
+    database.transaction(() -> {
+      final TypeIndex index = (TypeIndex) database.getSchema().getIndexByName("Article[title,body]");
+      assertThat(index).isNotNull();
+      assertThat(index.getType()).isEqualTo(Schema.INDEX_TYPE.FULL_TEXT);
+
+      // The pre-existing rows must be tokenized and matchable, both unqualified and field-qualified.
+      final Set<String> javaMatches = new HashSet<>();
+      final ResultSet result = database.query("sql",
+          "SELECT title FROM Article WHERE SEARCH_INDEX('Article[title,body]', 'java') = true");
+      while (result.hasNext())
+        javaMatches.add(result.next().getProperty("title"));
+      assertThat(javaMatches).containsExactlyInAnyOrder("java database", "python");
+
+      final Set<String> bodyMatches = new HashSet<>();
+      final ResultSet bodyResult = database.query("sql",
+          "SELECT title FROM Article WHERE SEARCH_INDEX('Article[title,body]', 'body:tutorial') = true");
+      while (bodyResult.hasNext())
+        bodyMatches.add(bodyResult.next().getProperty("title"));
+      assertThat(bodyMatches).containsExactly("java database");
     });
   }
 }

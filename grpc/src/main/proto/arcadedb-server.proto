@@ -385,6 +385,11 @@ message InsertOptions {
 
   ConflictMode conflict_mode = 3;
 
+  // Columns to overwrite when CONFLICT_UPDATE matches an existing row. Empty = merge all non-key
+  // columns present on the incoming record. A column whose incoming value is absent or a proto
+  // NullValue is skipped (left unchanged, not rejected), so a property cannot be set to null through
+  // this path. For edge targets the out/in endpoints are always ignored here (endpoints cannot be
+  // re-pointed by an upsert).
   repeated string update_columns_on_conflict = 4;
 
   enum TransactionMode {
@@ -562,7 +567,7 @@ service ArcadeDbAdminService {
 }
 
 message PingRequest {
-  DatabaseCredentials credentials = 1; // optional if you allow unauth ping
+  DatabaseCredentials credentials = 1; // required when server security is enabled (enforced centrally by the auth interceptor)
 }
 message PingResponse {
   bool ok = 1;

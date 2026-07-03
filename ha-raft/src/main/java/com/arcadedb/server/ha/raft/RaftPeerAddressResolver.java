@@ -88,6 +88,19 @@ final class RaftPeerAddressResolver {
    * This is a soft preference - if the preferred leader is unavailable, another node will take over.
    */
   static ParsedPeerList parsePeerList(final String serverList, final int defaultPort) {
+    return parsePeerList(serverList, defaultPort, "");
+  }
+
+  /**
+   * Same as {@link #parsePeerList(String, int)} but additionally appends a Kubernetes DNS suffix to
+   * every peer host so short pod names (e.g. {@code arcadedb-0}) written in the server list expand to
+   * the cluster-internal FQDN, consistent with the self-advertised host built in
+   * {@code ArcadeDBServer.assignHostAddress}. The suffix is applied to the Raft, HTTP and HTTPS host
+   * components. It is a no-op when {@code k8sDnsSuffix} is empty, when a host is already fully
+   * qualified with that suffix (idempotent), and for raw IP literals or {@code localhost}, which need
+   * no DNS resolution.
+   */
+  static ParsedPeerList parsePeerList(final String serverList, final int defaultPort, final String k8sDnsSuffix) {
     // Split on top-level commas only: the object form {raft:..,http:..} contains commas that must not
     // be treated as entry separators.
     final List<String> entries = splitEntries(serverList);
@@ -124,11 +137,12 @@ final class RaftPeerAddressResolver {
       if (braceIdx >= 0) {
         // Object form: host:{raft:2434,http:2480,https:2490,priority:10}
         final PeerSpec spec = parseObjectForm(entry, braceIdx, defaultPort);
-        raftAddress = spec.host + ":" + spec.raftPort;
+        final String host = applyDnsSuffix(spec.host, k8sDnsSuffix);
+        raftAddress = host + ":" + spec.raftPort;
         if (spec.httpPort != null)
-          httpAddress = spec.host + ":" + spec.httpPort;
+          httpAddress = host + ":" + spec.httpPort;
         if (spec.httpsPort != null)
-          httpsAddress = spec.host + ":" + spec.httpsPort;
+          httpsAddress = host + ":" + spec.httpsPort;
         priority = spec.priority;
       } else {
         final String[] parts = entry.split(":");
@@ -139,27 +153,29 @@ final class RaftPeerAddressResolver {
                   + "'. Expected [name@]host[:raftPort[:httpPort[:priority[:httpsPort]]]] "
                   + "or [name@]host:{raft:..,http:..,https:..,priority:..}");
 
+        final String host = applyDnsSuffix(parts[0], k8sDnsSuffix);
+
         if (parts.length == 5) {
           // host:raftPort:httpPort:priority:httpsPort
-          raftAddress = parts[0] + ":" + parts[1];
-          httpAddress = parts[0] + ":" + parts[2];
+          raftAddress = host + ":" + parts[1];
+          httpAddress = host + ":" + parts[2];
           priority = parseIntField(parts[3], "priority", entry);
-          httpsAddress = parts[0] + ":" + parts[4];
+          httpsAddress = host + ":" + parts[4];
         } else if (parts.length == 4) {
           // host:raftPort:httpPort:priority
-          raftAddress = parts[0] + ":" + parts[1];
-          httpAddress = parts[0] + ":" + parts[2];
+          raftAddress = host + ":" + parts[1];
+          httpAddress = host + ":" + parts[2];
           priority = parseIntField(parts[3], "priority", entry);
         } else if (parts.length == 3) {
           // host:raftPort:httpPort
-          raftAddress = parts[0] + ":" + parts[1];
-          httpAddress = parts[0] + ":" + parts[2];
+          raftAddress = host + ":" + parts[1];
+          httpAddress = host + ":" + parts[2];
         } else if (parts.length == 2) {
           // host:raftPort
-          raftAddress = entry;
+          raftAddress = host + ":" + parts[1];
         } else {
           // host only - use default Raft port
-          raftAddress = entry + ":" + defaultPort;
+          raftAddress = host + ":" + defaultPort;
         }
       }
 
@@ -269,6 +285,41 @@ final class RaftPeerAddressResolver {
     return new PeerSpec(host, raftPort, httpPort, httpsPort, priority);
   }
 
+  /**
+   * Appends the Kubernetes DNS suffix to a peer host so short pod names in the server list resolve to
+   * the cluster-internal FQDN, consistent with the self-advertised host. Returns the host unchanged
+   * when the suffix is empty, when the host is already fully qualified with that suffix (idempotent),
+   * or when the host is a raw IP literal or {@code localhost} (which need no DNS resolution).
+   */
+  static String applyDnsSuffix(final String host, final String k8sDnsSuffix) {
+    if (k8sDnsSuffix == null || k8sDnsSuffix.isEmpty() || host == null || host.isEmpty())
+      return host;
+    if (host.endsWith(k8sDnsSuffix))
+      return host;
+    if ("localhost".equals(host) || isIpLiteral(host))
+      return host;
+    return host + k8sDnsSuffix;
+  }
+
+  /** Returns true when the host is an IPv4/IPv6 literal, which must never receive a DNS suffix. */
+  private static boolean isIpLiteral(final String host) {
+    // IPv6 literals contain ':' (or are written in bracketed form); they are never DNS names.
+    if (host.indexOf(':') >= 0 || host.charAt(0) == '[')
+      return true;
+    // IPv4 dotted-quad: exactly four numeric octets.
+    final String[] octets = host.split("\\.");
+    if (octets.length != 4)
+      return false;
+    for (final String octet : octets) {
+      if (octet.isEmpty())
+        return false;
+      for (int i = 0; i < octet.length(); i++)
+        if (!Character.isDigit(octet.charAt(i)))
+          return false;
+    }
+    return true;
+  }
+
   /** Parses an integer field, throwing a descriptive {@link ServerException} on malformed input. */
   private static int parseIntField(final String value, final String fieldName, final String entry) {
     try {
@@ -367,6 +418,61 @@ final class RaftPeerAddressResolver {
               + " (the first server-list entry is index 0, not 1).");
 
     return peers.get(index).getId();
+  }
+
+  /**
+   * Synthesizes the local Raft peer for a Kubernetes StatefulSet scale-up pod whose ordinal is beyond
+   * the static {@code HA_SERVER_LIST} (issue #4836). A {@code kubectl scale} that grows the StatefulSet
+   * without simultaneously editing {@code HA_SERVER_LIST} starts pods (e.g. {@code arcadedb-3} for a
+   * 3-entry list) whose ordinal is {@code >= peers.size()}; {@link #findLocalPeerId} would throw
+   * "index out of range" and the pod would crash-loop. In K8s mode the local peer is instead
+   * reconstructed from the pod name + DNS suffix so the node can boot and let
+   * {@link KubernetesAutoJoin} add it to the running cluster via an atomic {@code Mode.ADD}.
+   * <p>
+   * Returns {@code null} (no synthesis, caller falls back to the normal/error path) when:
+   * <ul>
+   *   <li>not in K8s mode ({@code k8sMode == false});</li>
+   *   <li>the server name has no parseable {@code prefix-N} / {@code prefix_N} ordinal, so it cannot be
+   *       a StatefulSet pod;</li>
+   *   <li>the ordinal is within {@code [0, peers.size())} - a normal node that resolves through the
+   *       index path and must not be duplicated.</li>
+   * </ul>
+   * The synthesized address follows {@code <pod-name><dnsSuffix>:<raftPort>}, matching the local
+   * listening address computed by {@code ArcadeDBServer#assignHostAddress} ({@code HOSTNAME + dnsSuffix})
+   * and the {@code HA_RAFT_PORT} this node binds to, so the address advertised to the cluster is the one
+   * peers actually reach.
+   */
+  static RaftPeer synthesizeK8sScaleUpPeer(final boolean k8sMode, final List<RaftPeer> peers,
+      final String serverName, final String dnsSuffix, final int raftPort) {
+    if (!k8sMode)
+      return null;
+
+    final int separatorIdx;
+    try {
+      separatorIdx = findLastSeparatorIndex(serverName);
+    } catch (final IllegalArgumentException e) {
+      return null;
+    }
+
+    final int index;
+    try {
+      index = Integer.parseInt(serverName.substring(separatorIdx + 1));
+    } catch (final NumberFormatException e) {
+      return null;
+    }
+
+    // Within the configured range: the node resolves through the normal index path - do not synthesize.
+    if (index < peers.size())
+      return null;
+
+    final String host = serverName + (dnsSuffix == null ? "" : dnsSuffix);
+    final String raftAddress = host + ":" + raftPort;
+    // Use host_raftPort as peer ID (underscore avoids JMX ObjectName issues with colons), matching parsePeerList.
+    final String peerIdStr = raftAddress.replace(':', '_');
+    return RaftPeer.newBuilder()
+        .setId(peerIdStr)
+        .setAddress(raftAddress)
+        .build();
   }
 
   /**

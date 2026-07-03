@@ -45,6 +45,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -212,13 +213,17 @@ class RemoteHttpComponentTest {
   void manageExceptionServerIsNotTheLeader() {
     final JSONObject json = new JSONObject();
     json.put("exception", ServerIsNotTheLeaderException.class.getName());
-    json.put("detail", "leader.address.com");
+    json.put("detail", "Changes to the schema must be executed on the leader server");
     json.put("exceptionArgs", "leader.address.com:2480");
 
     final HttpResponse<String> response = createMockResponse(400, json.toString());
     final Exception result = component.manageException(response, "test");
 
     assertThat(result).isInstanceOf(ServerIsNotTheLeaderException.class);
+    // The human-readable message must reach the client untouched.
+    assertThat(result.getMessage()).isEqualTo("Changes to the schema must be executed on the leader server");
+    // The leader-address hint (exceptionArgs) must be preserved so the client can fast-path to the leader.
+    assertThat(((ServerIsNotTheLeaderException) result).getLeaderAddress()).isEqualTo("leader.address.com:2480");
   }
 
   @Test
@@ -529,13 +534,16 @@ class RemoteHttpComponentTest {
   void manageExceptionServerIsNotTheLeaderWithDot() {
     final JSONObject json = new JSONObject();
     json.put("exception", ServerIsNotTheLeaderException.class.getName());
-    json.put("detail", "leader.address.2480");
+    // A detail message containing periods must not be truncated at the last '.'.
+    json.put("detail", "Server is busy. Retry on the leader.");
     json.put("exceptionArgs", "leader.address:2480");
 
     final HttpResponse<String> response = createMockResponse(400, json.toString());
     final Exception result = component.manageException(response, "test");
 
     assertThat(result).isInstanceOf(ServerIsNotTheLeaderException.class);
+    assertThat(result.getMessage()).isEqualTo("Server is busy. Retry on the leader.");
+    assertThat(((ServerIsNotTheLeaderException) result).getLeaderAddress()).isEqualTo("leader.address:2480");
   }
 
   @Test
@@ -586,6 +594,8 @@ class RemoteHttpComponentTest {
     final Exception result = component.manageException(response, "test");
 
     assertThat(result).isInstanceOf(ServerIsNotTheLeaderException.class);
+    assertThat(result.getMessage()).isEqualTo("leaderaddress");
+    assertThat(((ServerIsNotTheLeaderException) result).getLeaderAddress()).isEqualTo("leader:2480");
   }
 
   // Regression test for issue #4372: leaderServer null-read in httpCommand retry path
@@ -735,7 +745,7 @@ class RemoteHttpComponentTest {
     try {
       return (Pair<String, Integer>) m.invoke(c);
     } catch (final InvocationTargetException e) {
-      throw (e.getCause() instanceof Exception ex) ? ex : new RuntimeException(e.getCause());
+      throw e.getCause() instanceof Exception ex ? ex : new RuntimeException(e.getCause());
     }
   }
 
@@ -896,10 +906,10 @@ class RemoteHttpComponentTest {
       try {
         assertThatThrownBy(() -> c.httpCommand("GET", null, "server", null, null, null, false, false,
             (response, json) -> {
-              throw new java.text.ParseException("checked failure", 0);
+              throw new ParseException("checked failure", 0);
             }))
             .isInstanceOf(RemoteException.class)
-            .hasCauseInstanceOf(java.text.ParseException.class);
+            .hasCauseInstanceOf(ParseException.class);
       } finally {
         c.close();
       }

@@ -20,6 +20,7 @@ package com.arcadedb.server.ha.raft;
 
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import org.apache.ratis.protocol.RaftPeer;
@@ -105,6 +106,9 @@ class RaftClusterStatusExporter {
     final var databases = new JSONArray();
     final var stateMachineForBaseline = haServer.getStateMachine();
     for (final String dbName : haServer.getServer().getDatabaseNames()) {
+      // Never expose reserved internal databases (e.g. the Raft control directory '.raft').
+      if (ArcadeDBServer.isReservedDatabaseName(dbName))
+        continue;
       final var databaseJSON = new JSONObject();
       databaseJSON.put("name", dbName);
       databaseJSON.put("quorum", haServer.getQuorum().name());
@@ -315,7 +319,8 @@ class RaftClusterStatusExporter {
         return;
       clusterMonitor.updateLeaderCommitIndex(haServer.getCommitIndex());
       for (final var fs : haServer.getFollowerStates())
-        clusterMonitor.updateReplicaMatchIndex((String) fs.get("peerId"), (Long) fs.get("matchIndex"));
+        clusterMonitor.updateReplicaMatchIndex((String) fs.get("peerId"), (Long) fs.get("matchIndex"),
+            (Long) fs.get("lastRpcElapsedMs"));
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.FINE, "Error checking replica lag", e);
     }

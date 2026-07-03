@@ -20,6 +20,9 @@ package com.arcadedb.server.ha.raft;
 
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseFactory;
+import com.arcadedb.serializer.json.JSONArray;
+import com.arcadedb.serializer.json.JSONObject;
+import com.arcadedb.server.monitor.HAReplicationStatsProvider.FollowerSample;
 import com.arcadedb.utility.FileUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -93,5 +96,101 @@ class ClusterAlertsTest {
     final List<String> flagged = ClusterAlerts.findSingleBucketTypes(db);
 
     assertThat(flagged).isSorted();
+  }
+
+  // ---- leader-missing-databases alert (issue #4727) ----
+
+  @Test
+  void leaderMissingAlertIsRaisedWithTheDatabaseNames() {
+    final JSONArray alerts = new JSONArray();
+    ClusterAlerts.addLeaderMissingAlert(List.of("OpenBeer", "Catalog"), alerts);
+
+    assertThat(alerts.length()).isEqualTo(1);
+    final JSONObject alert = alerts.getJSONObject(0);
+    assertThat(alert.getString("id")).isEqualTo("leader-missing-databases");
+    assertThat(alert.getString("severity")).isEqualTo(ClusterAlerts.SEVERITY_WARNING);
+    final JSONArray names = alert.getJSONObject("details").getJSONArray("databases");
+    assertThat(names.toList()).containsExactlyInAnyOrder("OpenBeer", "Catalog");
+  }
+
+  @Test
+  void leaderMissingAlertIsAbsentWhenNothingIsMissing() {
+    final JSONArray empty = new JSONArray();
+    ClusterAlerts.addLeaderMissingAlert(List.of(), empty);
+    assertThat(empty.length()).isEqualTo(0);
+
+    final JSONArray nullCase = new JSONArray();
+    ClusterAlerts.addLeaderMissingAlert(null, nullCase);
+    assertThat(nullCase.length()).isEqualTo(0);
+  }
+
+  // ---- failed-acquire-databases alert (issue #4727) ----
+
+  @Test
+  void failedAcquireAlertIsRaisedWithTheDatabaseNames() {
+    final JSONArray alerts = new JSONArray();
+    ClusterAlerts.addFailedAcquireAlert(List.of("OpenBeer"), alerts);
+
+    assertThat(alerts.length()).isEqualTo(1);
+    final JSONObject alert = alerts.getJSONObject(0);
+    assertThat(alert.getString("id")).isEqualTo("failed-acquire-databases");
+    assertThat(alert.getString("severity")).isEqualTo(ClusterAlerts.SEVERITY_WARNING);
+    assertThat(alert.getJSONObject("details").getJSONArray("databases").toList()).containsExactly("OpenBeer");
+  }
+
+  @Test
+  void failedAcquireAlertIsAbsentWhenNothingFailed() {
+    final JSONArray empty = new JSONArray();
+    ClusterAlerts.addFailedAcquireAlert(List.of(), empty);
+    ClusterAlerts.addFailedAcquireAlert(null, empty);
+    assertThat(empty.length()).isEqualTo(0);
+  }
+
+  // -- Lagging-follower alert (issue #4812) --
+
+  @Test
+  void laggingFollowerAlertIsAbsentWhenAllHealthy() {
+    final JSONArray alerts = new JSONArray();
+    ClusterAlerts.addLaggingFollowerAlert(List.of(
+        new FollowerSample("n1", 100, 101, 0, 5, "HEALTHY", 0),
+        new FollowerSample("n2", 100, 101, 3, 8, "CATCHING_UP", 1200)), alerts);
+    assertThat(alerts.length()).as("CATCHING_UP/HEALTHY are not alert-worthy").isZero();
+  }
+
+  @Test
+  void fallingBehindFollowerRaisesWarningNamingTheNode() {
+    final JSONArray alerts = new JSONArray();
+    ClusterAlerts.addLaggingFollowerAlert(List.of(
+        new FollowerSample("n1", 100, 101, 0, 5, "HEALTHY", 0),
+        new FollowerSample("slow-node", 50, 51, 4200, 900, "FALLING_BEHIND", 8000)), alerts);
+
+    assertThat(alerts.length()).isEqualTo(1);
+    final JSONObject alert = alerts.getJSONObject(0);
+    assertThat(alert.getString("id")).isEqualTo("lagging-followers");
+    assertThat(alert.getString("severity")).isEqualTo(ClusterAlerts.SEVERITY_WARNING);
+    final JSONArray nodes = alert.getJSONObject("details").getJSONArray("nodes");
+    assertThat(nodes.length()).isEqualTo(1);
+    assertThat(nodes.getJSONObject(0).getString("peerId")).isEqualTo("slow-node");
+    assertThat(nodes.getJSONObject(0).getLong("replicationLag")).isEqualTo(4200L);
+    assertThat(nodes.getJSONObject(0).getLong("laggingForMs")).isEqualTo(8000L);
+  }
+
+  @Test
+  void stalledFollowerEscalatesToCritical() {
+    final JSONArray alerts = new JSONArray();
+    ClusterAlerts.addLaggingFollowerAlert(List.of(
+        new FollowerSample("stuck", 10, 11, 99999, 6000, "STALLED", 60000)), alerts);
+
+    assertThat(alerts.length()).isEqualTo(1);
+    assertThat(alerts.getJSONObject(0).getString("severity")).isEqualTo(ClusterAlerts.SEVERITY_CRITICAL);
+    assertThat(alerts.getJSONObject(0).getString("title")).containsIgnoringCase("stalled");
+  }
+
+  @Test
+  void laggingFollowerAlertIsAbsentWhenNoSamples() {
+    final JSONArray empty = new JSONArray();
+    ClusterAlerts.addLaggingFollowerAlert(List.of(), empty);
+    ClusterAlerts.addLaggingFollowerAlert(null, empty);
+    assertThat(empty.length()).isZero();
   }
 }

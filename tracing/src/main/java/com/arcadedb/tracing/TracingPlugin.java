@@ -23,8 +23,12 @@ import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.ServerPlugin;
+
+import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationHandler;
 import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.TraceContext;
 import io.micrometer.tracing.Tracer;
 import io.micrometer.tracing.handler.DefaultTracingObservationHandler;
 import io.micrometer.tracing.handler.PropagatingReceiverTracingObservationHandler;
@@ -54,6 +58,8 @@ import java.util.logging.Level;
  * is confined to this module and never reaches the core/server compile classpath.
  */
 public class TracingPlugin implements ServerPlugin {
+  // OpenTelemetry's invalid/no-span trace id (all zeros): treated as "no active trace".
+  private static final String           INVALID_TRACE_ID = "00000000000000000000000000000000";
   private boolean                       enabled;
   private String                        endpoint;
   private double                        samplingRate;
@@ -103,6 +109,7 @@ public class TracingPlugin implements ServerPlugin {
     // Deactivate the handler BEFORE closing the provider: the ObservationRegistry has no
     // remove-handler API, so the handler stays registered, but once deactivated it is a no-op and
     // never touches the closed tracer provider.
+    LogManager.instance().setTraceContextSupplier(null);
     if (attachedHandler != null) {
       attachedHandler.deactivate();
       attachedHandler = null;
@@ -146,6 +153,23 @@ public class TracingPlugin implements ServerPlugin {
         new PropagatingReceiverTracingObservationHandler<>(tracer, propagator),
         new DefaultTracingObservationHandler(tracer)));
     registry.observationConfig().observationHandler(attachedHandler);
+
+    // Expose the active trace context to the core logger (issue #4466) without the core taking an
+    // OpenTelemetry dependency. The HTTP handler reads this when populating its per-request
+    // correlation, so JSON/text logs carry the traceId. Returns null when no real span is active so
+    // logging degrades cleanly. Cleared in stopService().
+    LogManager.instance().setTraceContextSupplier(() -> {
+      final Span span = tracer.currentSpan();
+      if (span == null)
+        return null;
+      final TraceContext context = span.context();
+      if (context == null)
+        return null;
+      final String traceId = context.traceId();
+      if (traceId == null || traceId.isEmpty() || INVALID_TRACE_ID.equals(traceId))
+        return null;
+      return new String[] { traceId, context.spanId() };
+    });
   }
 
   /**
@@ -162,11 +186,11 @@ public class TracingPlugin implements ServerPlugin {
    * gates every callback to a no-op - preventing the (now closed) tracer provider from being used by
    * later Observations.
    */
-  private static final class DeactivatableObservationHandler implements ObservationHandler<io.micrometer.observation.Observation.Context> {
-    private final ObservationHandler<io.micrometer.observation.Observation.Context> delegate;
+  private static final class DeactivatableObservationHandler implements ObservationHandler<Observation.Context> {
+    private final ObservationHandler<Observation.Context> delegate;
     private final AtomicBoolean                                                     active = new AtomicBoolean(true);
 
-    private DeactivatableObservationHandler(final ObservationHandler<io.micrometer.observation.Observation.Context> delegate) {
+    private DeactivatableObservationHandler(final ObservationHandler<Observation.Context> delegate) {
       this.delegate = delegate;
     }
 
@@ -175,49 +199,49 @@ public class TracingPlugin implements ServerPlugin {
     }
 
     @Override
-    public boolean supportsContext(final io.micrometer.observation.Observation.Context context) {
+    public boolean supportsContext(final Observation.Context context) {
       return active.get() && delegate.supportsContext(context);
     }
 
     @Override
-    public void onStart(final io.micrometer.observation.Observation.Context context) {
+    public void onStart(final Observation.Context context) {
       if (active.get())
         delegate.onStart(context);
     }
 
     @Override
-    public void onError(final io.micrometer.observation.Observation.Context context) {
+    public void onError(final Observation.Context context) {
       if (active.get())
         delegate.onError(context);
     }
 
     @Override
-    public void onEvent(final io.micrometer.observation.Observation.Event event,
-        final io.micrometer.observation.Observation.Context context) {
+    public void onEvent(final Observation.Event event,
+        final Observation.Context context) {
       if (active.get())
         delegate.onEvent(event, context);
     }
 
     @Override
-    public void onScopeOpened(final io.micrometer.observation.Observation.Context context) {
+    public void onScopeOpened(final Observation.Context context) {
       if (active.get())
         delegate.onScopeOpened(context);
     }
 
     @Override
-    public void onScopeClosed(final io.micrometer.observation.Observation.Context context) {
+    public void onScopeClosed(final Observation.Context context) {
       if (active.get())
         delegate.onScopeClosed(context);
     }
 
     @Override
-    public void onScopeReset(final io.micrometer.observation.Observation.Context context) {
+    public void onScopeReset(final Observation.Context context) {
       if (active.get())
         delegate.onScopeReset(context);
     }
 
     @Override
-    public void onStop(final io.micrometer.observation.Observation.Context context) {
+    public void onStop(final Observation.Context context) {
       if (active.get())
         delegate.onStop(context);
     }

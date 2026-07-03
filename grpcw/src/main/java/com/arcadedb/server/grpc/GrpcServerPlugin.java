@@ -39,6 +39,7 @@ import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.protobuf.services.HealthStatusManager;
 import io.grpc.protobuf.services.ProtoReflectionService;
 import io.grpc.xds.XdsServerBuilder;
+import io.micrometer.core.instrument.Metrics;
 
 import java.io.File;
 import java.io.IOException;
@@ -86,6 +87,9 @@ public class GrpcServerPlugin implements ServerPlugin {
   private static final String CONFIG_COMPRESSION_ENABLED = CONFIG_PREFIX + "compression.enabled";
   private static final String CONFIG_COMPRESSION_FORCE   = CONFIG_PREFIX + "compression.force";
   private static final String CONFIG_COMPRESSION_TYPE    = CONFIG_PREFIX + "compression.type";
+  private static final String CONFIG_TX_MAX_IDLE_MS      = CONFIG_PREFIX + "tx.maxIdleMs";
+  private static final String CONFIG_TX_MAX_AGE_MS       = CONFIG_PREFIX + "tx.maxAgeMs";
+  private static final String CONFIG_TX_REAPER_PERIOD_MS = CONFIG_PREFIX + "tx.reaperPeriodMs";
 
   @Override
   public void configure(ArcadeDBServer server, ContextConfiguration configuration) {
@@ -201,8 +205,15 @@ public class GrpcServerPlugin implements ServerPlugin {
     // Get database directory path
     String databasePath = arcadeServer.getRootPath() + File.separator + "databases";
 
+    // Idle-transaction reaper thresholds (issue #4802): reclaim abandoned transactions left open by clients that
+    // disconnected without committing or rolling back.
+    final long txMaxIdleMs = getConfigLong(config, CONFIG_TX_MAX_IDLE_MS, ArcadeDbGrpcService.DEFAULT_TX_MAX_IDLE_MS);
+    final long txMaxAgeMs = getConfigLong(config, CONFIG_TX_MAX_AGE_MS, ArcadeDbGrpcService.DEFAULT_TX_MAX_AGE_MS);
+    final long txReaperPeriodMs = getConfigLong(config, CONFIG_TX_REAPER_PERIOD_MS,
+        ArcadeDbGrpcService.DEFAULT_TX_REAPER_PERIOD_MS);
+
     // Create the main service and store reference for cleanup
-    this.grpcService = new ArcadeDbGrpcService(databasePath, arcadeServer);
+    this.grpcService = new ArcadeDbGrpcService(databasePath, arcadeServer, txMaxIdleMs, txMaxAgeMs, txReaperPeriodMs);
 
     // Add the main service
     serverBuilder.addService(grpcService);
@@ -240,12 +251,14 @@ public class GrpcServerPlugin implements ServerPlugin {
 
     // Add interceptors for logging, metrics, auth, etc.
     serverBuilder.intercept(new GrpcLoggingInterceptor());
-    serverBuilder.intercept(new GrpcMetricsInterceptor(arcadeServer));
+    // Publish gRPC metrics into the server's shared JVM-wide registry so the same exporters that
+    // scrape the rest of the server (Prometheus, OTLP, JMX, Studio) also see gRPC telemetry.
+    serverBuilder.intercept(new GrpcMetricsInterceptor(Metrics.globalRegistry));
 
     // Add compression interceptor if force compression is enabled
     if (getConfigBoolean(config, CONFIG_COMPRESSION_FORCE, false)) {
       String compressionType = getConfigString(config, CONFIG_COMPRESSION_TYPE, "gzip");
-      serverBuilder.intercept(new GrpcCompressionInterceptor(true, compressionType, 1024));
+      serverBuilder.intercept(new GrpcCompressionInterceptor(true, compressionType));
     }
 
     // Add authentication interceptor if security is configured
@@ -383,6 +396,13 @@ public class GrpcServerPlugin implements ServerPlugin {
   }
 
   /**
+   * Returns the underlying gRPC service instance (used for monitoring and testing).
+   */
+  public ArcadeDbGrpcService getService() {
+    return grpcService;
+  }
+
+  /**
    * Get the status of the gRPC servers
    */
   public ServerStatus getStatus() {
@@ -408,6 +428,19 @@ public class GrpcServerPlugin implements ServerPlugin {
         return Integer.parseInt(value);
       } catch (NumberFormatException e) {
         LogManager.instance().log(this, Level.WARNING, "Invalid integer value for %s: %s", key, value);
+      }
+    }
+    return defaultValue;
+  }
+
+  private long getConfigLong(ContextConfiguration config, String key, long defaultValue) {
+
+    String value = getConfigString(config, key, null);
+    if (value != null) {
+      try {
+        return Long.parseLong(value.trim());
+      } catch (NumberFormatException e) {
+        LogManager.instance().log(this, Level.WARNING, "Invalid long value for %s: %s", key, value);
       }
     }
     return defaultValue;

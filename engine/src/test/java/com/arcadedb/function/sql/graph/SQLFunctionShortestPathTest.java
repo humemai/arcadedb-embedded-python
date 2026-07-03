@@ -204,6 +204,107 @@ class SQLFunctionShortestPathTest {
   }
 
   @Test
+  void edgeTrueDirectionBothWithAsymmetricEdges() throws Exception {
+    TestHelper.executeInNewDatabase("testEdgeBothAsymmetric", graph -> {
+      final MutableVertex[] verts = new MutableVertex[2];
+      final RID[] edgeRid = new RID[1];
+
+      graph.transaction(() -> {
+        graph.getSchema().createVertexType("BugSP_V");
+        graph.getSchema().createEdgeType("BugSP_E");
+
+        verts[0] = graph.newVertex("BugSP_V").set("name", "a").save();
+        verts[1] = graph.newVertex("BugSP_V").set("name", "b").save();
+        edgeRid[0] = verts[0].newEdge("BugSP_E", verts[1]).getIdentity();
+      });
+
+      function = new SQLFunctionShortestPath();
+
+      final Map<String, Object> options = new HashMap<>();
+      options.put("direction", "BOTH");
+      options.put("edge", true);
+
+      final List<RID> result = function.execute(null, null, null, new Object[] { verts[0], verts[1], options },
+          new BasicCommandContext());
+
+      // expected: [a-rid, edge-rid, b-rid]
+      assertThat(result).hasSize(3);
+      assertThat(result.getFirst()).isEqualTo(verts[0].getIdentity());
+      assertThat(result.get(1)).isEqualTo(edgeRid[0]);
+      assertThat(result.getLast()).isEqualTo(verts[1].getIdentity());
+    });
+  }
+
+  @Test
+  void edgeTrueDirectionBothReverseAsymmetric() throws Exception {
+    // Mirror of edgeTrueDirectionBothWithAsymmetricEdges: search from the destination back to the source,
+    // so the OUT side of the start vertex is empty and the IN half of the fix is exercised.
+    TestHelper.executeInNewDatabase("testEdgeBothReverseAsymmetric", graph -> {
+      final MutableVertex[] verts = new MutableVertex[2];
+      final RID[] edgeRid = new RID[1];
+
+      graph.transaction(() -> {
+        graph.getSchema().createVertexType("BugSP_V");
+        graph.getSchema().createEdgeType("BugSP_E");
+
+        verts[0] = graph.newVertex("BugSP_V").set("name", "a").save();
+        verts[1] = graph.newVertex("BugSP_V").set("name", "b").save();
+        edgeRid[0] = verts[0].newEdge("BugSP_E", verts[1]).getIdentity();
+      });
+
+      function = new SQLFunctionShortestPath();
+
+      final Map<String, Object> options = new HashMap<>();
+      options.put("direction", "BOTH");
+      options.put("edge", true);
+
+      // search b -> a
+      final List<RID> result = function.execute(null, null, null, new Object[] { verts[1], verts[0], options },
+          new BasicCommandContext());
+
+      // expected: [b-rid, edge-rid, a-rid]
+      assertThat(result).hasSize(3);
+      assertThat(result.getFirst()).isEqualTo(verts[1].getIdentity());
+      assertThat(result.get(1)).isEqualTo(edgeRid[0]);
+      assertThat(result.getLast()).isEqualTo(verts[0].getIdentity());
+    });
+  }
+
+  @Test
+  void edgeTrueDirectionIn() throws Exception {
+    // Pure IN traversal with edge:true: from b, follow incoming edges back to a.
+    TestHelper.executeInNewDatabase("testEdgeDirectionIn", graph -> {
+      final MutableVertex[] verts = new MutableVertex[2];
+      final RID[] edgeRid = new RID[1];
+
+      graph.transaction(() -> {
+        graph.getSchema().createVertexType("BugSP_V");
+        graph.getSchema().createEdgeType("BugSP_E");
+
+        verts[0] = graph.newVertex("BugSP_V").set("name", "a").save();
+        verts[1] = graph.newVertex("BugSP_V").set("name", "b").save();
+        edgeRid[0] = verts[0].newEdge("BugSP_E", verts[1]).getIdentity();
+      });
+
+      function = new SQLFunctionShortestPath();
+
+      final Map<String, Object> options = new HashMap<>();
+      options.put("direction", "IN");
+      options.put("edge", true);
+
+      // a -OUT-> b, so from b the IN edge leads to a
+      final List<RID> result = function.execute(null, null, null, new Object[] { verts[1], verts[0], options },
+          new BasicCommandContext());
+
+      // expected: [b-rid, edge-rid, a-rid]
+      assertThat(result).hasSize(3);
+      assertThat(result.getFirst()).isEqualTo(verts[1].getIdentity());
+      assertThat(result.get(1)).isEqualTo(edgeRid[0]);
+      assertThat(result.getLast()).isEqualTo(verts[0].getIdentity());
+    });
+  }
+
+  @Test
   void rejectsUnknownOption() throws Exception {
     TestHelper.executeInNewDatabase("testShortestPathUnknownOption", graph -> {
       setUpDatabase(graph);
@@ -217,6 +318,52 @@ class SQLFunctionShortestPathTest {
           .isInstanceOf(CommandSQLParsingException.class)
           .hasMessageContaining("whoops")
           .hasMessageContaining("shortestPath");
+    });
+  }
+
+  /**
+   * Regression: a ghost edge (dangling segment pointer whose backing edge record is gone, as after a
+   * manual HA leader-to-follower copy) must be skipped during edge-mode bidirectional search rather
+   * than throwing RecordNotFoundException. Graph: A->B is ghosted, A->C->B remains; the search must
+   * route around the ghost and return the surviving path.
+   */
+  @Test
+  void edgeModeSkipsGhostEdge() throws Exception {
+    TestHelper.executeInNewDatabase("testShortestPathGhostEdge", graph -> {
+      final MutableVertex[] v = new MutableVertex[3];
+      final RID[] ghost = new RID[1];
+
+      graph.transaction(() -> {
+        graph.getSchema().createVertexType("GNode");
+        graph.getSchema().createEdgeType("GEdge");
+
+        v[0] = graph.newVertex("GNode").set("name", "A").save();
+        v[1] = graph.newVertex("GNode").set("name", "B").save();
+        v[2] = graph.newVertex("GNode").set("name", "C").save();
+
+        ghost[0] = v[0].newEdge("GEdge", v[1]).getIdentity(); // A->B, to be ghosted
+        v[0].newEdge("GEdge", v[2]);                          // A->C
+        v[2].newEdge("GEdge", v[1]);                          // C->B
+      });
+
+      // Delete only the A->B edge record, leaving its segment pointer dangling.
+      graph.transaction(() -> graph.getSchema().getBucketById(ghost[0].getBucketId()).deleteRecord(ghost[0]));
+
+      function = new SQLFunctionShortestPath();
+      final Map<String, Object> options = new HashMap<>();
+      options.put("direction", "OUT");
+      options.put("edge", true);
+
+      final List<RID> result = function.execute(null, null, null, new Object[] { v[0], v[1], options },
+          new BasicCommandContext());
+
+      // The ghost A->B is skipped, so the only surviving route is A -[edge]-> C -[edge]-> B, which in
+      // edge mode is exactly the 5 elements [A, edge(A->C), C, edge(C->B), B].
+      assertThat(result).hasSize(5);
+      assertThat(result.get(0)).isEqualTo(v[0].getIdentity()); // A
+      assertThat(result.get(2)).isEqualTo(v[2].getIdentity()); // C (routed around the ghost)
+      assertThat(result.get(4)).isEqualTo(v[1].getIdentity()); // B
+      assertThat(result).doesNotContain(ghost[0]);
     });
   }
 

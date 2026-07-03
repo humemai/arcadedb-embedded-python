@@ -26,6 +26,7 @@ import com.arcadedb.engine.PaginatedComponent;
 import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.schema.DocumentType;
+import com.arcadedb.schema.LocalDocumentType;
 import com.arcadedb.schema.IndexMetadata;
 import com.arcadedb.schema.Schema;
 import com.arcadedb.schema.Type;
@@ -539,6 +540,18 @@ public class TypeIndex implements RangeIndex, IndexInternal {
     return indexesOnBuckets.toArray(new IndexInternal[indexesOnBuckets.size()]);
   }
 
+  @Override
+  public boolean recomputeStatistics() {
+    // BM25 corpus counters are shared type-wide (the same metadata object backs every bucket sub-index), so recomputing on a
+    // single bucket sub-index repairs them for the whole type; this avoids N redundant full-type scans. Returning on the first
+    // success is therefore correct: every bucket sub-index of a given type shares one similarity and one metadata object, so
+    // they cannot disagree on whether statistics exist.
+    for (final IndexInternal idx : indexesOnBuckets)
+      if (idx.recomputeStatistics())
+        return true;
+    return false;
+  }
+
   public int countIndexesOnBuckets() {
     return indexesOnBuckets.size();
   }
@@ -552,6 +565,15 @@ public class TypeIndex implements RangeIndex, IndexInternal {
 
     if (isFullText) {
       // Full-text searches must scan all buckets to ensure complete results
+      return indexesOnBuckets;
+    }
+
+    // Partition mapping is stale: some records may sit outside the bucket their key hashes to
+    // (issue #832 / #4087). Pruning to the single hash-target sub-index would miss them, so fan out
+    // across every sub-index until a `REBUILD TYPE ... WITH repartition = true` relocates the records
+    // and clears the flag. Mirrors the cluster-scan planner's gate in SelectExecutionPlanner.
+    if (type instanceof LocalDocumentType ldt && ldt.isNeedsRepartition()) {
+      ldt.warnIfNeedsRepartition();
       return indexesOnBuckets;
     }
 

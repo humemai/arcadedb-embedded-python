@@ -23,6 +23,7 @@ package com.arcadedb.query.sql.parser;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseContext;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.bucketselectionstrategy.PartitionedBucketSelectionStrategy;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.CommandSQLParsingException;
 import com.arcadedb.exception.NeedRetryException;
@@ -36,11 +37,15 @@ import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.InternalResultSet;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.schema.DocumentType;
+import com.arcadedb.schema.FullTextIndexMetadata;
 import com.arcadedb.schema.IndexBuilder;
 import com.arcadedb.schema.IndexMetadata;
+import com.arcadedb.schema.LocalDocumentType;
 import com.arcadedb.schema.Schema;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 
@@ -63,23 +68,57 @@ public class RebuildIndexStatement extends DDLStatement {
 
     int batchSize = IndexBuilder.BUILD_BATCH_SIZE;
     int maxAttempts = MAX_ATTEMPTS;
+    // statsOnly: recompute persisted index statistics (BM25 corpus counters) by rescanning the live data, without the far more
+    // expensive full index rebuild. Lets operators repair counter drift (e.g. from rolled-back transactions) from SQL.
+    boolean statsOnly = false;
     if (!settings.isEmpty()) {
       for (Map.Entry<Expression, Expression> entry : settings.entrySet()) {
+        // Render the setting value via Expression.toString(): its `value` field can be null depending on how the literal was
+        // parsed (it was for the integer in `WITH batchSize = 1000`), so toString() is the reliable accessor for all literals.
+        final String settingValue = entry.getValue().toString();
         if ("batchSize".equalsIgnoreCase(entry.getKey().toString()))
-          batchSize = Integer.parseInt(entry.getValue().value.toString());
+          batchSize = Integer.parseInt(settingValue);
         else if ("maxAttempts".equalsIgnoreCase(entry.getKey().toString()))
-          maxAttempts = Integer.parseInt(entry.getValue().value.toString());
+          maxAttempts = Integer.parseInt(settingValue);
+        else if ("statsOnly".equalsIgnoreCase(entry.getKey().toString()))
+          statsOnly = Boolean.parseBoolean(settingValue);
         else
           throw new CommandSQLParsingException("Unrecognized setting '" + entry.getKey() + "' in rebuild index statement");
       }
     }
 
+    if (statsOnly)
+      return recomputeStatistics(context.getDatabase(), result);
+
     final AtomicLong total = new AtomicLong();
+    final AtomicLong misplaced = new AtomicLong();
+    // Types found to contain records sitting outside their partition hash-target bucket (issue #832).
+    final Set<DocumentType> typesToRepartition = ConcurrentHashMap.newKeySet();
 
     final Database database = context.getDatabase();
 
     final Index.BuildIndexCallback callback = (document, totalIndexed) -> {
       total.incrementAndGet();
+
+      // Issue #832: with a partitioned bucket selection strategy a record's index entry must live in
+      // the sub-index of the bucket its key hashes to, because partition-aware index pruning at query
+      // time only searches that one bucket. A record physically stored in a different bucket (placed
+      // by round-robin/thread before the strategy was switched, relocated by manual bucket ops, or
+      // imported) would be silently unreachable. The rebuild does not relocate records (that is
+      // REBUILD TYPE ... WITH repartition = true); it detects the mismatch and flags the type so the
+      // planner fans out across all buckets and results stay correct until a repartition runs.
+      final DocumentType docType = document.getType();
+      if (docType.getBucketSelectionStrategy() instanceof PartitionedBucketSelectionStrategy) {
+        try {
+          final int targetBucketId = docType.getBucketIdByRecord(document, false).getFileId();
+          if (targetBucketId != document.getIdentity().getBucketId()) {
+            misplaced.incrementAndGet();
+            typesToRepartition.add(docType);
+          }
+        } catch (final Exception e) {
+          // Validation must never break a rebuild: skip records the strategy cannot route.
+        }
+      }
 
       if (totalIndexed % 100000 == 0) {
         System.out.print(".");
@@ -107,6 +146,21 @@ public class RebuildIndexStatement extends DDLStatement {
       }
       result.setProperty("indexes", indexList);
       result.setProperty("totalIndexed", total.get());
+      result.setProperty("recordsMisplaced", misplaced.get());
+
+      // Raise needsRepartition once per affected type and tell the operator how to fix it. Doing
+      // this after the build (not inside the per-record scan) avoids repeated schema saves and keeps
+      // the warning to one line per type.
+      for (final DocumentType docType : typesToRepartition) {
+        if (docType instanceof LocalDocumentType ldt && !ldt.isNeedsRepartition()) {
+          ldt.setNeedsRepartition(true);
+          LogManager.instance().log(this, Level.WARNING,
+              "Rebuild of index found records of type '%s' stored outside their partition hash-target bucket; "
+                  + "partition-aware pruning is now disabled (queries fan out across all buckets and stay correct). "
+                  + "Run `REBUILD TYPE %s WITH repartition = true` to relocate the records and re-enable pruning",
+              null, docType.getName(), docType.getName());
+        }
+      }
 
     } catch (Exception e) {
       LogManager.instance()
@@ -118,6 +172,39 @@ public class RebuildIndexStatement extends DDLStatement {
     }
 
     // SUCCESS
+    final InternalResultSet rs = new InternalResultSet();
+    rs.add(result);
+    return rs;
+  }
+
+  /**
+   * Handles {@code REBUILD INDEX <name|*> {statsOnly: true}}: recomputes persisted index statistics (BM25 corpus counters) by
+   * rescanning the live data, without the full index rebuild. For {@code *} only the logical (type) indexes are visited so the
+   * type is scanned once per index rather than once per bucket sub-index.
+   */
+  private ResultSet recomputeStatistics(final Database database, final ResultInternal result) {
+    result.setProperty("operation", "rebuild index stats");
+    final List<String> recomputed = new ArrayList<>();
+    if (all) {
+      for (final Index idx : database.getSchema().getIndexes())
+        if (idx instanceof TypeIndex ti && ti.recomputeStatistics())
+          recomputed.add(idx.getName());
+    } else {
+      final Index idx = database.getSchema().getIndexByName(name.getValue());
+      if (idx == null)
+        throw new CommandExecutionException("Index '" + name.getValue() + "' not found");
+      if (!(idx instanceof final IndexInternal internal))
+        throw new CommandExecutionException("Index '" + idx.getName() + "' does not support statistics recomputation");
+      if (internal.recomputeStatistics())
+        recomputed.add(idx.getName());
+      else
+        throw new CommandExecutionException("Index '" + idx.getName()
+            + "' has no recomputable statistics: only BM25 full-text indexes keep corpus statistics. "
+            + "Switch the index to BM25 similarity, or omit 'statsOnly' to do a full rebuild.");
+    }
+    result.setProperty("indexes", recomputed);
+    result.setProperty("statsRecomputed", recomputed.size());
+
     final InternalResultSet rs = new InternalResultSet();
     rs.add(result);
     return rs;
@@ -165,7 +252,20 @@ public class RebuildIndexStatement extends DDLStatement {
         final int pageSize = ((IndexInternal) idx).getPageSize();
         final LSMTreeIndexAbstract.NULL_STRATEGY nullStrategy = idx.getNullStrategy();
         // Get index metadata (includes vector-specific settings like dimensions, similarity, etc.)
-        final IndexMetadata indexMetadata = ((IndexInternal) idx).getMetadata();
+        IndexMetadata indexMetadata = ((IndexInternal) idx).getMetadata();
+
+        // FULL_TEXT indexes carry their configuration (analyzers, similarity, BM25 parameters) in a FullTextIndexMetadata
+        // subtype, but getMetadata() returns the generic base IndexMetadata. Reconstruct the full-text metadata from the index's
+        // persisted JSON so the rebuilt index preserves its settings; the builder rejects a plain IndexMetadata for FULL_TEXT
+        // (issue #4732, which otherwise crashed AFTER the old index had already been dropped, leaving it gone). Reset the BM25
+        // corpus counters to zero so the re-index pass recomputes them from scratch instead of doubling the persisted totals.
+        if (type == Schema.INDEX_TYPE.FULL_TEXT) {
+          final FullTextIndexMetadata ftMeta = new FullTextIndexMetadata(typeName, propertyNames.toArray(new String[0]), -1);
+          ftMeta.fromJSON(((IndexInternal) idx).toJSON());
+          ftMeta.setCounters(0L, 0L);
+          indexMetadata = ftMeta;
+        }
+        final IndexMetadata rebuildMetadata = indexMetadata;
 
         ((DatabaseInternal) database).executeLockingFiles(((IndexInternal) idx).getFileIds(), () -> {
           database.getSchema().dropIndex(idx.getName());
@@ -174,7 +274,7 @@ public class RebuildIndexStatement extends DDLStatement {
             database.getSchema().buildTypeIndex(typeName, propertyNames.toArray(new String[propertyNames.size()])).withType(type)
                 .withUnique(unique).withPageSize(pageSize).withCallback(callback).withBatchSize(batchSize)
                 .withMaxAttempts(maxAttempts).withNullStrategy(nullStrategy)
-                .withMetadata(indexMetadata)
+                .withMetadata(rebuildMetadata)
                 .create();
 
           } else {
@@ -183,7 +283,7 @@ public class RebuildIndexStatement extends DDLStatement {
                     propertyNames.toArray(new String[propertyNames.size()])).withType(type).withUnique(unique)
                 .withPageSize(pageSize).withCallback(callback).withBatchSize(batchSize).withMaxAttempts(maxAttempts)
                 .withNullStrategy(nullStrategy)
-                .withMetadata(indexMetadata)
+                .withMetadata(rebuildMetadata)
                 .create();
           }
           return null;

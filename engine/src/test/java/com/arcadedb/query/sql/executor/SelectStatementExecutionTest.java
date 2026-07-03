@@ -27,7 +27,6 @@ import com.arcadedb.database.MutableDocument;
 import com.arcadedb.database.RID;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.CommandSQLParsingException;
-import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.index.Index;
 import com.arcadedb.schema.DocumentType;
@@ -1077,16 +1076,38 @@ public class SelectStatementExecutionTest extends TestHelper {
 
   @Test
   void nonExistingRids() {
+    // A SELECT whose FROM target is a single RID that does not resolve must return an empty result set,
+    // not abort the request with a RecordNotFoundException. See issue #4643.
     final int bucketId = database.getSchema().createDocumentType("testNonExistingRids").getBuckets(false).getFirst().getFileId();
     final ResultSet result = database.query("sql", "select from #" + bucketId + ":100000000");
-    assertThat(result.hasNext()).isTrue();
+    assertThat(result.hasNext()).isFalse();
+    result.close();
+  }
 
-    try {
-      result.next();
-    } catch (RecordNotFoundException e) {
+  @Test
+  void selectFromDeletedRidReturnsEmpty() {
+    // SELECT from a RID whose record was deleted must return an empty result set (not HTTP 500
+    // "Error on transaction commit"), regardless of isolation level. See issue #4643.
+    final DocumentType type = database.getSchema().createDocumentType("testSelectFromDeletedRid");
+    final int bucketId = type.getBuckets(false).getFirst().getFileId();
+    database.begin();
+    final MutableDocument doc = database.newDocument("testSelectFromDeletedRid");
+    doc.save();
+    final RID rid = doc.getIdentity();
+    database.commit();
+
+    database.begin();
+    database.command("sql", "delete from " + rid);
+    database.commit();
+
+    try (final ResultSet result = database.query("sql", "select from " + rid)) {
+      assertThat(result.hasNext()).isFalse();
     }
 
-    result.close();
+    // Never-allocated RID in the same (existing) bucket.
+    try (final ResultSet result = database.query("sql", "select from #" + bucketId + ":999")) {
+      assertThat(result.hasNext()).isFalse();
+    }
   }
 
   @Test
@@ -1160,17 +1181,13 @@ public class SelectStatementExecutionTest extends TestHelper {
     doc.save();
     database.commit();
 
+    // The missing RID (#1:100000) must be skipped, leaving only the two existing records. See issue #4643.
     final ResultSet result = database.query("sql", "select from [#1:0, #2:0, #1:100000]");
     assertThat(result.hasNext()).isTrue();
     assertThat(result.next()).isNotNull();
     assertThat(result.hasNext()).isTrue();
     assertThat(result.next()).isNotNull();
-
-    assertThat(result.hasNext()).isTrue();
-    try {
-      result.next();
-    } catch (RecordNotFoundException e) {
-    }
+    assertThat(result.hasNext()).isFalse();
     result.close();
   }
 
@@ -1889,6 +1906,43 @@ public class SelectStatementExecutionTest extends TestHelper {
     assertThat((int) next.getProperty("id")).isEqualTo(3); // Should reach v3 (3 hops from v0)
     assertThat(result.hasNext()).isFalse();
     result.close();
+  }
+
+  @Test
+  void distinctFunctionIssue2966() {
+    // https://github.com/ArcadeData/arcadedb/issues/2966
+    // distinct(*) and distinct(field) must work as the whole projection (translated to the DISTINCT clause),
+    // while nesting distinct() inside another function or using it as a method base must raise a clear error.
+    int count = 0;
+    try (final ResultSet result = database.query("sql", "SELECT distinct(*) FROM (SELECT expand([1,2,3,1]) AS x)")) {
+      while (result.hasNext()) {
+        result.next();
+        count++;
+      }
+    }
+    assertThat(count).isEqualTo(3);
+
+    count = 0;
+    try (final ResultSet result = database.query("sql", "SELECT distinct(x) FROM (SELECT expand([1,2,3,1]) AS x)")) {
+      while (result.hasNext()) {
+        result.next();
+        count++;
+      }
+    }
+    assertThat(count).isEqualTo(3);
+
+    // Nested usage is not supported: must fail with a clear, actionable message (not "Unknown function name 'distinct'").
+    assertThatThrownBy(() -> database.query("sql", "SELECT first(distinct(*)) FROM (SELECT expand([1,2,3,1]) AS x)").close())
+        .isInstanceOf(CommandExecutionException.class)
+        .hasMessageContaining("'distinct' is supported only as the whole SELECT projection");
+
+    assertThatThrownBy(() -> database.query("sql", "SELECT distinct(*).type() FROM (SELECT expand([1,2,3,1]) AS x)").close())
+        .isInstanceOf(CommandExecutionException.class)
+        .hasMessageContaining("'distinct' is supported only as the whole SELECT projection");
+
+    assertThatThrownBy(() -> database.query("sql", "SELECT first(distinct(x)) FROM (SELECT expand([1,2,3,1]) AS x)").close())
+        .isInstanceOf(CommandExecutionException.class)
+        .hasMessageContaining("'distinct' is supported only as the whole SELECT projection");
   }
 
   @Test

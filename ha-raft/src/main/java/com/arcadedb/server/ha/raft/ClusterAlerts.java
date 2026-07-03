@@ -24,6 +24,7 @@ import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.ServerDatabase;
+import com.arcadedb.server.monitor.HAReplicationStatsProvider.FollowerSample;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -70,9 +71,142 @@ public class ClusterAlerts {
    * Databases that are not in memory are skipped: a status poll must never trigger a database open.
    */
   public static JSONArray scan(final ArcadeDBServer server) {
+    return scan(server, null);
+  }
+
+  /**
+   * Scan overload that also includes HA auto-acquisition alerts when a {@link ArcadeStateMachine} is available
+   * (issue #4727). Pass {@code null} for the non-HA / pre-start path.
+   */
+  public static JSONArray scan(final ArcadeDBServer server, final ArcadeStateMachine stateMachine) {
+    return scan(server, stateMachine, Collections.emptyList());
+  }
+
+  /**
+   * Scan overload that also flags lagging/stalled followers from the leader's per-follower health
+   * samples (issue #4812). Pass an empty list on followers or when HA is unavailable.
+   */
+  public static JSONArray scan(final ArcadeDBServer server, final ArcadeStateMachine stateMachine,
+      final List<FollowerSample> followerSamples) {
     final JSONArray alerts = new JSONArray();
     checkSingleBucketTypes(server, alerts);
+    if (stateMachine != null) {
+      checkLeaderMissingDatabases(stateMachine, alerts);
+      checkFailedAcquireDatabases(stateMachine, alerts);
+    }
+    addLaggingFollowerAlert(followerSamples, alerts);
     return alerts;
+  }
+
+  /**
+   * Pure alert builder (package-private for unit testing): appends a "lagging follower" alert when any
+   * follower is {@code FALLING_BEHIND} or {@code STALLED} (issue #4812). A {@code STALLED} follower
+   * (matchIndex stuck while the leader advances) is {@code critical} because it will eventually force
+   * an election; a merely {@code FALLING_BEHIND} one is a {@code warning}. The alert names each slow
+   * node with its lag and how long it has been lagging, so the operator can act on the right node.
+   */
+  static void addLaggingFollowerAlert(final List<FollowerSample> samples, final JSONArray alerts) {
+    if (samples == null || samples.isEmpty())
+      return;
+
+    final JSONArray nodes = new JSONArray();
+    boolean anyStalled = false;
+    for (final FollowerSample s : samples) {
+      final boolean stalled = "STALLED".equals(s.status());
+      final boolean fallingBehind = "FALLING_BEHIND".equals(s.status());
+      if (!stalled && !fallingBehind)
+        continue;
+      anyStalled |= stalled;
+      nodes.put(new JSONObject()
+          .put("peerId", s.peerId())
+          .put("status", s.status())
+          .put("replicationLag", s.replicationLag())
+          .put("lastContactMs", s.lastContactMs())
+          .put("laggingForMs", s.laggingForMs()));
+    }
+
+    if (nodes.isEmpty())
+      return;
+
+    alerts.put(new JSONObject()
+        .put("id", "lagging-followers")
+        .put("severity", anyStalled ? SEVERITY_CRITICAL : SEVERITY_WARNING)
+        .put("title", anyStalled ? "Follower(s) stalled and bottlenecking replication"
+            : "Follower(s) falling behind the leader")
+        .put("message", nodes.length() + " follower(s) cannot keep up with the leader's write rate. "
+            + (anyStalled
+                ? "At least one is STALLED (its matchIndex is stuck while the leader advances), which will eventually "
+                    + "trigger a leader election and stalls quorum acknowledgements, forcing replication backpressure."
+                : "They are FALLING_BEHIND (lag is growing), which raises replication backpressure and risks election "
+                    + "churn if it continues.")
+            + " The slowest node is the bottleneck for the whole cluster.")
+        .put("recommendation", "Investigate the named node(s): check CPU, disk I/O, GC pauses and network to the leader. "
+            + "If the node is healthy but the write rate is simply too high, reduce per-batch size or raise "
+            + "arcadedb.ha.electionTimeoutMin/Max. A persistently STALLED node should be resynced "
+            + "(POST /api/v1/cluster/resync/{database}) or replaced.")
+        .put("details", new JSONObject().put("nodes", nodes)));
+  }
+
+  /**
+   * Flags databases this node holds that the leader does not (issue #4727). This is the aggravating factor from
+   * #4522: a node that lacks a database can be elected leader, leaving the only authoritative copies on followers
+   * where auto-acquire cannot reach them. The database is deliberately NOT dropped; the operator must transfer
+   * leadership to a node that holds it (or resync) to redistribute it.
+   */
+  static void checkLeaderMissingDatabases(final ArcadeStateMachine stateMachine, final JSONArray alerts) {
+    addLeaderMissingAlert(stateMachine.getReconciler().getDatabasesWithAcquireState(DatabaseReconciler.AcquireState.LEADER_MISSING), alerts);
+  }
+
+  /**
+   * Flags databases left in the FAILED acquisition state (issue #4727). After the acquire give-up threshold a
+   * database stops forcing the snapshot install to re-run, so it is only retried on the next natural
+   * InstallSnapshot - which Ratis avoids in favor of log replay. Such a database can therefore stay absent
+   * indefinitely even after the leader's copy is fixed, so surface it for an explicit operator resync.
+   */
+  static void checkFailedAcquireDatabases(final ArcadeStateMachine stateMachine, final JSONArray alerts) {
+    addFailedAcquireAlert(stateMachine.getReconciler().getDatabasesWithAcquireState(DatabaseReconciler.AcquireState.FAILED), alerts);
+  }
+
+  /** Pure alert builder (package-private for unit testing): appends the failed-acquire alert iff {@code failed} is non-empty. */
+  static void addFailedAcquireAlert(final List<String> failed, final JSONArray alerts) {
+    if (failed == null || failed.isEmpty())
+      return;
+
+    final JSONArray names = new JSONArray();
+    for (final String name : failed)
+      names.put(name);
+
+    alerts.put(new JSONObject()
+        .put("id", "failed-acquire-databases")
+        .put("severity", SEVERITY_WARNING)
+        .put("title", "Database(s) failed to acquire from the leader")
+        .put("message", failed.size() + " database(s) could not be acquired/refreshed from the leader after repeated "
+            + "attempts and are not present on this node. They will only be retried on the next snapshot install, so "
+            + "they may stay absent even after the leader's copy is healthy.")
+        .put("recommendation", "Once the leader's copy is healthy, force a fresh download on this node "
+            + "(POST /api/v1/cluster/resync/{database}). Check the logs for the underlying acquisition error.")
+        .put("details", new JSONObject().put("databases", names)));
+  }
+
+  /** Pure alert builder (package-private for unit testing): appends the leader-missing alert iff {@code missing} is non-empty. */
+  static void addLeaderMissingAlert(final List<String> missing, final JSONArray alerts) {
+    if (missing == null || missing.isEmpty())
+      return;
+
+    final JSONArray names = new JSONArray();
+    for (final String name : missing)
+      names.put(name);
+
+    alerts.put(new JSONObject()
+        .put("id", "leader-missing-databases")
+        .put("severity", SEVERITY_WARNING)
+        .put("title", "This node holds database(s) the leader does not")
+        .put("message", "This node holds " + missing.size() + " database(s) that the current leader does not have. "
+            + "They were kept (never dropped), but the cluster cannot auto-replicate them to other nodes while the "
+            + "leader lacks them, so new/empty nodes will not receive them.")
+        .put("recommendation", "Transfer leadership to a node that holds these databases (POST /api/v1/cluster/leader), "
+            + "then resync the nodes that are missing them (POST /api/v1/cluster/resync/{database}).")
+        .put("details", new JSONObject().put("databases", names)));
   }
 
   static void checkSingleBucketTypes(final ArcadeDBServer server, final JSONArray alerts) {

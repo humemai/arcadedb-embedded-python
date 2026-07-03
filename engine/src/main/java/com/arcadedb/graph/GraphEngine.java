@@ -450,7 +450,7 @@ public class GraphEngine {
     } catch (Exception e) {
       // LINKED LIST COULD BE BROKEN
       LogManager.instance()
-          .log(this, Level.WARNING, "Error on deleting outgoing edges connected to vertex %s", vertex.getIdentity());
+          .log(this, Level.WARNING, "Error on deleting outgoing edges connected to vertex %s", e, vertex.getIdentity());
     }
 
     EdgeLinkedList inEdges = null;
@@ -476,7 +476,7 @@ public class GraphEngine {
     } catch (Exception e) {
       // LINKED LIST COULD BE BROKEN
       LogManager.instance()
-          .log(this, Level.WARNING, "Error on deleting incoming edges connected to vertex %s", vertex.getIdentity());
+          .log(this, Level.WARNING, "Error on deleting incoming edges connected to vertex %s", e, vertex.getIdentity());
     }
 
     for (Identifiable edge : edgesToDelete)
@@ -494,7 +494,7 @@ public class GraphEngine {
           outEdges.deleteAll();
         } catch (Exception e) {
           LogManager.instance()
-              .log(this, Level.WARNING, "Error on deleting outgoing edges connected to vertex %s",
+              .log(this, Level.WARNING, "Error on deleting outgoing edges connected to vertex %s", e,
                   vertex.getIdentity());
         }
     }
@@ -506,7 +506,7 @@ public class GraphEngine {
           inEdges.deleteAll();
         } catch (Exception e) {
           LogManager.instance()
-              .log(this, Level.WARNING, "Error on deleting incoming edges connected to vertex %s",
+              .log(this, Level.WARNING, "Error on deleting incoming edges connected to vertex %s", e,
                   vertex.getIdentity());
         }
     }
@@ -1002,8 +1002,17 @@ public class GraphEngine {
       final Iterable<Edge> edges = relTypes != null && relTypes.length > 0 ?
           v.getEdges(dir, relTypes) : v.getEdges(dir);
       for (final Edge e : edges) {
-        if (ridToIdx.containsKey(neighborRid(e, vid, dir)))
-          counts[i]++;
+        try {
+          if (ridToIdx.containsKey(neighborRid(e, vid, dir)))
+            counts[i]++;
+        } catch (final RecordNotFoundException rnf) {  // 'rnf' not 'e' here: 'e' is the Edge loop variable in this scope
+          // Ghost edge: dangling segment pointer to a missing edge/target record. Skip it (the fill
+          // pass below skips it identically, so counts and adjacency stay consistent). This holds on two
+          // invariants of a read query: (1) an edge record is only deleted, never resurrected, so a pass-1
+          // ghost is still a ghost in pass 2; (2) the two getEdges() calls per vertex iterate the same
+          // edges in the same order, so the i-th live edge counted here is the i-th live edge filled below.
+          GhostEdgeReporter.reportSkipped(rnf);
+        }
       }
     }
     final int[][] adj = new int[n][];
@@ -1016,10 +1025,15 @@ public class GraphEngine {
       final Iterable<Edge> edges = relTypes != null && relTypes.length > 0 ?
           v.getEdges(dir, relTypes) : v.getEdges(dir);
       for (final Edge e : edges) {
-        final RID nid = neighborRid(e, vid, dir);
-        final Integer j = ridToIdx.get(nid);
-        if (j != null)
-          adj[i][pos[i]++] = j;
+        try {
+          final RID nid = neighborRid(e, vid, dir);
+          final Integer j = ridToIdx.get(nid);
+          if (j != null)
+            adj[i][pos[i]++] = j;
+        } catch (final RecordNotFoundException rnf) {  // 'rnf' not 'e' here: 'e' is the Edge loop variable in this scope
+          // Ghost edge: skipped identically to the counting pass above, so pos[i] never exceeds counts[i].
+          GhostEdgeReporter.reportSkipped(rnf);
+        }
       }
     }
     return adj;

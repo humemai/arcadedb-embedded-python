@@ -45,6 +45,7 @@ import com.arcadedb.database.QueryTracer;
 import com.arcadedb.server.monitor.EngineMetricsBinder;
 import com.arcadedb.server.monitor.MicrometerQueryMetricsRecorder;
 import com.arcadedb.server.monitor.MicrometerQueryTracer;
+import com.arcadedb.server.monitor.HAReplicationMetrics;
 import com.arcadedb.server.monitor.PoolMetrics;
 import com.arcadedb.server.monitor.ServerQueryProfiler;
 import com.arcadedb.server.plugin.PluginManager;
@@ -88,6 +89,13 @@ public class ArcadeDBServer {
   public enum STATUS {OFFLINE, STARTING, ONLINE, SHUTTING_DOWN}
 
   public static final String                                CONFIG_SERVER_CONFIGURATION_FILENAME = "config/server-configuration.json";
+
+  /**
+   * Prefix that marks reserved internal databases (e.g. the Raft control directory {@code .raft}).
+   * Reserved databases may live under the server database directory but are not user databases: they
+   * must not be registered at startup, nor exposed through the server/cluster status APIs.
+   */
+  public static final String                                RESERVED_DATABASE_PREFIX             = ".";
   private final       ContextConfiguration                  configuration;
   private final       String                                serverName;
   private             String                                hostAddress;
@@ -106,6 +114,11 @@ public class ArcadeDBServer {
   private             AiConfiguration                       aiConfiguration;
   private             ServerQueryProfiler                   queryProfiler;
   private final       ConcurrentMap<String, ServerDatabase> databases                            = new ConcurrentHashMap<>();
+  // Monitor serialising every check-then-act on the database registry (load, create, register, reopen). The HA
+  // snapshot installer also holds it across close->file-swap->reopen so no concurrent open observes the transient
+  // half-swapped directory or reopens it from disk mid-swap (issue #4832). Kept distinct from the map so it can be
+  // exposed via getDatabasesLock() without leaking the registry itself.
+  private final       Object                                databasesLock                        = new Object();
   private final       List<ReplicationCallback>             testEventListeners                   = new ArrayList<>();
   private volatile    STATUS                                status                               = STATUS.OFFLINE;
   private final       AtomicBoolean snapshotInstallInProgress            = new AtomicBoolean(false);
@@ -230,6 +243,9 @@ public class ArcadeDBServer {
       // Engine-wide Profiler stats (cache hit/miss, pages, WAL, MVCC conflicts, open files, tx,
       // queries) - exposes arcadedb.engine.* gauges read live from the Profiler on each scrape.
       new EngineMetricsBinder().bindTo(Metrics.globalRegistry);
+      // HA replication health (heartbeat lag + replication lag) sourced live from the HA plugin -
+      // exposes arcadedb.ha.* gauges; harmless no-op (all -1/0) when HA is disabled.
+      new HAReplicationMetrics(this).bindTo(Metrics.globalRegistry);
       QueryMetricsRecorder.Holder.register(new MicrometerQueryMetricsRecorder());
 
       if (configuration.getValueAsBoolean(GlobalConfiguration.SERVER_METRICS_LOGGING)) {
@@ -528,9 +544,20 @@ public class ArcadeDBServer {
     return databases.containsKey(databaseName);
   }
 
+  /**
+   * Returns the monitor that serialises every check-then-act on the database registry (load, create, register,
+   * reopen). Callers that must make a multi-step registry mutation atomic with respect to concurrent
+   * {@link #getDatabase} / {@link #createDatabase} calls synchronize on this object. The HA snapshot installer
+   * holds it across its close-&gt;file-swap-&gt;reopen sequence so no concurrent open observes the transient
+   * half-swapped on-disk directory (issue #4832).
+   */
+  public Object getDatabasesLock() {
+    return databasesLock;
+  }
+
   public ServerDatabase createDatabase(final String databaseName, final ComponentFile.MODE mode) {
     ServerDatabase serverDatabase;
-    synchronized (databases) {
+    synchronized (databasesLock) {
       serverDatabase = databases.get(databaseName);
       if (serverDatabase != null)
         throw new IllegalArgumentException("Database '" + databaseName + "' already exists");
@@ -564,6 +591,14 @@ public class ArcadeDBServer {
 
   public Set<String> getDatabaseNames() {
     return Collections.unmodifiableSet(databases.keySet());
+  }
+
+  /**
+   * Returns {@code true} if the given name belongs to a reserved internal database (e.g. the Raft
+   * control directory {@code .raft}) that must not be exposed as a user database.
+   */
+  public static boolean isReservedDatabaseName(final String databaseName) {
+    return databaseName != null && databaseName.startsWith(RESERVED_DATABASE_PREFIX);
   }
 
   public ServerDatabase registerDatabase(final String databaseName, final DatabaseInternal database) {
@@ -611,7 +646,7 @@ public class ArcadeDBServer {
     if (databaseWrapper == null)
       return;
 
-    synchronized (databases) {
+    synchronized (databasesLock) {
       for (final var entry : databases.entrySet()) {
         final ServerDatabase serverDb = entry.getValue();
         final DatabaseInternal wrapped = serverDb.getWrappedDatabaseInstance();
@@ -683,7 +718,7 @@ public class ArcadeDBServer {
       throw new IllegalArgumentException("Invalid database name " + databaseName);
 
     ServerDatabase db;
-    synchronized (databases) {
+    synchronized (databasesLock) {
       db = databases.get(databaseName);
 
       if (db == null || !db.isOpen()) {
@@ -749,7 +784,10 @@ public class ArcadeDBServer {
       if (configuration.getValueAsBoolean(GlobalConfiguration.SERVER_DATABASE_LOADATSTARTUP)) {
         final File[] databaseDirectories = databaseDir.listFiles(File::isDirectory);
         for (final File f : databaseDirectories)
-          getDatabase(f.getName());
+          // Skip reserved internal databases (e.g. the Raft control directory '.raft'): they are not
+          // user databases and must not be registered nor leak into the server/cluster status APIs.
+          if (!isReservedDatabaseName(f.getName()))
+            getDatabase(f.getName());
       }
     }
   }

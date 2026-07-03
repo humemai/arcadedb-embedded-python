@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 
@@ -187,12 +188,18 @@ public final class VectorUtils {
     if (vectorObj instanceof String s) {
       final String trimmed = s.trim();
       final String inner = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.substring(1, trimmed.length() - 1) : trimmed;
-      if (inner.isEmpty())
+      final String cleaned = inner.trim();
+      if (cleaned.isEmpty())
         return new float[0];
-      final String[] parts = inner.split(",");
+      // Split on commas, semicolons and/or whitespace so every asString()/vector.toString() format
+      // round-trips: comma-separated (COMPACT/PYTHON/JULIA/NUMPY), space-separated (MATLAB),
+      // semicolon-separated (MATLAB_COLUMN) and multi-line (PRETTY). This is intentionally lenient: a
+      // string mixing separators (e.g. "1.0, 2.0; 3.0") is accepted even though no format emits one, so
+      // hand-written input parses without fuss.
+      final String[] parts = cleaned.split("[,;\\s]+");
       final float[] result = new float[parts.length];
       for (int i = 0; i < parts.length; i++)
-        result[i] = Float.parseFloat(parts[i].trim());
+        result[i] = Float.parseFloat(parts[i]);
       return result;
     }
     throw new IllegalArgumentException("Vector must be an array or list, found: " + vectorObj.getClass().getSimpleName());
@@ -213,6 +220,76 @@ public final class VectorUtils {
       throw new IllegalArgumentException("Vector elements must be numbers, found: null");
     }
     throw new IllegalArgumentException("Vector elements must be numbers, found: " + elem.getClass().getSimpleName());
+  }
+
+  /**
+   * Human-readable string formats for a vector, shared by the {@code vector.toString()} SQL function and
+   * the {@code asString()} SQL method.
+   * <ul>
+   *   <li>{@code COMPACT}: single line {@code [1.0, 2.0, 3.0]} (default)</li>
+   *   <li>{@code PRETTY}: one element per line</li>
+   *   <li>{@code PYTHON}: Python list literal {@code [1.0, 2.0, 3.0]}</li>
+   *   <li>{@code MATLAB}: space-separated row vector {@code [1.0 2.0 3.0]}</li>
+   *   <li>{@code MATLAB_COLUMN}: semicolon-separated column vector {@code [1.0; 2.0; 3.0]}</li>
+   *   <li>{@code JULIA}: Julia vector literal {@code [1.0, 2.0, 3.0]}</li>
+   *   <li>{@code NUMPY}: bare comma-separated {@code 1.0, 2.0, 3.0} (no brackets), suitable for
+   *       {@code numpy.fromstring(..., sep=",")}</li>
+   * </ul>
+   */
+  public enum StringFormat {
+    COMPACT,
+    PRETTY,
+    PYTHON,
+    MATLAB,
+    MATLAB_COLUMN,
+    JULIA,
+    NUMPY
+  }
+
+  /**
+   * Parses a (case-insensitive) format name into a {@link StringFormat}.
+   *
+   * @throws IllegalArgumentException with the list of supported formats when the name is unknown
+   */
+  public static StringFormat parseStringFormat(final String name) {
+    try {
+      return StringFormat.valueOf(name.toUpperCase(Locale.ROOT));
+    } catch (final IllegalArgumentException e) {
+      throw new IllegalArgumentException(
+          "Unknown format: " + name + ". Supported: COMPACT, PRETTY, PYTHON, MATLAB, MATLAB_COLUMN, JULIA, NUMPY");
+    }
+  }
+
+  /**
+   * Renders a vector to a string using the given {@link StringFormat}. An empty vector renders as
+   * {@code []} (or an empty string for {@code NUMPY}).
+   */
+  public static String formatVector(final float[] vector, final StringFormat format) {
+    if (format == StringFormat.PRETTY) {
+      // PRETTY builds its own newline-delimited layout and does not use the single-line separator below.
+      final StringBuilder sb = new StringBuilder("[\n");
+      for (int i = 0; i < vector.length; i++) {
+        sb.append("  ").append(vector[i]);
+        if (i < vector.length - 1)
+          sb.append(",");
+        sb.append("\n");
+      }
+      return sb.append("]").toString();
+    }
+
+    final String separator = switch (format) {
+      case MATLAB -> " ";
+      case MATLAB_COLUMN -> "; ";
+      default -> ", ";
+    };
+    final StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < vector.length; i++) {
+      if (i > 0)
+        sb.append(separator);
+      sb.append(vector[i]);
+    }
+    // NUMPY emits a bare comma-separated list (no brackets) for numpy.fromstring(); all others bracket it.
+    return format == StringFormat.NUMPY ? sb.toString() : "[" + sb + "]";
   }
 
   /**

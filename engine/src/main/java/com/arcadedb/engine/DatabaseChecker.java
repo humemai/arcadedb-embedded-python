@@ -50,7 +50,16 @@ public class DatabaseChecker {
   private       boolean             compress     = false;
   private       Set<Object>         buckets      = Collections.emptySet();
   private       Set<String>         types        = Collections.emptySet();
+  private       int                 maxWarnings  = 100_000;
   private final Map<String, Object> result       = new HashMap<>();
+
+  // Distinct missing/unloadable targets (a record an edge points to) aggregated across the edge and vertex scans,
+  // with a per-target reference count and a sample error. A single missing supernode can be referenced by millions
+  // of edges; this collapses that fan-out so the operator sees "vertex #28:1 ..., referenced by N edge(s)" instead
+  // of scrolling N raw warning lines. Kept out of the serialized result as RID-keyed maps; the readable summary is
+  // emitted as topMissingReferences/distinctMissingReferences at the end of check().
+  private final Map<RID, Long>      missingReferences      = new HashMap<>();
+  private final Map<RID, String>    missingReferenceErrors = new HashMap<>();
 
   public DatabaseChecker(final Database database) {
     this.database = (DatabaseInternal) database;
@@ -58,6 +67,8 @@ public class DatabaseChecker {
 
   public Map<String, Object> check() {
     result.clear();
+    missingReferences.clear();
+    missingReferenceErrors.clear();
 
     if (verboseLevel > 0)
       LogManager.instance().log(this, Level.INFO, "Integrity check of database '%s' started", null, database.getName());
@@ -68,6 +79,10 @@ public class DatabaseChecker {
     result.put("deletedRecordsAfterFix", new LinkedHashSet<>());
     result.put("corruptedRecords", new LinkedHashSet<>());
     result.put("corruptedIndexes", new LinkedHashSet<>());
+    result.put("totalWarnings", 0L);
+    result.put("totalCorruptedRecords", 0L);
+    result.put("distinctMissingReferences", 0L);
+    result.put("topMissingReferences", new ArrayList<String>());
 
     checkEdges();
 
@@ -120,10 +135,35 @@ public class DatabaseChecker {
     if (compress)
       compress();
 
+    result.put("distinctMissingReferences", (long) missingReferences.size());
+    result.put("topMissingReferences", formatTopMissingReferences());
+
     if (verboseLevel > 0)
       LogManager.instance().log(this, Level.INFO, "Result:\n%s", null, new JSONObject(result).toString(2));
 
     return result;
+  }
+
+  /** Merges one scan's per-target dangling-reference counts into the cross-scan accumulator. */
+  private void mergeMissingReferences(final Map<RID, Long> refs, final Map<RID, String> errors) {
+    if (refs == null)
+      return;
+    for (final Map.Entry<RID, Long> e : refs.entrySet()) {
+      missingReferences.merge(e.getKey(), e.getValue(), Long::sum);
+      if (errors != null)
+        missingReferenceErrors.putIfAbsent(e.getKey(), errors.get(e.getKey()));
+    }
+  }
+
+  /** Top dangling targets by reference count, formatted for humans and capped so the summary stays readable. */
+  private List<String> formatTopMissingReferences() {
+    final int limit = 100;
+    return missingReferences.entrySet().stream()
+        .sorted((a, b) -> Long.compare(b.getValue(), a.getValue()))
+        .limit(limit)
+        .map(e -> e.getKey() + " could not be loaded (error: " + missingReferenceErrors.getOrDefault(e.getKey(), "?")
+            + "), referenced by " + e.getValue() + " edge(s)")
+        .collect(Collectors.toList());
   }
 
   private void checkDocuments() {
@@ -213,12 +253,17 @@ public class DatabaseChecker {
           continue;
 
       if (type instanceof LocalEdgeType) {
-        final Map<String, Object> stats = new GraphDatabaseChecker(database).checkEdges(type.getName(), fix, verboseLevel);
+        final int currentWarnings = ((LinkedHashSet<String>) result.get("warnings")).size();
+        final int currentCorrupted = ((LinkedHashSet<RID>) result.get("corruptedRecords")).size();
+        final Map<String, Object> stats = new GraphDatabaseChecker(database).checkEdges(type.getName(), fix, verboseLevel,
+            Math.max(0, maxWarnings - currentWarnings), Math.max(0, maxWarnings - currentCorrupted));
 
         updateStats(stats);
 
         ((LinkedHashSet<String>) result.get("warnings")).addAll((Collection<String>) stats.get("warnings"));
         ((LinkedHashSet<RID>) result.get("corruptedRecords")).addAll((Collection<RID>) stats.get("corruptedRecords"));
+        mergeMissingReferences((Map<RID, Long>) stats.get("missingReferences"),
+            (Map<RID, String>) stats.get("missingReferenceErrors"));
       }
     }
   }
@@ -233,12 +278,17 @@ public class DatabaseChecker {
           continue;
 
       if (type instanceof LocalVertexType) {
-        final Map<String, Object> stats = new GraphDatabaseChecker(database).checkVertices(type.getName(), fix, verboseLevel);
+        final int currentWarnings = ((LinkedHashSet<String>) result.get("warnings")).size();
+        final int currentCorrupted = ((LinkedHashSet<RID>) result.get("corruptedRecords")).size();
+        final Map<String, Object> stats = new GraphDatabaseChecker(database).checkVertices(type.getName(), fix, verboseLevel,
+            Math.max(0, maxWarnings - currentWarnings), Math.max(0, maxWarnings - currentCorrupted));
 
         updateStats(stats);
 
         ((LinkedHashSet<String>) result.get("warnings")).addAll((Collection<String>) stats.get("warnings"));
         ((LinkedHashSet<RID>) result.get("corruptedRecords")).addAll((Collection<RID>) stats.get("corruptedRecords"));
+        mergeMissingReferences((Map<RID, Long>) stats.get("missingReferences"),
+            (Map<RID, String>) stats.get("missingReferenceErrors"));
       }
     }
   }
@@ -265,6 +315,11 @@ public class DatabaseChecker {
 
   public DatabaseChecker setCompress(final boolean compress) {
     this.compress = compress;
+    return this;
+  }
+
+  public DatabaseChecker setMaxWarnings(final int maxWarnings) {
+    this.maxWarnings = maxWarnings;
     return this;
   }
 
@@ -474,6 +529,10 @@ public class DatabaseChecker {
         0F);
   }
 
+  /**
+   * Accumulates every Long entry of the sub-check stats into the global result. This is the single place totals
+   * like totalWarnings/totalCorruptedRecords are summed, so callers must NOT add them again or they double-count.
+   */
   private void updateStats(final Map<String, Object> stats) {
     for (final Map.Entry<String, Object> entry : stats.entrySet()) {
       final Object value = entry.getValue();

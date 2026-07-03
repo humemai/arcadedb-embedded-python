@@ -31,16 +31,23 @@ import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.HeaderValues;
 import io.undertow.util.Headers;
+import io.undertow.util.HttpString;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FilterOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.channels.ClosedChannelException;
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -48,7 +55,10 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
+import java.util.zip.CRC32;
+import java.util.zip.CheckedInputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -154,6 +164,9 @@ public class SnapshotHttpHandler implements HttpHandler {
       exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/zip");
       exchange.getResponseHeaders().put(Headers.CONTENT_DISPOSITION,
           "attachment; filename=\"" + safeName + "-snapshot.zip\"");
+      // Advertise that this stream ends with a completeness manifest (issue #4831) so the follower
+      // requires it and rejects a download truncated at a ZIP-entry boundary.
+      exchange.getResponseHeaders().put(new HttpString(SnapshotManager.MANIFEST_HEADER), "1");
       exchange.startBlocking();
 
       final DatabaseInternal db = server.getDatabase(databaseName);
@@ -254,33 +267,45 @@ public class SnapshotHttpHandler implements HttpHandler {
   private void serveSnapshotZip(final HttpServerExchange exchange, final DatabaseInternal db, final String databaseName) {
     final long writeTimeoutMs = httpServer.getServer().getConfiguration().getValueAsLong(GlobalConfiguration.HA_SNAPSHOT_WRITE_TIMEOUT);
     final AtomicBoolean completed = new AtomicBoolean(false);
-    final ScheduledFuture<?> watchdog = watchdogExecutor.schedule(() -> {
-      if (!completed.get()) {
-        LogManager.instance().log(this, Level.WARNING,
-            "Snapshot write for '%s' timed out after %dms, closing connection to release semaphore slot",
-            databaseName, writeTimeoutMs);
-        try {
-          exchange.getConnection().close();
-        } catch (final Exception ignored) {
-        }
-      }
-    }, writeTimeoutMs, TimeUnit.MILLISECONDS);
 
-    try (final OutputStream out = exchange.getOutputStream();
+    // Track the wall-clock time of the last byte written to the follower. The watchdog uses this to
+    // detect a *stalled* transfer (no progress within HA_SNAPSHOT_WRITE_TIMEOUT) rather than killing a
+    // slow-but-healthy one. A large database can legitimately take longer than the timeout to stream over
+    // the network; an absolute deadline would force-close a perfectly fine transfer, surfacing as
+    // "Premature EOF" on the follower and an unrecoverable resync loop (issue #4729).
+    final AtomicLong lastProgressMs = new AtomicLong(System.currentTimeMillis());
+
+    // Poll a few times within the timeout window so a stall is detected (and the semaphore slot freed)
+    // promptly once progress halts, without spinning. Floored at 1s for very small configured timeouts.
+    final long pollIntervalMs = Math.max(1_000L, writeTimeoutMs / 4);
+    final ScheduledFuture<?> watchdog = scheduleStallWatchdog(watchdogExecutor, completed, lastProgressMs,
+        writeTimeoutMs, pollIntervalMs, databaseName, () -> {
+          try {
+            exchange.getConnection().close();
+          } catch (final Exception ignored) {
+          }
+        });
+
+    try (final OutputStream rawOut = exchange.getOutputStream();
+        final OutputStream out = new ProgressTrackingOutputStream(rawOut, lastProgressMs);
         final ZipOutputStream zipOut = new ZipOutputStream(out)) {
+
+      // Accumulate one manifest record per file actually streamed (name + size + CRC32), written as the
+      // final ZIP entry so the follower can detect a truncated download (issue #4831).
+      final List<SnapshotManager.ManifestEntry> manifest = new ArrayList<>();
 
       final File configFile = ((LocalDatabase) db.getEmbedded()).getConfigurationFile();
       if (configFile.exists())
-        addFileToZip(zipOut, configFile);
+        addFileToZip(zipOut, configFile, manifest);
 
       final File schemaFile = ((LocalSchema) db.getSchema()).getConfigurationFile();
       if (schemaFile.exists())
-        addFileToZip(zipOut, schemaFile);
+        addFileToZip(zipOut, schemaFile, manifest);
 
       final Collection<ComponentFile> files = db.getFileManager().getFiles();
       for (final ComponentFile file : new ArrayList<>(files))
         if (file != null)
-          addFileToZip(zipOut, file.getOSFile());
+          addFileToZip(zipOut, file.getOSFile(), manifest);
 
       // TimeSeries sealed-store files (.ts.sealed) use raw FileChannel I/O and are NOT registered with
       // the FileManager, so they are absent from getFiles(). Add them explicitly so a snapshot-syncing
@@ -290,21 +315,68 @@ public class SnapshotHttpHandler implements HttpHandler {
       final File[] sealedFiles = dbDir.listFiles((d, name) -> name.endsWith(".ts.sealed"));
       if (sealedFiles != null)
         for (final File sealedFile : sealedFiles)
-          addFileToZip(zipOut, sealedFile);
+          addFileToZip(zipOut, sealedFile, manifest);
+
+      // Final entry: the manifest. Anything truncated upstream drops this entry, so the follower's
+      // "manifest present?" check turns a silently-short archive into a loud, retryable failure.
+      final ZipEntry manifestEntry = new ZipEntry(SnapshotManager.MANIFEST_ENTRY_NAME);
+      zipOut.putNextEntry(manifestEntry);
+      zipOut.write(SnapshotManager.buildManifest(manifest).getBytes(StandardCharsets.UTF_8));
+      zipOut.closeEntry();
 
       zipOut.finish();
       HALog.log(this, HALog.BASIC, "Database snapshot for '%s' sent successfully", databaseName);
 
     } catch (final Exception e) {
-      LogManager.instance().log(this, Level.SEVERE, "Error serving snapshot for '%s'", e, databaseName);
-      throw new RuntimeException(e);
+      // A follower that restarts (or whose stall watchdog closed the connection) drops the socket
+      // mid-transfer, surfacing here as a broken pipe / connection reset. That is benign and expected:
+      // the follower will retry. Log it quietly and do not rethrow (rethrowing would also surface a
+      // second SEVERE from the enclosing suspendFlushAndExecute). Genuine errors stay SEVERE and rethrow.
+      if (isClientDisconnect(e))
+        LogManager.instance().log(this, Level.FINE,
+            "Snapshot transfer for '%s' aborted: the follower closed the connection (%s)", databaseName, e.getMessage());
+      else {
+        LogManager.instance().log(this, Level.SEVERE, "Error serving snapshot for '%s'", e, databaseName);
+        throw new RuntimeException(e);
+      }
     } finally {
       completed.set(true);
       watchdog.cancel(false);
     }
   }
 
-  private void addFileToZip(final ZipOutputStream zipOut, final File inputFile) throws Exception {
+  /**
+   * Returns {@code true} when the throwable chain indicates the follower closed the connection
+   * mid-transfer (broken pipe, connection reset, or a closed channel) - a benign, expected event during
+   * a follower restart or after the stall watchdog force-closes the connection - rather than a genuine
+   * server-side snapshot error. Package-private and static so the classification is unit-testable.
+   */
+  static boolean isClientDisconnect(final Throwable t) {
+    for (Throwable c = t; c != null; c = c.getCause()) {
+      if (c instanceof ClosedChannelException)
+        return true;
+      if (c instanceof IOException) {
+        final String m = c.getMessage();
+        if (m != null) {
+          final String lower = m.toLowerCase(Locale.ROOT);
+          if (lower.contains("broken pipe") || lower.contains("connection reset")
+              || lower.contains("connection closed") || lower.contains("connection abort"))
+            return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Streams a single file into the ZIP and, on success, appends its {@link SnapshotManager.ManifestEntry}
+   * (name + uncompressed size + CRC32) to {@code manifest}. The CRC and size are computed inline from the
+   * exact bytes streamed (via {@link CheckedInputStream}), so they describe what the follower actually
+   * receives rather than a separate re-read of the file. Skipped files (absent or symlink) contribute no
+   * manifest entry, matching what is sent.
+   */
+  private void addFileToZip(final ZipOutputStream zipOut, final File inputFile,
+      final List<SnapshotManager.ManifestEntry> manifest) throws Exception {
     if (!inputFile.exists())
       return;
     final Path filePath = inputFile.toPath();
@@ -314,9 +386,80 @@ public class SnapshotHttpHandler implements HttpHandler {
     }
     final ZipEntry entry = new ZipEntry(inputFile.getName());
     zipOut.putNextEntry(entry);
-    try (final FileInputStream fis = new FileInputStream(inputFile)) {
-      fis.transferTo(zipOut);
+    final CRC32 crc = new CRC32();
+    final long size;
+    try (final FileInputStream fis = new FileInputStream(inputFile);
+        final CheckedInputStream cis = new CheckedInputStream(fis, crc)) {
+      size = cis.transferTo(zipOut);
     }
     zipOut.closeEntry();
+    manifest.add(new SnapshotManager.ManifestEntry(inputFile.getName(), size, crc.getValue()));
+  }
+
+  /**
+   * Returns {@code true} when a snapshot transfer should be force-closed because no bytes have been
+   * written for at least {@code writeTimeoutMs}. This is a stall check (idle time since the last write),
+   * not an absolute deadline, so a large but actively-progressing transfer is never killed (issue #4729).
+   * Package-private and static so the decision can be unit-tested independently of the HTTP exchange.
+   */
+  static boolean isSnapshotWriteStalled(final long lastProgressMs, final long nowMs, final long writeTimeoutMs) {
+    return nowMs - lastProgressMs >= writeTimeoutMs;
+  }
+
+  /**
+   * Schedules a periodic stall watchdog that force-closes the connection (via {@code onStall}) only when
+   * the transfer has made no progress for {@code writeTimeoutMs}. Returns the {@link ScheduledFuture} the
+   * caller cancels once the transfer completes. Package-private so the watchdog wiring is unit-testable
+   * with a fake close action.
+   */
+  static ScheduledFuture<?> scheduleStallWatchdog(final ScheduledExecutorService executor,
+      final AtomicBoolean completed, final AtomicLong lastProgressMs, final long writeTimeoutMs,
+      final long pollIntervalMs, final String databaseName, final Runnable onStall) {
+    return executor.scheduleWithFixedDelay(() -> {
+      if (completed.get())
+        return;
+      final long now = System.currentTimeMillis();
+      if (isSnapshotWriteStalled(lastProgressMs.get(), now, writeTimeoutMs)) {
+        LogManager.instance().log(SnapshotHttpHandler.class, Level.WARNING,
+            "Snapshot write for '%s' stalled for %dms with no progress, closing connection to release semaphore slot",
+            databaseName, now - lastProgressMs.get());
+        onStall.run();
+      }
+    }, pollIntervalMs, pollIntervalMs, TimeUnit.MILLISECONDS);
+  }
+
+  /**
+   * {@link OutputStream} wrapper that records the wall-clock time of the most recent write into a shared
+   * {@link AtomicLong}, letting the snapshot watchdog tell a stalled transfer apart from a slow-but-healthy
+   * one. Each successful write to the delegate refreshes {@code lastProgressMs}; the watchdog force-closes
+   * the connection only when no progress is made within HA_SNAPSHOT_WRITE_TIMEOUT (issue #4729).
+   * Package-private for unit testing.
+   */
+  static final class ProgressTrackingOutputStream extends FilterOutputStream {
+    private final AtomicLong lastProgressMs;
+
+    ProgressTrackingOutputStream(final OutputStream out, final AtomicLong lastProgressMs) {
+      super(out);
+      this.lastProgressMs = lastProgressMs;
+    }
+
+    @Override
+    public void write(final int b) throws IOException {
+      out.write(b);
+      lastProgressMs.set(System.currentTimeMillis());
+    }
+
+    @Override
+    public void write(final byte[] b, final int off, final int len) throws IOException {
+      // FilterOutputStream.write(byte[],int,int) relays byte-by-byte; override to write the whole chunk
+      // in one call (throughput) and record progress once per chunk instead of once per byte.
+      out.write(b, off, len);
+      lastProgressMs.set(System.currentTimeMillis());
+    }
+
+    @Override
+    public void flush() throws IOException {
+      out.flush();
+    }
   }
 }

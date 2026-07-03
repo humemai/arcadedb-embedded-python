@@ -21,8 +21,8 @@ package com.arcadedb.engine;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Binary;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.exception.LockTimeoutException;
 import com.arcadedb.exception.SchemaException;
-import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.exception.TransactionException;
 import com.arcadedb.exception.WALVersionGapException;
 import com.arcadedb.index.vector.LSMVectorIndex;
@@ -476,7 +476,11 @@ public class TransactionManager {
         modifiedPage.version = txPage.currentPageVersion;
         modifiedPage.setContentSize(txPage.currentPageSize);
         modifiedPage.updateMetadata();
-        file.write(modifiedPage);
+
+        // Write under the per-page I/O lock so concurrent readers never observe partially-written bytes during
+        // replicated/recovery replay (forceApply). Evict from the read cache AFTER the write so subsequent reads
+        // reload the new content from disk (see PageManager.writePageWithLock).
+        database.getPageManager().writePageWithLock(file, modifiedPage);
 
         database.getPageManager().removePageFromCache(modifiedPage.pageId);
 
@@ -672,11 +676,11 @@ public class TransactionManager {
         unlockFilesInOrder(lockedFiles, requester);
 
         if (attemptFileId != null)
-          throw new TimeoutException(
+          throw new LockTimeoutException(
               "Timeout on locking file " + attemptFileId + " (" + database.getFileManager().getFile(attemptFileId).getFileName()
                   + ") during commit (fileIds=" + orderedFilesIds + ", timeout=" + timeout + "ms");
 
-        throw new TimeoutException("Timeout on locking files during commit (fileIds=" + orderedFilesIds + ")");
+        throw new LockTimeoutException("Timeout on locking files during commit (fileIds=" + orderedFilesIds + ")");
       }
     }
 
@@ -709,7 +713,7 @@ public class TransactionManager {
         // ERROR: UNLOCK LOCKED FILES
         unlockFilesInOrder(lockedFiles, requester);
 
-        throw new TimeoutException(
+        throw new LockTimeoutException(
             "Timeout on locking file " + attemptFileId + " (" + database.getFileManager().getFile(attemptFileId).getFileName()
                 + ") during commit (fileIds=" + Arrays.toString(fileIds) + ", timeout=" + timeout + "ms");
       }

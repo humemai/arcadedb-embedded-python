@@ -1431,18 +1431,34 @@ public class LocalSchema implements Schema {
     boolean saveConfiguration = false;
     try {
       File file = new File(databasePath + File.separator + SCHEMA_FILE_NAME);
+      final File prevFile = new File(databasePath + File.separator + SCHEMA_PREV_FILE_NAME);
       if (!file.exists() || file.length() == 0) {
-        file = new File(databasePath + File.separator + SCHEMA_PREV_FILE_NAME);
+        file = prevFile;
         if (!file.exists())
           return;
 
         LogManager.instance().log(this, Level.WARNING, "Could not find schema file, loading the previous version saved");
       }
 
-      final JSONObject root;
+      JSONObject root;
       try (final FileInputStream fis = new FileInputStream(file)) {
         final String fileContent = FileUtils.readStreamAsString(fis, encoding);
         root = new JSONObject(fileContent);
+      } catch (final Exception e) {
+        // The primary schema.json is non-empty but unparseable: this is the classic "server killed in the middle of a
+        // schema save" corruption (issue #1249). Fall back to the previous good copy saved in schema.prev.json instead
+        // of letting the schema reset to empty (which would make every type/index disappear even though the records are
+        // still on disk). Self-heal by flagging a rewrite so the next save restores a valid schema.json.
+        if (file != prevFile && prevFile.exists() && prevFile.length() > 0) {
+          LogManager.instance().log(this, Level.WARNING,
+              "Schema file '%s' is corrupt (%s), loading the previous version saved in '%s'", null, file.getName(),
+              e.getMessage(), prevFile.getName());
+          try (final FileInputStream fis = new FileInputStream(prevFile)) {
+            root = new JSONObject(FileUtils.readStreamAsString(fis, encoding));
+          }
+          saveConfiguration = true;
+        } else
+          throw e;
       }
 
       if (root.names() == null || root.names().isEmpty())
@@ -1609,7 +1625,14 @@ public class LocalSchema implements Schema {
 
                 if (!index.getType().toString().equals(configuredIndexType)) {
                   if (configuredIndexType.equalsIgnoreCase(Schema.INDEX_TYPE.FULL_TEXT.toString())) {
-                    index = new LSMTreeFullTextIndex((LSMTreeIndex) index);
+                    // bucketId = -1 ("not set"): the bucket association is already established on the underlying index and read via
+                    // its getAssociatedBucketId(); this metadata only carries the full-text/BM25 configuration, not the binding.
+                    final FullTextIndexMetadata ftMeta = new FullTextIndexMetadata(typeName, properties, -1);
+                    ftMeta.fromJSON(indexJSON);
+                    // Same reserved-name guard as the creation path, in case a hand-edited/restored schema reintroduced a property
+                    // colliding with the query parser's default-field sentinel.
+                    LSMTreeFullTextIndex.checkReservedPropertyNames(ftMeta.propertyNames);
+                    index = new LSMTreeFullTextIndex((LSMTreeIndex) index, ftMeta);
                     indexMap.put(indexName, index);
                   } else if (configuredIndexType.equalsIgnoreCase(Schema.INDEX_TYPE.GEOSPATIAL.toString())) {
                     final int precision = indexJSON.getInt("precision", GeoIndexMetadata.DEFAULT_PRECISION);

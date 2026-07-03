@@ -99,6 +99,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 
 /**
@@ -138,6 +139,9 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
 
   private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
+  /** Poll cadence while waiting for a leader to be (re)elected before forwarding a write (issue #4728 follow-up). */
+  private static final long LEADER_WAIT_POLL_INTERVAL_MS = 100;
+
   /**
    * Emits the "no security context, forwarding as root" notice only once per JVM so embedded
    * deployments that legitimately issue writes from background threads don't get log-spammed.
@@ -150,6 +154,14 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
    * Always null in production.
    */
   static volatile Consumer<String> TEST_POST_REPLICATION_HOOK = null;
+
+  /**
+   * Test-only fault-injection hook. Fires inside phase-2 on the leader, just before
+   * {@code commit2ndPhase} runs, after Raft has already committed the entry. Throw from the
+   * consumer to simulate a leader-side phase-2 commit failure while the followers are already
+   * ahead (issue #4740). Always null in production.
+   */
+  static volatile Consumer<String> TEST_PHASE2_COMMIT_FAULT = null;
 
   public record ReadConsistencyContext(Database.READ_CONSISTENCY consistency, long readAfterIndex) {
   }
@@ -330,6 +342,16 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
           "ALL quorum watch failed after MAJORITY commit; applying locally to prevent leader divergence: db=%s", getName());
       applyLocallyAfterMajorityCommit(payload);
       throw e;
+    } catch (final ReplicationDispatchedTimeoutException e) {
+      // INDETERMINATE outcome (issue #4790): the entry was dispatched to Ratis but the quorum wait
+      // timed out before we learned its fate. Ratis may still reach quorum and commit it on the
+      // followers AND apply it on this leader's state machine - where it would be origin-skipped,
+      // silently dropping the write on the leader. Mark the transaction so that, if the entry does
+      // commit, applyTxEntry applies it locally instead of skipping. Then roll back the in-flight
+      // (un-applied) local transaction and surface the retryable error to the client.
+      markTransactionAbandonedForLocalApply(payload);
+      rollback();
+      throw e;
     } catch (final ArcadeDBException e) {
       rollback();
       throw e;
@@ -354,6 +376,11 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     proxied.executeInReadLock(() -> {
       final DatabaseContext.DatabaseContextTL current = DatabaseContext.INSTANCE.getContext(proxied.getDatabasePath());
       try {
+        // Test-only fault injection: simulate a phase-2 commit failure while followers are ahead.
+        final Consumer<String> phase2Fault = TEST_PHASE2_COMMIT_FAULT;
+        if (phase2Fault != null)
+          phase2Fault.accept(getName());
+
         payload.tx().commit2ndPhase(payload.phase1());
 
         if (getSchema().getEmbedded().isDirty())
@@ -374,6 +401,7 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
               Followers have applied this transaction but the leader has not. \
               Stepping down to prevent stale reads. Error: %s""",
               getName(), payload.tx(), e.getMessage());
+        reconcileLeaderPagesAfterPhase2Failure(payload);
         recoverLeadershipAfterPhase2Failure(payload.tx().toString());
         throw e;
       } finally {
@@ -401,6 +429,7 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
             Phase 2 commit failed during ALL-quorum recovery (db=%s, txId=%s). \
             Leader database may be inconsistent. Stepping down so a node with correct state takes over. Error: %s""",
             getName(), payload.tx(), e.getMessage());
+        reconcileLeaderPagesAfterPhase2Failure(payload);
         recoverLeadershipAfterPhase2Failure(payload.tx().toString());
       } finally {
         current.popIfNotLastTransaction();
@@ -409,8 +438,69 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     });
   }
 
+  /**
+   * Records (in the state machine) that this leader abandoned phase 2 for a locally-originated
+   * transaction whose replication returned an indeterminate result (issue #4790). If the entry
+   * later reaches quorum and is applied here, {@link ArcadeStateMachine#applyTxEntry} will apply it
+   * locally instead of origin-skipping it, preventing a silent lost write on the leader.
+   * <p>
+   * The WAL txId is the correlation key: it is embedded in the same WAL bytes that were replicated,
+   * so the state machine sees the identical value when the entry commits. Best-effort: if anything
+   * goes wrong while extracting the txId we log and continue (the caller still rolls back and throws
+   * a retryable error), rather than masking the original replication failure.
+   */
+  private void markTransactionAbandonedForLocalApply(final ReplicationPayload payload) {
+    final RaftHAServer raft = raftHAServer;
+    if (raft == null)
+      return;
+    final ArcadeStateMachine stateMachine = raft.getStateMachine();
+    if (stateMachine == null)
+      return;
+    try {
+      final long walTxId = ArcadeStateMachine.deserializeWalTransaction(payload.walData()).txId;
+      stateMachine.markLocalTransactionAbandoned(getName(), walTxId);
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.WARNING,
+          "Could not mark transaction for local apply after indeterminate replication (db=%s): %s",
+          getName(), e.getMessage());
+    }
+  }
+
   private static final int  STEP_DOWN_MAX_RETRIES    = 3;
   private static final long STEP_DOWN_RETRY_DELAY_MS = 500;
+
+  /**
+   * Attempts to bring the leader's pages into sync with the committed Raft entry after
+   * {@code commit2ndPhase} has failed. The WAL bytes in {@code payload} are the same bytes
+   * that Raft replicated to the followers; calling {@link com.arcadedb.engine.TransactionManager#applyChanges}
+   * with them uses page-version guards so already-applied pages are skipped and un-applied
+   * ones are written. After this call the leader's page versions match what the followers
+   * applied, so when this node steps down and replays the log as a follower it will not
+   * encounter a {@link com.arcadedb.exception.WALVersionGapException} for this entry.
+   * <p>
+   * Called by the phase-2 failure handlers while they still hold the read lock that the failed
+   * {@code commit2ndPhase} ran under. {@code applyChanges} mutates pages under the per-page I/O
+   * lock, so running it under the same read lock keeps the page-write coordination identical to
+   * the normal phase-2 path and avoids racing a concurrent phase-1 snapshot.
+   * <p>
+   * Uses {@code ignoreErrors=true}: this is a best-effort reconciliation, so if some page is more
+   * than one version behind (the leader was already lagging before this tx) {@code applyChanges}
+   * skips that page rather than aborting the whole replay on the first gap. Every page it CAN apply
+   * is applied; any page it cannot is left for the normal follower-side WAL-gap path to resync once
+   * this node steps down (issue #4740 Fix 2 makes that recoverable instead of fatal).
+   */
+  private void reconcileLeaderPagesAfterPhase2Failure(final ReplicationPayload payload) {
+    try {
+      final WALFile.WALTransaction walTx = ArcadeStateMachine.deserializeWalTransaction(payload.walData());
+      proxied.getTransactionManager().applyChanges(walTx, payload.bucketDeltas(), true);
+      LogManager.instance().log(this, Level.INFO,
+          "Phase 2 failure: leader pages reconciled via WAL replay (db=%s, tx=%s)", getName(), payload.tx());
+    } catch (final Exception reconcileEx) {
+      LogManager.instance().log(this, Level.SEVERE,
+          "Phase 2 failure: leader page reconciliation also failed (db=%s, tx=%s): %s",
+          getName(), payload.tx(), reconcileEx.getMessage());
+    }
+  }
 
   private void recoverLeadershipAfterPhase2Failure(final String txDescription) {
     if (raftHAServer == null || !raftHAServer.isLeader())
@@ -478,9 +568,18 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       // machine apply and produces inconsistent IDs across the cluster.
       if (queryEngine.isExecutedByTheLeader() || analyzed.isDDL() || !analyzed.isIdempotent())
         return forwardCommandToLeaderViaRaft(language, query, null, args);
+      // Read-only command executed locally on this follower: honor the read-consistency header
+      // exactly like query() does. /api/v1/command can carry read-only statements (a SELECT), and
+      // a LINEARIZABLE/READ_YOUR_WRITES caller must not get a silently weaker guarantee than via
+      // /api/v1/query (the original Jepsen stale-read was a SELECT routed through command()).
+      applyReadConsistencyForReadOnlyCommand(analyzed);
       return proxied.command(language, query, configuration, args);
     }
 
+    // On the leader, a read-only command must also satisfy LINEARIZABLE (ReadIndex barrier). Only
+    // analyze when a non-EVENTUAL read-consistency header is actually present, so the common write
+    // path pays no extra parsing.
+    applyReadConsistencyForReadOnlyCommandIfRequested(language, query);
     return proxied.command(language, query, configuration, args);
   }
 
@@ -507,8 +606,12 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       final QueryEngine.AnalyzedQuery analyzed = queryEngine.analyze(query);
       if (queryEngine.isExecutedByTheLeader() || analyzed.isDDL() || !analyzed.isIdempotent())
         return forwardCommandToLeaderViaRaft(language, query, args, null);
+      // Read-only command executed locally on this follower: honor the read-consistency header.
+      applyReadConsistencyForReadOnlyCommand(analyzed);
+      return proxied.command(language, query, configuration, args);
     }
 
+    applyReadConsistencyForReadOnlyCommandIfRequested(language, query);
     return proxied.command(language, query, configuration, args);
   }
 
@@ -981,6 +1084,33 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   public ResultSet query(final String language, final String query, final Map<String, Object> args) {
     waitForReadConsistency();
     return proxied.query(language, query, args);
+  }
+
+  /**
+   * Applies the read-consistency barrier for a command, but ONLY when the statement is read-only
+   * (idempotent and not DDL). A read-only command (e.g. a SELECT sent to {@code /api/v1/command})
+   * must honor {@code X-ArcadeDB-Read-Consistency} exactly like {@link #query} does; a mutating
+   * command or DDL must NOT get a read barrier (it would be meaningless and could mask routing).
+   */
+  private void applyReadConsistencyForReadOnlyCommand(final QueryEngine.AnalyzedQuery analyzed) {
+    if (analyzed != null && analyzed.isIdempotent() && !analyzed.isDDL())
+      waitForReadConsistency();
+  }
+
+  /**
+   * Like {@link #applyReadConsistencyForReadOnlyCommand}, but defers the (relatively expensive)
+   * query analysis until we know a non-EVENTUAL read-consistency context is actually set. Used on
+   * the leader's command() path so the common write path (no consistency header) pays no extra
+   * parsing.
+   */
+  private void applyReadConsistencyForReadOnlyCommandIfRequested(final String language, final String query) {
+    if (raftHAServer == null)
+      return;
+    final ReadConsistencyContext ctx = READ_CONSISTENCY_CONTEXT.get();
+    if (ctx == null || ctx.consistency() == null || ctx.consistency() == Database.READ_CONSISTENCY.EVENTUAL)
+      return;
+    final QueryEngine queryEngine = proxied.getQueryEngineManager().getEngine(language, this);
+    applyReadConsistencyForReadOnlyCommand(queryEngine.analyze(query));
   }
 
   private void waitForReadConsistency() {
@@ -1503,9 +1633,15 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   private ResultSet forwardCommandToLeaderViaRaft(final String language, final String query,
       final Map<String, Object> mapArgs, final Object[] positionalArgs) {
     final RaftHAServer raft = requireRaftServer();
-    final String leaderHttpAddress = raft.getLeaderHttpAddress();
+    // During cluster startup or a leader change there is a window with no elected leader. Rather than failing
+    // the forwarded write immediately (which loses the caller's transaction - issue #4728 follow-up), wait a
+    // bounded time for a leader to appear and forward as soon as one does. If this node becomes the leader
+    // while waiting, getLeaderHttpAddress() returns its own address and the POST to self executes locally.
+    final long leaderWaitMs = server.getConfiguration().getValueAsLong(GlobalConfiguration.HA_FORWARD_LEADER_WAIT_TIMEOUT_MS);
+    final String leaderHttpAddress = awaitLeaderAddress(raft::getLeaderHttpAddress, leaderWaitMs, LEADER_WAIT_POLL_INTERVAL_MS);
     if (leaderHttpAddress == null)
-      throw new TransactionException("Cannot forward command to leader: leader HTTP address is not available");
+      throw new TransactionException("Cannot forward command to leader: leader HTTP address is not available "
+          + "(no leader elected within " + leaderWaitMs + "ms; tune " + GlobalConfiguration.HA_FORWARD_LEADER_WAIT_TIMEOUT_MS.getKey() + ")");
 
     final JSONObject body = new JSONObject();
     body.put("language", language);
@@ -1567,6 +1703,36 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     } catch (final Exception e) {
       throw new TransactionException("Error forwarding command to leader at " + leaderHttpAddress, e);
     }
+  }
+
+  /**
+   * Resolves the Raft leader address, polling for up to {@code timeoutMs} when none is known yet so a write
+   * forwarded during a startup/leader-change election window is delayed rather than lost (issue #4728 follow-up).
+   *
+   * @param leaderAddressProbe supplier of the current leader address, or {@code null} when no leader is known
+   * @param timeoutMs          maximum time to wait for a leader; {@code <= 0} disables waiting (fail-fast)
+   * @param pollIntervalMs     poll cadence while waiting
+   * @return the leader address, or {@code null} if none appeared within the timeout
+   */
+  static String awaitLeaderAddress(final Supplier<String> leaderAddressProbe, final long timeoutMs, final long pollIntervalMs) {
+    String addr = leaderAddressProbe.get();
+    if (addr != null || timeoutMs <= 0)
+      return addr;
+
+    final long deadline = System.currentTimeMillis() + timeoutMs;
+    while (addr == null) {
+      final long remaining = deadline - System.currentTimeMillis();
+      if (remaining <= 0)
+        break;
+      try {
+        Thread.sleep(Math.min(pollIntervalMs, remaining));
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+        break;
+      }
+      addr = leaderAddressProbe.get();
+    }
+    return addr;
   }
 
   /**

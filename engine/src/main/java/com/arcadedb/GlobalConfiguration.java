@@ -324,7 +324,26 @@ public enum GlobalConfiguration {
   ASYNC_BACK_PRESSURE("arcadedb.asyncBackPressure", SCOPE.DATABASE,
       "When the asynchronous queue is full at a certain percentage, back pressure is applied", Integer.class, 0),
 
+  TRUNCATE_BATCH_SIZE("arcadedb.truncateBatchSize", SCOPE.DATABASE,
+      """
+      Number of records TRUNCATE TYPE/BUCKET deletes per committed transaction. Each batch is committed as one \
+      transaction, which in HA becomes one Raft log entry: keeping the batch small keeps that entry small so the \
+      leader's per-follower append pipeline returns to sending heartbeats between batches instead of stalling on a \
+      single multi-MB entry (issue #4817, which caused leader churn, an interrupted commit and a partial truncate). \
+      Larger values reduce commit overhead on single-node setups at the cost of bigger transactions.""",
+      Integer.class, 1000),
+
   PAGE_FLUSH_QUEUE("arcadedb.pageFlushQueue", SCOPE.DATABASE, "Size of the asynchronous page flush queue", Integer.class, 512),
+
+  FLUSH_SUSPEND_MAX_DEFERRED_RAM("arcadedb.flushSuspendMaxDeferredRAM", SCOPE.DATABASE,
+      """
+      Maximum amount of RAM (in MB) of dirty pages the page-flush thread may defer in memory while flushing \
+      is suspended (during an HA snapshot ship or a full backup, when the on-disk files must stay stable). \
+      Once the deferred backlog crosses this cap the flush thread stops draining its bounded queue, so \
+      committing threads are throttled instead of the deferred backlog growing without limit and exhausting \
+      the heap (issue #4728: a busy leader shipping a multi-GB snapshot OOM'd). Set to 0 to disable the cap \
+      (unbounded, pre-4728 behavior).""",
+      Long.class, 512),
 
   EXPLICIT_LOCK_TIMEOUT("arcadedb.explicitLockTimeout", SCOPE.DATABASE, "Timeout in ms to lock resources on explicit lock",
       Long.class, 5000),
@@ -559,6 +578,18 @@ public enum GlobalConfiguration {
       "When true and HA is active, /api/v1/ready also requires the node to have joined the Raft group and be caught up. Default false preserves current readiness behavior.",
       Boolean.class, false),
 
+  SERVER_READINESS_HA_MAX_LAG("arcadedb.server.readinessHAMaxLag", SCOPE.SERVER,
+      "When SERVER_READINESS_REQUIRES_HA is true, the maximum number of Raft log entries a follower may lag behind the commit index (commitIndex - lastAppliedIndex) and still report Ready. Keeps /api/v1/ready returning 503 until a (re)joined follower has replayed the committed log, so a rolling restart does not drop the write quorum.",
+      Long.class, 100L),
+
+  SERVER_LOG_FORMAT("arcadedb.server.logFormat", SCOPE.SERVER,
+      "Console log format: 'text' (default, human-readable) or 'json' (one JSON object per line with correlation fields)",
+      String.class, "text"),
+
+  SERVER_LOG_INCLUDE_TRACE("arcadedb.server.logIncludeTrace", SCOPE.SERVER,
+      "In text log mode, append [traceId=...] to each line while a trace is active. Default false preserves current text output.",
+      Boolean.class, false),
+
   //paths
   SERVER_ROOT_PATH("arcadedb.server.rootPath", SCOPE.SERVER,
       "Root path in the file system where the server is looking for files. By default is the current directory", String.class,
@@ -630,6 +661,34 @@ public enum GlobalConfiguration {
   SERVER_HTTP_BODY_CONTENT_MAX_SIZE("arcadedb.server.httpBodyContentMaxSize", SCOPE.SERVER,
       "Maximum size in bytes for HTTP request body content. Set to -1 for unlimited size (WARNING: removes DoS protection). Default is 100MB",
       Long.class, 100L * 1024 * 1024), // 100MB DEFAULT
+
+  // SERVER gRPC
+  SERVER_GRPC_QUERY_MAX_RESULT_ROWS("arcadedb.server.grpcQueryMaxResultRows", SCOPE.SERVER,
+      """
+      Hard ceiling on the number of rows the gRPC unary ExecuteQuery materializes. A request limit at or below \
+      this cap is honored; a result that would exceed it fails the call with RESOURCE_EXHAUSTED (consistent with \
+      the StreamQuery MATERIALIZE_ALL path) rather than silently truncating, and a client cannot bypass it with a \
+      larger limit. Bounds heap usage and protects against limitless-query DoS. The default is lower than \
+      grpcStreamMaxMaterializedRows because the unary response is built and returned as a single gRPC message \
+      (also bounded by the max inbound/outbound message size), whereas StreamQuery emits incrementally. \
+      Set to -1 or 0 for unlimited (WARNING: removes DoS protection). Default is 100000.""",
+      Integer.class, 100_000),
+
+  SERVER_GRPC_STREAM_MAX_MATERIALIZED_ROWS("arcadedb.server.grpcStreamMaxMaterializedRows", SCOPE.SERVER,
+      """
+      Maximum number of rows the gRPC StreamQuery MATERIALIZE_ALL retrieval mode buffers in memory before \
+      emitting. Exceeding the cap fails the call with RESOURCE_EXHAUSTED so clients fall back to CURSOR/PAGED \
+      streaming instead of running the server out of memory. Set to -1 or 0 for unlimited (WARNING: removes DoS \
+      protection). Default is 1000000.""",
+      Integer.class, 1_000_000),
+
+  SERVER_GRPC_STREAM_WRITE_TIMEOUT_MS("arcadedb.server.grpcStreamWriteTimeoutMs", SCOPE.SERVER,
+      """
+      Maximum time in milliseconds a gRPC StreamQuery worker waits for the client transport to become ready to \
+      accept the next batch before aborting the stream. Prevents a slow or abandoned client from pinning the \
+      worker thread (and the open ResultSet/transaction) indefinitely. Set to -1 to wait forever (WARNING: \
+      removes DoS protection). Default is 60000 (60s).""",
+      Long.class, 60_000L),
 
   // SERVER WS
   SERVER_WS_EVENT_BUS_QUEUE_SIZE("arcadedb.server.eventBusQueueSize", SCOPE.SERVER,
@@ -719,6 +778,16 @@ public enum GlobalConfiguration {
   HA_APPEND_BUFFER_SIZE("arcadedb.ha.appendBufferSize", SCOPE.SERVER,
       "AppendEntries batch byte limit for replication (e.g. '4MB')", String.class, "4MB"),
 
+  HA_APPEND_ELEMENT_LIMIT("arcadedb.ha.appendElementLimit", SCOPE.SERVER,
+      """
+      Maximum number of Raft log entries per AppendEntries batch. Bounds the per-batch in-memory \
+      footprint on the follower during catch-up resync, where many batches may queue before the \
+      state machine can apply them. Lowering this value reduces peak heap pressure on followers \
+      catching up from a far-behind state. The byte limit (arcadedb.ha.appendBufferSize) remains \
+      the dominant per-batch heap bound; this element count is the secondary cap that governs when \
+      entries are small enough that many fit under the byte limit. Must be a positive integer (>= 1).""",
+      Integer.class, 64),
+
   HA_WRITE_BUFFER_SIZE("arcadedb.ha.writeBufferSize", SCOPE.SERVER,
       """
       Raft log write buffer size (e.g. '8MB'). Must be at least appendBufferSize + 8 bytes, \
@@ -803,6 +872,19 @@ public enum GlobalConfiguration {
       "Timeout in ms waiting for space in the group-commit queue before throwing ReplicationQueueFullException.",
       Integer.class, 100),
 
+  HA_GROUP_COMMIT_MAX_QUEUED_BYTES("arcadedb.ha.groupCommitMaxQueuedBytes", SCOPE.SERVER,
+      """
+      Maximum total bytes of pending (not-yet-dispatched) transactions allowed in the Raft group-commit \
+      queue. This is a memory backpressure bound that complements the entry-count bound \
+      (arcadedb.ha.groupCommitQueueSize): because a single transaction can be up to \
+      arcadedb.ha.grpcMessageSizeMax (128MB by default), a count-only bound would let a flood of large \
+      transactions exhaust the heap before backpressure engages. When adding a transaction would exceed \
+      this byte budget, the server waits up to arcadedb.ha.groupCommitOfferTimeout and then throws \
+      ReplicationQueueFullException (a retryable NeedRetryException) so heavy ingest backpressures \
+      instead of running the leader out of memory. Must be at least arcadedb.ha.grpcMessageSizeMax so a \
+      single maximum-size transaction can always be enqueued. Default 256MB.""",
+      Long.class, 256L * 1024 * 1024),
+
   HA_CLUSTER_TOKEN("arcadedb.ha.clusterToken", SCOPE.SERVER,
       """
       Shared secret for inter-node request forwarding authentication. \
@@ -820,6 +902,27 @@ public enum GlobalConfiguration {
   HA_HEALTH_CHECK_INTERVAL("arcadedb.ha.healthCheckInterval", SCOPE.SERVER,
       "Interval in milliseconds for the Raft health monitor to check for CLOSED/EXCEPTION state and auto-recover. 0 disables.",
       Long.class, 3000L),
+
+  HA_RESYNC_PROGRESS_LOGGING("arcadedb.ha.resyncProgressLogging", SCOPE.SERVER,
+      """
+      When true (default), the leader emits a concise per-follower unreachable/reconnected narrative and a \
+      restarting follower logs its resync progress (Raft log catch-up and full snapshot download). Set to false \
+      to disable that narrative. Note: this flag does NOT control the raw Apache Ratis retry flood - that is \
+      suppressed unconditionally by the org.apache.ratis.grpc.server.GrpcLogAppender level in \
+      arcadedb-log.properties, which is the switch to change to see those raw lines again.""",
+      Boolean.class, true),
+
+  HA_RESYNC_PROGRESS_INTERVAL("arcadedb.ha.resyncProgressInterval", SCOPE.SERVER,
+      "Minimum interval in milliseconds between follower resync progress log lines (Raft log catch-up and snapshot download). Throttles progress output so a fast resync logs only start and finish.",
+      Long.class, 5000L),
+
+  HA_PEER_UNREACHABLE_THRESHOLD("arcadedb.ha.peerUnreachableThreshold", SCOPE.SERVER,
+      "Time in milliseconds since the last successful RPC to a follower before the leader reports it as unreachable in the resync narrative. Does not change Raft membership or quorum.",
+      Long.class, 10000L),
+
+  HA_RESYNC_CATCHUP_LAG_THRESHOLD("arcadedb.ha.resyncCatchupLagThreshold", SCOPE.SERVER,
+      "Minimum apply backlog (Raft log entries a follower has committed/received but not yet applied to its state machine) before the catch-up resync narrative is logged. This is a locally observable signal, not the distance from the leader's commit index. Keeps the small steady-state apply backlog under write load from being narrated; only a genuine post-restart burst crosses this threshold. The narrative finishes once the backlog drains to within a tenth of it.",
+      Long.class, 1000L),
 
   HA_GRPC_FLOW_CONTROL_WINDOW("arcadedb.ha.grpcFlowControlWindow", SCOPE.SERVER,
       "gRPC flow control window size in bytes for Ratis append-entries traffic. Larger values help catch-up replication after partitions.",
@@ -848,6 +951,19 @@ public enum GlobalConfiguration {
       (fingerprint, lastTxId) before falling back to majority. A SEVERE log is emitted on timeout so the operator \
       knows which peer was unreachable.""",
       Long.class, 120_000L),
+
+  HA_AUTO_ACQUIRE_DATABASES("arcadedb.ha.autoAcquireDatabases", SCOPE.SERVER,
+      """
+      When true (the default), a node that joins the cluster reconciles its local database set against the leader's \
+      and auto-pulls (full snapshot install) any database it has never seen on disk - so an empty/new node \
+      (e.g. a StatefulSet scaled up) becomes a full replica with zero manual steps. When false, the node only \
+      refreshes databases already present locally (the legacy behavior) and never acquires unseen ones. This is a \
+      per-node local policy, read live on each reconcile (not stored in Raft); acquisition is additive and never \
+      drops a database the leader is missing, so a mixed cluster is safe. Note: a database whose snapshot \
+      persistently fails to install is retried up to a small bounded number of times, and because a failed install \
+      makes Ratis re-trigger the whole InstallSnapshot, each retry re-downloads the other databases on this node \
+      too; the retry count is capped so this cannot loop indefinitely.""",
+      Boolean.class, true),
 
   HA_SNAPSHOT_MAX_CONCURRENT("arcadedb.ha.snapshotMaxConcurrent", SCOPE.SERVER,
       "Maximum number of concurrent snapshot downloads served by the leader. Requests over this limit receive HTTP 503.",
@@ -885,6 +1001,16 @@ public enum GlobalConfiguration {
       "Delay in milliseconds between RemoteDatabase election retries.",
       Long.class, 2000L),
 
+  HA_FORWARD_LEADER_WAIT_TIMEOUT_MS("arcadedb.ha.forwardLeaderWaitTimeoutMs", SCOPE.SERVER,
+      """
+      Maximum time in milliseconds a follower waits for a leader to be (re)elected before failing a write \
+      command it has to forward to the leader. During cluster startup or a leader change there is a window \
+      with no elected leader; without this wait a forwarded write fails immediately with "leader HTTP address \
+      is not available" and the caller's transaction is lost (issue #4728 follow-up). The follower polls for \
+      the leader and forwards as soon as one appears. Set to 0 to restore the previous fail-fast behavior. \
+      Default 20000 comfortably covers a first-election window (which can exceed 10s on cluster startup).""",
+      Long.class, 20000L),
+
   HA_RATIS_RESTART_MAX_RETRIES("arcadedb.ha.ratisRestartMaxRetries", SCOPE.SERVER,
       """
       Maximum consecutive Ratis restart attempts by the health monitor before the server shuts down \
@@ -901,8 +1027,9 @@ public enum GlobalConfiguration {
 
   HA_SNAPSHOT_WRITE_TIMEOUT("arcadedb.ha.snapshotWriteTimeout", SCOPE.SERVER,
       """
-      Timeout in milliseconds for writing a snapshot to a follower. \
-      If the transfer stalls beyond this duration, the connection is force-closed to free the semaphore slot.""",
+      Idle timeout in milliseconds for writing a snapshot to a follower. The connection is force-closed \
+      to free the semaphore slot only when NO bytes have been written for this duration (a stall), not on \
+      total transfer time, so a large but actively-progressing snapshot is never killed mid-stream.""",
       Long.class, 300_000L),
 
   HA_TS_MAX_SEALED_INLINE_SIZE("arcadedb.ha.tsMaxSealedInlineSize", SCOPE.SERVER,
@@ -929,15 +1056,59 @@ public enum GlobalConfiguration {
       Number of Raft log entries a follower may lag behind the commit index, while NOT actively catching up, before the \
       health monitor re-arms a snapshot download from the leader. Guards against a follower that diverged (apply failure) \
       and whose snapshot download also failed on a quiet cluster, where no new entry arrives to re-trigger recovery. \
-      0 (the default) disables stale-follower recovery; the node restart path remains the primary mitigation. \
-      Enable with a value well below HA_SNAPSHOT_THRESHOLD once you have observed normal catch-up lag for your workload, \
-      to avoid multiple followers downloading snapshots from the leader at once.""",
-      Long.class, 0L),
+      UPGRADE NOTE: this defaults to 10000 (was 0/disabled before 26.7.1), well below the default HA_SNAPSHOT_THRESHOLD \
+      (100000), so a genuinely stuck follower self-heals without operator action. The value must stay below \
+      HA_SNAPSHOT_THRESHOLD so recovery is attempted before the leader compacts the entries the follower still needs. \
+      Set to 0 to restore the previous behaviour (follower-side stale recovery disabled; node restart is the only \
+      mitigation) if a deployment prefers to avoid automatic snapshot downloads.""",
+      Long.class, 10_000L),
 
   HA_STALE_FOLLOWER_RECOVERY_DURATION_MS("arcadedb.ha.staleFollowerRecoveryDurationMs", SCOPE.SERVER,
       """
       How long in milliseconds the lag described by HA_STALE_FOLLOWER_LAG_THRESHOLD must persist continuously \
       (across consecutive health-monitor ticks) before recovery is triggered. Avoids acting on transient catch-up lag.""",
+      Long.class, 60_000L),
+
+  HA_DIVERGED_FOLLOWER_RECOVERY("arcadedb.ha.divergedFollowerRecovery", SCOPE.SERVER,
+      """
+      When true (default), a follower that detects it is stuck at a stale term against the leader (it recognizes a leader \
+      at a newer term and has applied everything it could locally commit, yet its last-applied entry is from an older \
+      term) automatically reformats its Raft storage and rejoins as a fresh peer, letting the leader reconcile it via the \
+      snapshot-install path. This covers issue #4741: a tiny (1-2 entry) Raft-log divergence on an otherwise idle \
+      cluster, where the leader's log is never compacted, so neither the follower-side stale recovery \
+      (HA_STALE_FOLLOWER_LAG_THRESHOLD) nor the leader-driven stalled-replica resync \
+      (HA_STALLED_REPLICA_RESYNC_DURATION_MS) ever fire - both need a large lag - and the leader's appender otherwise \
+      loops on INCONSISTENCY forever until an operator restarts a node. The stuck condition must persist for \
+      HA_STALE_FOLLOWER_RECOVERY_DURATION_MS before recovery triggers, and HA_DIVERGED_FOLLOWER_MAX_REFORMATS bounds how \
+      often it retries. \
+      DESTRUCTIVE: this deletes the local Raft storage automatically (the database files are preserved and re-synced \
+      from the leader). The signature is "stuck at a stale term", which a genuine log divergence satisfies but so can a \
+      sustained (> HA_STALE_FOLLOWER_RECOVERY_DURATION_MS) one-sided network outage where heartbeats arrive but the \
+      leader's current-term entries do not; in that case the reformat is wasteful (no data loss - the leader holds \
+      everything) but does not fix the connectivity. \
+      No cross-follower coordination: if a systemic condition makes several followers satisfy the signature at once they \
+      may reformat within the same window, briefly costing quorum while they re-sync. This is bounded (each reformat is \
+      non-data-losing and HA_DIVERGED_FOLLOWER_MAX_REFORMATS caps retries) and a leader-coordinated one-at-a-time variant \
+      is deferred to a follow-up; set this to false to fall back to a manual node restart as the only #4741 mitigation.""",
+      Boolean.class, true),
+
+  HA_DIVERGED_FOLLOWER_MAX_REFORMATS("arcadedb.ha.divergedFollowerMaxReformats", SCOPE.SERVER,
+      """
+      Maximum number of automatic Raft-storage reformats (HA_DIVERGED_FOLLOWER_RECOVERY) allowed within one divergence \
+      episode before the follower gives up and logs a SEVERE message for operator intervention, instead of reformatting \
+      and full-snapshot-installing every HA_STALE_FOLLOWER_RECOVERY_DURATION_MS forever. A clean reformat resets the \
+      shared Ratis restart-retry budget, so without this cap a node whose divergence keeps reproducing would loop \
+      silently. The budget re-arms once the follower has looked healthy for 5x the recovery duration (the episode is \
+      considered resolved). Set to 0 for unbounded reformats (no breaker).""",
+      Integer.class, 5),
+
+  HA_STALLED_REPLICA_RESYNC_DURATION_MS("arcadedb.ha.stalledReplicaResyncDurationMs", SCOPE.SERVER,
+      """
+      How long in milliseconds a replica must stay continuously STALLED (its matchIndex not advancing while the leader \
+      keeps committing - e.g. stuck at -1 after a rolling upgrade) before the LEADER actively forces it to resync from \
+      the leader. This is the leader-driven counterpart to HA_STALE_FOLLOWER_LAG_THRESHOLD: it covers the case where the \
+      follower cannot self-detect the stall because its own commit index never advances. Defaults to 60000; set to 0 to \
+      disable leader-driven stalled-replica recovery (the STALLED condition is still detected and logged).""",
       Long.class, 60_000L),
 
   HA_SNAPSHOT_MAX_ENTRY_SIZE("arcadedb.ha.snapshotMaxEntrySize", SCOPE.SERVER,
@@ -966,12 +1137,14 @@ public enum GlobalConfiguration {
   HA_PEER_ALLOWLIST_STARTUP_GRACE_MS("arcadedb.ha.peerAllowlistStartupGraceMs", SCOPE.SERVER,
       """
       Startup grace window in milliseconds during which the gRPC peer allowlist filter fails OPEN (accepts and logs a \
-      warning) for an inbound address it cannot yet match, as long as it has never resolved every host in \
-      arcadedb.ha.serverList at least once. This prevents a self-inflicted partition on Kubernetes, where a peer's \
-      headless-service DNS record is only published once its pod is Ready, so a legitimately-restarting peer connects \
-      before its own name resolves. Measured from filter creation. Once all peer hosts have resolved at least once, or \
-      the window elapses, the filter enforces normally. Set to 0 to disable fail-open (strict from the first connection); \
-      the filter is not an mTLS substitute (see issue #3890), so a bounded fail-open window is the safer default.""",
+      warning) for an inbound address it cannot yet match, as long as a quorum (majority) of the hosts in \
+      arcadedb.ha.serverList has never resolved at least once. This prevents a self-inflicted partition on Kubernetes, \
+      where a peer's headless-service DNS record is only published once its pod is Ready, so a legitimately-restarting \
+      peer connects before its own name resolves. Measured from filter creation. Once a quorum of peer hosts has \
+      resolved at least once, or the window elapses, the filter enforces normally; the gate is a quorum rather than the \
+      full peer set so a single permanently-down peer does not hold the window open for its full duration (issue #4828). \
+      Set to 0 to disable fail-open (strict from the first connection); the filter is not an mTLS substitute (see issue \
+      #3890), so a bounded fail-open window is the safer default.""",
       Long.class, 60_000L),
 
   HA_PEER_ALLOWLIST_STICKY_TTL_MS("arcadedb.ha.peerAllowlistStickyTtlMs", SCOPE.SERVER,

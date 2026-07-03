@@ -25,13 +25,13 @@
     <parent>
         <groupId>com.arcadedb</groupId>
         <artifactId>arcadedb-parent</artifactId>
-        <version>26.7.1-SNAPSHOT</version>
+        <version>26.7.1</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <properties>
-        <postgresql.version>42.7.11</postgresql.version>
-        <logback-classic.version>1.5.34</logback-classic.version>
+        <postgresql.version>42.7.12</postgresql.version>
+        <logback-classic.version>1.5.37</logback-classic.version>
         <allowIncompleteProjects>true</allowIncompleteProjects>
         <assertj-db.version>3.0.2</assertj-db.version>
     </properties>

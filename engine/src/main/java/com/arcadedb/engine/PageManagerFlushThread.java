@@ -29,6 +29,7 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
@@ -49,6 +50,10 @@ public class PageManagerFlushThread extends Thread {
   private final static PagesToFlush                                             SHUTDOWN_THREAD     = new PagesToFlush(null);
   private final        AtomicReference<PagesToFlush>                            nextPagesToFlush    = new AtomicReference<>();
   private final        ConcurrentHashMap<Database, ConcurrentLinkedQueue<PagesToFlush>> deferredByDatabase = new ConcurrentHashMap<>();
+  // Per-database lock serializing the suspend-flag check + defer in flushPagesFromQueueToDisk against the
+  // flag-clear + deferred-detach in setSuspended(false). Without it a batch could be deferred AFTER the
+  // unsuspend already drained the deferred map, leaving it stuck in deferredByDatabase / pageIndex forever.
+  private final        ConcurrentHashMap<Database, Object>                      suspendLocks        = new ConcurrentHashMap<>();
 
   /**
    * O(1) index: pageId → most recent MutablePage in the flush queue or currently being flushed.
@@ -57,6 +62,19 @@ public class PageManagerFlushThread extends Thread {
    * and assert on entries directly.
    */
   final                ConcurrentHashMap<PageId, MutablePage> pageIndex = new ConcurrentHashMap<>();
+
+  /**
+   * Maximum bytes of dirty pages that may sit deferred (in {@link #deferredByDatabase}) while flushing is
+   * suspended, before the flush thread stops draining its bounded queue and lets {@code scheduleFlushOfPages}
+   * throttle the committing threads. {@code 0} disables the cap (unbounded, pre-#4728 behavior).
+   */
+  private final        long                                   maxDeferredRAM;
+
+  /**
+   * Running total of bytes currently deferred across all suspended databases. Package-private so the white-box
+   * regression test for issue #4728 can assert the backlog stays bounded.
+   */
+  final                AtomicLong                             deferredRAMBytes = new AtomicLong();
 
   public static class PagesToFlush {
     public final BasicDatabase     database;
@@ -74,6 +92,8 @@ public class PageManagerFlushThread extends Thread {
     this.pageManager = pageManager;
     this.logContext = LogManager.instance().getContext();
     this.queue = new ArrayBlockingQueue<>(configuration.getValueAsInteger(GlobalConfiguration.PAGE_FLUSH_QUEUE));
+    final long maxDeferredMB = configuration.getValueAsLong(GlobalConfiguration.FLUSH_SUSPEND_MAX_DEFERRED_RAM);
+    this.maxDeferredRAM = maxDeferredMB > 0 ? maxDeferredMB * 1024 * 1024 : 0;
   }
 
   public void scheduleFlushOfPages(final List<MutablePage> pages) throws InterruptedException {
@@ -149,6 +169,18 @@ public class PageManagerFlushThread extends Thread {
   }
 
   protected void flushPagesFromQueueToDisk(final Database database, final long timeout) throws InterruptedException, IOException {
+    // Backpressure (issue #4728): while a database is suspended (HA snapshot ship / full backup) its dirty
+    // pages cannot be written to disk and pile up in the unbounded deferredByDatabase map. On a busy leader
+    // shipping a multi-GB snapshot this exhausted the heap. Once the deferred backlog crosses the cap, stop
+    // draining the bounded queue: it fills up and scheduleFlushOfPages() throttles the committing threads, so
+    // the dirty pages stay in the (separately bounded) page cache instead of growing the deferred map forever.
+    // Gate on `running`: during shutdown the queue must still be drained to reach the SHUTDOWN_THREAD marker,
+    // otherwise a database left suspended with a full backlog would spin the run loop forever and block join().
+    if (running && maxDeferredRAM > 0 && deferredRAMBytes.get() >= maxDeferredRAM) {
+      Thread.sleep(timeout);
+      return;
+    }
+
     final PagesToFlush pagesToFlush = queue.poll(timeout, TimeUnit.MILLISECONDS);
 
     if (pagesToFlush != null) {
@@ -162,9 +194,20 @@ public class PageManagerFlushThread extends Thread {
           running = false;
         else if (!pagesToFlush.pages.isEmpty()) {
           if (database == null || pagesToFlush.database.equals(database)) {
-            if (database == null && isSuspended((Database) pagesToFlush.database)) {
-              deferredByDatabase.computeIfAbsent((Database) pagesToFlush.database, k -> new ConcurrentLinkedQueue<>()).offer(pagesToFlush);
-              return;
+            if (database == null) {
+              final Database db = (Database) pagesToFlush.database;
+              // Check the suspended flag and defer the batch atomically under the per-database lock, so this
+              // cannot interleave with the flag-clear + deferred-detach in setSuspended(false). Either we
+              // observe "suspended" and the unsuspend's detach picks this batch up, or we observe "not
+              // suspended" (flag already cleared) and fall through to flush it normally - never a defer that
+              // outlives the detach.
+              synchronized (suspendLock(db)) {
+                if (isSuspended(db)) {
+                  deferredByDatabase.computeIfAbsent(db, k -> new ConcurrentLinkedQueue<>()).offer(pagesToFlush);
+                  deferredRAMBytes.addAndGet(batchRAM(pagesToFlush));
+                  return;
+                }
+              }
             }
 
             if (!pagesToFlush.database.isOpen())
@@ -231,6 +274,8 @@ public class PageManagerFlushThread extends Thread {
             } catch (final IOException e) {
               LogManager.instance().log(this, Level.WARNING, "Error on flushing deferred page '%s' to disk", e, page);
             } finally {
+              // The page leaves the deferred backlog (flushed to disk), so release its reserved RAM (issue #4728).
+              deferredRAMBytes.addAndGet(-page.getPhysicalSize());
               removeFromFlushIndex(page);
             }
           }
@@ -238,17 +283,27 @@ public class PageManagerFlushThread extends Thread {
       }
     }
 
-    // Phase 2: mark the database as no longer suspended
-    suspended.remove(database);
+    // Phase 2 + Phase 3a: under the per-database lock, clear the suspended flag AND atomically detach any
+    // batches deferred during Phase 1. Holding the lock makes this transition mutually exclusive with the
+    // suspended-check + defer in flushPagesFromQueueToDisk: once the flag is cleared no further batch can be
+    // added to deferredByDatabase for this database, and every batch deferred up to that point is detached
+    // exactly once. A single detach therefore suffices - nothing can repopulate the map behind us.
+    final ConcurrentLinkedQueue<PagesToFlush> newDeferred;
+    synchronized (suspendLock(database)) {
+      suspended.remove(database);
+      newDeferred = deferredByDatabase.remove(database);
+    }
 
-    // Phase 3: drain any batches that were deferred during Phase 1 back into the main queue.
-    // These batches were committed while Phase 1 was running; enqueue them so the background
-    // thread picks them up. Note: they are appended to the tail of the queue, so if any
-    // post-unsuspend commits have already been enqueued they will be flushed first. WAL-based
-    // recovery guarantees correctness even if the flush order differs from commit order.
-    final ConcurrentLinkedQueue<PagesToFlush> newDeferred = deferredByDatabase.remove(database);
+    // Phase 3b: re-enqueue the detached batches into the main queue so the background thread picks them up.
+    // They are appended to the tail of the queue, so if any post-unsuspend commits have already been
+    // enqueued they will be flushed first. WAL-based recovery guarantees correctness even if the flush order
+    // differs from commit order. This blocking re-enqueue is deliberately done OUTSIDE the lock: queue.offer
+    // can block when the queue is full, and the only consumer that drains the queue (the flush thread) needs
+    // the same per-database lock to make progress, so holding it across the offer would deadlock.
     if (newDeferred != null) {
       for (final PagesToFlush batch : newDeferred) {
+        // The batch moves back to the main queue and leaves the deferred backlog accounting (issue #4728).
+        deferredRAMBytes.addAndGet(-batchRAM(batch));
         while (running) {
           try {
             if (queue.offer(batch, 1, TimeUnit.SECONDS))
@@ -263,12 +318,22 @@ public class PageManagerFlushThread extends Thread {
       }
     }
 
+    // Safety net: once nothing is deferred for any database the backlog is provably empty, so reset the counter
+    // to absorb any drift from edge cases above (a batch skipped because its database closed mid-unsuspend).
+    if (deferredByDatabase.isEmpty())
+      deferredRAMBytes.set(0);
+
     return true;
   }
 
   public boolean isSuspended(final Database database) {
     final Boolean s = suspended.get(database);
     return s != null ? s : false;
+  }
+
+  /** Returns the stable per-database monitor used to serialize the suspend check/defer against unsuspend. */
+  private Object suspendLock(final Database database) {
+    return suspendLocks.computeIfAbsent(database, k -> new Object());
   }
 
   public void closeAndJoin() throws InterruptedException {
@@ -291,6 +356,20 @@ public class PageManagerFlushThread extends Thread {
     pageIndex.computeIfPresent(page.getPageId(), (id, indexed) -> indexed == page ? null : indexed);
   }
 
+  /** Sum of the in-RAM size of every page in a deferred batch, used to bound the deferred backlog (issue #4728). */
+  private static long batchRAM(final PagesToFlush batch) {
+    long bytes = 0;
+    if (batch.pages != null)
+      // Synchronize on the same monitor used by removePagesOfFileFromBatch / removeAllPagesOfDatabase, which
+      // can concurrently mutate this list (it.remove() / clear()), to avoid a ConcurrentModificationException
+      // and miscounting while a dropped file or database is being purged.
+      synchronized (batch.pages) {
+        for (final MutablePage page : batch.pages)
+          bytes += page.getPhysicalSize();
+      }
+    return bytes;
+  }
+
   public CachedPage getCachedPageFromMutablePageInQueue(final PageId pageId) {
     final MutablePage page = pageIndex.get(pageId);
     if (page != null)
@@ -309,6 +388,18 @@ public class PageManagerFlushThread extends Thread {
 
     // Also clean index entries for pages currently being flushed
     pageIndex.entrySet().removeIf(e -> database.equals(e.getKey().getDatabase()));
+
+    // Forget the per-database suspend bookkeeping so the dropped Database instance (and the resources it
+    // pins) can be garbage collected instead of being retained for the flush thread's lifetime as a map key.
+    suspendLocks.remove(database);
+    suspended.remove(database);
+    final ConcurrentLinkedQueue<PagesToFlush> droppedDeferred = deferredByDatabase.remove(database);
+    if (droppedDeferred != null) {
+      for (final PagesToFlush batch : droppedDeferred)
+        deferredRAMBytes.addAndGet(-batchRAM(batch));
+      if (deferredByDatabase.isEmpty())
+        deferredRAMBytes.set(0);
+    }
   }
 
   /** Drops every pending {@link MutablePage} of a single dropped file from the queue, the deferred batches and the index. */
@@ -321,26 +412,31 @@ public class PageManagerFlushThread extends Thread {
     final ConcurrentLinkedQueue<PagesToFlush> deferred = deferredByDatabase.get(database);
     if (deferred != null)
       for (final PagesToFlush pagesToFlush : deferred)
-        removePagesOfFileFromBatch(pagesToFlush, database, fileId);
+        // These pages leave the deferred backlog, so release their reserved RAM accounting (issue #4728).
+        deferredRAMBytes.addAndGet(-removePagesOfFileFromBatch(pagesToFlush, database, fileId));
 
     // Finally clean any index entry for a page currently being flushed.
     pageIndex.entrySet()
         .removeIf(e -> database.equals(e.getKey().getDatabase()) && e.getKey().getFileId() == fileId);
   }
 
-  private void removePagesOfFileFromBatch(final PagesToFlush pagesToFlush, final Database database, final int fileId) {
+  /** Removes the dropped file's pages from a batch and returns the sum of their in-RAM size (issue #4728). */
+  private long removePagesOfFileFromBatch(final PagesToFlush pagesToFlush, final Database database, final int fileId) {
     // pages is null for the SHUTDOWN_THREAD marker.
     if (pagesToFlush.pages == null || !database.equals(pagesToFlush.database))
-      return;
+      return 0;
 
+    long removedBytes = 0;
     synchronized (pagesToFlush.pages) {
       for (final Iterator<MutablePage> it = pagesToFlush.pages.iterator(); it.hasNext(); ) {
         final MutablePage page = it.next();
         if (page.getPageId().getFileId() == fileId) {
           pageIndex.remove(page.getPageId());
           it.remove();
+          removedBytes += page.getPhysicalSize();
         }
       }
     }
+    return removedBytes;
   }
 }
