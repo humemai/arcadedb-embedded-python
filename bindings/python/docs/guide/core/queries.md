@@ -339,6 +339,22 @@ for row in result:
     print(row.get("content"), row.get("$score"))
 ```
 
+Scoring uses native BM25 ranking. Individual query terms can be weighted with
+caret boosts (`term^weight`), which shifts `$score` accordingly:
+
+```python
+# 'database' matches count 5x more than 'java' matches
+result = db.query(
+    "sql",
+    "SELECT content, $score FROM Article "
+    "WHERE SEARCH_INDEX('Article[content]', 'java^1.0 database^5.0') = true "
+    "ORDER BY $score DESC",
+)
+```
+
+`SEARCH_INDEX('Type[property]', query)` targets one specific index and supports
+the same syntax, including wildcards (`'Hel*'`) and boosts.
+
 ### Choosing index types in SQL DSL
 
 When you create indexes through SQL, the index keyword controls both the index

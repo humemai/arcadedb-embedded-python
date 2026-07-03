@@ -6,7 +6,7 @@ recommended SQL-first way to build and query vector indexes (JVector) in embedde
 ## Quick Start (Embedded, Minimal)
 
 ```bash
-uv pip install arcadedb-embedded numpy
+pip install arcadedb-embedded numpy
 ```
 
 ```python
@@ -231,6 +231,10 @@ rows = db.query(
   bucket for training. For very small corpora, set `pq_clusters` to a value no larger
   than the number of indexed vectors in that bucket, or use `INT8`, `BINARY`, or `None`.
 - `"PRODUCT"`/PQ is currently not recommended for production workloads in these bindings.
+- SQL quantization helpers: `vector.quantizeInt8` / `vector.dequantizeInt8` and
+  `vector.quantizeBinary` / `vector.dequantizeBinary(v[, low, high])`. Binary
+  quantization keeps only the sign of each element; dequantize reconstructs it as
+  `low`/`high` (default `-1.0`/`1.0`).
 
 ## SQL Helpers
 
@@ -255,6 +259,13 @@ rows = db.query(
   where `mode` is the default ratio, `L0` (count of significant elements), or `GMEAN`.
 - Score shaping: `vector.scoreTransform(score, mode)` with modes such as `LN`/`LOG`
   and `TANH`, and `vector.multiScore(scores, fusion)` (e.g. `MAX`) to fuse score lists.
+- Conversions: `.asString(format)` renders a vector as text — formats are `COMPACT`
+  (default), `PRETTY`, `PYTHON`, `JULIA`, `MATLAB`, `MATLAB_COLUMN`, and `NUMPY`,
+  where `NUMPY` emits a bare comma-separated list ready for
+  `np.array(s.split(','), dtype=np.float32)`. `.asVector()` is the inverse and parses
+  any of those layouts (or a number/list) back into a vector, e.g.
+  `SELECT [1.0, 2.5].asString('NUMPY').asVector()`. `.asSparse([threshold])` converts
+  a dense vector to a sparse one (see Sparse Vectors).
 - Quantization via SQL: `METADATA {"quantization": "INT8"}` is the recommended path for
   embedded usage.
 
@@ -300,7 +311,10 @@ with INT8 quantization would quantize the same vector twice.
 ## Sparse Vectors
 
 ArcadeDB also supports sparse top-K retrieval through `LSM_SPARSE_VECTOR` and
-`vector.sparseNeighbors(...)`.
+`vector.sparseNeighbors(...)`. To convert between representations in SQL, use
+`.asSparse([threshold])` (dense → sparse, keeping elements above the threshold)
+and `vector.sparseToDense(sv)` (sparse → dense), e.g.
+`SELECT [0.0, 5.0, 0.0].asSparse()`.
 
 ```python
 import arcadedb_embedded as arcadedb

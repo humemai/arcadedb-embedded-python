@@ -278,6 +278,30 @@ def test_fulltext_search_preserves_wildcards(temp_db_path):
         assert contents == ["Hello database world", "Help me search"]
 
 
+def test_fulltext_search_bm25_term_boosts(temp_db_path):
+    """BM25 scoring honors per-term caret boosts (term^weight) in the query string."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE Article")
+        db.command("sql", "CREATE PROPERTY Article.content STRING")
+        db.command("sql", "CREATE INDEX ON Article (content) FULL_TEXT")
+
+        with db.transaction():
+            db.command("sql", "INSERT INTO Article SET content = 'java tutorial'")
+            db.command("sql", "INSERT INTO Article SET content = 'database tutorial'")
+
+        # Boost 'database' heavily: the database article must outrank the java one
+        result = db.query(
+            "sql",
+            "SELECT content, $score FROM Article "
+            "WHERE SEARCH_INDEX('Article[content]', 'java^1.0 database^5.0') = true "
+            "ORDER BY $score DESC",
+        )
+        records = list(result)
+        assert len(records) == 2
+        assert records[0].get("content") == "database tutorial"
+        assert records[0].get("$score") > records[1].get("$score")
+
+
 def test_sqlscript_returns_last_command_result(temp_db_path):
     """SQLScript returns the last command result when no explicit RETURN is used."""
     with arcadedb.create_database(temp_db_path) as db:

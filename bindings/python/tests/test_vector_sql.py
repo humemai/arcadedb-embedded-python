@@ -993,3 +993,76 @@ class TestVectorSQL:
         assert "Banana" in names
         assert "Car" not in names
         assert "Truck" not in names
+
+
+class TestVectorConversionSQL:
+    """Vector <-> string / sparse / binary conversions (new in ArcadeDB 26.7)."""
+
+    def test_as_string_formats(self, test_db):
+        """asString() emits COMPACT/PYTHON/NUMPY/MATLAB/JULIA/MATLAB_COLUMN layouts."""
+        # NUMPY is a bare comma-separated list (no brackets), ready for numpy parsing
+        rs = test_db.query("sql", "SELECT [1.0, 2.5].asString('NUMPY') as res")
+        numpy_str = str(next(rs).get("res"))
+        assert "[" not in numpy_str and "," in numpy_str
+
+        import numpy as np
+
+        parsed = np.array(numpy_str.split(","), dtype=np.float32)
+        assert parsed.tolist() == [1.0, 2.5]
+
+        # MATLAB is bracketed and space-separated
+        rs = test_db.query("sql", "SELECT [1.0, 2.5].asString('MATLAB') as res")
+        matlab_str = str(next(rs).get("res"))
+        assert matlab_str.startswith("[") and "," not in matlab_str
+
+        # MATLAB_COLUMN is bracketed and semicolon-separated
+        rs = test_db.query("sql", "SELECT [1.0, 2.5].asString('MATLAB_COLUMN') as res")
+        assert ";" in str(next(rs).get("res"))
+
+        # JULIA is bracketed and comma-separated
+        rs = test_db.query("sql", "SELECT [1.0, 2.5].asString('JULIA') as res")
+        julia_str = str(next(rs).get("res"))
+        assert julia_str.startswith("[") and "," in julia_str
+
+    def test_as_vector_round_trip(self, test_db):
+        """asVector() parses every asString() format back into a float vector."""
+        # Space-separated (MATLAB-style) string literal
+        rs = test_db.query("sql", "SELECT '[1.0 2.0 3.0]'.asVector() as res")
+        assert list(next(rs).get("res")) == [1.0, 2.0, 3.0]
+
+        # Full round-trip: vector -> NUMPY string -> vector
+        rs = test_db.query(
+            "sql", "SELECT [1.0, 2.5].asString('NUMPY').asVector() as res"
+        )
+        assert list(next(rs).get("res")) == [1.0, 2.5]
+
+        # A single number becomes a one-element vector
+        rs = test_db.query("sql", "SELECT (42).asVector() as res")
+        assert list(next(rs).get("res")) == [42.0]
+
+    def test_as_sparse_round_trip(self, test_db):
+        """asSparse() converts dense -> sparse; vector.sparseToDense inverts it."""
+        rs = test_db.query(
+            "sql",
+            "SELECT `vector.sparseToDense`([0.0, 5.0, 0.0, 3.0].asSparse()) as res",
+        )
+        assert list(next(rs).get("res")) == [0.0, 5.0, 0.0, 3.0]
+
+    def test_quantize_dequantize_binary(self, test_db):
+        """vector.dequantizeBinary reconstructs +-1 values from binary quantization."""
+        rs = test_db.query(
+            "sql",
+            "SELECT `vector.dequantizeBinary`("
+            "`vector.quantizeBinary`([1.0, -1.0, 0.5, -0.5])) as res",
+        )
+        res = list(next(rs).get("res"))
+        # Binary quantization keeps only the sign; defaults reconstruct to -1.0/1.0
+        assert res == [1.0, -1.0, 1.0, -1.0]
+
+        # Custom low/high reconstruction values
+        rs = test_db.query(
+            "sql",
+            "SELECT `vector.dequantizeBinary`("
+            "`vector.quantizeBinary`([1.0, -1.0]), 0.0, 10.0) as res",
+        )
+        assert list(next(rs).get("res")) == [10.0, 0.0]
