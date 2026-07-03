@@ -19,6 +19,38 @@ from .type_conversion import convert_python_to_java
 from .transactions import TransactionContext
 from .vector import to_java_float_array
 
+try:  # optional; hoisted to module scope to keep it out of per-call hot paths
+    import numpy as _np
+except ImportError:  # pragma: no cover - numpy is an optional dependency
+    _np = None
+
+# Java class handles resolved once per process (jpype.JClass lookups are not
+# free and used to run per record in wrapper dispatch).
+_JAVA_CLASSES = {}
+
+
+def _java_class(name):
+    cls = _JAVA_CLASSES.get(name)
+    if cls is None:
+        import jpype
+
+        cls = jpype.JClass(name)
+        _JAVA_CLASSES[name] = cls
+    return cls
+
+
+def _wrap_java_record(java_record):
+    """Wrap a Java record in the matching Python class (Vertex/Edge/Document)."""
+    if java_record is None:
+        return None
+    if isinstance(java_record, _java_class("com.arcadedb.graph.Vertex")):
+        return Vertex(java_record)
+    if isinstance(java_record, _java_class("com.arcadedb.graph.Edge")):
+        return Edge(java_record)
+    if isinstance(java_record, _java_class("com.arcadedb.database.Document")):
+        return Document(java_record)
+    return java_record
+
 
 class Database:
     """ArcadeDB Database wrapper."""
@@ -43,16 +75,15 @@ class Database:
         if not args:
             return []
 
-        try:
-            import numpy as np
-        except ImportError:
-            np = None
-
         converted_args = []
         for arg in args:
-            if np is not None and isinstance(arg, np.ndarray):
+            if _np is not None and isinstance(arg, _np.ndarray):
                 converted_args.append(to_java_float_array(arg))
-            elif isinstance(arg, Mapping):
+            elif isinstance(arg, (Mapping, list, tuple, set)):
+                # Plain Python collections don't participate in JPype's varargs
+                # overload resolution (query(String, String, Object[]) would be
+                # rejected with "No matching overloads"), so convert them to
+                # java.util collections explicitly.
                 converted_args.append(convert_python_to_java(arg))
             else:
                 converted_args.append(arg)
@@ -232,39 +263,24 @@ class Database:
         """
         self._check_not_closed()
         try:
-            import jpype
-
             java_rid = self.to_java_rid(rid)
-            java_record = self._java_db.lookupByRID(java_rid, True)
-
-            if java_record is None:
-                return None
-
-            # Wrap in appropriate Python class
-            if isinstance(java_record, jpype.JClass("com.arcadedb.graph.Vertex")):
-                return Vertex(java_record)
-            elif isinstance(java_record, jpype.JClass("com.arcadedb.graph.Edge")):
-                return Edge(java_record)
-            elif isinstance(
-                java_record, jpype.JClass("com.arcadedb.database.Document")
-            ):
-                return Document(java_record)
-
-            return java_record
+            return self._lookup_by_java_rid(java_rid)
         except Exception as e:
             raise ArcadeDBError(f"Failed to lookup RID '{rid}': {e}") from e
 
+    def _lookup_by_java_rid(self, java_rid) -> Any:
+        """Lookup by an already-Java RID, skipping string parsing (hot path)."""
+        java_record = self._java_db.lookupByRID(java_rid, True)
+        return _wrap_java_record(java_record)
+
     def to_java_rid(self, value):
         self._check_not_closed()
-
-        import jpype
 
         value = getattr(value, "_java_record", value)
         if hasattr(value, "getIdentity"):
             return value.getIdentity()
         if isinstance(value, str):
-            RID = jpype.JClass("com.arcadedb.database.RID")
-            return RID(value)
+            return _java_class("com.arcadedb.database.RID")(value)
         if hasattr(value, "get_identity"):
             return value.get_identity()
         return value

@@ -9,6 +9,15 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any, NamedTuple
 
+import jpype
+
+
+class _JavaTimeTypes(NamedTuple):
+    instant: Any
+    local_date: Any
+    local_datetime: Any
+    zoned_datetime: Any
+
 
 class _JavaCoreTypes(NamedTuple):
     boolean: Any
@@ -47,7 +56,26 @@ _TYPE_CACHE = {
     "java_core": None,
     "java_collections": None,
     "python_to_java": None,
+    "java_time": None,
 }
+
+
+def _get_java_time_types():
+    if _TYPE_CACHE["java_time"] is not None:
+        return _TYPE_CACHE["java_time"]
+
+    try:
+        from java.time import Instant, LocalDate, LocalDateTime, ZonedDateTime
+    except ImportError:
+        return None
+
+    _TYPE_CACHE["java_time"] = _JavaTimeTypes(
+        instant=Instant,
+        local_date=LocalDate,
+        local_datetime=LocalDateTime,
+        zoned_datetime=ZonedDateTime,
+    )
+    return _TYPE_CACHE["java_time"]
 
 
 def _get_java_core_types():
@@ -154,6 +182,16 @@ def convert_java_to_python(value: Any) -> Any:
     if value is None:
         return None
 
+    # Fast path for Java primitive arrays (float[], double[], int[], ...):
+    # bulk-copy through the buffer protocol instead of per-element recursion.
+    # A 384-float vector converts ~200x faster this way. Object arrays don't
+    # support memoryview and fall through to the generic handling below.
+    if isinstance(value, jpype.JArray):
+        try:
+            return memoryview(value).tolist()
+        except TypeError:
+            pass
+
     java_core_types, java_collection_types = _get_java_core_types()
     if java_core_types is not None and java_collection_types is not None:
         if isinstance(value, java_core_types.boolean):
@@ -183,15 +221,14 @@ def convert_java_to_python(value: Any) -> Any:
         if isinstance(value, java_core_types.java_date):
             return datetime.fromtimestamp(value.getTime() / 1000.0)
 
-        try:
-            from java.time import Instant, LocalDate, LocalDateTime, ZonedDateTime
-
-            if isinstance(value, LocalDate):
+        java_time_types = _get_java_time_types()
+        if java_time_types is not None:
+            if isinstance(value, java_time_types.local_date):
                 return date(
                     value.getYear(), value.getMonthValue(), value.getDayOfMonth()
                 )
 
-            if isinstance(value, LocalDateTime):
+            if isinstance(value, java_time_types.local_datetime):
                 return datetime(
                     value.getYear(),
                     value.getMonthValue(),
@@ -202,20 +239,18 @@ def convert_java_to_python(value: Any) -> Any:
                     value.getNano() // 1000,
                 )
 
-            if isinstance(value, Instant):
+            if isinstance(value, java_time_types.instant):
                 return datetime.fromtimestamp(
                     value.getEpochSecond() + value.getNano() / 1_000_000_000.0,
                     tz=timezone.utc,
                 )
 
-            if isinstance(value, ZonedDateTime):
+            if isinstance(value, java_time_types.zoned_datetime):
                 instant = value.toInstant()
                 return datetime.fromtimestamp(
                     instant.getEpochSecond() + instant.getNano() / 1_000_000_000.0,
                     tz=timezone.utc,
                 )
-        except ImportError:
-            pass
 
         if isinstance(value, java_collection_types.map_type):
             return {

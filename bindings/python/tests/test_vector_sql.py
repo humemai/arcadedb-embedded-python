@@ -1066,3 +1066,54 @@ class TestVectorConversionSQL:
             "`vector.quantizeBinary`([1.0, -1.0]), 0.0, 10.0) as res",
         )
         assert list(next(rs).get("res")) == [10.0, 0.0]
+
+
+class TestConversionFastPaths:
+    """Regression tests for the JPype-overhead fixes (2026-07)."""
+
+    def test_plain_list_query_params(self, test_db):
+        """Plain Python lists work as query parameters (previously failed
+        JPype varargs overload resolution; only numpy arrays worked)."""
+        rs = test_db.query(
+            "sql",
+            "SELECT vectorCosineSimilarity(?, ?) as res",
+            [1.0, 0.0],
+            [1.0, 0.0],
+        )
+        assert abs(next(rs).get("res") - 1.0) < 0.001
+
+    def test_float_array_property_round_trip(self, test_db):
+        """ARRAY_OF_FLOATS properties come back as Python float lists via the
+        bulk (buffer-protocol) conversion path."""
+        test_db.command("sql", "CREATE DOCUMENT TYPE FV")
+        test_db.command("sql", "CREATE PROPERTY FV.emb ARRAY_OF_FLOATS")
+        with test_db.transaction():
+            test_db.command("sql", "INSERT INTO FV SET emb = [0.25, -1.5, 3.0]")
+
+        row = test_db.query("sql", "SELECT emb FROM FV").first()
+        emb = row.get("emb")
+        assert isinstance(emb, list)
+        assert emb == [0.25, -1.5, 3.0]
+        assert all(isinstance(v, float) for v in emb)
+
+    def test_find_nearest_repeated_calls_consistent(self, test_db):
+        """Cached index resolution / PQ memoization returns identical results
+        across consecutive searches."""
+        test_db.command("sql", "CREATE DOCUMENT TYPE VDoc")
+        test_db.command("sql", "CREATE PROPERTY VDoc.v ARRAY_OF_FLOATS")
+        test_db.command(
+            "sql",
+            'CREATE INDEX ON VDoc (v) LSM_VECTOR METADATA {"dimensions": 3}',
+        )
+        with test_db.transaction():
+            for i in range(20):
+                test_db.command(
+                    "sql", f"INSERT INTO VDoc SET id = {i}, v = [{i}.0, 1.0, 0.0]"
+                )
+
+        vidx = test_db.schema.get_vector_index("VDoc", "v")
+        r1 = vidx.find_nearest([5.0, 1.0, 0.0], k=3)
+        r2 = vidx.find_nearest([5.0, 1.0, 0.0], k=3)
+        ids1 = [rec.get("id") for rec, _ in r1]
+        ids2 = [rec.get("id") for rec, _ in r2]
+        assert ids1 == ids2 and len(ids1) == 3
