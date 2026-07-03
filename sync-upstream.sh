@@ -22,6 +22,10 @@ NC='\033[0m' # No Color
 
 FORK_OWNED_PATHS=(
     "README.md"
+    # Repo-root uv dev environment (fork-only; upstream has no root Python project)
+    "pyproject.toml"
+    "uv.lock"
+    ".python-version"
 )
 
 FORK_EXCLUDED_PATHS=(

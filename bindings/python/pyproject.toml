@@ -34,6 +34,14 @@ dependencies = [
     "jpype1>=1.5.0",
 ]
 
+[tool.uv]
+# This pyproject is the *package definition* consumed by the wheel build
+# (scripts/build.sh via Docker). It is not a uv project: the dev/test
+# environment lives in the repo-root pyproject.toml, which installs the built
+# wheel from dist/. `managed = false` makes uv skip this directory during
+# project discovery, so `uv run` from here resolves to the repo-root project.
+managed = false
+
 [project.optional-dependencies]
 test = [
     "pytest>=7.0.0",

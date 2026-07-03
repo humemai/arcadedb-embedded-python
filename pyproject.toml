@@ -1,0 +1,81 @@
+#
+# Dev/test environment for the arcadedb-embedded Python bindings.
+#
+# This is NOT the package definition (that lives in bindings/python/pyproject.toml
+# and is only consumed by the wheel build). This is a virtual uv project so that
+# `uv run pytest` / `uv sync` at the repo root always produce the right
+# environment: the locally built wheel from bindings/python/dist/ plus test deps.
+#
+# Workflow:
+#   cd bindings/python && ./scripts/build.sh   # builds wheel, refreshes this env
+#   uv run pytest                              # from repo root
+#
+[project]
+name = "arcadedb-embedded-dev"
+version = "0.0.0"
+description = "Dev/test environment for arcadedb-embedded (virtual project, never published)"
+# The build produces a cp312 wheel by default, so the dev env is pinned to 3.12.
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "arcadedb-embedded",
+    "pytest>=7.0.0",
+    "pytest-cov",
+    "numpy>=1.20.0",
+    "requests>=2.0.0",   # HTTP API / docs-example tests
+    "py7zr>=0.20.0",     # Stack Exchange data downloads in examples
+]
+
+[dependency-groups]
+dev = [
+    "black",
+    "isort",
+    "mypy",
+    "bandit>=1.9.0",
+]
+docs = [
+    "mike>=2.2.0",
+    "mkdocs-git-revision-date-localized-plugin>=1.5.3",
+    "mkdocs-macros-plugin>=1.5.0",
+    "mkdocs-material>=9.7.6",
+]
+# Heavy deps for vector examples / benchmarks. Opt in with:
+#   uv sync --group examples
+examples = [
+    "torch",
+    "sentence-transformers",
+    "tqdm",
+    "lxml>=6.1.1",
+]
+
+[tool.uv]
+# Virtual project: sync installs only the dependencies, never this project itself.
+package = false
+# Install the heavy examples/benchmark stack by default so plain `uv run` /
+# `uv sync` doesn't uninstall it again (uv syncs the env to exactly the
+# requested groups). Skip it on a constrained machine with:
+#   uv sync --no-group examples
+default-groups = ["dev", "examples"]
+
+# The locally built wheel is resolved from dist/ (find-links style), so the
+# version bumps with every upstream sync without editing this file.
+[[tool.uv.index]]
+name = "arcadedb-dist"
+url = "bindings/python/dist"
+format = "flat"
+explicit = true
+
+[tool.uv.sources]
+arcadedb-embedded = { index = "arcadedb-dist" }
+
+# Mirrors bindings/python/pyproject.toml [tool.pytest.ini_options] so that a
+# bare `uv run pytest` from the repo root runs the binding tests.
+[tool.pytest.ini_options]
+testpaths = ["bindings/python/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "server: tests that require server/studio support",
+    "integration: tests that require external components",
+]

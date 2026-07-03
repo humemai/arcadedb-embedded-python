@@ -56,14 +56,12 @@ log "Building Python wheel with local JARs..."
 cd "${PY_BINDINGS_DIR}"
 ./scripts/build.sh linux/amd64 3.12 "${LOCAL_JARS_DIR}"
 
-# 4) Install the wheel with uv (force reinstall)
-log "Installing wheel via uv pip..."
+# 4) build.sh already refreshed the repo-root uv env with the new wheel
 WHEEL_PATH=$(ls -1 dist/arcadedb_embedded-*.whl | sort | tail -n 1)
 if [[ -z "${WHEEL_PATH}" ]]; then
     echo "❌ No wheel found in dist/. Did the build succeed?" >&2
     exit 1
 fi
-uv pip install --force-reinstall "${WHEEL_PATH}"
-log "Installed ${WHEEL_PATH}"
+log "Built ${WHEEL_PATH} (uv env refreshed by build.sh; verify with: uv run python -c 'import arcadedb_embedded')"
 
 log "All done."
