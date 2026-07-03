@@ -1,0 +1,7 @@
+# regenerable benchmark artifacts — only the harness, REPORT.md and
+# results/all_results.csv are tracked
+dbs/
+data_*/
+results/*.log
+*.class
+__pycache__/
