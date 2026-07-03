@@ -526,7 +526,7 @@ The Python binding is distributed as a **single, self-contained package** (`arca
 - **Zero Configuration**: No external Java installation required.
 
 ```python
-# uv pip install arcadedb-embedded
+# pip install arcadedb-embedded
 import arcadedb_embedded as arcadedb
 
 db = arcadedb.create_database("./mydb")

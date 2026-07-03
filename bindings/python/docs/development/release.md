@@ -26,9 +26,8 @@ cd bindings/python
 # Build distribution
 ./scripts/build.sh
 
-# Test distribution
-uv pip install dist/arcadedb_embedded-*.whl
-pytest
+# Test distribution (build.sh refreshed the repo-root uv env with the new wheel)
+uv run pytest
 ```
 
 ### 2. Tag and Release (CLI)
@@ -204,11 +203,8 @@ If you need to roll back a broken release:
 **PyPI** (cannot delete, but can yank):
 
 ```bash
-# Install twine
-uv pip install twine
-
 # Yank the release (makes it unavailable for new installs)
-twine yank arcadedb-embedded 25.9.1
+uvx twine yank arcadedb-embedded 25.9.1
 ```
 
 **Documentation** (can delete version):
@@ -216,14 +212,11 @@ twine yank arcadedb-embedded 25.9.1
 ```bash
 cd bindings/python
 
-# Install mike
-uv pip install mike
-
-# Delete version from docs
-mike delete 25.9.1 --push
+# Delete version from docs (mike lives in the `docs` dependency group)
+uv run --group docs mike delete 25.9.1 --push
 
 # Set previous version as latest
-mike set-default 25.9.0 --push
+uv run --group docs mike set-default 25.9.0 --push
 ```
 
 **GitHub Release:**

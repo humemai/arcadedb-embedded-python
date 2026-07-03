@@ -86,7 +86,7 @@ class ResultSet:
         except ImportError as exc:
             raise ImportError(
                 "pandas is required for to_dataframe(). "
-                "Install with: uv pip install pandas"
+                "Install with: pip install pandas"
             ) from exc
 
         return pd.DataFrame(self.to_list(convert_types=convert_types))

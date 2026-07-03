@@ -30,7 +30,7 @@ indexing for fast semantic similarity search. You'll learn:
 **1. Install dependencies:**
 
 ```bash
-uv pip install arcadedb-embedded sentence-transformers numpy
+pip install arcadedb-embedded sentence-transformers numpy
 ```
 
 **2. Source database:**

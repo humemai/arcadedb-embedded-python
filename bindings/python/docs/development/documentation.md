@@ -30,7 +30,7 @@ python scripts/fix_markdown.py
 
 ```bash
 cd bindings/python
-mkdocs serve
+uv run --group docs mkdocs serve
 ```
 
 Then open: <http://127.0.0.1:8000/arcadedb/>
@@ -321,15 +321,16 @@ Make sure you're in `bindings/python/` directory:
 
 ```bash
 cd bindings/python
-mkdocs serve
+uv run --group docs mkdocs serve
 ```
 
 ### "Module not found" error
 
-Install dependencies:
+Install dependencies (docs tooling lives in the `docs` dependency group of the
+repo-root uv project):
 
 ```bash
-uv pip install mkdocs-material mkdocs-git-revision-date-localized-plugin
+uv sync --group docs
 ```
 
 ### Changes not appearing

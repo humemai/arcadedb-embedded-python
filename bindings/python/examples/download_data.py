@@ -7,7 +7,7 @@ consistent, pinned versions for reproducibility, and systematically
 injects NULL values for comprehensive testing.
 
 Features:
-- Progress bars for all long-running operations (requires tqdm: uv pip install tqdm)
+- Progress bars for all long-running operations (requires tqdm: pip install tqdm)
 - Timing measurements for performance monitoring
 - Memory-efficient streaming for large files
 - Smart sampling for fast verification (100K rows)
@@ -788,7 +788,7 @@ def download_stackoverflow(size="small"):
         import py7zr
     except ImportError:
         print("[ERROR] Missing dependency: py7zr")
-        print("   Install with: uv pip install py7zr")
+        print("   Install with: pip install py7zr")
         raise
 
     # Dataset configurations (pinned to 2024-06-30 for reproducibility)
@@ -1228,7 +1228,7 @@ def embed_stackoverflow_vectors(
     except ImportError as exc:
         raise RuntimeError(
             "Missing dependencies for Stack Overflow embeddings. "
-            "Install with: uv pip install sentence-transformers torch numpy"
+            "Install with: pip install sentence-transformers torch numpy"
         ) from exc
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1825,7 +1825,7 @@ def convert_msmarco_parquet_to_shards(
     except ImportError as exc:
         raise RuntimeError(
             "Missing dependencies for MSMARCO conversion. "
-            "Install with: uv pip install numpy pyarrow"
+            "Install with: pip install numpy pyarrow"
         ) from exc
 
     def fmt_secs(secs: float | None) -> str:
@@ -2056,7 +2056,7 @@ def download_msmarco(count: int, data_dir: Path) -> Path:
 
     if shutil.which("hf") is None:
         raise RuntimeError(
-            "Missing Hugging Face CLI. Install with: uv pip install huggingface_hub"
+            "Missing Hugging Face CLI. Install with: pip install huggingface_hub"
         )
 
     print("[DOWNLOAD] MSMARCO v2.1 parquet parts (Hugging Face)")
@@ -2432,7 +2432,7 @@ Examples:
     python download_data.py ldbc-snb-sf100
 
 Note: Stack Exchange datasets require py7zr library:
-    uv pip install py7zr
+    pip install py7zr
 
 NULL Handling:
     MovieLens (CSV): NULL injection enabled by default (use --no-nulls to skip)

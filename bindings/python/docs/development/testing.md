@@ -108,23 +108,21 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
 ### Installation
 
-```bash
-# Install test dependencies
-uv pip install pytest pytest-cov
-```
+Nothing to install — test dependencies come from the repo-root uv project and
+are synced automatically by `uv run`.
 
 ### Running Tests
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Run specific category
-pytest tests/test_core.py -v
-pytest tests/test_concurrency.py -v
+uv run pytest tests/test_core.py -v
+uv run pytest tests/test_concurrency.py -v
 
 # Run with coverage
-pytest --cov=arcadedb_embedded --cov-report=html
+uv run pytest --cov=arcadedb_embedded --cov-report=html
 ```
 
 ## Test Coverage Summary

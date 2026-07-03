@@ -13,17 +13,14 @@ For detailed test documentation, examples, and best practices, see the **[Testin
 ## Running Tests
 
 ```bash
-# Install dependencies
-uv pip install pytest pytest-cov
-
-# Run all tests
-pytest
+# Run all tests (dependencies come from the repo-root uv project)
+uv run pytest
 
 # Run specific file
-pytest tests/test_core.py -v
+uv run pytest tests/test_core.py -v
 
 # Run with coverage
-pytest --cov=arcadedb_embedded --cov-report=html
+uv run pytest --cov=arcadedb_embedded --cov-report=html
 
 # Run matching keyword
 pytest -k "transaction" -v

@@ -35,18 +35,17 @@ The test suite covers:
 
 ### Install Test Dependencies
 
-```bash
-uv pip install pytest pytest-cov
-```
+Nothing to install — test dependencies come from the repo-root uv project and
+are synced automatically by `uv run`.
 
 ### Run All Tests
 
 ```bash
-# From the bindings/python directory
-pytest
+# From anywhere in the repo
+uv run pytest
 
 # With verbose output
-pytest -v
+uv run pytest -v
 
 # With coverage report
 pytest --cov=arcadedb_embedded --cov-report=html

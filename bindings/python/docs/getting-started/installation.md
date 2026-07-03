@@ -5,7 +5,7 @@
 The `arcadedb-embedded` package is **self-contained** with a bundled JRE - **no Java installation required!**
 
 ```bash
-uv pip install arcadedb-embedded
+pip install arcadedb-embedded
 ```
 
 **Requirements:**
@@ -36,7 +36,7 @@ installed, with some variation by platform, version, and filesystem allocation:
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 
 !!! tip "Platform Selection"
-    uv pip automatically selects the correct platform-specific wheel for your system. You don't need to specify the platform manually.
+    pip automatically selects the correct platform-specific wheel for your system. You don't need to specify the platform manually.
 
 ## Python Version
 
@@ -99,7 +99,7 @@ arcadedb_embedded-X.Y.Z-cp312-cp312-manylinux_2_34_x86_64.whl
 Install locally:
 
 ```bash
-uv pip install dist/arcadedb_embedded-*.whl
+pip install dist/arcadedb_embedded-*.whl
 ```
 
 ## JVM Configuration

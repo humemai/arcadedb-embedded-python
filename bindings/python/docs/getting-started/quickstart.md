@@ -7,7 +7,7 @@ Get up and running with ArcadeDB Python bindings in 5 minutes!
 Install the self-contained package with bundled JRE:
 
 ```bash
-uv pip install arcadedb-embedded
+pip install arcadedb-embedded
 ```
 
 !!! note "No Java Installation Required"

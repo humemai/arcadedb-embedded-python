@@ -17,7 +17,7 @@ Native Python bindings for ArcadeDB - the multi-model database that supports Gra
 ### Installation
 
 ```bash
-uv pip install arcadedb-embedded
+uv add arcadedb-embedded   # or: pip install arcadedb-embedded
 ```
 
 **Requirements:**
@@ -94,12 +94,15 @@ Import: `import arcadedb_embedded as arcadedb`
 
 **Status**: 331 passed
 
+Tests run against the built wheel via the uv project at the repo root — no
+virtualenv activation needed, and `uv run` works from anywhere in the repo:
+
 ```bash
 # Run all tests
-pytest tests/
+uv run pytest
 
 # Run specific test file
-pytest tests/test_core.py -v
+uv run pytest tests/test_core.py -v
 ```
 
 See [testing documentation](https://docs.humem.ai/arcadedb/latest/development/testing/) for detailed test documentation.
@@ -116,19 +119,13 @@ cd bindings/python/
 # Install uv (one-time)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Create virtual environment with uv
-uv venv .venv
-source .venv/bin/activate
-
-# Install build and test dependencies
-uv pip install build
-uv pip install -e ".[test]"
-
 # Build for your current platform (auto-detected)
 ./scripts/build.sh
 ```
 
-Built wheels will be in `dist/`.
+Built wheels will be in `dist/`. The build script also refreshes the uv dev
+environment at the repo root, so `uv run pytest` immediately tests the wheel
+you just built.
 
 **[Build instructions](https://docs.humem.ai/arcadedb/latest/getting-started/installation/#building-from-source)**
 

@@ -11,7 +11,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 **Installation:**
 
 ```bash
-uv pip install arcadedb-embedded
+pip install arcadedb-embedded
 ```
 
 **Requirements:** Python 3.10–3.14 (packaged; primary testing on 3.12) - No Java installation needed!
@@ -35,7 +35,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 **Key Features:**
 
 - ✅ All platforms use **platform-specific wheels** (not universal)
-- ✅ uv pip automatically selects the correct wheel for your system
+- ✅ pip automatically selects the correct wheel for your system
 - ✅ Each platform has its own bundled JRE optimized for that architecture
 - ✅ Current suite validated in the latest local run: 331 passed
 - ✅ Built on native runners (no emulation) for optimal performance
@@ -142,7 +142,7 @@ with arcadedb.create_database("./test") as db:
 
 ### Platform Detection
 
-uv pip automatically selects the correct platform-specific wheel:
+pip automatically selects the correct platform-specific wheel:
 
 ```bash
 # On Linux x64 for Python 3.12, installs: arcadedb_embedded-X.Y.Z-cp312-cp312-manylinux_2_34_x86_64.whl

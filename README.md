@@ -59,7 +59,7 @@ remains the source of the core database.
 ## 🚀 Quick start (Python)
 
 ```bash
-uv pip install arcadedb-embedded
+uv add arcadedb-embedded   # or: pip install arcadedb-embedded
 ```
 
 ## 🔗 Quick Links

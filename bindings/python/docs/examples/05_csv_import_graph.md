@@ -34,7 +34,7 @@ for:
 **1. Install ArcadeDB Python bindings:**
 
 ```bash
-uv pip install arcadedb-embedded
+pip install arcadedb-embedded
 ```
 
 **2. Dataset download (automatic):**

@@ -9,14 +9,11 @@ Thank you for your interest in contributing to ArcadeDB Python bindings! This gu
 git clone https://github.com/humemai/arcadedb-embedded-python.git
 cd arcadedb-embedded-python/bindings/python
 
-# Build the package (requires Docker)
+# Build the package (requires Docker) — also refreshes the uv env at the repo root
 ./scripts/build.sh
 
-# Install in development mode
-uv pip install -e .
-
 # Run tests
-pytest tests/
+uv run pytest
 ```
 
 ## Development Environment
@@ -46,37 +43,29 @@ git clone https://github.com/humemai/arcadedb-embedded-python.git
 cd arcadedb-embedded-python/bindings/python
 ```
 
-2. **Create Virtual Environment**
+2. **Build the Wheel**
+
+The package only works as a built wheel (it bundles the ArcadeDB JARs and a
+JRE), so there is no editable install. Building also refreshes the uv dev
+environment at the repo root:
 
 ```bash
-# Create venv with uv
-uv venv .venv
-
-# Activate
-source .venv/bin/activate
+./scripts/build.sh
 ```
 
-3. **Install Development Dependencies**
+3. **Verify Setup**
+
+The dev environment is a uv project at the repo root (`pyproject.toml`); it
+installs the built wheel from `dist/` plus all test/dev dependencies. There is
+no virtualenv to activate — run everything through `uv run`, from anywhere in
+the repo:
 
 ```bash
-# Install package in editable mode
-uv pip install -e ".[dev,vector]"
-
-# Or manually install dependencies
-uv pip install pytest pytest-cov black isort mypy numpy
-```
-
-4. **Verify Setup**
-
-```bash
-# Check Python
-python --version  # Should be within 3.10–3.14
-
-# Check Java
-java -version     # Should be 25+
-
 # Run quick test
-python -c "import arcadedb_embedded; print('✅ Setup successful!')"
+uv run python -c "import arcadedb_embedded; print('✅ Setup successful!')"
+
+# Run the test suite
+uv run pytest
 ```
 
 ## Project Structure
@@ -198,18 +187,18 @@ arcadedb-embedded-python/bindings/python/
 ./scripts/build.sh darwin/arm64 3.12
 ./scripts/build.sh windows/amd64 3.12
 
-# Install locally
-uv pip install dist/*.whl
+# No install step needed — build.sh refreshes the repo-root uv env automatically
 ```
 
 ### Development Install
 
-```bash
-# Install in editable mode (no wheel needed)
-uv pip install -e .
+There is no editable install: the package only works as a built wheel (it
+bundles the ArcadeDB JARs and a JRE that a source install lacks). After
+changing Python code in `src/`, rebuild:
 
-# Changes to Python code take effect immediately
-# No reinstall needed
+```bash
+./scripts/build.sh   # rebuilds the wheel and refreshes the uv env
+uv run pytest
 ```
 
 ## Running Tests
@@ -457,11 +446,10 @@ class Database:
 ### Building Documentation
 
 ```bash
-# Install mkdocs
-uv pip install mkdocs mkdocs-material
+# Docs tooling lives in the `docs` dependency group of the repo-root uv project
 
 # Serve locally (hot reload)
-mkdocs serve
+uv run --group docs mkdocs serve
 
 # Build static site
 mkdocs build
@@ -730,25 +718,23 @@ ls -lh dist/
 3. **Test Installation**
 
 ```bash
-# Test the wheel
-uv pip install dist/arcadedb_embedded-*.whl
-python -c "import arcadedb_embedded; print('✅ Package OK')"
+# Test the wheel in a throwaway env (doesn't touch the dev env)
+uv run --isolated --no-project --with dist/arcadedb_embedded-*.whl \
+    python -c "import arcadedb_embedded; print('✅ Package OK')"
 ```
 
 4. **Publish to PyPI**
 
 ```bash
-# Install twine
-uv pip install twine
+# Upload to Test PyPI first (twine runs via uvx, no install needed)
+uvx twine upload --repository testpypi dist/*
 
-# Upload to Test PyPI first
-twine upload --repository testpypi dist/*
-
-# Test install from Test PyPI
-uv pip install --index-url https://test.pypi.org/simple/ arcadedb-embedded
+# Test install from Test PyPI in a throwaway env
+uv run --isolated --no-project --index https://test.pypi.org/simple/ \
+    --with arcadedb-embedded python -c "import arcadedb_embedded"
 
 # Upload to production PyPI
-twine upload dist/*
+uvx twine upload dist/*
 ```
 
 ## Common Tasks
@@ -780,11 +766,11 @@ twine upload dist/*
 ### Updating Dependencies
 
 ```bash
-# Update JPype
-uv pip install --upgrade jpype1
+# Upgrade the dev environment to the latest allowed versions
+uv lock --upgrade && uv sync
 
-# Update dev dependencies
-uv pip install --upgrade pytest black mypy
+# Runtime deps of the package itself (e.g. jpype1) are declared in
+# bindings/python/pyproject.toml [project.dependencies] — edit by hand
 
 # Update in pyproject.toml
 [project]

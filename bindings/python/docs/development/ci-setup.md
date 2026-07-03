@@ -70,9 +70,8 @@ You need to create one environment in GitHub repository settings:
     cd bindings/python
     ./scripts/build.sh
 
-    # Upload manually to register the package
-    uv pip install twine
-    twine upload dist/arcadedb_embedded-*.whl
+    # Upload manually to register the package (twine runs via uvx)
+    uvx twine upload dist/arcadedb_embedded-*.whl
     ```
 
 2. **Set up trusted publisher** on PyPI (see step 2 above)
