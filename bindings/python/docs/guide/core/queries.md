@@ -373,6 +373,10 @@ db.command("sql", "CREATE INDEX ON Order (customerId) NOTUNIQUE_HASH")
 db.command("sql", "CREATE INDEX ON Article (content) FULL_TEXT")
 db.command("sql", "CREATE INDEX ON Doc (embedding) LSM_VECTOR METADATA {\"dimensions\": 128}")
 db.command("sql", "CREATE INDEX ON Place (location) GEOSPATIAL")
+
+# MAP properties: index by keys or values (accelerates CONTAINSKEY / CONTAINSVALUE)
+db.command("sql", "CREATE INDEX ON Movie (thumbs BY KEY) NOTUNIQUE")
+db.command("sql", "CREATE INDEX ON Movie (thumbs BY VALUE) NOTUNIQUE")
 ```
 
 For `LSM_VECTOR`, SQL builds the graph immediately by default. If you need to defer that
