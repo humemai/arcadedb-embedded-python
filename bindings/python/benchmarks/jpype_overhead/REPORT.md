@@ -121,6 +121,27 @@ slower than Java to ~1.2×**.
 5. **Per-command overhead** (write path 1.9×): lowest priority; absolute cost is
    ~5µs and users batch anyway.
 
+## After the fixes (2026-07-04, same night)
+
+Fixes 1–3 were implemented (`perf:` commit) and the wheel rebuilt; full test suite
+green (352 passed). Same 100k database and queries, Java baselines unchanged:
+
+| metric | before | after | Java baseline | gap closed |
+|---|---|---|---|---|
+| vector P-SQL (the #3674 path) | 52.8ms | **4.80ms** (11×) | 3.49ms | 15× → **1.4×** |
+| P-wrapper `find_nearest` | 2.89ms | 2.69ms | 2.48ms (direct) | 1.17× → 1.08× |
+| scan 100k rows w/ float-array col | 4.54s | **0.59s** (7.7×) | 66ms | 69× → 8.9× |
+| `convert(384-float Java array)` | 900µs | (bulk path) ~µs | — | — |
+| `convert(384-float Java List)` | 1121µs | 712µs | — | remaining item |
+| `lookup_by_rid` | 15.3µs | 4.0µs | — | — |
+| `convert(int)` / `(LocalDateTime)` | 5.7 / 8.8µs | 2.9 / 4.3µs | — | — |
+| scan 100k × 7 scalar cols | 2.78s | 2.85s (unchanged) | 149ms | fix #4 pending |
+
+The headline is resolved: **the SQL vector-search path went from 15× slower than
+Java to 1.4×**. Wide scalar scans still pay the per-`getProperty` crossing per
+column (fix #4, not yet implemented), and `java.util.List` values still convert
+per-element (bulk path only covers primitive arrays).
+
 ## Caveats
 
 - Laptop, single run-day, `-Xmx4g`, default ArcadeDB profile (upstream's own
