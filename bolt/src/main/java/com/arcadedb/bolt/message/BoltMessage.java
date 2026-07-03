@@ -20,6 +20,7 @@ package com.arcadedb.bolt.message;
 
 import com.arcadedb.bolt.packstream.PackStreamReader;
 import com.arcadedb.bolt.packstream.PackStreamWriter;
+import com.arcadedb.bolt.structure.BoltStructureMapper;
 
 import java.io.IOException;
 import java.util.List;
@@ -101,7 +102,11 @@ public abstract class BoltMessage {
   @SuppressWarnings("unchecked")
   private static RunMessage parseRun(final List<Object> fields) {
     final String query = (String) fields.get(0);
-    final Map<String, Object> parameters = fields.size() > 1 && fields.get(1) != null ? (Map<String, Object>) fields.get(1) : Map.of();
+    // Hydrate temporal PackStream structures (Date/Time/DateTime/...) into java.time values so
+    // native temporal query parameters bind correctly instead of being dropped (issue #4905).
+    final Map<String, Object> parameters = fields.size() > 1 && fields.get(1) != null ?
+        (Map<String, Object>) BoltStructureMapper.fromPackStreamValue(fields.get(1)) :
+        Map.of();
     final Map<String, Object> extra = fields.size() > 2 && fields.get(2) != null ? (Map<String, Object>) fields.get(2) : Map.of();
     return new RunMessage(query, parameters, extra);
   }
@@ -134,7 +139,15 @@ public abstract class BoltMessage {
   private static RouteMessage parseRoute(final List<Object> fields) {
     final Map<String, Object> routing = fields.isEmpty() || fields.get(0) == null ? Map.of() : (Map<String, Object>) fields.get(0);
     final List<String> bookmarks = fields.size() > 1 && fields.get(1) != null ? (List<String>) fields.get(1) : List.of();
-    final String database = fields.size() > 2 ? (String) fields.get(2) : null;
+    final Object thirdField = fields.size() > 2 ? fields.get(2) : null;
+    // Bolt <=4.3 sends db::String; Bolt 4.4+ sends extra::Map{db, imp_user} (issue #4916).
+    final String database;
+    if (thirdField instanceof Map<?, ?> extra) {
+      final Object db = extra.get("db");
+      database = db != null ? db.toString() : null;
+    } else {
+      database = (String) thirdField;
+    }
     return new RouteMessage(routing, bookmarks, database);
   }
 
