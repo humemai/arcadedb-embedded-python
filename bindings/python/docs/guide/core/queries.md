@@ -427,15 +427,21 @@ else:
 
 ### Performance and Materialization
 
-Use lazy access inside the hot path, and materialize only when you explicitly need
-Python-native containers.
+Rule of thumb: **iterate when you're selective or the result is small; use the
+bulk APIs when you're taking everything from a large result.**
 
 - Use `first()` when you only need one row.
-- Use direct iteration plus `get()` for large scans and request-time processing.
-- Use `to_list()` when you need to keep all rows in Python, hand them to another
-    library, or serialize them as a batch.
-- Use `iter_chunks()` when you need batch processing without loading everything at
-    once.
+- Use direct iteration plus `get()` when you read only some columns, need live
+    records (`get_element()`), or may stop early. Ideal for small/medium results;
+    on very large results it pays a per-row boundary cost.
+- Use `to_columns()` / `to_dataframe()` to bulk-load large results into
+    numpy/pandas — the fastest path (~14x over `to_list` on 100k-row scans),
+    with typed columns including real `datetime64`.
+- Use `to_json_list()` (or `iter_json_batches()` when it may not fit in memory)
+    to bulk-load large results as plain dicts. JSON-native types: temporals
+    arrive as ISO strings.
+- Use `to_list()` when you need full Python-type fidelity (`datetime`,
+    `Decimal`) as row dicts and the result is not huge.
 - Use wrapper `to_dict()` only when you truly want the full document in Python.
 
 ```python
