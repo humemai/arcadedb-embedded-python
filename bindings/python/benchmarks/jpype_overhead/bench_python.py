@@ -419,6 +419,51 @@ def bench_micro(doc_db_dir: str):
         print(f"MICRO,lookup_by_rid,{per_lookup_us:.2f}us", flush=True)
 
 
+# ---------- async executor (callback bridging) ----------
+
+
+def bench_async(db_dir: str):
+    with arcadedb.create_database(db_dir) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE A")
+        db.command("sql", "CREATE PROPERTY A.id INTEGER")
+        db.command("sql", "CREATE PROPERTY A.name STRING")
+
+        executor = db.async_executor()
+
+        # warmup
+        for i in range(1_000):
+            executor.command("sql", "INSERT INTO A SET id = ?, name = ?", args=[i, f"w{i}"])
+        executor.wait_completion()
+
+        # no-callback throughput: 10k async inserts, one wall-clock number
+        s = time.perf_counter_ns()
+        for i in range(10_000):
+            executor.command(
+                "sql", "INSERT INTO A SET id = ?, name = ?", args=[1_000 + i, f"n{i}"]
+            )
+        executor.wait_completion()
+        total_no_cb = time.perf_counter_ns() - s
+        report("async", "P-async-insert", [total_no_cb // 10_000] * 1, "total10k")
+
+        # with a Python ok-callback per command (bridged Java->Python)
+        done = {"n": 0}
+
+        def on_ok(_rs):
+            done["n"] += 1
+
+        s = time.perf_counter_ns()
+        for i in range(10_000):
+            executor.command(
+                "sql",
+                "INSERT INTO A SET id = ?, name = ?",
+                callback=on_ok,
+                args=[11_000 + i, f"c{i}"],
+            )
+        executor.wait_completion()
+        total_cb = time.perf_counter_ns() - s
+        report("async", "P-async-insert-callback", [total_cb // 10_000] * 1, f"cb={done['n']}")
+
+
 if __name__ == "__main__":
     phase, data_dir, db_dir = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
     {
@@ -429,4 +474,5 @@ if __name__ == "__main__":
         "bench-fulltext": lambda: bench_fulltext(db_dir),
         "bench-lifecycle": lambda: bench_lifecycle(db_dir),
         "micro": lambda: bench_micro(db_dir),
+        "bench-async": lambda: bench_async(db_dir),
     }[phase]()

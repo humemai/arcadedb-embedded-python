@@ -121,26 +121,63 @@ slower than Java to ~1.2×**.
 5. **Per-command overhead** (write path 1.9×): lowest priority; absolute cost is
    ~5µs and users batch anyway.
 
-## After the fixes (2026-07-04, same night)
+## After the fixes (2026-07-04, same night — two rounds)
 
-Fixes 1–3 were implemented (`perf:` commit) and the wheel rebuilt; full test suite
-green (352 passed). Same 100k database and queries, Java baselines unchanged:
+**Round 1** (`perf:` commit fdcf3e78db): buffer-protocol bulk array conversion, cached
+java.time/JClass handles, Java-RID fast path in `find_nearest`, cached index/PQ checks,
+plain-list query params. **Round 2**: self-populating exact-type converter dispatch
+cache in `convert_java_to_python` (JPype types are stable per process, so the
+isinstance chain runs once per *type* instead of once per *value*; validated by
+`probe_round2.py` — probes also killed the `Result.toMap()` idea, which measured
+*slower* than per-column `getProperty`, 41 vs 33µs/row). Suite green after each round
+(352 passed).
 
-| metric | before | after | Java baseline | gap closed |
-|---|---|---|---|---|
-| vector P-SQL (the #3674 path) | 52.8ms | **4.80ms** (11×) | 3.49ms | 15× → **1.4×** |
-| P-wrapper `find_nearest` | 2.89ms | 2.69ms | 2.48ms (direct) | 1.17× → 1.08× |
-| scan 100k rows w/ float-array col | 4.54s | **0.59s** (7.7×) | 66ms | 69× → 8.9× |
-| `convert(384-float Java array)` | 900µs | (bulk path) ~µs | — | — |
-| `convert(384-float Java List)` | 1121µs | 712µs | — | remaining item |
-| `lookup_by_rid` | 15.3µs | 4.0µs | — | — |
-| `convert(int)` / `(LocalDateTime)` | 5.7 / 8.8µs | 2.9 / 4.3µs | — | — |
-| scan 100k × 7 scalar cols | 2.78s | 2.85s (unchanged) | 149ms | fix #4 pending |
+| metric | before | round 1 | round 2 | Java | final gap |
+|---|---|---|---|---|---|
+| vector SQL search 100k (the #3674 path) | 52.8ms | 4.80ms | **4.51ms** | 3.49ms | 15× → **1.3×** |
+| vector SQL search 500k | 62.1ms | — | **11.5ms** | 10.2ms | 6.1× → **1.1×** |
+| `find_nearest` wrapper 100k | 2.89ms | 2.69ms | 2.69ms | 2.48ms | 1.08× |
+| scan 100k rows w/ 16-float col | 4.54s | 0.59s | **0.55s** | 66ms | 69× → 8.3× |
+| scan 100k × 7 scalar cols (`.get`) | 2.78s | 2.85s | **2.27s** | 149ms | 19× → 15× |
+| scan 100k × 7 cols (`to_dict`) | 3.60s | 3.60s | **3.08s** | 149ms | 24× → 21× |
+| Cypher projection 10k rows | 95.4ms | 96.9ms | **89.4ms** | 9.7ms | 10× → 9.2× |
+| `convert(384-float Java array)` | 900µs | ~µs (bulk) | ~µs | — | done |
+| `convert(384-float Java List)` | 1121µs | 712µs | **467µs** | — | improved |
+| `lookup_by_rid` | 15.3µs | 4.0µs | 4.3µs | — | done |
 
-The headline is resolved: **the SQL vector-search path went from 15× slower than
-Java to 1.4×**. Wide scalar scans still pay the per-`getProperty` crossing per
-column (fix #4, not yet implemented), and `java.util.List` values still convert
-per-element (bulk path only covers primitive arrays).
+**Headline resolved**: vector search through SQL is now at ~1.1–1.3× Java at both
+scales. Wide-row scans improved ~20% but remain 15–21× — the floor is now per-row
+`hasNext`/`next`/`getProperty` crossings and `Result` wrapper allocation, not value
+conversion; closing it needs batched row transport (rows serialized Java-side in
+bulk), a architectural change documented under Remaining work.
+
+## Async executor (new coverage, same night)
+
+10k async INSERTs, per-op wall time:
+
+| layer | Java | Python | ratio |
+|---|---|---|---|
+| fire-and-wait (no callback) | 8.0µs | 8.3µs | **~1×, parity** |
+| with per-op ok-callback | 5.5µs | **104µs** | **~19×** |
+
+Submitting async work from Python is free; **per-operation Python callbacks are
+not** — each completion crosses Java→Python through a JPype proxy under the GIL,
+throttling the executor's parallelism. Guidance for docs/examples: prefer
+no-callback batches + `wait_completion()` (or one aggregate callback), never
+per-record Python callbacks in bulk ingest. (Side note: the Java benchmark's
+callback counter also exposed that `AsyncResultsetCallback` fires on pool threads —
+Python callback counters are GIL-safe, a rare point where Python is *safer*.)
+
+## Remaining work (quantified, not yet implemented)
+
+1. **Batched row transport** for large scans (15–21× gap): one Java call returning
+   N serialized rows (JSON/columnar buffer) parsed Python-side, instead of 2+C
+   crossings per row. Architectural; benefits scans, `to_list`, Cypher projections.
+2. **`java.util.List` values** still convert per element (467µs/384 floats);
+   engine returns `float[]` for vector properties, so this only hits list-typed
+   columns.
+3. Async per-op callback bridging (above) — mitigate via API guidance or a
+   Java-side aggregating callback exposed to Python once per batch.
 
 ## Caveats
 

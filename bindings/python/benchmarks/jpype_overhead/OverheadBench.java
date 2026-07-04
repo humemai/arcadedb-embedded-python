@@ -56,6 +56,7 @@ public class OverheadBench {
     case "seed-text" -> seedText(dbDir);
     case "bench-fulltext" -> benchFulltext(dbDir);
     case "bench-lifecycle" -> benchLifecycle(dbDir);
+    case "bench-async" -> benchAsync(dbDir);
     default -> throw new IllegalArgumentException("unknown phase: " + phase);
     }
   }
@@ -465,6 +466,47 @@ public class OverheadBench {
           lat[r] = System.nanoTime() - s;
       }
       report("fulltext", "J-bm25", lat, "checksum=" + (checksum & 0xffff));
+    }
+  }
+
+  // ---------- async executor (callback bridging counterpart) ----------
+
+  static void benchAsync(final String dbDir) {
+    try (final DatabaseFactory factory = new DatabaseFactory(dbDir); final Database db = factory.create()) {
+      db.transaction(() -> {
+        final var type = db.getSchema().createDocumentType("A");
+        type.createProperty("id", Type.INTEGER);
+        type.createProperty("name", Type.STRING);
+      });
+
+      // warmup
+      for (int i = 0; i < 1_000; i++)
+        db.async().command("sql", "INSERT INTO A SET id = ?, name = ?", null, i, "w" + i);
+      db.async().waitCompletion();
+
+      // no-callback throughput: 10k async inserts, one wall-clock number
+      long s = System.nanoTime();
+      for (int i = 0; i < 10_000; i++)
+        db.async().command("sql", "INSERT INTO A SET id = ?, name = ?", null, 1_000 + i, "n" + i);
+      db.async().waitCompletion();
+      final long perInsertNoCb = (System.nanoTime() - s) / 10_000;
+      report("async", "J-async-insert", new long[] { perInsertNoCb }, "total10k");
+
+      // with a Java ok-callback per command
+      final int[] done = { 0 };
+      final com.arcadedb.database.async.AsyncResultsetCallback cb =
+          new com.arcadedb.database.async.AsyncResultsetCallback() {
+            @Override
+            public void onComplete(final ResultSet resultset) {
+              done[0]++;
+            }
+          };
+      s = System.nanoTime();
+      for (int i = 0; i < 10_000; i++)
+        db.async().command("sql", "INSERT INTO A SET id = ?, name = ?", cb, 11_000 + i, "c" + i);
+      db.async().waitCompletion();
+      final long perInsertCb = (System.nanoTime() - s) / 10_000;
+      report("async", "J-async-insert-callback", new long[] { perInsertCb }, "cb=" + done[0]);
     }
   }
 
