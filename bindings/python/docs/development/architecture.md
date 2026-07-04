@@ -104,7 +104,7 @@ arcadedb_embedded/
 
 **`results.py`**
 
-- `ResultSet`: iterator, chunking, DataFrame export
+- `ResultSet`: iterator, chunking, bulk materialization (`to_json_list`, `to_columns`), DataFrame export
 - `Result`: property access with conversion
 
 **`transactions.py`**
@@ -118,6 +118,18 @@ arcadedb_embedded/
 **`exceptions.py`**
 
 - `ArcadeDBError`: unified exception wrapper
+
+### Java Bridge Jar
+
+Alongside the engine JARs, the wheel ships `arcadedb-python-bridge.jar` —
+four small Java helpers (`RowBatcher`, `ColumnBatcher`, `EdgeBatcher`,
+`VertexBatcher`, sources in `bindings/python/src/java/com/arcadedb/python/`)
+that move per-row/per-record loops to the Java side so bulk operations cost
+one JPype crossing per batch instead of several per row. It backs
+`to_json_list()`, `to_columns()`/`to_dataframe()`, `GraphBatch.new_edges()`,
+the `create_vertices()` bulk path, and `export_to_csv()`; every caller falls
+back to pure JPype if the jar is absent. See [Java Bridge](bridge.md) for
+details.
 
 ## JPype Integration
 
@@ -472,6 +484,10 @@ for row in result:
     process(row)
     # Only one row in memory at a time
 ```
+
+When you do need the whole result materialized, prefer the bulk APIs
+(`to_columns()`/`to_dataframe()` or `to_json_list()`) over `list(result)` /
+`to_list()` — see the [Performance guide](../guide/performance.md).
 
 ---
 

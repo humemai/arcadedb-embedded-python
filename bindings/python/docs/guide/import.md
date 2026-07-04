@@ -49,7 +49,8 @@ not something we currently encourage as the default Python import story.
     current Python testing it has also shown reliability problems under heavier loads.
 + Reserve `IMPORT DATABASE` for supported import formats, restore flows, and cases where
     you explicitly need that importer behavior from Python.
-+ For bulk graph ingest, use `GraphBatch` instead; see Example 16 and the graph
++ For bulk graph ingest, use `GraphBatch` instead — its bulk `create_vertices()` and
+    `new_edges()` methods run at or near Java speed; see Example 16 and the graph
     examples.
 
 ## Example 15 and 16 Benchmark Structure

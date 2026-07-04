@@ -176,6 +176,7 @@ nav:
   - Vector Search: guide/vectors.md
   - Data Import: guide/import.md
   - Graph Operations: guide/graphs.md
+  - Performance: guide/performance.md
 - API Reference:
   - Database: api/database.md
   - GraphBatch: api/graph_batch.md
@@ -194,6 +195,7 @@ nav:
   - Exceptions: api/exceptions.md
 - Development:
   - Architecture: development/architecture.md
+  - Java Bridge: development/bridge.md
   - Build Architecture: development/build-architecture.md
   - CI/CD Setup: development/ci-setup.md
   - Contributing: development/contributing.md

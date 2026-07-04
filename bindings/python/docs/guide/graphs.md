@@ -8,7 +8,9 @@ bindings.
 
 For bulk graph ingest from Python, the repository recommendation is `GraphBatch`.
 Example 16 and the Stack Overflow graph examples use it as the preferred path for
-loading vertices and edges.
+loading vertices and edges. Prefer its bulk methods — `create_vertices()` and
+`new_edges()` — over per-record calls: they cost one JVM crossing per batch and
+run at or near Java speed (see the [Performance guide](performance.md)).
 
 Async SQL graph insert remains useful as a comparison baseline, but it is not the
 recommended bulk graph ingest path here.

@@ -13,6 +13,16 @@ This plan turns the architecture audit into concrete refactor work. The goal is 
 
 ## Status Summary
 
+**2026-07-05 review** (after the JPype performance campaign,
+`benchmarks/jpype_overhead/REPORT.md`): the engineering items are effectively
+closed — item 3 (CSV streaming) completed via `iter_json_batches`; item 5
+substantially completed by the exact-type converter dispatch cache; item 6's
+materialization concerns superseded by `to_columns`/`to_json_list` (the
+fast/typed bulk boundary now exists); item 9 extended by `ResultSet.close()` +
+the JVM-exit atexit hook. Remaining open scope is **Phase 4 (items 10–11,
+examples reorganization)** — a content/curation decision (which scripts are
+teaching examples vs benchmark research tooling), pending maintainer direction.
+
 Completed so far:
 
 - vector search now raises instead of silently returning empty results on failure

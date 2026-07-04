@@ -19,7 +19,7 @@ This document describes the build architecture for creating platform-specific Py
 
 **All supported platforms:**
 
-- ✅ Current suite: 331 passed
+- ✅ Current suite: 362 passed
 - ✅ ~38M JARs (current Linux x86_64 package info, identical contents across platforms)
 - ✅ All native runners (no QEMU emulation)
 - ✅ Reproducible builds (pinned runner versions)
