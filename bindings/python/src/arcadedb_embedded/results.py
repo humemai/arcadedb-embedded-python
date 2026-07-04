@@ -61,6 +61,26 @@ class ResultSet:
         for result in self:
             yield result.to_dict(convert_types=convert_types)
 
+    def close(self) -> None:
+        """
+        Close the underlying Java result set.
+
+        Optional: memory-benchmarked as GC-safe to omit (drained or abandoned
+        result sets are collected without measurable heap growth), but closing
+        deterministically matches the Java API's try-with-resources idiom and
+        releases any engine-side iteration state immediately.
+        """
+        try:
+            self._java_result_set.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "ResultSet":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
     def to_json_list(self, batch_size: int = 10_000) -> List[Dict[str, Any]]:
         """
         Bulk-materialize all rows via batched Java-side JSON serialization.

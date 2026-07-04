@@ -206,6 +206,41 @@ Suite: 354 passed. Async guidance also landed as a docstring performance note on
    guidance; a Java-side aggregating callback could land in the bridge jar if a
    real use case appears.
 
+## Round 4: memory behavior + statistical hardening
+
+### Memory (bench_memory.py; MemoryMXBean after forced dual-GC + /proc RSS)
+
+The suspected memory pain points were measured and **mostly acquitted**:
+
+| suspicion | verdict | evidence |
+|---|---|---|
+| unclosed ResultSets leak (Python wrapper had no `close()`) | **no leak** | 10k undrained `.first()` queries: heap returns to 9MB after GC, identical to drained and explicitly-closed variants; flat across 5 sustained waves |
+| Python wrappers pin Java heap | **negligible** | ~312 bytes/row pinned while held; fully returned on release. Holding 100k wrappers costs *less* RSS (237MB) than converting to dicts (437MB) |
+| "Python is using gigabytes" | **perception** | RSS after JVM start: 121MB (33MB Python + JVM). `-Xmx4g` is a ceiling, not a reservation |
+| `to_json_list` transient copies | **real, bounded** | peak Java heap 214MB vs 82MB for `to_list` on a 100k×7 scan — the price of the 9× speedup; scales with batch_size |
+
+Note: after releasing 100k read rows, heap settles ~20MB above start — that is the
+engine's page cache warming (by design, stays inside the JVM), not a leak.
+
+Outcome: `ResultSet` gained `close()` + context-manager support as API hygiene
+(matches Java's try-with-resources idiom; deterministic release), explicitly *not*
+as a leak fix — the benchmark shows GC handles abandoned result sets fine.
+
+### Multi-run statistics (5 independent processes per layer, 100k vector)
+
+| layer | mean ± std (ms) | CV |
+|---|---|---|
+| J-direct | 2.89 ± 0.05 | 1.6% |
+| J-SQL | 4.41 ± 0.24 | 5.4% |
+| P-raw-call | 3.17 ± 0.17 | 5.5% |
+| P-wrapper | 3.07 ± 0.13 | 4.3% |
+| **P-SQL** | **5.09 ± 0.15** | 2.9% |
+
+With process-level repetition, **Python's SQL vector path is 1.15× Java's**
+(5.09 vs 4.41ms), with near-overlapping intervals. Single-run numbers elsewhere in
+this report are point estimates; run-to-run CV is ~2–6% on an idle machine and
+higher under desktop load (daytime runs drifted ~30%).
+
 ## Caveats
 
 - Laptop, single run-day, `-Xmx4g`, default ArcadeDB profile (upstream's own

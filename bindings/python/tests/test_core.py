@@ -986,3 +986,20 @@ def test_to_json_list_empty_result(temp_db_path):
     with arcadedb.create_database(temp_db_path) as db:
         db.command("sql", "CREATE DOCUMENT TYPE Empty")
         assert db.query("sql", "SELECT FROM Empty").to_json_list() == []
+
+
+def test_resultset_close_and_context_manager(temp_db_path):
+    """ResultSet supports close() and the context-manager protocol."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE C")
+        with db.transaction():
+            for i in range(5):
+                db.command("sql", f"INSERT INTO C SET n = {i}")
+
+        with db.query("sql", "SELECT FROM C") as rs:
+            first = rs.first()
+            assert first is not None
+
+        rs = db.query("sql", "SELECT FROM C")
+        rs.close()
+        rs.close()  # idempotent
