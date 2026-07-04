@@ -147,16 +147,54 @@ class GraphBatch:
                 java_rids = self._java_graph_batch.createVertices(
                     type_name, count_or_properties
                 )
-            else:
-                java_rids = self._java_graph_batch.createVertices(
-                    type_name,
-                    self._to_java_property_matrix(count_or_properties),
-                )
+                return [str(rid) for rid in java_rids]
+
+            rows = list(count_or_properties)
+            rids = self._create_vertices_json_bulk(type_name, rows)
+            if rids is not None:
+                return rids
+
+            java_rids = self._java_graph_batch.createVertices(
+                type_name,
+                self._to_java_property_matrix(rows),
+            )
             return [str(rid) for rid in java_rids]
         except Exception as e:
             raise ArcadeDBError(
                 f"Failed to create batch vertices for type '{type_name}': {e}"
             ) from e
+
+    _JSON_SAFE_TYPES = (str, int, float, bool, type(None))
+
+    def _create_vertices_json_bulk(self, type_name, rows):
+        """Bulk path: rows cross as one JSON string, RIDs return as one joined
+        string (two bulk copies instead of per-value marshaling — measured
+        ~2.4x). Returns None when unavailable/unsuitable so the caller falls
+        back to the property-matrix path."""
+        import jpype
+
+        try:
+            vertex_batcher = jpype.JClass("com.arcadedb.python.VertexBatcher")
+        except Exception:
+            return None
+
+        json_safe = self._JSON_SAFE_TYPES
+        for row in rows:
+            if row:
+                for value in row.values():
+                    if not isinstance(value, json_safe):
+                        return None  # e.g. datetime/bytes: matrix path preserves types
+
+        import json
+
+        joined = str(
+            vertex_batcher.createVerticesJson(
+                self._java_graph_batch,
+                type_name,
+                json.dumps([row or {} for row in rows]),
+            )
+        )
+        return joined.split(";") if joined else []
 
     def new_edge(
         self,
@@ -190,19 +228,23 @@ class GraphBatch:
         source_rids,
         edge_type: str,
         destination_rids,
+        properties=None,
     ) -> "GraphBatch":
         """
-        Buffer many property-less edges with one JPype crossing per call.
+        Buffer many edges with one JPype crossing per call.
 
         The bulk counterpart of :meth:`new_edge` (which costs one boundary
         crossing per edge — measured ~24x slower than Java-native for large
         edge lists). RIDs may be strings ("#1:0") or objects with a string
-        representation. For edges with properties, use :meth:`new_edge`.
+        representation.
 
         Args:
             source_rids: Sequence of source vertex RIDs.
             edge_type: Edge type name.
             destination_rids: Sequence of destination RIDs (same length).
+            properties: Optional sequence of per-edge property dicts (same
+                length). JSON-representable values take the bulk path;
+                anything else falls back to per-edge buffering.
         """
         self._check_not_closed()
         import jpype
@@ -210,18 +252,49 @@ class GraphBatch:
         try:
             edge_batcher = jpype.JClass("com.arcadedb.python.EdgeBatcher")
         except Exception:
+            edge_batcher = None
+
+        if edge_batcher is None:
             # bridge jar unavailable: fall back to the per-edge path
-            for src, dst in zip(source_rids, destination_rids):
-                self.new_edge(src, edge_type, dst)
+            props_iter = properties or [None] * len(source_rids)
+            for src, dst, p in zip(source_rids, destination_rids, props_iter):
+                self.new_edge(src, edge_type, dst, **(p or {}))
             return self
 
         try:
-            # One joined string crosses the boundary in a single bulk copy;
-            # a Python list of N strings would be converted element-by-element
-            # by JPype and eat the batching win (measured).
-            src = ";".join(str(r) for r in source_rids)
-            dst = ";".join(str(r) for r in destination_rids)
-            edge_batcher.newEdgesJoined(self._java_graph_batch, src, edge_type, dst)
+            if properties is None:
+                # One joined string crosses the boundary in a single bulk
+                # copy; a Python list of N strings would be converted
+                # element-by-element by JPype and eat the batching win.
+                src = ";".join(str(r) for r in source_rids)
+                dst = ";".join(str(r) for r in destination_rids)
+                edge_batcher.newEdgesJoined(
+                    self._java_graph_batch, src, edge_type, dst
+                )
+                return self
+
+            json_safe = self._JSON_SAFE_TYPES
+            rows = []
+            for src, dst, p in zip(source_rids, destination_rids, properties):
+                row = {"_src": str(src), "_dst": str(dst)}
+                for key, value in (p or {}).items():
+                    if key in ("_src", "_dst") or not isinstance(value, json_safe):
+                        # non-JSON value (datetime/bytes): per-edge fallback
+                        # preserves types exactly
+                        props_iter = properties
+                        for s2, d2, p2 in zip(
+                            source_rids, destination_rids, props_iter
+                        ):
+                            self.new_edge(s2, edge_type, d2, **(p2 or {}))
+                        return self
+                    row[key] = value
+                rows.append(row)
+
+            import json
+
+            edge_batcher.newEdgesJson(
+                self._java_graph_batch, edge_type, json.dumps(rows)
+            )
             return self
         except Exception as e:
             raise ArcadeDBError(

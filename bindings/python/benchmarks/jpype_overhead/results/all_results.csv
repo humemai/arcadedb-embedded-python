@@ -266,3 +266,10 @@ ROUND5,RESULT,update,P-delete-sql,5000,18.3,15.8,27.9,49.0,
 ROUND5,RESULT,mutate,P-modify-set-save,10000,16.5,6.1,16.0,55.6,
 ROUND5,RESULT,graphbatch,J-create-vertices,20000,6.2,6.2,6.2,6.2,per-vertex
 ROUND5,RESULT,graphbatch,J-new-edge,60000,0.2,0.2,0.2,0.2,per-edge-pre-close
+ROUND6,RESULT,graphbatch,P-create-vertices,20000,23.9,23.9,23.9,23.9,per-vertex
+ROUND6,RESULT,graphbatch,P-new-edge,60000,6.22,6.22,6.22,6.22,per-edge-buffered
+ROUND6,RESULT,graphbatch,P-new-edges-bulk,60000,0.72,0.72,0.72,0.72,per-edge-buffered
+ROUND6,PROBE,edge_props_per_edge_us,24.23
+ROUND6,PROBE,edge_props_bulk_us,4.57
+ROUND6,PROBE,vertices_json_us,15.9
+ROUND6,PROBE,vertices_matrix_us,22.3

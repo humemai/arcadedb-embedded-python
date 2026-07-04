@@ -41,4 +41,30 @@ public final class EdgeBatcher {
     final String[] destinations = joinedDestinationRids.split(";");
     newEdges(batch, sources, edgeType, destinations);
   }
+
+  /**
+   * Bulk edges WITH properties: one JSON array of rows, each
+   * {"_src": "#1:0", "_dst": "#1:1", ...properties}. JSON-representable
+   * property values only; the Python side falls back per-edge otherwise.
+   */
+  public static void newEdgesJson(final GraphBatch batch, final String edgeType, final String jsonRows) {
+    final com.arcadedb.serializer.json.JSONArray rows = new com.arcadedb.serializer.json.JSONArray(jsonRows);
+    for (int i = 0; i < rows.length(); i++) {
+      final com.arcadedb.serializer.json.JSONObject row = rows.getJSONObject(i);
+      final RID src = new RID(row.getString("_src"));
+      final RID dst = new RID(row.getString("_dst"));
+      final Object[] props = new Object[(row.length() - 2) * 2];
+      int j = 0;
+      for (final String key : row.keySet()) {
+        if (key.equals("_src") || key.equals("_dst"))
+          continue;
+        props[j++] = key;
+        props[j++] = row.isNull(key) ? null : row.get(key);
+      }
+      if (props.length == 0)
+        batch.newEdge(src, edgeType, dst);
+      else
+        batch.newEdge(src, edgeType, dst, props);
+    }
+  }
 }

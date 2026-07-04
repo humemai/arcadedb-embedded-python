@@ -43,6 +43,8 @@ reproduced in pure Java).
 | Bulk scan, 100k rows × 7 cols | 149ms | 4.54s (30×) | **0.50s (3.4×)** | `to_json_list()` (batched transport) |
 | Scan with float-array column, 100k | 66ms | 4.54s (69×) | **0.55s (8.3×)** | buffer-protocol array conversion |
 | Bulk edge ingest (GraphBatch, per edge) | 0.1µs | 4.24µs (24×) | **0.57µs** | `new_edges()` bulk API |
+| Bulk edge ingest with per-edge properties | — | 24.2µs | **4.6µs (5.3×)** | `new_edges(properties=)` (JSON rows) |
+| Bulk vertex creation (GraphBatch, per vertex) | 6.2µs | 22.3µs | **15.9µs (1.4×)** | JSON-rows bridge path in `create_vertices()` |
 | CSV export, 100k rows | — | 2431ms | **498ms** | streaming over JSON batches |
 | Threaded OLTP writers, 8 threads | 106.6k qps | crash (no retry) | **44.6k qps** | `run_in_transaction(retries=)` |
 | `find_nearest` wrapper | 2.48ms (direct) | 2.89ms | **2.69ms (1.08×)** | RID fast path, cached index checks |
@@ -91,6 +93,15 @@ New/changed public API (all with fallbacks and regression tests; suite 358 passe
 - Plain Python lists/tuples/sets now work as query parameters.
 - `jvm.py` atexit hook — stops the engine thread leaked by failed opens (#4991
   workaround) so the interpreter always exits.
+- `new_edges(properties=)` and a JSON-rows bulk path inside `create_vertices()` —
+  GraphBatch ingest with properties in one crossing per batch.
+
+**Post-release regression, caught and fixed** (`bc9ec743f4`): the plain-list
+parameter conversion initially broke the historical "a single list argument is
+the positional-parameter array" idiom, silently null-ing multi-`?` INSERTs.
+Found by running the real examples (the suite had no coverage for the idiom —
+it does now). Single list/tuple → expands to N parameters; collections among
+multiple args → single collection parameter.
 
 Internal: buffer-protocol bulk conversion for Java primitive arrays (900µs → ~µs
 per 384-float vector); a self-populating exact-type converter dispatch cache (the
