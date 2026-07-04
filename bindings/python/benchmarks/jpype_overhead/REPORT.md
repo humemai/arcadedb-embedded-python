@@ -168,16 +168,43 @@ per-record Python callbacks in bulk ingest. (Side note: the Java benchmark's
 callback counter also exposed that `AsyncResultsetCallback` fires on pool threads —
 Python callback counters are GIL-safe, a rare point where Python is *safer*.)
 
-## Remaining work (quantified, not yet implemented)
+## Round 3: batched row transport (implemented)
 
-1. **Batched row transport** for large scans (15–21× gap): one Java call returning
-   N serialized rows (JSON/columnar buffer) parsed Python-side, instead of 2+C
-   crossings per row. Architectural; benefits scans, `to_list`, Cypher projections.
+Probed first (`probe_round3.py`: 100k×7 scan 2436ms → 397ms via one-crossing-per-batch
+JSON serialization), then productized:
+
+- **`com.arcadedb.python.RowBatcher`** (`src/java/`): serializes N rows per JPype
+  crossing into a JSON array, normalizing primitive arrays (the engine's own row
+  JSON renders `float[]` as `"[F@..."` — caught by the new regression test).
+  Compiled into `arcadedb-python-bridge.jar` by both wheel builds
+  (`Dockerfile.build` and `build-native.sh`).
+- **`ResultSet.to_json_list(batch_size=10_000)`**: the documented fast bulk path
+  (JSON-native types; temporals arrive as ISO strings). Falls back to `to_list()`
+  if the bridge jar is absent.
+
+Measured (100k rows × 7 cols, same run):
+
+| path | time | vs Java-native (149ms) |
+|---|---|---|
+| `to_list()` | 4.54s | 30× |
+| iterate + `.get` per col | 3.16s | 21× |
+| **`to_json_list()`** | **0.50s** | **3.4×** |
+
+Suite: 354 passed. Async guidance also landed as a docstring performance note on
+`AsyncExecutor.command` and in the queries guide.
+
+## Remaining work (quantified)
+
+1. Large scans now reach ~3× Java via `to_json_list()`; the default
+   full-fidelity paths (`to_list`, per-row `.get`) keep their per-row crossing
+   floor by design. Closing further would need columnar buffers (Arrow-style) —
+   diminishing returns unless a workload demands it.
 2. **`java.util.List` values** still convert per element (467µs/384 floats);
    engine returns `float[]` for vector properties, so this only hits list-typed
    columns.
-3. Async per-op callback bridging (above) — mitigate via API guidance or a
-   Java-side aggregating callback exposed to Python once per batch.
+3. Async per-op Python callbacks stay ~19× (GIL physics) — mitigated by API
+   guidance; a Java-side aggregating callback could land in the bridge jar if a
+   real use case appears.
 
 ## Caveats
 

@@ -203,6 +203,16 @@ fi
 # Always filter excluded jars, even when reusing an existing jars directory from a prior build.
 apply_jar_exclusions "$JARS_DIR" "$JAR_EXCLUSIONS_FILE"
 
+# Build the Python-bindings bridge jar (batched row transport; see
+# src/java/com/arcadedb/python/RowBatcher.java). Mirrors Dockerfile.build.
+echo -e "${CYAN}🔨 Building arcadedb-python-bridge.jar...${NC}"
+BRIDGE_SRC="$PY_BINDINGS_DIR/src/java"
+BRIDGE_CLASSES=$(mktemp -d)
+javac -cp "$JARS_DIR/*" -d "$BRIDGE_CLASSES" $(find "$BRIDGE_SRC" -name "*.java")
+jar cf "$JARS_DIR/arcadedb-python-bridge.jar" -C "$BRIDGE_CLASSES" .
+rm -rf "$BRIDGE_CLASSES"
+echo -e "${GREEN}✅ Bridge jar built${NC}"
+
 # Step 2: Build minimal JRE with jlink
 echo -e "${CYAN}🔨 Building minimal JRE with jlink...${NC}"
 

@@ -944,3 +944,45 @@ def test_lookup_by_rid(temp_db_path):
         # Test lookup with invalid RID format
         with pytest.raises(arcadedb.ArcadeDBError):
             db.lookup_by_rid("invalid_rid")
+
+
+def test_to_json_list_bulk_materialization(temp_db_path):
+    """to_json_list returns all rows with JSON-native types via the bridge."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE Item")
+        db.command("sql", "CREATE PROPERTY Item.n INTEGER")
+        db.command("sql", "CREATE PROPERTY Item.name STRING")
+        db.command("sql", "CREATE PROPERTY Item.active BOOLEAN")
+        db.command("sql", "CREATE PROPERTY Item.emb ARRAY_OF_FLOATS")
+
+        with db.transaction():
+            for i in range(25):
+                db.command(
+                    "sql",
+                    "INSERT INTO Item SET n = ?, name = ?, active = ?, emb = [1.5, 2.5]",
+                    i,
+                    f"item-{i}",
+                    i % 2 == 0,
+                )
+
+        # batch_size smaller than the result forces multiple Java batches
+        rows = db.query("sql", "SELECT n, name, active, emb FROM Item ORDER BY n").to_json_list(
+            batch_size=10
+        )
+        assert len(rows) == 25
+        assert rows[3]["n"] == 3
+        assert rows[3]["name"] == "item-3"
+        assert rows[3]["active"] is False
+        assert rows[3]["emb"] == [1.5, 2.5]
+        # parity with the per-row path on JSON-representable columns
+        rows_slow = db.query(
+            "sql", "SELECT n, name, active, emb FROM Item ORDER BY n"
+        ).to_list()
+        assert [r["n"] for r in rows] == [r["n"] for r in rows_slow]
+
+
+def test_to_json_list_empty_result(temp_db_path):
+    """to_json_list on an empty result returns an empty list."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE Empty")
+        assert db.query("sql", "SELECT FROM Empty").to_json_list() == []

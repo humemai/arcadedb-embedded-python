@@ -444,7 +444,12 @@ result = db.query("sql", "SELECT name, score FROM Item WHERE score > ?", 100)
 for row in result:
         handle(row.get("name"), row.get("score"))
 
-# Materialize only at the boundary where Python-native data is needed
+# Fastest bulk materialization (~6x faster than to_list on wide scans):
+# rows are JSON-serialized in batches on the Java side. Values carry
+# JSON-native types (temporals arrive as ISO strings, not datetime).
+rows = db.query("sql", "SELECT FROM Item").to_json_list()
+
+# Materialize with full Python-type fidelity (datetime, Decimal, ...)
 result = db.query("sql", "SELECT name, score FROM Item WHERE score > ?", 100)
 payload = result.to_list()
 

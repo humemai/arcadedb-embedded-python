@@ -61,6 +61,47 @@ class ResultSet:
         for result in self:
             yield result.to_dict(convert_types=convert_types)
 
+    def to_json_list(self, batch_size: int = 10_000) -> List[Dict[str, Any]]:
+        """
+        Bulk-materialize all rows via batched Java-side JSON serialization.
+
+        The fast path for large result sets: rows are serialized to JSON in
+        batches on the Java side (one JPype crossing per batch instead of
+        several per row) and parsed with the C json module — measured ~6x
+        faster than ``to_list()`` on wide 100k-row scans.
+
+        Trade-off: values carry JSON-native types. Numbers, strings, booleans,
+        lists and nested maps convert as expected, but temporal values arrive
+        as ISO strings (not ``datetime``) and DECIMALs as floats. Use
+        ``to_list()`` when full Python-type fidelity matters more than speed.
+
+        Args:
+            batch_size: Rows serialized per Java crossing (default 10000)
+
+        Returns:
+            List of dictionaries with JSON-native values
+
+        Example:
+            >>> rows = db.query("sql", "SELECT FROM Doc").to_json_list()
+        """
+        import json
+
+        import jpype
+
+        try:
+            row_batcher = jpype.JClass("com.arcadedb.python.RowBatcher")
+        except Exception:
+            # Bridge jar unavailable (e.g. source build without it): fall back
+            # to the per-row path so the API stays functional everywhere.
+            return self.to_list()
+
+        rows: List[Dict[str, Any]] = []
+        while True:
+            batch = json.loads(str(row_batcher.nextJsonBatch(self._java_result_set, int(batch_size))))
+            if not batch:
+                return rows
+            rows.extend(batch)
+
     def to_dataframe(self, convert_types: bool = True):
         """
         Convert results to pandas DataFrame.
