@@ -3,7 +3,7 @@
 Measured 2026-07-03/04 · Engine 26.8.1-SNAPSHOT · Maintainer laptop (diagnostic
 numbers — paper-grade numbers must be re-measured on tk@mini) · Raw data:
 `results/all_results.csv` · Change history: `git log bindings/python` (this work
-spans commits `fdcf3e78db..99f2d4dd09`).
+spans commits `fdcf3e78db..686996e379`).
 
 ## Summary
 
@@ -77,7 +77,7 @@ reproduced in pure Java).
 
 ## What changed in the bindings
 
-New/changed public API (all with fallbacks and regression tests; suite 358 passed):
+New/changed public API (all with fallbacks and regression tests; suite 362 passed):
 
 - `ResultSet.to_json_list(batch_size=)` / `iter_json_batches()` — bulk
   materialization via batched Java-side JSON serialization: one JPype crossing per
@@ -116,7 +116,7 @@ isinstance chain runs once per *type*, not per value); cached JClass/java.time
 handles; Java-RID fast path in vector search (no string round-trip + re-fetch per
 hit); per-wrapper index/PQ-check caching; `export_to_csv` streams JSON batches.
 
-**The bridge jar.** `RowBatcher`/`EdgeBatcher` (~200 lines,
+**The bridge jar.** `RowBatcher`/`EdgeBatcher`/`VertexBatcher`/`ColumnBatcher` (~450 lines,
 `bindings/python/src/java/com/arcadedb/python/`) compile into
 `arcadedb-python-bridge.jar` during both wheel builds (`Dockerfile.build` and
 `build-native.sh`) and ship inside the wheel next to the engine JARs. They are
