@@ -162,6 +162,59 @@ Python side falls back to pure-JPype paths if the jar is absent.
   `probe_round3.py`); two plausible designs measured slower and were rejected
   (`Result.toMap()`, string-array marshaling).
 
+## Wheel-size audit (2026-07-05)
+
+Same quarantine-and-gate method applied to the wheel contents (82MB → **70.8MB**):
+
+- **Cut (~11MB, feature-preserving; verified by full suite incl. server tests +
+  examples run)**: `arcadedb-tracing` (4.4MB), `snappy-java` (2.4MB, engine uses
+  LZ4 not snappy), `jackson-*` (2.1MB), `commons-math3` (2.0MB, zero users),
+  `jline` (0.4MB, console-only). `micrometer` must stay — server startup
+  requires it (found by bisection).
+- **Kept deliberately**: Lucene stack (~7.5MB — FULL_TEXT tokenization +
+  geospatial genuinely use it), JTS (geospatial), server/studio/undertow set
+  (~7MB ≈ 8.5% of wheel — under the "small fraction, keep server mode" bar).
+- **JRE lever is dead**: the jlink `java.se` umbrella measures within 1MB of the
+  jdeps-detected module set (the detected set already includes java.desktop/sql).
+  However, the audit found the jdeps detection had been **silently broken** —
+  `lucene-spatial-extras` declares a missing module and aborted the whole scan,
+  so builds always used the fallback. Fixed in both build scripts (excluded from
+  the scan, like jboss/wildfly); module detection now actually works.
+
+## Paper-grade verification on tk@mini (2026-07-05)
+
+Independent machine (20 cores, idle), 5 runs/layer, same wheel:
+
+| layer | mini | laptop | verdict |
+|---|---|---|---|
+| Vector J-SQL / P-SQL | 4.08 ± 0.17 / **4.45 ± 0.09ms (1.09×)** | 4.41 / 5.09 (1.15×) | replicated, tighter |
+| J-direct / P-wrapper | 2.63 ± 0.06 / 2.91 ± 0.03ms (1.11×) | 2.48 / 2.69 (1.08×) | replicated |
+| 100k×7 scan: Java / `to_columns` / `to_json_list` | 161 / **263 (1.63×)** / 398ms | 149 / 240 / ~390ms | replicated |
+| `to_list` slow path | 3560ms (22×) | 3441ms (23×) | replicated |
+
+## Appendix: completeness-verification sweep (2026-07-04, final)
+
+After the fixes landed, an adversarial audit asked what the harness itself had
+NOT covered. Each identified gap was then measured:
+
+| audited gap | verdict | evidence |
+|---|---|---|
+| Memory of the new bulk APIs (`to_columns`) | **clean** | transient peak 180MB (vs 214 JSON / 82 to_list); 5 repeated-call waves GC flat at 27MB — no leak |
+| Memory of bulk GraphBatch ingest | **clean** | 20k vertices + 60k prop-edges: peak 140MB during, returns to 22MB after close |
+| Converter-cache boundedness | **bounded** | 8 dispatch-cache entries + 0 lazy JClass entries after a full mixed-type workload |
+| Does the columnar ratio hold at 10× scale? | **yes, linear** | 1M×7-col: `to_columns` 2.64s (100k was 0.24s — 11× time for 10× rows); `to_json_list` 5.2s; Java all-column baseline 1.31s. All-column shapes (incl. array columns → JSON fallback) run ~2× slower than pure-scalar shapes — select columns explicitly for max speed |
+| Very wide rows (50 columns × 10k) | **columnar wins grow with width** | `to_columns` 91ms vs JSON 211ms vs per-row `.get` 1010ms (11×) |
+| Chunking actually exercised (>100k rows/batch) | **works** | 1M bulk edges at 1.69µs/edge (matches the 60k-scale 1.6µs), all 1M created |
+| Tail latency (n=10k, not n=100) | **tight** | 2k-row `to_columns`: p50 2.4ms, p99 7.8ms, p99.9 9.6ms, max 15.6ms; 189 GC collections across 10k ops — spikes GC-correlated and bounded at ~6× median |
+| Write-direction conversion (never measured) | **fine** | `convert_python_to_java`: dict(10) 41µs, list(100) 74µs, datetime 0.9µs, 1MB str 0.2µs — invisible next to per-command costs |
+| Behavior under heap pressure | **graceful** | 100k×7 `to_columns` with `-Xmx512m`: completes (no OOM), 719ms (3× the 4g time), 30 GCs — chunking bounds Java-side buffers |
+| Sustained soak incl. new APIs + threads (2h) | TODO(soak-v2) |
+
+One methodology lesson from the sweep: the v2 soak's graph-ingest ops grow the
+database itself (7GB over the run), so the engine's page cache legitimately
+grows with it — "flat heap" is only a valid pass criterion for non-growing
+workloads; for growing ones the criterion is a plateau below the cache cap.
+
 ## Reproducing
 
 ```bash

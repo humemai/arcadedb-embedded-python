@@ -223,7 +223,7 @@ echo -e "${CYAN}🔍 Analyzing JARs to determine required modules (jdeps)...${NC
 # --multi-release 25: treat multi-release JARs as Java 25
 # Note: Filter out jboss/wildfly jars which often have broken module descriptors
 # Note: Do NOT use --class-path or --recursive to avoid resolving bad modules
-RAW_JDEPS_OUTPUT=$(find "$JARS_DIR" -name "*.jar" | grep -v "jboss" | grep -v "wildfly" | grep -v "smallrye" | xargs jdeps --print-module-deps --ignore-missing-deps --multi-release 25 2>&1 || true)
+RAW_JDEPS_OUTPUT=$(find "$JARS_DIR" -name "*.jar" | grep -v "jboss" | grep -v "wildfly" | grep -v "smallrye" | grep -v "spatial-extras" | xargs jdeps --print-module-deps --ignore-missing-deps --multi-release 25 2>&1 || true)
 DETECTED_MODULES=$(echo "$RAW_JDEPS_OUTPUT" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -E '^[a-zA-Z0-9_.]+$' | sort -u | paste -sd "," - || true)
 
 JMODS_DIR="${JAVA_HOME}/jmods"
