@@ -1,296 +1,166 @@
-# JPype Overhead Report: Java vs Python Bindings
+# Python Bindings vs Java Native: Performance & Memory Report
 
-Date: 2026-07-04 (overnight run) · Machine: tk laptop (diagnostic numbers — NOT for
-the paper; paper numbers must be re-measured on tk@mini) · Engine: 26.8.1-SNAPSHOT
-wheel (`arcadedb_embedded-26.8.1.dev0`, cp312)
+Five measurement/fix rounds, 2026-07-03 → 2026-07-04 · Engine 26.8.1-SNAPSHOT ·
+Machine: maintainer laptop (diagnostic numbers — paper-grade numbers must be
+re-measured on tk@mini) · Full history in the Appendix; raw data in
+`results/all_results.csv`.
 
-**Setup**: Java and Python ran the *same bytecode* — the wheel's bundled JARs on the
-wheel's bundled JRE (Corretto 25.0.3) with the exact JVM flags `jvm.py` injects
-(`--add-modules=jdk.incubator.vector`, `-Xmx4g`, etc.), on the same on-disk databases
-and the same query vectors. Result parity verified: J-direct, P-raw-call and
-P-wrapper return byte-identical top-50 RID lists. 20 warmup + 100 measured queries
-per layer (12 reps for full-scan layers). Harness:
-`benchmarks/jpype_overhead/{OverheadBench.java, bench_python.py, run_bench.sh}`.
+## Executive summary
 
-## Headline: vector search (k=50, efSearch=100, 384-dim, COSINE)
+Starting point: upstream (discussion #3674) observed vector search is fast in Java
+but slow through the Python bindings. A controlled comparison — **identical JARs,
+identical bundled JRE, identical JVM flags, identical on-disk databases and query
+vectors, verified identical results** — confirmed it, located every source of
+overhead, and fixed what mattered:
 
-Latency mean (p50) in ms:
-
-| layer | what it measures | 100k vectors | 500k vectors |
+| | before | after | Java native |
 |---|---|---|---|
-| J-direct | `LSMVectorIndex.findNeighborsFromVector` from Java | 2.48 (2.37) | 12.45 (10.83) |
-| J-SQL | `SELECT vectorNeighbors(...)` from Java | 3.49 (3.06) | 10.18 (9.46) |
-| P-raw-call | same direct call via JPype, args pre-converted | 2.76 (2.55) | 12.11 (9.92) |
-| P-rawconv | + query-vector marshaling inside timer | 2.53 (2.30) | 10.75 (8.34) |
-| P-wrapper | `VectorIndex.find_nearest` (bindings wrapper) | 2.89 (2.77) | 9.83 (8.11) |
-| **P-SQL** | `SELECT vectorNeighbors(?)` via `db.query` — **the example-12 / #3674 path** | **52.8 (52.3)** | **62.1 (61.1)** |
+| Vector search (SQL path, 100k×384, k=50) | 52.8ms (15×) | **5.09 ± 0.15ms (1.15×)** | 4.41 ± 0.24ms |
+| Vector search, 500k (#3674 scale) | 62.1ms | **11.5ms (1.13×)** | 10.2ms |
+| Bulk scan 100k rows × 7 cols | 4.54s (30×) | **0.50s (3.4×)** via `to_json_list()` | 149ms |
+| Bulk edge ingest (GraphBatch, per edge) | 4.24µs (24×) | **0.57µs** via `new_edges()` | 0.1µs |
+| CSV export, 100k rows | 2431ms | **498ms** | — |
+| Threaded OLTP, 8 threads | crash | **44.6k qps** via `run_in_transaction()` | 106.6k qps |
 
-### Attribution
+**The engine was never the problem.** Raw JPype calls match Java (2.89 vs 3.17ms,
+overlapping intervals), and every engine-bound operation measured at parity from the
+start: GROUP BY 1.05×, Cypher traversal 1.06×, BM25 full-text 1.02×, UPDATE 1.2×,
+DELETE 1.3×, INSERT 1.9× (on a 5µs op), `export_database` 1.02×, async submission
+1.04×, DB open/lifecycle ~1×. All overhead lived in the Python-side *result
+materialization and per-operation crossing* layers — and that is what the fixes
+removed.
 
-- **JPype call overhead is negligible**: P-raw-call ≈ J-direct at both scales
-  (+0.3ms at 100k, within noise at 500k). The JVM does identical work; crossing the
-  boundary per *call* is free-ish.
-- **Query-vector marshaling is negligible**: ~8µs per 384-dim list (micro-bench),
-  invisible at ms scale.
-- **The wrapper's per-hit record re-fetch is small at k=50**: ~0.3–0.8ms
-  (50 × ~15µs `lookup_by_rid`), but it is pure waste and grows linearly with k.
-- **The SQL path costs ~50ms of pure Python-side materialization, flat across
-  scales** (52.8−3.5 ≈ 49ms at 100k; 62.1−10.2 ≈ 52ms at 500k). Cause: each of the
-  50 returned neighbors carries its full document — including the 384-float
-  `vector` property — and `Result.get("res")` recursively converts everything via
-  `convert_java_to_python`. Micro-bench: converting one 384-float Java list costs
-  **1.12ms** → 50 × 1.12 ≈ 56ms. The benchmark (and any user of the SQL surface)
-  pays ~15× Java latency to receive data it immediately discards.
+**Memory: acquitted.** No leaks (45-min soak, 2.65M mixed ops: post-GC heap flat at
+28MB throughout; abandoned/undrained ResultSets GC cleanly), wrapper pinning is
+~312 bytes/row and fully reclaimed, and baseline RSS is 121MB (`-Xmx4g` is a
+ceiling, not a reservation).
 
-**Conclusion: Luca is right and the engine is innocent.** Vector search through the
-engine is at parity from Python. The 15× gap he observes is the Python bindings
-converting the neighbors' embedding vectors (and other properties) element-by-element
-during result materialization on the SQL path.
+**Two engine bugs found and filed upstream** (both worked around in the bindings):
+- [#4967](https://github.com/ArcadeData/arcadedb/issues/4967) — `Result.toJSON()`
+  renders primitive arrays as Java `toString` (`"[F@..."`).
+- [#4991](https://github.com/ArcadeData/arcadedb/issues/4991) — JVM cannot exit
+  after a *failed* `DatabaseFactory.open()`: the non-daemon "ArcadeDB AsyncFlush"
+  thread is never stopped (reproduced in pure Java, `HangRepro.java`).
 
-## Other surfaces (mean latency)
+## What changed in the bindings
 
-| workload | Java | Python | ratio | bottleneck |
-|---|---|---|---|---|
-| GROUP BY aggregation (100k rows scanned, ~14 rows out) | 72.8ms | 76.1ms | 1.05× | engine (parity) |
-| Cypher traverse `*1..2` (count only) | 3.72ms | 3.94ms | 1.06× | engine (parity) |
-| BM25 fulltext top-100 | 116ms | 118ms | 1.02× | engine (parity) |
-| Cypher projection, 10k rows | 9.7ms | 95.4ms | **9.8×** | row materialization |
-| Scan 100k rows × 1 int col | 43.5ms | 352ms | **8.1×** | per-row crossings |
-| Scan 100k rows × 7 scalar cols (`.get` each) | 149ms | 2,780ms | **18.6×** | per-value conversion |
-| Scan 100k rows × 7 cols (`to_dict`) | 149ms | 3,596ms | **24×** | + dict building |
-| Scan 100k rows incl. 16-float array col | 66ms | 4,539ms | **69×** | list recursion |
-| INSERT via SQL (per command, in tx) | 5.3µs | 10.1µs | 1.9× | per-command crossing |
-| DB open | 2.0ms | 1.6ms | ~1× | parity |
+New/changed API (all with graceful fallbacks and regression tests; suite 358 passed):
 
-Pattern: **anything engine-bound is at parity; cost scales with the number of
-values crossing the boundary**, at roughly 4–30µs per value depending on type.
-
-## Micro-benchmarks (per call)
-
-| operation | cost |
+| addition | purpose |
 |---|---|
-| `convert_java_to_python(384-float Java list)` | **1121µs** (~2.9µs/element) |
-| `lookup_by_rid` (the wrapper's per-hit re-fetch) | 15.3µs |
-| `convert_java_to_python(LocalDateTime)` | 8.8µs |
-| `to_java_float_array` (384-dim list / numpy row) | 8.1µs / 4.5µs |
-| `convert_java_to_python(Integer)` | 5.7µs |
-| `convert_java_to_python(String)` | 0.45µs |
+| `ResultSet.to_json_list(batch_size=)` / `iter_json_batches()` | bulk materialization via batched Java-side JSON serialization — one JPype crossing per batch instead of 2+C per row. JSON-native types (temporals as ISO strings) |
+| `GraphBatch.new_edges(srcs, type, dsts)` | bulk property-less edge buffering (one crossing per batch; RIDs cross as one joined string because JPype converts string *lists* per-element) |
+| `Database.run_in_transaction(fn, retries=)` | auto-retry on `ConcurrentModificationException`, matching Java's `transaction(lambda)`; a `with` block cannot re-run its body |
+| `ResultSet.close()` + context manager | deterministic release, Java-idiom parity (measured optional — GC handles abandoned result sets) |
+| plain Python lists/tuples/sets as query params | previously failed JPype varargs overload resolution; now converted to `java.util` collections |
+| `jvm.py` atexit hook | stops the engine's leaked AsyncFlush thread so failed opens can't hang interpreter exit (workaround for #4991) |
 
-## Empirical validation of the attribution (validate_attribution.py)
+Internal: buffer-protocol bulk conversion for Java primitive arrays (900µs → ~µs per
+384-float vector), a self-populating exact-type converter dispatch cache (isinstance
+chain runs once per *type*), cached JClass/java.time handles, Java-RID fast path in
+vector search (no string round-trip), per-wrapper index/PQ-check caching,
+`export_to_csv` streaming over JSON batches.
 
-Decomposing the P-SQL path on the 100k index (same 100 queries):
+**The bridge jar**: `RowBatcher`/`EdgeBatcher` (~200 lines,
+`bindings/python/src/java/com/arcadedb/python/`) compile into
+`arcadedb-python-bridge.jar` during both wheel builds (`Dockerfile.build`,
+`build-native.sh`). Bindings-scoped glue over public engine APIs — no engine code is
+modified; Python falls back to pure-JPype paths if the jar is absent.
 
-| step | mean |
-|---|---|
-| `db.query("sql", "SELECT vectorNeighbors(?)...").first()` — engine + row crossing, no conversion | **3.32ms** (≈ J-SQL 3.49ms → parity) |
-| `row.get("res")` — Python-side conversion of the 50 neighbors, alone | **49.1ms** |
-| sum | 52.4ms ≈ measured P-SQL 52.8ms ✓ |
+## Known limits (measured, documented, deliberately not chased)
 
-And the proposed fix #1, measured on a 384-float Java array:
+- **Full-fidelity wide scans** (`to_list`, per-row `.get`) remain 15–21× Java: the
+  per-row `hasNext`/`next`/`getProperty` crossings are the floor. `to_json_list()`
+  covers the bulk use case at 3.4×; going further means Arrow-style columnar
+  transport — not justified by any current workload.
+- **Threading** scales to ~4 threads (JPype releases the GIL during engine calls),
+  plateauing at ~45k qps vs Java's 107k at 8 threads — Python's per-op share under
+  the GIL is the ceiling.
+- **Async per-op Python callbacks** cost ~104µs vs 5.5µs Java (GIL-bound proxy per
+  completion). Submission without callbacks is at parity (8.3 vs 8.0µs); guidance:
+  batch + `wait_completion()`, never per-record callbacks.
+- **Record mutation** (`modify().set().save()`) is 4.9× (16.5 vs 3.4µs) — three
+  crossings per record; absolute cost small, bulk paths exist.
+- **List-typed columns** convert per element (467µs/384 floats; a 10k-element LIST
+  property costs 14.6ms via `.get()`). Use typed array properties
+  (`ARRAY_OF_FLOATS` → buffer-protocol bulk path) or `to_json_list`.
+- `to_json_list`'s speed costs a transient: 214MB peak heap vs 82MB for `to_list`
+  on 100k×7 (scales with `batch_size`).
 
-| conversion | per call |
-|---|---|
-| `convert_java_to_python` (current, per-element recursion) | 900µs |
-| `list(jarray)` (JPype bulk to list) | 78µs (11×) |
-| `np.frombuffer(memoryview(jarray))` (zero-copy view) | 0.48µs (1,900×) |
-| `np.asarray(jarray, dtype=np.float32)` | **0.38µs (2,370×)** |
+## Methodology
 
-Projected effect of fix #1 alone: P-SQL vector search 52.8ms → ~4ms, i.e. **from 15×
-slower than Java to ~1.2×**.
+- Java baseline (`OverheadBench.java`) runs on the wheel's own JARs and bundled
+  JRE (Corretto 25) with the exact flags `jvm.py` injects — same bytecode, same VM;
+  only the caller differs. Compiled via the `maven:3.9-amazoncorretto-25` image.
+- Layered Python measurements (`bench_python.py`, `bench_round5.py`) separate: raw
+  JPype call → argument marshaling → wrapper logic → SQL path, so deltas attribute
+  to a specific layer. Result parity asserted across layers/languages.
+- 20 warmup + 100 measured iterations per layer (12 reps for full scans);
+  mean/p50/p95/p99. Headline claims re-measured across **5 independent processes**
+  (CV 1.6–5.5%); single-run numbers are point estimates and daytime desktop load
+  adds up to ~30% drift.
+- Memory truth from `MemoryMXBean` after forced dual-GC + `/proc` RSS
+  (`bench_memory.py`); sustained behavior via a 45-min mixed-workload soak
+  (`bench_soak.py`).
+- Candidate fixes were **probed before implementation** (`probe_round2.py`,
+  `probe_round3.py`) — this killed two plausible-but-slower designs
+  (`Result.toMap()`, string-array marshaling) before they shipped.
 
-## Ranked fixes (not implemented in this pass — measure-only)
+## Reproducing
 
-1. **Bulk-convert float arrays in `type_conversion.py`** (biggest win, fixes the
-   headline). A Java `float[]`/`List<Float>` should convert via
-   `numpy.frombuffer`/JPype bulk array copy (or `memoryview(jarray)`) instead of
-   per-element recursion — turns 1.12ms into ~µs. Directly fixes P-SQL vector
-   search (52ms → ~4ms expected) and the 69× embedding-column scans.
-2. **Lazy/optional record materialization on the vector SQL path & wrapper**:
-   `find_nearest` should stop re-fetching via `str(rid)` → `to_java_rid` →
-   `lookupByRID` (vector.py:319–332, core.py:238–267) and pass the Java RID
-   through; offer `include_records=False` (ids+scores only). Also cache
-   `_iter_lsm_indexes`/PQ-readiness per index instead of per query
-   (vector.py:185–219).
-3. **Flatten `convert_java_to_python` dispatch** (type_conversion.py:159–233):
-   hoist the in-loop `from java.time import ...` (:186) to module scope, reorder
-   the isinstance chain by frequency, and dispatch on `type(value)` via a dict
-   where possible. Targets the 5.7µs/int → sub-µs, cutting scalar scans ~3–5×.
-4. **Row-level bulk fetch in `results.py`**: fetch all properties in one crossing
-   (e.g. `result.toMap()` Java-side) instead of one `getProperty` call per column
-   per row (results.py:356–365).
-5. **Per-command overhead** (write path 1.9×): lowest priority; absolute cost is
-   ~5µs and users batch anyway.
+```bash
+cd bindings/python/benchmarks/jpype_overhead
+./run_bench.sh              # full battery (SKIP_500K=1 to skip the big one)
+# individual phases: see headers of bench_python.py / bench_round5.py /
+# bench_memory.py / bench_soak.py / OverheadBench.java
+```
 
-## After the fixes (2026-07-04, same night — two rounds)
+Databases/datasets are regenerable and gitignored; `results/all_results.csv` holds
+every measured line (BEFORE rows unprefixed; `AFTER,`/`ROUND2,`/`ROUND3,`/`ROUND5,`
+prefixes mark re-measurements). This harness doubles as the post-upstream-sync
+regression check.
 
-**Round 1** (`perf:` commit fdcf3e78db): buffer-protocol bulk array conversion, cached
-java.time/JClass handles, Java-RID fast path in `find_nearest`, cached index/PQ checks,
-plain-list query params. **Round 2**: self-populating exact-type converter dispatch
-cache in `convert_java_to_python` (JPype types are stable per process, so the
-isinstance chain runs once per *type* instead of once per *value*; validated by
-`probe_round2.py` — probes also killed the `Result.toMap()` idea, which measured
-*slower* than per-column `getProperty`, 41 vs 33µs/row). Suite green after each round
-(352 passed).
+---
 
-| metric | before | round 1 | round 2 | Java | final gap |
-|---|---|---|---|---|---|
-| vector SQL search 100k (the #3674 path) | 52.8ms | 4.80ms | **4.51ms** | 3.49ms | 15× → **1.3×** |
-| vector SQL search 500k | 62.1ms | — | **11.5ms** | 10.2ms | 6.1× → **1.1×** |
-| `find_nearest` wrapper 100k | 2.89ms | 2.69ms | 2.69ms | 2.48ms | 1.08× |
-| scan 100k rows w/ 16-float col | 4.54s | 0.59s | **0.55s** | 66ms | 69× → 8.3× |
-| scan 100k × 7 scalar cols (`.get`) | 2.78s | 2.85s | **2.27s** | 149ms | 19× → 15× |
-| scan 100k × 7 cols (`to_dict`) | 3.60s | 3.60s | **3.08s** | 149ms | 24× → 21× |
-| Cypher projection 10k rows | 95.4ms | 96.9ms | **89.4ms** | 9.7ms | 10× → 9.2× |
-| `convert(384-float Java array)` | 900µs | ~µs (bulk) | ~µs | — | done |
-| `convert(384-float Java List)` | 1121µs | 712µs | **467µs** | — | improved |
-| `lookup_by_rid` | 15.3µs | 4.0µs | 4.3µs | — | done |
+## Appendix: round-by-round history
 
-**Headline resolved**: vector search through SQL is now at ~1.1–1.3× Java at both
-scales. Wide-row scans improved ~20% but remain 15–21× — the floor is now per-row
-`hasNext`/`next`/`getProperty` crossings and `Result` wrapper allocation, not value
-conversion; closing it needs batched row transport (rows serialized Java-side in
-bulk), a architectural change documented under Remaining work.
+**Round 0 — measurement (measure-only mandate).** Built the harness; found the 15×
+vector gap and attributed it exactly: `query().first()` alone = 3.32ms (Java
+parity); `row.get("res")` conversion alone = 49.1ms (50 neighbors × 384-float
+vectors converted per-element at ~1.1ms each). Scans 19–69×; engine-bound ops at
+parity. Ranked four fixes.
 
-## Async executor (new coverage, same night)
+**Round 1 (commit fdcf3e78db).** Buffer-protocol bulk conversion for primitive
+arrays, cached java.time/JClass handles, Java-RID fast path (no
+str→re-parse→re-fetch per hit), cached index/PQ checks, plain-list query params.
+Vector SQL 52.8 → 4.80ms; float-array scans 4.54 → 0.59s; `lookup_by_rid` 15.3 →
+4.0µs. Two test failures caught real issues (PQ memoization on empty indexes must
+not stick).
 
-10k async INSERTs, per-op wall time:
+**Round 2 (commit 733e76518b).** Probes first: `Result.toMap()` measured *slower*
+than per-column `getProperty` (41 vs 33µs/row) — rejected. Shipped the exact-type
+converter dispatch cache instead: scans −20%, List conversion 712 → 467µs, vector
+SQL 4.5ms, 500k at 11.5ms (1.13×).
 
-| layer | Java | Python | ratio |
-|---|---|---|---|
-| fire-and-wait (no callback) | 8.0µs | 8.3µs | **~1×, parity** |
-| with per-op ok-callback | 5.5µs | **104µs** | **~19×** |
+**Round 3 (commit f860452133).** Batched row transport: probe showed 2436 → 397ms
+on 100k×7; productized as the bridge jar + `to_json_list()` (0.50s, 3.4× Java).
+Found #4967 (`toJSON` float[] bug) via regression test; bridge normalizes primitive
+arrays itself.
 
-Submitting async work from Python is free; **per-operation Python callbacks are
-not** — each completion crosses Java→Python through a JPype proxy under the GIL,
-throttling the executor's parallelism. Guidance for docs/examples: prefer
-no-callback batches + `wait_completion()` (or one aggregate callback), never
-per-record Python callbacks in bulk ingest. (Side note: the Java benchmark's
-callback counter also exposed that `AsyncResultsetCallback` fires on pool threads —
-Python callback counters are GIL-safe, a rare point where Python is *safer*.)
+**Round 4 (commit 55a3d09e2b).** Memory investigation: no ResultSet leak (10k
+undrained `.first()` queries GC to baseline, flat over 5 waves), pinning 312B/row
+fully reclaimed, baseline RSS 121MB, `to_json_list` transient peak documented.
+`ResultSet.close()` + context manager added as hygiene. Multi-run stats: P-SQL
+5.09±0.15 vs J-SQL 4.41±0.24ms.
 
-## Round 3: batched row transport (implemented)
+**Round 5 (commit ec07d39912).** Coverage audit of all 16 modules drove new phases:
+UPDATE/DELETE (parity), mutation (4.9×), GraphBatch (`new_edges` bulk 4.24 →
+0.57µs/edge — after discovering both a flush-pollution artifact in the first
+measurement *and* that JPype marshals string lists per-element, hence the
+joined-string design), threaded OLTP (crash → 44.6k qps via `run_in_transaction`;
+scaling real to ~4 threads), value-shape extremes, import/export
+(`export_database` parity; `export_to_csv` 2431 → 498ms), 45-min soak (flat 28MB —
+no leaks), and the #4991 exit-hang engine bug (pure-Java repro; bindings atexit
+workaround).
 
-Probed first (`probe_round3.py`: 100k×7 scan 2436ms → 397ms via one-crossing-per-batch
-JSON serialization), then productized:
-
-- **`com.arcadedb.python.RowBatcher`** (`src/java/`): serializes N rows per JPype
-  crossing into a JSON array, normalizing primitive arrays (the engine's own row
-  JSON renders `float[]` as `"[F@..."` — caught by the new regression test).
-  Compiled into `arcadedb-python-bridge.jar` by both wheel builds
-  (`Dockerfile.build` and `build-native.sh`).
-- **`ResultSet.to_json_list(batch_size=10_000)`**: the documented fast bulk path
-  (JSON-native types; temporals arrive as ISO strings). Falls back to `to_list()`
-  if the bridge jar is absent.
-
-Measured (100k rows × 7 cols, same run):
-
-| path | time | vs Java-native (149ms) |
-|---|---|---|
-| `to_list()` | 4.54s | 30× |
-| iterate + `.get` per col | 3.16s | 21× |
-| **`to_json_list()`** | **0.50s** | **3.4×** |
-
-Suite: 354 passed. Async guidance also landed as a docstring performance note on
-`AsyncExecutor.command` and in the queries guide.
-
-## Remaining work (quantified)
-
-1. Large scans now reach ~3× Java via `to_json_list()`; the default
-   full-fidelity paths (`to_list`, per-row `.get`) keep their per-row crossing
-   floor by design. Closing further would need columnar buffers (Arrow-style) —
-   diminishing returns unless a workload demands it.
-2. **`java.util.List` values** still convert per element (467µs/384 floats);
-   engine returns `float[]` for vector properties, so this only hits list-typed
-   columns.
-3. Async per-op Python callbacks stay ~19× (GIL physics) — mitigated by API
-   guidance; a Java-side aggregating callback could land in the bridge jar if a
-   real use case appears.
-
-## Round 4: memory behavior + statistical hardening
-
-### Memory (bench_memory.py; MemoryMXBean after forced dual-GC + /proc RSS)
-
-The suspected memory pain points were measured and **mostly acquitted**:
-
-| suspicion | verdict | evidence |
-|---|---|---|
-| unclosed ResultSets leak (Python wrapper had no `close()`) | **no leak** | 10k undrained `.first()` queries: heap returns to 9MB after GC, identical to drained and explicitly-closed variants; flat across 5 sustained waves |
-| Python wrappers pin Java heap | **negligible** | ~312 bytes/row pinned while held; fully returned on release. Holding 100k wrappers costs *less* RSS (237MB) than converting to dicts (437MB) |
-| "Python is using gigabytes" | **perception** | RSS after JVM start: 121MB (33MB Python + JVM). `-Xmx4g` is a ceiling, not a reservation |
-| `to_json_list` transient copies | **real, bounded** | peak Java heap 214MB vs 82MB for `to_list` on a 100k×7 scan — the price of the 9× speedup; scales with batch_size |
-
-Note: after releasing 100k read rows, heap settles ~20MB above start — that is the
-engine's page cache warming (by design, stays inside the JVM), not a leak.
-
-Outcome: `ResultSet` gained `close()` + context-manager support as API hygiene
-(matches Java's try-with-resources idiom; deterministic release), explicitly *not*
-as a leak fix — the benchmark shows GC handles abandoned result sets fine.
-
-### Multi-run statistics (5 independent processes per layer, 100k vector)
-
-| layer | mean ± std (ms) | CV |
-|---|---|---|
-| J-direct | 2.89 ± 0.05 | 1.6% |
-| J-SQL | 4.41 ± 0.24 | 5.4% |
-| P-raw-call | 3.17 ± 0.17 | 5.5% |
-| P-wrapper | 3.07 ± 0.13 | 4.3% |
-| **P-SQL** | **5.09 ± 0.15** | 2.9% |
-
-With process-level repetition, **Python's SQL vector path is 1.15× Java's**
-(5.09 vs 4.41ms), with near-overlapping intervals. Single-run numbers elsewhere in
-this report are point estimates; run-to-run CV is ~2–6% on an idle machine and
-higher under desktop load (daytime runs drifted ~30%).
-
-## Round 5: full-surface coverage (write paths, GraphBatch, threads, orchestrators, soak)
-
-A coverage audit of the entire public API (16 modules) drove new phases in
-`bench_round5.py` / OverheadBench phases; findings and fixes:
-
-| workload | Java | Python before | Python after fix | note |
-|---|---|---|---|---|
-| UPDATE (indexed, per-op) | 33.3µs | 40.6µs | — | parity (1.2×), no fix needed |
-| DELETE | 14.4µs | 18.3µs | — | parity (1.3×) |
-| `modify().set().save()` per record | 3.4µs | 16.5µs | — | 4.9×; 3 crossings/record, documented |
-| GraphBatch `create_vertices` (per vertex) | 6.2µs | 19µs | — | 3× (property-matrix marshal), acceptable |
-| GraphBatch edges (per edge, buffered) | 0.1µs | 4.24µs (24×) | **0.57µs** via `new_edges()` | bulk API + joined-string marshal (a Python list of RID strings converts per-element in JPype — the joined-string trick is what makes it work) |
-| `export_database` (JSONL, full DB) | 698ms | 711ms | — | parity — single thick Java call, as designed |
-| `export_to_csv` (100k×4) | — | 2431ms | **498ms** | now streams `iter_json_batches()` |
-| OLTP 90/10 threads ×8 | 106.6k qps | crash at 4t | **44.6k qps** | see below |
-| 10k-element LIST prop via `.get()` | — | 14.6ms | — | List-conversion at scale; use ARRAY_OF_FLOATS types or `to_json_list` |
-| 1MB string / depth-5 nested map | — | 1.17ms / 62µs | — | fine |
-
-**Threading**: JPype releases the GIL during engine calls, so Python OLTP throughput
-scales 6.5k → 29k → 42k → 44.5k qps at 1/2/4/8 threads (Java: 8k → 26k → 77k → 107k).
-Scaling is real to ~4 threads; the ~45k plateau is Python-side per-op work under the
-GIL. Two findings along the way:
-- Java's `database.transaction(lambda)` auto-retries `NeedRetryException`; the Python
-  `with db.transaction():` block *cannot* retry (context managers can't re-run their
-  body), so concurrent writers crashed on `ConcurrentModificationException`. New API:
-  **`Database.run_in_transaction(fn, retries=12)`** mirrors the Java semantics.
-
-**45-minute soak** (`bench_soak.py`, 2.65M mixed ops): post-GC Java heap **flat at
-28MB from minute 1 to minute 45** — no leak; RSS bounded in a 189–574MB band with no
-monotonic trend.
-
-**Engine bug found: process hangs on exit after a failed database open.** A failed
-`DatabaseFactory.open()` leaves the engine's global non-daemon "ArcadeDB AsyncFlush"
-thread running; nothing stops it, so JVM shutdown blocks forever. **Reproduced in
-pure Java** (`HangRepro.java` — try/catch around `factory.open()` on a missing path;
-`main` returns, process never exits), so this is engine-level, not JPype. Bindings
-mitigation shipped: an `atexit` hook closes the engine's PageManager when the
-interpreter exits (`jvm.py:_stop_engine_background_threads`), with a subprocess
-regression test. Upstream issue to be filed.
-
-## Caveats
-
-- Laptop, single run-day, `-Xmx4g`, default ArcadeDB profile (upstream's own
-  benchmark sets `PROFILE=high-performance`; neither side used it here — deltas
-  are caller-side so the comparison stands).
-- At 500k, J-SQL measured slightly *faster* than J-direct (10.2 vs 12.5ms mean) —
-  within run-to-run variance of the adaptive efSearch path; treat direct-vs-SQL
-  Java deltas as noise-level, not signal.
-- 100k lifecycle create/open dominated by first-JVM-start effects in run 1; medians
-  reported.
-- Raw per-step logs: `benchmarks/jpype_overhead/results/*.log`; consolidated lines
-  in `all_results.csv`; datasets in `data_100k/` (`data_500k/` regenerable via
-  `gen_dataset.py`).
+Suite growth across the arc: 346 → 358 tests, green at every commit gate.
