@@ -165,6 +165,7 @@ class GraphBatch:
             ) from e
 
     _JSON_SAFE_TYPES = (str, int, float, bool, type(None))
+    _BULK_CHUNK = 100_000  # rows per boundary crossing in bulk paths
 
     def _create_vertices_json_bulk(self, type_name, rows):
         """Bulk path: rows cross as one JSON string, RIDs return as one joined
@@ -187,14 +188,20 @@ class GraphBatch:
 
         import json
 
-        joined = str(
-            vertex_batcher.createVerticesJson(
-                self._java_graph_batch,
-                type_name,
-                json.dumps([row or {} for row in rows]),
+        # chunked so huge ingests never materialize one giant JSON string
+        rids = []
+        for start in range(0, len(rows), self._BULK_CHUNK):
+            chunk = rows[start : start + self._BULK_CHUNK]
+            joined = str(
+                vertex_batcher.createVerticesJson(
+                    self._java_graph_batch,
+                    type_name,
+                    json.dumps([row or {} for row in chunk]),
+                )
             )
-        )
-        return joined.split(";") if joined else []
+            if joined:
+                rids.extend(joined.split(";"))
+        return rids
 
     def new_edge(
         self,
@@ -266,11 +273,16 @@ class GraphBatch:
                 # One joined string crosses the boundary in a single bulk
                 # copy; a Python list of N strings would be converted
                 # element-by-element by JPype and eat the batching win.
-                src = ";".join(str(r) for r in source_rids)
-                dst = ";".join(str(r) for r in destination_rids)
-                edge_batcher.newEdgesJoined(
-                    self._java_graph_batch, src, edge_type, dst
-                )
+                # Chunked so huge ingests never build one giant string.
+                sources = [str(r) for r in source_rids]
+                dests = [str(r) for r in destination_rids]
+                for start in range(0, len(sources), self._BULK_CHUNK):
+                    edge_batcher.newEdgesJoined(
+                        self._java_graph_batch,
+                        ";".join(sources[start : start + self._BULK_CHUNK]),
+                        edge_type,
+                        ";".join(dests[start : start + self._BULK_CHUNK]),
+                    )
                 return self
 
             json_safe = self._JSON_SAFE_TYPES
@@ -292,9 +304,12 @@ class GraphBatch:
 
             import json
 
-            edge_batcher.newEdgesJson(
-                self._java_graph_batch, edge_type, json.dumps(rows)
-            )
+            for start in range(0, len(rows), self._BULK_CHUNK):
+                edge_batcher.newEdgesJson(
+                    self._java_graph_batch,
+                    edge_type,
+                    json.dumps(rows[start : start + self._BULK_CHUNK]),
+                )
             return self
         except Exception as e:
             raise ArcadeDBError(
