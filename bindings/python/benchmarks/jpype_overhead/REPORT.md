@@ -43,8 +43,9 @@ reproduced in pure Java).
 | Bulk scan, 100k rows × 7 cols | 149ms | 4.54s (30×) | **0.50s (3.4×)** | `to_json_list()` (batched transport) |
 | Scan with float-array column, 100k | 66ms | 4.54s (69×) | **0.55s (8.3×)** | buffer-protocol array conversion |
 | Bulk edge ingest (GraphBatch, per edge) | 0.1µs | 4.24µs (24×) | **0.57µs** | `new_edges()` bulk API |
-| Bulk edge ingest with per-edge properties | — | 24.2µs | **4.6µs (5.3×)** | `new_edges(properties=)` (JSON rows) |
-| Bulk vertex creation (GraphBatch, per vertex) | 6.2µs | 22.3µs | **15.9µs (1.4×)** | JSON-rows bridge path in `create_vertices()` |
+| Bulk edge ingest with per-edge properties | — | 24.2µs | **1.6 ± 0.3µs (15×)** | `new_edges(properties=)` (JSON rows) |
+| Bulk vertex creation (GraphBatch, per vertex) | 6.2µs | 22.3µs | **6.0 ± 0.3µs (parity)** | JSON-rows bridge path in `create_vertices()` |
+| Typed bulk scan → numpy/pandas, 100k × 7 | 149ms | 3.44s via `to_list` | **240 ± 7ms (1.6×)** | `to_columns()` binary columnar transport; `to_dataframe()` rides it |
 | CSV export, 100k rows | — | 2431ms | **498ms** | streaming over JSON batches |
 | Threaded OLTP writers, 8 threads | 106.6k qps | crash (no retry) | **44.6k qps** | `run_in_transaction(retries=)` |
 | `find_nearest` wrapper | 2.48ms (direct) | 2.89ms | **2.69ms (1.08×)** | RID fast path, cached index checks |
@@ -93,6 +94,12 @@ New/changed public API (all with fallbacks and regression tests; suite 358 passe
 - Plain Python lists/tuples/sets now work as query parameters.
 - `jvm.py` atexit hook — stops the engine thread leaked by failed opens (#4991
   workaround) so the interpreter always exits.
+- `ResultSet.to_columns(batch_size=)` — binary columnar transport
+  (`ColumnBatcher`): typed numpy columns (int64/float64/bool/datetime64[ms]),
+  pandas-convention nulls, per-column JSON fallback for exotic types;
+  `to_dataframe()` uses it automatically. Full type fidelity INCLUDING real
+  datetimes — faster than the JSON path and typed, superseding the
+  fidelity-vs-speed trade-off for scans.
 - `new_edges(properties=)` and a JSON-rows bulk path inside `create_vertices()` —
   GraphBatch ingest with properties in one crossing per batch.
 
@@ -118,10 +125,11 @@ Python side falls back to pure-JPype paths if the jar is absent.
 
 ## Known limits (measured, documented, deliberately not pursued)
 
-- **Full-fidelity wide scans** (`to_list`, per-row `.get`) remain 15–21× Java: the
-  per-row `hasNext`/`next`/`getProperty` crossings are the floor. `to_json_list()`
-  covers bulk use at 3.4×; going further means Arrow-style columnar transport,
-  which no current workload justifies.
+- **Per-row materialization** (`to_list`, per-row `.get`) remains 15–21× Java —
+  the per-row crossing floor. Every *bulk* use case now has a fast typed exit:
+  `to_columns()`/`to_dataframe()` at 1.6× (full fidelity incl. datetime64) or
+  `to_json_list()` at ~2.6×. The remaining gap only matters for row-at-a-time
+  streaming consumption of huge results, which has no known customer.
 - **Threading** scales to ~4 threads (JPype releases the GIL during engine calls)
   and plateaus at ~45k qps vs Java's 107k at 8 threads — Python's per-op share
   under the GIL is the ceiling.

@@ -224,6 +224,10 @@ def bench_query(db_dir: str):
             def run_jsonbatch():
                 return len(db.query("sql", sql_all).to_json_list())
 
+            def run_columns():
+                cols = db.query("sql", sql_all).to_columns()
+                return len(next(iter(cols.values()))) if cols else 0
+
             def run_emb():
                 n = 0
                 for row in db.query("sql", sql_emb):
@@ -237,6 +241,7 @@ def bench_query(db_dir: str):
                 (f"P-allcols-todict-{limit}", run_todict),
                 (f"P-tolist-{limit}", run_tolist),
                 (f"P-jsonbatch-{limit}", run_jsonbatch),
+                (f"P-columns-{limit}", run_columns),
                 (f"P-onecol-{limit}", run_one),
                 (f"P-embcol-{limit}", run_emb),
             ):

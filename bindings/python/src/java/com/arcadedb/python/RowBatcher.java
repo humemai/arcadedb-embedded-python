@@ -58,7 +58,7 @@ public final class RowBatcher {
     sb.append(obj);
   }
 
-  private static Object normalize(final Object value) {
+  static Object normalize(final Object value) {
     switch (value) {
     case null -> {
       return null;

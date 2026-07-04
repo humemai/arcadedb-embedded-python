@@ -1078,3 +1078,53 @@ def test_single_list_arg_is_positional_param_array(temp_db_path):
             "sql", "SELECT vectorCosineSimilarity(?, ?) as r", [1.0, 0.0], [1.0, 0.0]
         )
         assert abs(next(rs).get("r") - 1.0) < 0.001
+
+
+def test_to_columns_typed_bulk_materialization(temp_db_path):
+    """to_columns returns typed numpy columns with pandas-convention nulls."""
+    np = __import__("numpy")
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE T")
+        db.command("sql", "CREATE PROPERTY T.n INTEGER")
+        db.command("sql", "CREATE PROPERTY T.x DOUBLE")
+        db.command("sql", "CREATE PROPERTY T.s STRING")
+        db.command("sql", "CREATE PROPERTY T.ok BOOLEAN")
+        db.command("sql", "CREATE PROPERTY T.ts DATETIME")
+        db.command("sql", "CREATE PROPERTY T.tags LIST")
+
+        with db.transaction():
+            db.command(
+                "sql",
+                "INSERT INTO T SET n = 1, x = 1.5, s = 'a', ok = true, "
+                "ts = date('2026-01-02 03:04:05', 'yyyy-MM-dd HH:mm:ss'), tags = [1, 2]",
+            )
+            db.command("sql", "INSERT INTO T SET n = 2, x = null, s = null, ok = false")
+
+        cols = db.query(
+            "sql", "SELECT n, x, s, ok, ts, tags FROM T ORDER BY n"
+        ).to_columns()
+        assert cols is not None
+        assert cols["n"].dtype == np.int64 and list(cols["n"]) == [1, 2]
+        assert np.isnan(cols["x"][1]) and cols["x"][0] == 1.5
+        assert cols["s"] == ["a", None]
+        assert str(cols["ts"].dtype).startswith("datetime64")
+        assert str(cols["ts"][0]).startswith("2026-01-02")
+        assert cols["tags"][0] == [1, 2] and cols["tags"][1] is None
+
+        # empty result
+        assert db.query("sql", "SELECT FROM T WHERE n > 99").to_columns() == {}
+
+
+def test_to_dataframe_fast_path(temp_db_path):
+    """to_dataframe uses the columnar path and yields typed dtypes."""
+    pd = __import__("pytest").importorskip("pandas")
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE D")
+        with db.transaction():
+            for i in range(50):
+                db.command("sql", "INSERT INTO D SET n = ?, name = ?", i, f"r{i}")
+
+        df = db.query("sql", "SELECT n, name FROM D ORDER BY n").to_dataframe()
+        assert len(df) == 50
+        assert df["n"].dtype.kind == "i"
+        assert df["name"].iloc[3] == "r3"
