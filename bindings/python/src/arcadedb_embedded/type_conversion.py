@@ -182,22 +182,125 @@ def convert_java_to_python(value: Any) -> Any:
     if value is None:
         return None
 
-    # Fast path for Java primitive arrays (float[], double[], int[], ...):
-    # bulk-copy through the buffer protocol instead of per-element recursion.
-    # A 384-float vector converts ~200x faster this way. Object arrays don't
-    # support memoryview and fall through to the generic handling below.
+    # Exact-type dispatch cache: JPype wrapper classes are stable per process,
+    # so after a value's type has been resolved once through the isinstance
+    # chain (in _convert_and_register), every later value of the same type
+    # converts via a single dict lookup (~5x faster than the chain, dominant
+    # in per-row result materialization).
+    converter = _CONVERTER_CACHE.get(type(value))
+    if converter is not None:
+        return converter(value)
+    return _convert_and_register(value)
+
+
+_CONVERTER_CACHE: dict = {}
+
+
+def _conv_identity(value):
+    return value
+
+
+def _conv_bool(value):
+    return bool(value)
+
+
+def _conv_str(value):
+    return str(value)
+
+
+def _conv_int(value):
+    return int(value)
+
+
+def _conv_float(value):
+    return float(value)
+
+
+def _conv_decimal(value):
+    return Decimal(str(value))
+
+
+def _conv_bigint(value):
+    return int(str(value))
+
+
+def _conv_java_date(value):
+    return datetime.fromtimestamp(value.getTime() / 1000.0)
+
+
+def _conv_local_date(value):
+    return date(value.getYear(), value.getMonthValue(), value.getDayOfMonth())
+
+
+def _conv_local_datetime(value):
+    return datetime(
+        value.getYear(),
+        value.getMonthValue(),
+        value.getDayOfMonth(),
+        value.getHour(),
+        value.getMinute(),
+        value.getSecond(),
+        value.getNano() // 1000,
+    )
+
+
+def _conv_instant(value):
+    return datetime.fromtimestamp(
+        value.getEpochSecond() + value.getNano() / 1_000_000_000.0,
+        tz=timezone.utc,
+    )
+
+
+def _conv_zoned_datetime(value):
+    instant = value.toInstant()
+    return datetime.fromtimestamp(
+        instant.getEpochSecond() + instant.getNano() / 1_000_000_000.0,
+        tz=timezone.utc,
+    )
+
+
+def _conv_map(value):
+    return {
+        convert_java_to_python(k): convert_java_to_python(v)
+        for k, v in value.items()
+    }
+
+
+def _conv_set(value):
+    return {convert_java_to_python(item) for item in value}
+
+
+def _conv_iter_to_list(value):
+    return [convert_java_to_python(item) for item in value]
+
+
+def _conv_primitive_array(value):
+    # Bulk copy through the buffer protocol: ~200x faster than per-element
+    # recursion for a 384-float vector.
+    return memoryview(value).tolist()
+
+
+def _register(value, converter):
+    _CONVERTER_CACHE[type(value)] = converter
+    return converter(value)
+
+
+def _convert_and_register(value):
+    """Resolve the converter for a not-yet-seen type, cache it, convert."""
     if isinstance(value, jpype.JArray):
         try:
-            return memoryview(value).tolist()
+            memoryview(value)
         except TypeError:
-            pass
+            # object array (String[], Object[], ...): convert per element
+            return _register(value, _conv_iter_to_list)
+        return _register(value, _conv_primitive_array)
 
     java_core_types, java_collection_types = _get_java_core_types()
     if java_core_types is not None and java_collection_types is not None:
         if isinstance(value, java_core_types.boolean):
-            return bool(value)
+            return _register(value, _conv_bool)
         if isinstance(value, java_core_types.string):
-            return str(value)
+            return _register(value, _conv_str)
         if isinstance(
             value,
             (
@@ -207,65 +310,39 @@ def convert_java_to_python(value: Any) -> Any:
                 java_core_types.byte,
             ),
         ):
-            return int(value)
+            return _register(value, _conv_int)
         if isinstance(value, (java_core_types.float_type, java_core_types.double)):
-            return float(value)
+            return _register(value, _conv_float)
         if isinstance(value, java_core_types.character):
-            return str(value)
+            return _register(value, _conv_str)
 
         if isinstance(value, java_core_types.big_decimal):
-            return Decimal(str(value))
+            return _register(value, _conv_decimal)
         if isinstance(value, java_core_types.big_integer):
-            return int(str(value))
+            return _register(value, _conv_bigint)
 
         if isinstance(value, java_core_types.java_date):
-            return datetime.fromtimestamp(value.getTime() / 1000.0)
+            return _register(value, _conv_java_date)
 
         java_time_types = _get_java_time_types()
         if java_time_types is not None:
             if isinstance(value, java_time_types.local_date):
-                return date(
-                    value.getYear(), value.getMonthValue(), value.getDayOfMonth()
-                )
-
+                return _register(value, _conv_local_date)
             if isinstance(value, java_time_types.local_datetime):
-                return datetime(
-                    value.getYear(),
-                    value.getMonthValue(),
-                    value.getDayOfMonth(),
-                    value.getHour(),
-                    value.getMinute(),
-                    value.getSecond(),
-                    value.getNano() // 1000,
-                )
-
+                return _register(value, _conv_local_datetime)
             if isinstance(value, java_time_types.instant):
-                return datetime.fromtimestamp(
-                    value.getEpochSecond() + value.getNano() / 1_000_000_000.0,
-                    tz=timezone.utc,
-                )
-
+                return _register(value, _conv_instant)
             if isinstance(value, java_time_types.zoned_datetime):
-                instant = value.toInstant()
-                return datetime.fromtimestamp(
-                    instant.getEpochSecond() + instant.getNano() / 1_000_000_000.0,
-                    tz=timezone.utc,
-                )
+                return _register(value, _conv_zoned_datetime)
 
         if isinstance(value, java_collection_types.map_type):
-            return {
-                convert_java_to_python(k): convert_java_to_python(v)
-                for k, v in value.items()
-            }
-
+            return _register(value, _conv_map)
         if isinstance(value, java_collection_types.set_type):
-            return {convert_java_to_python(item) for item in value}
-
+            return _register(value, _conv_set)
         if isinstance(value, java_collection_types.list_type):
-            return [convert_java_to_python(item) for item in value]
-
+            return _register(value, _conv_iter_to_list)
         if isinstance(value, java_collection_types.collection):
-            return [convert_java_to_python(item) for item in value]
+            return _register(value, _conv_iter_to_list)
 
     if (
         hasattr(value, "__len__")
@@ -273,12 +350,18 @@ def convert_java_to_python(value: Any) -> Any:
         and not isinstance(value, (str, bytes))
     ):
         try:
-            return [convert_java_to_python(item) for item in value]
+            result = [convert_java_to_python(item) for item in value]
         except (TypeError, AttributeError):
             pass
+        else:
+            _CONVERTER_CACHE[type(value)] = _conv_iter_to_list
+            return result
 
-    # Return as-is if no conversion available
-    # This could be a Java object like Vertex, Edge, Document, etc.
+    # No conversion available: Java objects like Vertex, Edge, Document pass
+    # through unchanged. Cached only when the JVM type system was consulted,
+    # so a pre-JVM call can't pin a wrong converter.
+    if java_core_types is not None:
+        _CONVERTER_CACHE[type(value)] = _conv_identity
     return value
 
 
