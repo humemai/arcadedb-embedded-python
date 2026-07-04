@@ -48,8 +48,9 @@ public class OverheadBench {
     switch (phase) {
     case "vector-build" -> vectorBuild(dataDir, dbDir);
     case "vector-bench" -> vectorBench(dataDir, dbDir);
-    case "seed-docs" -> seedDocs(dbDir);
+    case "seed-docs" -> seedDocs(dbDir, dataDir == null || args[1].equals("-") ? 100_000 : Integer.parseInt(args[1]));
     case "bench-query" -> benchQuery(dbDir);
+    case "bench-scan" -> benchScan(dbDir, Integer.parseInt(args[1]));
     case "bench-write" -> benchWrite(dbDir);
     case "seed-graph" -> seedGraph(dbDir);
     case "bench-cypher" -> benchCypher(dbDir);
@@ -217,7 +218,7 @@ public class OverheadBench {
   static final String[] WORDS = { "graph", "vector", "database", "embedded", "python", "java",
       "index", "search", "engine", "arcade", "query", "result", "latency", "bench" };
 
-  static void seedDocs(final String dbDir) {
+  static void seedDocs(final String dbDir, final int numDocs) {
     final Random rnd = new Random(42);
     try (final DatabaseFactory factory = new DatabaseFactory(dbDir); final Database db = factory.create()) {
       db.transaction(() -> {
@@ -232,7 +233,7 @@ public class OverheadBench {
         type.createProperty("embedding", Type.ARRAY_OF_FLOATS);
       });
       db.begin();
-      for (int i = 0; i < 100_000; i++) {
+      for (int i = 0; i < numDocs; i++) {
         final float[] emb = new float[16];
         for (int j = 0; j < emb.length; j++)
           emb[j] = rnd.nextFloat();
@@ -253,7 +254,7 @@ public class OverheadBench {
       }
       if (db.isTransactionActive())
         db.commit();
-      System.out.println("INFO,seed-docs,done,100000");
+      System.out.println("INFO,seed-docs,done," + numDocs);
     }
   }
 
@@ -316,6 +317,30 @@ public class OverheadBench {
         lat[r] = System.nanoTime() - s;
     }
     report("query", layer, lat, "checksum=" + (checksum & 0xffff));
+  }
+
+  static void benchScan(final String dbDir, final int limit) {
+    try (final DatabaseFactory factory = new DatabaseFactory(dbDir); final Database db = factory.open()) {
+      final int reps = limit >= 1_000_000 ? 4 : 8;
+      long checksum = 0;
+      final long[] lat = new long[reps];
+      for (int r = -1; r < reps; r++) {
+        final long s = System.nanoTime();
+        try (final ResultSet rs = db.query("sql", "SELECT FROM Doc LIMIT " + limit)) {
+          while (rs.hasNext()) {
+            final Result row = rs.next();
+            for (final String p : row.getPropertyNames()) {
+              final Object v = row.getProperty(p);
+              if (v != null)
+                checksum += v.hashCode();
+            }
+          }
+        }
+        if (r >= 0)
+          lat[r] = System.nanoTime() - s;
+      }
+      report("scan", "J-scan-" + limit, lat, "checksum=" + (checksum & 0xffff));
+    }
   }
 
   // ---------- phase C: write path ----------

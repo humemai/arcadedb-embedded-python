@@ -166,6 +166,78 @@ def exp_peaks(db_dir: str):
         del rows
 
 
+def exp_newapi_peaks(db_dir: str):
+    """Memory behavior of the round-5/6 bulk APIs: to_columns peaks + leak waves."""
+    with arcadedb.open_database(db_dir) as db:
+        sql = "SELECT id, score, name, category, active, created, counts FROM Doc LIMIT 100000"
+        heap0 = heap_mb_after_gc()
+        print(f"MEM,newapi-peaks,heap_start_mb,{heap0:.0f}")
+
+        reset_peak()
+        cols = db.query("sql", sql).to_columns()
+        print(f"MEM,newapi-peaks,to_columns_peak_heap_mb,{peak_heap_mb():.0f}")
+        print(f"MEM,newapi-peaks,to_columns_rss_mb,{rss_mb():.0f}")
+        del cols
+
+        # leak waves: repeated to_columns must GC back to baseline
+        for wave in range(5):
+            for _ in range(5):
+                db.query("sql", sql).to_columns()
+            print(f"MEM,newapi-peaks,heap_wave{wave}_mb,{heap_mb_after_gc():.0f}")
+
+
+def exp_newapi_ingest(db_dir: str):
+    """Bulk GraphBatch ingest memory: peak during, baseline return after."""
+    import shutil
+
+    shutil.rmtree(db_dir, ignore_errors=True)
+    with arcadedb.create_database(db_dir) as db:
+        db.command("sql", "CREATE VERTEX TYPE P")
+        db.command("sql", "CREATE EDGE TYPE E")
+        heap0 = heap_mb_after_gc()
+        print(f"MEM,newapi-ingest,heap_start_mb,{heap0:.0f}")
+        reset_peak()
+        import random
+
+        rnd = random.Random(3)
+        with db.graph_batch(use_wal=False) as batch:
+            rids = batch.create_vertices(
+                "P", [{"id": i, "name": f"p{i}"} for i in range(20_000)]
+            )
+            pairs = [
+                (rids[rnd.randrange(20_000)], rids[rnd.randrange(20_000)])
+                for _ in range(60_000)
+            ]
+            batch.new_edges(
+                [a for a, _ in pairs],
+                "E",
+                [c for _, c in pairs],
+                properties=[{"w": i} for i in range(60_000)],
+            )
+        print(f"MEM,newapi-ingest,ingest_peak_heap_mb,{peak_heap_mb():.0f}")
+        print(f"MEM,newapi-ingest,rss_after_mb,{rss_mb():.0f}")
+        print(f"MEM,newapi-ingest,heap_after_close_gc_mb,{heap_mb_after_gc():.0f}")
+
+
+def exp_cache_growth(db_dir: str):
+    """Prove the converter/dispatch caches stay bounded under mixed types."""
+    from arcadedb_embedded import core as _core
+    from arcadedb_embedded import type_conversion as _tc
+
+    with arcadedb.open_database(db_dir) as db:
+        # exercise a wide mix of value types through the converter
+        db.query("sql", "SELECT FROM Doc LIMIT 5000").to_list()
+        db.query("sql", "SELECT FROM Doc LIMIT 5000").to_json_list()
+        db.query("sql", "SELECT id, embedding FROM Doc LIMIT 2000").to_list()
+        db.query(
+            "sql", "SELECT category, count(*) as c, avg(score) as a FROM Doc GROUP BY category"
+        ).to_list()
+        for row in db.query("sql", "SELECT FROM Doc LIMIT 1000"):
+            row.get("created"), row.get("counts"), row.get("active")
+        print(f"MEM,cache-growth,converter_cache_entries,{len(_tc._CONVERTER_CACHE)}")
+        print(f"MEM,cache-growth,java_class_cache_entries,{len(_core._JAVA_CLASSES)}")
+
+
 if __name__ == "__main__":
     exp, db_dir = sys.argv[1], sys.argv[2]
     {
@@ -173,4 +245,7 @@ if __name__ == "__main__":
         "rs-leak": exp_rs_leak,
         "pinning": exp_pinning,
         "peaks": exp_peaks,
+        "newapi-peaks": exp_newapi_peaks,
+        "newapi-ingest": exp_newapi_ingest,
+        "cache-growth": exp_cache_growth,
     }[exp](db_dir)

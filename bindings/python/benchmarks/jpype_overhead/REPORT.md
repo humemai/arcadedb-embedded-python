@@ -208,7 +208,7 @@ NOT covered. Each identified gap was then measured:
 | Tail latency (n=10k, not n=100) | **tight** | 2k-row `to_columns`: p50 2.4ms, p99 7.8ms, p99.9 9.6ms, max 15.6ms; 189 GC collections across 10k ops — spikes GC-correlated and bounded at ~6× median |
 | Write-direction conversion (never measured) | **fine** | `convert_python_to_java`: dict(10) 41µs, list(100) 74µs, datetime 0.9µs, 1MB str 0.2µs — invisible next to per-command costs |
 | Behavior under heap pressure | **graceful** | 100k×7 `to_columns` with `-Xmx512m`: completes (no OOM), 719ms (3× the 4g time), 30 GCs — chunking bounds Java-side buffers |
-| Sustained soak incl. new APIs + threads (2h) | TODO(soak-v2) |
+| Sustained soak incl. new APIs + threads (2h, 4.31M ops) | **bounded** | post-GC heap plateaus in a 758–990MB oscillating band with no monotonic trend through the final 4-thread window; the rise from v1's 28MB is the engine page cache legitimately tracking the workload's own database growth (the mix's graph-ingests grew the DB past 7GB), not a bindings leak |
 
 One methodology lesson from the sweep: the v2 soak's graph-ingest ops grow the
 database itself (7GB over the run), so the engine's page cache legitimately
