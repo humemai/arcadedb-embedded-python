@@ -241,6 +241,46 @@ With process-level repetition, **Python's SQL vector path is 1.15× Java's**
 this report are point estimates; run-to-run CV is ~2–6% on an idle machine and
 higher under desktop load (daytime runs drifted ~30%).
 
+## Round 5: full-surface coverage (write paths, GraphBatch, threads, orchestrators, soak)
+
+A coverage audit of the entire public API (16 modules) drove new phases in
+`bench_round5.py` / OverheadBench phases; findings and fixes:
+
+| workload | Java | Python before | Python after fix | note |
+|---|---|---|---|---|
+| UPDATE (indexed, per-op) | 33.3µs | 40.6µs | — | parity (1.2×), no fix needed |
+| DELETE | 14.4µs | 18.3µs | — | parity (1.3×) |
+| `modify().set().save()` per record | 3.4µs | 16.5µs | — | 4.9×; 3 crossings/record, documented |
+| GraphBatch `create_vertices` (per vertex) | 6.2µs | 19µs | — | 3× (property-matrix marshal), acceptable |
+| GraphBatch edges (per edge, buffered) | 0.1µs | 4.24µs (24×) | **0.57µs** via `new_edges()` | bulk API + joined-string marshal (a Python list of RID strings converts per-element in JPype — the joined-string trick is what makes it work) |
+| `export_database` (JSONL, full DB) | 698ms | 711ms | — | parity — single thick Java call, as designed |
+| `export_to_csv` (100k×4) | — | 2431ms | **498ms** | now streams `iter_json_batches()` |
+| OLTP 90/10 threads ×8 | 106.6k qps | crash at 4t | **44.6k qps** | see below |
+| 10k-element LIST prop via `.get()` | — | 14.6ms | — | List-conversion at scale; use ARRAY_OF_FLOATS types or `to_json_list` |
+| 1MB string / depth-5 nested map | — | 1.17ms / 62µs | — | fine |
+
+**Threading**: JPype releases the GIL during engine calls, so Python OLTP throughput
+scales 6.5k → 29k → 42k → 44.5k qps at 1/2/4/8 threads (Java: 8k → 26k → 77k → 107k).
+Scaling is real to ~4 threads; the ~45k plateau is Python-side per-op work under the
+GIL. Two findings along the way:
+- Java's `database.transaction(lambda)` auto-retries `NeedRetryException`; the Python
+  `with db.transaction():` block *cannot* retry (context managers can't re-run their
+  body), so concurrent writers crashed on `ConcurrentModificationException`. New API:
+  **`Database.run_in_transaction(fn, retries=12)`** mirrors the Java semantics.
+
+**45-minute soak** (`bench_soak.py`, 2.65M mixed ops): post-GC Java heap **flat at
+28MB from minute 1 to minute 45** — no leak; RSS bounded in a 189–574MB band with no
+monotonic trend.
+
+**Engine bug found: process hangs on exit after a failed database open.** A failed
+`DatabaseFactory.open()` leaves the engine's global non-daemon "ArcadeDB AsyncFlush"
+thread running; nothing stops it, so JVM shutdown blocks forever. **Reproduced in
+pure Java** (`HangRepro.java` — try/catch around `factory.open()` on a missing path;
+`main` returns, process never exits), so this is engine-level, not JPype. Bindings
+mitigation shipped: an `atexit` hook closes the engine's PageManager when the
+interpreter exits (`jvm.py:_stop_engine_background_threads`), with a subprocess
+regression test. Upstream issue to be filed.
+
 ## Caveats
 
 - Laptop, single run-day, `-Xmx4g`, default ArcadeDB profile (upstream's own

@@ -57,6 +57,11 @@ public class OverheadBench {
     case "bench-fulltext" -> benchFulltext(dbDir);
     case "bench-lifecycle" -> benchLifecycle(dbDir);
     case "bench-async" -> benchAsync(dbDir);
+    case "bench-update" -> benchUpdate(dbDir);
+    case "bench-mutate" -> benchMutate(dbDir);
+    case "bench-graphbatch" -> benchGraphBatch(dbDir);
+    case "bench-threads" -> benchThreads(dbDir);
+    case "bench-importexport" -> benchImportExport(dbDir);
     default -> throw new IllegalArgumentException("unknown phase: " + phase);
     }
   }
@@ -507,6 +512,165 @@ public class OverheadBench {
       db.async().waitCompletion();
       final long perInsertCb = (System.nanoTime() - s) / 10_000;
       report("async", "J-async-insert-callback", new long[] { perInsertCb }, "cb=" + done[0]);
+    }
+  }
+
+  // ---------- round 5: UPDATE / DELETE ----------
+
+  static void benchUpdate(final String dbDir) {
+    try (final DatabaseFactory factory = new DatabaseFactory(dbDir); final Database db = factory.create()) {
+      db.transaction(() -> {
+        final var type = db.getSchema().createDocumentType("U");
+        type.createProperty("id", Type.INTEGER);
+        type.createProperty("score", Type.DOUBLE);
+        db.command("sql", "CREATE INDEX ON U (id) UNIQUE");
+      });
+      db.begin();
+      for (int i = 0; i < 10_000; i++) {
+        db.command("sql", "INSERT INTO U SET id = ?, score = ?", i, i * 1.0);
+        if ((i + 1) % 1000 == 0) { db.commit(); db.begin(); }
+      }
+      db.commit();
+
+      final long[] latU = new long[10_000];
+      int i = 0;
+      for (int b = 0; b < 10; b++) {
+        db.begin();
+        for (int j = 0; j < 1_000; j++, i++) {
+          final long s = System.nanoTime();
+          db.command("sql", "UPDATE U SET score = score + 1 WHERE id = ?", i);
+          latU[i] = System.nanoTime() - s;
+        }
+        db.commit();
+      }
+      report("update", "J-update-sql", latU, "");
+
+      final long[] latD = new long[5_000];
+      i = 0;
+      for (int b = 0; b < 5; b++) {
+        db.begin();
+        for (int j = 0; j < 1_000; j++, i++) {
+          final long s = System.nanoTime();
+          db.command("sql", "DELETE FROM U WHERE id = ?", i);
+          latD[i] = System.nanoTime() - s;
+        }
+        db.commit();
+      }
+      report("update", "J-delete-sql", latD, "");
+    }
+  }
+
+  // ---------- round 5: record mutation via API ----------
+
+  static void benchMutate(final String dbDir) {
+    try (final DatabaseFactory factory = new DatabaseFactory(dbDir); final Database db = factory.open()) {
+      final long[] lat = new long[10_000];
+      int i = 0;
+      final var it = db.iterateType("Doc", true);
+      db.begin();
+      while (it.hasNext() && i < lat.length) {
+        final var record = (com.arcadedb.database.Document) it.next().getRecord();
+        final long s = System.nanoTime();
+        record.modify().set("score", i * 0.5).save();
+        lat[i] = System.nanoTime() - s;
+        i++;
+        if (i % 1000 == 0) { db.commit(); db.begin(); }
+      }
+      if (db.isTransactionActive()) db.commit();
+      report("mutate", "J-modify-set-save", lat, "");
+    }
+  }
+
+  // ---------- round 5: GraphBatch ----------
+
+  static void benchGraphBatch(final String dbDir) throws Exception {
+    final Random rnd = new Random(11);
+    try (final DatabaseFactory factory = new DatabaseFactory(dbDir); final Database db = factory.create()) {
+      db.transaction(() -> {
+        db.getSchema().createVertexType("P");
+        db.getSchema().createEdgeType("E");
+      });
+      final long sV = System.nanoTime();
+      final RID[][] all = new RID[4][];
+      try (final com.arcadedb.graph.GraphBatch batch = db.batch().withWAL(false).build()) {
+        for (int b = 0; b < 4; b++) {
+          final Object[][] props = new Object[5_000][];
+          for (int i = 0; i < 5_000; i++)
+            props[i] = new Object[] { "id", b * 5_000 + i, "name", "p" + i };
+          all[b] = batch.createVertices("P", props);
+        }
+        final double perVertexUs = (System.nanoTime() - sV) / 1e3 / 20_000;
+        System.out.printf("RESULT,graphbatch,J-create-vertices,20000,%.1f,%.1f,%.1f,%.1f,per-vertex%n",
+            perVertexUs, perVertexUs, perVertexUs, perVertexUs);
+
+        final long sE = System.nanoTime();
+        for (int e = 0; e < 60_000; e++) {
+          final RID a = all[rnd.nextInt(4)][rnd.nextInt(5_000)];
+          final RID c = all[rnd.nextInt(4)][rnd.nextInt(5_000)];
+          batch.newEdge(a, "E", c);
+        }
+        final double perEdgeUs = (System.nanoTime() - sE) / 1e3 / 60_000;
+        System.out.printf("RESULT,graphbatch,J-new-edge,60000,%.1f,%.1f,%.1f,%.1f,per-edge-pre-close%n",
+            perEdgeUs, perEdgeUs, perEdgeUs, perEdgeUs);
+      }
+      System.out.println("INFO,graphbatch,J-closed,ok");
+    }
+  }
+
+  // ---------- round 5: threaded readers/writers ----------
+
+  static void benchThreads(final String dbDir) throws Exception {
+    try (final DatabaseFactory factory = new DatabaseFactory(dbDir); final Database db = factory.open()) {
+      try {
+        db.transaction(() -> db.command("sql", "CREATE INDEX ON Doc (id) UNIQUE"));
+      } catch (final Exception e) {
+        // index may already exist
+      }
+      final int opsPerWorker = 2_000;
+      for (final int workers : new int[] { 1, 2, 4, 8 }) {
+        final var pool = java.util.concurrent.Executors.newFixedThreadPool(workers);
+        final var latch = new java.util.concurrent.CountDownLatch(workers);
+        final long s = System.nanoTime();
+        for (int w = 0; w < workers; w++) {
+          final int seed = 42 + w;
+          pool.submit(() -> {
+            final Random r = new Random(seed);
+            for (int op = 0; op < opsPerWorker; op++) {
+              final int id = r.nextInt(100_000);
+              if (r.nextDouble() < 0.9) {
+                try (final ResultSet rs = db.query("sql", "SELECT score FROM Doc WHERE id = ?", id)) {
+                  while (rs.hasNext()) rs.next();
+                }
+              } else {
+                db.transaction(() -> db.command("sql", "UPDATE Doc SET score = score + 1 WHERE id = ?", id));
+              }
+            }
+            latch.countDown();
+          });
+        }
+        latch.await();
+        pool.shutdown();
+        final double wallS = (System.nanoTime() - s) / 1e9;
+        final double qps = workers * opsPerWorker / wallS;
+        System.out.printf("RESULT,threads,J-oltp-%dt,%d,%.0f,%.0f,%.0f,%.0f,qps%n",
+            workers, workers * opsPerWorker, qps, qps, qps, qps);
+      }
+    }
+  }
+
+  // ---------- round 5: importer / exporter ----------
+
+  static void benchImportExport(final String dbDir) throws Exception {
+    // export the docs db to JSONL, then import into a fresh db — both engine-native
+    try (final DatabaseFactory factory = new DatabaseFactory(dbDir); final Database db = factory.open()) {
+      final String out = dbDir + "_export.jsonl.tgz";
+      new java.io.File(out).delete();
+      final long sX = System.nanoTime();
+      final var exporter = new com.arcadedb.integration.exporter.Exporter(
+          (com.arcadedb.database.LocalDatabase) db, out);
+      exporter.setFormat("jsonl").setOverwrite(true).exportDatabase();
+      System.out.printf("RESULT,importexport,J-export-jsonl,1,%.0f,0,0,0,ms-total%n",
+          (System.nanoTime() - sX) / 1e6);
     }
   }
 

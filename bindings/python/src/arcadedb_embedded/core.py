@@ -119,6 +119,50 @@ class Database:
         except Exception as e:
             raise ArcadeDBError(f"Command failed: {e}") from e
 
+    def run_in_transaction(self, fn, retries: int = 12, backoff_s: float = 0.005):
+        """
+        Execute a callable inside a transaction with automatic retry on
+        concurrent-modification conflicts.
+
+        Mirrors the Java API's ``database.transaction(lambda)`` semantics: on
+        ``ConcurrentModificationException`` / ``NeedRetryException`` the
+        transaction is rolled back and ``fn`` is re-executed, with linear
+        backoff. The ``with db.transaction():`` context manager cannot retry
+        (a ``with`` block can't be re-entered), so use this for contended
+        multi-threaded writes.
+
+        Args:
+            fn: Zero-argument callable executed inside the transaction.
+            retries: Max retry attempts on conflict (default 12).
+            backoff_s: Base sleep between attempts, grows linearly.
+
+        Returns:
+            The return value of ``fn``.
+        """
+        import time as _time
+
+        for attempt in range(retries + 1):
+            self.begin()
+            try:
+                result = fn()
+                self.commit()
+                return result
+            except ArcadeDBError as e:
+                try:
+                    if self.is_transaction_active():
+                        self.rollback()
+                except Exception:
+                    pass
+                msg = str(e)
+                retryable = (
+                    "ConcurrentModificationException" in msg
+                    or "NeedRetryException" in msg
+                )
+                if retryable and attempt < retries:
+                    _time.sleep(backoff_s * (attempt + 1))
+                    continue
+                raise
+
     def begin(self):
         """Begin a transaction."""
         self._check_not_closed()

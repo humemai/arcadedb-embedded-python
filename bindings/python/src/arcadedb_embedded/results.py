@@ -104,6 +104,21 @@ class ResultSet:
         Example:
             >>> rows = db.query("sql", "SELECT FROM Doc").to_json_list()
         """
+        rows: List[Dict[str, Any]] = []
+        for batch in self.iter_json_batches(batch_size=batch_size):
+            rows.extend(batch)
+        return rows
+
+    def iter_json_batches(
+        self, batch_size: int = 10_000
+    ) -> Iterator[List[Dict[str, Any]]]:
+        """
+        Yield rows as lists of dicts, one Java-serialized batch at a time.
+
+        Streaming counterpart of :meth:`to_json_list` with the same JSON-native
+        type semantics; bounds memory to one batch. Falls back to chunked
+        per-row conversion when the bridge jar is unavailable.
+        """
         import json
 
         import jpype
@@ -111,16 +126,23 @@ class ResultSet:
         try:
             row_batcher = jpype.JClass("com.arcadedb.python.RowBatcher")
         except Exception:
-            # Bridge jar unavailable (e.g. source build without it): fall back
-            # to the per-row path so the API stays functional everywhere.
-            return self.to_list()
+            chunk: List[Dict[str, Any]] = []
+            for row in self.iter_dicts():
+                chunk.append(row)
+                if len(chunk) >= batch_size:
+                    yield chunk
+                    chunk = []
+            if chunk:
+                yield chunk
+            return
 
-        rows: List[Dict[str, Any]] = []
         while True:
-            batch = json.loads(str(row_batcher.nextJsonBatch(self._java_result_set, int(batch_size))))
+            batch = json.loads(
+                str(row_batcher.nextJsonBatch(self._java_result_set, int(batch_size)))
+            )
             if not batch:
-                return rows
-            rows.extend(batch)
+                return
+            yield batch
 
     def to_dataframe(self, convert_types: bool = True):
         """

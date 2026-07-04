@@ -185,6 +185,49 @@ class GraphBatch:
                 f"Failed to buffer batch edge '{edge_type}': {e}"
             ) from e
 
+    def new_edges(
+        self,
+        source_rids,
+        edge_type: str,
+        destination_rids,
+    ) -> "GraphBatch":
+        """
+        Buffer many property-less edges with one JPype crossing per call.
+
+        The bulk counterpart of :meth:`new_edge` (which costs one boundary
+        crossing per edge — measured ~24x slower than Java-native for large
+        edge lists). RIDs may be strings ("#1:0") or objects with a string
+        representation. For edges with properties, use :meth:`new_edge`.
+
+        Args:
+            source_rids: Sequence of source vertex RIDs.
+            edge_type: Edge type name.
+            destination_rids: Sequence of destination RIDs (same length).
+        """
+        self._check_not_closed()
+        import jpype
+
+        try:
+            edge_batcher = jpype.JClass("com.arcadedb.python.EdgeBatcher")
+        except Exception:
+            # bridge jar unavailable: fall back to the per-edge path
+            for src, dst in zip(source_rids, destination_rids):
+                self.new_edge(src, edge_type, dst)
+            return self
+
+        try:
+            # One joined string crosses the boundary in a single bulk copy;
+            # a Python list of N strings would be converted element-by-element
+            # by JPype and eat the batching win (measured).
+            src = ";".join(str(r) for r in source_rids)
+            dst = ";".join(str(r) for r in destination_rids)
+            edge_batcher.newEdgesJoined(self._java_graph_batch, src, edge_type, dst)
+            return self
+        except Exception as e:
+            raise ArcadeDBError(
+                f"Failed to buffer batch edges '{edge_type}': {e}"
+            ) from e
+
     def flush(self) -> "GraphBatch":
         """Flush buffered edges to disk."""
         self._check_not_closed()

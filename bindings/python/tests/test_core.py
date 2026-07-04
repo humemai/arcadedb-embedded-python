@@ -1003,3 +1003,49 @@ def test_resultset_close_and_context_manager(temp_db_path):
         rs = db.query("sql", "SELECT FROM C")
         rs.close()
         rs.close()  # idempotent
+
+
+def test_failed_open_does_not_hang_process_exit(tmp_path):
+    """A failed open_database must not leave the process unable to exit
+    (regression: engine's non-daemon AsyncFlush thread leaked on failed open)."""
+    import subprocess
+    import sys
+
+    code = (
+        "import arcadedb_embedded as a\n"
+        "try:\n"
+        f"    a.open_database({str(tmp_path / 'missing_db')!r})\n"
+        "except Exception:\n"
+        "    pass\n"
+        "print('ok')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
+    )
+    assert proc.returncode == 0
+    assert "ok" in proc.stdout
+
+
+def test_run_in_transaction_commits_and_returns(temp_db_path):
+    """run_in_transaction executes fn transactionally and returns its value."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE R")
+
+        def work():
+            db.command("sql", "INSERT INTO R SET n = 1")
+            return "done"
+
+        assert db.run_in_transaction(work) == "done"
+        assert db.query("sql", "SELECT count(*) as c FROM R").first().get("c") == 1
+
+        # non-retryable errors propagate and roll back
+        def bad():
+            db.command("sql", "INSERT INTO R SET n = 2")
+            raise_sql = "SELECT FROM NonExistentType"
+            db.query("sql", raise_sql).first()
+
+        import pytest as _pytest
+
+        with _pytest.raises(arcadedb.ArcadeDBError):
+            db.run_in_transaction(bad)
+        assert db.query("sql", "SELECT count(*) as c FROM R").first().get("c") == 1
