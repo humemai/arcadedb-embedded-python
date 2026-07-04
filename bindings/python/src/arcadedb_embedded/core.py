@@ -75,15 +75,23 @@ class Database:
         if not args:
             return []
 
+        # Historical semantics (kept for compatibility): a SINGLE list/tuple
+        # argument is the positional-parameter array itself — one element per
+        # `?` placeholder — matching how JPype bound it to the Object[]
+        # varargs before explicit conversion existed. It expands here, with
+        # per-element conversion.
+        if len(args) == 1 and isinstance(args[0], (list, tuple)):
+            args = tuple(args[0])
+
         converted_args = []
         for arg in args:
             if _np is not None and isinstance(arg, _np.ndarray):
                 converted_args.append(to_java_float_array(arg))
             elif isinstance(arg, (Mapping, list, tuple, set)):
-                # Plain Python collections don't participate in JPype's varargs
-                # overload resolution (query(String, String, Object[]) would be
-                # rejected with "No matching overloads"), so convert them to
-                # java.util collections explicitly.
+                # A collection AMONG multiple args is a single collection-typed
+                # parameter (e.g. a query vector). Plain Python collections
+                # don't participate in JPype's varargs overload resolution, so
+                # convert them to java.util collections explicitly.
                 converted_args.append(convert_python_to_java(arg))
             else:
                 converted_args.append(arg)

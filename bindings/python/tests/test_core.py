@@ -1049,3 +1049,32 @@ def test_run_in_transaction_commits_and_returns(temp_db_path):
         with _pytest.raises(arcadedb.ArcadeDBError):
             db.run_in_transaction(bad)
         assert db.query("sql", "SELECT count(*) as c FROM R").first().get("c") == 1
+
+
+def test_single_list_arg_is_positional_param_array(temp_db_path):
+    """A single list argument binds one element per `?` placeholder
+    (historical semantics; regression test for the example-04 CSV ingest
+    idiom that briefly broke when lists became collection parameters)."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE M")
+        db.command("sql", "CREATE PROPERTY M.movieId LONG")
+        db.command("sql", "CREATE PROPERTY M.title STRING")
+        db.command("sql", "CREATE PROPERTY M.score DOUBLE")
+
+        with db.transaction():
+            db.command(
+                "sql",
+                "INSERT INTO M SET `movieId` = ?, `title` = ?, `score` = ?",
+                [1, "Toy Story", 4.5],
+            )
+
+        row = db.query("sql", "SELECT FROM M").first()
+        assert row.get("movieId") == 1
+        assert row.get("title") == "Toy Story"
+        assert row.get("score") == 4.5
+
+        # a collection among MULTIPLE args stays a single collection param
+        rs = db.query(
+            "sql", "SELECT vectorCosineSimilarity(?, ?) as r", [1.0, 0.0], [1.0, 0.0]
+        )
+        assert abs(next(rs).get("r") - 1.0) < 0.001
