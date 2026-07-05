@@ -250,7 +250,7 @@ def _stop_engine_background_threads():
 
         if jpype.isJVMStarted():
             jpype.JClass("com.arcadedb.engine.PageManager").INSTANCE.close()
-    except Exception:  # pragma: no cover - never block interpreter exit
+    except Exception:  # nosec B110  # pragma: no cover - never block interpreter exit
         pass
 
 

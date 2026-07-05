@@ -208,7 +208,18 @@ apply_jar_exclusions "$JARS_DIR" "$JAR_EXCLUSIONS_FILE"
 echo -e "${CYAN}🔨 Building arcadedb-python-bridge.jar...${NC}"
 BRIDGE_SRC="$PY_BINDINGS_DIR/src/java"
 BRIDGE_CLASSES=$(mktemp -d)
-javac -cp "$JARS_DIR/*" -d "$BRIDGE_CLASSES" $(find "$BRIDGE_SRC" -name "*.java")
+# The `dir/*` wildcard classpath breaks on Windows Git Bash (MSYS skips path
+# conversion for args containing `*`, so javac.exe gets an unreadable POSIX
+# path). Build an explicit platform-correct jar list instead.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        BRIDGE_CP=$(find "$JARS_DIR" -name '*.jar' -exec cygpath -m {} \; | paste -sd ';' -)
+        ;;
+    *)
+        BRIDGE_CP=$(find "$JARS_DIR" -name '*.jar' | paste -sd ':' -)
+        ;;
+esac
+javac -cp "$BRIDGE_CP" -d "$BRIDGE_CLASSES" $(find "$BRIDGE_SRC" -name "*.java")
 jar cf "$JARS_DIR/arcadedb-python-bridge.jar" -C "$BRIDGE_CLASSES" .
 rm -rf "$BRIDGE_CLASSES"
 echo -e "${GREEN}✅ Bridge jar built${NC}"

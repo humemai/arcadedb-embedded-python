@@ -159,7 +159,7 @@ class Database:
                 try:
                     if self.is_transaction_active():
                         self.rollback()
-                except Exception:
+                except Exception:  # nosec B110 - best-effort rollback before retry
                     pass
                 msg = str(e)
                 retryable = (

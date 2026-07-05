@@ -72,7 +72,7 @@ class ResultSet:
         """
         try:
             self._java_result_set.close()
-        except Exception:
+        except Exception:  # nosec B110 - close() is best-effort hygiene
             pass
 
     def __enter__(self) -> "ResultSet":
@@ -315,7 +315,7 @@ class ResultSet:
                         np.concatenate(parts) if len(parts) > 1 else parts[0]
                     )
                     continue
-                except Exception:
+                except Exception:  # nosec B110 - fall through to generic merge
                     pass
             column = []
             for p in parts:

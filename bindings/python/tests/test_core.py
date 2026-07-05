@@ -1008,7 +1008,7 @@ def test_resultset_close_and_context_manager(temp_db_path):
 def test_failed_open_does_not_hang_process_exit(tmp_path):
     """A failed open_database must not leave the process unable to exit
     (regression: engine's non-daemon AsyncFlush thread leaked on failed open)."""
-    import subprocess
+    import subprocess  # nosec B404 - fixed argv, no shell
     import sys
 
     code = (
@@ -1019,7 +1019,7 @@ def test_failed_open_does_not_hang_process_exit(tmp_path):
         "    pass\n"
         "print('ok')\n"
     )
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603 - interpreter + inline snippet, no shell
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
     )
     assert proc.returncode == 0
