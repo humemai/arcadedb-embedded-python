@@ -91,7 +91,6 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
 markers = [
-    "server: tests that require server/studio support",
     "integration: tests that require external components",
 ]
 

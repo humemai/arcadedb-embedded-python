@@ -300,7 +300,6 @@ def build_examples(_examples_dir: Path) -> list[ExampleRun]:
         ExampleRun(18, "18_geo_predicates_wkt.py", lambda _, __: []),
         ExampleRun(19, "19_hash_index_exact_match.py", lambda _, __: []),
         ExampleRun(20, "20_graph_algorithms_route_planning.py", lambda _, __: []),
-        ExampleRun(21, "21_server_mode_http_access.py", lambda _, __: []),
         ExampleRun(
             22,
             "22_graph_analytical_view_sql.py",

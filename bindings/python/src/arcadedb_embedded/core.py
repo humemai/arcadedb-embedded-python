@@ -227,15 +227,6 @@ class Database:
                 async_close_error = self._close_async_executors()
                 self._java_db.close()
             except Exception as e:
-                # Server-managed databases cannot be closed directly
-                # They are shared and managed by the server lifecycle
-                error_msg = str(e)
-                if "cannot be closed" in error_msg.lower():
-                    # Silently ignore - this is expected for server databases
-                    self._closed = True
-                    if async_close_error is not None:
-                        raise async_close_error
-                    return
                 raise ArcadeDBError(f"Failed to close database: {e}") from e
             finally:
                 self._closed = True
@@ -1005,8 +996,6 @@ class Database:
         interpreter is shutting down and logging may already be unavailable,
         so we narrow the catch to AttributeError/RuntimeError that JPype can
         raise when the JVM has been torn down before this finalizer runs.
-        Server-managed databases raise UnsupportedOperationException on close,
-        which is handled by close() itself and also suppressed here.
         """
         try:
             self.close()

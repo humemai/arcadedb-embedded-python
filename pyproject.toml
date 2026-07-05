@@ -31,6 +31,7 @@ dev = [
     "isort",
     "mypy",
     "bandit>=1.9.0",
+    "pandas>=3.0.3",
 ]
 docs = [
     "mike>=2.2.0",

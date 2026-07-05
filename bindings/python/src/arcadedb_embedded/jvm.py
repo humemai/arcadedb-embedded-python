@@ -184,7 +184,7 @@ def start_jvm(
             if candidate_args != _JVM_CONFIG:
                 raise ArcadeDBError(
                     "JVM is already started. Configure JVM args/heap before the "
-                    "first database or server creation."
+                    "first database creation."
                 )
             return
 
@@ -197,7 +197,7 @@ def start_jvm(
         if has_overrides:
             raise ArcadeDBError(
                 "JVM is already started. Configure JVM args/heap before the "
-                "first database or server creation."
+                "first database creation."
             )
 
         _JVM_CONFIG = candidate_args

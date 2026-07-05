@@ -1,6 +1,6 @@
 """
 Core functionality tests for ArcadeDB Python bindings.
-These tests work with our base package (includes SQL, OpenCypher, Studio).
+These tests work with our base package (includes SQL and OpenCypher).
 """
 
 import json
