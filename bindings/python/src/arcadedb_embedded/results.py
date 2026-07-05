@@ -251,7 +251,7 @@ class ResultSet:
                 elif ctype == "dt":
                     arr = np.frombuffer(data, dtype="<i8").astype("datetime64[ms]")
                     if has_nulls:
-                        arr[mask] = np.datetime64("NaT")
+                        arr[mask] = np.datetime64("NaT", "ms")
                     values = arr
                 elif ctype == "b1":
                     arr = np.frombuffer(data, dtype=np.uint8).astype(bool)
