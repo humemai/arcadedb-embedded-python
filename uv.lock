@@ -31,13 +31,13 @@ wheels = [
 
 [[package]]
 name = "arcadedb-embedded"
-version = "26.8.1.dev0"
+version = "26.7.2.dev0"
 source = { registry = "bindings/python/dist" }
 dependencies = [
     { name = "jpype1" },
 ]
 wheels = [
-    { path = "arcadedb_embedded-26.8.1.dev0-cp312-cp312-manylinux_2_34_x86_64.whl" },
+    { path = "arcadedb_embedded-26.7.2.dev0-cp312-cp312-manylinux_2_34_x86_64.whl" },
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 # Python Bindings vs Java Native: Performance & Memory Report
 
-Measured 2026-07-03/04 · Engine 26.8.1-SNAPSHOT · Maintainer laptop (diagnostic
+Measured 2026-07-03/04 · Engine 26.8.1-SNAPSHOT (lineage since renamed 26.7.2-SNAPSHOT upstream) · Maintainer laptop (diagnostic
 numbers — paper-grade numbers must be re-measured on tk@mini) · Raw data:
 `results/all_results.csv` · Change history: `git log bindings/python` (this work
 spans commits `fdcf3e78db..686996e379`).
