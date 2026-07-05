@@ -253,14 +253,18 @@ else
     FILTERED_MODULES="$DETECTED_MODULES"
 fi
 
-# Manual overrides:
-# java.se: Stable baseline of standard Java SE modules needed by server/import/runtime paths
-# jdk.management: Required by server metrics integrations
+# Manual overrides (added to the jdeps-detected set; jlink pulls transitive
+# `requires` automatically, e.g. java.xml/java.logging via java.sql):
+# jdk.management: JMX beans used by engine memory monitoring
 # jdk.zipfs: Required for JPype to load classes from JARs
 # jdk.unsupported: Often required for Unsafe access in libraries
 # jdk.incubator.vector: Required for vectorized execution paths
+# NOTE: the java.se umbrella used to be force-added as a safety net; with the
+# package embedded-only and jdeps detection fixed, the detected set gates the
+# JRE (full suite + examples verify each build). java.se remains the fallback
+# when detection yields nothing.
 if [ -n "$FILTERED_MODULES" ]; then
-    REQUIRED_MODULES="${FILTERED_MODULES},java.se,jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector"
+    REQUIRED_MODULES="${FILTERED_MODULES},jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector"
 else
     REQUIRED_MODULES="java.se,jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector"
 fi

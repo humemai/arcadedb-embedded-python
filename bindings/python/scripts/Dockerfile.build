@@ -105,7 +105,7 @@ RUN echo "🔍 Analyzing JARs with jdeps..." && \
         FILTERED_MODULES="${DETECTED_MODULES}" ; \
     fi && \
     if [ -n "${FILTERED_MODULES}" ]; then \
-        REQUIRED_MODULES="${FILTERED_MODULES},java.se,jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector" ; \
+        REQUIRED_MODULES="${FILTERED_MODULES},jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector" ; \
     else \
         REQUIRED_MODULES="java.se,jdk.management,jdk.zipfs,jdk.unsupported,jdk.incubator.vector" ; \
     fi && \
