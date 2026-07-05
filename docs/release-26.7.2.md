@@ -1,7 +1,7 @@
-# ArcadeDB v.26.8.1 Release Highlights
+# ArcadeDB v.26.7.2 Release Highlights
 
 This is a living document: fixes, improvements, new features, and breaking changes are collected here as
-they land during the 26.8.1 development cycle, so the release notes are ready at tag time.
+they land during the 26.7.2 development cycle, so the release notes are ready at tag time.
 
 This release hardens **High Availability (Raft)** recovery. Raft storage is now **durable by default**
 (previously ephemeral outside Kubernetes), which removes a class of permanent follower divergence after a
@@ -47,6 +47,40 @@ that could starve the very snapshot resync meant to heal the node.
   `IndexException` naming the index and telling the operator to rebuild it, instead of hanging. The guard is
   allocation-free so the unique-check hot path is unaffected. Recovery: `DROP` and recreate (or
   `CHECK DATABASE FIX`) the affected index.
+- **LSM index: compaction no longer loses a key that was deleted and re-inserted.** The compactor merges
+  pages oldest to newest, accumulating each key's RIDs in an insertion-ordered set, while the reader treats
+  the LAST position of an entry as the newest operation. A RID that was added, deleted, and added again
+  (e.g. a record whose indexed property was changed away and back, across enough writes for the three
+  operations to land in different sealed pages) kept its original pre-tombstone position in the set, so the
+  tombstone ended up "newest" and the row silently vanished from the index after compaction: a query by that
+  key returned nothing while the record still existed
+  ([#4942](https://github.com/ArcadeData/arcadedb/issues/4942)). Duplicates now move to the end of the set so
+  last-write-wins is preserved for both re-added RIDs and repeated tombstones.
+- **LSM index: range scans are no longer truncated by a fully-deleted key on an older page.** The cursor
+  constructor left a cursor positioned on a full-key tombstone (written by `Index.remove(keys)` without a
+  RID, as the geospatial index does internally) alive but not counted in its active-iterator counter, while
+  `next()` decrements that counter whenever ANY cursor is exhausted or leaves the range. The counter could
+  hit zero with other cursors still holding valid rows, silently ending the scan: a range query could return
+  0 rows when the surviving rows all sorted after the tombstoned key
+  ([#4944](https://github.com/ArcadeData/arcadedb/issues/4944)). The constructor now skips past
+  tombstone-only keys at initialization so every cursor left alive is counted, and it releases exhausted
+  cursors instead of letting their stale keys take part in the merge.
+- **LSM index: point lookup on a non-unique index no longer resurrects a deleted RID.** During a `get()` the
+  per-RID tombstone set was local to each page lookup, while the whole-key removed set was already threaded
+  across pages. On a non-unique index a per-RID tombstone and the original ADD routinely live in different
+  pages, so when the walk reached the older page the deletion was forgotten and the deleted row reappeared
+  in equality lookups, disagreeing with the range/cursor path
+  ([#4945](https://github.com/ArcadeData/arcadedb/issues/4945)). The tombstone set is now threaded across
+  pages and the compacted sub-index, exactly like the removed-keys set.
+- **Index: updating the same record twice in one transaction no longer leaves a phantom index entry.** The
+  eager in-transaction index update diffed every save against the record's committed buffer, which stays
+  frozen until commit because serialization is deferred, so the intermediate ADD was never cancelled: after
+  `orig -> mid -> final` in one transaction, a lookup of `mid` still resolved (to the wrong record) and, on a
+  unique index, blocked a later legitimate insert of that value
+  ([#4935](https://github.com/ArcadeData/arcadedb/issues/4935)). The second and subsequent updates now diff
+  against a per-record snapshot of the previous in-transaction indexed state. The snapshot stores ONLY the
+  indexed property values (not a full copy of the document), so the cost per update is independent of the
+  document width and negligible for bulk updates.
 
 ### Improvements
 
@@ -101,4 +135,4 @@ previous ISO-8601 strings. Inbound datetime query parameters are decoded to `jav
   now receive a native temporal type (e.g. `Value.asZonedDateTime()` / `asLocalDate()`), the same as
   against Neo4j. Clients relying on the old string form must read the native temporal instead.
 
-**Full Changelog**: https://github.com/ArcadeData/arcadedb/compare/26.7.1...26.8.1
+**Full Changelog**: https://github.com/ArcadeData/arcadedb/compare/26.7.1...26.7.2
