@@ -241,7 +241,7 @@ SQL-first route-planning workflow:
 
 ---
 
-### 🕸️ [22_graph_analytical_view_sql.py](./22_graph_analytical_view_sql.py)
+### 🕸️ [21_graph_analytical_view_sql.py](./21_graph_analytical_view_sql.py)
 **Graph Analytical View | SQL DDL | Schema Metadata | Rebuild Lifecycle**
 
 SQL-first Graph Analytical View workflow:

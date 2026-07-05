@@ -632,7 +632,7 @@ Examples:
 - `examples/19_hash_index_exact_match.py`
 - `examples/20_graph_algorithms_route_planning.py`
 - `examples/21_server_mode_http_access.py`
-- `examples/22_graph_analytical_view_sql.py`
+- `examples/21_graph_analytical_view_sql.py`
 
 Why these are good:
 

@@ -301,8 +301,8 @@ def build_examples(_examples_dir: Path) -> list[ExampleRun]:
         ExampleRun(19, "19_hash_index_exact_match.py", lambda _, __: []),
         ExampleRun(20, "20_graph_algorithms_route_planning.py", lambda _, __: []),
         ExampleRun(
-            22,
-            "22_graph_analytical_view_sql.py",
+            21,
+            "21_graph_analytical_view_sql.py",
             lambda _, __: [
                 "--base-cities",
                 "1200",

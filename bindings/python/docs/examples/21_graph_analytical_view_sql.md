@@ -1,6 +1,6 @@
-# 22 - Graph Analytical View SQL Workflow
+# 21 - Graph Analytical View SQL Workflow
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/22_graph_analytical_view_sql.py){ .md-button }
+[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/21_graph_analytical_view_sql.py){ .md-button }
 
 This example shows the intended Python posture for Graph Analytical Views: keep the
 binding surface thin and drive the entire lifecycle with SQL, even for a much larger
@@ -29,13 +29,13 @@ It covers:
 From `bindings/python/examples`:
 
 ```bash
-python3 22_graph_analytical_view_sql.py
+python3 21_graph_analytical_view_sql.py
 ```
 
 With a custom database path:
 
 ```bash
-python3 22_graph_analytical_view_sql.py --db-path ./my_test_databases/gav_demo
+python3 21_graph_analytical_view_sql.py --db-path ./my_test_databases/gav_demo
 ```
 
 The default run is 100,000 base cities, 25,000 stale-growth cities, and 10,000
@@ -44,7 +44,7 @@ synchronous-growth cities.
 For a smaller smoke-sized run:
 
 ```bash
-python3 22_graph_analytical_view_sql.py --base-cities 1200 --stale-growth-cities 300 --sync-growth-cities 200 --regions 12 --batch-size 300
+python3 21_graph_analytical_view_sql.py --base-cities 1200 --stale-growth-cities 300 --sync-growth-cities 200 --regions 12 --batch-size 300
 ```
 
 ## Notes
