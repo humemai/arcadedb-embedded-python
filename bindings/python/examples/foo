@@ -1,134 +1,0 @@
-======================================================================
-[DOWNLOAD] Dataset Download
-======================================================================
-
-[CLEAN] Removing existing MovieLens small directory: /home/tk/repos/arcadedb-embedded-python/bindings/python/examples/data/movielens-small
-[DOWNLOAD] Downloading MovieLens small dataset
-   Description: ~100K ratings, ~9K movies (~1 MB)
-   URL: https://files.grouplens.org/datasets/movielens/ml-latest-small.zip
-   This may take a few minutes...
-
-   Progress: 0.0% (0.0/0.9 MB)   Progress: 0.8% (0.0/0.9 MB)   Progress: 1.7% (0.0/0.9 MB)   Progress: 2.5% (0.0/0.9 MB)   Progress: 3.3% (0.0/0.9 MB)   Progress: 4.2% (0.0/0.9 MB)   Progress: 5.0% (0.0/0.9 MB)   Progress: 5.9% (0.1/0.9 MB)   Progress: 6.7% (0.1/0.9 MB)   Progress: 7.5% (0.1/0.9 MB)   Progress: 8.4% (0.1/0.9 MB)   Progress: 9.2% (0.1/0.9 MB)   Progress: 10.0% (0.1/0.9 MB)   Progress: 10.9% (0.1/0.9 MB)   Progress: 11.7% (0.1/0.9 MB)   Progress: 12.6% (0.1/0.9 MB)   Progress: 13.4% (0.1/0.9 MB)   Progress: 14.2% (0.1/0.9 MB)   Progress: 15.1% (0.1/0.9 MB)   Progress: 15.9% (0.1/0.9 MB)   Progress: 16.7% (0.2/0.9 MB)   Progress: 17.6% (0.2/0.9 MB)   Progress: 18.4% (0.2/0.9 MB)   Progress: 19.3% (0.2/0.9 MB)   Progress: 20.1% (0.2/0.9 MB)   Progress: 20.9% (0.2/0.9 MB)   Progress: 21.8% (0.2/0.9 MB)   Progress: 22.6% (0.2/0.9 MB)   Progress: 23.4% (0.2/0.9 MB)   Progress: 24.3% (0.2/0.9 MB)   Progress: 25.1% (0.2/0.9 MB)   Progress: 26.0% (0.2/0.9 MB)   Progress: 26.8% (0.2/0.9 MB)   Progress: 27.6% (0.3/0.9 MB)   Progress: 28.5% (0.3/0.9 MB)   Progress: 29.3% (0.3/0.9 MB)   Progress: 30.1% (0.3/0.9 MB)   Progress: 31.0% (0.3/0.9 MB)   Progress: 31.8% (0.3/0.9 MB)   Progress: 32.7% (0.3/0.9 MB)   Progress: 33.5% (0.3/0.9 MB)   Progress: 34.3% (0.3/0.9 MB)   Progress: 35.2% (0.3/0.9 MB)   Progress: 36.0% (0.3/0.9 MB)   Progress: 36.8% (0.3/0.9 MB)   Progress: 37.7% (0.4/0.9 MB)   Progress: 38.5% (0.4/0.9 MB)   Progress: 39.4% (0.4/0.9 MB)   Progress: 40.2% (0.4/0.9 MB)   Progress: 41.0% (0.4/0.9 MB)   Progress: 41.9% (0.4/0.9 MB)   Progress: 42.7% (0.4/0.9 MB)   Progress: 43.5% (0.4/0.9 MB)   Progress: 44.4% (0.4/0.9 MB)   Progress: 45.2% (0.4/0.9 MB)   Progress: 46.1% (0.4/0.9 MB)   Progress: 46.9% (0.4/0.9 MB)   Progress: 47.7% (0.4/0.9 MB)   Progress: 48.6% (0.5/0.9 MB)   Progress: 49.4% (0.5/0.9 MB)   Progress: 50.2% (0.5/0.9 MB)   Progress: 51.1% (0.5/0.9 MB)   Progress: 51.9% (0.5/0.9 MB)   Progress: 52.8% (0.5/0.9 MB)   Progress: 53.6% (0.5/0.9 MB)   Progress: 54.4% (0.5/0.9 MB)   Progress: 55.3% (0.5/0.9 MB)   Progress: 56.1% (0.5/0.9 MB)   Progress: 56.9% (0.5/0.9 MB)   Progress: 57.8% (0.5/0.9 MB)   Progress: 58.6% (0.5/0.9 MB)   Progress: 59.5% (0.6/0.9 MB)   Progress: 60.3% (0.6/0.9 MB)   Progress: 61.1% (0.6/0.9 MB)   Progress: 62.0% (0.6/0.9 MB)   Progress: 62.8% (0.6/0.9 MB)   Progress: 63.6% (0.6/0.9 MB)   Progress: 64.5% (0.6/0.9 MB)   Progress: 65.3% (0.6/0.9 MB)   Progress: 66.2% (0.6/0.9 MB)   Progress: 67.0% (0.6/0.9 MB)   Progress: 67.8% (0.6/0.9 MB)   Progress: 68.7% (0.6/0.9 MB)   Progress: 69.5% (0.6/0.9 MB)   Progress: 70.3% (0.7/0.9 MB)   Progress: 71.2% (0.7/0.9 MB)   Progress: 72.0% (0.7/0.9 MB)   Progress: 72.9% (0.7/0.9 MB)   Progress: 73.7% (0.7/0.9 MB)   Progress: 74.5% (0.7/0.9 MB)   Progress: 75.4% (0.7/0.9 MB)   Progress: 76.2% (0.7/0.9 MB)   Progress: 77.0% (0.7/0.9 MB)   Progress: 77.9% (0.7/0.9 MB)   Progress: 78.7% (0.7/0.9 MB)   Progress: 79.6% (0.7/0.9 MB)   Progress: 80.4% (0.8/0.9 MB)   Progress: 81.2% (0.8/0.9 MB)   Progress: 82.1% (0.8/0.9 MB)   Progress: 82.9% (0.8/0.9 MB)   Progress: 83.7% (0.8/0.9 MB)   Progress: 84.6% (0.8/0.9 MB)   Progress: 85.4% (0.8/0.9 MB)   Progress: 86.3% (0.8/0.9 MB)   Progress: 87.1% (0.8/0.9 MB)   Progress: 87.9% (0.8/0.9 MB)   Progress: 88.8% (0.8/0.9 MB)   Progress: 89.6% (0.8/0.9 MB)   Progress: 90.4% (0.8/0.9 MB)   Progress: 91.3% (0.9/0.9 MB)   Progress: 92.1% (0.9/0.9 MB)   Progress: 93.0% (0.9/0.9 MB)   Progress: 93.8% (0.9/0.9 MB)   Progress: 94.6% (0.9/0.9 MB)   Progress: 95.5% (0.9/0.9 MB)   Progress: 96.3% (0.9/0.9 MB)   Progress: 97.1% (0.9/0.9 MB)   Progress: 98.0% (0.9/0.9 MB)   Progress: 98.8% (0.9/0.9 MB)   Progress: 99.7% (0.9/0.9 MB)   Progress: 100.0% (0.9/0.9 MB)
-[OK] Downloaded to: /home/tk/repos/arcadedb-embedded-python/bindings/python/examples/data/movielens-small.zip (4.44s)
-[EXTRACT] Extracting...
-[OK] Extracted to: /home/tk/repos/arcadedb-embedded-python/bindings/python/examples/data/movielens-small (0.01s)
-
-[WORK] Systematically introducing NULL values in MovieLens CSV files...
-   movies.csv:   0%|          | 0/9742 [00:00<?, ? rows/s]   movies.csv: 100%|██████████| 9742/9742 [00:00<00:00, 328968.99 rows/s]
-   [OK] movies.csv: 183 NULL genres, 40 NULL title (0.03s)
-   ratings.csv:   0%|          | 0/100836 [00:00<?, ? rows/s]   ratings.csv:  50%|█████     | 50770/100836 [00:00<00:00, 507677.49 rows/s]   ratings.csv: 100%|██████████| 100836/100836 [00:00<00:00, 523094.21 rows/s]
-   [OK] ratings.csv: 3013 NULL timestamp, 1014 NULL rating (0.20s)
-   links.csv:   0%|          | 0/9742 [00:00<?, ? rows/s]   links.csv: 100%|██████████| 9742/9742 [00:00<00:00, 579012.46 rows/s]
-   [OK] links.csv: 470 NULL imdbId, 812 NULL tmdbId (0.02s)
-   tags.csv:   0%|          | 0/3683 [00:00<?, ? rows/s]   tags.csv: 100%|██████████| 3683/3683 [00:00<00:00, 489670.07 rows/s]
-   [OK] tags.csv: 188 NULL tag, 63 NULL timestamp (0.01s)
-
-[TIME]  Total CSV NULL injection time: 0.26s
-
-[STATS] Dataset contents:
-   - tags.csv: 0.1 MB
-   - movies.csv: 0.5 MB
-   - links.csv: 0.2 MB
-   - ratings.csv: 2.3 MB
-
-[CLEAN] Cleaned up zip file
-
-======================================================================
-[OK] MovieLens Dataset Ready!
-======================================================================
-
-[INFO] Use this dataset in examples:
-   data_dir = Path('/home/tk/repos/arcadedb-embedded-python/bindings/python/examples/data/movielens-small')
-   movies_csv = data_dir / 'movies.csv'
-   ratings_csv = data_dir / 'ratings.csv'
-
-[INFO] Dataset info:
-   - ~9,000 movies
-   - ~100,000 ratings
-   - ~600 users
-   - Licensed for educational use
-
-
-[TIME]  CSV verification time: 0.09s
-
-======================================================================
-[STATS] Dataset Verification Report
-======================================================================
-
-[OK] NULL injection was ENABLED
-
-CSV Files:
-  [FILE] movies.csv:
-     Total rows: 9742
-     [OK] NULL genres: 183 (1.9%)
-     [OK] NULL title: 40 (0.4%)
-  [FILE] ratings.csv:
-     Total rows: 100836
-     [OK] NULL timestamp: 3013 (3.0%)
-     [OK] NULL rating: 1014 (1.0%)
-  [FILE] links.csv:
-     Total rows: 9742
-     [OK] NULL imdbId: 470 (4.8%)
-     [OK] NULL tmdbId: 819 (8.4%)
-  [FILE] tags.csv:
-     Total rows: 3683
-     [OK] NULL tag: 188 (5.1%)
-     [OK] NULL timestamp: 63 (1.7%)
-
-======================================================================
-[OK] Verification Complete
-======================================================================
-
-Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
-======================================================================
-[DOWNLOAD] Dataset Download
-======================================================================
-
-[CLEAN] Removing existing Stack Exchange tiny directory: /home/tk/repos/arcadedb-embedded-python/bindings/python/examples/data/stackoverflow-tiny
-[BUILD] Creating stackoverflow-tiny from stackoverflow-small
-   Source: /home/tk/repos/arcadedb-embedded-python/bindings/python/examples/data/stackoverflow-small
-   Output: /home/tk/repos/arcadedb-embedded-python/bindings/python/examples/data/stackoverflow-tiny
-   Rows per file: 10000 (except Tags.xml)
-
-   [OK] Posts.xml: 10,000 rows
-   [OK] Users.xml: 10,000 rows
-   [OK] Comments.xml: 10,000 rows
-   [OK] Tags.xml: copied full file
-   [OK] Badges.xml: 10,000 rows
-   [OK] PostLinks.xml: 10,000 rows
-   [OK] PostHistory.xml: 10,000 rows
-   [OK] Votes.xml: 10,000 rows
-
-[OK] Created stackoverflow-tiny dataset
-
-======================================================================
-[OK] Stack Exchange Dataset Ready!
-======================================================================
-
-[INFO] Use this dataset in examples:
-   data_dir = Path('/home/tk/repos/arcadedb-embedded-python/bindings/python/examples/data/stackoverflow-tiny')
-   posts_xml = data_dir / 'Posts.xml'
-   users_xml = data_dir / 'Users.xml'
-
-[INFO] Dataset info:
-   - Site: cs.stackexchange.com
-   - ~10,000 rows per XML (Tags.xml full)
-   - ~100,000 total rows
-   - Date: 2024-06-30 (pinned for reproducibility)
-   - License: CC BY-SA
-
-
-[COUNTS] Stack Overflow entity counts
-   (copy-friendly for markdown)
-- User: 10,000
-- Post: 10,000
-- Comment: 10,000
-- Badge: 10,000
-- Vote: 10,000
-- PostLink: 10,000
-- Tag: 668
-- PostHistory: 10,000
-- Total: 70,668
-
-[VECTORS] Loading model: all-MiniLM-L6-v2 (cpu)
-Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights: 100%|██████████| 103/103 [00:00<00:00, 12424.53it/s]
