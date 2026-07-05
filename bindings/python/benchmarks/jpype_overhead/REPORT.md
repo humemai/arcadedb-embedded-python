@@ -25,12 +25,14 @@ Three conclusions:
    pinning by Python wrappers, and baseline RSS is 121MB (`-Xmx4g` is a ceiling,
    not a reservation).
 
-Two engine bugs were found and filed upstream, both worked around in the bindings:
+Two engine bugs were found and filed upstream:
 [#4967](https://github.com/ArcadeData/arcadedb/issues/4967) (`Result.toJSON()`
-renders primitive arrays as `"[F@..."`) and
+renders primitive arrays as `"[F@..."` — still open, worked around by the
+bridge's array normalization) and
 [#4991](https://github.com/ArcadeData/arcadedb/issues/4991) (JVM cannot exit after
 a failed `DatabaseFactory.open()` — non-daemon "ArcadeDB AsyncFlush" thread leaks;
-reproduced in pure Java).
+reproduced in pure Java; **fixed upstream in 26.7.2**, so the bindings' atexit
+workaround was removed and the exit-hang regression test now guards the engine fix).
 
 ## Results: before vs. after
 
@@ -49,7 +51,7 @@ reproduced in pure Java).
 | CSV export, 100k rows | — | 2431ms | **498ms** | streaming over JSON batches |
 | Threaded OLTP writers, 8 threads | 106.6k qps | crash (no retry) | **44.6k qps** | `run_in_transaction(retries=)` |
 | `find_nearest` wrapper | 2.48ms (direct) | 2.89ms | **2.69ms (1.08×)** | RID fast path, cached index checks |
-| Failed `open_database` → process exit | hangs (engine bug #4991) | hangs | **exits cleanly** | atexit engine-thread cleanup |
+| Failed `open_database` → process exit | hangs (engine bug #4991) | hangs | **exits cleanly** | atexit workaround, since replaced by the upstream 26.7.2 fix |
 | Plain Python list as query parameter | — | error (overload resolution) | **works** | collection conversion in `_convert_args` |
 
 ### Paths that were already at parity (no fix needed)
@@ -77,7 +79,7 @@ reproduced in pure Java).
 
 ## What changed in the bindings
 
-New/changed public API (all with fallbacks and regression tests; suite 362 passed):
+New/changed public API (all with fallbacks and regression tests; suite 352 passed after the embedded-only cut):
 
 - `ResultSet.to_json_list(batch_size=)` / `iter_json_batches()` — bulk
   materialization via batched Java-side JSON serialization: one JPype crossing per
@@ -92,10 +94,12 @@ New/changed public API (all with fallbacks and regression tests; suite 362 passe
 - `ResultSet.close()` + context-manager support — deterministic release, Java-idiom
   parity (measured optional: GC handles abandoned result sets).
 - Plain Python lists/tuples/sets now work as query parameters.
-- `jvm.py` atexit hook — stops the engine thread leaked by failed opens (#4991
-  workaround) so the interpreter always exits.
+- `jvm.py` atexit hook — stopped the engine thread leaked by failed opens
+  (#4991 workaround); removed once the engine fixed the root cause in 26.7.2.
+  The subprocess regression test remains.
 - `ResultSet.to_columns(batch_size=)` — binary columnar transport
-  (`ColumnBatcher`): typed numpy columns (int64/float64/bool/datetime64[ms]),
+  (`ColumnBatcher`; temporals incl. OffsetDateTime, storable since engine
+  26.7.2): typed numpy columns (int64/float64/bool/datetime64[ms]),
   pandas-convention nulls, per-column JSON fallback for exotic types;
   `to_dataframe()` uses it automatically. Full type fidelity INCLUDING real
   datetimes — faster than the JSON path and typed, superseding the
