@@ -26,6 +26,8 @@ FORK_OWNED_PATHS=(
     "pyproject.toml"
     "uv.lock"
     ".python-version"
+    # Fork tooling for the periodic upstream bindings PR
+    "make-upstream-pr-branch.sh"
 )
 
 FORK_EXCLUDED_PATHS=(
