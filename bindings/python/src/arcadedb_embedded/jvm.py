@@ -4,7 +4,6 @@ ArcadeDB Python Bindings - JVM Management
 Handles JVM initialization and JAR file management.
 """
 
-import atexit
 import glob
 import os
 import platform
@@ -231,27 +230,11 @@ def start_jvm(
     except Exception as e:
         raise ArcadeDBError(f"Failed to start JVM: {e}") from e
 
-    atexit.register(_stop_engine_background_threads)
-
-
-def _stop_engine_background_threads():
-    """Stop the engine's global background machinery at interpreter exit.
-
-    The engine's PageManager singleton starts a non-daemon "ArcadeDB
-    AsyncFlush" thread on first storage access. If a database open *fails*
-    (e.g. path does not exist), nothing ever stops that thread and the
-    Python process hangs forever on exit waiting for the JVM to terminate.
-    Closing the PageManager flushes pending pages and joins the thread; the
-    engine restarts it transparently on next use, so this is safe even when
-    the process exits with databases still open.
-    """
-    try:
-        import jpype
-
-        if jpype.isJVMStarted():
-            jpype.JClass("com.arcadedb.engine.PageManager").INSTANCE.close()
-    except Exception:  # nosec B110  # pragma: no cover - never block interpreter exit
-        pass
+    # NOTE: an atexit hook used to close the engine's PageManager here as a
+    # workaround for ArcadeData/arcadedb#4991 (failed open() leaked a
+    # non-daemon AsyncFlush thread and the process could never exit). The
+    # engine fixed the root cause in 26.7.2; the exit-hang regression test in
+    # tests/test_core.py still guards the behavior.
 
 
 def _normalize_jvm_args(jvm_args: Optional[Union[Iterable[str], str]]) -> list[str]:
