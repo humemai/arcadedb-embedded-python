@@ -40,58 +40,12 @@ with arcadedb.create_database("./mydb") as db:
         print(record.get("name"))
 ```
 
-### HTTP API (Server Mode) - For Remote Access
+### Need remote or multi-process access?
 
-REST requests when server is running - enables remote access:
-
-```python
-import arcadedb_embedded as arcadedb
-import requests
-from requests.auth import HTTPBasicAuth
-
-# Start server with Java API
-server = arcadedb.create_server("./server", "password123")
-server.start()
-
-auth = HTTPBasicAuth("root", "password123")
-
-# Create database via HTTP
-requests.post(
-    f"http://localhost:{server.get_http_port()}/api/v1/server",
-    auth=auth,
-    json={"command": "create database mydb"}
-)
-
-# Create schema
-requests.post(
-    f"http://localhost:{server.get_http_port()}/api/v1/command/mydb",
-    auth=auth,
-    json={"language": "sql", "command": "CREATE DOCUMENT TYPE Person"}
-)
-
-# Insert data
-requests.post(
-    f"http://localhost:{server.get_http_port()}/api/v1/command/mydb",
-    auth=auth,
-    json={"language": "sql", "command": "INSERT INTO Person SET name = 'Alice'"}
-)
-
-# Query data
-response = requests.post(
-    f"http://localhost:{server.get_http_port()}/api/v1/command/mydb",
-    auth=auth,
-    json={"language": "sql", "command": "SELECT FROM Person"}
-)
-result = response.json()
-print(result)
-
-server.stop()
-```
-
-!!! tip "Choose Your Method"
-    - **Embedded mode**: Use for single-process apps (fastest)
-    - **HTTP API**: Use for multi-process/remote access
-    - **Both**: Can be used simultaneously on same server!
+This package is embedded-only. For HTTP access, remote clients, or several
+processes sharing one database, run the official [ArcadeDB server](https://docs.arcadedb.com/#Server)
+(e.g. the `arcadedata/arcadedb` Docker image) and talk to it over its HTTP
+API — see [Access Methods](../api-access-methods.md).
 
 ## Your First Database
 

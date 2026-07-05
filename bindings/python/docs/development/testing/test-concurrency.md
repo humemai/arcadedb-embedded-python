@@ -8,7 +8,7 @@ There are 5 tests demonstrating file locking, thread safety, sequential access, 
 
 - ❌ Multiple **processes** cannot access same database (file lock prevents)
 - ✅ Multiple **threads** can (thread-safe within same process)
-- ✅ Use **server mode** for true multi-process access
+- ✅ For true multi-process access, run the standalone ArcadeDB server
 
 ## Test Cases
 
@@ -35,7 +35,7 @@ Runs a mixed read/write workload across multiple threads, measures basic latency
 ## Architecture
 
 - **Single-process (embedded)**: Thread-safe; file lock prevents other processes
-- **Multi-process**: Requires server mode (HTTP API); embedded access remains file-locked
+- **Multi-process**: Requires the standalone ArcadeDB server (HTTP API); embedded access remains file-locked
 
 ## Overview
 
@@ -46,7 +46,7 @@ Runs a mixed read/write workload across multiple threads, measures basic latency
 
     - ❌ Multiple **processes** cannot (file lock prevents it)
     - ✅ Multiple **threads** can (thread-safe within same process)
-    - ✅ Use **server mode** for true multi-process access
+    - ✅ For true multi-process access, run the standalone ArcadeDB server
 
 These tests demonstrate:
 
@@ -59,7 +59,7 @@ These tests demonstrate:
 
 Understanding ArcadeDB's concurrency model is critical for:
 
-- **Deployment architecture**: Knowing when to use embedded vs server mode
+- **Deployment architecture**: Knowing when to use embedded vs a standalone server
 - **Multi-process applications**: Understanding limitations and workarounds
 - **Thread safety**: Confidently using threads with shared database access
 - **Performance optimization**: Choosing the right access pattern
@@ -115,7 +115,7 @@ db1.close()
     db = arcadedb.open_database("./mydb")    # FAILS with LockException!
     ```
 
-**Solution:** Use [server mode](test-server-patterns.md) for multi-process access.
+**Solution:** Use the standalone ArcadeDB server for multi-process access.
 
 ---
 
@@ -277,7 +277,7 @@ db2.close()
 This is useful for:
 
 1. **Batch processing**: Open → process → close → repeat
-2. **Migration to server**: Create & populate → close → move to server directory
+2. **Migration to a standalone server**: Create & populate → close → move into the server's databases directory
 3. **Temporary exclusive access**: Open → do work → close (release lock)
 
 **Important:**
@@ -345,27 +345,17 @@ Process 1 (main):     db1 = open("./mydb")  🔒 Lock acquired
 Process 2 (subprocess): db2 = open("./mydb")  ❌ LockException!
 ```
 
-**The solution: Server Mode**
+**The solution: run the official ArcadeDB server**
+
+```bash
+# One standalone server owns the databases
+docker run -d -p 2480:2480 -p 2424:2424 \
+  -e JAVA_OPTS="-Darcadedb.server.rootPassword=playwithdata" \
+  arcadedata/arcadedb:latest
+```
 
 ```python
-# Solution: Use server mode for multi-process access
-
-# Main process: Start server
-import arcadedb_embedded as arcadedb
-
-server = arcadedb.create_server("./databases")
-server.start()
-
-# Create database through server
-# "mydb" will be created at ./databases/databases/mydb
-db = server.create_database("mydb")
-
-# Now you have TWO ways to access:
-
-# 1. Embedded access (same process) - Fast, no HTTP
-db.query("sql", "SELECT FROM MyType")
-
-# 2. HTTP access (other processes) - Via HTTP API
+# All processes access it over HTTP
 import requests
 response = requests.post(
     'http://localhost:2480/api/v1/query/mydb',
@@ -373,20 +363,16 @@ response = requests.post(
         'language': 'sql',
         'command': 'SELECT FROM MyType'
     },
-    auth=('root', 'your_password')
+    auth=('root', 'playwithdata')
 )
 ```
 
 **Key insight:**
 
 !!! tip "Multi-Process Architecture"
-    For multi-process applications:
-
-    1. **Start ArcadeDB server** in one process
-    2. **Access via HTTP** from other processes
-    3. **Or**: Use embedded access in server process + HTTP for others
-
-    See [Server Patterns](test-server-patterns.md) for detailed guide.
+    This package is embedded-only (single process owns the files). For
+    multi-process applications, run the standalone ArcadeDB server and have
+    every process talk to it over HTTP.
 
 ## Summary Table
 
@@ -395,8 +381,7 @@ response = requests.post(
 | Multiple threads, same process | ✅ Yes | Thread-safe, share database instance |
 | Sequential: open → close → reopen | ✅ Yes | Must close to release lock |
 | Multiple processes, embedded mode | ❌ No | File lock prevents concurrent access |
-| Multiple processes, server mode | ✅ Yes | Use HTTP API for additional processes |
-| Server-managed embedded + HTTP | ✅ Yes | Best of both worlds |
+| Multiple processes via standalone ArcadeDB server | ✅ Yes | All processes use its HTTP API |
 
 ## Running These Tests
 
@@ -433,17 +418,12 @@ for t in threads:
 db.close()
 ```
 
-### ✅ DO: Use Server Mode for Multi-Process
+### ✅ DO: Use the Standalone Server for Multi-Process
 
-```python
-# Process 1: Start server
-server = arcadedb.create_server("./databases")
-server.start()
-# "mydb" will be created at ./databases/databases/mydb
-db = server.create_database("mydb")
-
-# Process 2+: Use HTTP API
-# (See Server Patterns documentation)
+```bash
+# One standalone ArcadeDB server owns the databases;
+# every process connects over its HTTP API
+docker run -d -p 2480:2480 arcadedata/arcadedb:latest
 ```
 
 ### ✅ DO: Close Between Sequential Opens
@@ -489,11 +469,8 @@ def worker():
 
 ## Related Documentation
 
-- [Server Tests](test-server.md) - Server mode basics
-- [Server Patterns](test-server-patterns.md) - Combining embedded + HTTP access
-- [Concurrency Guide](../../guide/server.md#multi-process-access) - User guide for concurrency
+- [Access Methods](../../api-access-methods.md) - Embedded vs standalone server
 - [Database API](../../api/database.md) - Database class reference
-- [Server API](../../api/server.md) - Server class reference
 
 ## Troubleshooting
 

@@ -140,7 +140,7 @@ rm ./mydb/.lock
 
 #### JVM Memory Configuration
 
-Configure JVM memory in Python **before the first database or server is created**:
+Configure JVM memory in Python **before the first database is created**:
 
 **Basic Configuration (preferred):**
 
@@ -249,7 +249,7 @@ start_jvm(
 
 !!! warning "Configuration Timing"
     JVM options are locked after the JVM starts. Configure `start_jvm(...)` or pass
-    `jvm_kwargs` before the first database or server is created. To change settings,
+    `jvm_kwargs` before the first database is created. To change settings,
     start a new Python process.
 
 !!! tip "Alternative: ARCADEDB_JVM_ERROR_FILE"
@@ -640,81 +640,6 @@ for i in range(0, 1000000, batch_size):
     with db.transaction():
         for j in range(batch_size):
             db.command("sql", "INSERT INTO Data SET id = ?", i + j)
-```
-
-## Server Mode Issues
-
-### Server Won't Start
-
-**Symptom:**
-```python
-server = arcadedb.create_server("./databases")
-server.start()
-# ArcadeDBError: Unable to start server
-```
-
-**Solutions:**
-
-1. **Check port availability:**
-```bash
-lsof -i :2480
-```
-
-Use different port:
-
-```python
-server = arcadedb.create_server(
-    root_path="./databases",
-    http_port=8080  # Different port
-)
-```
-
-2. **Check permissions:**
-```bash
-ls -la ./databases
-# Ensure write permissions
-chmod -R 755 ./databases
-```
-
-3. **Check logs:**
-```python
-# Enable logging
-import logging
-logging.basicConfig(level=logging.DEBUG)
-
-server = arcadedb.create_server("./databases")
-server.start()
-# Check log output
-```
-
----
-
-### Can't Connect to Server
-
-**Symptom:**
-Server running but can't connect via HTTP.
-
-**Solutions:**
-
-1. **Verify server is running:**
-```python
-if server.is_started():
-    print("Server is running")
-    print(f"URL: http://localhost:{server.http_port}")
-```
-
-2. **Check firewall:**
-```bash
-# Linux
-sudo ufw allow 2480
-
-# macOS
-# System Preferences > Security & Privacy > Firewall
-```
-
-3. **Test with curl:**
-```bash
-curl http://localhost:2480/api/v1/server
 ```
 
 ## Vector Search Issues

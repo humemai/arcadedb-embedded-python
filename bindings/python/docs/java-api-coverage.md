@@ -7,9 +7,11 @@ Python bindings surface in this repository. It reflects the current code in
 ## Executive Summary
 
 The Python bindings expose the **core database, schema, graph, vector, async,
-import/export, and server workflows** needed for typical application usage. Most
+and import/export workflows** needed for typical application usage. Most
 omissions are **low-level JVM internals** (WAL details, bucket scanning, binary
 protocol, server plugins, clustering) that are not typically used from Python.
+The package is embedded-only: server mode is intentionally not bundled — use
+the official ArcadeDB server for client-server deployments.
 
 ### Coverage by Area (Qualitative)
 
@@ -23,7 +25,7 @@ protocol, server plugins, clustering) that are not typically used from Python.
 | Async Execution | ✅ Supported | `AsyncExecutor` plus record-level and SQL/Cypher async flows |
 | Data Import | ✅ Supported | SQL import workflows plus a narrow `db.import_documents(...)` wrapper for document files |
 | Data Export | ✅ Supported | JSONL/GraphML/GraphSON + CSV for query results |
-| Server Mode | ✅ Supported | Embedded server lifecycle + Studio access |
+| Server Mode | ❌ Not bundled | Embedded-only package; use the official ArcadeDB server |
 | Advanced/Low-level | ❌ Not exposed | WAL internals, binary protocol, HA/replication, plugins |
 
 ### Detailed Coverage
@@ -127,14 +129,9 @@ Full Pythonic Schema API available via `db.schema`:
 
 #### 5. Server Mode
 
-- ✅ `ArcadeDBServer(root_path, root_password, config)` / `create_server(...)` - Server initialization
-- ✅ `start()`, `stop()`, context manager support
-- ✅ `get_database()`, `create_database()` - Database management
-- ✅ `get_studio_url()`, `get_http_port()`
-- ✅ Context manager support
-- ✅ `get_studio_url()`, `get_http_port()` - Python enhancements
-- ✅ Embedded and HTTP mode support
-- ❌ Plugin management, HA/replication, advanced user/security management
+Not bundled. The embedded server (`create_server`) was removed from the package
+to keep it lean; run the official [ArcadeDB server](https://docs.arcadedb.com/#Server)
+for HTTP access, Studio, plugins, HA/replication, and multi-process deployments.
 
 #### 6. Data Import
 
@@ -215,7 +212,7 @@ index = index_builder.withUnique(true).create()
 | Graph analytics with Cypher | ✅ Excellent | SQL and OpenCypher supported |
 | Document store | ✅ Excellent | SQL and schema APIs |
 | Vector similarity search | ✅ Excellent | JVector + NumPy integration |
-| Development with Studio UI | ✅ Excellent | Server mode included |
+| Development with Studio UI | ❌ Not bundled | Use the standalone ArcadeDB server + export/import |
 | Data migration (CSV/XML/JSONL import) | ✅ Good | SQL import workflows exercised by tests |
 | Async bulk ingestion | ✅ Good | `AsyncExecutor` |
 | Multi-master replication | ❌ Not supported | Java server only |
@@ -228,7 +225,6 @@ These bindings cover the **primary workflows** most Python developers need:
 - Embedded multi-model database
 - Graph, document, vector, and time-series data
 - SQL and OpenCypher queries
-- Server mode for Studio UI and HTTP access
 
 They intentionally **do not expose** low-level JVM internals, clustering, and plugin
 management. For those scenarios, use the Java APIs directly.

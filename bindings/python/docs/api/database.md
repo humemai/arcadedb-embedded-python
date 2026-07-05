@@ -986,5 +986,4 @@ else:
 
 - [Graph Operations](../guide/graphs.md): Working with vertices and edges
 - [Vector Search](../guide/vectors.md): Similarity search with HNSW (JVector) indexes
-- [Server Mode](../guide/server.md): HTTP API and Studio UI
 - [Quick Start](../getting-started/quickstart.md): Getting started guide

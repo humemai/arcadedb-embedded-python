@@ -4,9 +4,9 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 
 ## The Package
 
-| Package | Wheel Size | Installed Size | Java Required | Studio UI | Query Languages |
-|---------|-----------|------------------------------|---------------|-----------|----------------|
-| **arcadedb-embedded** | ~74MB | ~101-103MB | ❌ No | ✅ | SQL, OpenCypher |
+| Package | Wheel Size | Installed Size | Java Required | Query Languages |
+|---------|-----------|------------------------------|---------------|----------------|
+| **arcadedb-embedded** | ~64MB | ~89MB | ❌ No | SQL, OpenCypher |
 
 **Installation:**
 
@@ -20,10 +20,10 @@ pip install arcadedb-embedded
 
 The package includes everything you need:
 
-- **ArcadeDB JARs** (~38MB, uncompressed): Core database with all features
-- **Bundled JRE** (~63MB, uncompressed): Platform-specific Java 25 runtime (via jlink)
+- **ArcadeDB JARs** (~24MB, uncompressed): Core database with the embedded feature set
+- **Bundled JRE** (~65MB, uncompressed): Platform-specific Java 25 runtime (via jlink)
 
-**Current Linux x86_64 package info:** ~74MB compressed wheel, ~63MB JRE, ~38MB JARs, and ~101MB installed. Local installs may show closer to ~103MB on disk depending on filesystem allocation.
+**Current Linux x86_64 package info:** ~64MB compressed wheel, ~65MB JRE, ~24MB JARs, and ~89MB installed.
 
 These numbers are measured from the built wheel file and the extracted
 `site-packages/arcadedb_embedded/` directory, and they vary by platform and version.
@@ -37,66 +37,39 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 - ✅ All platforms use **platform-specific wheels** (not universal)
 - ✅ pip automatically selects the correct wheel for your system
 - ✅ Each platform has its own bundled JRE optimized for that architecture
-- ✅ Current suite validated in the latest local run: 362 passed
+- ✅ Full bindings suite passes on every platform build
 - ✅ Built on native runners (no emulation) for optimal performance
 
 ## What's Included
 
 **Core Features:**
 
-- ✅ **No Java Installation Required**: Platform-specific JRE bundled (~63MB uncompressed)
+- ✅ **No Java Installation Required**: Platform-specific JRE bundled (~65MB uncompressed)
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
 - ✅ **Query Languages**: SQL, OpenCypher (all included)
-- ✅ **Studio Web UI**: Visual database explorer and query editor
-- ✅ **Wire Protocols**: HTTP REST, PostgreSQL, Redis, Bolt (Neo4j)
 - ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 
-**Optimized:**
+**Optimized (embedded-only):**
 
-- Some components are excluded to optimize package size (e.g., gRPC wire protocol)
-- See `scripts/jar_exclusions.txt` in the repository for details
-
-## Test Results
-
-The current bindings suite reports **362 passed** in a full local run:
-
-- ✅ All core database operations
-- ✅ SQL and OpenCypher queries
-- ✅ HTTP server and Studio UI
-- ✅ Vector search and import operations
-- ✅ All platforms validated
+- The package is embedded-only: the HTTP server, Studio web UI, and wire
+  protocols are not bundled. For client-server deployments, run the official
+  [ArcadeDB server](https://docs.arcadedb.com/#Server) alongside — see
+  [Access Methods](../api-access-methods.md).
+- Additional components are excluded to optimize package size (e.g., gRPC
+  wire protocol). See `scripts/jar_exclusions.txt` in the repository for the
+  full list.
 
 ## Use Cases
 
 Perfect for:
 
 - Production Python applications
-- Development and debugging (with Studio UI)
 - Cloud deployments (no Java setup needed!)
 - Docker containers
 - Desktop applications
 - Multi-model database needs (Graph, Document, Vector, Time Series)
 - Any scenario requiring SQL or OpenCypher queries
-
-## Accessing Studio UI
-
-```python
-from arcadedb_embedded import create_server
-
-# Start HTTP server with Studio UI
-server = create_server("./databases")
-server.start()
-
-# Studio UI available at: http://localhost:2480
-# Create databases, run queries, visualize data
-
-# When done
-server.stop()
-```
-
-!!! tip "Studio in Browser"
-    Once the server starts, open your browser to `http://localhost:2480` to access the Studio UI.
 
 ## Import Statement
 
@@ -113,17 +86,17 @@ Simple and consistent across all platforms!
 Current sizes are ballpark values and can move with ArcadeDB, the bundled JRE, the
 target platform, and filesystem overhead after installation:
 
-- **Wheel (compressed)**: ~74MB
-- **Installed package**: ~101-103MB
+- **Wheel (compressed)**: ~64MB
+- **Installed package**: ~89MB
 
 **Components (uncompressed):**
 
-- **ArcadeDB JARs**: ~38MB
-- **Bundled JRE**: ~63MB (platform-specific Java 25 runtime via jlink)
+- **ArcadeDB JARs**: ~24MB (51 JARs)
+- **Bundled JRE**: ~65MB (platform-specific Java 25 runtime via jlink)
 
 **Optimizations:**
 
-- Some components excluded for size (e.g., gRPC wire protocol)
+- Embedded-only: server/Studio/wire-protocol JARs excluded
 - See `scripts/jar_exclusions.txt` in repository for details
 
 ## Installation Tips
@@ -165,5 +138,4 @@ print(f"Python: {platform.python_version()}")
 - [Installation Guide](installation.md) - Detailed install instructions
 - [Quick Start](quickstart.md) - Get started in 5 minutes
 - [Build Architecture](../development/build-architecture.md) - How platform-specific wheels are built
-- [Server Mode](../guide/server.md) - Using the HTTP server with Studio UI
 - [Query Languages](../guide/core/queries.md) - SQL and OpenCypher examples

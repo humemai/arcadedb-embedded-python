@@ -28,7 +28,6 @@ arcadedb_embedded/
 ├── jvm.py               # JVM startup (bundled JRE, JAR discovery)
 ├── results.py           # ResultSet, Result (query results)
 ├── schema.py            # Schema/Index/Property helpers
-├── server.py            # ArcadeDBServer (HTTP/Studio)
 ├── transactions.py      # TransactionContext (ACID guard)
 ├── type_conversion.py   # Java ↔ Python value conversion
 └── vector.py            # VectorIndex + array helpers
@@ -111,10 +110,6 @@ arcadedb_embedded/
 
 - `TransactionContext`: context-managed begin/commit/rollback
 
-**`server.py`**
-
-- `ArcadeDBServer`: HTTP/Studio server lifecycle, db management
-
 **`exceptions.py`**
 
 - `ArcadeDBError`: unified exception wrapper
@@ -165,7 +160,7 @@ def start_jvm(
 
 1. Uses the bundled JRE inside the wheel (no system JVM required)
 2. Loads packaged ArcadeDB JARs from `arcadedb_embedded/jars`
-3. Configurable via Python API before first database or server creation (`start_jvm`, `jvm_kwargs`)
+3. Configurable via Python API before first database creation (`start_jvm`, `jvm_kwargs`)
 4. JVM stays live for the process lifetime and cannot be restarted
 
 Thread control example:
@@ -184,9 +179,8 @@ db = arcadedb.create_database(
 
 **Implications:**
 
-- Set JVM options _before_ creating the first database or server in a process
+- Set JVM options _before_ creating the first database in a process
 - Tests that need different JVM args must run in separate processes
-- Server and embedded modes share the same in-process JVM
 
 ---
 
@@ -280,7 +274,6 @@ for batch in large_dataset:
 
 - Holding references to Java objects prevents GC
 - Large ResultSets should be consumed and released
-- Server mode: Monitor JVM heap usage
 
 ## Class Hierarchy
 
@@ -367,12 +360,6 @@ for i in range(5):
 for t in threads:
     t.join()
 ```
-
-**Server Mode:**
-
-- `ArcadeDBServer` is thread-safe
-- HTTP requests handled by internal thread pool
-- Each request gets isolated transaction
 
 ---
 

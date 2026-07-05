@@ -84,7 +84,7 @@ first_row = db.query("sql", "SELECT FROM FirstTest ORDER BY value").first()
 only_row = db.query("sql", "SELECT FROM OneTest WHERE value = 'unique'").one()
 ```
 
-Key behaviors: ResultSet is single-use for iteration, `count()` runs server-side, `one()` validates cardinality, and empty results return `None` for `first()` and an empty list/chunks for conversions.
+Key behaviors: ResultSet is single-use for iteration, `count()` runs engine-side, `one()` validates cardinality, and empty results return `None` for `first()` and an empty list/chunks for conversions.
 3. **Chunk large results** - Use `iter_chunks()` for memory efficiency
 4. **Convert to DataFrame** - For data analysis
 5. **Check for empty** - Use `first()` to check if results exist

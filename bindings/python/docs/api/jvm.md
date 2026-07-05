@@ -1,11 +1,11 @@
 # JVM API
 
 Helpers for locating the bundled runtime and configuring the JVM before the first
-database or server is created.
+database is created.
 
 !!! warning "Configure once per process"
     JVM options are locked after the JVM starts. Call `start_jvm(...)` before the
-    first `create_database(...)`, `open_database(...)`, or `create_server(...)`.
+    first `create_database(...)` or `open_database(...)`.
 
 ## Overview
 
@@ -55,8 +55,8 @@ shutdown_jvm()
 Shuts down the JVM if it is running in the current process.
 
 !!! note
-    Most application code does not need to call this directly. Normal database and
-    server usage should focus on proper object cleanup; use this helper mainly in
+    Most application code does not need to call this directly. Normal database
+    usage should focus on proper object cleanup; use this helper mainly in
     test harnesses or short-lived tooling.
 
 ## get_jar_path

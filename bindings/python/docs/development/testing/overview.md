@@ -14,7 +14,6 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 The test suite covers:
 
 - ✅ **Core database operations** - CRUD, transactions, queries
-- ✅ **Server mode** - HTTP API, multi-client access
 - ✅ **Concurrency patterns** - File locking, thread safety, multi-process
 - ✅ **Graph operations** - Vertices, edges, traversals
 - ✅ **Query languages** - SQL, OpenCypher
@@ -62,7 +61,6 @@ pytest tests/test_core.py::test_database_creation
 
 # Run tests matching a keyword
 pytest -k "transaction"
-pytest -k "server"
 pytest -k "concurrency"
 
 # Run with output (see print statements)
@@ -86,9 +84,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_numpy_support.py`](test-numpy-support.md) | NumPy integration and array conversion behavior |
 | [`test_resultset.py`](test-resultset.md) | Result and ResultSet iteration, accessors, and export helpers |
 | [`test_schema.py`](test-schema.md) | Schema, property, and index management behavior |
-| [`test_server.py`](test-server.md) | Server mode, HTTP API, configuration |
 | [`test_concurrency.py`](test-concurrency.md) | File locking, thread safety, multi-process behavior |
-| [`test_server_patterns.py`](test-server-patterns.md) | Best practices for embedded + server mode |
 | [`test_import_database.py`](test-importer.md) | SQL `IMPORT DATABASE` scenarios and format coverage |
 | [`test_cypher.py`](test-opencypher.md) | OpenCypher query language |
 | [`test_graph_batch.py`](test-graph-batch.md) | Bulk graph-ingest helper coverage |
@@ -138,12 +134,9 @@ pytest -vv -s
 
 ## Test Markers
 
-Tests are organized with pytest markers (`server`, `integration`, `graph_export`):
+Tests are organized with pytest markers (`integration`, `graph_export`):
 
 ```bash
-# Run only server tests
-pytest -m server
-
 # Run only OpenCypher tests
 pytest -k cypher
 
@@ -162,7 +155,6 @@ When the current bindings test suite passes, you should see a clean all-green su
 ## Next Steps
 
 - **New to testing?** Start with [Core Tests](test-core.md)
-- **Using server mode?** See [Server Tests](test-server.md) and [Server Patterns](test-server-patterns.md)
 - **Confused about concurrency?** Read [Concurrency Tests](test-concurrency.md)
 - **Importing data?** Check [Data Import Tests](test-importer.md)
 - **Using OpenCypher?** See [OpenCypher Tests](test-opencypher.md)

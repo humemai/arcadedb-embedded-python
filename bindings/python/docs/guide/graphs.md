@@ -74,20 +74,20 @@ with db.transaction():
 ```
 
 !!! tip "When to Use Each Approach"
-    - **SQL/OpenCypher (default)**: Consistent across embedded and server modes
+    - **SQL/OpenCypher (default)**: Portable across embedded use and the standalone ArcadeDB server
 
 ## Creating Edges
 
 **Important**: In ArcadeDB, edges connect existing vertices. In these docs, the
 recommended write path is SQL/OpenCypher so graph creation looks the same across
-embedded and server usage.
+embedded usage and any standalone ArcadeDB server.
 
 ### Why create edges via SQL `CREATE EDGE`?
 
 `CREATE EDGE ... FROM (...) TO (...)` is the recommended graph-write pattern in docs:
 
 - Clear source/destination semantics
-- Works consistently in embedded and server modes
+- Works identically against a standalone ArcadeDB server
 - Avoids wrapper-level coupling in examples
 
 ### Creating Edges with SQL (recommended)
@@ -456,4 +456,3 @@ For more details, see [OpenCypher Tests](../development/testing/test-opencypher.
 
 - **[Vector Search](vectors.md)**: Add vector embeddings to vertices for similarity search
 - **[Data Import](import.md)**: Import graph data from CSV or ArcadeDB JSONL exports
-- **[Server Mode](server.md)**: Visualize your graph in Studio UI

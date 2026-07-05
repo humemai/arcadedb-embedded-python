@@ -87,7 +87,6 @@ arcadedb-embedded-python/bindings/python/
 │       ├── jvm.py                 # JVM startup logic
 │       ├── results.py             # Query result handling
 │       ├── schema.py              # Schema management
-│       ├── server.py              # ArcadeDBServer
 │       ├── transactions.py        # Transaction management
 │       ├── type_conversion.py     # Python-Java type conversion
 │       └── vector.py              # Vector search support
@@ -115,8 +114,6 @@ arcadedb-embedded-python/bindings/python/
 │   ├── test_numpy_support.py      # NumPy integration tests
 │   ├── test_resultset.py          # Result handling tests
 │   ├── test_schema.py             # Schema tests
-│   ├── test_server.py             # Server tests
-│   ├── test_server_patterns.py    # Server pattern tests
 │   ├── test_timeseries_sql.py     # Timeseries SQL tests
 │   ├── test_transaction_config.py # Transaction tests
 │   ├── test_type_conversion.py    # Type conversion tests
@@ -222,9 +219,6 @@ open htmlcov/index.html
 # Core functionality
 pytest tests/test_core.py
 
-# Server mode
-pytest tests/test_server.py
-
 # Import database coverage
 pytest tests/test_import_database.py
 
@@ -238,9 +232,6 @@ pytest tests/test_cypher.py -k cypher
 ### Test Markers
 
 ```bash
-# Skip server tests
-pytest -m "not server"
-
 # Only OpenCypher tests
 pytest -k cypher
 ```

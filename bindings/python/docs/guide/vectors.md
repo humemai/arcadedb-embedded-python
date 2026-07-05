@@ -238,7 +238,7 @@ rows = db.query(
 
 ## SQL Helpers
 
-- Preferred path for embedded and server modes: `CREATE INDEX ON Doc (embedding)
+- Preferred path: `CREATE INDEX ON Doc (embedding)
   LSM_VECTOR METADATA {"dimensions": 128, "distanceFunction": "COSINE"}`
 - Search via SQL:
     - `SELECT vectorNeighbors('Doc[embedding]', [0.1,0.2], 5) AS res`

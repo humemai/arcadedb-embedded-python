@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 331 Passed | **Platforms**: 4 Supported
+**Status**: ✅ Production Ready | **Tests**: 351 Passed | **Platforms**: 4 Supported
 
 ---
 
@@ -56,11 +56,10 @@ with arcadedb.create_database("./mydb") as db:
 
 ## ✨ Features
 
-- ☕ **No Java Installation Required**: Bundled JRE (~60MB uncompressed)
+- ☕ **No Java Installation Required**: Bundled JRE (~65MB uncompressed)
 - 🌍 **4 Platforms Supported**: Linux (x86_64, ARM64), macOS (ARM64), Windows (x86_64)
-- 🚀 **Embedded Mode**: Direct database access in Python process (no network)
-- 🌐 **Server Mode**: Optional HTTP server with Studio web interface
-- 📦 **Self-contained**: All dependencies bundled (~73MB current Linux wheel)
+- 🚀 **Embedded Mode**: Direct database access in Python process (no network); for client-server or multi-process deployments, use the official [ArcadeDB server](https://arcadedb.com/) alongside
+- 📦 **Self-contained**: All dependencies bundled (~64MB current Linux wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
 - 🔍 **Multiple query languages**: SQL, OpenCypher, MongoDB
 - ⚡ **High performance**: Direct JVM integration via JPype
@@ -76,15 +75,15 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 
 **Package Contents (current Linux x86_64 dev build; varies by platform and version):**
 
-- **Wheel size (compressed)**: ~73MB
-- **ArcadeDB JARs (uncompressed)**: ~32MB
-- **Bundled JRE (uncompressed)**: ~60MB (platform-specific Java 25 runtime via jlink)
-- **Installed package size**: ~102MB
+- **Wheel size (compressed)**: ~64MB
+- **ArcadeDB JARs (uncompressed)**: ~24MB
+- **Bundled JRE (uncompressed)**: ~65MB (platform-specific Java 25 runtime via jlink)
+- **Installed package size**: ~89MB
 
 The compressed wheel size is measured from `dist/*.whl`, and the installed package size
 is measured from the extracted `site-packages/arcadedb_embedded/` directory.
 
-**Note**: Some JARs are excluded to optimize package size (e.g., gRPC wire protocol). See [`scripts/jar_exclusions.txt`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/scripts/jar_exclusions.txt) for details.
+**Note**: The package is embedded-only — server/Studio and other unused JARs are excluded to optimize size (e.g., gRPC wire protocol). See [`scripts/jar_exclusions.txt`](https://github.com/humemai/arcadedb-embedded-python/blob/main/bindings/python/scripts/jar_exclusions.txt) for details.
 
 Import: `import arcadedb_embedded as arcadedb`
 
@@ -92,7 +91,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 331 passed
+**Status**: 351 passed
 
 Tests run against the built wheel via the uv project at the repo root — no
 virtualenv activation needed, and `uv run` works from anywhere in the repo:
@@ -151,7 +150,6 @@ arcadedb_embedded/
 ├── jvm.py               # JVM lifecycle management
 ├── results.py           # ResultSet and Result wrappers
 ├── schema.py            # Schema management API
-├── server.py            # ArcadeDBServer for HTTP mode
 ├── transactions.py      # TransactionContext manager
 ├── type_conversion.py   # Python-Java type conversion utilities
 └── vector.py            # Vector search and HNSW (JVector) indexing

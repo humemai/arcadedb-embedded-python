@@ -12,7 +12,6 @@ All errors from ArcadeDB operations raise `ArcadeDBError` or its subclasses (cur
 - **Transaction errors**: Concurrent modifications, commit failures, rollbacks
 - **Query errors**: Syntax errors, invalid queries, type errors
 - **Database errors**: File I/O errors, corruption, not found
-- **Server errors**: Connection failures, authentication errors, port conflicts
 - **Resource errors**: Out of memory, too many open files
 
 ## ArcadeDBError Class
@@ -150,45 +149,6 @@ except ArcadeDBError as e:
 
 ---
 
-### Server Already Running
-
-```python
-from arcadedb_embedded import create_server, ArcadeDBError
-
-server = create_server()
-server.start()
-
-try:
-    server.start()  # Already started!
-except ArcadeDBError as e:
-    print(f"Server error: {e}")
-    # Server error: Server is already started
-finally:
-    server.stop()
-```
-
-**Solution:** Check `server.is_started()` before calling `start()`.
-
----
-
-### Port Already in Use
-
-```python
-try:
-    server = create_server(config={"http_port": 2480})
-    server.start()
-except ArcadeDBError as e:
-    if "bind" in str(e).lower() or "port" in str(e).lower():
-        print("Port 2480 is already in use")
-        print("Try a different port or stop conflicting process")
-    else:
-        print(f"Server error: {e}")
-```
-
-**Solution:** Use a different port or stop the process using port 2480.
-
----
-
 ## Error Handling Best Practices
 
 ### Specific Error Handling
@@ -293,20 +253,15 @@ else:
 ### Cleanup on Error
 
 ```python
-from arcadedb_embedded import ArcadeDBError, create_server
+from arcadedb_embedded import ArcadeDBError, create_database
 
-server = None
 db = None
 
 try:
-    # Start server
-    server = create_server()
-    server.start()
-
-    # Create database
-    db = server.create_database("temp_db")
+    db = create_database("./temp_db")
 
     # Do work
+    db.command("sql", "CREATE DOCUMENT TYPE Test")
     with db.transaction():
         db.command("sql", "INSERT INTO Test SET data = ?", "value")
 
@@ -317,8 +272,6 @@ finally:
     # Always cleanup
     if db:
         db.close()
-    if server and server.is_started():
-        server.stop()
     print("Cleanup complete")
 ```
 
@@ -568,7 +521,6 @@ if validate_schema(db, "Person", ["name", "email"]):
 
 - Validate queries with test data first
 - Use parameterized queries when possible
-- Test query syntax in Studio UI
 
 ---
 
@@ -588,24 +540,8 @@ if validate_schema(db, "Person", ["name", "email"]):
 
 ---
 
-### Server Errors
-
-- Server already running
-- Port in use
-- Cannot bind to address
-- Database not accessible
-
-**Prevention:**
-
-- Check `is_started()` before operations
-- Use available ports
-- Ensure proper permissions
-
----
-
 ## See Also
 
 - [Database API](database.md) - Database operations that may raise errors
 - [Transactions API](transactions.md) - Transaction error handling
-- [Server API](server.md) - Server-related errors
 - [Troubleshooting Guide](../development/troubleshooting.md) - Common issues and solutions

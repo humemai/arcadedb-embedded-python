@@ -172,8 +172,13 @@ Same quarantine-and-gate method applied to the wheel contents (82MB → **70.8MB
   `jline` (0.4MB, console-only). `micrometer` must stay — server startup
   requires it (found by bisection).
 - **Kept deliberately**: Lucene stack (~7.5MB — FULL_TEXT tokenization +
-  geospatial genuinely use it), JTS (geospatial), server/studio/undertow set
-  (~7MB ≈ 8.5% of wheel — under the "small fraction, keep server mode" bar).
+  geospatial genuinely use it), JTS (geospatial).
+- **Server mode removed (follow-up decision, 2026-07-05)**: the
+  server/studio/undertow/xnio/micrometer set (~7.7MB uncompressed) was
+  initially kept under the "small fraction" bar, then cut when the maintainer
+  opted for an embedded-only package: wheel **70.8MB → 63.5MB**, 51 JARs.
+  The official ArcadeDB server distribution is the supported client-server
+  path. (micrometer's only consumer was server startup, so it went too.)
 - **JRE lever is dead**: the jlink `java.se` umbrella measures within 1MB of the
   jdeps-detected module set (the detected set already includes java.desktop/sql).
   However, the audit found the jdeps detection had been **silently broken** —

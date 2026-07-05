@@ -6,21 +6,21 @@ This document describes the build architecture for creating platform-specific Py
 
 **Goal:** Distribute a single `arcadedb-embedded` package that works on 4 platforms with **zero Java installation required**.
 
-**Achievement:** 4 platform-specific wheels (currently about ~74MB compressed and ~101MB installed on Linux x86_64, with slight platform/version variation) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
+**Achievement:** 4 platform-specific wheels (currently about ~64MB compressed and ~89MB installed on Linux x86_64, with slight platform/version variation) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
 
 ## Supported Platforms
 
 | Platform | Wheel Size | JRE Size | Runner | Build Method | Notes |
 |----------|-----------|----------|---------|--------------|-------|
-| **linux/amd64** | ~74M | ~63M | `ubuntu-24.04` | Docker native | Most common Linux platform |
-| **linux/arm64** | ~70-75M | ~63M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
-| **darwin/arm64** | ~70-75M | ~63M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
-| **windows/amd64** | ~70-75M | ~63M | `windows-2025` | Native build | Windows x86_64 |
+| **linux/amd64** | ~64M | ~65M | `ubuntu-24.04` | Docker native | Most common Linux platform |
+| **linux/arm64** | ~60-65M | ~65M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
+| **darwin/arm64** | ~60-65M | ~65M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
+| **windows/amd64** | ~60-65M | ~65M | `windows-2025` | Native build | Windows x86_64 |
 
 **All supported platforms:**
 
-- ✅ Current suite: 362 passed
-- ✅ ~38M JARs (current Linux x86_64 package info, identical contents across platforms)
+- ✅ Full bindings suite passes on every platform build
+- ✅ ~24M JARs (current Linux x86_64 package info, identical contents across platforms; embedded-only, no server/Studio)
 - ✅ All native runners (no QEMU emulation)
 - ✅ Reproducible builds (pinned runner versions)
 
@@ -392,10 +392,10 @@ bindings/python/
 
 Sizes are ballpark values and vary by platform and version:
 
-- Wheel: ~74M (compressed)
-- JRE: ~63M (uncompressed)
-- JARs: ~38M (uncompressed)
-- Installed package: ~101-103M
+- Wheel: ~64M (compressed)
+- JRE: ~65M (uncompressed)
+- JARs: ~24M (uncompressed)
+- Installed package: ~89M
 
 ## Development
 

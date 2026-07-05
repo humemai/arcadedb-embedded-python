@@ -5,8 +5,8 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 !!! success "Test Coverage"
     Current bindings suite
 
-    - **Current package**: 362 passed
-    - All ArcadeDB features working (SQL, OpenCypher, Studio)
+    - **Current package**: 351 passed
+    - All embedded ArcadeDB features working (SQL, OpenCypher, vectors, graphs)
 
 ## Quick Navigation
 
@@ -24,23 +24,11 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
     CRUD, transactions, queries, graph operations (13 tests)
 
--   :material-server: **[Server Tests](testing/test-server.md)**
-
-    ---
-
-    HTTP API, Studio, configuration
-
 -   :material-lock: **[Concurrency Tests](testing/test-concurrency.md)**
 
     ---
 
     File locking, thread safety, multi-process
-
--   :material-swap-horizontal: **[Server Patterns](testing/test-server-patterns.md)**
-
-    ---
-
-    Embedded + HTTP best practices
 
 -   :material-import: **[Data Import Tests](testing/test-importer.md)**
 
@@ -130,9 +118,7 @@ uv run pytest --cov=arcadedb_embedded --cov-report=html
 | Category | What's Tested |
 |----------|---------------|
 | **Core Operations** | CRUD, transactions, queries, graph operations, vector search |
-| **Server Mode** | HTTP API, Studio UI, configuration, multiple databases |
 | **Concurrency** | File locking, thread safety, multi-process limitations |
-| **Server Patterns** | Embedded+HTTP combinations, lock management |
 | **Data Import** | SQL import workflows, type inference, batch commits |
 | **Query Languages** | SQL, OpenCypher |
 | **Advanced Features** | Unicode support, schema introspection, geospatial SQL, timeseries SQL, graph algorithms, materialized views, HASH indexes |
@@ -145,25 +131,9 @@ uv run pytest --cov=arcadedb_embedded --cov-report=html
 
     - ❌ Multiple **processes** cannot (file lock prevents it)
     - ✅ Multiple **threads** can (thread-safe within same process)
-    - ✅ Use **server mode** for true multi-process access
+    - ✅ For true multi-process access, run the official standalone ArcadeDB server
 
 See [Concurrency Tests](testing/test-concurrency.md) for details.
-
-### Server Access Patterns
-
-Two ways to combine embedded + HTTP access:
-
-1. **Pattern 1**: Embedded First → Server (requires manual `close()`)
-2. **Pattern 2**: Server First → Create (recommended, simpler)
-
-See [Server Patterns](testing/test-server-patterns.md) for detailed comparison.
-
-### Performance Insight
-
-!!! tip "No HTTP Overhead"
-    Embedded access through server is **just as fast** as standalone embedded mode!
-
-    It's a direct JVM call, not HTTP. Same Python process = zero network overhead.
 
 ## Common Testing Workflows
 
@@ -211,8 +181,6 @@ tests/
 ├── test_numpy_support.py              # NumPy integration tests
 ├── test_resultset.py                  # Result handling tests
 ├── test_schema.py                     # Schema tests
-├── test_server.py                     # Server tests
-├── test_server_patterns.py            # Embedded/server access patterns
 ├── test_timeseries_sql.py             # Timeseries SQL coverage
 ├── test_transaction_config.py         # Transaction config tests
 ├── test_type_conversion.py            # Type conversion tests
@@ -229,8 +197,6 @@ tests/
 **Working with databases?** See [Core Tests](testing/test-core.md)
 
 **Need multi-process access?** Read [Concurrency Tests](testing/test-concurrency.md)
-
-**Setting up a server?** Check [Server Patterns](testing/test-server-patterns.md)
 
 **Importing data?** See [Data Import Tests](testing/test-importer.md)
 

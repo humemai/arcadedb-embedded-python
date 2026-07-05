@@ -6,10 +6,10 @@
 
     ---
 
-    Native Python bindings for ArcadeDB with comprehensive embedded/server coverage
+    Native Python bindings for ArcadeDB with comprehensive embedded coverage
 
     - **Status**: ✅ Production Ready
-    - **Tests**: ✅ 362 passed
+    - **Tests**: ✅ Full suite green on every platform build
 
 -   :fontawesome-brands-python:{ .lg .middle } **Pure Python API**
 
@@ -50,8 +50,8 @@ ArcadeDB is a next-generation multi-model database that supports:
 
 ## Why Python Bindings?
 
-These bindings provide native Python access to ArcadeDB's full capabilities with **two
-access methods**:
+These bindings provide native Python access to ArcadeDB's full capabilities through
+an **embedded engine**:
 
 ### Embedded Engine (DSL-first)
 
@@ -66,25 +66,11 @@ access methods**:
         db.command("sql", "INSERT INTO Person SET name = 'Alice'")
     ```
 
-### HTTP API (Server Mode)
-
-- **Remote Access**: HTTP REST endpoints when server is running
-- **Multi-Language**: Any language can connect via HTTP
-- **Use Cases**: Multi-process applications, web services, remote access
-- **Example**:
-    ```python
-    import requests
-    from requests.auth import HTTPBasicAuth
-
-    requests.post(
-        "http://localhost:2480/api/v1/command/mydb",
-        json={"language": "sql", "command": "SELECT FROM Person"},
-        auth=HTTPBasicAuth("root", "password"),
-        timeout=30,
-    )
-    ```
-
-Both APIs can be used **simultaneously** on the same server instance.
+!!! info "Need client-server or multi-process access?"
+    This package is embedded-only. For HTTP access, remote clients, or several
+    processes sharing one database, run the official
+    [ArcadeDB server](https://docs.arcadedb.com/#Server) alongside — see
+    [Access Methods](api-access-methods.md).
 
 ## Additional Features
 
@@ -113,7 +99,6 @@ are doing.
 
 !!! success "Core Features"
     - 🚀 **Embedded Mode** - Direct database access in Python process
-    - 🌐 **Server Mode** - Optional HTTP server with Studio UI
     - 📦 **Self-contained** - All JARs and JRE bundled
     - 🔄 **Multi-model** - Graph, Document, Key/Value, Vector
     - 🔍 **Multiple languages** - SQL, OpenCypher, MongoDB
@@ -157,7 +142,6 @@ features most relevant to Python developers:
 |--------|----------|-------------|
 | Core Operations | ✅ 100% | Database, queries, transactions |
 | Schema Management | ✅ 100% | Types, properties, indexes |
-| Server Mode | ✅ 90% | HTTP server, Studio UI, database management |
 | Vector Search | ✅ 100% | HNSW (JVector) indexing, similarity search |
 | Data Import | ✅ 100% | CSV, XML, and ArcadeDB JSONL |
 | Data Export | ✅ 100% | JSONL, GraphML, GraphSON; CSV for query results |
@@ -171,7 +155,7 @@ We provide a **single, self-contained package** that works on all major platform
 
 | Platforms | Package Name | Size | What's Included |
 |----------|-------------|------|-----------------|
-| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | `arcadedb-embedded` | ~74MB wheel, ~101-103MB installed | Full ArcadeDB + Bundled JRE + Studio UI |
+| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | `arcadedb-embedded` | ~64MB wheel, ~89MB installed | Embedded ArcadeDB + Bundled JRE |
 
 The package uses the standard import:
 
@@ -216,13 +200,13 @@ import arcadedb_embedded as arcadedb
     variation by platform, version, and filesystem:
 
     - **Bundled JRE**
-    (Platform-specific Java 25 runtime trimmed with jlink to only what's required for ArcadeDB, ~63MB uncompressed)
+    (Platform-specific Java 25 runtime trimmed with jlink to only what's required for ArcadeDB, ~65MB uncompressed)
     - **ArcadeDB JARs**
-    (~38MB uncompressed)
+    (~24MB uncompressed)
     - **Wheel download**
-    (~74MB compressed)
+    (~64MB compressed)
     - **Installed package on disk**
-    (~101-103MB)
+    (~89MB)
     - **JPype** (Bridge between Python and the bundled JVM)
 
 ## Community & Support

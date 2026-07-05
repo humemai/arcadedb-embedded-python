@@ -38,7 +38,6 @@ The file uses a few complementary approaches:
 - extract Python fences from Markdown pages
 - execute standalone snippets in subprocesses
 - wrap progressive guide snippets with seeded database setup when the page assumes prior context
-- keep server-specific cases behind the existing server support checks
 
 This is intentionally broader than a smoke test, but it does not try to execute every Python fence in the docs tree.
 

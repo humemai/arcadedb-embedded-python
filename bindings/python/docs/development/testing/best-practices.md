@@ -13,16 +13,6 @@ with arcadedb.create_database("./mydb") as db:
 # Database automatically closed
 ```
 
-```python
-# Also good for servers
-with arcadedb.create_server("./databases") as server:
-    server.start()
-    # "mydb" will be created at ./databases/databases/mydb
-    db = server.create_database("mydb")
-    # ... work ...
-# Server automatically stopped
-```
-
 ### ✅ Close When Done
 
 ```python
@@ -69,18 +59,14 @@ def worker():
 threads = [Thread(target=worker) for _ in range(10)]
 ```
 
-### ✅ Use Server Mode for Multi-Process
+### ✅ Use the Standalone Server for Multi-Process
 
-```python
-# Good: Server mode for multiple processes
-server = arcadedb.create_server(root_path="./databases")
-server.start()
-
-# Python process: embedded access
-db = server.get_database("mydb")
-
-# Other processes: HTTP API
-# http://localhost:2480/api/v1/query/mydb
+```bash
+# Good: run the official ArcadeDB server for multiple processes
+docker run -d -p 2480:2480 -p 2424:2424 \
+  -e JAVA_OPTS="-Darcadedb.server.rootPassword=playwithdata" \
+  arcadedata/arcadedb:latest
+# All processes connect over its HTTP API
 ```
 
 ### ❌ Don't Try Concurrent Process Access
@@ -92,33 +78,6 @@ db1 = arcadedb.create_database("./mydb")  # Locks
 
 # process2.py (simultaneously)
 db2 = arcadedb.open_database("./mydb")    # ❌ LockException!
-```
-
-## Server Patterns
-
-### ✅ Prefer Pattern 2 (Server First)
-
-```python
-# Recommended: Start server first
-server = arcadedb.create_server("./databases")
-server.start()
-# "mydb" will be created at ./databases/databases/mydb
-db = server.create_database("mydb")
-
-# Use embedded access (fast!)
-# HTTP also available for other processes
-```
-
-### ⚠️ Pattern 1 Requires close()
-
-```python
-# If using Pattern 1, MUST close
-db = arcadedb.create_database("./mydb")
-# ... populate ...
-db.close()  # ⚠️ Critical!
-
-# Then start server
-server = arcadedb.create_server(...)
 ```
 
 ## Data Import
@@ -261,26 +220,12 @@ for i in range(1000):
         rec.set("value", i).save()
 ```
 
-### ✅ Server-Managed Embedded = Fast
-
-```python
-# Fast: No HTTP overhead, direct JVM call
-server = arcadedb.create_server("./databases")
-server.start()
-# "mydb" will be created at ./databases/databases/mydb
-db = server.create_database("mydb")
-
-# This is as fast as standalone embedded!
-result = db.query("sql", "SELECT FROM Data")
-```
-
 ## Summary Checklist
 
 - [ ] Use context managers for automatic cleanup
 - [ ] Wrap writes in transactions
 - [ ] Use threads (not processes) for parallelism
-- [ ] Use server mode for multi-process access
-- [ ] Prefer Pattern 2 (server first) for new projects
+- [ ] Use the standalone ArcadeDB server for multi-process access
 - [ ] Pre-create schema for better import performance
 - [ ] Batch operations in transactions
 - [ ] Clean up test databases
@@ -291,6 +236,5 @@ result = db.query("sql", "SELECT FROM Data")
 
 - [Core Tests](test-core.md)
 - [Concurrency Tests](test-concurrency.md)
-- [Server Patterns](test-server-patterns.md)
 - [Import Tests](test-importer.md)
 - [User Guide](../../guide/core/database.md)

@@ -228,7 +228,6 @@ db.close()
 |---------|----------------|--------|
 | SQL | ✅ Yes | All SQL features |
 | OpenCypher | ✅ Yes | Graph queries |
-| Studio UI | ✅ Yes | Web interface |
 ```
 
 #### Internal Links

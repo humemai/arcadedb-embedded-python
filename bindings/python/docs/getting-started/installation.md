@@ -30,7 +30,6 @@ installed, with some variation by platform, version, and filesystem allocation:
 - ✅ **No Java Installation Required**: Bundled platform-specific JRE
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
 - ✅ **Query Languages**: SQL, OpenCypher
-- ✅ **Studio Web UI**: Visual database explorer and query editor
 - ✅ **Wire Protocols**: HTTP REST, PostgreSQL, Redis, Bolt (Neo4j)
 - ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
@@ -104,7 +103,7 @@ pip install dist/arcadedb_embedded-*.whl
 
 ## JVM Configuration
 
-Prefer configuring the bundled JVM **inside Python** before the first database or server is created:
+Prefer configuring the bundled JVM **inside Python** before the first database is created:
 
 ```python
 from arcadedb_embedded.jvm import start_jvm
@@ -151,7 +150,7 @@ JVM arguments use two flag types:
 | `-Djava.awt.headless=true` | Suppress AWT/display initialisation |
 
 !!! warning "One JVM configuration per process"
-    JVM options are locked after the JVM starts. Set `start_jvm(...)` or pass `jvm_kwargs` **before** the first database or server is created. To change JVM settings, start a new Python process.
+    JVM options are locked after the JVM starts. Set `start_jvm(...)` or pass `jvm_kwargs` **before** the first database is created. To change JVM settings, start a new Python process.
 
 !!! tip "Environment fallback (optional)"
     If you must configure JVM flags externally (CI, shell scripts), `ARCADEDB_JVM_ARGS` is still supported, but in-code configuration is preferred.

@@ -161,7 +161,6 @@ nav:
   - 18 - Geo Predicates With WKT: examples/18_geo_predicates_wkt.md
   - 19 - Hash Index Exact Match: examples/19_hash_index_exact_match.md
   - 20 - Graph Algorithms Route Planning: examples/20_graph_algorithms_route_planning.md
-  - 21 - Server Mode And HTTP Access: examples/21_server_mode_http_access.md
   - 22 - Graph Analytical View SQL Workflow: examples/22_graph_analytical_view_sql.md
   - Data Import Patterns: examples/import.md
   - Vector Search Patterns: examples/vectors.md
@@ -172,7 +171,6 @@ nav:
     - Queries: guide/core/queries.md
     - Transactions: guide/core/transactions.md
   - Operations & Logging: guide/operations.md
-  - Server Mode: guide/server.md
   - Vector Search: guide/vectors.md
   - Data Import: guide/import.md
   - Graph Operations: guide/graphs.md
@@ -183,7 +181,6 @@ nav:
   - JVM: api/jvm.md
   - Record Wrappers: api/record-wrappers.md
   - Results: api/results.md
-  - Server: api/server.md
   - Transactions: api/transactions.md
   - Vector: api/vector.md
   - Importer: api/importer.md
@@ -205,7 +202,6 @@ nav:
     - Overview: development/testing.md
     - Getting Started: development/testing/overview.md
     - Core Tests: development/testing/test-core.md
-    - Server Tests: development/testing/test-server.md
     - API Tests:
       - AsyncExecutor: development/testing/test-async-executor.md
       - Schema: development/testing/test-schema.md
@@ -223,7 +219,6 @@ nav:
       - Vector SQL: development/testing/test-vector-sql.md
     - Advanced Testing:
       - Concurrency: development/testing/test-concurrency.md
-      - Server Patterns: development/testing/test-server-patterns.md
       - Data Import: development/testing/test-importer.md
       - Documentation Examples: development/testing/test-docs-examples.md
       - OpenCypher Queries: development/testing/test-opencypher.md
