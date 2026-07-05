@@ -17,6 +17,7 @@ class _JavaTimeTypes(NamedTuple):
     local_date: Any
     local_datetime: Any
     zoned_datetime: Any
+    offset_datetime: Any
 
 
 class _JavaCoreTypes(NamedTuple):
@@ -65,7 +66,13 @@ def _get_java_time_types():
         return _TYPE_CACHE["java_time"]
 
     try:
-        from java.time import Instant, LocalDate, LocalDateTime, ZonedDateTime
+        from java.time import (
+            Instant,
+            LocalDate,
+            LocalDateTime,
+            OffsetDateTime,
+            ZonedDateTime,
+        )
     except ImportError:
         return None
 
@@ -74,6 +81,7 @@ def _get_java_time_types():
         local_date=LocalDate,
         local_datetime=LocalDateTime,
         zoned_datetime=ZonedDateTime,
+        offset_datetime=OffsetDateTime,
     )
     return _TYPE_CACHE["java_time"]
 
@@ -259,6 +267,11 @@ def _conv_zoned_datetime(value):
     )
 
 
+# OffsetDateTime is a storable DATETIME since engine 26.7.2 (#4922); same
+# toInstant() shape as ZonedDateTime.
+_conv_offset_datetime = _conv_zoned_datetime
+
+
 def _conv_map(value):
     return {
         convert_java_to_python(k): convert_java_to_python(v)
@@ -334,6 +347,8 @@ def _convert_and_register(value):
                 return _register(value, _conv_instant)
             if isinstance(value, java_time_types.zoned_datetime):
                 return _register(value, _conv_zoned_datetime)
+            if isinstance(value, java_time_types.offset_datetime):
+                return _register(value, _conv_offset_datetime)
 
         if isinstance(value, java_collection_types.map_type):
             return _register(value, _conv_map)

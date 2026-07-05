@@ -42,6 +42,8 @@ public final class ColumnBatcher {
       return i.toEpochMilli();
     if (v instanceof java.time.ZonedDateTime z)
       return z.toInstant().toEpochMilli();
+    if (v instanceof java.time.OffsetDateTime o)
+      return o.toInstant().toEpochMilli();
     throw new IllegalArgumentException("not a temporal: " + v.getClass());
   }
 
