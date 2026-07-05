@@ -6,7 +6,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 
 | Package | Wheel Size | Installed Size | Java Required | Query Languages |
 |---------|-----------|------------------------------|---------------|----------------|
-| **arcadedb-embedded** | ~64MB | ~89MB | ❌ No | SQL, OpenCypher |
+| **arcadedb-embedded** | ~62MB | ~87MB | ❌ No | SQL, OpenCypher |
 
 **Installation:**
 
@@ -21,9 +21,9 @@ pip install arcadedb-embedded
 The package includes everything you need:
 
 - **ArcadeDB JARs** (~24MB, uncompressed): Core database with the embedded feature set
-- **Bundled JRE** (~65MB, uncompressed): Platform-specific Java 25 runtime (via jlink)
+- **Bundled JRE** (~63MB, uncompressed): Platform-specific Java 25 runtime (via jlink)
 
-**Current Linux x86_64 package info:** ~64MB compressed wheel, ~65MB JRE, ~24MB JARs, and ~89MB installed.
+**Current Linux x86_64 package info:** ~62MB compressed wheel, ~63MB JRE, ~24MB JARs, and ~87MB installed.
 
 These numbers are measured from the built wheel file and the extracted
 `site-packages/arcadedb_embedded/` directory, and they vary by platform and version.
@@ -44,7 +44,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 
 **Core Features:**
 
-- ✅ **No Java Installation Required**: Platform-specific JRE bundled (~65MB uncompressed)
+- ✅ **No Java Installation Required**: Platform-specific JRE bundled (~63MB uncompressed)
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
 - ✅ **Query Languages**: SQL, OpenCypher (all included)
 - ✅ **Vector Search**: Graph-based indexing for embeddings
@@ -86,13 +86,13 @@ Simple and consistent across all platforms!
 Current sizes are ballpark values and can move with ArcadeDB, the bundled JRE, the
 target platform, and filesystem overhead after installation:
 
-- **Wheel (compressed)**: ~64MB
-- **Installed package**: ~89MB
+- **Wheel (compressed)**: ~62MB
+- **Installed package**: ~87MB
 
 **Components (uncompressed):**
 
 - **ArcadeDB JARs**: ~24MB (51 JARs)
-- **Bundled JRE**: ~65MB (platform-specific Java 25 runtime via jlink)
+- **Bundled JRE**: ~63MB (platform-specific Java 25 runtime via jlink, 16 modules)
 
 **Optimizations:**
 

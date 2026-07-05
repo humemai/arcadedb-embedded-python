@@ -8,7 +8,7 @@ The CI/CD workflows now support building and releasing across **4 platforms** fo
 
 ### Single-Package Strategy
 
-- **arcadedb-embedded**: All platforms (~64MB compressed and ~89MB installed on current Linux x86_64 builds; varies slightly by platform and version) - JRE bundled, no external Java needed
+- **arcadedb-embedded**: All platforms (~62MB compressed and ~87MB installed on current Linux x86_64 builds; varies slightly by platform and version) - JRE bundled, no external Java needed
 
 ### Platforms (All Native Runners)
 
@@ -101,12 +101,12 @@ All 4 platforms passing the bindings suite and example workflows:
 
 | Platforms | Wheel Size | JRE Size | Tests |
 |-----------|-----------|----------|-------|
-| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | ~64M | ~65M | full suite ✅ |
+| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | ~62M | ~63M | full suite ✅ |
 
 **All platforms include:**
 
 - ~24M JARs (current Linux x86_64 package info, same contents across platforms; embedded-only — server/Studio/gRPC excluded)
-- Platform-specific JRE (~65M uncompressed, similar across platforms)
+- Platform-specific JRE (~63M uncompressed, similar across platforms)
 - Native runners (no QEMU emulation anywhere)
 
 ## Cross-Platform Building

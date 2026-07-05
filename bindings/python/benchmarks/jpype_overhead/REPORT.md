@@ -183,12 +183,17 @@ Same quarantine-and-gate method applied to the wheel contents (82MB → **70.8MB
   opted for an embedded-only package: wheel **70.8MB → 63.5MB**, 51 JARs.
   The official ArcadeDB server distribution is the supported client-server
   path. (micrometer's only consumer was server startup, so it went too.)
-- **JRE lever is dead**: the jlink `java.se` umbrella measures within 1MB of the
-  jdeps-detected module set (the detected set already includes java.desktop/sql).
-  However, the audit found the jdeps detection had been **silently broken** —
+- **JRE lever**: initially judged dead — with the server jars present, the
+  jdeps-detected module set measured within 1MB of the `java.se` umbrella.
+  The audit also found the jdeps detection had been **silently broken** —
   `lucene-spatial-extras` declares a missing module and aborted the whole scan,
   so builds always used the fallback. Fixed in both build scripts (excluded from
-  the scan, like jboss/wildfly); module detection now actually works.
+  the scan, like jboss/wildfly). After the server removal the detected set
+  shrank well below `java.se`, so the umbrella was dropped (2026-07-05):
+  jlink now builds from the detected 16 modules — wheel **63.5MB → 61.6MB**,
+  gated by the full suite + examples. Floor reached: the remaining candidates
+  (java.desktop is statically required by jts-core/commons-lang3; native-symbol
+  stripping; Lucene sub-jar bisection) are crumbs or rule-violations.
 
 ## Paper-grade verification on tk@mini (2026-07-05)
 
