@@ -35,6 +35,7 @@ dev = [
 ]
 docs = [
     "mike>=2.2.0",
+    "mkdocs>=1.6.1",
     "mkdocs-git-revision-date-localized-plugin>=1.5.3",
     "mkdocs-macros-plugin>=1.5.0",
     "mkdocs-material>=9.7.6",
@@ -55,7 +56,8 @@ package = false
 # `uv sync` doesn't uninstall it again (uv syncs the env to exactly the
 # requested groups). Skip it on a constrained machine with:
 #   uv sync --no-group examples
-default-groups = ["dev", "examples"]
+# docs is default too so plain `uv run mkdocs serve` works without --group.
+default-groups = ["dev", "examples", "docs"]
 
 # The locally built wheel is resolved from dist/ (find-links style), so the
 # version bumps with every upstream sync without editing this file.
@@ -77,6 +79,5 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
 markers = [
-    "server: tests that require server/studio support",
     "integration: tests that require external components",
 ]

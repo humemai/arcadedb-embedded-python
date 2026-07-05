@@ -63,6 +63,7 @@ dev = [
 ]
 docs = [
     { name = "mike" },
+    { name = "mkdocs" },
     { name = "mkdocs-git-revision-date-localized-plugin" },
     { name = "mkdocs-macros-plugin" },
     { name = "mkdocs-material" },
@@ -94,6 +95,7 @@ dev = [
 ]
 docs = [
     { name = "mike", specifier = ">=2.2.0" },
+    { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mkdocs-git-revision-date-localized-plugin", specifier = ">=1.5.3" },
     { name = "mkdocs-macros-plugin", specifier = ">=1.5.0" },
     { name = "mkdocs-material", specifier = ">=9.7.6" },
