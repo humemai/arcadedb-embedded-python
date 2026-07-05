@@ -81,8 +81,8 @@ except ArcadeDBError as e:
 # Assuming User.email has UNIQUE constraint
 try:
     with db.transaction():
-    db.command("sql", "INSERT INTO User SET email = ?", "alice@example.com")
-    db.command("sql", "INSERT INTO User SET email = ?", "alice@example.com")
+        db.command("sql", "INSERT INTO User SET email = ?", "alice@example.com")
+        db.command("sql", "INSERT INTO User SET email = ?", "alice@example.com")
 
 except ArcadeDBError as e:
     print(f"Constraint violation: {e}")
@@ -99,7 +99,7 @@ except ArcadeDBError as e:
 # Assuming Person.age is INTEGER
 try:
     with db.transaction():
-    db.command("sql", "INSERT INTO Person SET age = ?", "not a number")
+        db.command("sql", "INSERT INTO Person SET age = ?", "not a number")
 
 except ArcadeDBError as e:
     print(f"Type error: {e}")
