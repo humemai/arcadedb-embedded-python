@@ -1044,9 +1044,7 @@ def test_run_in_transaction_commits_and_returns(temp_db_path):
             raise_sql = "SELECT FROM NonExistentType"
             db.query("sql", raise_sql).first()
 
-        import pytest as _pytest
-
-        with _pytest.raises(arcadedb.ArcadeDBError):
+        with pytest.raises(arcadedb.ArcadeDBError):
             db.run_in_transaction(bad)
         assert db.query("sql", "SELECT count(*) as c FROM R").first().get("c") == 1
 
@@ -1117,7 +1115,7 @@ def test_to_columns_typed_bulk_materialization(temp_db_path):
 
 def test_to_dataframe_fast_path(temp_db_path):
     """to_dataframe uses the columnar path and yields typed dtypes."""
-    pd = __import__("pytest").importorskip("pandas")
+    pytest.importorskip("pandas")
     with arcadedb.create_database(temp_db_path) as db:
         db.command("sql", "CREATE DOCUMENT TYPE D")
         with db.transaction():

@@ -172,8 +172,6 @@ class GraphBatch:
         string (two bulk copies instead of per-value marshaling — measured
         ~2.4x). Returns None when unavailable/unsuitable so the caller falls
         back to the property-matrix path."""
-        import jpype
-
         try:
             vertex_batcher = jpype.JClass("com.arcadedb.python.VertexBatcher")
         except Exception:
