@@ -31,6 +31,7 @@ FORK_OWNED_PATHS=(
 FORK_EXCLUDED_PATHS=(
     "CLAUDE.md"
     ".github/workflows/benchmark-tests.yml"
+    ".github/workflows/bolt-conformance-spec.yml"
     ".github/workflows/claude-code-review.yml"
     ".github/workflows/claude.yml"
     ".github/workflows/ha-resilience-tests.yml"
@@ -158,6 +159,7 @@ ${YELLOW}Fork-Excluded Files (kept out of the fork):${NC}
     • .github/workflows/benchmark-tests.yml
     • .github/workflows/claude-code-review.yml
     • .github/workflows/claude.yml
+    • .github/workflows/bolt-conformance-spec.yml
     • .github/workflows/ha-resilience-tests.yml
     • .github/workflows/load-tests.yml
     • .github/workflows/license-compliance.yml
