@@ -111,3 +111,22 @@ Milvus/InfluxDB. CypherGlot = workload-shape claims; harness reuse only.
   ArcadeDB JVM default (cgroup-aware) + ForkJoin parallelism stated;
   ES/Milvus/Qdrant per their config, documented per engine in the manifest.
   Every manifest records the engine's effective thread setting.
+
+## Runtime budget & co-scheduling decision (2026-07-06)
+
+1. BUILD ONCE, QUERY MANY: ingest/index-build happens once per (backend, scale)
+   and is timed with its own N=3; the N=5 query repeats run against the
+   persisted store with an engine restart between reps. This removes the
+   dominant cost (multi-hour graph/sparse builds) from the repeat loop with
+   zero fairness impact.
+2. CALIBRATION STUDY decides paper-tier co-scheduling: ~6 representative cells
+   run both solo (12 threads) and 2-at-once (disjoint 6-thread cpusets, no SMT
+   sharing across jobs). If co-run deltas on means AND p95/p99 fall within the
+   solo std, the paper tier runs 2-at-once and the paper states the measured
+   perturbation bound; otherwise latency-bearing cells stay serial and only
+   build/ingest cells co-run. (Permutation cancels between-config bias — fine
+   for ratios — but cannot restore absolute levels/tails, and our headline
+   claims are single-node absolutes.)
+3. 10M-scale and scale-ceiling cells are serial regardless (RAM-bound) — they
+   are also the longest, so co-scheduling only ever accelerates the cheap half
+   of the matrix.
