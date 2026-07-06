@@ -1,0 +1,12 @@
+# LaTeX build artifacts (keep paper.pdf committed for co-author convenience)
+latex/*.aux
+latex/*.bbl
+latex/*.blg
+latex/*.log
+latex/*.out
+latex/*.fls
+latex/*.fdb_latexmk
+latex/*.synctex.gz
+# Raw benchmark outputs (summaries are committed)
+results/raw/
+experiments/**/__pycache__/

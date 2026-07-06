@@ -1,0 +1,885 @@
+%% CypherGlot / VLDB 2027 references.
+%% NOTE: entries marked `note = {VERIFY metadata}` still need confirmation
+%% against the official proceedings/DBLP before camera-ready.
+
+%% ===========================================================================
+%% Existing entries (preserved, with fixes)
+%% ===========================================================================
+
+@inproceedings{ldbc-snb,
+  author    = {Orri Erling and Alex Averbuch and Josep Larriba-Pey and
+               Hassan Chafi and Andrey Gubichev and Arnau Prat-P{\'e}rez and
+               Minh-Duc Pham and Peter Boncz},
+  title     = {The {LDBC} Social Network Benchmark: Interactive Workload},
+  booktitle = {Proceedings of the 2015 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {2015},
+  pages     = {619--630},
+  doi       = {10.1145/2723372.2742786}
+}
+
+@article{jin-predefined-joins,
+  author  = {Guodong Jin and Semih Salihoglu},
+  title   = {Making {RDBMSs} Efficient on Graph Workloads Through Predefined Joins},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {15},
+  number  = {5},
+  pages   = {1011--1023},
+  year    = {2022},
+  doi     = {10.14778/3510397.3510400}
+}
+
+@article{gupta-columnar-graph,
+  author  = {Pranjal Gupta and Amine Mhedhbi and Semih Salihoglu},
+  title   = {Columnar Storage and List-based Processing for Graph Database
+             Management Systems},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {14},
+  number  = {11},
+  pages   = {2491--2504},
+  year    = {2021},
+  doi     = {10.14778/3476249.3476297}
+}
+
+@article{lissandrini-microbench,
+  author  = {Matteo Lissandrini and Martin Brugnara and Yannis Velegrakis},
+  title   = {Beyond Macrobenchmarks: Microbenchmark-based Graph Database
+             Evaluation},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {12},
+  number  = {4},
+  pages   = {390--403},
+  year    = {2018},
+  doi     = {10.14778/3297753.3297759}
+}
+
+@article{gap,
+  author  = {Scott Beamer and Krste Asanovi{\'c} and David Patterson},
+  title   = {The {GAP} Benchmark Suite},
+  journal = {arXiv preprint arXiv:1508.03619},
+  year    = {2015}
+}
+
+@article{m2bench,
+  author  = {Bogyeong Kim and Kyoseung Koo and Undraa Enkhbat and
+             Sohyun Kim and Juhun Kim and Bongki Moon},
+  title   = {{M2Bench}: A Database Benchmark for Multi-model Analytic Workloads},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {16},
+  number  = {4},
+  pages   = {747--759},
+  year    = {2022},
+  doi     = {10.14778/3574245.3574259}
+}
+
+@article{tfb,
+  author  = {Xiangfei Qiu and Jilin Hu and Lekui Zhou and Xingjian Wu and
+             Junyang Du and Buang Zhang and Chenjuan Guo and Aoying Zhou and
+             Christian S. Jensen and Zhenli Sheng and Bin Yang},
+  title   = {{TFB}: Towards Comprehensive and Fair Benchmarking of Time Series
+             Forecasting Methods},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {17},
+  number  = {9},
+  pages   = {2363--2377},
+  year    = {2024},
+  doi     = {10.14778/3665844.3665863}
+}
+
+%% ===========================================================================
+%% Graph benchmarking
+%% ===========================================================================
+
+@article{ldbc-snb-bi,
+  author  = {G{\'a}bor Sz{\'a}rnyas and Jack Waudby and Benjamin A. Steer and
+             D{\'a}vid Szak{\'a}llas and Altan Birler and Mingxi Wu and
+             Yuchen Zhang and Peter Boncz},
+  title   = {The {LDBC} Social Network Benchmark: Business Intelligence Workload},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {16},
+  number  = {4},
+  pages   = {877--890},
+  year    = {2023},
+  doi     = {10.14778/3574245.3574270}
+}
+
+@article{ldbc-graphalytics,
+  author  = {Alexandru Iosup and Tim Hegeman and Wing Lung Ngai and
+             Stijn Heldens and Arnau Prat-P{\'e}rez and Thomas Manhardt and
+             Hassan Chafi and Mihai Capot{\u{a}} and Narayanan Sundaram and
+             Michael Anderson and Ilie Gabriel T{\u{a}}nase and Yinglong Xia and
+             Lifeng Nai and Peter Boncz},
+  title   = {{LDBC} Graphalytics: A Benchmark for Large-Scale Graph Analysis on
+             Parallel and Distributed Platforms},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {9},
+  number  = {13},
+  pages   = {1317--1328},
+  year    = {2016},
+  doi     = {10.14778/3007263.3007270}
+}
+
+@article{ldbc-snb-overview,
+  author  = {Renzo Angles and J{\'a}nos Benjamin Antal and Alex Averbuch and
+             Peter Boncz and Orri Erling and Andrey Gubichev and
+             Vlad Haprian and Moritz Kaufmann and Josep Larriba-Pey and
+             Norbert Mart{\'\i}nez-Bazan and J{\'o}zsef Marton and
+             Marcus Paradies and Minh-Duc Pham and Arnau Prat-P{\'e}rez and
+             Mirko Spasi{\'c} and Benjamin A. Steer and G{\'a}bor Sz{\'a}rnyas and
+             Jack Waudby},
+  title   = {The {LDBC} Social Network Benchmark},
+  journal = {arXiv preprint arXiv:2001.02299},
+  year    = {2020}
+}
+
+@inproceedings{ldbc-snb-interactive-v2,
+  author    = {Jack Waudby and Benjamin A. Steer and Karim Karimov and
+               J{\'o}zsef Marton and Peter Boncz and G{\'a}bor Sz{\'a}rnyas},
+  title     = {The {LDBC} Social Network Benchmark Interactive Workload v2},
+  booktitle = {Performance Evaluation and Benchmarking (TPCTC 2023)},
+  year      = {2024},
+  doi       = {10.1007/978-3-031-68031-1_8}
+}
+
+@article{ldbc-finbench,
+  author  = {Shipeng Qi and Bing Tong and Jiatao Hu and Heng Lin and Yue Pang and
+             Wei Yuan and Songlin Lyu and Zhihui Guo and Ke Huang and Xujin Ba and
+             Qiang Yin and Youren Shen and Yan Zhou and Tao Lv and Jia Li and
+             Lei Zou and Yongwei Wu and G{\'a}bor Sz{\'a}rnyas and Xiaowei Zhu and
+             Wenguang Chen and Chuntao Hong},
+  title   = {The {LDBC} Financial Benchmark: Transaction Workload},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {18},
+  number  = {9},
+  pages   = {3007--3020},
+  year    = {2025},
+  doi     = {10.14778/3746405.3746424}
+}
+
+@inproceedings{s3g2-datagen,
+  author    = {Minh-Duc Pham and Peter Boncz and Orri Erling},
+  title     = {{S3G2}: A Scalable Structure-Correlated Social Graph Generator},
+  booktitle = {Selected Topics in Performance Evaluation and Benchmarking
+               (TPCTC 2012)},
+  year      = {2013},
+  pages     = {156--172},
+  doi       = {10.1007/978-3-642-36727-4_11}
+}
+
+@inproceedings{lsqb,
+  author    = {Amine Mhedhbi and Matteo Lissandrini and Laurens Kuiper and
+               Jack Waudby and G{\'a}bor Sz{\'a}rnyas},
+  title     = {{LSQB}: A Large-Scale Subgraph Query Benchmark},
+  booktitle = {Proceedings of the 4th ACM SIGMOD Joint International Workshop on
+               Graph Data Management Experiences \& Systems (GRADES) and
+               Network Data Analytics (NDA)},
+  year      = {2021},
+  doi       = {10.1145/3461837.3464516}
+}
+
+@article{gmark,
+  author  = {Guillaume Bagan and Angela Bonifati and Radu Ciucanu and
+             George H. L. Fletcher and Aur{\'e}lien Lemay and Nicky Advokaat},
+  title   = {{gMark}: Schema-Driven Generation of Graphs and Queries},
+  journal = {IEEE Transactions on Knowledge and Data Engineering},
+  volume  = {29},
+  number  = {4},
+  pages   = {856--869},
+  year    = {2017},
+  doi     = {10.1109/TKDE.2016.2633993}
+}
+
+@article{world-of-graphdbs,
+  author  = {Yuanyuan Tian},
+  title   = {The World of Graph Databases from an Industry Perspective},
+  journal = {ACM SIGMOD Record},
+  volume  = {51},
+  number  = {4},
+  pages   = {60--67},
+  year    = {2022},
+  doi     = {10.1145/3582302.3582320}
+}
+
+%% ===========================================================================
+%% Native graph systems
+%% ===========================================================================
+
+@article{tigergraph,
+  author  = {Alin Deutsch and Yu Xu and Mingxi Wu and Victor Lee},
+  title   = {{TigerGraph}: A Native {MPP} Graph Database},
+  journal = {arXiv preprint arXiv:1901.08248},
+  year    = {2019}
+}
+
+@inproceedings{kuzu,
+  author    = {Xiyang Feng and Guodong Jin and Ziyi Chen and Chang Liu and
+               Semih Saliho{\u{g}}lu},
+  title     = {K{\`u}zu Graph Database Management System},
+  booktitle = {Proceedings of the 13th Conference on Innovative Data Systems
+               Research (CIDR)},
+  year      = {2023},
+  url       = {https://www.cidrdb.org/cidr2023/papers/p48-jin.pdf},
+  urldate   = {2026}
+}
+
+@inproceedings{graphflow,
+  author    = {Chathura Kankanamge and Siddhartha Sahu and Amine Mhedbi and
+               Jeremy Chen and Semih Salihoglu},
+  title     = {Graphflow: An Active Graph Database},
+  booktitle = {Proceedings of the 2017 ACM International Conference on Management
+               of Data},
+  year      = {2017},
+  doi       = {10.1145/3035918.3056445}
+}
+
+@book{neo4j-book,
+  author    = {Ian Robinson and Jim Webber and Emil Eifrem},
+  title     = {Graph Databases: New Opportunities for Connected Data},
+  edition   = {2nd},
+  publisher = {O'Reilly Media},
+  year      = {2015}
+}
+
+%% ===========================================================================
+%% Graph-on-relational
+%% ===========================================================================
+
+@inproceedings{grfusion,
+  author    = {Mohamed S. Hassan and Tatiana Kuznetsova and Hyun Chai Jeong and
+               Walid G. Aref and Mohammad Sadoghi},
+  title     = {Extending In-Memory Relational Database Engines with Native Graph
+               Support},
+  booktitle = {Proceedings of the 21st International Conference on Extending
+               Database Technology (EDBT)},
+  year      = {2018},
+  pages     = {25--36},
+  doi       = {10.5441/002/edbt.2018.04}
+}
+
+@inproceedings{cytosm,
+  author    = {Benjamin A. Steer and Alhamza Alnaimi and
+               Marco A. B. F. G. Lotz and Felix Cuadrado and
+               Luis M. Vaquero and Joan Varvenne},
+  title     = {Cytosm: Declarative Property Graph Queries Without Data Migration},
+  booktitle = {Proceedings of the Fifth International Workshop on Graph
+               Data-management Experiences \& Systems (GRADES)},
+  year      = {2017},
+  doi       = {10.1145/3078447.3078451}
+}
+
+@inproceedings{graphgen,
+  author    = {Konstantinos Xirogiannopoulos and Amol Deshpande},
+  title     = {Extracting and Analyzing Hidden Graphs from Relational Databases},
+  booktitle = {Proceedings of the 2017 ACM International Conference on Management
+               of Data},
+  year      = {2017},
+  doi       = {10.1145/3035918.3035949}
+}
+
+@article{vertexica,
+  author  = {Alekh Jindal and Praynaa Rawlani and Eugene Wu and
+             Samuel Madden and Amol Deshpande and Michael Stonebraker},
+  title   = {Vertexica: Your Relational Friend for Graph Analytics!},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {7},
+  number  = {13},
+  pages   = {1669--1672},
+  year    = {2014},
+  doi     = {10.14778/2733004.2733057}
+}
+
+@inproceedings{grail,
+  author    = {Jing Fan and Adalbert Gerald Soosai Raj and Jignesh M. Patel},
+  title     = {The Case Against Specialized Graph Analytics Engines},
+  booktitle = {Proceedings of the 7th Biennial Conference on Innovative Data
+               Systems Research (CIDR)},
+  year      = {2015},
+  url       = {https://www.cidrdb.org/cidr2015/Papers/CIDR15_Paper20.pdf},
+  urldate   = {2026}
+}
+
+@inproceedings{emptyheaded,
+  author    = {Christopher R. Aberger and Susan Tu and Kunle Olukotun and
+               Christopher R{\'e}},
+  title     = {{EmptyHeaded}: A Relational Engine for Graph Processing},
+  booktitle = {Proceedings of the 2016 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {2016},
+  doi       = {10.1145/2882903.2915213},
+  note      = {Extended version in ACM TODS 42(4), 2017}
+}
+
+@inproceedings{wcoj-ngo,
+  author    = {Hung Q. Ngo and Ely Porat and Christopher R{\'e} and
+               Atri Rudra},
+  title     = {Worst-case Optimal Join Algorithms},
+  booktitle = {Proceedings of the 31st ACM SIGMOD-SIGACT-SIGAI Symposium on
+               Principles of Database Systems (PODS)},
+  year      = {2012},
+  doi       = {10.1145/2213556.2213565}
+}
+
+@inproceedings{leapfrog-triejoin,
+  author    = {Todd L. Veldhuizen},
+  title     = {Triejoin: A Simple, Worst-Case Optimal Join Algorithm},
+  booktitle = {Proceedings of the 17th International Conference on Database
+               Theory (ICDT)},
+  year      = {2014},
+  doi       = {10.5441/002/icdt.2014.13}
+}
+
+@article{mhedhbi-wcoj-subgraph,
+  author  = {Amine Mhedhbi and Semih Salihoglu},
+  title   = {Optimizing Subgraph Queries by Combining Binary and Worst-Case
+             Optimal Joins},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {12},
+  number  = {11},
+  pages   = {1692--1704},
+  year    = {2019},
+  doi     = {10.14778/3342263.3342643}
+}
+
+@inproceedings{duckpgq,
+  author    = {Dani{\"e}l ten Wolde and Tavneet Singh and G{\'a}bor Sz{\'a}rnyas and
+               Peter Boncz},
+  title     = {{DuckPGQ}: Efficient Property Graph Queries in an Analytical {RDBMS}},
+  booktitle = {Proceedings of the 13th Conference on Innovative Data Systems
+               Research (CIDR)},
+  year      = {2023},
+  url       = {https://www.cidrdb.org/cidr2023/papers/p66-wolde.pdf},
+  urldate   = {2026}
+}
+
+@article{duckpgq-demo,
+  author  = {Dani{\"e}l ten Wolde and G{\'a}bor Sz{\'a}rnyas and Peter Boncz},
+  title   = {{DuckPGQ}: Bringing {SQL/PGQ} to {DuckDB}},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {16},
+  number  = {12},
+  pages   = {4034--4037},
+  year    = {2023},
+  doi     = {10.14778/3611540.3611614}
+}
+
+@article{gqfast,
+  author  = {Chunbin Lin and Benjamin Mandel and Yannis Papakonstantinou and
+             Matthias Springer},
+  title   = {Fast In-Memory {SQL} Analytics on Typed Graphs},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {10},
+  number  = {3},
+  pages   = {265--276},
+  year    = {2016},
+  doi     = {10.14778/3021924.3021941}
+}
+
+@article{modern-graph-relational,
+  author  = {Amine Mhedhbi and Semih Salihoglu},
+  title   = {Modern Techniques for Querying Graph-Structured Relations:
+             Foundations, System Implementations, and Open Challenges},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {15},
+  number  = {12},
+  pages   = {3762--3765},
+  year    = {2022},
+  doi     = {10.14778/3554821.3554894}
+}
+
+@inproceedings{graindb,
+  author    = {Guodong Jin and Nafisa Anzum and Semih Salihoglu},
+  title     = {{GRainDB}: A Relational-core Graph-Relational {DBMS}},
+  booktitle = {Proceedings of the 12th Conference on Innovative Data Systems
+               Research (CIDR)},
+  year      = {2022},
+  url       = {https://www.cidrdb.org/cidr2022/papers/p57-jin.pdf},
+  urldate   = {2026}
+}
+
+@inproceedings{sqlgraph,
+  author    = {Wen Sun and Achille Fokoue and Kavitha Srinivas and
+               Anastasios Kementsietsidis and Gang Hu and Guotong Xie},
+  title     = {{SQLGraph}: An Efficient Relational-Based Property Graph Store},
+  booktitle = {Proceedings of the 2015 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {2015},
+  doi       = {10.1145/2723372.2723732}
+}
+
+%% ===========================================================================
+%% Columnar storage and query execution
+%% ===========================================================================
+
+@inproceedings{cstore,
+  author    = {Michael Stonebraker and Daniel J. Abadi and Adam Batkin and
+               Xuedong Chen and Mitch Cherniack and Miguel Ferreira and
+               Edmond Lau and Amerson Lin and Samuel Madden and
+               Elizabeth O'Neil and Patrick O'Neil and Alex Rasin and
+               Nga Tran and Stan Zdonik},
+  title     = {{C-Store}: A Column-oriented {DBMS}},
+  booktitle = {Proceedings of the 31st International Conference on Very Large
+               Data Bases (VLDB)},
+  year      = {2005},
+  pages     = {553--564}
+}
+
+@inproceedings{monetdb-x100,
+  author    = {Peter Boncz and Marcin Zukowski and Niels Nes},
+  title     = {{MonetDB/X100}: Hyper-Pipelining Query Execution},
+  booktitle = {Proceedings of the 2nd Biennial Conference on Innovative Data
+               Systems Research (CIDR)},
+  year      = {2005},
+  url       = {https://www.cidrdb.org/cidr2005/papers/P19.pdf},
+  urldate   = {2026}
+}
+
+@inproceedings{abadi-column-vs-row,
+  author    = {Daniel J. Abadi and Samuel R. Madden and Nabil Hachem},
+  title     = {Column-Stores vs. Row-Stores: How Different Are They Really?},
+  booktitle = {Proceedings of the 2008 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {2008},
+  doi       = {10.1145/1376616.1376712}
+}
+
+@article{abadi-coldesign,
+  author  = {Daniel Abadi and Peter Boncz and Stavros Harizopoulos and
+             Stratos Idreos and Samuel Madden},
+  title   = {The Design and Implementation of Modern Column-Oriented Database
+             Systems},
+  journal = {Foundations and Trends in Databases},
+  volume  = {5},
+  number  = {3},
+  pages   = {197--280},
+  year    = {2013},
+  doi     = {10.1561/1900000024}
+}
+
+@article{neumann-compile,
+  author  = {Thomas Neumann},
+  title   = {Efficiently Compiling Efficient Query Plans for Modern Hardware},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {4},
+  number  = {9},
+  pages   = {539--550},
+  year    = {2011},
+  doi     = {10.14778/2002938.2002940}
+}
+
+@article{kersten-compiled-vectorized,
+  author  = {Timo Kersten and Viktor Leis and Alfons Kemper and
+             Thomas Neumann and Andrew Pavlo and Peter Boncz},
+  title   = {Everything You Always Wanted to Know About Compiled and Vectorized
+             Queries But Were Afraid to Ask},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {11},
+  number  = {13},
+  pages   = {2209--2222},
+  year    = {2018},
+  doi     = {10.14778/3275366.3284966}
+}
+
+@inproceedings{kemper-hyper,
+  author    = {Alfons Kemper and Thomas Neumann},
+  title     = {{HyPer}: A Hybrid {OLTP\&OLAP} Main Memory Database System Based on
+               Virtual Memory Snapshots},
+  booktitle = {Proceedings of the 27th IEEE International Conference on Data
+               Engineering (ICDE)},
+  year      = {2011},
+  doi       = {10.1109/ICDE.2011.5767867}
+}
+
+@inproceedings{zukowski-vectorwise,
+  author    = {Marcin Zukowski and Mark van de Wiel and Peter Boncz},
+  title     = {Vectorwise: A Vectorized Analytical {DBMS}},
+  booktitle = {Proceedings of the 28th IEEE International Conference on Data
+               Engineering (ICDE)},
+  year      = {2012},
+  doi       = {10.1109/ICDE.2012.148}
+}
+
+@article{idreos-monetdb,
+  author  = {Stratos Idreos and Fabian Groffen and Niels Nes and
+             Stefan Manegold and Sjoerd Mullender and Martin Kersten},
+  title   = {{MonetDB}: Two Decades of Research in Column-oriented Database
+             Architectures},
+  journal = {IEEE Data Engineering Bulletin},
+  volume  = {35},
+  number  = {1},
+  pages   = {40--45},
+  year    = {2012}
+}
+
+@inproceedings{ozcan-htap,
+  author    = {Fatma {\"O}zcan and Yuanyuan Tian and Pinar T{\"o}z{\"u}n},
+  title     = {Hybrid Transactional/Analytical Processing: A Survey},
+  booktitle = {Proceedings of the 2017 ACM International Conference on Management
+               of Data},
+  year      = {2017},
+  doi       = {10.1145/3035918.3054784}
+}
+
+@inproceedings{lang-datablocks,
+  author    = {Harald Lang and Tobias M{\"u}hlbauer and Florian Funke and
+               Peter Boncz and Thomas Neumann and Alfons Kemper},
+  title     = {Data Blocks: Hybrid {OLTP} and {OLAP} on Compressed Storage Using
+               Both Vectorization and Compilation},
+  booktitle = {Proceedings of the 2016 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {2016},
+  pages     = {311--326},
+  doi       = {10.1145/2882903.2882925}
+}
+
+@article{pedreira-velox,
+  author  = {Pedro Pedreira and Orri Erling and Konstantinos Karanasos and
+             Scott Schneider and Wes McKinney and Satya R. Valluri and
+             Mohamed Zait and Jacques Nadeau},
+  title   = {Velox: Meta's Unified Execution Engine},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {15},
+  number  = {12},
+  pages   = {3372--3384},
+  year    = {2022},
+  doi     = {10.14778/3554821.3554829}
+}
+
+@inproceedings{behm-photon,
+  author    = {Alexander Behm and Shoumik Palkar and Utkarsh Agarwal and
+               Timothy Armstrong and David Cashman and Ankur Dave and
+               Todd Greenstein and Shant Hovsepian and Ryan Johnson and
+               Arvind Sai Krishnan and Paul Leventis and Ala Luszczak and
+               Prashanth Menon and Mostafa Mokhtar and Gene Pang and
+               Sameer Paranjpye and Greg Rahn and Bart Samwel and
+               Tom van Bussel and Herman Van Hovell and Maryann Xue and
+               Reynold Xin and Matei Zaharia},
+  title     = {Photon: A Fast Query Engine for Lakehouse Systems},
+  booktitle = {Proceedings of the 2022 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {2022},
+  doi       = {10.1145/3514221.3526054}
+}
+
+@inproceedings{duckdb,
+  author    = {Mark Raasveldt and Hannes M{\"u}hleisen},
+  title     = {{DuckDB}: An Embeddable Analytical Database},
+  booktitle = {Proceedings of the 2019 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {2019},
+  pages     = {1981--1984},
+  doi       = {10.1145/3299869.3320212}
+}
+
+@inproceedings{raasveldt-duckdb-cidr,
+  author    = {Mark Raasveldt and Hannes M{\"u}hleisen},
+  title     = {Data Management for Data Science --- Towards Embedded Analytics},
+  booktitle = {Proceedings of the 10th Conference on Innovative Data Systems
+               Research (CIDR)},
+  year      = {2020},
+  url       = {https://www.cidrdb.org/cidr2020/papers/p23-raasveldt-cidr20.pdf},
+  urldate   = {2026}
+}
+
+@article{clickhouse,
+  author  = {Robert Schulze and Tom Schreiber and Ilya Yatsishin and
+             Ryadh Dahimene and Alexey Milovidov},
+  title   = {{ClickHouse} --- Lightning Fast Analytics for Everyone},
+  journal = {Proceedings of the VLDB Endowment},
+  volume  = {17},
+  number  = {12},
+  pages   = {3731--3744},
+  year    = {2024},
+  doi     = {10.14778/3685800.3685802}
+}
+
+@inproceedings{stonebraker-architectural-era,
+  author    = {Michael Stonebraker and Samuel Madden and Daniel J. Abadi and
+               Stavros Harizopoulos and Nabil Hachem and Pat Helland},
+  title     = {The End of an Architectural Era (It's Time for a Complete Rewrite)},
+  booktitle = {Proceedings of the 33rd International Conference on Very Large
+               Data Bases (VLDB)},
+  year      = {2007},
+  pages     = {1150--1160}
+}
+
+%% ===========================================================================
+%% Cypher / GQL / translation and standards
+%% ===========================================================================
+
+@inproceedings{francis-cypher,
+  author    = {Nadime Francis and Alastair Green and Paolo Guagliardo and
+               Leonid Libkin and Tobias Lindaaker and Victor Marsault and
+               Stefan Plantikow and Mats Rydberg and Petra Selmer and
+               Andr{\'e}s Taylor},
+  title     = {Cypher: An Evolving Query Language for Property Graphs},
+  booktitle = {Proceedings of the 2018 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {2018},
+  doi       = {10.1145/3183713.3190657}
+}
+
+@misc{gql-standard,
+  author       = {{ISO/IEC}},
+  title        = {{ISO/IEC} 39075:2024 Information Technology --- Database
+                  Languages --- {GQL}},
+  howpublished = {International Organization for Standardization},
+  year         = {2024},
+  url          = {https://www.iso.org/standard/76120.html},
+  urldate      = {2026}
+}
+
+@inproceedings{gpml-gql-pgq,
+  author    = {Alin Deutsch and Nadime Francis and Alastair Green and
+               Keith Hare and Bei Li and Leonid Libkin and Tobias Lindaaker and
+               Victor Marsault and Wim Martens and Jan Michels and
+               Filip Murlak and Stefan Plantikow and Petra Selmer and
+               Oskar van Rest and Hannes Voigt and Domagoj Vrgo{\v{c}} and
+               Mingxi Wu and Fred Zemke},
+  title     = {Graph Pattern Matching in {GQL} and {SQL/PGQ}},
+  booktitle = {Proceedings of the 2022 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {2022},
+  doi       = {10.1145/3514221.3526057}
+}
+
+@inproceedings{francis-gql-digest,
+  author    = {Nadime Francis and Am{\'e}lie Gheerbrant and Paolo Guagliardo and
+               Leonid Libkin and Victor Marsault and Wim Martens and
+               Filip Murlak and Liat Peterfreund and Alexandra Rogova and
+               Domagoj Vrgo{\v{c}}},
+  title     = {A Researcher's Digest of {GQL}},
+  booktitle = {Proceedings of the 26th International Conference on Database
+               Theory (ICDT)},
+  year      = {2023},
+  doi       = {10.4230/LIPIcs.ICDT.2023.1}
+}
+
+@inproceedings{angles-gcore,
+  author    = {Renzo Angles and Marcelo Arenas and Pablo Barcel{\'o} and
+               Peter Boncz and George Fletcher and Claudio Gutierrez and
+               Tobias Lindaaker and Marcus Paradies and Stefan Plantikow and
+               Juan Sequeda and Oskar van Rest and Hannes Voigt},
+  title     = {{G-CORE}: A Core for Future Graph Query Languages},
+  booktitle = {Proceedings of the 2018 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {2018},
+  doi       = {10.1145/3183713.3190654}
+}
+
+@inproceedings{vanrest-pgql,
+  author    = {Oskar van Rest and Sungpack Hong and Jinha Kim and Xuming Meng and
+               Hassan Chafi},
+  title     = {{PGQL}: A Property Graph Query Language},
+  booktitle = {Proceedings of the Fourth International Workshop on Graph Data
+               Management Experiences and Systems (GRADES)},
+  year      = {2016},
+  doi       = {10.1145/2960414.2960421}
+}
+
+@inproceedings{rodriguez-gremlin,
+  author    = {Marko A. Rodriguez},
+  title     = {The Gremlin Graph Traversal Machine and Language},
+  booktitle = {Proceedings of the 15th Symposium on Database Programming
+               Languages (DBPL)},
+  year      = {2015},
+  doi       = {10.1145/2815072.2815073}
+}
+
+@article{angles-foundations-survey,
+  author  = {Renzo Angles and Marcelo Arenas and Pablo Barcel{\'o} and
+             Aidan Hogan and Juan Reutter and Domagoj Vrgo{\v{c}}},
+  title   = {Foundations of Modern Query Languages for Graph Databases},
+  journal = {ACM Computing Surveys},
+  volume  = {50},
+  number  = {5},
+  year    = {2017},
+  doi     = {10.1145/3104031}
+}
+
+@article{mami-querytranslation,
+  author  = {Mohamed Nadjib Mami and Damien Graux and Harsh Thakkar and
+             Simon Scerri and S{\"o}ren Auer and Jens Lehmann},
+  title   = {The Query Translation Landscape: A Survey},
+  journal = {arXiv preprint arXiv:1910.03118},
+  year    = {2019}
+}
+
+@article{pgq-expressiveness,
+  author  = {Hadar Rotschield and Liat Peterfreund},
+  title   = {On the Expressiveness of Languages for Querying Property Graphs in
+             Relational Databases},
+  journal = {Proceedings of the ACM on Management of Data},
+  volume  = {3},
+  number  = {5},
+  pages   = {1--18},
+  year    = {2025},
+  doi     = {10.1145/3767715}
+}
+
+%% ===========================================================================
+%% Systems under test
+%% ===========================================================================
+
+@misc{opencypher,
+  author       = {{openCypher}},
+  title        = {{openCypher} Project},
+  howpublished = {\url{https://opencypher.org/}},
+  url          = {https://opencypher.org/},
+  urldate      = {2026}
+}
+
+@misc{apacheage,
+  author       = {{Apache Software Foundation}},
+  title        = {Apache {AGE}},
+  howpublished = {\url{https://age.apache.org/}},
+  url          = {https://age.apache.org/},
+  urldate      = {2026}
+}
+
+@misc{arcadedb,
+  author       = {{ArcadeDB}},
+  title        = {{ArcadeDB}: Multi-Model Database},
+  howpublished = {\url{https://arcadedb.com/}},
+  url          = {https://arcadedb.com/},
+  urldate      = {2026}
+}
+
+@misc{ladybugdb,
+  author       = {{LadybugDB}},
+  title        = {{LadybugDB}},
+  howpublished = {\url{https://ladybugdb.com/}},
+  url          = {https://ladybugdb.com/},
+  urldate      = {2026}
+}
+
+@misc{libsql,
+  author       = {{Turso}},
+  title        = {{libSQL}},
+  howpublished = {\url{https://github.com/tursodatabase/libsql}},
+  url          = {https://github.com/tursodatabase/libsql},
+  urldate      = {2026}
+}
+
+@misc{sqlite,
+  author       = {{SQLite}},
+  title        = {Most Widely Deployed and Used Database Engine},
+  howpublished = {\url{https://sqlite.org/mostdeployed.html}},
+  url          = {https://sqlite.org/mostdeployed.html},
+  urldate      = {2026}
+}
+
+@misc{postgresql,
+  author       = {{PostgreSQL Global Development Group}},
+  title        = {{PostgreSQL} Documentation},
+  howpublished = {\url{https://www.postgresql.org/docs/}},
+  url          = {https://www.postgresql.org/docs/},
+  urldate      = {2026}
+}
+
+@misc{sqlglot,
+  author       = {Toby Mao},
+  title        = {{SQLGlot}: Python {SQL} Parser and Transpiler},
+  howpublished = {\url{https://github.com/tobymao/sqlglot}},
+  url          = {https://github.com/tobymao/sqlglot},
+  urldate      = {2026}
+}
+
+@inproceedings{stonebraker1986postgres,
+  author    = {Michael Stonebraker and Lawrence A. Rowe},
+  title     = {The Design of {POSTGRES}},
+  booktitle = {Proceedings of the 1986 ACM SIGMOD International Conference on
+               Management of Data},
+  year      = {1986},
+  doi       = {10.1145/16894.16888}
+}
+
+%% ===========================================================================
+%% Methodology and benchmarking fairness
+%% ===========================================================================
+
+@inproceedings{fair-benchmarking,
+  author    = {Mark Raasveldt and Pedro Holanda and Tim Gubner and
+               Hannes M{\"u}hleisen},
+  title     = {Fair Benchmarking Considered Difficult: Common Pitfalls in
+               Database Performance Testing},
+  booktitle = {Proceedings of the Workshop on Testing Database Systems (DBTest)},
+  year      = {2018},
+  doi       = {10.1145/3209950.3209955}
+}
+
+@inproceedings{vogelsgesang2018getreal,
+  author    = {Adrian Vogelsgesang and Michael Haubenschild and Jan Finis and
+               Alfons Kemper and Viktor Leis and Tobias M{\"u}hlbauer and
+               Thomas Neumann and Manuel Then},
+  title     = {Get Real: How Benchmarks Fail to Represent the Real World},
+  booktitle = {Proceedings of the Workshop on Testing Database Systems (DBTest)},
+  year      = {2018},
+  doi       = {10.1145/3209950.3209952}
+}
+
+@inproceedings{boncz2013tpch,
+  author    = {Peter Boncz and Thomas Neumann and Orri Erling},
+  title     = {{TPC-H} Analyzed: Hidden Messages and Lessons Learned from an
+               Influential Benchmark},
+  booktitle = {Performance Characterization and Benchmarking (TPCTC 2013)},
+  year      = {2014},
+  doi       = {10.1007/978-3-319-04936-6_5}
+}
+
+@inproceedings{georges2007rigorous,
+  author    = {Andy Georges and Dries Buytaert and Lieven Eeckhout},
+  title     = {Statistically Rigorous {Java} Performance Evaluation},
+  booktitle = {Proceedings of the 22nd Annual ACM SIGPLAN Conference on
+               Object-Oriented Programming Systems, Languages and Applications
+               (OOPSLA)},
+  year      = {2007},
+  pages     = {57--76},
+  doi       = {10.1145/1297027.1297033}
+}
+
+@book{kounev2020benchmarking,
+  author    = {Samuel Kounev and Klaus-Dieter Lange and J{\'o}akim von Kistowski},
+  title     = {Systems Benchmarking: For Scientists and Engineers},
+  publisher = {Springer},
+  year      = {2020},
+  doi       = {10.1007/978-3-030-41705-5}
+}
+
+@article{manolescu2008repeatability,
+  author  = {Ioana Manolescu and Loredana Afanasiev and Andrei Arion and
+             Jens Dittrich and Stefan Manegold and Neoklis Polyzotis and
+             Karl Schnaitter and Pierre Senellart and Spyros Zoupanos and
+             Dennis Shasha},
+  title   = {The Repeatability Experiment of {SIGMOD} 2008},
+  journal = {ACM SIGMOD Record},
+  volume  = {37},
+  number  = {1},
+  pages   = {39--45},
+  year    = {2008},
+  doi     = {10.1145/1374780.1374791}
+}
+
+@misc{sigmodreproducibility,
+  author       = {{ACM SIGMOD}},
+  title        = {{ACM SIGMOD} Reproducibility},
+  howpublished = {\url{https://reproducibility.sigmod.org/}},
+  url          = {https://reproducibility.sigmod.org/},
+  urldate      = {2026}
+}
+
+@book{gray1993handbook,
+  editor    = {Jim Gray},
+  title     = {The Benchmark Handbook for Database and Transaction Systems},
+  edition   = {2nd},
+  publisher = {Morgan Kaufmann},
+  year      = {1993}
+}
+
+@article{graphiti,
+  author  = {Yang He and Ruijie Fang and Isil Dillig and Yuepeng Wang},
+  title   = {Graphiti: Bridging Graph and Relational Database Queries},
+  journal = {Proc. {ACM} Program. Lang.},
+  volume  = {9},
+  number  = {{PLDI}},
+  year    = {2025},
+}

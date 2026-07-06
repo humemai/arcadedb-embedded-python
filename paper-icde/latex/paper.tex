@@ -1,0 +1,120 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+% ICDE 2027 Industry & Applications track (single-blind; 12 pages + unlimited refs;
+% no appendices; AI-generated-content acknowledgement required).
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{textcomp}
+
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\arcadedb}{ArcadeDB}
+
+\begin{document}
+
+\title{ArcadeDB: One ACID Engine for Documents, Graphs, Vectors, and Time Series\\
+{\large\todo{working title --- alternatives in .notes strategy doc}}}
+
+\author{
+\IEEEauthorblockN{Taewoon Kim}
+\IEEEauthorblockA{HumemAI\\
+tae898@gmail.com}
+\and
+\IEEEauthorblockN{Roberto Franchini}
+\IEEEauthorblockA{ArcadeData\\
+\todo{email}}
+\and
+\IEEEauthorblockN{Christian Himpe}
+\IEEEauthorblockA{\todo{affiliation}\\
+\todo{email}}
+\and
+\IEEEauthorblockN{Luca Garulli}
+\IEEEauthorblockA{ArcadeData\\
+\todo{email}}
+}
+
+\maketitle
+
+\begin{abstract}
+\todo{Written last. Spine: multi-model unification as a real, adopted system ---
+one page/WAL/MVCC-transaction pipeline under documents, graphs, key-value,
+time series, and vectors; every index type (LSM, full-text, geo, hash,
+dense/sparse vector) commits inside the same transaction; Raft replication ships
+model-agnostic WAL page diffs; one jar runs embedded in-process or as a server
+speaking six wire protocols. Deep dive: what adding the vector model to a unified
+substrate takes, including the deliberate transactional-source-of-truth /
+eventually-consistent-ANN-graph tradeoff. Evaluation vs specialist engines +
+lessons from a decade of multi-model engineering (OrientDB lineage).}
+\end{abstract}
+
+\begin{IEEEkeywords}
+multi-model databases, ACID transactions, vector search, graph databases,
+embedded databases
+\end{IEEEkeywords}
+
+\section{Introduction}\label{sec:intro}
+\todo{Vector-era motivation: apps hold documents + relationships + embeddings of
+the same entities; composed specialist stacks pay consistency/ops glue. Thesis:
+unification at the storage layer, not the API gateway. Claims 1--4 from the
+audit. Explicitly claim integration, not new algorithms.}
+
+\section{Background and Design Goals}\label{sec:background}
+\todo{OrientDB lineage ("second system"); design goals; what industry usage
+demanded. Co-author input needed here.}
+
+\section{Architecture: One Substrate, Five Models}\label{sec:architecture}
+\todo{Page -> WAL -> optimistic-MVCC transaction pipeline; PaginatedComponent
+inventory (buckets, LSM trees, vector segments, time-series buckets); index
+changes committed in commit1stPhase; RID-linked adjacency + LightEdges (honest
+framing); time-series engine paragraph.}
+
+\section{Case Study: Adding the Vector Model}\label{sec:vector}
+\todo{Dense (JVector HNSW) + LSM\_SPARSE\_VECTOR (BlockMax-WAND DAAT, RID-delta
+compression, quantization, size-tiered compaction). The tradeoff, stated
+plainly: vector records are transactional/WAL'd/Raft-replicated; the ANN graph
+is an asynchronously maintained, rebuildable derived structure. Include the
+measurement-integrity story (retracted early number) in a sidebar-style
+paragraph if space allows.}
+
+\section{Query and Deployment Surfaces}\label{sec:surfaces}
+\todo{One executor + result model behind SQL/Cypher/GraphQL/Mongo (Gremlin via
+TinkerPop over the same storage); embedded in-process vs server; six wire
+protocols; cite the SciPy paper for Python binding internals.}
+
+\section{High Availability}\label{sec:ha}
+\todo{Ratis-based Raft shipping shared-WAL page diffs => model-agnostic
+replication; quorum/membership hardening lessons.}
+
+\section{Evaluation}\label{sec:eval}
+\todo{E1 sparse DB-vs-DB (Qdrant, Milvus) at 100k/1M/10M; E2 unified-ACID hybrid
+transaction vs composed stack incl. atomicity demonstration; E3 durability
+(kill -9) + Raft failover; E4 embedded vs server deployment axis; E5 dense
+sanity. Protocol: docker, pinned digests, identical cpuset/memory caps, N=5
+mean$\pm$std, serial re-runs for all reported numbers.}
+
+\section{Lessons Learned and Tradeoffs}\label{sec:lessons}
+\todo{The cost of unification (measured); where specialists win; single-node
+ceiling; async-ANN consequences; production war stories (co-authors).}
+
+\section{Related Work}\label{sec:related}
+\todo{Multi-model (Cosmos DB API-level vs our storage-level; ArangoDB;
+Lu \& Holubov\'a survey; UniBench/M2Bench), vector DBs (Milvus, Manu, Qdrant,
+pgvector), sparse retrieval (SPLADE, BlockMax-WAND), embedded engines
+(SQLite, DuckDB).}
+
+\section{Conclusion}\label{sec:conclusion}
+\todo{}
+
+\section*{Acknowledgment}
+\todo{AI-generated-content disclosure REQUIRED by ICDE 2027: name tools and
+affected content areas (drafting/editing assistance, experiment tooling).
+Keep updated as the paper evolves.}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
