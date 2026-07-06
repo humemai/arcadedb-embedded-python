@@ -25,10 +25,11 @@ Three conclusions:
    pinning by Python wrappers, and baseline RSS is 121MB (`-Xmx4g` is a ceiling,
    not a reservation).
 
-Two engine bugs were found and filed upstream:
+Two engine bugs were found and filed upstream, and both are now fixed there:
 [#4967](https://github.com/ArcadeData/arcadedb/issues/4967) (`Result.toJSON()`
-renders primitive arrays as `"[F@..."` — still open, worked around by the
-bridge's array normalization) and
+renders primitive arrays as `"[F@..."` — fixed upstream in 26.7.2 via
+03792a39f; the bridge's array normalization stays until that commit is in a
+synced engine build, then can be revisited) and
 [#4991](https://github.com/ArcadeData/arcadedb/issues/4991) (JVM cannot exit after
 a failed `DatabaseFactory.open()` — non-daemon "ArcadeDB AsyncFlush" thread leaks;
 reproduced in pure Java; **fixed upstream in 26.7.2**, so the bindings' atexit
