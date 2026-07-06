@@ -130,3 +130,13 @@ Milvus/InfluxDB. CypherGlot = workload-shape claims; harness reuse only.
 3. 10M-scale and scale-ceiling cells are serial regardless (RAM-bound) — they
    are also the longest, so co-scheduling only ever accelerates the cheap half
    of the matrix.
+
+## Bench host (2026-07-06)
+
+- tk@mini (i9-12900HK, 61 GiB, 1.8 TB NVMe) is EXCLUSIVE to this paper's runs;
+  CypherGlot's campaigns run on Hetzner (standing arrangement, per maintainer).
+  Paper-tier cells therefore run on an otherwise-idle host by default.
+- Laptop is for harness development and smoke (plumbing validation) only —
+  nothing measured on the laptop is ever reported.
+- Before first mini runs: verify cpuset layout with lscpu (P-thread IDs 0-11
+  assumed), stage images + datasets, re-run the tiny smoke there.
