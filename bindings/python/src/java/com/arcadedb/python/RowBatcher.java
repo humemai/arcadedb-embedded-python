@@ -8,9 +8,9 @@
  * Java-side, so Python pays a single crossing per batch and parses with the
  * C-fast json module (measured ~6x faster end-to-end, ~2.7x of Java-native).
  *
- * Rows are serialized property-by-property (not via Result.toJSON()) because
- * the engine's default row JSON renders primitive arrays like float[] as
- * their Java toString ("[F@..."); normalize() turns them into JSON arrays.
+ * Rows are serialized property-by-property into the engine's JSONObject,
+ * which since 26.7.2 (#4967) serializes primitive arrays like float[] as
+ * real JSON arrays natively.
  *
  * Compiled into arcadedb-python-bridge.jar during the wheel build
  * (scripts/Dockerfile.build and scripts/build-native.sh) and consumed by
@@ -21,11 +21,7 @@ package com.arcadedb.python;
 
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
-import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
-
-import java.util.Collection;
-import java.util.Map;
 
 public final class RowBatcher {
 
@@ -54,80 +50,7 @@ public final class RowBatcher {
   private static void appendRow(final StringBuilder sb, final Result row) {
     final JSONObject obj = new JSONObject();
     for (final String property : row.getPropertyNames())
-      obj.put(property, normalize(row.getProperty(property)));
+      obj.put(property, (Object) row.getProperty(property));
     sb.append(obj);
-  }
-
-  static Object normalize(final Object value) {
-    switch (value) {
-    case null -> {
-      return null;
-    }
-    case float[] a -> {
-      final JSONArray arr = new JSONArray();
-      for (final float v : a)
-        arr.put(v);
-      return arr;
-    }
-    case double[] a -> {
-      final JSONArray arr = new JSONArray();
-      for (final double v : a)
-        arr.put(v);
-      return arr;
-    }
-    case int[] a -> {
-      final JSONArray arr = new JSONArray();
-      for (final int v : a)
-        arr.put(v);
-      return arr;
-    }
-    case long[] a -> {
-      final JSONArray arr = new JSONArray();
-      for (final long v : a)
-        arr.put(v);
-      return arr;
-    }
-    case short[] a -> {
-      final JSONArray arr = new JSONArray();
-      for (final short v : a)
-        arr.put(v);
-      return arr;
-    }
-    case boolean[] a -> {
-      final JSONArray arr = new JSONArray();
-      for (final boolean v : a)
-        arr.put(v);
-      return arr;
-    }
-    case byte[] a -> {
-      final JSONArray arr = new JSONArray();
-      for (final byte v : a)
-        arr.put(v);
-      return arr;
-    }
-    case Object[] a -> {
-      final JSONArray arr = new JSONArray();
-      for (final Object v : a)
-        arr.put(normalize(v));
-      return arr;
-    }
-    case Collection<?> c -> {
-      final JSONArray arr = new JSONArray();
-      for (final Object v : c)
-        arr.put(normalize(v));
-      return arr;
-    }
-    case Map<?, ?> m -> {
-      final JSONObject obj = new JSONObject();
-      for (final Map.Entry<?, ?> e : m.entrySet())
-        obj.put(String.valueOf(e.getKey()), normalize(e.getValue()));
-      return obj;
-    }
-    // everything else (numbers, strings, booleans, temporals, embedded
-    // documents) serializes the same way Result.toJSON() would
-    default -> {
-      return value;
-    }
-    }
   }
 }

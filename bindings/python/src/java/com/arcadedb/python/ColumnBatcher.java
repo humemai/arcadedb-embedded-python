@@ -148,13 +148,14 @@ public final class ColumnBatcher {
         }
         colBuf = bb.array();
       } else if (type.equals("json")) {
-        // one JSON array for the whole column, RowBatcher-normalized values
+        // one JSON array for the whole column (JSONObject/JSONArray handle
+        // primitive arrays natively since engine 26.7.2, #4967)
         final com.arcadedb.serializer.json.JSONArray arr = new com.arcadedb.serializer.json.JSONArray();
         for (int r = 0; r < count; r++) {
           final Object v = rows.get(r)[c];
           if (v == null)
             nulls[r >> 3] |= (1 << (r & 7));
-          arr.put(v == null ? null : RowBatcher.normalize(v));
+          arr.put(v);
         }
         colBuf = arr.toString().getBytes(StandardCharsets.UTF_8);
       } else { // strings: int32 offsets (count+1) then utf8 bytes
