@@ -74,3 +74,22 @@ metrics stream (L4).
 Disjointness: SciPy paper = embedded-from-Python, small scale, SQLite/Chroma/
 Ladybug; this paper = engine-level, 10-100x scale, Postgres/Neo4j/ES/Qdrant/
 Milvus/InfluxDB. CypherGlot = workload-shape claims; harness reuse only.
+
+## Workload design — OLTP and OLAP are separate suites (decided 2026-07-06)
+
+- Every lane defines TWO fixed, versioned query suites: OLTP (point reads /
+  inserts / updates / point traversals -> ops/s + latency percentiles) and OLAP
+  (analytical aggregations / multi-hop traversals -> per-query ms, mean of K
+  runs). Never blended into a single number; figures show them side by side.
+- Every engine runs BOTH suites, with its IDIOMATIC configuration per workload
+  (no strawmen): ArcadeDB graph OLAP = Graph Analytical View enabled (build
+  polled to READY; build time reported as a separate one-time-cost column);
+  specialists get their recommended indexes/settings per workload.
+- Results are annotated with each engine's design orientation (DuckDB and
+  LadybugDB are OLAP-oriented; Postgres/Neo4j OLTP-oriented; ArcadeDB
+  OLTP-oriented with GAV as its OLAP answer) so wins/losses read as
+  workload-shaped, not engine-shaped — the same honesty pattern protects
+  ArcadeDB where specialists win.
+- Index policy: indexed mode is the default reported configuration; an
+  unindexed ablation only where it teaches something (cf. cypherglot's
+  index-removal finding), not everywhere.
