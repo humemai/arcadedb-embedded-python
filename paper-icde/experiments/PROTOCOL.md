@@ -96,3 +96,18 @@ Milvus/InfluxDB. CypherGlot = workload-shape claims; harness reuse only.
 - Index policy: indexed mode is the default reported configuration; an
   unindexed ablation only where it teaches something (cf. cypherglot's
   index-removal finding), not everywhere.
+
+## CPU allocation (explicit, 2026-07-06)
+
+- Paper tier: 12 threads = full P-core set (cpuset 0-11; 6 physical P cores x
+  2 SMT on the i9-12900HK), one cell at a time. E-core threads 12-19 stay
+  OUTSIDE all containers (OS/dockerd/harness overhead never pollutes cells).
+- Client-server: both containers share the same 12-thread cpuset (see topology
+  note); sweep tier: 3 workers x 4 disjoint threads, never reported.
+- ENGINE THREAD POOLS PINNED EXPLICITLY to the cpuset size — cpuset alone does
+  not control pools sized from detected CPUs, and detection differs (JVM is
+  cgroup-aware; DuckDB hardware_concurrency may see the host's 20):
+  DuckDB `SET threads=12`; Postgres `max_parallel_workers=12` (+ per-gather);
+  ArcadeDB JVM default (cgroup-aware) + ForkJoin parallelism stated;
+  ES/Milvus/Qdrant per their config, documented per engine in the manifest.
+  Every manifest records the engine's effective thread setting.
