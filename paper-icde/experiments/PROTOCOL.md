@@ -8,11 +8,14 @@ i9-12900HK bench host), `--memory` + `--memory-swap` caps, same JVM-heap policy
 per scale tier.
 
 - Embedded topology: 1 container under the parent (engine + workload in-process).
-- Client-server topology: server container + client container under the SAME
-  parent — they compete for the same total; no manual client/server split
-  (removes the split-ratio tunable as a bias vector; mirrors a real single-host
-  deployment). One sensitivity cell per family uses an explicit 80/20 split to
-  show conclusions don't depend on arbitration.
+- Client-server topology (implementation note 2026-07-06: docker slice limits
+  need root, unavailable on the bench host — pragmatic equivalent adopted):
+  server and client containers share the SAME cpuset (CPU is work-conserving,
+  so competition is natural and unbiased — no split tunable), while MEMORY is
+  split explicitly (default 75/25 server/client; memory does not arbitrate
+  gracefully under contention — OOM). Sums must respect the cell total. One
+  sensitivity cell per family uses 85/15 to show conclusions don't depend on
+  the split.
 - HA topology (E3): 3 server containers + client under one parent with a bigger,
   stated budget (the co-running IS the experiment).
 
