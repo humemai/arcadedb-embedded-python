@@ -1,0 +1,15 @@
+{
+ "lane": "l1",
+ "n_rows": 50000,
+ "connect_s": 0.339,
+ "engine_version": "26.7.2.dev0",
+ "schema_s": 0.133,
+ "ingest_s": 1.09,
+ "ingest_rows_per_s": 45792.1,
+ "olap_agg_by_region_ms": 53.073,
+ "olap_top_customers_ms": 32.399,
+ "olap_filtered_avg_ms": 31.076,
+ "olap_status_histogram_ms": 34.846,
+ "olap_range_agg_ms": 27.884,
+ "olap_total_ms": 179.278
+}

@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""ICDE-paper benchmark runner — implements experiments/PROTOCOL.md.
+
+Descended from the SciPy-paper orchestrator (scipy_proceedings@arcadedb-2026
+experiments/run.py) with the protocol extensions:
+
+  * TOPOLOGIES: "embedded" (one container does engine+workload) and
+    "client_server" (a long-lived server container + a client container).
+    Per PROTOCOL: both containers share the SAME cpuset (CPU competition is
+    natural/work-conserving); MEMORY is split explicitly (default 75/25) and
+    the reported numbers are the SUM of both cgroups.
+  * TIERS: tier2 (default) runs cells strictly serially with the full cpuset —
+    every paper number comes from this tier. tier1 (--parallel N) is the
+    exploration sweep: N workers on disjoint cpuset shards, shuffled job order,
+    never two jobs of the same backend at once. Manifests record the tier.
+  * MANIFESTS: results/manifest-<ts>.json records image digests, cpuset,
+    memory caps, tier, repeats; every row in runs.jsonl carries run metadata.
+
+Usage (smoke):    python3 runner.py --lanes l1 --scale tiny --reps 1
+Paper (serial):   python3 runner.py --lanes l1,l2,l3s,l3d,l4 --scale medium --reps 5
+Sweep (parallel): python3 runner.py --parallel 3 --tier sweep ...
+"""
+import argparse
+import csv
+import json
+import os
+import random
+import re
+import subprocess
+import threading
+import time
+from datetime import datetime, timezone
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DATA = os.path.abspath(os.environ.get("BENCH_DATA", os.path.join(HERE, "data")))
+RESULTS = os.path.join(HERE, "results")
+RAW = os.path.join(RESULTS, "raw")
+SAMPLE_INTERVAL = 0.25
+
+# P-core threads on the i9-12900HK bench host; override for other hosts.
+CPUSET = os.environ.get("BENCH_CPUSET", "0-11")
+MEM_BY_SCALE = {"tiny": "8g", "small": "16g", "medium": "32g", "large": "48g"}
+# Per-cell watchdog: a cell exceeding this is killed and recorded as a timeout.
+# Generous by design (ingest included); real hangs run to infinity without it.
+TIMEOUT_BY_SCALE = {"tiny": 900, "small": 7200, "medium": 6 * 3600, "large": 24 * 3600}
+HEAP_BY_SCALE = {"tiny": "4g", "small": "8g", "medium": "16g", "large": "24g"}
+SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
+
+# ---------------------------------------------------------------- backends
+# Each backend: image (bench image for the workload driver), topology, and for
+# client_server: the server image + readiness probe + env.
+BACKENDS = {
+    "arcadedb_embedded": {
+        "topology": "embedded",
+        "image": "icde-bench:arcadedb",
+    },
+    "arcadedb_server": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "arcadedata/arcadedb:latest",
+        "server_env": ["-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
+                             "-Darcadedb.server.defaultDatabases=bench[root]"],
+        "server_port": 2480,
+        "ready_regex": r"HTTP Server started",
+    },
+    "duckdb": {
+        "topology": "embedded",
+        "image": "icde-bench:duckdb",
+    },
+    "postgres": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "postgres:17",
+        "server_env": ["-e", "POSTGRES_PASSWORD=icdebench", "-e", "POSTGRES_DB=bench"],
+        "server_port": 5432,
+        "ready_regex": r"database system is ready to accept connections",
+    },
+}
+
+LANES = {
+    # lane -> (bench script, backends)
+    "l1": ("l1_tabular.py", ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"]),
+    # l2 graph, l3s sparse, l3d dense, l4 timeseries: added as adapters land.
+}
+WORKLOADS = ["oltp", "olap"]
+
+
+def sh(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw).stdout.strip()
+
+
+def cgroup_dir(cid):
+    p = f"/sys/fs/cgroup/system.slice/docker-{cid}.scope"
+    if os.path.isdir(p):
+        return p
+    return sh(["bash", "-c",
+               f"find /sys/fs/cgroup -name '*{cid}*' -type d 2>/dev/null | head -1"]) or None
+
+
+def read_int(path):
+    try:
+        return int(open(path).read().strip())
+    except Exception:
+        return None
+
+
+def read_cpu_stat(cg):
+    out = {}
+    try:
+        for line in open(os.path.join(cg, "cpu.stat")):
+            parts = line.split()
+            if len(parts) == 2 and parts[0] in ("usage_usec", "user_usec", "system_usec"):
+                out[parts[0]] = int(parts[1])
+    except Exception:
+        pass
+    return out
+
+
+class CgroupSampler(threading.Thread):
+    """Samples one container's cgroup: memory series, kernel peak, cpu totals."""
+
+    def __init__(self, cid):
+        super().__init__(daemon=True)
+        self.cid, self.stop_evt = cid, threading.Event()
+        self.series, self.peak, self.cpu = [], 0, {}
+
+    def run(self):
+        cg, t0 = None, time.time()
+        while not self.stop_evt.is_set():
+            cg = cg or cgroup_dir(self.cid)
+            if cg:
+                cur = read_int(os.path.join(cg, "memory.current"))
+                pk = read_int(os.path.join(cg, "memory.peak"))
+                if cur is not None:
+                    self.series.append((round(time.time() - t0, 3), cur))
+                if pk is not None:
+                    self.peak = max(self.peak, pk)
+                cpu = read_cpu_stat(cg)
+                if cpu:
+                    self.cpu = cpu
+            time.sleep(SAMPLE_INTERVAL)
+
+    def finish(self):
+        self.stop_evt.set()
+        self.join(timeout=5)
+
+
+def mem_bytes(spec):
+    m = re.fullmatch(r"(\d+)([gm])", spec)
+    n, u = int(m.group(1)), m.group(2)
+    return n * (1024 ** 3 if u == "g" else 1024 ** 2)
+
+
+def image_digest(image):
+    return sh(["docker", "inspect", "--format", "{{.Id}}", image])
+
+
+def wait_ready(cid, regex, timeout_s=120):
+    pat, t0 = re.compile(regex), time.time()
+    while time.time() - t0 < timeout_s:
+        logs = subprocess.run(["docker", "logs", cid], capture_output=True, text=True)
+        if pat.search(logs.stdout + logs.stderr):
+            return True
+        time.sleep(1.0)
+    return False
+
+
+def docker_rm(cid):
+    subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
+
+
+def run_cell(job, rep, scale, cpuset, tier, net_name):
+    """Run one cell (backend x workload x scale, one repeat). Returns row dict."""
+    be = BACKENDS[job["backend"]]
+    run_id = f"{job['run_id']}_r{rep}"
+    total_mem = mem_bytes(MEM_BY_SCALE[scale])
+    heap = HEAP_BY_SCALE[scale]
+    row = {"run_id": run_id, "lane": job["lane"], "backend": job["backend"],
+           "workload": job["workload"], "scale": scale, "rep": rep, "tier": tier,
+           "cpuset": cpuset, "topology": be["topology"],
+           "ts_utc": datetime.now(timezone.utc).isoformat()}
+
+    server_cid, samplers = None, []
+    try:
+        if be["topology"] == "client_server":
+            server_mem = int(total_mem * SERVER_MEM_FRACTION)
+            client_mem = total_mem - server_mem
+            row["mem_split"] = f"{SERVER_MEM_FRACTION:.2f}"
+            server_cid = sh(["docker", "run", "-d", "--network", net_name,
+                             "--label", "icde-bench=1",
+                             "--name", f"srv-{run_id}",
+                             "--cpuset-cpus", cpuset,
+                             "--memory", str(server_mem), "--memory-swap", str(server_mem)]
+                            + be.get("server_env", []) + [be["server_image"]])
+            if len(server_cid) < 12 or not wait_ready(server_cid, be["ready_regex"]):
+                row["error"] = "server_not_ready"
+                return row
+            s_srv = CgroupSampler(server_cid)
+            s_srv.start()
+            samplers.append(("server", s_srv))
+            client_caps = ["--memory", str(client_mem), "--memory-swap", str(client_mem)]
+            bench_env = ["-e", f"BENCH_SERVER_HOST=srv-{run_id}",
+                         "-e", f"BENCH_SERVER_PORT={be['server_port']}"]
+        else:
+            client_caps = ["--memory", str(total_mem), "--memory-swap", str(total_mem)]
+            bench_env = []
+
+        cmd = (["docker", "run", "-d", "--network", net_name,
+                "--label", "icde-bench=1",
+                "--name", f"cli-{run_id}", "--cpuset-cpus", cpuset]
+               + client_caps + bench_env
+               + ["-e", f"ARCADEDB_HEAP={heap}", "-e", f"RUN_LABEL={run_id}",
+                  "-v", f"{HERE}:/work", "-w", "/work", "-v", f"{DATA}:/data:ro",
+                  be["image"], "python", job["script"],
+                  "--backend", job["backend"], "--workload", job["workload"],
+                  "--scale", scale, "--out", f"/work/results/raw/{run_id}.json"])
+        cli_cid = sh(cmd)
+        if len(cli_cid) < 12:
+            row["error"] = "client_failed_to_start"
+            return row
+        s_cli = CgroupSampler(cli_cid)
+        s_cli.start()
+        samplers.append(("client", s_cli))
+
+        timeout_s = TIMEOUT_BY_SCALE[scale]
+        try:
+            wait = subprocess.run(["docker", "wait", cli_cid], capture_output=True,
+                                  text=True, timeout=timeout_s)
+            rc = int(wait.stdout.strip() or "1")
+        except subprocess.TimeoutExpired:
+            rc = -1
+            row["error"] = f"timeout_after_{timeout_s}s"
+        logs = subprocess.run(["docker", "logs", cli_cid], capture_output=True, text=True)
+        docker_rm(cli_cid)
+        row["rc"] = rc
+        if rc != 0 and "error" not in row:
+            row["error"] = (logs.stderr or logs.stdout)[-800:]
+
+        out_path = os.path.join(RAW, f"{run_id}.json")
+        if os.path.exists(out_path):
+            row.update(json.load(open(out_path)))
+    finally:
+        for name, s in samplers:
+            s.finish()
+            row[f"{name}_peak_mib"] = round(s.peak / 2**20, 1)
+            row[f"{name}_cpu_usec"] = s.cpu.get("usage_usec")
+        if len(samplers) == 2:
+            row["peak_mib_sum"] = round(sum(s.peak for _, s in samplers) / 2**20, 1)
+            row["cpu_usec_sum"] = sum((s.cpu.get("usage_usec") or 0) for _, s in samplers)
+        elif samplers:
+            row["peak_mib_sum"] = row.get("client_peak_mib")
+            row["cpu_usec_sum"] = row.get("client_cpu_usec")
+        if server_cid:
+            docker_rm(server_cid)
+    return row
+
+
+def sweep_orphans():
+    """Reap containers left by a previous crashed/killed runner. Safe because
+    the protocol allows exactly one runner per host."""
+    ids = sh(["docker", "ps", "-aq", "--filter", "label=icde-bench=1"]).split()
+    if ids:
+        print(f"sweeping {len(ids)} orphaned bench container(s): "
+              + sh(["docker", "ps", "-a", "--filter", "label=icde-bench=1",
+                    "--format", "{{.Names}}"]).replace("\n", " "))
+        subprocess.run(["docker", "rm", "-f"] + ids, capture_output=True)
+
+
+def build_jobs(lanes, workloads):
+    jobs = []
+    for lane in lanes:
+        script, backends = LANES[lane]
+        for be in backends:
+            for wl in workloads:
+                jobs.append({"lane": lane, "backend": be, "workload": wl,
+                             "script": script,
+                             "run_id": f"{lane}_{be}_{wl}"})
+    return jobs
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--lanes", default="l1")
+    ap.add_argument("--backends", default="",
+                    help="comma list to restrict backends (default: all in lane)")
+    ap.add_argument("--workloads", default="oltp,olap")
+    ap.add_argument("--scale", default="tiny",
+                    choices=list(MEM_BY_SCALE))
+    ap.add_argument("--reps", type=int, default=5)
+    ap.add_argument("--tier", default="paper", choices=["paper", "sweep"])
+    ap.add_argument("--timeout", type=int, default=0,
+                    help="per-cell timeout override in seconds (0 = scale default)")
+    ap.add_argument("--seed", type=int, default=42)
+    args = ap.parse_args()
+
+    if args.timeout:
+        for k in TIMEOUT_BY_SCALE:
+            TIMEOUT_BY_SCALE[k] = args.timeout
+    lanes = args.lanes.split(",")
+    workloads = args.workloads.split(",")
+    os.makedirs(RAW, exist_ok=True)
+
+    net_name = "icde-bench"
+    subprocess.run(["docker", "network", "create", net_name], capture_output=True)
+    sweep_orphans()
+
+    jobs = build_jobs(lanes, workloads)
+    if args.backends:
+        keep = set(args.backends.split(","))
+        jobs = [j for j in jobs if j["backend"] in keep]
+    cells = [(j, r) for j in jobs for r in range(1, args.reps + 1)]
+    random.Random(args.seed).shuffle(cells)  # shuffled order even in serial tier
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    manifest = {"ts": ts, "tier": args.tier, "scale": args.scale, "cpuset": CPUSET,
+                "reps": args.reps, "seed": args.seed,
+                "mem": MEM_BY_SCALE[args.scale], "heap": HEAP_BY_SCALE[args.scale],
+                "server_mem_fraction": SERVER_MEM_FRACTION,
+                "images": {}}
+    for j in jobs:
+        be = BACKENDS[j["backend"]]
+        for img in filter(None, [be.get("image"), be.get("server_image")]):
+            manifest["images"].setdefault(img, image_digest(img))
+    json.dump(manifest, open(os.path.join(RESULTS, f"manifest-{ts}.json"), "w"), indent=2)
+
+    rows = []
+    jsonl = open(os.path.join(RESULTS, "runs.jsonl"), "a")
+    print(f"{len(cells)} cell-runs (tier={args.tier}, scale={args.scale}, cpuset={CPUSET})")
+    for i, (job, rep) in enumerate(cells, 1):
+        t0 = time.time()
+        row = run_cell(job, rep, args.scale, CPUSET, args.tier, net_name)
+        row["manifest"] = ts
+        rows.append(row)
+        jsonl.write(json.dumps(row) + "\n")
+        jsonl.flush()
+        status = row.get("error", "ok")[:60]
+        print(f"  [{i}/{len(cells)}] {row['run_id']} {time.time()-t0:.1f}s -> {status}")
+
+    if rows:
+        cols = sorted({k for r in rows for k in r})
+        path = os.path.join(RESULTS, f"runs-{ts}.csv")
+        with open(path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=cols)
+            w.writeheader()
+            w.writerows(rows)
+        print(f"wrote {len(rows)} rows -> {path}")
+
+
+if __name__ == "__main__":
+    main()

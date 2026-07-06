@@ -10,3 +10,6 @@ latex/*.synctex.gz
 # Raw benchmark outputs (summaries are committed)
 results/raw/
 experiments/**/__pycache__/
+results/*.json
+results/*.jsonl
+results/*.csv
