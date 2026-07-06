@@ -38,16 +38,24 @@ per scale tier.
 
 ## Experiment matrix (revised 2026-07-06 — eval must mirror the multi-model thesis)
 
-Per-model lanes (compact: 1 figure/table each, 1-2 specialist baselines):
-- L1 tabular OLTP+OLAP vs PostgreSQL, DuckDB (10-100M rows)
-- L2 graph OLTP+OLAP vs Neo4j (LDBC-SNB-style, ~10M nodes / ~80M edges;
-  cypherglot harness reused, FRESH runs + engine-focused queries — no result
-  overlap with the CypherGlot paper)
-- L3 vector: sparse headline (Qdrant, Milvus, Elasticsearch) at 100k/1M/10M
-  x 30k-dim + E1b scale-ceiling (grow past 10M until each system fails the
-  fixed 61GiB node — "max corpus per node" figure); real-SPLADE 1M subset for
-  external validity; dense sanity vs pgvector
-- L4 time-series (small): ingest + range/downsample vs InfluxDB, one table
+Per-model lanes (compact: 1 figure/table each). DESIGN RULE: each lane pairs
+one SERVER-grade specialist with one EMBEDDED specialist — the baseline set
+itself restates the thesis (ArcadeDB is the only engine on both sides of every
+lane):
+- L1 tabular OLTP+OLAP: PostgreSQL (server) + DuckDB (embedded), 10-100M rows
+- L2 graph OLTP+OLAP (Cypher engines): Neo4j (server) + LadybugDB (embedded),
+  LDBC-SNB-style ~10M nodes / ~80M edges. Cypherglot harness reused with FRESH
+  runs + a standard-workload query set — no result overlap with the CypherGlot
+  paper (papers cross-cite; re-check disjointness when both drafts exist).
+  Memgraph/AGE/FalkorDB cited, not run.
+- L3 vector dense: Qdrant or pgvector (server) + LanceDB (embedded, columnar
+  Lance format — no server mode, worth a sentence)
+- L3 vector sparse (headline): Elasticsearch + Qdrant + Milvus (all server) at
+  100k/1M/10M x 30k-dim + E1b scale-ceiling past 10M on the fixed 61GiB node
+  ("max corpus per node" figure); real-SPLADE 1M subset for external validity.
+  NOTE: no embedded learned-sparse engine exists to our knowledge — citable
+  claim; ArcadeDB is the only embedded entry in this lane by definition.
+- L4 time-series (small): InfluxDB (server), one table
 
 Unification experiments (the depth):
 - U1 hybrid cross-model ACID txn (vector hit -> graph traversal -> doc update,
