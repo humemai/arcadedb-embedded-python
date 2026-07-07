@@ -97,6 +97,34 @@ Milvus/InfluxDB. CypherGlot = workload-shape claims; harness reuse only.
   unindexed ablation only where it teaches something (cf. cypherglot's
   index-removal finding), not everywhere.
 
+## Configuration policy — defaults first, fairness overrides (2026-07-07)
+
+Every backend runs **as shipped, with default index/engine settings**, unless a
+deviation is required to make the comparison fair. Legitimate deviations, each
+recorded in the manifest and in the paper's configuration table with its
+justification:
+
+1. **Resource fitting** (always applied): heap/thread-pool/memory settings that
+   adapt an engine to the cell's cpuset+memory envelope (JVM heap by scale,
+   `SET threads` in DuckDB, ES `ES_JAVA_OPTS`). Not tuning — envelope equality.
+2. **Vendor-documented settle steps** (bulk-load-then-query preparation, timed
+   inside build): ES forcemerge, Milvus flush+load, Qdrant green-wait, ArcadeDB
+   LSM compact. Each engine gets its own documented step; none gets skipped.
+3. **Operating-point matching**: where defaults put systems at different points
+   of a quality/latency tradeoff, raw latency comparison is misleading — match
+   the points or sweep the curve. Dense ANN (L3d): same HNSW M/efConstruction
+   everywhere, efSearch swept -> recall-latency curves; float32 everywhere, no
+   PQ/SQ. Sparse: no common quantization axis exists (ArcadeDB int8 postings
+   are hard-wired; competitors' posting formats are internal), so quality is
+   surfaced instead via first-class recall@10 next to every latency number.
+4. **Escape hatch**: if a default is demonstrably pathological for a workload
+   (e.g., a batch-size or refresh-interval default that cripples ingest), tune
+   it to the vendor's own documented recommendation for that workload, apply
+   the same care to every backend in the lane, and say so in the paper.
+
+What we never do: per-system expert tuning beyond vendor-documented guidance,
+or tuning ArcadeDB with insider knowledge not applied to competitors.
+
 ## CPU allocation (explicit, 2026-07-06)
 
 - Paper tier: 12 threads = full P-core set (cpuset 0-11; 6 physical P cores x
