@@ -39,11 +39,14 @@ SAMPLE_INTERVAL = 0.25
 
 # P-core threads on the i9-12900HK bench host; override for other hosts.
 CPUSET = os.environ.get("BENCH_CPUSET", "0-11")
-MEM_BY_SCALE = {"tiny": "8g", "small": "16g", "medium": "32g", "large": "48g"}
+MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
+                "large": "48g"}
 # Per-cell watchdog: a cell exceeding this is killed and recorded as a timeout.
 # Generous by design (ingest included); real hangs run to infinity without it.
-TIMEOUT_BY_SCALE = {"tiny": 900, "small": 7200, "medium": 6 * 3600, "large": 24 * 3600}
-HEAP_BY_SCALE = {"tiny": "4g", "small": "8g", "medium": "16g", "large": "24g"}
+TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
+                    "medium": 6 * 3600, "large": 24 * 3600}
+HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
+                 "large": "24g"}
 SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
 
 # ---------------------------------------------------------------- backends
@@ -75,14 +78,64 @@ BACKENDS = {
         "server_port": 5432,
         "ready_regex": r"database system is ready to accept connections",
     },
+    # ---- L3 sparse lane ----
+    "arcadedb_sparse_embedded": {
+        "topology": "embedded",
+        "image": "icde-bench:arcadedb",
+    },
+    "arcadedb_sparse_server": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "arcadedata/arcadedb:latest",
+        "server_env": ["-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
+                             "-Darcadedb.server.defaultDatabases=bench[root]"],
+        "server_port": 2480,
+        "ready_regex": r"HTTP Server started",
+    },
+    "qdrant_sparse": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "qdrant/qdrant:latest",
+        "server_port": 6333,
+        "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
+    },
+    "milvus_sparse": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "milvusdb/milvus:latest",
+        "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
+                       "-e", "ETCD_USE_EMBED=true",
+                       "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
+                       "-e", "ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml",
+                       "-e", "COMMON_STORAGETYPE=local"],
+        "server_volumes": ["-v", f"{HERE}/docker-conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml"],
+        "server_cmd": ["milvus", "run", "standalone"],
+        "server_port": 19530,
+        "ready_regex": r"Proxy successfully started|successfully started",
+    },
+    "elasticsearch_sparse": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "docker.elastic.co/elasticsearch/elasticsearch:9.0.0",
+        "server_env": ["-e", "discovery.type=single-node",
+                       "-e", "xpack.security.enabled=false",
+                       "-e", "ES_JAVA_OPTS=-Xms2g -Xmx4g"],
+        "server_port": 9200,
+        "ready_regex": r'"message":"started|current.health=\"GREEN\"',
+    },
 }
 
 LANES = {
-    # lane -> (bench script, backends)
-    "l1": ("l1_tabular.py", ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"]),
-    # l2 graph, l3s sparse, l3d dense, l4 timeseries: added as adapters land.
+    # lane -> (bench script, backends, workloads)
+    "l1": ("l1_tabular.py",
+           ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"],
+           ["oltp", "olap"]),
+    "l3s": ("l3_sparse.py",
+            ["arcadedb_sparse_embedded", "arcadedb_sparse_server",
+             "qdrant_sparse", "milvus_sparse", "elasticsearch_sparse"],
+            ["search"]),
+    # l2 graph, l3d dense, l4 timeseries: added as adapters land.
 }
-WORKLOADS = ["oltp", "olap"]
 
 
 def sh(cmd, **kw):
@@ -191,7 +244,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                              "--name", f"srv-{run_id}",
                              "--cpuset-cpus", cpuset,
                              "--memory", str(server_mem), "--memory-swap", str(server_mem)]
-                            + be.get("server_env", []) + [be["server_image"]])
+                            + be.get("server_env", [])
+                            + be.get("server_volumes", [])
+                            + [be["server_image"]]
+                            + be.get("server_cmd", []))
             if len(server_cid) < 12 or not wait_ready(server_cid, be["ready_regex"]):
                 row["error"] = "server_not_ready"
                 return row
@@ -266,10 +322,10 @@ def sweep_orphans():
         subprocess.run(["docker", "rm", "-f"] + ids, capture_output=True)
 
 
-def build_jobs(lanes, workloads):
+def build_jobs(lanes, _workloads_arg):
     jobs = []
     for lane in lanes:
-        script, backends = LANES[lane]
+        script, backends, workloads = LANES[lane]
         for be in backends:
             for wl in workloads:
                 jobs.append({"lane": lane, "backend": be, "workload": wl,
@@ -284,8 +340,7 @@ def main():
     ap.add_argument("--backends", default="",
                     help="comma list to restrict backends (default: all in lane)")
     ap.add_argument("--workloads", default="oltp,olap")
-    ap.add_argument("--scale", default="tiny",
-                    choices=list(MEM_BY_SCALE))
+    ap.add_argument("--scale", default="tiny", choices=list(MEM_BY_SCALE))
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--tier", default="paper", choices=["paper", "sweep"])
     ap.add_argument("--timeout", type=int, default=0,

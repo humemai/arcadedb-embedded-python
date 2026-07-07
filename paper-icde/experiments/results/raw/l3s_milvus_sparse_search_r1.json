@@ -1,0 +1,18 @@
+{
+ "lane": "l3s",
+ "n_docs": 1000000,
+ "dims": 30000,
+ "k": 10,
+ "n_queries": 500,
+ "connect_s": 2.076,
+ "engine_version": "milvus",
+ "build_s": 38.38,
+ "build_docs_per_s": 26051.9,
+ "query_mean_ms": 1.548,
+ "query_p50_ms": 1.53,
+ "query_p95_ms": 1.868,
+ "query_p99_ms": 2.009,
+ "query_n": 495,
+ "qps": 645.9,
+ "recall_at_10": 1.0
+}
