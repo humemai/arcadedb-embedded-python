@@ -125,6 +125,26 @@ justification:
 What we never do: per-system expert tuning beyond vendor-documented guidance,
 or tuning ArcadeDB with insider knowledge not applied to competitors.
 
+### ArcadeDB embedded vs server — parity matrix (2026-07-07)
+
+The deployment axis (E4) is only meaningful if the two deployments of the
+same engine differ ONLY in transport. Pinned:
+
+| dimension | embedded | server | status |
+|---|---|---|---|
+| heap | -Xms{heap} -Xmx{heap} via jvm_kwargs | ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap} | MATCHED per scale tier |
+| GC | bundled-JRE default (G1) | JAVA_OPTS override drops image ZGC -> G1 | MATCHED (G1 both) |
+| JDK | wheel's jlink'd JRE 21 | image jdk-21 | same major; exact builds recorded in manifests |
+| cpuset / mem-swap caps | 32g container | 24g srv + 8g client (75/25) | envelope equality: totals identical; split is inherent to the topology |
+| DDL / index metadata | identical CREATE INDEX | identical | MATCHED |
+| ingest path | native document API | SQL over HTTP | intentionally different — each surface's native bulk path |
+| settle step | LSM compact() via Java API | none reachable over HTTP/SQL | documented product asymmetry (lessons material) |
+| engine RAM-derived defaults | from 32g container | from 24g container | follows the envelope split; recorded, not tuned |
+
+Every row's heap and mem cap now land in runs.jsonl (`heap`, `mem_cap`).
+History: the 2GB-default heap starvation (user-caught 2026-07-07) cost the
+server 15% p50 and 35% build time at 10M — parity is load-bearing.
+
 ## CPU allocation (explicit, 2026-07-06)
 
 - Paper tier: 12 threads = full P-core set (cpuset 0-11; 6 physical P cores x

@@ -63,8 +63,11 @@ class ArcadeEmbedded(Base):
     def connect(self):
         import arcadedb_embedded as arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
-        self.db = arcadedb.create_database("/tmp/l3_arcade",
-                                           jvm_kwargs={"heap_size": heap})
+        # -Xms pinned to -Xmx for parity with the server deployment
+        # (ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap} in runner.py)
+        self.db = arcadedb.create_database(
+            "/tmp/l3_arcade",
+            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
         self.version = arcadedb.__version__
         self.db.command("sql", "CREATE DOCUMENT TYPE Doc")
         self.db.command("sql", "CREATE PROPERTY Doc.id LONG")

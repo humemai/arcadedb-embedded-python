@@ -244,7 +244,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     heap = HEAP_BY_SCALE[scale]
     row = {"run_id": run_id, "lane": job["lane"], "backend": job["backend"],
            "workload": job["workload"], "scale": scale, "rep": rep, "tier": tier,
-           "cpuset": cpuset, "topology": be["topology"],
+           "cpuset": cpuset, "topology": be["topology"], "heap": heap,
+           "mem_cap": MEM_BY_SCALE[scale],
            "ts_utc": datetime.now(timezone.utc).isoformat()}
 
     server_cid, samplers = None, []
