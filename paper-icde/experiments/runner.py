@@ -61,7 +61,14 @@ BACKENDS = {
         "topology": "client_server",
         "image": "icde-bench:client",
         "server_image": "arcadedata/arcadedb:latest",
-        "server_env": ["-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
+        # Heap parity with the embedded deployment (protocol: same JVM-heap
+        # policy per scale tier) — the image's own default is -Xmx2G, which
+        # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
+        # also drops the image's ZGC default: both deployments run the same
+        # default GC (G1) so the embedded-vs-server axis isolates transport,
+        # not GC choice.
+        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
                              "-Darcadedb.server.defaultDatabases=bench[root]"],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
@@ -87,7 +94,14 @@ BACKENDS = {
         "topology": "client_server",
         "image": "icde-bench:client",
         "server_image": "arcadedata/arcadedb:latest",
-        "server_env": ["-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
+        # Heap parity with the embedded deployment (protocol: same JVM-heap
+        # policy per scale tier) — the image's own default is -Xmx2G, which
+        # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
+        # also drops the image's ZGC default: both deployments run the same
+        # default GC (G1) so the embedded-vs-server axis isolates transport,
+        # not GC choice.
+        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
                              "-Darcadedb.server.defaultDatabases=bench[root]"],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
@@ -244,7 +258,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                              "--name", f"srv-{run_id}",
                              "--cpuset-cpus", cpuset,
                              "--memory", str(server_mem), "--memory-swap", str(server_mem)]
-                            + be.get("server_env", [])
+                            + [s.format(heap=heap) for s in be.get("server_env", [])]
                             + be.get("server_volumes", [])
                             + [be["server_image"]]
                             + be.get("server_cmd", []))
