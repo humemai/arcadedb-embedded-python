@@ -91,6 +91,16 @@ class ArcadeEmbedded(Base):
             with self.db.transaction():
                 self.db.command("sqlscript", ";".join(buf))
 
+    def post_build(self):
+        # ArcadeDB's settle step (fairness parity with ES forcemerge / Milvus
+        # flush+load / Qdrant green-wait): blocking LSM segment compaction via
+        # the Java API — embedded-only, no SQL/HTTP trigger exists. Measured at
+        # 1M docs: ~2s, query p50 9.5ms -> 7.0ms (control run: no change).
+        jdb = self.db.get_java_database()
+        for idx in jdb.getSchema().getIndexes():
+            if "SparseVector" in str(idx.getClass().getSimpleName()):
+                idx.compact()
+
     def search(self, idx, vals, k):
         import jpype
         ji = jpype.JArray(jpype.JInt)(idx)
@@ -131,6 +141,12 @@ class ArcadeServer(ArcadeEmbedded):
                     'METADATA {"dimensions": %d}' % DIMENSIONS]:
             self._cmd("sql", ddl)
         self.idx_name = "Doc[tokens,weights]"
+
+    def post_build(self):
+        # No compaction trigger is reachable over HTTP/SQL — the server runs
+        # query-after-ingest as-shipped. Documented asymmetry vs embedded
+        # (paper: operational gap worth a sentence).
+        pass
 
     def _cmd(self, language, command, params=None):
         payload = {"language": language, "command": command}
