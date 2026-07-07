@@ -86,6 +86,36 @@ BACKENDS = {
         "ready_regex": r"database system is ready to accept connections",
     },
     # ---- L3 sparse lane ----
+    "arcadedb_graph_embedded": {
+        "topology": "embedded",
+        "image": "icde-bench:arcadedb",
+    },
+    "arcadedb_graph_server": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "arcadedata/arcadedb:latest",
+        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
+                             "-Darcadedb.server.defaultDatabases=bench[root]"],
+        "server_port": 2480,
+        "ready_regex": r"HTTP Server started",
+    },
+    "neo4j_graph": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "neo4j:5-community",
+        # heap parity with the ArcadeDB deployments (same per-scale heap)
+        "server_env": ["-e", "NEO4J_AUTH=neo4j/icdebench",
+                       "-e", "NEO4J_server_memory_heap_initial__size={heap}",
+                       "-e", "NEO4J_server_memory_heap_max__size={heap}"],
+        "server_port": 7687,
+        "ready_regex": r"Started\.",
+    },
+    "ladybug_graph": {
+        # embedded engine, runs in-process in the client image
+        "topology": "embedded",
+        "image": "icde-bench:client",
+    },
     "arcadedb_sparse_embedded": {
         "topology": "embedded",
         "image": "icde-bench:arcadedb",
@@ -143,6 +173,10 @@ LANES = {
     # lane -> (bench script, backends, workloads)
     "l1": ("l1_tabular.py",
            ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"],
+           ["oltp", "olap"]),
+    "l2": ("l2_graph.py",
+           ["arcadedb_graph_embedded", "arcadedb_graph_server",
+            "neo4j_graph", "ladybug_graph"],
            ["oltp", "olap"]),
     "l3s": ("l3_sparse.py",
             ["arcadedb_sparse_embedded", "arcadedb_sparse_server",

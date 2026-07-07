@@ -1,0 +1,1 @@
+{"n_persons": 10000, "connect_s": 0.248, "engine_version": "server:latest", "build_s": 7.63, "top_degree_mean_ms": 14.45, "top_degree_min_ms": 11.4, "top_degree_rows": 10, "same_city_edges_mean_ms": 54.89, "same_city_edges_min_ms": 54.3, "same_city_edges_rows": 10, "friend_age_by_city_mean_ms": 55.83, "friend_age_by_city_min_ms": 51.66, "friend_age_by_city_rows": 10}

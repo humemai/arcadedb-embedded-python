@@ -15,7 +15,7 @@ fi
 declare -A PKGS=(
   [arcadedb]="$ARCADE_PKGS"
   [duckdb]="duckdb pandas pyarrow"
-  [client]="requests psycopg[binary] pandas pyarrow numpy qdrant-client pymilvus elasticsearch"
+  [client]="requests psycopg[binary] pandas pyarrow numpy qdrant-client pymilvus elasticsearch neo4j real_ladybug"
 )
 targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client)
 for be in "${targets[@]}"; do

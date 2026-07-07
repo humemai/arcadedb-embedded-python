@@ -1,0 +1,1 @@
+{"n_persons": 10000, "connect_s": 0.12, "engine_version": "real_ladybug:0.15.3", "build_s": 0.32, "point_p50_ms": 0.154, "point_p95_ms": 0.256, "point_p99_ms": 0.396, "hop1_p50_ms": 1.107, "hop1_p95_ms": 1.428, "hop1_p99_ms": 1.682, "hop2_p50_ms": 2.974, "hop2_p95_ms": 3.526, "hop2_p99_ms": 3.913, "write_p50_ms": 6.124, "write_p95_ms": 8.43, "oltp_total_s": 1.48}
