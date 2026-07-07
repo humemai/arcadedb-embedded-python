@@ -337,6 +337,20 @@ def sweep_orphans():
         subprocess.run(["docker", "rm", "-f"] + ids, capture_output=True)
 
 
+def split_cpuset(cpuset, n):
+    """Split a 'a-b' cpuset into n disjoint contiguous shards ('a-m', ...)."""
+    lo, hi = (int(x) for x in cpuset.split("-"))
+    cpus = list(range(lo, hi + 1))
+    if n > len(cpus):
+        raise ValueError(f"{n} workers > {len(cpus)} cpus in {cpuset}")
+    size = len(cpus) // n
+    shards = []
+    for w in range(n):
+        chunk = cpus[w * size:(w + 1) * size] if w < n - 1 else cpus[(n - 1) * size:]
+        shards.append(f"{chunk[0]}-{chunk[-1]}")
+    return shards
+
+
 def build_jobs(lanes, _workloads_arg):
     jobs = []
     for lane in lanes:
@@ -358,6 +372,9 @@ def main():
     ap.add_argument("--scale", default="tiny", choices=list(MEM_BY_SCALE))
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--tier", default="paper", choices=["paper", "sweep"])
+    ap.add_argument("--workers", type=int, default=0,
+                    help="parallel workers on disjoint cpuset shards "
+                         "(sweep tier only; 0 = 1 for paper, 2 for sweep)")
     ap.add_argument("--timeout", type=int, default=0,
                     help="per-cell timeout override in seconds (0 = scale default)")
     ap.add_argument("--seed", type=int, default=42)
@@ -366,6 +383,19 @@ def main():
     if args.timeout:
         for k in TIMEOUT_BY_SCALE:
             TIMEOUT_BY_SCALE[k] = args.timeout
+
+    workers = args.workers or (1 if args.tier == "paper" else 2)
+    if args.tier == "paper" and workers != 1:
+        ap.error("paper tier is strictly serial: one cell at a time, full cpuset")
+    if workers > 1:
+        host_ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+        need = workers * mem_bytes(MEM_BY_SCALE[args.scale])
+        if need > host_ram * 0.85:
+            ap.error(f"{workers} workers x {MEM_BY_SCALE[args.scale]} = "
+                     f"{need/2**30:.0f}g exceeds 85% of host RAM "
+                     f"({host_ram/2**30:.0f}g) — this scale runs serially")
+    shards = split_cpuset(CPUSET, workers)
+
     lanes = args.lanes.split(",")
     workloads = args.workloads.split(",")
     os.makedirs(RAW, exist_ok=True)
@@ -383,6 +413,7 @@ def main():
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     manifest = {"ts": ts, "tier": args.tier, "scale": args.scale, "cpuset": CPUSET,
+                "workers": workers, "shards": shards,
                 "reps": args.reps, "seed": args.seed,
                 "mem": MEM_BY_SCALE[args.scale], "heap": HEAP_BY_SCALE[args.scale],
                 "server_mem_fraction": SERVER_MEM_FRACTION,
@@ -395,16 +426,49 @@ def main():
 
     rows = []
     jsonl = open(os.path.join(RESULTS, "runs.jsonl"), "a")
-    print(f"{len(cells)} cell-runs (tier={args.tier}, scale={args.scale}, cpuset={CPUSET})")
-    for i, (job, rep) in enumerate(cells, 1):
-        t0 = time.time()
-        row = run_cell(job, rep, args.scale, CPUSET, args.tier, net_name)
-        row["manifest"] = ts
-        rows.append(row)
-        jsonl.write(json.dumps(row) + "\n")
-        jsonl.flush()
-        status = row.get("error", "ok")[:60]
-        print(f"  [{i}/{len(cells)}] {row['run_id']} {time.time()-t0:.1f}s -> {status}")
+    total = len(cells)
+    print(f"{total} cell-runs (tier={args.tier}, scale={args.scale}, "
+          f"workers={workers}, shards={shards})")
+
+    pending = list(cells)
+    active_backends = set()
+    cv = threading.Condition()
+    done = [0]
+
+    def worker(shard):
+        while True:
+            with cv:
+                idx = next((i for i, (j, _) in enumerate(pending)
+                            if j["backend"] not in active_backends), None)
+                if idx is None:
+                    if not pending:
+                        return
+                    cv.wait(5)  # all queued backends busy elsewhere; re-check
+                    continue
+                job, rep = pending.pop(idx)
+                active_backends.add(job["backend"])
+            t0 = time.time()
+            try:
+                row = run_cell(job, rep, args.scale, shard, args.tier, net_name)
+            finally:
+                with cv:
+                    active_backends.discard(job["backend"])
+                    cv.notify_all()
+            row["manifest"] = ts
+            status = row.get("error", "ok")[:60]
+            with cv:
+                rows.append(row)
+                jsonl.write(json.dumps(row) + "\n")
+                jsonl.flush()
+                done[0] += 1
+                print(f"  [{done[0]}/{total}] {row['run_id']} "
+                      f"{time.time()-t0:.1f}s ({shard}) -> {status}")
+
+    threads = [threading.Thread(target=worker, args=(s,)) for s in shards]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
     if rows:
         cols = sorted({k for r in rows for k in r})
