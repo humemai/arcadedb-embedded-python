@@ -76,20 +76,26 @@ class ArcadeEmbedded(Base):
         self.idx_name = "Doc[tokens,weights]"
 
     def build(self, n_docs):
-        buf = []
+        # Native document API with primitive arrays — the embedded analog of
+        # Qdrant/Milvus binary clients (1.8x faster than SQL INSERT batches;
+        # the server adapter keeps SQL-over-HTTP, its native remote surface).
+        import jpype
+        JInt, JFloat = jpype.JArray(jpype.JInt), jpype.JArray(jpype.JFloat)
+        jdb = self.db.get_java_database()
+        jdb.begin()
+        open_n = 0
         for i, idx, vals in gen_docs(n_docs):
-            t = ",".join(map(str, idx))
-            # 9 decimals: exact float32 round-trip, keeps ingest == GT weights
-            w = ",".join(f"{v:.9f}" for v in vals)
-            buf.append(f"INSERT INTO Doc SET id = {i}, tokens = [{t}], "
-                       f"weights = [{w}]")
-            if len(buf) >= INGEST_BATCH:
-                with self.db.transaction():
-                    self.db.command("sqlscript", ";".join(buf))
-                buf = []
-        if buf:
-            with self.db.transaction():
-                self.db.command("sqlscript", ";".join(buf))
+            d = jdb.newDocument("Doc")
+            d.set("id", i)
+            d.set("tokens", JInt(idx))
+            d.set("weights", JFloat(vals))
+            d.save()
+            open_n += 1
+            if open_n == INGEST_BATCH:
+                jdb.commit()
+                jdb.begin()
+                open_n = 0
+        jdb.commit()
 
     def post_build(self):
         # ArcadeDB's settle step (fairness parity with ES forcemerge / Milvus
