@@ -208,12 +208,23 @@ class Postgres(Base):
     placeholder = "%s"
 
     def connect(self):
+        import time as _time
         import psycopg
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "5432")
-        self.con = psycopg.connect(
-            f"host={host} port={port} dbname=bench user=postgres password=icdebench",
-            autocommit=True)
+        dsn = (f"host={host} port={port} dbname=bench "
+               "user=postgres password=icdebench")
+        # retry across the initdb restart window (belt to the runner's
+        # ready_regex suspenders); untimed — connect_s covers it
+        deadline = _time.time() + 60
+        while True:
+            try:
+                self.con = psycopg.connect(dsn, autocommit=True)
+                break
+            except psycopg.OperationalError:
+                if _time.time() > deadline:
+                    raise
+                _time.sleep(1)
         self.version = self.con.execute("SHOW server_version").fetchone()[0]
 
     def exec(self, sql, params=None):

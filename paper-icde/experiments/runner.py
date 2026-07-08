@@ -83,7 +83,12 @@ BACKENDS = {
         "server_image": "postgres:17",
         "server_env": ["-e", "POSTGRES_PASSWORD=icdebench", "-e", "POSTGRES_DB=bench"],
         "server_port": 5432,
-        "ready_regex": r"database system is ready to accept connections",
+        # the image prints "ready to accept connections" TWICE (initdb's
+        # temporary server, then the real one); anchor on the init-complete
+        # marker so we only match the second — matching the first raced the
+        # restart window (2 intermittent connection-refused cells, 2026-07-08)
+        "ready_regex": r"(?s)PostgreSQL init process complete.*"
+                       r"database system is ready to accept connections",
     },
     # ---- L3 sparse lane ----
     "arcadedb_graph_embedded": {
