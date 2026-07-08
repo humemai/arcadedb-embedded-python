@@ -64,7 +64,7 @@ def test_import_documents_applies_and_restores_runtime_settings(temp_db_path, tm
         db.set_read_your_writes(True)
         async_exec = db.async_executor()
         async_exec.set_parallel_level(1)
-        async_exec.set_commit_every(0)
+        async_exec.set_commit_every(7)
         async_exec.set_transaction_use_wal(True)
 
         result = db.import_documents(
@@ -79,7 +79,7 @@ def test_import_documents_applies_and_restores_runtime_settings(temp_db_path, tm
         assert result.result == "OK"
         assert db.is_read_your_writes() is True
         assert async_exec.get_parallel_level() == 1
-        assert async_exec.get_commit_every() == 0
+        assert async_exec.get_commit_every() == 7
         assert async_exec.is_transaction_use_wal() is True
 
 
@@ -100,7 +100,7 @@ def test_import_documents_restores_runtime_settings_after_failure(
         db.set_read_your_writes(True)
         async_exec = db.async_executor()
         async_exec.set_parallel_level(1)
-        async_exec.set_commit_every(0)
+        async_exec.set_commit_every(7)
         async_exec.set_transaction_use_wal(True)
 
         with pytest.raises(arcadedb.ArcadeDBError):
@@ -115,5 +115,5 @@ def test_import_documents_restores_runtime_settings_after_failure(
 
         assert db.is_read_your_writes() is True
         assert async_exec.get_parallel_level() == 1
-        assert async_exec.get_commit_every() == 0
+        assert async_exec.get_commit_every() == 7
         assert async_exec.is_transaction_use_wal() is True

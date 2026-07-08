@@ -19,6 +19,7 @@
 package com.arcadedb.query.opencypher.executor.steps;
 
 import com.arcadedb.database.Document;
+import com.arcadedb.database.RID;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.exception.TimeoutException;
@@ -30,6 +31,7 @@ import com.arcadedb.query.opencypher.executor.DeletedEntityMarker;
 import com.arcadedb.query.opencypher.traversal.TraversalPath;
 import com.arcadedb.query.sql.executor.AbstractExecutionStep;
 import com.arcadedb.query.sql.executor.CommandContext;
+import com.arcadedb.query.sql.executor.QueryStatistics;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
@@ -37,7 +39,6 @@ import com.arcadedb.query.sql.executor.ResultSet;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -241,14 +242,21 @@ public class DeleteStep extends AbstractExecutionStep {
       else
         others.add(entry);
     }
+    final QueryStatistics stats = context.getStatistics();
     final Set<Object> deleted = new HashSet<>();
     for (final Object edge : edges)
-      deleteObjectStatic(edge, deleted);
+      deleteObjectStatic(edge, deleted, stats);
     for (final DeferredDeleteTarget entry : others) {
       final Object target = entry.target();
       if (target instanceof Vertex v && !deleted.contains(v)) {
         if (entry.detach() || hasNoEdges(v)) {
+          if (entry.detach())
+            // DETACH removes connected relationships; count each one not already deleted so
+            // relationships-deleted matches Neo4j (deleteObjectStatic skips any already in `deleted`).
+            for (final Edge edge : collectConnectedEdges(v))
+              deleteObjectStatic(edge, deleted, stats);
           v.delete();
+          stats.incNodesDeleted();
           deleted.add(v);
         } else {
           throw new CommandExecutionException("DeleteConnectedNode: Cannot delete node "
@@ -256,7 +264,7 @@ public class DeleteStep extends AbstractExecutionStep {
               + " its relationships, or use DETACH DELETE");
         }
       } else {
-        deleteObjectStatic(target, deleted);
+        deleteObjectStatic(target, deleted, stats);
       }
     }
     batch.clear();
@@ -271,15 +279,30 @@ public class DeleteStep extends AbstractExecutionStep {
     }
   }
 
-  private static void deleteObjectStatic(final Object obj, final Set<Object> deleted) {
+  private static List<Edge> collectConnectedEdges(final Vertex v) {
+    final List<Edge> edges = new ArrayList<>();
+    try {
+      for (final Edge e : v.getEdges(Vertex.DIRECTION.OUT))
+        edges.add(e);
+      for (final Edge e : v.getEdges(Vertex.DIRECTION.IN))
+        edges.add(e);
+    } catch (final RecordNotFoundException ignored) {
+      // vertex was already removed by the batch flush - return what was collected so far
+    }
+    return edges;
+  }
+
+  private static void deleteObjectStatic(final Object obj, final Set<Object> deleted, final QueryStatistics stats) {
     if (obj == null || deleted.contains(obj))
       return;
     try {
-      if (obj instanceof Edge)
-        ((Edge) obj).delete();
-      else if (obj instanceof Vertex)
-        ((Vertex) obj).delete();
-      else if (obj instanceof Document)
+      if (obj instanceof Edge e) {
+        e.delete();
+        stats.incRelationshipsDeleted();
+      } else if (obj instanceof Vertex v) {
+        v.delete();
+        stats.incNodesDeleted();
+      } else if (obj instanceof Document)
         ((Document) obj).delete();
       deleted.add(obj);
     } catch (final RecordNotFoundException ignored) {
@@ -407,14 +430,14 @@ public class DeleteStep extends AbstractExecutionStep {
     if (obj instanceof Vertex) {
       deleted.add(obj);
       try {
-        deleteVertex((Vertex) obj);
+        deleteVertex((Vertex) obj, deleted);
       } catch (final RecordNotFoundException e) {
         // Already deleted - skip
       }
     } else if (obj instanceof Edge) {
       deleted.add(obj);
       try {
-        deleteEdge((Edge) obj);
+        deleteEdge((Edge) obj, deleted);
       } catch (final RecordNotFoundException e) {
         // Already deleted - skip
       }
@@ -451,12 +474,14 @@ public class DeleteStep extends AbstractExecutionStep {
    * Deletes a vertex from the graph.
    * If detach is true, deletes all connected relationships first.
    *
-   * @param vertex vertex to delete
+   * @param vertex  vertex to delete
+   * @param deleted shared set of already-deleted objects, so a relationship removed both by DETACH
+   *                and by an explicit edge delete in the same statement is counted only once
    */
-  private void deleteVertex(final Vertex vertex) {
+  private void deleteVertex(final Vertex vertex, final Set<Object> deleted) {
     if (deleteClause.isDetach()) {
       // DETACH DELETE: Remove all connected relationships first
-      deleteAllEdges(vertex);
+      deleteAllEdges(vertex, deleted);
     } else {
       // Non-DETACH DELETE: check for connected edges
       if (vertex.getEdges(Vertex.DIRECTION.OUT).iterator().hasNext() ||
@@ -466,43 +491,56 @@ public class DeleteStep extends AbstractExecutionStep {
     }
 
     vertex.delete();
+    context.getStatistics().incNodesDeleted();
   }
 
   /**
    * Deletes all edges connected to a vertex.
    *
-   * @param vertex vertex whose edges should be deleted
+   * @param vertex  vertex whose edges should be deleted
+   * @param deleted shared set of already-deleted objects; edges already removed and counted earlier
+   *                in the same statement (by an explicit DELETE or another vertex's DETACH pass) are
+   *                skipped here
    */
-  private void deleteAllEdges(final Vertex vertex) {
-    // Collect all edges to delete (both incoming and outgoing)
-    // We collect first to avoid concurrent modification
+  private void deleteAllEdges(final Vertex vertex, final Set<Object> deleted) {
+    // Collect connected edges in both directions, de-duplicating self-loops (which appear in both
+    // OUT and IN) so a self-loop relationship is deleted and counted exactly once.
     final List<Edge> edgesToDelete = new ArrayList<>();
+    final Set<RID> seen = new HashSet<>();
+    for (final Edge edge : vertex.getEdges(Vertex.DIRECTION.OUT))
+      if (seen.add(edge.getIdentity()))
+        edgesToDelete.add(edge);
+    for (final Edge edge : vertex.getEdges(Vertex.DIRECTION.IN))
+      if (seen.add(edge.getIdentity()))
+        edgesToDelete.add(edge);
 
-    // Collect outgoing edges
-    final Iterator<Edge> outgoing = vertex.getEdges(Vertex.DIRECTION.OUT).iterator();
-    while (outgoing.hasNext()) {
-      edgesToDelete.add(outgoing.next());
-    }
-
-    // Collect incoming edges
-    final Iterator<Edge> incoming = vertex.getEdges(Vertex.DIRECTION.IN).iterator();
-    while (incoming.hasNext()) {
-      edgesToDelete.add(incoming.next());
-    }
-
-    // Delete all collected edges
+    final QueryStatistics stats = context.getStatistics();
     for (final Edge edge : edgesToDelete) {
-      edge.delete();
+      // Skip any relationship already removed and counted by an explicit DELETE in the same statement.
+      if (deleted.contains(edge))
+        continue;
+      try {
+        edge.delete();
+        stats.incRelationshipsDeleted();
+        deleted.add(edge);
+      } catch (final RecordNotFoundException ignored) {
+        // already removed (e.g. a shared edge deleted when the other endpoint was detached) - do not count again
+        deleted.add(edge);
+      }
     }
   }
 
   /**
    * Deletes an edge from the graph.
    *
-   * @param edge edge to delete
+   * @param edge    edge to delete
+   * @param deleted shared set of already-deleted objects, updated so a later DETACH pass does not
+   *                recount this edge
    */
-  private void deleteEdge(final Edge edge) {
+  private void deleteEdge(final Edge edge, final Set<Object> deleted) {
     edge.delete();
+    context.getStatistics().incRelationshipsDeleted();
+    deleted.add(edge);
   }
 
   @Override
