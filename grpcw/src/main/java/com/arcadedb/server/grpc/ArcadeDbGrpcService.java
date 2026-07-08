@@ -40,6 +40,7 @@ import com.arcadedb.graph.MutableEdge;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.sql.executor.QueryStatistics;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.schema.DocumentType;
@@ -135,12 +136,17 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     final Database        db;
     final ExecutorService executor;
     final String          txId;
+    // Principal that opened this transaction. Bound at beginTransaction so a transaction-scoped RPC can
+    // reject any caller other than the owner. Null only when the transaction was opened on a server with
+    // security disabled (open mode), where there is no authenticated identity to bind to.
+    final String          owner;
     final long            createdAtMs;
     volatile long         lastAccessMs;
 
-    TransactionContext(Database db, String txId) {
+    TransactionContext(Database db, String txId, String owner) {
       this.db = db;
       this.txId = txId;
+      this.owner = owner;
       this.createdAtMs = System.currentTimeMillis();
       this.lastAccessMs = this.createdAtMs;
       // Single-thread executor ensures all tx operations happen on the same thread
@@ -185,9 +191,24 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   static final long DEFAULT_TX_MAX_AGE_MS       = 0L;       // disabled by default
   static final long DEFAULT_TX_REAPER_PERIOD_MS = 30_000L;  // 30 seconds
 
+  // Concurrent-transaction caps (issue #5048). Each open transaction owns a dedicated executor thread, so an
+  // unbounded number of concurrent transactions is a thread/memory-exhaustion DoS vector for an authenticated
+  // client. A non-positive value disables the corresponding bound.
+  static final int DEFAULT_MAX_CONCURRENT_TX               = 1_000;
+  static final int DEFAULT_MAX_CONCURRENT_TX_PER_PRINCIPAL = 100;
+
+  // Sentinel used as the per-principal counter key when a transaction is opened on a security-disabled server
+  // (no authenticated identity to bind to).
+  private static final String ANONYMOUS_PRINCIPAL = "";
+
   private final long                     txMaxIdleMs;
   private final long                     txMaxAgeMs;
   private final ScheduledExecutorService txReaper;
+
+  private final int                            maxConcurrentTransactions;
+  private final int                            maxConcurrentTransactionsPerPrincipal;
+  private final AtomicInteger                  globalTransactionCount     = new AtomicInteger();
+  private final Map<String, AtomicInteger>     perPrincipalTransactionCount = new ConcurrentHashMap<>();
 
   public ArcadeDbGrpcService(String databasePath, ArcadeDBServer server) {
     this(databasePath, server, DEFAULT_TX_MAX_IDLE_MS, DEFAULT_TX_MAX_AGE_MS, DEFAULT_TX_REAPER_PERIOD_MS);
@@ -195,10 +216,18 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
   public ArcadeDbGrpcService(String databasePath, ArcadeDBServer server, final long txMaxIdleMs, final long txMaxAgeMs,
       final long txReaperPeriodMs) {
+    this(databasePath, server, txMaxIdleMs, txMaxAgeMs, txReaperPeriodMs, DEFAULT_MAX_CONCURRENT_TX,
+        DEFAULT_MAX_CONCURRENT_TX_PER_PRINCIPAL);
+  }
+
+  public ArcadeDbGrpcService(String databasePath, ArcadeDBServer server, final long txMaxIdleMs, final long txMaxAgeMs,
+      final long txReaperPeriodMs, final int maxConcurrentTransactions, final int maxConcurrentTransactionsPerPrincipal) {
     this.databasePath = databasePath;
     this.arcadeServer = server;
     this.txMaxIdleMs = txMaxIdleMs;
     this.txMaxAgeMs = txMaxAgeMs;
+    this.maxConcurrentTransactions = maxConcurrentTransactions;
+    this.maxConcurrentTransactionsPerPrincipal = maxConcurrentTransactionsPerPrincipal;
 
     // Start the reaper only when at least one expiry bound is active and a positive period is configured.
     // A non-positive maxIdleMs/maxAgeMs disables that individual bound; non-positive for both (or a non-positive
@@ -231,6 +260,65 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   }
 
   /**
+   * Returns the number of open transactions currently attributed to the given principal. Exposed for testing the
+   * per-principal concurrency cap.
+   */
+  int getTransactionCountForPrincipal(final String owner) {
+    final AtomicInteger counter = perPrincipalTransactionCount.get(owner == null ? ANONYMOUS_PRINCIPAL : owner);
+    return counter == null ? 0 : counter.get();
+  }
+
+  /**
+   * Atomically reserves a slot for a new transaction against the global and per-principal caps. Returns {@code true}
+   * when both bounds admit the transaction; on rejection no counter is left incremented. A non-positive cap disables
+   * that bound. Reserving before the dedicated executor thread is created is what makes the cap effective against a
+   * beginTransaction flood: the thread is never allocated for a rejected request.
+   */
+  boolean tryReserveTransactionSlot(final String owner) {
+    final int global = globalTransactionCount.incrementAndGet();
+    if (maxConcurrentTransactions > 0 && global > maxConcurrentTransactions) {
+      globalTransactionCount.decrementAndGet();
+      return false;
+    }
+
+    // Reserve the per-principal slot under an atomic compute so admission and the counter mutation happen as one
+    // step per key; this also lets releaseTransactionSlot remove the entry at zero without racing a concurrent
+    // reserve, keeping perPrincipalTransactionCount from growing unbounded across many distinct principals.
+    // The per-principal cap does not apply to the anonymous principal (security-disabled server): a single shared
+    // identity is not a fairness boundary, so only the global cap bounds it. The count is still tracked for metrics.
+    final String key = owner == null ? ANONYMOUS_PRINCIPAL : owner;
+    final int perPrincipalCap = owner == null ? 0 : maxConcurrentTransactionsPerPrincipal;
+    final boolean[] admitted = { true };
+    perPrincipalTransactionCount.compute(key, (k, counter) -> {
+      if (counter == null)
+        return new AtomicInteger(1);
+      if (perPrincipalCap > 0 && counter.get() >= perPrincipalCap) {
+        admitted[0] = false;
+        return counter;
+      }
+      counter.incrementAndGet();
+      return counter;
+    });
+
+    if (!admitted[0]) {
+      globalTransactionCount.decrementAndGet();
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Releases a previously reserved transaction slot. Called exactly once per successful reservation when the
+   * transaction is torn down (commit, rollback, reap, or a failed begin) so the caps track live transactions. The
+   * per-principal entry is dropped when its count returns to zero so the map does not accumulate stale keys.
+   */
+  void releaseTransactionSlot(final String owner) {
+    globalTransactionCount.decrementAndGet();
+    final String key = owner == null ? ANONYMOUS_PRINCIPAL : owner;
+    perPrincipalTransactionCount.computeIfPresent(key, (k, counter) -> counter.decrementAndGet() <= 0 ? null : counter);
+  }
+
+  /**
    * Looks up an active transaction and refreshes its last-access timestamp so that genuine activity keeps it alive.
    * Returns {@code null} for a blank/unknown id, preserving the previous inline behaviour.
    */
@@ -241,6 +329,38 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     if (ctx != null)
       ctx.touch();
     return ctx;
+  }
+
+  /**
+   * Resolves an active transaction for a transaction-scoped RPC and enforces that the caller is allowed to
+   * drive it. Returns {@code null} when no transaction id was supplied (or none is registered) so the
+   * caller falls back to the non-transactional path. When a transaction IS found the caller must pass the
+   * same authentication + per-database authorization enforced by {@link #getDatabase} and be the principal
+   * that opened it; otherwise a gRPC {@code PERMISSION_DENIED} (or {@code UNAUTHENTICATED}) is thrown. This
+   * closes the transaction-hijack where a caller guessing another user's transaction id could drive it on a
+   * database it cannot otherwise access.
+   */
+  private TransactionContext resolveAuthorizedTransaction(final String txId, final DatabaseCredentials credentials) {
+    final TransactionContext txCtx = lookupActiveTransaction(txId);
+    if (txCtx == null)
+      return null;
+    authorizeTransactionAccess(txCtx, credentials);
+    return txCtx;
+  }
+
+  /**
+   * Authenticates the caller and authorizes them for the transaction's REAL database (never a
+   * request-supplied database name), mirroring {@link #getDatabase}'s gate, then enforces transaction
+   * ownership: only the principal that opened the transaction may drive it. Throws a gRPC status exception
+   * (fail-closed) on any mismatch.
+   */
+  private void authorizeTransactionAccess(final TransactionContext txCtx, final DatabaseCredentials credentials) {
+    // Authorize against the transaction's actual database so a caller cannot lie about the database name.
+    validateCredentials(credentials, txCtx.db.getName());
+
+    final String caller = resolvedUsername(credentials);
+    if (txCtx.owner != null && !txCtx.owner.equals(caller))
+      throw Status.PERMISSION_DENIED.withDescription("Transaction is owned by another user").asRuntimeException();
   }
 
   /**
@@ -269,6 +389,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         if (activeTransactions.remove(entry.getKey(), ctx)) {
           LogManager.instance().log(this, Level.FINE,
               "Reaping abandoned gRPC transaction txId=%s (idleMs=%s ageMs=%s)", entry.getKey(), idleMs, ageMs);
+          releaseTransactionSlot(ctx.owner);
           reapTransaction(ctx);
           reaped++;
         }
@@ -360,7 +481,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       final boolean hasTx = req.hasTransaction();
       final var tx = hasTx ? req.getTransaction() : null;
       final String incomingTxId = hasTx && tx != null ? tx.getTransactionId() : null;
-      final TransactionContext txCtx = lookupActiveTransaction(incomingTxId);
+      final TransactionContext txCtx = resolveAuthorizedTransaction(incomingTxId, req.getCredentials());
 
       if (txCtx != null) {
         // External transaction - execute command on the transaction's dedicated thread
@@ -469,6 +590,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
       long serializationAccum = 0L;
       final long engineStart = System.nanoTime();
+      QueryStatistics writeStats = null;
 
       try (ResultSet rs = db.command(language, req.getCommand(), params)) {
 
@@ -528,6 +650,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               }
             }
           }
+
+          writeStats = rs.getStatistics().orElse(null);
         }
       }
 
@@ -573,6 +697,21 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       final long ms = (System.nanoTime() - t0) / 1_000_000L;
       final long serFinalStart = System.nanoTime();
       out.setAffectedRecords(affected).setExecutionTimeMs(ms);
+      if (writeStats != null && writeStats.containsUpdates())
+        out.setStats(QueryUpdateStats.newBuilder()
+            .setNodesCreated(writeStats.getNodesCreated())
+            .setNodesDeleted(writeStats.getNodesDeleted())
+            .setRelationshipsCreated(writeStats.getRelationshipsCreated())
+            .setRelationshipsDeleted(writeStats.getRelationshipsDeleted())
+            .setPropertiesSet(writeStats.getPropertiesSet())
+            .setLabelsAdded(writeStats.getLabelsAdded())
+            .setLabelsRemoved(writeStats.getLabelsRemoved())
+            .setIndexesAdded(writeStats.getIndexesAdded())
+            .setIndexesRemoved(writeStats.getIndexesRemoved())
+            .setConstraintsAdded(writeStats.getConstraintsAdded())
+            .setConstraintsRemoved(writeStats.getConstraintsRemoved())
+            .setContainsUpdates(true)
+            .build());
       final ExecuteCommandResponse response = out.build();
       profile.addSerializationNanos(System.nanoTime() - serFinalStart);
       return response;
@@ -628,7 +767,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   public void createRecord(CreateRecordRequest req, StreamObserver<CreateRecordResponse> resp) {
     // Check for external transaction
     final String incomingTxId = req.hasTransaction() ? req.getTransaction().getTransactionId() : null;
-    final TransactionContext txCtx = lookupActiveTransaction(incomingTxId);
+    final TransactionContext txCtx;
+    try {
+      txCtx = resolveAuthorizedTransaction(incomingTxId, req.getCredentials());
+    } catch (final StatusRuntimeException e) {
+      resp.onError(e);
+      return;
+    }
 
     if (txCtx != null) {
       // External transaction — execute on its dedicated thread to maintain thread-local state
@@ -749,7 +894,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // record version is tracked in that transaction. Under REPEATABLE_READ this is what lets a later write detect a
     // concurrent modification on commit, mirroring the HTTP behavior (issue #4533).
     final String incomingTxId = req.hasTransaction() ? req.getTransaction().getTransactionId() : null;
-    final TransactionContext txCtx = lookupActiveTransaction(incomingTxId);
+    final TransactionContext txCtx;
+    try {
+      txCtx = resolveAuthorizedTransaction(incomingTxId, req.getCredentials());
+    } catch (final StatusRuntimeException e) {
+      resp.onError(e);
+      return;
+    }
 
     if (txCtx != null) {
       try {
@@ -791,7 +942,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   public void updateRecord(final UpdateRecordRequest req, final StreamObserver<UpdateRecordResponse> resp) {
     // Check for external transaction
     final String incomingTxId = req.hasTransaction() ? req.getTransaction().getTransactionId() : null;
-    final TransactionContext txCtx = lookupActiveTransaction(incomingTxId);
+    final TransactionContext txCtx;
+    try {
+      txCtx = resolveAuthorizedTransaction(incomingTxId, req.getCredentials());
+    } catch (final StatusRuntimeException e) {
+      resp.onError(e);
+      return;
+    }
 
     if (txCtx != null) {
       // External transaction — execute on its dedicated thread to maintain thread-local state
@@ -954,7 +1111,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   public void deleteRecord(DeleteRecordRequest req, StreamObserver<DeleteRecordResponse> resp) {
     // Check for external transaction
     final String incomingTxId = req.hasTransaction() ? req.getTransaction().getTransactionId() : null;
-    final TransactionContext txCtx = lookupActiveTransaction(incomingTxId);
+    final TransactionContext txCtx;
+    try {
+      txCtx = resolveAuthorizedTransaction(incomingTxId, req.getCredentials());
+    } catch (final StatusRuntimeException e) {
+      resp.onError(e);
+      return;
+    }
 
     if (txCtx != null) {
       // External transaction — execute on its dedicated thread to maintain thread-local state
@@ -1041,7 +1204,14 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       final String incomingTxId = request.getTransaction().getTransactionId();
       LogManager.instance().log(this, Level.FINE, "executeQuery(): has Tx %s", incomingTxId);
 
-      final TransactionContext txCtx = lookupActiveTransaction(incomingTxId);
+      final TransactionContext txCtx;
+      try {
+        txCtx = resolveAuthorizedTransaction(incomingTxId, request.getCredentials());
+      } catch (final StatusRuntimeException e) {
+        // Preserve the authz/authn status (PERMISSION_DENIED/UNAUTHENTICATED) instead of masking it.
+        responseObserver.onError(e);
+        return;
+      }
       if (txCtx == null) {
         responseObserver.onError(Status.INTERNAL
             .withDescription("Query execution failed: Invalid transaction ID").asException());
@@ -1248,6 +1418,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
     // Declare txCtx outside try block so we can clean it up on failure
     TransactionContext txCtx = null;
+    // Track whether we hold a reserved concurrency slot so the failure path releases it exactly once.
+    boolean reserved = false;
+    String owner = null;
 
     try {
       final Database database = getDatabase(reqDb, request.getCredentials());
@@ -1262,8 +1435,27 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // Generate transaction ID first so we can create the context
       final String transactionId = generateTransactionId();
 
+      // Bind the transaction to the authenticated principal so a transaction-scoped RPC can later reject
+      // any caller other than the owner (getDatabase() above already authenticated/authorized this user).
+      owner = resolvedUsername(request.getCredentials());
+
+      // Enforce the concurrent-transaction caps BEFORE allocating the dedicated executor thread, so a
+      // beginTransaction flood is rejected without ever creating the thread it is trying to exhaust.
+      if (!tryReserveTransactionSlot(owner)) {
+        // Report the configured caps rather than live counts: tryReserveTransactionSlot has already rolled back its
+        // increments on rejection, so a live read here would be post-decrement and misleadingly below the cap.
+        LogManager.instance().log(this, Level.WARNING,
+            "beginTransaction(): rejected for principal=%s - concurrent transaction limit reached (caps: global=%s, perPrincipal=%s)",
+            owner != null ? owner : "<anonymous>", maxConcurrentTransactions, maxConcurrentTransactionsPerPrincipal);
+        responseObserver.onError(Status.RESOURCE_EXHAUSTED
+            .withDescription("Too many concurrent transactions; retry after committing or rolling back open transactions")
+            .asException());
+        return;
+      }
+      reserved = true;
+
       // Create transaction context with dedicated executor thread
-      txCtx = new TransactionContext(database, transactionId);
+      txCtx = new TransactionContext(database, transactionId, owner);
 
       LogManager.instance().log(this, Level.FINE, """
           beginTransaction(): calling database.begin() on dedicated thread \
@@ -1283,8 +1475,27 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       });
       beginFuture.get(); // Wait for begin to complete
 
-      // Register the transaction context
-      activeTransactions.put(transactionId, txCtx);
+      // Register the transaction context. putIfAbsent (never plain put) so two concurrent begins can never
+      // silently overwrite one another's context; with UUID ids a collision is effectively impossible, so a
+      // non-null return is treated as an internal error. Roll back the transaction we just started on its
+      // own thread before failing so it does not leak.
+      final TransactionContext registered = txCtx;
+      final TransactionContext existing = activeTransactions.putIfAbsent(transactionId, registered);
+      if (existing != null) {
+        try {
+          registered.executor.submit(() -> database.rollback()).get();
+        } catch (final Exception rollbackError) {
+          LogManager.instance().log(this, Level.WARNING,
+              "Failed to roll back transaction after id collision for txId=%s", rollbackError, transactionId);
+        }
+        throw new IllegalStateException("Transaction id collision for id=" + transactionId);
+      }
+
+      // Registration succeeded: the reserved slot and the executor now belong to the live transaction, which is
+      // torn down (and its slot released) by commit/rollback/reap. Clear the local cleanup handles so the catch
+      // block below cannot double-release the slot or shut down the live transaction's executor.
+      txCtx = null;
+      reserved = false;
 
       LogManager.instance()
           .log(this, Level.FINE, "beginTransaction(): started txId=%s for db=%s activeTxCount(after)=%s", transactionId,
@@ -1299,6 +1510,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // Shutdown the executor if it was created but not registered (prevents thread leak)
       if (txCtx != null) {
         txCtx.shutdown();
+      }
+      // Release the reserved concurrency slot if the transaction never became live.
+      if (reserved) {
+        releaseTransactionSlot(owner);
       }
       Throwable cause = t instanceof ExecutionException && t.getCause() != null ? t.getCause() : t;
       LogManager.instance()
@@ -1322,18 +1537,34 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       return;
     }
 
-    // remove atomically to avoid double-commit races
-    final TransactionContext txCtx = activeTransactions.remove(txId);
-
-    LogManager.instance()
-        .log(this, Level.FINE, "commitTransaction(): removed txId=%s, presentPreviously=%s, remainingActiveTx=%s", txId,
-            txCtx != null,
-            activeTransactions.size());
+    // Peek (do NOT remove yet) so an unauthorized caller cannot evict the real owner's transaction.
+    final TransactionContext txCtx = lookupActiveTransaction(txId);
 
     if (txCtx == null) {
       // Idempotent no-op
       LogManager.instance()
           .log(this, Level.FINE, "commitTransaction(): no active tx for id=%s, responding committed=false", txId);
+      rsp.onNext(CommitTransactionResponse.newBuilder().setSuccess(true).setCommitted(false)
+          .setMessage("No active transaction for id=" + txId + " (already committed/rolled back?)").build());
+      rsp.onCompleted();
+      return;
+    }
+
+    // Enforce ownership + per-database authorization before mutating anything. A denied caller must not be
+    // able to commit (or, via the removal, disrupt) another user's transaction.
+    try {
+      authorizeTransactionAccess(txCtx, req.getCredentials());
+    } catch (final StatusRuntimeException e) {
+      rsp.onError(e);
+      return;
+    }
+
+    // Now atomically claim the transaction. remove(key, value) avoids double-commit races: if a concurrent
+    // commit/rollback/reaper already took it, treat this as the same idempotent no-op as an unknown id.
+    if (!activeTransactions.remove(txId, txCtx)) {
+      LogManager.instance()
+          .log(this, Level.FINE, "commitTransaction(): tx id=%s already claimed concurrently, responding committed=false",
+              txId);
       rsp.onNext(CommitTransactionResponse.newBuilder().setSuccess(true).setCommitted(false)
           .setMessage("No active transaction for id=" + txId + " (already committed/rolled back?)").build());
       rsp.onCompleted();
@@ -1361,7 +1592,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // tx is unusable; do not reinsert into the map
       rsp.onError(Status.ABORTED.withDescription("Commit failed: " + cause.getMessage()).asException());
     } finally {
-      // Always shutdown the executor
+      // The transaction was claimed above (removed from activeTransactions), so release its concurrency slot and
+      // shut the executor down exactly once here.
+      releaseTransactionSlot(txCtx.owner);
       txCtx.shutdown();
     }
   }
@@ -1378,17 +1611,32 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       return;
     }
 
-    final TransactionContext txCtx = activeTransactions.remove(txId);
-
-    LogManager.instance()
-        .log(this, Level.FINE, "rollbackTransaction(): removed txId=%s, presentPreviously=%s, remainingActiveTx=%s",
-            txId,
-            txCtx != null,
-            activeTransactions.size());
+    // Peek (do NOT remove yet) so an unauthorized caller cannot evict the real owner's transaction.
+    final TransactionContext txCtx = lookupActiveTransaction(txId);
 
     if (txCtx == null) {
       LogManager.instance()
           .log(this, Level.FINE, "rollbackTransaction(): no active tx for id=%s, responding rolledBack=false", txId);
+      rsp.onNext(RollbackTransactionResponse.newBuilder().setSuccess(true).setRolledBack(false)
+          .setMessage("No active transaction for id=" + txId + " (already committed/rolled back?)").build());
+      rsp.onCompleted();
+      return;
+    }
+
+    // Enforce ownership + per-database authorization before mutating anything.
+    try {
+      authorizeTransactionAccess(txCtx, req.getCredentials());
+    } catch (final StatusRuntimeException e) {
+      rsp.onError(e);
+      return;
+    }
+
+    // Atomically claim the transaction; if a concurrent commit/rollback/reaper already took it, treat this
+    // as the same idempotent no-op as an unknown id.
+    if (!activeTransactions.remove(txId, txCtx)) {
+      LogManager.instance()
+          .log(this, Level.FINE, "rollbackTransaction(): tx id=%s already claimed concurrently, responding rolledBack=false",
+              txId);
       rsp.onNext(RollbackTransactionResponse.newBuilder().setSuccess(true).setRolledBack(false)
           .setMessage("No active transaction for id=" + txId + " (already committed/rolled back?)").build());
       rsp.onCompleted();
@@ -1415,7 +1663,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           cause.toString(), cause);
       rsp.onError(Status.ABORTED.withDescription("Rollback failed: " + cause.getMessage()).asException());
     } finally {
-      // Always shutdown the executor
+      // The transaction was claimed above (removed from activeTransactions), so release its concurrency slot and
+      // shut the executor down exactly once here.
+      releaseTransactionSlot(txCtx.owner);
       txCtx.shutdown();
     }
   }
@@ -4150,7 +4400,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   }
 
   private String generateTransactionId() {
-    return "tx_" + System.nanoTime();
+    // UUID (CSPRNG-backed) instead of System.nanoTime(): high-entropy so it cannot be enumerated by an
+    // attacker guessing values around a known point in time, and collision-free so two concurrent begins
+    // can never map to the same id and drive one another's server-side transaction.
+    return "tx_" + UUID.randomUUID();
   }
 
   private static String langOrDefault(String language) {

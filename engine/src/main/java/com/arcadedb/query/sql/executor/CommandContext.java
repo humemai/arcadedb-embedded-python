@@ -78,6 +78,10 @@ public interface CommandContext {
 
   DatabaseInternal getDatabase();
 
+  QueryStatistics getStatistics();
+
+  void setStatistics(QueryStatistics statistics);
+
   void declareScriptVariable(String varName);
 
   boolean isScriptVariableDeclared(String varName);

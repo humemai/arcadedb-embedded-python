@@ -29,6 +29,7 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -47,13 +48,24 @@ public class PageManagerFlushThread extends Thread {
   public final         ArrayBlockingQueue<PagesToFlush>                         queue;
   private final        String                                                   logContext;
   private volatile     boolean                                                  running             = true;
-  private final        ConcurrentHashMap<Database, Boolean>                     suspended           = new ConcurrentHashMap<>(); // USED DURING BACKUP
+  // Per-database suspension REFCOUNT (issue #5068): flushing is suspended while the count is > 0. Backup,
+  // verify and HA snapshot serving can overlap on the same database, and each caller must own its whole
+  // window: the count is bumped per suspender and the resume (deferred-batch flush + flag clear) runs only
+  // when the LAST suspender exits. Guarded by suspendLock(database) for every transition.
+  private final        ConcurrentHashMap<Database, Integer>                     suspended           = new ConcurrentHashMap<>();
+  // Databases whose LAST suspender is currently resuming (synchronously flushing the deferred batches).
+  // A new suspender arriving in that window waits on suspendLock(database) until the resume completes, so
+  // its suspension window can never overlap the resume's page writes (issue #5068).
+  private final        Set<Database>                                            resumingDatabases   = ConcurrentHashMap.newKeySet();
   private final static PagesToFlush                                             SHUTDOWN_THREAD     = new PagesToFlush(null);
-  private final        AtomicReference<PagesToFlush>                            nextPagesToFlush    = new AtomicReference<>();
+  // Package-private so the white-box regression test for issue #5068 can fabricate an in-flight batch and
+  // deterministically exercise an interrupt during waitForCurrentFlushToComplete.
+  final                AtomicReference<PagesToFlush>                            nextPagesToFlush    = new AtomicReference<>();
   private final        ConcurrentHashMap<Database, ConcurrentLinkedQueue<PagesToFlush>> deferredByDatabase = new ConcurrentHashMap<>();
   // Per-database lock serializing the suspend-flag check + defer in flushPagesFromQueueToDisk against the
   // flag-clear + deferred-detach in setSuspended(false). Without it a batch could be deferred AFTER the
   // unsuspend already drained the deferred map, leaving it stuck in deferredByDatabase / pageIndex forever.
+  // Also the monitor new suspenders wait on while a resume is in flight (see resumingDatabases).
   private final        ConcurrentHashMap<Database, Object>                      suspendLocks        = new ConcurrentHashMap<>();
 
   /**
@@ -70,6 +82,17 @@ public class PageManagerFlushThread extends Thread {
    * throttle the committing threads. {@code 0} disables the cap (unbounded, pre-#4728 behavior).
    */
   private final        long                                   maxDeferredRAM;
+
+  /**
+   * Per-database count of pages that LEFT the flush pipeline: the progress signal for
+   * {@link #waitAllPagesOfDatabaseAreFlushed} (#4928). Deliberately per-database and package-private (for
+   * the regression test): a JVM-global signal (e.g. PageManager.totalPagesWritten) would let a busy sibling
+   * database sharing this flush thread mask a wedged one forever, defeating the very timeout it feeds.
+   * An entry is created on a database's FIRST bounded wait (close, rename, backup-suspend, compaction
+   * shipping) and lives until {@link #removeAllPagesOfDatabase} (close/drop) - one bounded entry per open
+   * database, not a leak.
+   */
+  final ConcurrentHashMap<BasicDatabase, AtomicLong> flushedPagesPerDatabase = new ConcurrentHashMap<>();
 
   /**
    * Running total of bytes currently deferred across all suspended databases. Package-private so the white-box
@@ -147,24 +170,60 @@ public class PageManagerFlushThread extends Thread {
    * Entries are added to pageIndex BEFORE enqueueing and removed AFTER flushing each page,
    * so checking pageIndex is race-free unlike checking queue + nextPagesToFlush separately.
    */
-  protected void waitAllPagesOfDatabaseAreFlushed(final Database database) {
+  /**
+   * @return {@code true} when every page of the database reached the disk, {@code false} when the wait gave
+   *     up: either interrupted, or no flush PROGRESS was observed for {@code arcadedb.flushAllPagesTimeout}
+   *     milliseconds (#4928 - a wedged flush thread or unwritable disk used to hang close()/rename()/backup
+   *     forever here). The window resets whenever the pending-page count decreases, so a healthy but slow
+   *     backlog never trips it. Callers on the close path treat {@code false} as a crash-equivalent close:
+   *     the WAL files and the lock file are preserved so the next open replays the unflushed pages.
+   */
+  /** Records that a page of the database LEFT the flush pipeline: the per-database progress signal (#4928). */
+  private void bumpFlushProgress(final MutablePage page) {
+    final AtomicLong counter = flushedPagesPerDatabase.get(page.getPageId().getDatabase());
+    if (counter != null)
+      counter.incrementAndGet();
+  }
+
+  protected boolean waitAllPagesOfDatabaseAreFlushed(final Database database) {
+    final long timeoutMs = database.getConfiguration().getValueAsLong(GlobalConfiguration.FLUSH_ALL_PAGES_TIMEOUT);
+    int lastPending = Integer.MAX_VALUE;
+    final AtomicLong flushedCounter = flushedPagesPerDatabase.computeIfAbsent(database, k -> new AtomicLong());
+    long lastFlushed = flushedCounter.get();
+    long lastProgressAt = System.currentTimeMillis();
     while (true) {
-      boolean hasPendingPages = false;
+      int pending = 0;
       for (final PageId key : pageIndex.keySet()) {
-        if (database.equals(key.getDatabase())) {
-          hasPendingPages = true;
-          break;
-        }
+        if (database.equals(key.getDatabase()))
+          ++pending;
       }
 
-      if (!hasPendingPages)
-        return;
+      if (pending == 0)
+        return true;
+
+      final long now = System.currentTimeMillis();
+      final long flushed = flushedCounter.get();
+      if (pending < lastPending || flushed > lastFlushed) {
+        // The flush is making progress ON THIS DATABASE. Two signals on purpose: on LIVE callers (rename,
+        // backup-suspend, compaction shipping) sustained commits can keep the pending count from ever
+        // dipping below its minimum while the flusher works flat out, so this database's pages leaving the
+        // pipeline also reset the window. The signal is per-database by design: a busy sibling database
+        // sharing the flush thread must not mask a wedged one.
+        lastPending = Math.min(lastPending, pending);
+        lastFlushed = flushed;
+        lastProgressAt = now;
+      } else if (timeoutMs > 0 && now - lastProgressAt > timeoutMs) {
+        LogManager.instance().log(this, Level.SEVERE,
+            "No flush progress for %d ms with %d pages of database '%s' still pending: giving up the wait. The caller preserves the WAL so the next open recovers the unflushed pages",
+            null, timeoutMs, pending, database.getName());
+        return false;
+      }
 
       try {
         Thread.sleep(10);
       } catch (final InterruptedException e) {
         Thread.currentThread().interrupt();
-        return;
+        return false;
       }
     }
   }
@@ -261,12 +320,23 @@ public class PageManagerFlushThread extends Thread {
                 } catch (final DatabaseMetadataException e) {
                   // FILE DELETED, CONTINUE WITH THE NEXT PAGES
                   LogManager.instance().log(this, Level.WARNING, "Error on flushing page '%s' to disk", e, page);
+                } catch (final IOException e) {
+                  // #4928: contain a plain I/O failure per page, same policy as the interrupt double-fault
+                  // above. Letting it escape aborted the whole batch: the remaining pages were never flushed
+                  // or retried, yet their pageIndex entries survived, so waitAllPagesOfDatabaseAreFlushed
+                  // spun forever and close()/rename()/backup-suspend hung. The failed page's WAL entry was
+                  // never acked (notifyPageFlushed not reached), which keeps its WAL file from being dropped:
+                  // the page is durable via WAL replay on the next open, NOT repaired in place - until then,
+                  // once the read cache evicts it, readers see the stale on-disk version.
+                  LogManager.instance().log(this, Level.SEVERE,
+                      "Error on flushing page '%s' to disk, the page will be recovered from the WAL on restart", e, page);
                 } finally {
                   // Remove from index AFTER flushing: the page is now on disk and will be
                   // found in the read cache (putPageInReadCache was called at commit time).
                   // Reference identity ensures a NEWER MutablePage for the same PageId (queued
                   // by a later TX while this batch was waiting) is NOT removed from the index.
                   removeFromFlushIndex(page);
+                  bumpFlushProgress(page);
                 }
               }
             }
@@ -284,10 +354,81 @@ public class PageManagerFlushThread extends Thread {
       Thread.sleep(1);
   }
 
+  /**
+   * Refcounted suspension (issue #5068). {@code value == true} adds a suspender: the return value is
+   * {@code true} only for the FIRST suspender (count 0 to 1). {@code value == false} releases one
+   * suspender: only the LAST release (count 1 to 0) resumes flushing - it synchronously flushes the
+   * deferred batches and clears the flag - and returns {@code true}; a non-last release just decrements
+   * the count and returns {@code false}, keeping the database suspended for the remaining suspenders.
+   * <p>
+   * A new suspender arriving while the last release is mid-resume waits until the resume completes:
+   * otherwise its freshly acquired window would overlap the resume's synchronous page writes, exactly the
+   * torn-read overlap this refcount exists to prevent. The wait is uninterruptible (the interrupt flag is
+   * preserved and restored) and timed, so a lost notification degrades to polling instead of a hang.
+   * <p>
+   * Parking here uninterruptibly is an ACCEPTED TRADEOFF (#5074 review): the wait is bounded by the
+   * resume's Phase 1, which writes at most {@code FLUSH_SUSPEND_MAX_DEFERRED_RAM} (the #4728 backpressure
+   * cap) of deferred pages, and the only suspenders are admin-path threads - SQL BACKUP DATABASE, database
+   * verify, and HA snapshot serving, the latter capped at {@code HA_SNAPSHOT_MAX_CONCURRENT} (default 2)
+   * of Undertow's 500 workers and serialized per database by {@code SnapshotHttpHandler}. No pool can be
+   * exhausted and shutdown is delayed by at most one bounded resume; a {@code flushPage} wedged on a dead
+   * disk stalls the flush thread itself first, so this wait is never the limiting factor.
+   */
   public boolean setSuspended(final Database database, final boolean value) {
-    if (value)
-      return suspended.putIfAbsent(database, true) == null;
+    final Object lock = suspendLock(database);
 
+    if (value) {
+      synchronized (lock) {
+        boolean interrupted = false;
+        while (resumingDatabases.contains(database)) {
+          try {
+            lock.wait(100);
+          } catch (final InterruptedException e) {
+            interrupted = true;
+          }
+        }
+        if (interrupted)
+          Thread.currentThread().interrupt();
+
+        final int count = suspended.merge(database, 1, Integer::sum);
+        return count == 1;
+      }
+    }
+
+    synchronized (lock) {
+      final Integer count = suspended.get(database);
+      if (count == null)
+        // NOT SUSPENDED (E.G. UNBALANCED RELEASE OR DATABASE DROPPED MID-SUSPENSION): NOTHING TO RESUME
+        return false;
+      if (count > 1) {
+        // OTHER SUSPENDERS STILL OWN THE WINDOW: JUST RELEASE THIS CALLER'S REFERENCE
+        suspended.put(database, count - 1);
+        return false;
+      }
+      // LAST SUSPENDER: RESUME BELOW. The count stays at 1 through Phase 1 so the flush thread keeps
+      // deferring, and resumingDatabases blocks new suspenders until the flag is cleared in Phase 2.
+      if (!resumingDatabases.add(database))
+        // DEFENSIVE: A RESUME IS ALREADY IN FLIGHT (UNBALANCED CONCURRENT RELEASE)
+        return false;
+    }
+
+    try {
+      resumeFlushing(database);
+    } finally {
+      synchronized (lock) {
+        // Idempotent on the success path (Phase 2 already removed the entry and the resume gate kept
+        // anyone from re-adding it); on an unexpected exception out of the resume it heals the stuck
+        // count so the database does not stay suspended forever.
+        suspended.remove(database);
+        resumingDatabases.remove(database);
+        lock.notifyAll();
+      }
+    }
+    return true;
+  }
+
+  /** Executes the resume of the LAST suspender: flushes the deferred batches and clears the suspension. */
+  private void resumeFlushing(final Database database) {
     // Phase 1: synchronously flush all deferred batches accumulated while suspended. If the unsuspending
     // thread (e.g. backup/HA) is interrupted, the flag is consumed ONCE for the whole flush (a set flag makes
     // concurrentPageAccess reject every subsequent write, one throw+retry cycle per page) and restored at the
@@ -329,17 +470,20 @@ public class PageManagerFlushThread extends Thread {
               // The page leaves the deferred backlog (flushed to disk), so release its reserved RAM (issue #4728).
               deferredRAMBytes.addAndGet(-page.getPhysicalSize());
               removeFromFlushIndex(page);
+              bumpFlushProgress(page);
             }
           }
         }
       }
     }
 
-    // Phase 2 + Phase 3a: under the per-database lock, clear the suspended flag AND atomically detach any
-    // batches deferred during Phase 1. Holding the lock makes this transition mutually exclusive with the
-    // suspended-check + defer in flushPagesFromQueueToDisk: once the flag is cleared no further batch can be
-    // added to deferredByDatabase for this database, and every batch deferred up to that point is detached
-    // exactly once. A single detach therefore suffices - nothing can repopulate the map behind us.
+    // Phase 2 + Phase 3a: under the per-database lock, clear the suspension refcount AND atomically detach
+    // any batches deferred during Phase 1. Holding the lock makes this transition mutually exclusive with
+    // the suspended-check + defer in flushPagesFromQueueToDisk: once the flag is cleared no further batch
+    // can be added to deferredByDatabase for this database, and every batch deferred up to that point is
+    // detached exactly once. A single detach therefore suffices - nothing can repopulate the map behind us.
+    // New suspenders are still gated out by resumingDatabases (removed by the caller AFTER Phase 3b), so
+    // the count going 1 to 0 here cannot interleave with a concurrent acquire.
     final ConcurrentLinkedQueue<PagesToFlush> newDeferred;
     synchronized (suspendLock(database)) {
       suspended.remove(database);
@@ -378,13 +522,11 @@ public class PageManagerFlushThread extends Thread {
     if (restoreCallerInterrupt)
       // Consumed once during Phase 1: restore it so the caller still observes its own cancellation.
       Thread.currentThread().interrupt();
-
-    return true;
   }
 
   public boolean isSuspended(final Database database) {
-    final Boolean s = suspended.get(database);
-    return s != null ? s : false;
+    final Integer count = suspended.get(database);
+    return count != null && count > 0;
   }
 
   /** Returns the stable per-database monitor used to serialize the suspend check/defer against unsuspend. */
@@ -449,6 +591,8 @@ public class PageManagerFlushThread extends Thread {
     // pins) can be garbage collected instead of being retained for the flush thread's lifetime as a map key.
     suspendLocks.remove(database);
     suspended.remove(database);
+    resumingDatabases.remove(database);
+    flushedPagesPerDatabase.remove(database);
     final ConcurrentLinkedQueue<PagesToFlush> droppedDeferred = deferredByDatabase.remove(database);
     if (droppedDeferred != null) {
       for (final PagesToFlush batch : droppedDeferred)
@@ -490,6 +634,13 @@ public class PageManagerFlushThread extends Thread {
           pageIndex.remove(page.getPageId());
           it.remove();
           removedBytes += page.getPhysicalSize();
+          // The purged page will never be flushed and its content is irrelevant (its file was dropped):
+          // release its WAL ack so the close-time ack gate (#4928) is not tripped by stale pending counts.
+          // takeWALFile makes the release exactly-once against the racing flush loop (which does NOT remove
+          // pages from this batch list, so both paths can visit the same page).
+          final WALFile walFile = page.takeWALFile();
+          if (walFile != null)
+            walFile.notifyPageFlushed();
         }
       }
     }

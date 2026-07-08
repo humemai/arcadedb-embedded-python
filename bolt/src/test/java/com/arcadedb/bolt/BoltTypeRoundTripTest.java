@@ -19,6 +19,7 @@
 package com.arcadedb.bolt;
 
 import com.arcadedb.bolt.packstream.PackStreamReader;
+import com.arcadedb.bolt.packstream.PackStreamStructure;
 import com.arcadedb.bolt.packstream.PackStreamWriter;
 import com.arcadedb.bolt.structure.BoltPointStructure;
 import com.arcadedb.bolt.structure.BoltStructureMapper;
@@ -75,7 +76,10 @@ class BoltTypeRoundTripTest {
   void type010_offsetDateTimeNative() {
     final Object out = BoltStructureMapper.toPackStreamValue(
         OffsetDateTime.of(2026, 1, 15, 14, 30, 0, 0, ZoneOffset.ofHours(2)));
-    assertThat(out).isInstanceOf(BoltTemporalStructure.class);
+    // DateTime/DateTimeZoneId now carry both epoch bases and pick their wire signature at writeTo()
+    // time from the negotiated Bolt major version (see BoltDateTimeStructure), so this is no longer a
+    // BoltTemporalStructure - it is still a native Bolt structure though, just a version-aware one.
+    assertThat(out).isInstanceOf(PackStreamStructure.class);
   }
 
   @Test
@@ -86,8 +90,6 @@ class BoltTypeRoundTripTest {
     final Object out = BoltStructureMapper.toPackStreamValue(d);
     assertThat(out).isInstanceOf(BoltTemporalStructure.class);
     final BoltTemporalStructure s = (BoltTemporalStructure) out;
-    assertThat(s.getSignature()).isEqualTo((byte) 0x45);
-    assertThat(s.getFieldCount()).isEqualTo(4);
 
     // BoltTemporalStructure has no field getter by design; round-trip through the wire to pin the
     // field ORDER and VALUES, not just the structure shape.
@@ -100,7 +102,7 @@ class BoltTypeRoundTripTest {
 
   @Test
   @DisplayName("[TYPE-012] cartesian Point serializes as a native Bolt Point2D structure")
-  void type012_cartesianPointNative() {
+  void type012_cartesianPointNative() throws IOException {
     final Map<String, Object> point = new LinkedHashMap<>();
     point.put("x", 12.34);
     point.put("y", 56.78);
@@ -108,16 +110,22 @@ class BoltTypeRoundTripTest {
     final Object out = BoltStructureMapper.toPackStreamValue(point);
     assertThat(out).isInstanceOf(BoltPointStructure.class);
     final BoltPointStructure p = (BoltPointStructure) out;
-    assertThat(p.getSignature()).isEqualTo((byte) 0x58);
     assertThat(p.getSrid()).isEqualTo(7203);
     assertThat(p.getX()).isEqualTo(12.34);
     assertThat(p.getY()).isEqualTo(56.78);
     assertThat(p.getZ()).isNull();
+
+    // Pin the header the inlined BoltPointStructure.writeTo emits for a 2D point (z absent).
+    final PackStreamWriter writer = new PackStreamWriter();
+    p.writeTo(writer);
+    final byte[] bytes = writer.toByteArray();
+    assertThat(bytes[0]).isEqualTo((byte) (0xB0 | 3)); // TINY_STRUCT, 3 fields
+    assertThat(bytes[1]).isEqualTo(BoltPointStructure.SIGNATURE_2D);
   }
 
   @Test
   @DisplayName("[TYPE-012] WGS-84 3D Point serializes as a native Bolt Point3D structure")
-  void type012_wgs84Point3DNative() {
+  void type012_wgs84Point3DNative() throws IOException {
     final Map<String, Object> point = new LinkedHashMap<>();
     point.put("longitude", 12.34);
     point.put("latitude", 56.78);
@@ -125,11 +133,17 @@ class BoltTypeRoundTripTest {
     point.put("crs", "WGS-84-3D");
     point.put("srid", 4979);
     final BoltPointStructure p = (BoltPointStructure) BoltStructureMapper.toPackStreamValue(point);
-    assertThat(p.getSignature()).isEqualTo((byte) 0x59);
     assertThat(p.getSrid()).isEqualTo(4979);
     assertThat(p.getX()).isEqualTo(12.34);
     assertThat(p.getY()).isEqualTo(56.78);
     assertThat(p.getZ()).isEqualTo(100.0);
+
+    // Pin the header the inlined BoltPointStructure.writeTo emits for a 3D point (z present).
+    final PackStreamWriter writer = new PackStreamWriter();
+    p.writeTo(writer);
+    final byte[] bytes = writer.toByteArray();
+    assertThat(bytes[0]).isEqualTo((byte) (0xB0 | 4)); // TINY_STRUCT, 4 fields
+    assertThat(bytes[1]).isEqualTo(BoltPointStructure.SIGNATURE_3D);
   }
 
   @Test

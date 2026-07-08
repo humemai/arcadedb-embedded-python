@@ -17,6 +17,7 @@ from .jvm import start_jvm
 from .results import ResultSet
 from .type_conversion import convert_python_to_java
 from .transactions import TransactionContext
+from .type_conversion import convert_python_to_java
 from .vector import to_java_float_array
 
 try:  # optional; hoisted to module scope to keep it out of per-call hot paths

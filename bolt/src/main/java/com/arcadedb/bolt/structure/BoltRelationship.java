@@ -56,25 +56,25 @@ public class BoltRelationship implements PackStreamStructure {
   }
 
   @Override
-  public byte getSignature() {
-    return SIGNATURE;
-  }
-
-  @Override
-  public int getFieldCount() {
-    return 5; // BOLT v4.x format
-  }
-
-  @Override
   public void writeTo(final PackStreamWriter writer) throws IOException {
-    // Use BOLT v4.x format with 5 fields for compatibility
-    writer.writeStructureHeader(SIGNATURE, 5);
-    writer.writeInteger(id);
-    writer.writeInteger(startNodeId);
-    writer.writeInteger(endNodeId);
-    writer.writeString(type);
-    writer.writeMap(properties);
-    // Note: element_id fields are omitted for v4.x compatibility
+    if (writer.getBoltMajorVersion() >= 5) {
+      writer.writeStructureHeader(SIGNATURE, 8);
+      writer.writeInteger(id);
+      writer.writeInteger(startNodeId);
+      writer.writeInteger(endNodeId);
+      writer.writeString(type);
+      writer.writeMap(properties);
+      writer.writeString(elementId);
+      writer.writeString(startNodeElementId);
+      writer.writeString(endNodeElementId);
+    } else {
+      writer.writeStructureHeader(SIGNATURE, 5);
+      writer.writeInteger(id);
+      writer.writeInteger(startNodeId);
+      writer.writeInteger(endNodeId);
+      writer.writeString(type);
+      writer.writeMap(properties);
+    }
   }
 
   public long getId() {
