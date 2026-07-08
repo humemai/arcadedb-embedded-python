@@ -1,0 +1,1 @@
+{"n_persons": 1000000, "connect_s": 0.551, "engine_version": "26.7.2.dev0", "build_s": 578.32, "point_p50_ms": 0.45, "point_p95_ms": 0.674, "point_p99_ms": 0.809, "hop1_p50_ms": 0.588, "hop1_p95_ms": 0.759, "hop1_p99_ms": 1.3, "hop2_p50_ms": 1.113, "hop2_p95_ms": 2.431, "hop2_p99_ms": 2.821, "write_p50_ms": 377.114, "write_p95_ms": 403.606, "oltp_total_s": 39.12}

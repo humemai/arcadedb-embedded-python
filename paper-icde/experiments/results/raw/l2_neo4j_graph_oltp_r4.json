@@ -1,0 +1,1 @@
+{"n_persons": 1000000, "connect_s": 0.783, "engine_version": "neo4j-driver:6.2.0", "build_s": 497.88, "point_p50_ms": 5.363, "point_p95_ms": 7.859, "point_p99_ms": 9.409, "hop1_p50_ms": 4.697, "hop1_p95_ms": 6.268, "hop1_p99_ms": 13.261, "hop2_p50_ms": 4.866, "hop2_p95_ms": 6.794, "hop2_p99_ms": 7.588, "write_p50_ms": 8.157, "write_p95_ms": 20.948, "oltp_total_s": 4.43}
