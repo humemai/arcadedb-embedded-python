@@ -17,7 +17,7 @@
 \begin{document}
 
 \title{ArcadeDB: One ACID Engine for Documents, Graphs, Vectors, and Time Series\\
-{\large\todo{working title --- alternatives in .notes strategy doc}}}
+{\large\todo{working title; alternatives in .notes strategy doc}}}
 
 \author{
 \IEEEauthorblockN{Taewoon Kim}
@@ -40,7 +40,7 @@ l.garulli@arcadedata.com}
 \maketitle
 
 \begin{abstract}
-\todo{Written last. Spine: multi-model unification as a real, adopted system ---
+\todo{Written last. Spine: multi-model unification as a real, adopted system,
 one page/WAL/MVCC-transaction pipeline under documents, graphs, key-value,
 time series, and vectors; every index type (LSM, full-text, geo, hash,
 dense/sparse vector) commits inside the same transaction; Raft replication ships
@@ -63,14 +63,14 @@ unification at the storage layer, not the API gateway. Claims 1--4 from the
 audit. Explicitly claim integration, not new algorithms.}
 
 \section{Background and Design Goals}\label{sec:background}
-\todo{PROSE PASS NEEDED — raw co-author input below (Garulli, 2026-07-08).}
+\todo{PROSE PASS NEEDED. Raw co-author input below (Garulli, 2026-07-08).}
 
 ArcadeDB descends from OrientDB, and its design goals are best understood as
 deliberate corrections of three OrientDB limitations its authors lived with:
 \begin{itemize}
   \item \textbf{Durability.} OrientDB's write-ahead log was asynchronous,
   single-threaded, and (in the authors' assessment) unreliable. ArcadeDB's
-  journal is synchronous, parallel, and crash-proof --- the point-of-no-return
+  journal is synchronous, parallel, and crash-proof. It follows the point-of-no-return
   discipline detailed in \S\ref{sec:architecture}.
   \item \textbf{Edge storage.} OrientDB managed edges with a tree-bag
   structure; ArcadeDB replaces it with a LIFO linked list that scales
@@ -82,7 +82,7 @@ deliberate corrections of three OrientDB limitations its authors lived with:
 \todo{Design goals framing; what industry usage demanded. Third-party academic
 adoption: DatAasee~\cite{himpe2024dataasee} (metadata catalog for research
 libraries) and AptBacterialDB~\cite{aptbacterialdb} (ArcadeDB/openCypher graph
-layer for an antibacterial-aptamer database) --- both independent multi-model
+layer for an antibacterial-aptamer database), both independent multi-model
 graph uses. Christian's "why we chose it" paragraph goes here or in Lessons.}
 
 \section{Architecture: One Substrate, Five Models}\label{sec:architecture}
