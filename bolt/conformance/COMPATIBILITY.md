@@ -4,25 +4,19 @@
 
 Certification status of ArcadeDB's Bolt protocol against every official Neo4j driver, per the shared conformance spec ([`spec.yaml`](spec.yaml), epic #4882). Columns are driver language by pinned version ([`driver-versions.md`](driver-versions.md)).
 
-**Last verified:** 2026-07-08 14:51 UTC ([run](https://github.com/ArcadeData/arcadedb/actions/runs/28951539917))
+**Last verified:** 2026-07-08 20:26 UTC ([run](https://github.com/ArcadeData/arcadedb/actions/runs/28972944164))
 
 Legend: ✅ pass, ❌ fail, ⚠️ expected-fail / known limitation, ➖ not applicable, ⚪ skipped, `·` not reported. A `·` in a listed Coverage-gaps column means no result for that driver:version.
-
-## Coverage gaps
-
-These driver:version cells produced no usable result this run and count against the badge:
-
-- missing (job produced no result): csharp:4.4.0, javascript:4.4.11, javascript:5.28.3, javascript:6.2.0
 
 ## connection
 
 | Scenario | java<br>4.4.20 | java<br>5.28.5 | java<br>6.2.0 | javascript<br>4.4.11 | javascript<br>5.28.3 | javascript<br>6.2.0 | python<br>5.28.4 | python<br>6.1.0 | python<br>6.2.0 | csharp<br>4.4.0 | csharp<br>5.28.4 | csharp<br>6.2.1 | go<br>5.27.0 | go<br>5.28.0 | go<br>5.28.4 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **CONN-001** Connect via bolt:// scheme | ✅ | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **CONN-002** Connect via bolt+s:// with TLS required | · | · | · | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **CONN-003** Connect via neo4j:// routing discovery, single-node deployment | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **CONN-004** neo4j:// routing reflects actual multi-node HA cluster topology | · | ⚪ | ⚪ | · | · | · | ⚪ | ⚪ | ⚪ | · | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ |
-| **CONN-005** TLS OPTIONAL mode falls back to plaintext bolt:// | · | · | · | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **CONN-001** Connect via bolt:// scheme | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **CONN-002** Connect via bolt+s:// with TLS required | · | · | · | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **CONN-003** Connect via neo4j:// routing discovery, single-node deployment | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **CONN-004** neo4j:// routing reflects actual multi-node HA cluster topology | · | ⚪ | ⚪ | · | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | · | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ |
+| **CONN-005** TLS OPTIONAL mode falls back to plaintext bolt:// | · | · | · | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 > **CONN-004**: For clusters with heterogeneous Bolt ports, each node's client-reachable Bolt address must be declared with the object-form 'bolt:' field in HA_SERVER_LIST (host:{raft:..,http:..,bolt:..}). When omitted, the address is derived from each peer's Raft host plus this node's Bolt port, which is correct only for homogeneous deployments (e.g. a Kubernetes StatefulSet).
 
@@ -30,67 +24,67 @@ These driver:version cells produced no usable result this run and count against 
 
 | Scenario | java<br>4.4.20 | java<br>5.28.5 | java<br>6.2.0 | javascript<br>4.4.11 | javascript<br>5.28.3 | javascript<br>6.2.0 | python<br>5.28.4 | python<br>6.1.0 | python<br>6.2.0 | csharp<br>4.4.0 | csharp<br>5.28.4 | csharp<br>6.2.1 | go<br>5.27.0 | go<br>5.28.0 | go<br>5.28.4 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **AUTH-001** Basic auth succeeds with valid credentials | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **AUTH-002** Basic auth fails with invalid credentials | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **AUTH-003** Auth scheme 'none' is rejected (intentional, not a bug) | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **AUTH-001** Basic auth succeeds with valid credentials | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **AUTH-002** Basic auth fails with invalid credentials | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **AUTH-003** Auth scheme 'none' is rejected (intentional, not a bug) | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## transactions
 
 | Scenario | java<br>4.4.20 | java<br>5.28.5 | java<br>6.2.0 | javascript<br>4.4.11 | javascript<br>5.28.3 | javascript<br>6.2.0 | python<br>5.28.4 | python<br>6.1.0 | python<br>6.2.0 | csharp<br>4.4.0 | csharp<br>5.28.4 | csharp<br>6.2.1 | go<br>5.27.0 | go<br>5.28.0 | go<br>5.28.4 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **TX-001** Autocommit query executes and returns results | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TX-002** Explicit BEGIN/RUN/COMMIT persists changes | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TX-003** Explicit BEGIN/RUN/ROLLBACK discards changes | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TX-004** Managed transaction function executeWrite commits on success | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TX-005** Managed transaction function retries on Neo.TransientError.* | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TX-001** Autocommit query executes and returns results | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TX-002** Explicit BEGIN/RUN/COMMIT persists changes | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TX-003** Explicit BEGIN/RUN/ROLLBACK discards changes | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TX-004** Managed transaction function executeWrite commits on success | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TX-005** Managed transaction function retries on Neo.TransientError.* | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## causal-consistency
 
 | Scenario | java<br>4.4.20 | java<br>5.28.5 | java<br>6.2.0 | javascript<br>4.4.11 | javascript<br>5.28.3 | javascript<br>6.2.0 | python<br>5.28.4 | python<br>6.1.0 | python<br>6.2.0 | csharp<br>4.4.0 | csharp<br>5.28.4 | csharp<br>6.2.1 | go<br>5.27.0 | go<br>5.28.0 | go<br>5.28.4 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **CAUSAL-001** Bookmark enforces read-after-write across sessions | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **CAUSAL-001** Bookmark enforces read-after-write across sessions | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## multi-database
 
 | Scenario | java<br>4.4.20 | java<br>5.28.5 | java<br>6.2.0 | javascript<br>4.4.11 | javascript<br>5.28.3 | javascript<br>6.2.0 | python<br>5.28.4 | python<br>6.1.0 | python<br>6.2.0 | csharp<br>4.4.0 | csharp<br>5.28.4 | csharp<br>6.2.1 | go<br>5.27.0 | go<br>5.28.0 | go<br>5.28.4 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **MDB-001** Session selects a specific named database | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **MDB-002** Sessions against different databases on the same driver are isolated | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **MDB-001** Session selects a specific named database | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **MDB-002** Sessions against different databases on the same driver are isolated | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## result-handling
 
 | Scenario | java<br>4.4.20 | java<br>5.28.5 | java<br>6.2.0 | javascript<br>4.4.11 | javascript<br>5.28.3 | javascript<br>6.2.0 | python<br>5.28.4 | python<br>6.1.0 | python<br>6.2.0 | csharp<br>4.4.0 | csharp<br>5.28.4 | csharp<br>6.2.1 | go<br>5.27.0 | go<br>5.28.0 | go<br>5.28.4 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **RESULT-001** Streaming PULL returns records incrementally | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **RESULT-002** PULL n streams exactly n rows, further PULL continues from where it left off | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **RESULT-003** DISCARD abandons remaining rows without materializing them | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **RESULT-004** ResultSummary counters accurately reflect write operations | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **RESULT-001** Streaming PULL returns records incrementally | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **RESULT-002** PULL n streams exactly n rows, further PULL continues from where it left off | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **RESULT-003** DISCARD abandons remaining rows without materializing them | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **RESULT-004** ResultSummary counters accurately reflect write operations | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## type-roundtrip
 
 | Scenario | java<br>4.4.20 | java<br>5.28.5 | java<br>6.2.0 | javascript<br>4.4.11 | javascript<br>5.28.3 | javascript<br>6.2.0 | python<br>5.28.4 | python<br>6.1.0 | python<br>6.2.0 | csharp<br>4.4.0 | csharp<br>5.28.4 | csharp<br>6.2.1 | go<br>5.27.0 | go<br>5.28.0 | go<br>5.28.4 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **TYPE-001** Node round-trips as a native Bolt structure | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-002** Relationship round-trips as a native Bolt structure | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-003** Path round-trips as a native Bolt structure | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-004** ByteArray round-trips as a bound parameter | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-005** Nested lists and maps round-trip structurally | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-006** Null values round-trip | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-007** LocalDate round-trips as a native Bolt Date structure | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-008** LocalTime round-trips as a native Bolt LocalTime structure | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-009** LocalDateTime round-trips as a native Bolt LocalDateTime structure | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-010** Offset/zoned DateTime round-trips as a native Bolt DateTime structure | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-011** Duration round-trips as a native Bolt Duration structure | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **TYPE-012** Point round-trips as a native Bolt Point structure | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-001** Node round-trips as a native Bolt structure | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-002** Relationship round-trips as a native Bolt structure | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-003** Path round-trips as a native Bolt structure | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-004** ByteArray round-trips as a bound parameter | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-005** Nested lists and maps round-trip structurally | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-006** Null values round-trip | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-007** LocalDate round-trips as a native Bolt Date structure | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-008** LocalTime round-trips as a native Bolt LocalTime structure | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-009** LocalDateTime round-trips as a native Bolt LocalDateTime structure | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-010** Offset/zoned DateTime round-trips as a native Bolt DateTime structure | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-011** Duration round-trips as a native Bolt Duration structure | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **TYPE-012** Point round-trips as a native Bolt Point structure | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## errors
 
 | Scenario | java<br>4.4.20 | java<br>5.28.5 | java<br>6.2.0 | javascript<br>4.4.11 | javascript<br>5.28.3 | javascript<br>6.2.0 | python<br>5.28.4 | python<br>6.1.0 | python<br>6.2.0 | csharp<br>4.4.0 | csharp<br>5.28.4 | csharp<br>6.2.1 | go<br>5.27.0 | go<br>5.28.0 | go<br>5.28.4 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **ERR-001** Syntax error returns Neo.ClientError.Statement.SyntaxError | ✅ | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **ERR-002** Semantic error returns Neo.ClientError.Statement.SemanticError | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **ERR-001** Syntax error returns Neo.ClientError.Statement.SyntaxError | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **ERR-002** Semantic error returns Neo.ClientError.Statement.SemanticError | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **ERR-003** Unauthenticated request returns Neo.ClientError.Security.Forbidden | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ | ➖ |
-| **ERR-004** Transient conditions surface Neo.TransientError.* codes | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **ERR-004** Transient conditions surface Neo.TransientError.* codes | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 > **ERR-003**: Cannot be triggered through any official driver's public API - every official Neo4j driver completes HELLO/LOGON internally before exposing session/query methods to user code. Testable only via a bespoke raw-socket client, which the epic's governing principles exclude.
 
@@ -98,6 +92,6 @@ These driver:version cells produced no usable result this run and count against 
 
 | Scenario | java<br>4.4.20 | java<br>5.28.5 | java<br>6.2.0 | javascript<br>4.4.11 | javascript<br>5.28.3 | javascript<br>6.2.0 | python<br>5.28.4 | python<br>6.1.0 | python<br>6.2.0 | csharp<br>4.4.0 | csharp<br>5.28.4 | csharp<br>6.2.1 | go<br>5.27.0 | go<br>5.28.0 | go<br>5.28.4 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **PROTO-001** Version negotiation succeeds for Bolt 4.4, 4.0, and 3.0 | ✅ | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **PROTO-002** Version negotiation with a Bolt 5.x-only driver | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **PROTO-003** RESET returns the connection to a clean state mid-stream | · | ✅ | ✅ | · | · | · | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **PROTO-001** Version negotiation succeeds for Bolt 4.4, 4.0, and 3.0 | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **PROTO-002** Version negotiation with a Bolt 5.x-only driver | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **PROTO-003** RESET returns the connection to a clean state mid-stream | · | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |

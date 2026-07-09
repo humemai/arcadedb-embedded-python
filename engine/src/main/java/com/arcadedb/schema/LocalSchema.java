@@ -45,6 +45,7 @@ import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.exception.SchemaException;
 import com.arcadedb.function.FunctionDefinition;
 import com.arcadedb.function.FunctionLibraryDefinition;
+import com.arcadedb.function.FunctionLibraryFactory;
 import com.arcadedb.index.Index;
 import com.arcadedb.index.IndexException;
 import com.arcadedb.index.IndexFactory;
@@ -263,6 +264,7 @@ public class LocalSchema implements Schema {
 
   @Override
   public void setDateFormat(final String dateFormat) {
+    database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_DATABASE_SETTINGS);
     this.dateFormat = dateFormat;
   }
 
@@ -273,6 +275,7 @@ public class LocalSchema implements Schema {
 
   @Override
   public void setDateTimeFormat(final String dateTimeFormat) {
+    database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_DATABASE_SETTINGS);
     this.dateTimeFormat = dateTimeFormat;
   }
 
@@ -284,6 +287,7 @@ public class LocalSchema implements Schema {
 
   @Override
   public void setExtension(final String name, final JSONObject value) {
+    database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
     if (value == null)
       extensions.remove(name);
     else
@@ -698,6 +702,8 @@ public class LocalSchema implements Schema {
 
   @Override
   public synchronized void dropMaterializedView(final String viewName) {
+    database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
+
     final MaterializedViewImpl view = materializedViews.get(viewName);
     if (view == null)
       throw new SchemaException("Materialized view '" + viewName + "' not found");
@@ -728,6 +734,8 @@ public class LocalSchema implements Schema {
   @Override
   public synchronized void alterMaterializedView(final String viewName, final MaterializedViewRefreshMode newMode,
       final long newIntervalMs) {
+    database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
+
     final MaterializedViewImpl oldView = materializedViews.get(viewName);
     if (oldView == null)
       throw new SchemaException("Materialized view '" + viewName + "' not found");
@@ -781,6 +789,8 @@ public class LocalSchema implements Schema {
 
   @Override
   public synchronized void dropContinuousAggregate(final String name) {
+    database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
+
     final ContinuousAggregateImpl ca = continuousAggregates.get(name);
     if (ca == null)
       throw new SchemaException("Continuous aggregate '" + name + "' not found");
@@ -1845,6 +1855,34 @@ public class LocalSchema implements Schema {
         }
       }
 
+      // Load user-defined function libraries (DEFINE FUNCTION, issue #5121). Only persistable libraries (js/sql/cypher)
+      // are stored, so drop any previously loaded persistable library and rebuild from the schema file, while keeping
+      // libraries registered programmatically from native Java code (getLanguage() == null).
+      functionLibraries.values().removeIf(l -> l.getLanguage() != null);
+      if (root.has("functions")) {
+        final JSONObject functionsJSON = root.getJSONObject("functions");
+        for (final String libraryName : functionsJSON.keySet()) {
+          try {
+            final JSONObject libraryJSON = functionsJSON.getJSONObject(libraryName);
+            final String language = libraryJSON.getString("language");
+            final FunctionLibraryDefinition library = FunctionLibraryFactory.createLibrary(database, libraryName, language);
+
+            final JSONObject funcsJSON = libraryJSON.getJSONObject("functions");
+            for (final String funcName : funcsJSON.keySet()) {
+              final JSONObject funcJSON = funcsJSON.getJSONObject(funcName);
+              final String[] params = funcJSON.getJSONArray("parameters").toListOfStrings().toArray(new String[0]);
+              library.registerFunction(FunctionLibraryFactory.createFunction(database, language, funcName,
+                  funcJSON.getString("code"), params));
+            }
+
+            functionLibraries.put(libraryName, library);
+          } catch (final Exception e) {
+            LogManager.instance().log(this, Level.SEVERE, "Error loading function library '%s': %s", e, libraryName,
+                e.getMessage());
+          }
+        }
+      }
+
       // Load extensions (module-specific configuration)
       extensions.clear();
       if (root.has("extensions")) {
@@ -1940,6 +1978,16 @@ public class LocalSchema implements Schema {
       caJSON.put(entry.getKey(), entry.getValue().toJSON());
     root.put("continuousAggregates", caJSON);
 
+    // Serialize user-defined function libraries (DEFINE FUNCTION) so they survive a restart (issue #5121). Libraries
+    // backed by native Java code are not persistable and return null from toJSON(): they are skipped here.
+    final JSONObject functionsJSON = new JSONObject();
+    for (final FunctionLibraryDefinition library : functionLibraries.values()) {
+      final JSONObject libraryJSON = library.toJSON();
+      if (libraryJSON != null)
+        functionsJSON.put(library.getName(), libraryJSON);
+    }
+    root.put("functions", functionsJSON);
+
     // Serialize extensions (module-specific configuration)
     if (!extensions.isEmpty()) {
       final JSONObject extJSON = new JSONObject();
@@ -1991,6 +2039,7 @@ public class LocalSchema implements Schema {
 
   @Override
   public Schema registerFunctionLibrary(final FunctionLibraryDefinition library) {
+    database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
     if (functionLibraries.putIfAbsent(library.getName(), library) != null)
       throw new IllegalArgumentException("Function library '" + library.getName() + "' already registered");
     return this;
@@ -1998,6 +2047,7 @@ public class LocalSchema implements Schema {
 
   @Override
   public Schema unregisterFunctionLibrary(final String name) {
+    database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
     functionLibraries.remove(name);
     return this;
   }

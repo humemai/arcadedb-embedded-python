@@ -2,20 +2,17 @@
 /* JavaCCOptions:MULTI=true,NODE_USES_PARSER=false,VISITOR=true,TRACK_TOKENS=true,NODE_PREFIX=O,NODE_EXTENDS=,NODE_FACTORY=,SUPPORT_CLASS_VISIBILITY_PUBLIC=true */
 package com.arcadedb.query.sql.parser;
 
-import com.arcadedb.database.Database;
+import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.exception.CommandSQLParsingException;
+import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.function.FunctionDefinition;
 import com.arcadedb.function.FunctionLibraryDefinition;
-import com.arcadedb.function.cypher.CypherFunctionDefinition;
-import com.arcadedb.function.cypher.CypherFunctionLibraryDefinition;
-import com.arcadedb.function.polyglot.JavascriptFunctionDefinition;
-import com.arcadedb.function.polyglot.JavascriptFunctionLibraryDefinition;
-import com.arcadedb.function.sql.SQLFunctionDefinition;
-import com.arcadedb.function.sql.SQLFunctionLibraryDefinition;
+import com.arcadedb.function.FunctionLibraryFactory;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.InternalResultSet;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.schema.LocalSchema;
 
 import java.util.List;
 import java.util.Map;
@@ -36,29 +33,23 @@ public class DefineFunctionStatement extends SimpleExecStatement {
 
   @Override
   public ResultSet executeSimple(final CommandContext context) {
-    final Database database = context.getDatabase();
+    final DatabaseInternal database = context.getDatabase();
+
+    // Defining a function in a scripting language (polyglot, e.g. JavaScript) is arbitrary host code
+    // execution, so it requires security-admin privileges - not merely UPDATE_SCHEMA. Otherwise a user
+    // with schema (or lesser) access could DEFINE FUNCTION ... LANGUAGE js and then invoke it via SELECT,
+    // bypassing the polyglot scripting gate that GHSA-48qw introduced (GHSA-vwjc-v7x7-cm6g). SQL/Cypher
+    // user functions are declarative, not host code, so they keep the standard schema-level protection.
+    if (language != null && "js".equalsIgnoreCase(language.getStringValue()))
+      database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SECURITY);
 
     final FunctionLibraryDefinition fLib;
     if (!database.getSchema().hasFunctionLibrary(libraryName.getStringValue())) {
-      switch (language.getStringValue()) {
-      case "js":
-        fLib = new JavascriptFunctionLibraryDefinition(database, libraryName.getStringValue());
-        break;
-
-      case "sql":
-        fLib = new SQLFunctionLibraryDefinition(database, libraryName.getStringValue());
-        break;
-
-      case "opencypher":
-      case "cypher":
-        fLib = new CypherFunctionLibraryDefinition(database, libraryName.getStringValue());
-        break;
-
-      default:
-        throw new CommandSQLParsingException(
-            "Error on function creation: language '" + language.getStringValue() + "' not supported");
+      try {
+        fLib = FunctionLibraryFactory.createLibrary(database, libraryName.getStringValue(), language.getStringValue());
+      } catch (final IllegalArgumentException e) {
+        throw new CommandSQLParsingException(e.getMessage());
       }
-
       database.getSchema().registerFunctionLibrary(fLib);
     } else
       fLib = database.getSchema().getFunctionLibrary(libraryName.getStringValue());
@@ -73,26 +64,18 @@ public class DefineFunctionStatement extends SimpleExecStatement {
       parameterArray = new String[] {};
 
     final FunctionDefinition f;
-    switch (language.getStringValue()) {
-    case "js":
-      f = new JavascriptFunctionDefinition(functionName.getStringValue(), code, parameterArray);
-      break;
-
-    case "sql":
-      f = new SQLFunctionDefinition(database, functionName.getStringValue(), code, parameterArray);
-      break;
-
-    case "opencypher":
-    case "cypher":
-      f = new CypherFunctionDefinition(database, functionName.getStringValue(), code, parameterArray);
-      break;
-
-    default:
-      throw new CommandSQLParsingException(
-          "Error on function creation: language '" + language.getStringValue() + "' not supported");
+    try {
+      f = FunctionLibraryFactory.createFunction(database, language.getStringValue(), functionName.getStringValue(), code,
+          parameterArray);
+    } catch (final IllegalArgumentException e) {
+      throw new CommandSQLParsingException(e.getMessage());
     }
 
     fLib.registerFunction(f);
+
+    // Persist the definition so it survives a restart (issue #5121). Only reached after a successful (validated)
+    // registration, so a broken definition is never written to the schema.
+    ((LocalSchema) database.getSchema()).saveConfiguration();
 
     return new InternalResultSet().add(
         new ResultInternal(context.getDatabase()).setProperty("operation", "create function").setProperty("libraryName", libraryName.getStringValue())
