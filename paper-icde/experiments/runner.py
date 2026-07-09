@@ -130,6 +130,10 @@ BACKENDS = {
         "topology": "embedded",
         "image": "icde-bench:arcadedb",
     },
+    "arcadedb_sparse_embedded_nocompact": {
+        "topology": "embedded",
+        "image": "icde-bench:arcadedb",
+    },
     "arcadedb_sparse_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
@@ -190,7 +194,7 @@ LANES = {
            ["oltp", "olap"]),
     "l3s": ("l3_sparse.py",
             ["arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32",
-             "arcadedb_sparse_server",
+             "arcadedb_sparse_embedded_nocompact", "arcadedb_sparse_server",
              "qdrant_sparse", "milvus_sparse", "elasticsearch_sparse"],
             ["search"]),
     # l2 graph, l3d dense, l4 timeseries: added as adapters land.

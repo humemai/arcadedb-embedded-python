@@ -59,13 +59,13 @@ class Base:
 
 class ArcadeEmbedded(Base):
     name = "arcadedb_sparse_embedded"
-    quant = None  # None = engine default (INT8); or "FP32"/"FP16" (engine #5143)
+    quant = None  # None = engine default (INT8); "FP32"/"FP16" per engine #5143
 
     def _index_metadata(self):
+        import json as _json
         meta = {"dimensions": DIMENSIONS}
         if self.quant:
             meta["weightQuantization"] = self.quant
-        import json as _json
         return _json.dumps(meta)
 
     def connect(self):
@@ -81,16 +81,10 @@ class ArcadeEmbedded(Base):
         self.db.command("sql", "CREATE PROPERTY Doc.id LONG")
         self.db.command("sql", "CREATE PROPERTY Doc.tokens ARRAY_OF_INTEGERS")
         self.db.command("sql", "CREATE PROPERTY Doc.weights ARRAY_OF_FLOATS")
-        self.db.command("sql", 'CREATE INDEX ON Doc (tokens, weights) '
-                               'LSM_SPARSE_VECTOR METADATA ' + self._index_metadata())
+        self.db.command("sql", "CREATE INDEX ON Doc (tokens, weights) "
+                               "LSM_SPARSE_VECTOR METADATA "
+                               + self._index_metadata())
         self.idx_name = "Doc[tokens,weights]"
-
-
-class ArcadeEmbeddedFP32(ArcadeEmbedded):
-    # Quantization ablation (engine #5143): exact FP32 posting weights vs the
-    # default INT8. Measures the recall/latency/disk tradeoff on one engine.
-    name = "arcadedb_sparse_embedded_fp32"
-    quant = "FP32"
 
     def build(self, n_docs):
         # Native document API with primitive arrays — the embedded analog of
@@ -143,6 +137,28 @@ class ArcadeEmbeddedFP32(ArcadeEmbedded):
         ).to_json_list()
         by_rid = {r["r"]: r["id"] for r in rows}
         return [by_rid.get(x, -1) for x in rids]
+
+
+class ArcadeEmbeddedFP32(ArcadeEmbedded):
+    """Quantization ablation (engine #5143): exact FP32 posting weights vs the
+    default INT8. Prices the default's recall cost on our own engine."""
+    name = "arcadedb_sparse_embedded_fp32"
+    quant = "FP32"
+
+
+class ArcadeEmbeddedNoCompact(ArcadeEmbedded):
+    """Settle-step ablation; de-confounds the deployment axis.
+
+    The server cannot trigger compaction (no SQL/HTTP path, engine #5144), so
+    "embedded (compacted) vs server (as-shipped)" mixes transport cost with
+    settle-step cost. Skipping compaction here gives the decomposition:
+        embedded            vs embedded_nocompact -> settle-step cost
+        embedded_nocompact  vs server             -> pure transport cost
+    """
+    name = "arcadedb_sparse_embedded_nocompact"
+
+    def post_build(self):
+        pass  # deliberately no compaction
 
 
 class ArcadeServer(ArcadeEmbedded):
@@ -351,8 +367,8 @@ class Elastic(Base):
 
 
 BACKENDS = {c.name: c for c in
-            [ArcadeEmbedded, ArcadeEmbeddedFP32, ArcadeServer, Qdrant, Milvus,
-             Elastic]}
+            [ArcadeEmbedded, ArcadeEmbeddedFP32, ArcadeEmbeddedNoCompact,
+             ArcadeServer, Qdrant, Milvus, Elastic]}
 
 
 def main():
