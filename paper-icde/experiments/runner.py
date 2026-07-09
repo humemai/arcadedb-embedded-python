@@ -22,6 +22,7 @@ Sweep (parallel): python3 runner.py --parallel 3 --tier sweep ...
 """
 import argparse
 import csv
+import fcntl
 import json
 import os
 import random
@@ -370,9 +371,34 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     return row
 
 
+def acquire_host_lock():
+    """Enforce one-runner-per-host. Returns the held lock file object.
+
+    sweep_orphans() force-removes every icde-bench container, so a second
+    runner would destroy a live campaign's in-flight cells (this happened
+    2026-07-10: a micro smoke wiped an L1 medium cell mid-run). The lock is
+    advisory but process-wide; it dies with the process, so a crashed runner
+    leaves no stale lock.
+    """
+    lock_path = os.path.join(RESULTS, ".runner.lock")
+    os.makedirs(RESULTS, exist_ok=True)
+    fh = open(lock_path, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit(
+            f"another runner already holds {lock_path} on this host. "
+            "The protocol allows exactly one runner per bench host: a second "
+            "one would sweep the first's containers. Wait for it, or kill it."
+        )
+    fh.write(f"{os.getpid()}\n")
+    fh.flush()
+    return fh
+
+
 def sweep_orphans():
-    """Reap containers left by a previous crashed/killed runner. Safe because
-    the protocol allows exactly one runner per host."""
+    """Reap containers left by a previous crashed/killed runner. Only safe to
+    call while holding the host lock (see acquire_host_lock)."""
     ids = sh(["docker", "ps", "-aq", "--filter", "label=icde-bench=1"]).split()
     if ids:
         print(f"sweeping {len(ids)} orphaned bench container(s): "
@@ -443,6 +469,9 @@ def main():
     lanes = args.lanes.split(",")
     workloads = args.workloads.split(",")
     os.makedirs(RAW, exist_ok=True)
+
+    # one runner per bench host; must hold before sweeping containers
+    _host_lock = acquire_host_lock()  # noqa: F841 (held for process lifetime)
 
     net_name = "icde-bench"
     subprocess.run(["docker", "network", "create", net_name], capture_output=True)

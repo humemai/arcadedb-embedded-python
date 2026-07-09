@@ -188,3 +188,18 @@ server 15% p50 and 35% build time at 10M — parity is load-bearing.
   nothing measured on the laptop is ever reported.
 - Before first mini runs: verify cpuset layout with lscpu (P-thread IDs 0-11
   assumed), stage images + datasets, re-run the tiny smoke there.
+
+## One runner per bench host (enforced 2026-07-10)
+
+`sweep_orphans()` force-removes every container labeled `icde-bench=1` at
+runner startup. A second runner therefore DESTROYS a live campaign's in-flight
+cells. This actually happened: a micro smoke launched while the L1 N=5 medium
+tier was running wiped an in-flight cell (`can not get logs from container`)
+and pushed another to the 6h watchdog (`timeout_after_21600s`). Those L1 rows
+are contaminated and superseded by the definitive 26.7.2 campaign.
+
+`runner.py` now takes an exclusive `flock` on `results/.runner.lock` before
+sweeping. A second runner exits with an error instead of stomping the first.
+Corollary rules: never rebuild a bench image while a campaign is live (running
+containers keep the old image, new cells get the new one, so a campaign would
+straddle two engine builds), and never co-run a smoke with a paper-tier run.

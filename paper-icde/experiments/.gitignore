@@ -1,2 +1,5 @@
 data/
 __pycache__/
+
+# runner lock (host-local, never committed)
+results/.runner.lock
