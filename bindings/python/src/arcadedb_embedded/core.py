@@ -15,7 +15,6 @@ from .importer import ImportResult
 from .importer import import_documents as run_document_import
 from .jvm import start_jvm
 from .results import ResultSet
-from .type_conversion import convert_python_to_java
 from .transactions import TransactionContext
 from .type_conversion import convert_python_to_java
 from .vector import to_java_float_array
