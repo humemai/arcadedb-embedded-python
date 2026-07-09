@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import statistics
+import sys
 import time
 
 from sparse_common import (DIMENSIONS, K, SCALE_DOCS, SCALE_QUERIES,
@@ -432,4 +433,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Fail fast. JPype's JVM keeps non-daemon threads (AsyncFlush,
+    # TransactionManager) alive after a Python exception, so a crashed cell
+    # would otherwise sit until the runner's multi-hour watchdog. os._exit
+    # skips interpreter cleanup and takes the JVM down with it.
+    try:
+        main()
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
