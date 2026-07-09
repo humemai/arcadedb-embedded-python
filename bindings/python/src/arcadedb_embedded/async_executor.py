@@ -127,10 +127,11 @@ class AsyncExecutor:
         Example:
             >>> async_exec.set_commit_every(5000)  # Commit every 5K ops
         """
+        # engine #4961: commitEvery < 1 breaks async task execution
         if count < 1:
             raise ValueError(
                 f"commit_every must be >= 1 (got {count}); the async "
-                "executor always commits in batches (engine #4961)"
+                "executor always commits in batches"
             )
         self._java_async.setCommitEvery(count)
         return self
