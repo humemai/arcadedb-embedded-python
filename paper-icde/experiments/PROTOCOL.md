@@ -114,9 +114,12 @@ justification:
    of a quality/latency tradeoff, raw latency comparison is misleading — match
    the points or sweep the curve. Dense ANN (L3d): same HNSW M/efConstruction
    everywhere, efSearch swept -> recall-latency curves; float32 everywhere, no
-   PQ/SQ. Sparse: no common quantization axis exists (ArcadeDB int8 postings
-   are hard-wired; competitors' posting formats are internal), so quality is
-   surfaced instead via first-class recall@10 next to every latency number.
+   PQ/SQ. Sparse: still no COMMON quantization axis (competitors' posting
+   formats are internal and not user-selectable), so quality is surfaced via
+   first-class recall@10 next to every latency number. As of 26.7.2, ArcadeDB
+   DOES expose `weightQuantization` (engine #5143, filed off this benchmark),
+   so we additionally report an INT8-vs-FP32 ablation on our own engine to
+   price the default's recall cost (backend `arcadedb_sparse_embedded_fp32`).
 4. **Escape hatch**: if a default is demonstrably pathological for a workload
    (e.g., a batch-size or refresh-interval default that cripples ingest), tune
    it to the vendor's own documented recommendation for that workload, apply
