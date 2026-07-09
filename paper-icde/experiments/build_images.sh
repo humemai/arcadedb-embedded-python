@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-ARCADE_PKGS="arcadedb-embedded==26.7.2.dev2 numpy pandas pyarrow"
+ARCADE_PKGS="arcadedb-embedded==26.7.2 numpy pandas pyarrow"
 mkdir -p docker-wheels && rm -f docker-wheels/*.whl
 if [ -n "${ARCADEDB_WHEEL:-}" ]; then
   cp "$ARCADEDB_WHEEL" docker-wheels/
