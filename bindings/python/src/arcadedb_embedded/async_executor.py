@@ -118,7 +118,7 @@ class AsyncExecutor:
         Args:
             count: Commit frequency (operations per commit). Must be >= 1;
                    the engine rejects lower values (0 used to be silently
-                   accepted but broke async task execution — engine #4961).
+                   accepted but broke async task execution, engine #4961).
                    Recommended: 1000-10000 for bulk inserts.
 
         Returns:
