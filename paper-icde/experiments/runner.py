@@ -61,7 +61,7 @@ BACKENDS = {
     "arcadedb_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:26.7.2@sha256:5dbd3ae240b932a0a8b1b23d61e0ec1827941af687816ff84864324fe7a62772",  # release, matches embedded ==26.7.2
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:7aa633c5387a8508e1cc064dbca6faab4641e7124724f5d511fc72759370972a",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
@@ -99,7 +99,7 @@ BACKENDS = {
     "arcadedb_graph_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:26.7.2@sha256:5dbd3ae240b932a0a8b1b23d61e0ec1827941af687816ff84864324fe7a62772",  # release, matches embedded ==26.7.2
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:7aa633c5387a8508e1cc064dbca6faab4641e7124724f5d511fc72759370972a",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
                              "-Darcadedb.server.defaultDatabases=bench[root]"],
@@ -137,7 +137,7 @@ BACKENDS = {
     "arcadedb_sparse_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:26.7.2@sha256:5dbd3ae240b932a0a8b1b23d61e0ec1827941af687816ff84864324fe7a62772",  # release, matches embedded ==26.7.2
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:7aa633c5387a8508e1cc064dbca6faab4641e7124724f5d511fc72759370972a",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
@@ -232,13 +232,39 @@ def read_cpu_stat(cg):
     return out
 
 
+def read_memory_stat(cg):
+    """anon = anonymous working set (heaps/buffers); file = reclaimable page
+    cache. anon is the honest memory metric; file is the confound to exclude."""
+    out = {}
+    try:
+        for line in open(os.path.join(cg, "memory.stat")):
+            parts = line.split()
+            if len(parts) == 2 and parts[0] in ("anon", "file"):
+                out[parts[0]] = int(parts[1])
+    except Exception:
+        pass
+    return out
+
+
 class CgroupSampler(threading.Thread):
-    """Samples one container's cgroup: memory series, kernel peak, cpu totals."""
+    """Samples one container's cgroup: memory series, kernel peak, cpu totals.
+
+    Memory is reported two ways. `peak`/series come from memory.current /
+    memory.peak, which include reclaimable FILE page cache (a container that
+    touches a lot of file data pegs near its cap; ES read 20.1+-0.0 GB this
+    way, which is page cache, not engine need). `peak_anon` / `end_anon` come
+    from memory.stat `anon` = the true anonymous working set (heaps, buffers),
+    which is what the paper reports. `end_file` records the page cache at exit
+    for transparency. Steady-state = the last sample (post-load serving state).
+    """
 
     def __init__(self, cid):
         super().__init__(daemon=True)
         self.cid, self.stop_evt = cid, threading.Event()
         self.series, self.peak, self.cpu = [], 0, {}
+        self.peak_anon = 0
+        self.end_anon = None
+        self.end_file = None
 
     def run(self):
         cg, t0 = None, time.time()
@@ -251,6 +277,12 @@ class CgroupSampler(threading.Thread):
                     self.series.append((round(time.time() - t0, 3), cur))
                 if pk is not None:
                     self.peak = max(self.peak, pk)
+                stat = read_memory_stat(cg)
+                if stat.get("anon") is not None:
+                    self.peak_anon = max(self.peak_anon, stat["anon"])
+                    self.end_anon = stat["anon"]
+                if stat.get("file") is not None:
+                    self.end_file = stat["file"]
                 cpu = read_cpu_stat(cg)
                 if cpu:
                     self.cpu = cpu
@@ -360,15 +392,23 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         if os.path.exists(out_path):
             row.update(json.load(open(out_path)))
     finally:
+        mib = lambda b: round((b or 0) / 2**20, 1)
         for name, s in samplers:
             s.finish()
-            row[f"{name}_peak_mib"] = round(s.peak / 2**20, 1)
+            row[f"{name}_peak_mib"] = mib(s.peak)          # incl. page cache
+            row[f"{name}_peak_anon_mib"] = mib(s.peak_anon)  # working set
+            row[f"{name}_end_anon_mib"] = mib(s.end_anon)    # steady-state
+            row[f"{name}_end_file_mib"] = mib(s.end_file)    # page cache at exit
             row[f"{name}_cpu_usec"] = s.cpu.get("usage_usec")
         if len(samplers) == 2:
-            row["peak_mib_sum"] = round(sum(s.peak for _, s in samplers) / 2**20, 1)
+            row["peak_mib_sum"] = mib(sum(s.peak for _, s in samplers))
+            row["peak_anon_mib_sum"] = mib(sum(s.peak_anon for _, s in samplers))
+            row["end_anon_mib_sum"] = mib(sum((s.end_anon or 0) for _, s in samplers))
             row["cpu_usec_sum"] = sum((s.cpu.get("usage_usec") or 0) for _, s in samplers)
         elif samplers:
             row["peak_mib_sum"] = row.get("client_peak_mib")
+            row["peak_anon_mib_sum"] = row.get("client_peak_anon_mib")
+            row["end_anon_mib_sum"] = row.get("client_end_anon_mib")
             row["cpu_usec_sum"] = row.get("client_cpu_usec")
         if server_cid:
             docker_rm(server_cid)

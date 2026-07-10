@@ -256,3 +256,20 @@ Current pins (2026-07-10):
 | Milvus | milvusdb/milvus (digest) + pymilvus 3.0.0 | current |
 | Elasticsearch | 9.4.1 (digest) + client 9.4.1 | aligned |
 | PostgreSQL | postgres 17.10 (digest) | current supported line |
+
+## 26.8.1 re-campaign changes (2026-07-11)
+
+- **Version pins**: embedded `arcadedb-embedded==26.8.1.dev0`, server
+  `arcadedata/arcadedb:26.8.1-SNAPSHOT` (digest sha256:7aa633c5...). Both the
+  same 26.8.1 dev line, so the deployment axis compares identical engine code.
+- **Memory instrument fixed** (was task #52): the memory column now reports
+  ANON working set (peak_anon_mib_sum / end_anon_mib_sum) from memory.stat, not
+  total memory.peak (which included reclaimable FILE page cache -- ES read
+  20.1+-0.0 GB that way, pegged page cache, not engine need). Old peak_mib_sum
+  is still recorded for continuity; end_file_mib records page cache at exit.
+- **Sparse settle parity** (engine #5144, #5189): the server adapter now runs
+  `COMPACT INDEX \`Doc[tokens,weights]\`` over HTTP as its settle step, matching
+  embedded's idx.compact(). So E4 (embedded vs server) isolates transport, not
+  the settle asymmetry. `arcadedb_sparse_embedded_nocompact` still isolates the
+  settle cost itself. FP32 (`arcadedb_sparse_embedded_fp32`) now runs at MEDIUM
+  too (#5189 streamed the segment build past the 2 GB WAL ceiling).

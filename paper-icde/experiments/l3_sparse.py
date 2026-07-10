@@ -183,10 +183,11 @@ class ArcadeServer(ArcadeEmbedded):
         self.idx_name = "Doc[tokens,weights]"
 
     def post_build(self):
-        # No compaction trigger is reachable over HTTP/SQL — the server runs
-        # query-after-ingest as-shipped. Documented asymmetry vs embedded
-        # (paper: operational gap worth a sentence).
-        pass
+        # Settle step, now client-reachable over HTTP/SQL via COMPACT INDEX
+        # (engine #5144, in 26.8.x). This gives the server the same settle the
+        # embedded adapter gets via idx.compact(), so the deployment axis
+        # isolates transport, not the settle asymmetry. Synchronous.
+        self._cmd("sql", "COMPACT INDEX `Doc[tokens,weights]`")
 
     def _cmd(self, language, command, params=None):
         payload = {"language": language, "command": command}
