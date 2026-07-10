@@ -61,7 +61,7 @@ BACKENDS = {
     "arcadedb_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:latest",
+        "server_image": "arcadedata/arcadedb:26.7.2@sha256:5dbd3ae240b932a0a8b1b23d61e0ec1827941af687816ff84864324fe7a62772",  # release, matches embedded ==26.7.2
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
@@ -81,7 +81,7 @@ BACKENDS = {
     "postgres": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "postgres:17",
+        "server_image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",  # 17.10
         "server_env": ["-e", "POSTGRES_PASSWORD=icdebench", "-e", "POSTGRES_DB=bench"],
         "server_port": 5432,
         # the image prints "ready to accept connections" TWICE (initdb's
@@ -99,7 +99,7 @@ BACKENDS = {
     "arcadedb_graph_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:latest",
+        "server_image": "arcadedata/arcadedb:26.7.2@sha256:5dbd3ae240b932a0a8b1b23d61e0ec1827941af687816ff84864324fe7a62772",  # release, matches embedded ==26.7.2
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
                              "-Darcadedb.server.defaultDatabases=bench[root]"],
@@ -109,7 +109,7 @@ BACKENDS = {
     "neo4j_graph": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "neo4j:5-community",
+        "server_image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",  # 5-community
         # heap parity with the ArcadeDB deployments (same per-scale heap)
         "server_env": ["-e", "NEO4J_AUTH=neo4j/icdebench",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
@@ -137,7 +137,7 @@ BACKENDS = {
     "arcadedb_sparse_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:latest",
+        "server_image": "arcadedata/arcadedb:26.7.2@sha256:5dbd3ae240b932a0a8b1b23d61e0ec1827941af687816ff84864324fe7a62772",  # release, matches embedded ==26.7.2
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
@@ -153,14 +153,14 @@ BACKENDS = {
     "qdrant_sparse": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "qdrant/qdrant:latest",
+        "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
     "milvus_sparse": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "milvusdb/milvus:latest",
+        "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
         "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
                        "-e", "ETCD_USE_EMBED=true",
                        "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
@@ -174,7 +174,7 @@ BACKENDS = {
     "elasticsearch_sparse": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "docker.elastic.co/elasticsearch/elasticsearch:9.0.0",
+        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:5856b2c77263336792b80fc0e03df42922b2f86a816a4daf23397fb02ef7b138",  # 9.0.0
         "server_env": ["-e", "discovery.type=single-node",
                        "-e", "xpack.security.enabled=false",
                        "-e", "ES_JAVA_OPTS=-Xms2g -Xmx4g"],

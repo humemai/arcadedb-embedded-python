@@ -206,3 +206,28 @@ sweeping. A second runner exits with an error instead of stomping the first.
 Corollary rules: never rebuild a bench image while a campaign is live (running
 containers keep the old image, new cells get the new one, so a campaign would
 straddle two engine builds), and never co-run a smoke with a paper-tier run.
+
+## Version pinning (fixed 2026-07-10, after a real skew was found)
+
+PROTOCOL claimed "images pinned by digest on first run". The code did not do it.
+Found while chasing LadybugDB issue #645:
+
+- `arcadedata/arcadedb:latest` resolved to **26.7.2-SNAPSHOT**, while the
+  embedded wheel was pinned to **26.7.2** (the release). The deployment axis
+  (E4), one of the paper's four claims, was comparing a pre-release snapshot
+  against a release build.
+- The same `:latest` tag had **different digests on the laptop and on mini**,
+  so the two hosts were not even running the same server.
+- Every Python client library (real_ladybug, neo4j, qdrant-client, pymilvus,
+  elasticsearch) was unpinned and resolved at image-build time.
+
+Now enforced:
+- Every `server_image` is pinned by immutable digest. ArcadeDB server is
+  `arcadedata/arcadedb:26.7.2@sha256:5dbd3ae2...`, matching `arcadedb-embedded==26.7.2`.
+- Every client library is version-pinned (real_ladybug==0.15.3, neo4j==6.2.0,
+  qdrant-client==1.18.0, pymilvus==3.0.0, elasticsearch==9.4.1).
+- Manifests still record the digest actually used, so a row can always be traced.
+
+Consequence: the in-flight 26.7.2 campaign carries the server-image skew on its
+`arcadedb_*_server` rows. It is preliminary data and is superseded by the
+26.8.1 re-campaign (engine #5189 fix), which runs fully pinned.
