@@ -10,6 +10,32 @@ that could starve the very snapshot resync meant to heal the node.
 
 ### Fixes
 
+- **SQL: a combined `FULL_TEXT` (or any) index over two `BY ITEM` properties now indexes every property, not just the last one.**
+  An index such as `CREATE INDEX combo ON Doc (obj.hd BY ITEM, obj.tl BY ITEM) FULL_TEXT` only indexed the second
+  property, so `search_index('combo', <hd value>)` returned nothing while the `tl` values matched
+  ([#5181](https://github.com/ArcadeData/arcadedb/issues/5181)). The document indexer tracked a single `BY ITEM`
+  expansion per index, so with two `BY ITEM` properties the loop kept only the last one and resolved the other as a
+  scalar nested lookup that always yielded `null`. The indexer now detects a per-property expansion: when several
+  `BY ITEM` properties share the same root list it walks the list once and builds one compound key per element, zipping
+  each property's nested value from the same element (element-wise, not a cross-product). The fix covers the create,
+  build, update, and delete index paths. For a **compound (LSM) index**, multiple `BY ITEM` properties that reference
+  different lists are rejected with a clear error rather than silently mis-indexed.
+  A **`FULL_TEXT` index** is an inverted per-field index rather than a compound key, so it goes further: it now supports
+  any mix of plain properties and several `BY ITEM` properties over *different* lists of *different* lengths (e.g.
+  `CREATE INDEX Metadata_ft ON Metadata (title, keywords BY ITEM, `synonyms.name` BY ITEM, `creators.name` BY ITEM) FULL_TEXT`).
+  Each `BY ITEM` property is indexed as the union of its own list items, so every field - scalar or list - is searchable
+  with `search_index()`, with no shared-list restriction.
+
+- **OpenCypher: `FOREACH ... CREATE` writes are no longer silently lost when followed directly by `RETURN count(var)`.**
+  A query such as `MATCH (a:A) FOREACH (x IN [1] | CREATE (:FB {id: x})) RETURN count(a) AS c` returned the correct
+  count but never persisted the `FB` nodes created inside the `FOREACH`; inserting a `WITH` between the `FOREACH` and
+  the `RETURN` worked around it ([#5166](https://github.com/ArcadeData/arcadedb/issues/5166)). The O(1) `count(var)`
+  optimization (`TypeCountStep`, which answers `MATCH (a:A) RETURN count(a)` with a direct `countType()` instead of
+  iterating) matched the query by checking only for a handful of clause types via typed accessors and missed `FOREACH`
+  (also `CALL`, `SUBQUERY`, `LOAD CSV`), so it replaced the whole plan and discarded the write side effects. The
+  optimization now applies only when the statement is made of exactly the single `MATCH` and the `RETURN`, so any other
+  clause (including `FOREACH`) falls back to the regular execution path that runs the writes.
+
 - **OpenCypher: repeating a node variable across single-node MATCH parts is no longer order-sensitive.**
   A query such as `MATCH (n0:L1:L5), (n0), (n1)` ran up to ~16x slower when the parts were written in a
   different order, e.g. `MATCH (n1), (n0), (n0:L1:L5)` ([#5116](https://github.com/ArcadeData/arcadedb/issues/5116)).

@@ -1343,7 +1343,17 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     // IMPORTANT: Check parentheses BEFORE patterns to handle cases like (NOT (pattern))
     // where the NOT operator should be preserved during recursive parsing
     final Cypher25Parser.ParenthesizedExpressionContext parenExpr = findParenthesizedExpressionRecursive(expr6);
-    if (parenExpr != null && compCtx == null) {
+    // Only treat this as a parenthesized boolean predicate when the parentheses wrap the WHOLE
+    // expression (e.g. "(a = 1 OR b = 2)"). The recursive finder also matches parentheses nested
+    // deep inside a larger expression - notably the inner predicate of a list quantifier such as
+    // all(a IN list WHERE (a = false)) - and returning parseBooleanExpression on that inner node
+    // would silently discard the enclosing all()/any()/none()/single() and evaluate the bare inner
+    // predicate against unbound iteration variables, filtering out every row (issue #5145). The span
+    // check mirrors the EXISTS guard above (issue #4126): parenExpr is a descendant of expr6, so its
+    // original text length equals expr6's only when it spans the entire expression.
+    final boolean parenSpansWholeExpression = parenExpr != null
+        && getOriginalText(parenExpr).trim().length() >= getOriginalText(expr6).trim().length();
+    if (parenExpr != null && compCtx == null && parenSpansWholeExpression) {
       // Check if the parenthesized expression contains just a bare variable (e.g., WHERE (n)).
       // A single-node pattern without relationships is invalid as a boolean predicate.
       // Use getOriginalText (whitespace-preserving) rather than getText(): getText() strips all
@@ -1442,28 +1452,10 @@ public class CypherASTBuilder extends Cypher25ParserBaseVisitor<Object> {
     final Cypher25Parser.ListItemsPredicateContext listPredCtx = expressionBuilder.findListItemsPredicateRecursive(expr6);
     if (listPredCtx != null) {
       final Expression listPredExpr = expressionBuilder.parseListItemsPredicate(listPredCtx);
-      return new BooleanExpression() {
-        @Override
-        public boolean evaluate(final Result result, final CommandContext context) {
-          final Object value = listPredExpr.evaluate(result, context);
-          return value instanceof Boolean && (Boolean) value;
-        }
-
-        @Override
-        public Object evaluateTernary(final Result result, final CommandContext context) {
-          final Object value = listPredExpr.evaluate(result, context);
-          if (value == null)
-            return null;
-          if (value instanceof Boolean)
-            return value;
-          return Boolean.TRUE;
-        }
-
-        @Override
-        public String getText() {
-          return listPredExpr.getText();
-        }
-      };
+      // Wrap via BooleanCoercionExpression (rather than an anonymous adapter) so the semantic
+      // validator can reach the underlying predicate and scope-check its WHERE body. This catches
+      // variables that leak out of a pattern/list comprehension into the outer predicate (issue #5179).
+      return new BooleanCoercionExpression(listPredExpr);
     }
 
     // Check if the expression is a function call used as a predicate (e.g., isEmpty(x), exists(x))
