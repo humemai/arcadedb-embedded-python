@@ -174,7 +174,7 @@ BACKENDS = {
     "elasticsearch_sparse": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:5856b2c77263336792b80fc0e03df42922b2f86a816a4daf23397fb02ef7b138",  # 9.0.0
+        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",  # 9.4.1, matches the 9.4.1 client
         "server_env": ["-e", "discovery.type=single-node",
                        "-e", "xpack.security.enabled=false",
                        "-e", "ES_JAVA_OPTS=-Xms2g -Xmx4g"],

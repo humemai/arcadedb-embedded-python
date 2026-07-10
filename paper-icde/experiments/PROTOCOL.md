@@ -231,3 +231,28 @@ Now enforced:
 Consequence: the in-flight 26.7.2 campaign carries the server-image skew on its
 `arcadedb_*_server` rows. It is preliminary data and is superseded by the
 26.8.1 re-campaign (engine #5189 fix), which runs fully pinned.
+
+## Comparator versions are a LIVING pin (TK, 2026-07-10)
+
+This paper has months of runway (unlike CypherGlot, which is time-boxed on
+Hetzner), so comparator versions are refreshed as they move, and re-pinned for
+real before the campaign that produces the paper's tables. Rules:
+
+- Pin by immutable digest (server images) and exact version (client libs).
+- Re-check "is this still current?" before the final campaign, not after.
+- Client and server of the same system must match (Elasticsearch 9.4.1 server
+  and 9.4.1 client; not 9.0.0 vs 9.4.1).
+- ArcadeDB embedded and server must be the SAME release (26.7.2 wheel and the
+  26.7.2 release image, never :latest, which resolves to a SNAPSHOT).
+
+Current pins (2026-07-10):
+| component | pin | note |
+|---|---|---|
+| ArcadeDB embedded | arcadedb-embedded==26.7.2 | moves to 26.8.1 (engine #5189 fix) |
+| ArcadeDB server | arcadedata/arcadedb:26.7.2 (digest) | release, matches embedded |
+| LadybugDB | ladybug==0.18.1 | was real_ladybug==0.15.3, a stale fork from lbugdb/lbug |
+| Neo4j | neo4j:5-community (digest) + driver 6.2.0 | current supported line |
+| Qdrant | qdrant 1.18.2 (digest) + client 1.18.0 | latest |
+| Milvus | milvusdb/milvus (digest) + pymilvus 3.0.0 | current |
+| Elasticsearch | 9.4.1 (digest) + client 9.4.1 | aligned |
+| PostgreSQL | postgres 17.10 (digest) | current supported line |

@@ -282,11 +282,11 @@ class LadybugGraph(Base):
     name = "ladybug_graph"
 
     def connect(self):
-        import real_ladybug as ladybug
+        import ladybug
         self._mod = ladybug
         self.db = ladybug.Database("/tmp/l2_ladybug")
         self.conn = ladybug.Connection(self.db)
-        self.version = f"real_ladybug:{getattr(ladybug, '__version__', '?')}"
+        self.version = f"ladybug:{getattr(ladybug, '__version__', '?')}"
         self.conn.execute(
             "CREATE NODE TABLE Person(id INT64, name STRING, age INT64, "
             "city STRING, PRIMARY KEY(id))")
