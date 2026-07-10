@@ -172,7 +172,13 @@ class ArcadeServer(ArcadeEmbedded):
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
-        self.version = "server:latest"
+        # report the real server version, not a hardcoded guess (the image is
+        # digest-pinned in runner.py; keep the results row honest)
+        try:
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            self.version = "server:" + (info.json().get("version") or "?")
+        except Exception:
+            self.version = "server:unknown"
         for ddl in ["CREATE DOCUMENT TYPE Doc",
                     "CREATE PROPERTY Doc.id LONG",
                     "CREATE PROPERTY Doc.tokens ARRAY_OF_INTEGERS",
