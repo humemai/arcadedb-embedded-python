@@ -46,12 +46,15 @@ def load_rows():
 
 
 def fmt(vals):
+    # Median + [min-max] range: robust central tendency with a non-parametric
+    # spread (per DBTest'18 "Fair Benchmarking"; more robust than mean±std at
+    # N=5, and exceeds the bare-mean norm of most accepted DB papers).
     vals = [v for v in vals if isinstance(v, (int, float))]
     if not vals:
         return "-"
     if len(vals) == 1:
         return f"{vals[0]:.3g}"
-    return f"{st.mean(vals):.3g}±{st.stdev(vals):.2g}"
+    return f"{st.median(vals):.3g} [{min(vals):.3g}-{max(vals):.3g}]"
 
 
 def main():
