@@ -61,7 +61,7 @@ BACKENDS = {
     "arcadedb_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:7aa633c5387a8508e1cc064dbca6faab4641e7124724f5d511fc72759370972a",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:122b4a8bdd70d70fcfee45928a9c494f4b88a7a8edb8cc895edc0ff58adc0780",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
@@ -100,7 +100,7 @@ BACKENDS = {
     "arcadedb_graph_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:7aa633c5387a8508e1cc064dbca6faab4641e7124724f5d511fc72759370972a",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:122b4a8bdd70d70fcfee45928a9c494f4b88a7a8edb8cc895edc0ff58adc0780",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
@@ -139,7 +139,7 @@ BACKENDS = {
     "arcadedb_sparse_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:7aa633c5387a8508e1cc064dbca6faab4641e7124724f5d511fc72759370972a",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:122b4a8bdd70d70fcfee45928a9c494f4b88a7a8edb8cc895edc0ff58adc0780",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
