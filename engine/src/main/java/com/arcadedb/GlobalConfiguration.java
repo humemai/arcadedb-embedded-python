@@ -399,6 +399,14 @@ public enum GlobalConfiguration {
       "At commit, when the only conflict on an edge-list page is concurrent in-chunk edge appends (which commute), re-apply the appends on top of the newer page version instead of failing the whole transaction with a ConcurrentModificationException. Removes the retry storm on super-node (hot vertex) edge insertion",
       Boolean.class, true),
 
+  GRAPH_SUPERNODE_THRESHOLD("arcadedb.graph.supernodeThreshold", SCOPE.DATABASE,
+      "Approximate number of edges (per vertex, per direction) after which the vertex's edge list is promoted to the striped super-node layout, spreading further appends over multiple files so concurrent insertions on the same hot vertex do not contend. FORWARD-INCOMPATIBLE ON FIRST USE: promotion writes a new record type (the stripe directory), so once any vertex promotes, the database can no longer be opened by releases older than 26.8.1; promotion is one-way. Iteration order on promoted vertices is approximate (newest-generation-first) instead of strict reverse-insertion. 0 disables promotion entirely (databases stay fully readable by older versions)",
+      Integer.class, 4096),
+
+  GRAPH_SUPERNODE_STRIPES("arcadedb.graph.supernodeStripes", SCOPE.DATABASE,
+      "Number of stripes (separate edge-list files) a super-node's edge list is spread over at promotion. The stripes are hosted in a per-type bucket pool of this many files, created once per type at its first promotion (types without super-nodes cost no files). Write parallelism saturates at the number of concurrent writers, so values beyond the CPU cores rarely help. Values below 2 disable promotion entirely. Recorded per vertex at promotion time",
+      Integer.class, 16),
+
   BACKUP_ENABLED("arcadedb.backup.enabled", SCOPE.DATABASE,
       "Allow a database to be backup. Disabling backup gives a huge boost in performance because no lock will be used for every operations",
       Boolean.class, true),
@@ -479,10 +487,20 @@ public enum GlobalConfiguration {
       Boolean.class, true),
 
   QUERY_MAX_HEAP_ELEMENTS_ALLOWED_PER_OP("arcadedb.queryMaxHeapElementsAllowedPerOp", SCOPE.DATABASE, """
-      Maximum number of elements (records) allowed in a single query for memory-intensive operations (eg. ORDER BY in heap). \
-      If exceeded, the query fails with an OCommandExecutionException. Negative number means no limit.\
-      This setting is intended as a safety measure against excessive resource consumption from a single query (eg. prevent OutOfMemory)""",
-      Long.class, 500_000),
+      Maximum number of elements (records/groups) allowed in a single query for memory-intensive operations (eg. ORDER BY, GROUP BY \
+      and DISTINCT in heap). If exceeded, the query fails with a CommandExecutionException. Negative number means no limit. \
+      This setting is intended as a safety measure against excessive resource consumption from a single query (eg. prevent OutOfMemory). \
+      When left at the default it auto-scales with the JVM max heap (roughly one element every 2KB of heap, never below 500000), so \
+      large-cardinality analytical queries (eg. top-N-by-aggregate over millions of distinct keys) complete out of the box on servers \
+      with a big heap while small footprints stay protected. Set an explicit value to override the auto-scaling.""",
+      Long.class, 500_000L, null, value -> {
+        // Auto-scale the default with the JVM max heap: roughly one element every 2KB, never below the historical 500000 floor.
+        final long maxHeap = Runtime.getRuntime().maxMemory();
+        if (maxHeap == Long.MAX_VALUE)
+          // Heap is unbounded (no -Xmx): keep the conservative floor rather than an effectively unlimited cap.
+          return 500_000L;
+        return Math.max(500_000L, maxHeap / 2048);
+      }),
 
   QUERY_PARALLEL_SCAN("arcadedb.queryParallelScan", SCOPE.DATABASE,
       """
