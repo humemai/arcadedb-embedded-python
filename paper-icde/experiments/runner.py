@@ -184,6 +184,34 @@ BACKENDS = {
         "server_port": 9200,
         "ready_regex": r'"message":"started|current.health=\"GREEN\"',
     },
+    # --- l3d dense (SIFT1M) ---
+    "arcadedb_dense_embedded": {"topology": "embedded",
+                                "image": "icde-bench:arcadedb"},
+    "chroma_dense": {"topology": "embedded", "image": "icde-bench:dense"},
+    "lancedb_dense": {"topology": "embedded", "image": "icde-bench:dense"},
+    "sqlite_vec_dense": {"topology": "embedded", "image": "icde-bench:dense"},
+    "duckdb_vss_dense": {"topology": "embedded", "image": "icde-bench:dense"},
+    "qdrant_dense": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
+        "server_port": 6333,
+        "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
+    },
+    "milvus_dense": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+        "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
+                       "-e", "ETCD_USE_EMBED=true",
+                       "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
+                       "-e", "ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml",
+                       "-e", "COMMON_STORAGETYPE=local"],
+        "server_volumes": ["-v", f"{HERE}/docker-conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml"],
+        "server_cmd": ["milvus", "run", "standalone"],
+        "server_port": 19530,
+        "ready_regex": r"Proxy successfully started|successfully started",
+    },
 }
 
 LANES = {
@@ -200,7 +228,12 @@ LANES = {
              "arcadedb_sparse_embedded_nocompact", "arcadedb_sparse_server",
              "qdrant_sparse", "milvus_sparse", "elasticsearch_sparse"],
             ["search"]),
-    # l2 graph, l3d dense, l4 timeseries: added as adapters land.
+    "l3d": ("l3d_dense.py",
+            ["arcadedb_dense_embedded", "chroma_dense", "lancedb_dense",
+             "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
+             "milvus_dense"],
+            ["search"]),
+    # l4 timeseries: added as adapters land.
 }
 
 
