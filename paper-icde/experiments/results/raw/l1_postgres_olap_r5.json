@@ -1,0 +1,15 @@
+{
+ "lane": "l1",
+ "n_rows": 20000000,
+ "connect_s": 0.115,
+ "engine_version": "17.10 (Debian 17.10-1.pgdg13+1)",
+ "schema_s": 0.018,
+ "ingest_s": 60.78,
+ "ingest_rows_per_s": 329069.8,
+ "olap_agg_by_region_ms": 724.259,
+ "olap_top_customers_ms": 1000.906,
+ "olap_filtered_avg_ms": 419.207,
+ "olap_status_histogram_ms": 682.85,
+ "olap_range_agg_ms": 400.407,
+ "olap_total_ms": 3227.629
+}

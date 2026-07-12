@@ -2,7 +2,7 @@
 
 | backend | n | peak_mib_sum | manifests |
 |---|---|---|---|
-| arcadedb_embedded | 1 | 971 | 20260706T211836Z |
-| arcadedb_server | 1 | 1.64e+03 | 20260706T211836Z |
-| duckdb | 1 | 217 | 20260706T211836Z |
-| postgres | 1 | 166 | 20260706T211836Z |
+| arcadedb_embedded | 5 | 3.01e+03 [2.98e+03-3.23e+03] | 20260711T010336Z |
+| arcadedb_server | 5 | 2.86e+03 [2.25e+03-2.88e+03] | 20260711T010336Z |
+| duckdb | 5 | 120 [118-121] | 20260711T010336Z |
+| postgres | 5 | 122 [122-123] | 20260711T010336Z |

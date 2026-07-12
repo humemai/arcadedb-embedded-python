@@ -1,15 +1,15 @@
 {
  "lane": "l1",
- "n_rows": 50000,
- "connect_s": 0.468,
+ "n_rows": 20000000,
+ "connect_s": 0.116,
  "engine_version": "17.10 (Debian 17.10-1.pgdg13+1)",
- "schema_s": 0.008,
- "ingest_s": 0.36,
- "ingest_rows_per_s": 138923.1,
- "olap_agg_by_region_ms": 12.591,
- "olap_top_customers_ms": 9.96,
- "olap_filtered_avg_ms": 6.303,
- "olap_status_histogram_ms": 11.829,
- "olap_range_agg_ms": 6.921,
- "olap_total_ms": 47.604
+ "schema_s": 0.009,
+ "ingest_s": 62.1,
+ "ingest_rows_per_s": 322052.1,
+ "olap_agg_by_region_ms": 721.756,
+ "olap_top_customers_ms": 1010.676,
+ "olap_filtered_avg_ms": 423.651,
+ "olap_status_histogram_ms": 686.047,
+ "olap_range_agg_ms": 404.09,
+ "olap_total_ms": 3246.22
 }

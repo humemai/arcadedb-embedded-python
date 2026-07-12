@@ -1,0 +1,1 @@
+{"lane": "l3d", "n_docs": 5000, "dims": 128, "k": 10, "n_queries": 1000, "m": 16, "ef_construction": 100, "ef_search": 100, "connect_s": 0.46, "engine_version": "3.0.0", "build_s": 3.16, "build_docs_per_s": 1583.5, "query_p50_ms": 1.737, "query_p95_ms": 2.159, "query_p99_ms": 2.431, "query_mean_ms": 1.759, "query_max_ms": 15.176, "qps": 566.7, "recall_at_10": 1.0}

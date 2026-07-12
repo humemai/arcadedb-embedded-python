@@ -1,15 +1,15 @@
 {
  "lane": "l1",
- "n_rows": 50000,
- "connect_s": 0.148,
+ "n_rows": 20000000,
+ "connect_s": 0.051,
  "engine_version": "server:latest",
- "schema_s": 0.203,
- "ingest_s": 1.39,
- "ingest_rows_per_s": 35890.0,
- "olap_agg_by_region_ms": 55.948,
- "olap_top_customers_ms": 37.411,
- "olap_filtered_avg_ms": 28.569,
- "olap_status_histogram_ms": 31.105,
- "olap_range_agg_ms": 27.506,
- "olap_total_ms": 180.539
+ "schema_s": 0.197,
+ "ingest_s": 728.45,
+ "ingest_rows_per_s": 27455.5,
+ "olap_agg_by_region_ms": 17968.455,
+ "olap_top_customers_ms": 16347.57,
+ "olap_filtered_avg_ms": 12741.26,
+ "olap_status_histogram_ms": 14286.708,
+ "olap_range_agg_ms": 12760.551,
+ "olap_total_ms": 74104.544
 }
