@@ -31,8 +31,10 @@ SCALE_FILE = {"tiny": "base_small.csr", "small": "base_1M.csr",
 SCALE_GT = {"tiny": "base_small.dev.gt", "small": "base_1M.dev.gt",
             "medium": "base_full.dev.gt"}
 SCALE_DOCS = {"tiny": 100_000, "small": 1_000_000, "medium": 8_841_823}
-# All tiers share the same 6980 dev queries; cap for stable, bounded-cost stats.
-SCALE_QUERIES = {"tiny": 6_980, "small": 6_980, "medium": 6_980}
+# All tiers share the same 6980 dev queries; cap at 1000 for stable percentiles
+# at bounded cost (recall@10 is an average and converges well below 1000; a
+# headline serial pass can bump this back to the full 6980 if desired).
+SCALE_QUERIES = {"tiny": 1_000, "small": 1_000, "medium": 1_000}
 
 _N_TO_SCALE = {n: s for s, n in SCALE_DOCS.items()}
 
