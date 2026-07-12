@@ -70,7 +70,8 @@ BACKENDS = {
         # not GC choice.
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
-                             "-Darcadedb.server.defaultDatabases=bench[root]"],
+                             "-Darcadedb.server.defaultDatabases=bench[root] "
+                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
@@ -102,7 +103,8 @@ BACKENDS = {
         "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:7aa633c5387a8508e1cc064dbca6faab4641e7124724f5d511fc72759370972a",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
-                             "-Darcadedb.server.defaultDatabases=bench[root]"],
+                             "-Darcadedb.server.defaultDatabases=bench[root] "
+                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
@@ -146,7 +148,8 @@ BACKENDS = {
         # not GC choice.
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
-                             "-Darcadedb.server.defaultDatabases=bench[root]"],
+                             "-Darcadedb.server.defaultDatabases=bench[root] "
+                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },

@@ -249,9 +249,17 @@ class ArcadeEmbedded(Base):
         import arcadedb_embedded as arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         # -Xms pinned to -Xmx for parity with the server deployment
+        # queryMaxHeapElementsAllowedPerOp: raised from the 500k default so a
+        # high-cardinality top-N-by-aggregate (top_customers, >1.24M groups at
+        # medium) completes instead of aborting. Documented fairness override
+        # (postgres/duckdb have no such cap); the 26.8.1 release auto-scales
+        # this by heap, so it disappears at the final release re-pin. See
+        # ArcadeData/arcadedb#5215.
         self.db = arcadedb.create_database(
             "/tmp/l1_arcade",
-            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
+            jvm_kwargs={"heap_size": heap,
+                        "jvm_args": f"-Xms{heap} "
+                                    "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"})
         self.version = arcadedb.__version__
         self._tx = False
 
