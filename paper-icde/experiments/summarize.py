@@ -36,7 +36,11 @@ def load_rows():
     rows = [json.loads(l) for l in open(os.path.join(RESULTS, "runs.jsonl"))]
     latest = {}
     for r in rows:
-        if r.get("error") or r.get("tier") != "paper":
+        # Accept both regimes: 'sweep' = 3x-parallel exploration (fast; valid for
+        # single-threaded query cells where core contention is negligible),
+        # 'paper' = serial full-cpuset headline. Latest manifest wins, so a later
+        # serial pass supersedes a parallel one for the same cell.
+        if r.get("error") or r.get("tier") not in ("paper", "sweep"):
             continue
         key = (r.get("lane"), r.get("backend"), r.get("workload"),
                r.get("scale"), r.get("rep"))
