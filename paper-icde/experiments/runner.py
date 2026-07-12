@@ -187,6 +187,17 @@ BACKENDS = {
     # --- l3d dense (SIFT1M) ---
     "arcadedb_dense_embedded": {"topology": "embedded",
                                 "image": "icde-bench:arcadedb"},
+    "arcadedb_dense_server": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:122b4a8bdd70d70fcfee45928a9c494f4b88a7a8edb8cc895edc0ff58adc0780",  # post-#5254 fix, matches dev1 wheel
+        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
+                             "-Darcadedb.server.defaultDatabases=bench[root] "
+                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
+        "server_port": 2480,
+        "ready_regex": r"HTTP Server started",
+    },
     "chroma_dense": {"topology": "embedded", "image": "icde-bench:dense"},
     "lancedb_dense": {"topology": "embedded", "image": "icde-bench:dense"},
     "sqlite_vec_dense": {"topology": "embedded", "image": "icde-bench:dense"},
@@ -229,7 +240,7 @@ LANES = {
              "qdrant_sparse", "milvus_sparse", "elasticsearch_sparse"],
             ["search"]),
     "l3d": ("l3d_dense.py",
-            ["arcadedb_dense_embedded", "chroma_dense", "lancedb_dense",
+            ["arcadedb_dense_embedded", "arcadedb_dense_server", "chroma_dense", "lancedb_dense",
              "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
              "milvus_dense"],
             ["search"]),

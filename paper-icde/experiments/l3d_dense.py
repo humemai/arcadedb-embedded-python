@@ -127,6 +127,59 @@ class ArcadeEmbedded(Base):
         self.db.close()
 
 
+class ArcadeServer(Base):
+    """ArcadeDB over HTTP (client-server), same index/params as embedded."""
+    name = "arcadedb_dense_server"
+
+    def connect(self):
+        import requests
+        self.rq = requests.Session()
+        self.rq.auth = ("root", "icdebench")
+        host = os.environ["BENCH_SERVER_HOST"]
+        port = os.environ.get("BENCH_SERVER_PORT", "2480")
+        self.base = f"http://{host}:{port}/api/v1"
+        try:
+            r = self.rq.get(f"{self.base}/server", timeout=30).json()
+            self.version = "server:" + str(r.get("version", "?"))
+        except Exception:
+            self.version = "server:?"
+
+    def _cmd(self, language, command):
+        r = self.rq.post(f"{self.base}/command/bench",
+                         json={"language": language, "command": command},
+                         timeout=1800)
+        r.raise_for_status()
+        return r.json().get("result", [])
+
+    def build(self, vecs):
+        self._cmd("sql", "CREATE VERTEX TYPE Article")
+        self._cmd("sql", "CREATE PROPERTY Article.vid INTEGER")
+        self._cmd("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
+        buf = []
+        for vid in range(len(vecs)):
+            w = ", ".join("%.6f" % x for x in vecs[vid])
+            buf.append(f"INSERT INTO Article SET vid = {vid}, embedding = [{w}]")
+            if len(buf) >= 500:
+                self._cmd("sqlscript", ";".join(buf))
+                buf = []
+        if buf:
+            self._cmd("sqlscript", ";".join(buf))
+        self._cmd("sql", f'''CREATE INDEX ON Article (embedding) LSM_VECTOR
+                  METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
+                  "maxConnections": {M}, "beamWidth": {EF_CONSTRUCTION},
+                  "storeVectorsInGraph": false, "addHierarchy": true }}''')
+
+    def search(self, qvec, k):
+        w = ", ".join("%.6f" % x for x in qvec)
+        r = self.rq.post(f"{self.base}/query/bench", json={
+            "language": "sql",
+            "command": f"SELECT vid FROM (SELECT expand(vectorNeighbors("
+                       f"'Article[embedding]', [{w}], {k}, {EF_SEARCH}))) "
+                       f"ORDER BY distance"}, timeout=600)
+        r.raise_for_status()
+        return [int(x["vid"]) for x in r.json().get("result", [])]
+
+
 class Chroma(Base):
     name = "chroma_dense"
 
@@ -303,7 +356,7 @@ class Milvus(Base):
 
 
 BACKENDS = {b.name: b for b in
-            (ArcadeEmbedded, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus)}
+            (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus)}
 
 
 def pct(vals):
