@@ -360,6 +360,11 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             client_caps = ["--memory", str(total_mem), "--memory-swap", str(total_mem)]
             bench_env = []
 
+        # forward sparse-lane data-source selection into the container
+        for _k in ("BENCH_SPARSE_SOURCE", "BENCH_SPARSE_DATA"):
+            if os.environ.get(_k):
+                bench_env += ["-e", f"{_k}={os.environ[_k]}"]
+
         cmd = (["docker", "run", "-d", "--network", net_name,
                 "--label", "icde-bench=1",
                 "--name", f"cli-{run_id}", "--cpuset-cpus", cpuset]

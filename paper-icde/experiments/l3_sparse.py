@@ -17,8 +17,15 @@ import statistics
 import sys
 import time
 
-from sparse_common import (DIMENSIONS, K, SCALE_DOCS, SCALE_QUERIES,
-                           gen_docs, gen_queries)
+# Data source: synthetic SPLADE-shaped (default) or real Big-ANN SPLADE/MS MARCO
+# (BENCH_SPARSE_SOURCE=bigann). Both expose the same surface.
+if os.environ.get("BENCH_SPARSE_SOURCE") == "bigann":
+    import bigann_sparse as _src
+else:
+    import sparse_common as _src
+DIMENSIONS, K = _src.DIMENSIONS, _src.K
+SCALE_DOCS, SCALE_QUERIES = _src.SCALE_DOCS, _src.SCALE_QUERIES
+gen_docs, gen_queries = _src.gen_docs, _src.gen_queries
 
 WARMUP = 5
 INGEST_BATCH = 500
@@ -389,11 +396,14 @@ def main():
 
     n_docs = SCALE_DOCS[args.scale]
     queries = gen_queries(SCALE_QUERIES[args.scale])
-    gt_path = f"/data/sparse/{args.scale}/gt.npy"
     gt = None
-    if os.path.exists(gt_path):
-        import numpy as np
-        gt = np.load(gt_path)
+    if os.environ.get("BENCH_SPARSE_SOURCE") == "bigann":
+        gt = _src.load_gt(args.scale)
+    else:
+        gt_path = f"/data/sparse/{args.scale}/gt.npy"
+        if os.path.exists(gt_path):
+            import numpy as np
+            gt = np.load(gt_path)
 
     b = BACKENDS[args.backend]()
     out = {"lane": "l3s", "n_docs": n_docs, "dims": DIMENSIONS, "k": K,
