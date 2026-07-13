@@ -84,7 +84,8 @@ class ArcadeEmbedded(Base):
         self.db = arcadedb.create_database(
             "/tmp/l3_arcade",
             jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
-        self.version = arcadedb.__version__
+        from importlib.metadata import version as _pv
+        self.version = _pv("arcadedb-embedded")
         self.db.command("sql", "CREATE DOCUMENT TYPE Doc")
         self.db.command("sql", "CREATE PROPERTY Doc.id LONG")
         self.db.command("sql", "CREATE PROPERTY Doc.tokens ARRAY_OF_INTEGERS")

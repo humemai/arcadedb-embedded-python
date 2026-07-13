@@ -94,7 +94,8 @@ class ArcadeEmbedded(Base):
         self.db = arcadedb.create_database(
             "/tmp/l3d_arcade",
             jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
-        self.version = arcadedb.__version__
+        from importlib.metadata import version as _pv
+        self.version = _pv("arcadedb-embedded")
 
     def build(self, vecs):
         db = self.db
