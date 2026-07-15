@@ -537,6 +537,9 @@ def main():
     ap.add_argument("--workloads", default="oltp,olap")
     ap.add_argument("--scale", default="tiny", choices=list(MEM_BY_SCALE))
     ap.add_argument("--reps", type=int, default=5)
+    ap.add_argument("--only-reps", default="",
+                    help="comma-separated rep numbers to run (e.g. '5' or '2,4'); "
+                         "empty = all 1..reps")
     ap.add_argument("--tier", default="paper", choices=["paper", "sweep"])
     ap.add_argument("--workers", type=int, default=0,
                     help="parallel workers on disjoint cpuset shards "
@@ -577,7 +580,9 @@ def main():
     if args.backends:
         keep = set(args.backends.split(","))
         jobs = [j for j in jobs if j["backend"] in keep]
-    cells = [(j, r) for j in jobs for r in range(1, args.reps + 1)]
+    only = {int(x) for x in args.only_reps.split(",") if x.strip()}
+    cells = [(j, r) for j in jobs for r in range(1, args.reps + 1)
+             if not only or r in only]
     random.Random(args.seed).shuffle(cells)  # shuffled order even in serial tier
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
