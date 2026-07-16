@@ -327,7 +327,7 @@ public class CypherSemanticValidator {
   // ==============================
 
   private void validateVariableScope(final CypherStatement statement) {
-    validateVariableScope(statement, new HashSet<>());
+    validateVariableScope(statement, new HashSet<>(), Set.of());
   }
 
   /**
@@ -335,8 +335,14 @@ public class CypherSemanticValidator {
    * visible when the statement begins. Top-level statements start with an empty scope; a CALL
    * subquery body starts with only the variables it imports (explicit {@code CALL (v) { ... }} scope
    * list, {@code CALL (*)}, or an importing {@code WITH}).
+   * <p>
+   * {@code shadowed} holds the names declared in an enclosing scope that this subquery body did NOT
+   * import. Such a name is not a free identifier the body may re-declare: a CREATE/MERGE pattern that
+   * binds it would silently mint a fresh anonymous vertex instead of writing against the outer entity,
+   * so it is rejected as undefined.
    */
-  private void validateVariableScope(final CypherStatement statement, final Set<String> scope) {
+  private void validateVariableScope(final CypherStatement statement, final Set<String> scope,
+      final Set<String> shadowed) {
     final List<ClauseEntry> clausesInOrder = statement.getClausesInOrder();
     if (clausesInOrder == null || clausesInOrder.isEmpty())
       return; // Can't validate scope without clause ordering
@@ -363,12 +369,14 @@ public class CypherSemanticValidator {
               for (final RelationshipPattern rel : path.getRelationships())
                 if (rel.hasProperties())
                   checkPropertyValuesScope(rel.getProperties(), scope);
+              checkPatternVarsNotShadowed(path, scope, shadowed);
               addBoundVarsFromPattern(path, scope);
             }
           break;
         case MERGE:
           final MergeClause mergeClause = entry.getTypedClause();
           if (mergeClause != null) {
+            checkPatternVarsNotShadowed(mergeClause.getPathPattern(), scope, shadowed);
             addBoundVarsFromPattern(mergeClause.getPathPattern(), scope);
             // Validate ON CREATE SET / ON MATCH SET variables
             validateSetClauseScope(mergeClause.getOnCreateSet(), scope);
@@ -422,35 +430,24 @@ public class CypherSemanticValidator {
             checkExpressionScope(item.getExpression(), scope);
           // Build the scope for ORDER BY
           if (withClause.getOrderByClause() != null) {
-            final Set<String> orderByScope;
-            if (withClause.hasAggregations()) {
-              // After aggregation, restrict to output aliases + grouping key variables
-              orderByScope = new HashSet<>();
-              for (final ReturnClause.ReturnItem item : withClause.getItems()) {
-                if (item.getAlias() != null)
-                  orderByScope.add(item.getAlias());
-                else if (item.getExpression() instanceof VariableExpression)
-                  orderByScope.add(((VariableExpression) item.getExpression()).getVariableName());
-                if (!item.getExpression().containsAggregation())
-                  collectVariableNamesFromExpression(item.getExpression(), orderByScope);
-              }
+            if (withClause.hasAggregations() || withClause.isDistinct()) {
+              // A collapsing WITH restricts ORDER BY to the projected columns, exactly as the
+              // matching RETURN form does (issues #5286, #5287)
+              validateCollapsedOrderByScope(withClause.getItems(), withClause.getOrderByClause(),
+                  withClause.hasAggregations());
             } else {
               // Non-aggregating WITH: ORDER BY can reference both original scope + aliases
-              orderByScope = new HashSet<>(scope);
+              final Set<String> orderByScope = new HashSet<>(scope);
               for (final ReturnClause.ReturnItem item : withClause.getItems()) {
                 if (item.getAlias() != null)
                   orderByScope.add(item.getAlias());
                 else if (item.getExpression() instanceof VariableExpression)
                   orderByScope.add(((VariableExpression) item.getExpression()).getVariableName());
               }
-            }
-            for (final OrderByClause.OrderByItem item : withClause.getOrderByClause().getItems())
-              if (item.getExpressionAST() != null) {
-                if (withClause.hasAggregations())
-                  checkExpressionScopeSkipAggArgs(item.getExpressionAST(), orderByScope);
-                else
+              for (final OrderByClause.OrderByItem item : withClause.getOrderByClause().getItems())
+                if (item.getExpressionAST() != null)
                   checkExpressionScope(item.getExpressionAST(), orderByScope);
-              }
+            }
           }
           // Reset scope to only projected aliases
           scope.clear();
@@ -493,43 +490,11 @@ public class CypherSemanticValidator {
             if (statement.getOrderByClause() != null) {
               if (statement.getReturnClause().isDistinct()) {
                 // After DISTINCT, ORDER BY can only reference returned columns
-                final Set<String> returnedNames = new HashSet<>();
-                for (final ReturnClause.ReturnItem item : statement.getReturnClause().getReturnItems()) {
-                  returnedNames.add(item.getOutputName());
-                  if (item.getAlias() != null)
-                    returnedNames.add(item.getAlias());
-                  if (item.getExpression() instanceof VariableExpression)
-                    returnedNames.add(((VariableExpression) item.getExpression()).getVariableName());
-                }
-                for (final OrderByClause.OrderByItem item : statement.getOrderByClause().getItems()) {
-                  final String orderExprText = item.getExpression();
-                  if (orderExprText != null && !returnedNames.contains(orderExprText)) {
-                    if (item.getExpressionAST() != null) {
-                      final Set<String> distinctScope = new HashSet<>();
-                      for (final ReturnClause.ReturnItem rItem : statement.getReturnClause().getReturnItems()) {
-                        if (rItem.getAlias() != null)
-                          distinctScope.add(rItem.getAlias());
-                        else if (rItem.getExpression() instanceof VariableExpression)
-                          distinctScope.add(((VariableExpression) rItem.getExpression()).getVariableName());
-                      }
-                      checkExpressionScope(item.getExpressionAST(), distinctScope);
-                    }
-                  }
-                }
+                validateCollapsedOrderByScope(statement.getReturnClause().getReturnItems(), statement.getOrderByClause(), false);
               } else if (statement.getReturnClause().hasAggregations()) {
-                // After aggregation, ORDER BY scope restricted to aliases + grouping key variables
-                final Set<String> orderByScope = new HashSet<>();
-                for (final ReturnClause.ReturnItem item : statement.getReturnClause().getReturnItems()) {
-                  if (item.getAlias() != null)
-                    orderByScope.add(item.getAlias());
-                  else if (item.getExpression() instanceof VariableExpression)
-                    orderByScope.add(((VariableExpression) item.getExpression()).getVariableName());
-                  if (!item.getExpression().containsAggregation())
-                    collectVariableNamesFromExpression(item.getExpression(), orderByScope);
-                }
-                for (final OrderByClause.OrderByItem item : statement.getOrderByClause().getItems())
-                  if (item.getExpressionAST() != null)
-                    checkExpressionScopeSkipAggArgs(item.getExpressionAST(), orderByScope);
+                // Likewise after aggregation: what the projection did not keep, ORDER BY cannot sort
+                // on. Reporting it beats the sort silently doing nothing (issue #5286).
+                validateCollapsedOrderByScope(statement.getReturnClause().getReturnItems(), statement.getOrderByClause(), true);
               }
             }
           }
@@ -546,7 +511,7 @@ public class CypherSemanticValidator {
           final SubqueryClause subqueryClause = entry.getTypedClause();
           if (subqueryClause != null && subqueryClause.getInnerStatement() != null) {
             // Validate the subquery body: outer variables are visible only if imported (issue #5213).
-            validateSubqueryScope(subqueryClause, scope);
+            validateSubqueryScope(subqueryClause, scope, shadowed);
             final ReturnClause innerReturn = subqueryClause.getInnerStatement().getReturnClause();
             if (innerReturn != null)
               for (final ReturnClause.ReturnItem item : innerReturn.getReturnItems()) {
@@ -574,7 +539,8 @@ public class CypherSemanticValidator {
    * Referencing an outer variable that is not imported raises an undefined-variable error, matching
    * Neo4j (issue #5213).
    */
-  private void validateSubqueryScope(final SubqueryClause clause, final Set<String> outerScope) {
+  private void validateSubqueryScope(final SubqueryClause clause, final Set<String> outerScope,
+      final Set<String> outerShadowed) {
     final List<String> scopeVariables = clause.getScopeVariables();
 
     // Explicit scope list applies uniformly to every UNION branch of the body.
@@ -595,23 +561,59 @@ public class CypherSemanticValidator {
     final CypherStatement inner = clause.getInnerStatement();
     if (inner instanceof UnionStatement union) {
       for (final CypherStatement branch : union.getQueries())
-        validateSubqueryBranchScope(branch, outerScope, explicitSeed);
+        validateSubqueryBranchScope(branch, outerScope, outerShadowed, explicitSeed);
     } else
-      validateSubqueryBranchScope(inner, outerScope, explicitSeed);
+      validateSubqueryBranchScope(inner, outerScope, outerShadowed, explicitSeed);
   }
 
   private void validateSubqueryBranchScope(final CypherStatement branch, final Set<String> outerScope,
-      final Set<String> explicitSeed) {
+      final Set<String> outerShadowed, final Set<String> explicitSeed) {
     final Set<String> seed;
-    if (explicitSeed != null)
+    final Set<String> imported;
+    if (explicitSeed != null) {
       seed = new HashSet<>(explicitSeed);
-    else if (startsWithImportingWith(branch))
+      imported = explicitSeed;
+    } else if (startsWithImportingWith(branch)) {
       // The importing WITH may reference outer variables; it then resets the scope to its projections,
       // so exposing the whole outer scope here does not leak variables past the WITH.
       seed = new HashSet<>(outerScope);
-    else
+      imported = importedNamesFromLeadingWith(branch, outerScope);
+    } else {
       seed = new HashSet<>();
-    validateVariableScope(branch, seed);
+      imported = Set.of();
+    }
+
+    // Outer names the body did not import are shadowed: they may not be re-bound by a write pattern.
+    final Set<String> shadowed = new HashSet<>(outerScope);
+    shadowed.addAll(outerShadowed);
+    shadowed.removeAll(imported);
+
+    validateVariableScope(branch, seed, shadowed);
+  }
+
+  /**
+   * Returns the outer names that survive the leading importing {@code WITH} of a subquery body, i.e. the
+   * variables actually imported. {@code WITH *} imports the whole outer scope.
+   * <p>
+   * This tracks the <i>names still bound after the WITH</i>, not the source variables they were computed
+   * from, because that is what the shadowing check needs: a re-aliased item ({@code WITH a AS x}) leaves
+   * {@code a} unbound, so {@code a} stays shadowed and a later {@code CREATE (a)} in the body is rejected.
+   */
+  private static Set<String> importedNamesFromLeadingWith(final CypherStatement branch, final Set<String> outerScope) {
+    final WithClause withClause = branch.getClausesInOrder().get(0).getTypedClause();
+    final Set<String> imported = new HashSet<>();
+    for (final ReturnClause.ReturnItem item : withClause.getItems()) {
+      final Expression expr = item.getExpression();
+      if (expr instanceof StarExpression ||
+          (expr instanceof VariableExpression && "*".equals(((VariableExpression) expr).getVariableName())))
+        return new HashSet<>(outerScope);
+      final String name = item.getAlias() != null ?
+          item.getAlias() :
+          (expr instanceof VariableExpression ? ((VariableExpression) expr).getVariableName() : null);
+      if (name != null && outerScope.contains(name))
+        imported.add(name);
+    }
+    return imported;
   }
 
   private static boolean startsWithImportingWith(final CypherStatement statement) {
@@ -619,6 +621,86 @@ public class CypherSemanticValidator {
     if (clauses == null || clauses.isEmpty())
       return false;
     return clauses.get(0).getType() == ClauseEntry.ClauseType.WITH;
+  }
+
+  /**
+   * Rejects a CREATE/MERGE pattern variable that is not visible in the current scope but is declared in
+   * an enclosing one without having been imported. Binding it here would create a fresh anonymous entity
+   * rather than write against the outer one, which is a silent data-loss bug (issue #5257).
+   */
+  private void checkPatternVarsNotShadowed(final PathPattern path, final Set<String> scope, final Set<String> shadowed) {
+    if (shadowed.isEmpty() || path == null)
+      return;
+
+    if (path.hasPathVariable())
+      checkVarNotShadowed(path.getPathVariable(), scope, shadowed);
+    for (final NodePattern node : path.getNodes())
+      checkVarNotShadowed(node.getVariable(), scope, shadowed);
+    for (final RelationshipPattern rel : path.getRelationships())
+      checkVarNotShadowed(rel.getVariable(), scope, shadowed);
+  }
+
+  private void checkVarNotShadowed(final String var, final Set<String> scope, final Set<String> shadowed) {
+    if (var != null && isValidVariableName(var) && !scope.contains(var) && shadowed.contains(var))
+      throw new CommandSemanticException("UndefinedVariable: Variable '" + var
+          + "' not defined: it is declared in an outer scope but not imported into the CALL subquery");
+  }
+
+  /**
+   * Validates the ORDER BY of a collapsing projection, shared by RETURN and WITH in both their
+   * DISTINCT (issues #5283, #5287) and aggregating (issue #5286) forms.
+   * <p>
+   * Collapsing the input rows leaves the variables that fed the projection without a single value per
+   * surviving row, so ORDER BY is restricted to the projected columns. Whatever ORDER BY could still
+   * resolve against those columns has already been rewritten to reference them by
+   * {@link com.arcadedb.query.opencypher.rewriter.ProjectedOrderByNormalizer} - the whole item when it
+   * repeats a projected expression, or the parts of it that do - so it reaches the check below as a
+   * plain column reference. Anything left pointing at a collapsed variable genuinely has no value to
+   * sort on and is reported here.
+   *
+   * An item that itself contains an aggregation is the exception: openCypher keeps the grouping-key
+   * variables referencable inside it (ReturnOrderBy6/WithOrderBy4 [3]/[18] require
+   * {@code ORDER BY me.age + count(you.age)} to compile when {@code me.age} is projected), and draws
+   * the line between a simple grouping-key read and a complex expression in
+   * {@link #checkAmbiguousAggregation} instead. Such an item keeps the wider scope so that check, not
+   * this one, gets to report it.
+   *
+   * @param aggregating whether the projection aggregates, which admits the grouping-key variables into
+   *                    the scope of ORDER BY items that contain an aggregation
+   */
+  private void validateCollapsedOrderByScope(final List<ReturnClause.ReturnItem> items, final OrderByClause orderBy,
+      final boolean aggregating) {
+    final Set<String> projectedNames = new HashSet<>();
+    final Set<String> orderByScope = new HashSet<>();
+    for (final ReturnClause.ReturnItem item : items) {
+      projectedNames.add(item.getOutputName());
+      if (item.getAlias() != null)
+        orderByScope.add(item.getAlias());
+      else if (item.getExpression() instanceof VariableExpression)
+        orderByScope.add(((VariableExpression) item.getExpression()).getVariableName());
+    }
+
+    Set<String> aggregationScope = null;
+
+    for (final OrderByClause.OrderByItem item : orderBy.getItems()) {
+      // An item naming a projected output column resolves against the projected row, whatever the
+      // column name looks like (an un-aliased projection is named after its own expression text)
+      if (item.getExpression() != null && projectedNames.contains(item.getExpression()))
+        continue;
+      if (item.getExpressionAST() == null)
+        continue;
+
+      if (aggregating && item.getExpressionAST().containsAggregation()) {
+        if (aggregationScope == null) {
+          aggregationScope = new HashSet<>(orderByScope);
+          for (final ReturnClause.ReturnItem projected : items)
+            if (!projected.getExpression().containsAggregation())
+              collectVariableNamesFromExpression(projected.getExpression(), aggregationScope);
+        }
+        checkExpressionScopeSkipAggArgs(item.getExpressionAST(), aggregationScope);
+      } else
+        checkExpressionScope(item.getExpressionAST(), orderByScope);
+    }
   }
 
   private void checkExpressionScope(final Expression expr, final Set<String> scope) {
@@ -1687,9 +1769,11 @@ public class CypherSemanticValidator {
                 throw new CommandParsingException("InvalidArgumentType: length() cannot be applied to a relationship");
               break;
             case "type":
-              // type() only works on relationships
+              // type() only works on relationships. Point at valueType(), which is what callers who
+              // expect a value-type name are actually after (issue #5292).
               if (argType == VarType.NODE)
-                throw new CommandParsingException("InvalidArgumentType: type() requires a relationship argument, got node");
+                throw new CommandParsingException("InvalidArgumentType: type() requires a relationship argument, got node"
+                    + ". Use valueType() to inspect the type of a value");
               break;
             case "labels":
               // labels() only works on nodes

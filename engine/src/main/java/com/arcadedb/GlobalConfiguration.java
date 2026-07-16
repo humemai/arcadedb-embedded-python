@@ -444,6 +444,23 @@ public enum GlobalConfiguration {
       directory and path traversal (../) is blocked. Empty string means no restriction.""",
       String.class, ""),
 
+  OPENCYPHER_LOAD_CSV_ALLOW_REMOTE_URLS("arcadedb.opencypher.loadCsv.allowRemoteUrls", SCOPE.DATABASE,
+      """
+      Allow LOAD CSV to fetch data from remote http:// and https:// URLs. When enabled (default), remote fetches are still \
+      restricted by arcadedb.opencypher.loadCsv.blockedIpRanges to prevent Server-Side Request Forgery (SSRF) against internal \
+      services. Disable to block all remote URL access in locked-down or multi-tenant deployments.""",
+      Boolean.class, true),
+
+  OPENCYPHER_LOAD_CSV_BLOCKED_IP_RANGES("arcadedb.opencypher.loadCsv.blockedIpRanges", SCOPE.DATABASE,
+      """
+      Comma-separated list of CIDR ranges that LOAD CSV remote http(s) fetches are NOT allowed to reach. Enforced against the \
+      resolved IP address of the target host and re-checked on every redirect hop to prevent Server-Side Request Forgery (SSRF). \
+      Defaults to loopback, private (RFC 1918), link-local (including the cloud metadata address 169.254.169.254), carrier-grade \
+      NAT, multicast and reserved ranges. Set to an empty string to disable IP filtering (not recommended).""",
+      String.class,
+      "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,0.0.0.0/8,100.64.0.0/10,192.0.0.0/24,198.18.0.0/15,"
+          + "224.0.0.0/4,240.0.0.0/4,255.255.255.255/32,::1/128,::/128,fe80::/10,fc00::/7,ff00::/8"),
+
   OPENCYPHER_ID_BUCKET_BITS("arcadedb.opencypher.idBucketBits", SCOPE.JVM,
       """
       Number of bits reserved for the bucketId when packing a RID into the numeric value returned by the OpenCypher id() function (and SQL's .asCypherRID() method). \
@@ -906,9 +923,15 @@ public enum GlobalConfiguration {
   HA_RAFT_STORAGE_DIRECTORY("arcadedb.ha.raftStorageDirectory", SCOPE.SERVER,
       """
       Parent directory where Raft storage sub-folders (raft-storage-<nodeName>) are created. \
-      When empty (the default), the server root path is used, preserving the previous default layout. \
-      Set to an absolute path (e.g. /var/lib/arcadedb/raft) to decouple Raft persistence from \
-      the server installation directory, which is required for Kubernetes readOnlyRootFilesystem deployments.""",
+      When empty (the default), Raft storage is placed under the database directory \
+      (<databaseDirectory>/.raft-storage), so persisting the database directory - which every durable \
+      deployment already does - persists the Raft log too. This avoids losing all Raft state on pod \
+      recreation in Kubernetes, where only the database directory is on a PersistentVolume while the \
+      server root path is ephemeral. A legacy raft-storage-<nodeName> directory already present under the \
+      server root path (pre-fix layout) is still reused for backward compatibility. \
+      Set to an absolute path (e.g. /var/lib/arcadedb/raft) to decouple Raft persistence from the \
+      database directory, which is required for Kubernetes readOnlyRootFilesystem deployments with a \
+      dedicated Raft volume.""",
       String.class, ""),
 
   HA_SNAPSHOT_THRESHOLD("arcadedb.ha.snapshotThreshold", SCOPE.SERVER,
@@ -1088,7 +1111,11 @@ public enum GlobalConfiguration {
   HA_RATIS_RESTART_MAX_RETRIES("arcadedb.ha.ratisRestartMaxRetries", SCOPE.SERVER,
       """
       Maximum consecutive Ratis restart attempts by the health monitor before the server shuts down \
-      for cluster-level recovery. Raise when partition-recovery scenarios cause legitimate rapid restarts.""",
+      for cluster-level recovery. Raise when partition-recovery scenarios cause legitimate rapid restarts. \
+      Also bounds the crash-loop escalation: when a RECOVER restart keeps returning to CLOSED (e.g. a \
+      term-inverted persisted Raft log or a poisoned snapshot-install) without the restart itself failing, \
+      the health monitor escalates after this many non-sticking restarts (reformat + rejoin once, then give \
+      up with a SEVERE alert) instead of restarting forever (issue #5291).""",
       Integer.class, 10),
 
   HA_STOP_SERVER_ON_REPLICATION_FAILURE("arcadedb.ha.stopServerOnReplicationFailure", SCOPE.SERVER,
@@ -1181,8 +1208,12 @@ public enum GlobalConfiguration {
       How long in milliseconds a replica must stay continuously STALLED (its matchIndex not advancing while the leader \
       keeps committing - e.g. stuck at -1 after a rolling upgrade) before the LEADER actively forces it to resync from \
       the leader. This is the leader-driven counterpart to HA_STALE_FOLLOWER_LAG_THRESHOLD: it covers the case where the \
-      follower cannot self-detect the stall because its own commit index never advances. Defaults to 60000; set to 0 to \
-      disable leader-driven stalled-replica recovery (the STALLED condition is still detected and logged).""",
+      follower cannot self-detect the stall because its own commit index never advances. A follower still at the \
+      never-appended sentinel (matchIndex = -1 while the leader holds committed entries, issue #5295) is treated as \
+      STALLED regardless of the numeric lag, so it is recovered even when the leader is only a few entries ahead (where \
+      the lag stays below HA_REPLICATION_LAG_WARNING); the same duration doubles as the grace before its status flips \
+      from HEALTHY to STALLED, so a brief join / snapshot-install window is not misreported. Defaults to 60000; set to 0 \
+      to disable leader-driven stalled-replica recovery (the STALLED condition is still detected and logged).""",
       Long.class, 60_000L),
 
   HA_SNAPSHOT_MAX_ENTRY_SIZE("arcadedb.ha.snapshotMaxEntrySize", SCOPE.SERVER,

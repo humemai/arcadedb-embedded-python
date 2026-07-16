@@ -147,6 +147,8 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   private          RaftClusterManager        clusterManager;
   private final    Object                    recoveryLock          = new Object();
   private volatile boolean                   shutdownRequested     = false;
+  private volatile boolean                   legacyRaftStorageWarningLogged = false;
+  private volatile Thread                    autoJoinThread        = null;
   private volatile LifeCycle.State           forcedStateForTesting = null;
   private          HealthMonitor             healthMonitor;
   // Follower-side Raft log catch-up narrative. Driven by the health-monitor tick; only active on a
@@ -554,8 +556,6 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
         ? RaftStorage.StartupOption.RECOVER
         : RaftStorage.StartupOption.FORMAT;
 
-    final boolean hadExistingStorage = hasExistingRaftStorage();
-
     final Parameters parameters = buildParameters(configuration);
 
     raftServer = RaftServer.newBuilder()
@@ -589,9 +589,25 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     // changes. Wired into ArcadeStateMachine.notifyLeaderChanged below via runBootstrapIfEligible.
     this.bootstrapElection = new BootstrapElection(this, arcadeServer);
 
-    // K8s auto-join: if running in Kubernetes with no existing storage, try to join an existing cluster
-    if (configuration.getValueAsBoolean(GlobalConfiguration.HA_K8S) && !hadExistingStorage)
-      new KubernetesAutoJoin(arcadeServer, raftGroup, localPeerId, raftProperties).tryAutoJoin();
+    // K8s auto-join / membership self-check: probe the peers' live Raft configuration and re-ADD this
+    // node if absent. Runs on EVERY Kubernetes start, not only when the local Raft storage is missing
+    // (issue #5275): a node restarting with persisted storage may have been dropped from the committed
+    // configuration while it was down (e.g. by the pre-#5275 shutdown auto-leave), and its own storage
+    // still claiming membership meant it waited forever for a leader that would never dial a non-member.
+    // When the node is still a member the probe is a cheap no-op ("already a member").
+    // Runs on a background thread WITH retry (issue #5268): the one-shot probe reliably lost the race
+    // against the peers' allowlist DNS refresh on pod recreation and then parked forever. Retries stop
+    // as soon as a leader is visible - at that point this node is either a functioning member or a
+    // cold-start election completed - or on shutdown.
+    if (configuration.getValueAsBoolean(GlobalConfiguration.HA_K8S)) {
+      final KubernetesAutoJoin autoJoin = new KubernetesAutoJoin(arcadeServer, raftGroup, localPeerId, raftProperties);
+      final Thread joinThread = new Thread(
+          () -> autoJoin.tryAutoJoinWithRetry(() -> !shutdownRequested && getLeaderId() == null),
+          "arcadedb-k8s-auto-join");
+      joinThread.setDaemon(true);
+      joinThread.start();
+      this.autoJoinThread = joinThread;
+    }
 
     final long healthInterval = configuration.getValueAsLong(GlobalConfiguration.HA_HEALTH_CHECK_INTERVAL);
     final long staleFollowerLagThreshold = configuration.getValueAsLong(GlobalConfiguration.HA_STALE_FOLLOWER_LAG_THRESHOLD);
@@ -601,8 +617,14 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
         GlobalConfiguration.HA_DIVERGED_FOLLOWER_RECOVERY);
     final int divergedFollowerMaxReformats = configuration.getValueAsInteger(
         GlobalConfiguration.HA_DIVERGED_FOLLOWER_MAX_REFORMATS);
+    // Reuse the Ratis restart-retry cap as the crash-loop escalation threshold (issue #5291): a RECOVER
+    // restart that keeps returning to CLOSED (e.g. a term-inverted persisted log) never trips restartRatis()'s
+    // own escape because the server object builds successfully each time, so the health monitor bounds the
+    // non-sticking restart streak here and escalates (reformat once, then give up loudly).
+    final int crashLoopRestartThreshold = configuration.getValueAsInteger(
+        GlobalConfiguration.HA_RATIS_RESTART_MAX_RETRIES);
     this.healthMonitor = new HealthMonitor(this, healthInterval, staleFollowerLagThreshold, staleFollowerRecoveryDurationMs,
-        divergedFollowerRecovery, divergedFollowerMaxReformats);
+        divergedFollowerRecovery, divergedFollowerMaxReformats, crashLoopRestartThreshold);
     this.healthMonitor.start();
     if (configuration.getValueAsBoolean(GlobalConfiguration.HA_RESYNC_PROGRESS_LOGGING))
       this.resyncProgressTracker = new FollowerResyncProgressTracker(
@@ -634,7 +656,40 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     }
     if (raftServer == null)
       return LifeCycle.State.NEW;
-    return raftServer.getLifeCycleState();
+    final LifeCycle.State proxyState = raftServer.getLifeCycleState();
+    if (proxyState != LifeCycle.State.RUNNING)
+      return proxyState;
+    // The RaftServer proxy can stay RUNNING while the per-group division (RaftServerImpl) underneath
+    // is CLOSED or EXCEPTION - the node then rejects every vote/append with ServerNotReadyException
+    // while looking perfectly healthy to anything that only reads the proxy state. That blind spot
+    // left a stranded voter CLOSED indefinitely (the health monitor saw RUNNING and never recovered
+    // it), silently zeroing the cluster's fault tolerance and turning a leader restart into a
+    // permanent full-cluster outage (issue #5271). Report the division's terminal states so the
+    // health monitor treats a dead division exactly like a dead server.
+    try {
+      final RaftServer.Division division = raftServer.getDivision(raftGroup.getGroupId());
+      final LifeCycle.State divisionState = division.getInfo().getLifeCycleState();
+      if (divisionState == LifeCycle.State.CLOSED || divisionState == LifeCycle.State.EXCEPTION)
+        return divisionState;
+    } catch (final Exception e) {
+      // The division cannot be read - typically a transient window while the server is starting or an
+      // in-place restart is re-registering the group. Report the (RUNNING) proxy state rather than
+      // CLOSED: mapping this window to CLOSED would make the health monitor restart a healthy,
+      // still-initializing server in a loop. A genuinely dead division reports CLOSED/EXCEPTION from
+      // getInfo() above once readable.
+      LogManager.instance().log(this, Level.FINE, "Cannot read Raft division state: %s", e.getMessage());
+    }
+    return proxyState;
+  }
+
+  /**
+   * The live Ratis division (per-group {@code RaftServerImpl}) for the cluster group.
+   * Package-private: used by tests that need to fault-inject a dead division (issue #5271).
+   *
+   * @throws IOException when the group is not present on this server
+   */
+  RaftServer.Division getRaftDivision() throws IOException {
+    return raftServer.getDivision(raftGroup.getGroupId());
   }
 
   @Override
@@ -971,6 +1026,12 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    */
   public void stop() {
     shutdownRequested = true;
+    final Thread joinThread = autoJoinThread;
+    if (joinThread != null) {
+      // Wake the auto-join retry loop out of its backoff sleep so shutdown is not delayed (issue #5268).
+      joinThread.interrupt();
+      autoJoinThread = null;
+    }
     if (healthMonitor != null) {
       healthMonitor.stop();
       healthMonitor = null;
@@ -982,16 +1043,14 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       transactionBroker = null;
     }
 
-    if (configuration.getValueAsBoolean(GlobalConfiguration.HA_K8S)) {
-      // Best-effort graceful leave during shutdown: leaveCluster() now surfaces failures (issue #4796),
-      // but the pod is going down regardless, so a refusal (e.g. would breach quorum) or a transient
-      // error must not abort the shutdown sequence.
-      try {
-        leaveCluster();
-      } catch (final Exception e) {
-        LogManager.instance().log(this, Level.WARNING, "Could not leave cluster gracefully on shutdown: %s", e.getMessage());
-      }
-    }
+    // NOTE (issue #5275): this method deliberately does NOT remove the node from the Raft
+    // configuration. The former Kubernetes auto-leave here meant every graceful pod shutdown (rollout,
+    // eviction, kubectl delete pod) silently shrank the committed membership - and because persisted
+    // Raft storage skipped the boot-time auto-join, the recreated pod (same StatefulSet name) was never
+    // re-added: fault tolerance silently dropped while every status surface still showed a full cluster.
+    // A pod shutdown means "temporarily unreachable", not "gone": the same pod name comes back by
+    // construction. An intentional scale-down must remove the peer explicitly (POST /api/v1/cluster/leave
+    // before stopping, or DELETE /api/v1/cluster/peer/<id> from a surviving node).
 
     // Suppress noisy Ratis gRPC warnings during shutdown (AlreadyClosedException, CANCELLED streams).
     // These are harmless - internal replication threads take a moment to notice the server is closed.
@@ -1034,7 +1093,9 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
 
     try {
       return raftServer.getDivision(raftGroup.getGroupId()).getInfo().isLeader();
-    } catch (final IOException e) {
+    } catch (final Exception e) {
+      // Also guards the IllegalStateException Ratis throws while an in-place restart re-initializes
+      // the division (issue #5271): status reads must degrade to "unknown", never propagate.
       LogManager.instance().log(this, Level.WARNING, "Error checking leader status", e);
       return false;
     }
@@ -1049,7 +1110,10 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
 
     try {
       return raftServer.getDivision(raftGroup.getGroupId()).getInfo().getLeaderId();
-    } catch (final IOException e) {
+    } catch (final Exception e) {
+      // Also guards the IllegalStateException Ratis throws while an in-place restart re-initializes
+      // the division (issue #5271). Callers (including the k8s auto-join retry loop) treat null as
+      // "leader unknown"; propagating here would kill background threads mid-restart.
       LogManager.instance().log(this, Level.WARNING, "Error getting leader ID", e);
       return null;
     }
@@ -1172,6 +1236,15 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
 
   public RaftGroup getRaftGroup() {
     return raftGroup;
+  }
+
+  /**
+   * The live {@link RaftProperties} the Ratis server was started with, or {@code null} before
+   * {@link #start()}. Package-private: used by tests that exercise {@link KubernetesAutoJoin}
+   * directly against a running cluster (issue #5275).
+   */
+  RaftProperties getRaftProperties() {
+    return raftProperties;
   }
 
   public Map<RaftPeerId, String> getHttpAddresses() {
@@ -1463,8 +1536,12 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       final boolean localInConfig = conf != null && isPeerInConfig(conf.getCurrentPeers(), localPeerId);
       final long commitIndex = division.getRaftLog().getLastCommittedIndex();
       final long appliedIndex = info.getLastAppliedIndex();
+      // A snapshot resync in flight (or a database still diverged awaiting one) means this node's data
+      // may be divergent; do not advertise Ready until it clears (issue #5273).
+      final ArcadeStateMachine sm = getStateMachine();
+      final boolean resyncInProgress = sm != null && sm.isResyncInProgress();
       return isReadyForTrafficState(leaderPresent, localInConfig, info.isLeader(), commitIndex, appliedIndex,
-          maxLagEntries);
+          maxLagEntries, resyncInProgress);
     } catch (final IOException e) {
       LogManager.instance().log(this, Level.FINE, "Cannot read Raft state for readiness probe", e);
       return false;
@@ -1482,7 +1559,24 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    */
   static boolean isReadyForTrafficState(final boolean leaderPresent, final boolean localInConfig,
       final boolean leader, final long commitIndex, final long appliedIndex, final long maxLagEntries) {
+    return isReadyForTrafficState(leaderPresent, localInConfig, leader, commitIndex, appliedIndex, maxLagEntries,
+        false);
+  }
+
+  /**
+   * Overload of {@link #isReadyForTrafficState(boolean, boolean, boolean, long, long, long)} that also
+   * fails closed while a snapshot resync is in flight (issue #5273). A follower that is downloading a
+   * snapshot - or that still has a database marked diverged after a WAL version gap and awaiting its
+   * resync - may hold divergent data, so it must not advertise Ready until the resync clears, even if
+   * its raw applied-index lag happens to be within {@code maxLagEntries}. The leader never resyncs from
+   * a peer, so this gate only affects followers in practice.
+   */
+  static boolean isReadyForTrafficState(final boolean leaderPresent, final boolean localInConfig,
+      final boolean leader, final long commitIndex, final long appliedIndex, final long maxLagEntries,
+      final boolean resyncInProgress) {
     if (!leaderPresent || !localInConfig)
+      return false;
+    if (resyncInProgress)
       return false;
     if (leader)
       return true;
@@ -1748,7 +1842,9 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       return -1;
     try {
       return raftServer.getDivision(raftGroup.getGroupId()).getInfo().getLastAppliedIndex();
-    } catch (final IOException e) {
+    } catch (final Exception e) {
+      // Ratis throws IllegalStateException ("stateMachineUpdater is uninitialized") while an in-place
+      // restart re-initializes the division (issue #5271); report "unknown" instead of propagating.
       return -1;
     }
   }
@@ -1758,7 +1854,8 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       return -1;
     try {
       return raftServer.getDivision(raftGroup.getGroupId()).getRaftLog().getLastCommittedIndex();
-    } catch (final IOException e) {
+    } catch (final Exception e) {
+      // See getLastAppliedIndex: degrade to "unknown" during an in-place restart (issue #5271).
       return -1;
     }
   }
@@ -1768,7 +1865,8 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       return -1;
     try {
       return raftServer.getDivision(raftGroup.getGroupId()).getInfo().getCurrentTerm();
-    } catch (final IOException e) {
+    } catch (final Exception e) {
+      // See getLastAppliedIndex: degrade to "unknown" during an in-place restart (issue #5271).
       return -1;
     }
   }
@@ -2067,10 +2165,74 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   private File getRaftStorageDir() {
-    String raftDir = configuration.getValueAsString(GlobalConfiguration.HA_RAFT_STORAGE_DIRECTORY);
-    if (raftDir == null || raftDir.isBlank())
-      raftDir = arcadeServer.getRootPath();
-    return new File(raftDir, "raft-storage-" + localPeerId);
+    final File dir = resolveRaftStorageDir(
+        configuration.getValueAsString(GlobalConfiguration.HA_RAFT_STORAGE_DIRECTORY),
+        configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY),
+        arcadeServer.getRootPath(), localPeerId.toString());
+    warnIfLegacyRaftStorage(dir);
+    return dir;
+  }
+
+  /**
+   * Resolves the on-disk Raft storage directory for a peer. Kept as a package-visible static so tests
+   * and the server agree on the default location (issue #5272).
+   * <p>
+   * Precedence:
+   * <ol>
+   *   <li>an explicit {@code arcadedb.ha.raftStorageDirectory} is always honored - absolute decoupling,
+   *       required for read-only-root-filesystem deployments;</li>
+   *   <li>otherwise the default is {@code <databaseDirectory>/.raft-storage/raft-storage-<peerId>} so
+   *       that persisting the database directory (which every durable deployment already does) also
+   *       persists the Raft log. The pre-#5272 default was the server root path, a <i>sibling</i> of the
+   *       database directory, which on Kubernetes lands on ephemeral disk while only {@code databases/}
+   *       is on the PersistentVolume - so a pod recreation silently discarded all Raft state;</li>
+   *   <li>backward compatibility: if the new default does not yet exist but a legacy
+   *       {@code <serverRootPath>/raft-storage-<peerId>} directory does, the legacy location is reused, so
+   *       an in-place upgrade of a deployment that persisted the server root path does not FORMAT a fresh
+   *       empty log and self-inflict the very divergence this fix prevents. The caller emits a one-time
+   *       WARNING recommending migration or an explicit {@code raftStorageDirectory}.</li>
+   * </ol>
+   */
+  static File resolveRaftStorageDir(final String configuredRaftDir, final String databaseDirectory,
+      final String serverRootPath, final String peerId) {
+    final String subdir = "raft-storage-" + peerId;
+
+    if (configuredRaftDir != null && !configuredRaftDir.isBlank())
+      return new File(configuredRaftDir, subdir);
+
+    final File newDefault = databaseDirectory != null && !databaseDirectory.isBlank()
+        ? new File(new File(databaseDirectory, ".raft-storage"), subdir)
+        : new File(serverRootPath, subdir);
+
+    if (!newDefault.exists()) {
+      final File legacy = new File(serverRootPath, subdir);
+      if (legacy.exists() && !legacy.equals(newDefault))
+        return legacy;
+    }
+    return newDefault;
+  }
+
+  /**
+   * Emits a one-time WARNING when the resolved Raft storage directory is the legacy pre-#5272 location
+   * (directly under the server root path) rather than the new default under the database directory.
+   */
+  private void warnIfLegacyRaftStorage(final File resolvedDir) {
+    if (legacyRaftStorageWarningLogged)
+      return;
+    if (configuration.getValueAsString(GlobalConfiguration.HA_RAFT_STORAGE_DIRECTORY) != null
+        && !configuration.getValueAsString(GlobalConfiguration.HA_RAFT_STORAGE_DIRECTORY).isBlank())
+      return;
+    final File rootPath = new File(arcadeServer.getRootPath());
+    final File parent = resolvedDir.getParentFile();
+    if (parent != null && parent.equals(rootPath)) {
+      legacyRaftStorageWarningLogged = true;
+      LogManager.instance().log(this, Level.WARNING,
+          "Raft storage is using the legacy location '%s' (under the server root path). Set '%s' explicitly "
+              + "or move it under the database directory ('%s/.raft-storage') so Raft state is persisted together "
+              + "with the databases (issue #5272).",
+          resolvedDir.getAbsolutePath(), GlobalConfiguration.HA_RAFT_STORAGE_DIRECTORY.getKey(),
+          configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY));
+    }
   }
 
   /**

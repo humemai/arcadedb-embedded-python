@@ -392,6 +392,60 @@ class ClusterMonitorTest {
     assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.STALLED);
   }
 
+  // --- Reachability-aware status (issue #5291) ---
+
+  @Test
+  void caughtUpButUnreachableReportsStalledNotHealthy() {
+    // A follower whose member is CLOSED/crash-looping still shows matchIndex caught up (a stale high-water
+    // mark) while it has not answered an RPC for a long time. Keying health on lag alone masks it as
+    // HEALTHY/lag-0 while it crashes ~20x/min; the reachability signal must downgrade it (issue #5291).
+    final ClusterMonitor monitor = new ClusterMonitor(50L, 0L, null, false, 10_000L);
+    monitor.updateLeaderCommitIndex(5000);
+
+    // Caught up AND answering RPCs recently -> HEALTHY.
+    monitor.updateReplicaMatchIndex("replica1", 5000, 0L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.HEALTHY);
+
+    // Still caught up (lag 0) but no successful RPC for 60s (>= 10s threshold) -> STALLED, not HEALTHY.
+    monitor.updateReplicaMatchIndex("replica1", 5000, 60_000L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.STALLED);
+    // The reachability narrative / channel-reset own the logging; the status fix must not emit the
+    // misleading "matchIndex stuck ... disk saturation ... leader election" STALLED message here.
+    assertThat(captured.linesAtLevel(Level.SEVERE)).noneMatch(l -> l.message.contains("disk"));
+  }
+
+  @Test
+  void caughtUpAndReachableStaysHealthy() {
+    // Guard against false positives: an elapsed time below the threshold must not downgrade a caught-up
+    // follower. A healthy follower answers heartbeats well within the unreachable threshold.
+    final ClusterMonitor monitor = new ClusterMonitor(50L, 0L, null, false, 10_000L);
+    monitor.updateLeaderCommitIndex(5000);
+    monitor.updateReplicaMatchIndex("replica1", 5000, 9_999L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.HEALTHY);
+  }
+
+  @Test
+  void unreachableStatusRecoversToHealthyWhenRpcResumes() {
+    final ClusterMonitor monitor = new ClusterMonitor(50L, 0L, null, false, 10_000L);
+    monitor.updateLeaderCommitIndex(5000);
+    monitor.updateReplicaMatchIndex("replica1", 5000, 60_000L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.STALLED);
+
+    // The follower answers an RPC again: reachability is restored, so a caught-up replica is HEALTHY again.
+    monitor.updateReplicaMatchIndex("replica1", 5000, 0L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.HEALTHY);
+  }
+
+  @Test
+  void unreachableStatusDisabledWhenThresholdZero() {
+    // With the unreachable threshold disabled (0) the classification stays lag-only: a caught-up replica is
+    // HEALTHY regardless of how long since its last RPC, preserving the pre-#5291 behaviour.
+    final ClusterMonitor monitor = new ClusterMonitor(50L, 0L, null, false, 0L);
+    monitor.updateLeaderCommitIndex(5000);
+    monitor.updateReplicaMatchIndex("replica1", 5000, 600_000L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.HEALTHY);
+  }
+
   /**
    * Issue #4841: a stale lag streak must not survive into the next term either. If a replica was mid
    * stall-streak when this node lost leadership, {@link ClusterMonitor#reset()} must clear the streak
@@ -587,6 +641,132 @@ class ClusterMonitorTest {
     captured.clear();
     new ClusterMonitor(10L, 0L, null, false, 10_000L, 30_000L, s -> { });
     assertThat(captured.linesContaining("peerUnreachableThreshold")).isEmpty();
+  }
+
+  /**
+   * Issue #5295: a follower still at the never-appended sentinel (matchIndex == -1) while the leader
+   * already holds committed entries has a dead replication path - not a single append ever landed. When
+   * the leader is only a few entries ahead its numeric lag sits below the warning threshold, which used
+   * to mask it as HEALTHY forever. It must instead be reported STALLED once the sentinel persists past
+   * the grace, without a false STALLED during the brief join / snapshot-install window.
+   */
+  @Test
+  void neverAppendedFollowerIsReportedStalledNotHealthy() {
+    final AtomicLong now = new AtomicLong(0);
+    // Lag threshold 1000 (the production default): a leader only 3 entries ahead is well under it.
+    final ClusterMonitor monitor = new ClusterMonitor(1000L, 30_000L, s -> { });
+    monitor.setClock(now::get);
+
+    // Leader committed entry 2; the follower has never appended (matchIndex == -1). lag = 2-(-1) = 3.
+    monitor.updateLeaderCommitIndex(2);
+    monitor.updateReplicaMatchIndex("replica1", -1, 0L);
+    // During the grace it is not yet flagged (a normal join sits here briefly): must NOT be STALLED.
+    assertThat(monitor.getReplicaStatus("replica1")).isNotEqualTo(ClusterMonitor.ReplicaStatus.STALLED);
+
+    // Still at the sentinel just before the grace elapses: still not STALLED.
+    now.set(29_000);
+    monitor.updateLeaderCommitIndex(2);
+    monitor.updateReplicaMatchIndex("replica1", -1, 0L);
+    assertThat(monitor.getReplicaStatus("replica1")).isNotEqualTo(ClusterMonitor.ReplicaStatus.STALLED);
+
+    // Past the grace, still never appended: now STALLED, not the masked HEALTHY.
+    now.set(31_000);
+    monitor.updateLeaderCommitIndex(2);
+    monitor.updateReplicaMatchIndex("replica1", -1, 0L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.STALLED);
+    assertThat(captured.linesAtLevel(Level.SEVERE)).isNotEmpty();
+    assertThat(captured.linesContaining("NEVER received a single append")).isNotEmpty();
+  }
+
+  /**
+   * Issue #5295: the leader-driven resync (#4728) is documented to cover "matchIndex stuck at -1", but
+   * it keyed on a large lag, so a never-appended follower with a small numeric lag never got recovered.
+   * The never-appended condition must trigger the resync after the configured duration regardless of the
+   * lag magnitude.
+   */
+  @Test
+  void neverAppendedFollowerTriggersLeaderDrivenResyncDespiteSmallLag() {
+    final List<String> resynced = new ArrayList<>();
+    final AtomicLong now = new AtomicLong(0);
+    final ClusterMonitor monitor = new ClusterMonitor(1000L, 30_000L, resynced::add);
+    monitor.setClock(now::get);
+
+    // First tick: never appended, streak starts, no fire yet (lag = 3, far below the 1000 threshold).
+    monitor.updateLeaderCommitIndex(2);
+    monitor.updateReplicaMatchIndex("replica1", -1, 0L);
+    assertThat(resynced).isEmpty();
+
+    // Still never appended after the duration: the leader forces a resync exactly once.
+    now.set(31_000);
+    monitor.updateLeaderCommitIndex(2);
+    monitor.updateReplicaMatchIndex("replica1", -1, 0L);
+    assertThat(resynced).containsExactly("replica1");
+  }
+
+  /**
+   * Issue #5295: a follower that finally receives its first append within the grace is a normal join,
+   * not a dead path - it must never be flagged STALLED and must never trigger a resync.
+   */
+  @Test
+  void normalJoinThatAppendsWithinGraceIsNeverStalled() {
+    final List<String> resynced = new ArrayList<>();
+    final AtomicLong now = new AtomicLong(0);
+    final ClusterMonitor monitor = new ClusterMonitor(1000L, 30_000L, resynced::add);
+    monitor.setClock(now::get);
+
+    // t=0: just joined, still at the sentinel.
+    monitor.updateLeaderCommitIndex(2);
+    monitor.updateReplicaMatchIndex("replica1", -1, 0L);
+
+    // t=10s (within the 30s grace): the first append lands, matchIndex advances to caught-up.
+    now.set(10_000);
+    monitor.updateLeaderCommitIndex(2);
+    monitor.updateReplicaMatchIndex("replica1", 2, 0L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.HEALTHY);
+
+    // Long after the grace would have elapsed: it caught up, so it stays HEALTHY and never resyncs.
+    now.set(60_000);
+    monitor.updateLeaderCommitIndex(3);
+    monitor.updateReplicaMatchIndex("replica1", 3, 0L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.HEALTHY);
+    assertThat(resynced).isEmpty();
+  }
+
+  /**
+   * Issue #5295: before the leader has committed anything (leaderCommitIndex == -1), a follower at
+   * matchIndex == -1 is simply level with the leader, not a dead path. It must stay HEALTHY.
+   */
+  @Test
+  void followerLevelWithAnEmptyLeaderIsHealthy() {
+    final AtomicLong now = new AtomicLong(0);
+    final ClusterMonitor monitor = new ClusterMonitor(1000L, 30_000L, s -> { });
+    monitor.setClock(now::get);
+
+    monitor.updateLeaderCommitIndex(-1);
+    monitor.updateReplicaMatchIndex("replica1", -1, 0L);
+    now.set(60_000);
+    monitor.updateLeaderCommitIndex(-1);
+    monitor.updateReplicaMatchIndex("replica1", -1, 0L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.HEALTHY);
+  }
+
+  /**
+   * Issue #5295: with leader-driven resync disabled (duration 0), a never-appended follower must still
+   * be reported STALLED (the status must not mask the dead path even when auto-recovery is off), using
+   * the built-in fallback grace.
+   */
+  @Test
+  void neverAppendedFollowerIsStalledEvenWhenResyncDisabled() {
+    final AtomicLong now = new AtomicLong(0);
+    final ClusterMonitor monitor = new ClusterMonitor(1000L, 0L, null);
+    monitor.setClock(now::get);
+
+    monitor.updateLeaderCommitIndex(2);
+    monitor.updateReplicaMatchIndex("replica1", -1, 0L);
+    now.set(ClusterMonitor.NEVER_APPENDED_STALL_GRACE_MS + 1_000);
+    monitor.updateLeaderCommitIndex(2);
+    monitor.updateReplicaMatchIndex("replica1", -1, 0L);
+    assertThat(monitor.getReplicaStatus("replica1")).isEqualTo(ClusterMonitor.ReplicaStatus.STALLED);
   }
 
   /** ArcadeDB Logger that captures everything in memory for test assertions. */

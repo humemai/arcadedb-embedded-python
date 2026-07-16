@@ -19,6 +19,7 @@
 package com.arcadedb.query.opencypher.parser;
 
 import com.arcadedb.database.Document;
+import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.CommandParsingException;
 import com.arcadedb.query.opencypher.ast.*;
 import com.arcadedb.query.opencypher.grammar.Cypher25Parser;
@@ -1705,7 +1706,13 @@ class CypherExpressionBuilder {
         return new CypherLocalDateTime((LocalDateTime) baseValue).getTemporalProperty(propertyName);
       }
 
-      return null;
+      // Type validation: property access only works on property-bearing types. Primitive types
+      // (Integer, String, Boolean, List, etc.) don't have properties, so accessing one is a type
+      // error - mirroring PropertyAccessExpression (variable-bound access) and Neo4j semantics.
+      // Note: a null base short-circuits to null above (property access on null propagates null).
+      throw new CommandExecutionException(
+          "TypeError: Cannot access property '" + propertyName + "' on " +
+          baseValue.getClass().getSimpleName() + " value");
     }
 
     @Override
@@ -1959,7 +1966,10 @@ class CypherExpressionBuilder {
   Expression parseComparisonFromExpression8(final Cypher25Parser.Expression8Context ctx) {
     // Expression8 has multiple expression7 children with comparison operators between them
     if (ctx.expression7().size() > 1) {
-      // Found a comparison, get the operator
+      // Collect all operators, in textual order, for chained comparisons (issue #5284).
+      // Per the OpenCypher spec a chain like "a < b < c" is equivalent to "a < b AND b < c":
+      // every adjacent comparison must hold, not only the first one.
+      final List<ComparisonExpression.Operator> operators = new ArrayList<>();
       for (int i = 1; i < ctx.getChildCount(); i++) {
         if (ctx.getChild(i) instanceof TerminalNode) {
           final TerminalNode terminal = (TerminalNode) ctx.getChild(i);
@@ -1974,14 +1984,21 @@ class CypherExpressionBuilder {
           else if (type == Cypher25Parser.LE) op = ComparisonExpression.Operator.LESS_THAN_OR_EQUAL;
           else if (type == Cypher25Parser.GE) op = ComparisonExpression.Operator.GREATER_THAN_OR_EQUAL;
 
-          if (op != null) {
-            final Expression left = parseExpressionFromText(ctx.expression7(0));
-            final Expression right = parseExpressionFromText(ctx.expression7(1));
-            final ComparisonExpression comparison = new ComparisonExpression(left, op, right);
-            // Wrap BooleanExpression in an Expression adapter
-            return new BooleanWrapperExpression(comparison);
-          }
+          if (op != null)
+            operators.add(op);
         }
+      }
+
+      if (!operators.isEmpty()) {
+        BooleanExpression result = null;
+        for (int i = 0; i < operators.size(); i++) {
+          final Expression left = parseExpressionFromText(ctx.expression7(i));
+          final Expression right = parseExpressionFromText(ctx.expression7(i + 1));
+          final ComparisonExpression comparison = new ComparisonExpression(left, operators.get(i), right);
+          result = result == null ? comparison : new LogicalExpression(LogicalExpression.Operator.AND, result, comparison);
+        }
+        // Wrap the (possibly conjoined) BooleanExpression in an Expression adapter
+        return new BooleanWrapperExpression(result);
       }
     }
 
@@ -2143,8 +2160,9 @@ class CypherExpressionBuilder {
         else if (type == Cypher25Parser.MINUS)
           op = ArithmeticExpression.Operator.SUBTRACT;
         else if (type == Cypher25Parser.DOUBLEBAR)
-          // Cypher 25 / GQL concatenation operator: same semantics as + for lists and strings.
-          op = ArithmeticExpression.Operator.ADD;
+          // Cypher 25 / GQL concatenation operator: STRING||STRING or LIST||LIST only, no implicit
+          // coercion of non-STRING operands (issue #5298). Distinct from + which appends/coerces.
+          op = ArithmeticExpression.Operator.CONCAT;
 
         if (op != null) {
           final Expression right = parseArithmeticExpression5(operands.get(operandIndex));

@@ -20,11 +20,12 @@ package com.arcadedb.function.graph;
 
 import com.arcadedb.database.Document;
 import com.arcadedb.exception.CommandExecutionException;
+import com.arcadedb.exception.CommandSemanticException;
 import com.arcadedb.function.StatelessFunction;
 import com.arcadedb.query.sql.executor.CommandContext;
+import com.arcadedb.query.sql.executor.Result;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Map;
 
 /**
@@ -49,6 +50,11 @@ public class KeysFunction implements StatelessFunction {
     }
     if (args[0] instanceof Map)
       return new ArrayList<>(((Map<?, ?>) args[0]).keySet());
-    return Collections.emptyList();
+    if (args[0] instanceof Result)
+      return new ArrayList<>(((Result) args[0]).getPropertyNames());
+    // Client-side type error, not a server failure: report it as a 400 rather than a 500 commit failure.
+    // See issue #5299 (same classification as type() in #5204).
+    throw new CommandSemanticException("TypeError: keys() requires a node, relationship, or map argument, got " +
+        args[0].getClass().getSimpleName());
   }
 }
