@@ -61,7 +61,7 @@ BACKENDS = {
     "arcadedb_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:122b4a8bdd70d70fcfee45928a9c494f4b88a7a8edb8cc895edc0ff58adc0780",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
@@ -100,7 +100,7 @@ BACKENDS = {
     "arcadedb_graph_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:122b4a8bdd70d70fcfee45928a9c494f4b88a7a8edb8cc895edc0ff58adc0780",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
@@ -139,7 +139,7 @@ BACKENDS = {
     "arcadedb_sparse_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:122b4a8bdd70d70fcfee45928a9c494f4b88a7a8edb8cc895edc0ff58adc0780",  # 26.8.1 dev line, matches embedded ==26.8.1.dev0
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
@@ -190,7 +190,7 @@ BACKENDS = {
     "arcadedb_dense_server": {
         "topology": "client_server",
         "image": "icde-bench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:122b4a8bdd70d70fcfee45928a9c494f4b88a7a8edb8cc895edc0ff58adc0780",  # post-#5254 fix, matches dev1 wheel
+        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
