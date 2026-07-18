@@ -82,7 +82,7 @@ class ArcadeGraphEmbedded(Base):
     def build(self, n_persons):
         # Native Java API with batched commits — ArcadeDB's embedded bulk path
         jdb = self.db.get_java_database()
-        verts = [None] * n_persons
+        verts = {}  # keyed by person id (sparse longs under the LDBC source)
         jdb.begin()
         n = 0
         for i, name, age, city in gen_persons(n_persons):
