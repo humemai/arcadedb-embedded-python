@@ -51,7 +51,9 @@ TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "sf1": 3600, "sf10": 6 * 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  "large": "24g",
-                 "sf1": "6g", "sf10": "16g"}
+                 # heap must fit inside the 75% server-container share of
+                 # MEM_BY_SCALE with headroom (JVMs pin -Xms): 8g*0.75=6g -> 4g
+                 "sf1": "4g", "sf10": "12g"}
 SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
 
 # ---------------------------------------------------------------- backends
