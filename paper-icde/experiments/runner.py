@@ -441,6 +441,14 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         except subprocess.TimeoutExpired:
             rc = -1
             row["error"] = f"timeout_after_{timeout_s}s"
+            # phase-at-timeout evidence (cypherglot audit standard): the bench's
+            # last progress lines identify WHERE the budget expired (ingest /
+            # index build / warmup / query iter) without log archaeology later.
+            tail = subprocess.run(["docker", "logs", "--tail", "8", cli_cid],
+                                  capture_output=True, text=True)
+            last = [l.strip() for l in (tail.stdout + tail.stderr).splitlines()
+                    if l.strip()][-3:]
+            row["timeout_phase_hint"] = " | ".join(last)[-400:]
         logs = subprocess.run(["docker", "logs", cli_cid], capture_output=True, text=True)
         docker_rm(cli_cid)
         row["rc"] = rc
