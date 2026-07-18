@@ -175,8 +175,11 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
         # SQL-over-HTTP sqlscript batches — the server's remote bulk surface
         buf = []
         for i, name, age, city in gen_persons(n_persons):
-            buf.append(f"CREATE VERTEX Person SET id = {i}, name = '{name}', "
-                       f"age = {age}, city = '{city}'")
+            # literal SQL: escape string payloads (LDBC names contain quotes)
+            name_q = name.replace("\\", "\\\\").replace("'", "\\'")
+            city_q = city.replace("\\", "\\\\").replace("'", "\\'")
+            buf.append(f"CREATE VERTEX Person SET id = {i}, name = '{name_q}', "
+                       f"age = {age}, city = '{city_q}'")
             if len(buf) >= INGEST_BATCH:
                 self._http("command", "sqlscript", ";".join(buf))
                 buf = []
@@ -305,13 +308,16 @@ class LadybugGraph(Base):
 
     def build(self, n_persons):
         # CSV COPY — LadybugDB's native bulk path (Kuzu lineage)
+        import csv as _csv
         pcsv, kcsv = "/tmp/l2_persons.csv", "/tmp/l2_knows.csv"
-        with open(pcsv, "w") as f:
+        with open(pcsv, "w", newline="") as f:
+            w = _csv.writer(f)  # proper quoting: LDBC names can carry commas/quotes
             for i, name, age, city in gen_persons(n_persons):
-                f.write(f"{i},{name},{age},{city}\n")
-        with open(kcsv, "w") as f:
+                w.writerow([i, name, age, city])
+        with open(kcsv, "w", newline="") as f:
+            w = _csv.writer(f)
             for src, dst, since in gen_edges(n_persons):
-                f.write(f"{src},{dst},{since}\n")
+                w.writerow([src, dst, since])
         self.conn.execute(f"COPY Person FROM '{pcsv}'")
         self.conn.execute(f"COPY KNOWS FROM '{kcsv}'")
         os.unlink(pcsv)
