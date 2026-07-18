@@ -18,6 +18,16 @@ from graph_common import (OLAP_ITERATIONS, OLAP_QUERIES, OLTP_READS,
                           OLTP_WRITE, SCALE_OLTP_QUERIES, SCALE_PERSONS,
                           gen_edges, gen_persons, pick_query_ids)
 
+# Data-source switch (same pattern as l3_sparse/bigann): BENCH_GRAPH_SOURCE=ldbc
+# swaps the synthetic generator for the LDBC-SNB persons+KNOWS projection.
+# The generators are rebound to scale-aware wrappers in main() once the scale
+# is known; templates/tunables stay identical so runs differ only in data.
+_GRAPH_SOURCE = os.environ.get("BENCH_GRAPH_SOURCE", "synthetic")
+if _GRAPH_SOURCE == "ldbc":
+    import ldbc_snb as _ldbc
+    SCALE_PERSONS = _ldbc.SCALE_PERSONS
+    SCALE_OLTP_QUERIES = _ldbc.SCALE_OLTP_QUERIES
+
 INGEST_BATCH = 5_000
 GAV_NAME = "l2gav"
 GAV_TIMEOUT_S = 3600
@@ -332,7 +342,19 @@ def main():
 
     n_persons = SCALE_PERSONS[args.scale]
     n_q = SCALE_OLTP_QUERIES[args.scale]
-    out = {"n_persons": n_persons}
+    out = {"n_persons": n_persons, "graph_source": _GRAPH_SOURCE}
+
+    write_id_base = 10_000_000
+    if _GRAPH_SOURCE == "ldbc":
+        # Rebind generators to scale-aware LDBC streams. Adapters resolve these
+        # names from module globals at call time, so rebinding here is enough.
+        global gen_persons, gen_edges, pick_query_ids
+        gen_persons = lambda _n: _ldbc.gen_persons(args.scale)
+        gen_edges = lambda _n: _ldbc.gen_edges(args.scale)
+        pick_query_ids = lambda _n, k: _ldbc.pick_query_ids(args.scale, k)
+        # LDBC person ids are sparse longs; harness-invented ids must not collide
+        write_id_base = _ldbc.write_id_base(args.scale)
+        out["graph_source"] = f"ldbc-{args.scale}"
 
     ad = ADAPTERS[args.backend]()
     t0 = time.perf_counter()
@@ -362,7 +384,7 @@ def main():
         n_writes = min(100, n_q)
         lat = []
         for w, pid in enumerate(ids[:n_writes]):
-            new_id = 10_000_000 + w
+            new_id = write_id_base + w
             t = time.perf_counter()
             ad.run_cypher_write(OLTP_WRITE.format(id=pid, new_id=new_id))
             if w >= 5:
