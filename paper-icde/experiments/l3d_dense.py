@@ -266,13 +266,18 @@ class DuckVSS(Base):
         self.cx.execute("SET hnsw_enable_experimental_persistence=true;")
 
     def build(self, vecs):
-        import pandas as pd  # noqa: F401 (duckdb arrow path)
-        self.cx.execute(f"CREATE TABLE t (id BIGINT, vec FLOAT[{DIM}])")
-        arr = vecs.tolist()
-        for i in range(0, len(arr), BATCH):
-            self.cx.executemany(
-                "INSERT INTO t VALUES (?, ?)",
-                [(i + j, arr[i + j]) for j in range(min(BATCH, len(arr) - i))])
+        # native bulk path: Arrow FixedSizeList -> DuckDB FLOAT[DIM] in one
+        # relational insert (fairness: executemany over Python lists measured
+        # ~2h for 1M x 128 and is a harness artifact, not the engine)
+        import pyarrow as pa
+        flat = pa.array(vecs.astype("float32").reshape(-1), type=pa.float32())
+        tbl = pa.table({
+            "id": pa.array(range(len(vecs)), type=pa.int64()),
+            "vec": pa.FixedSizeListArray.from_arrays(flat, DIM),
+        })
+        self.cx.register("src", tbl)
+        self.cx.execute(f"CREATE TABLE t AS SELECT id, vec::FLOAT[{DIM}] AS vec FROM src")
+        self.cx.unregister("src")
         self.cx.execute(
             f"CREATE INDEX hn ON t USING HNSW (vec) "
             f"WITH (metric = 'l2sq', M = {M}, ef_construction = {EF_CONSTRUCTION})")
