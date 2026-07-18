@@ -55,7 +55,9 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  "large": "24g",
                  # heap must fit inside the 75% server-container share of
                  # MEM_BY_SCALE with headroom (JVMs pin -Xms): 8g*0.75=6g -> 4g
-                 "sf1": "4g", "sf10": "12g", "deep10m": "12g"}
+                 # deep10m: 16g fits the 18g (75% of 24g) server share and
+                 # clears the embedded 10M JVector build (12g OOMed)
+                 "sf1": "4g", "sf10": "12g", "deep10m": "16g"}
 SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
 
 # ---------------------------------------------------------------- backends
@@ -375,7 +377,13 @@ def docker_rm(cid):
 def run_cell(job, rep, scale, cpuset, tier, net_name):
     """Run one cell (backend x workload x scale, one repeat). Returns row dict."""
     be = BACKENDS[job["backend"]]
-    run_id = f"{job['run_id']}_r{rep}"
+    # scale in run_id: out-file names must never collide across campaigns
+    # (a stale same-name out file once resurfaced a previous campaign's
+    # metrics into a killed cell's row)
+    run_id = f"{job['run_id']}_{scale}_r{rep}"
+    stale = os.path.join(RAW, f"{run_id}.json")
+    if os.path.exists(stale):
+        os.unlink(stale)  # belt-and-braces vs stale out-file reads
     total_mem = mem_bytes(MEM_BY_SCALE[scale])
     heap = HEAP_BY_SCALE[scale]
     row = {"run_id": run_id, "lane": job["lane"], "backend": job["backend"],
@@ -458,7 +466,9 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row["error"] = (logs.stderr or logs.stdout)[-800:]
 
         out_path = os.path.join(RAW, f"{run_id}.json")
-        if os.path.exists(out_path):
+        # merge bench output ONLY on clean exit: a stale or partial out file
+        # must never masquerade as results for a failed/killed cell
+        if rc == 0 and os.path.exists(out_path):
             row.update(json.load(open(out_path)))
     finally:
         mib = lambda b: round((b or 0) / 2**20, 1)
