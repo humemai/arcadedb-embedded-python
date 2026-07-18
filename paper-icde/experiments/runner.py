@@ -41,13 +41,17 @@ SAMPLE_INTERVAL = 0.25
 # P-core threads on the i9-12900HK bench host; override for other hosts.
 CPUSET = os.environ.get("BENCH_CPUSET", "0-11")
 MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
-                "large": "48g"}
+                "large": "48g",
+                # LDBC-SNB tiers (l2 lane, BENCH_GRAPH_SOURCE=ldbc)
+                "sf1": "8g", "sf10": "24g"}
 # Per-cell watchdog: a cell exceeding this is killed and recorded as a timeout.
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
-                    "medium": 6 * 3600, "large": 24 * 3600}
+                    "medium": 6 * 3600, "large": 24 * 3600,
+                    "sf1": 3600, "sf10": 6 * 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
-                 "large": "24g"}
+                 "large": "24g",
+                 "sf1": "6g", "sf10": "16g"}
 SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
 
 # ---------------------------------------------------------------- backends
@@ -404,8 +408,9 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             client_caps = ["--memory", str(total_mem), "--memory-swap", str(total_mem)]
             bench_env = []
 
-        # forward sparse-lane data-source selection into the container
-        for _k in ("BENCH_SPARSE_SOURCE", "BENCH_SPARSE_DATA"):
+        # forward data-source selection into the container (sparse + graph)
+        for _k in ("BENCH_SPARSE_SOURCE", "BENCH_SPARSE_DATA",
+                   "BENCH_GRAPH_SOURCE", "BENCH_GRAPH_DATA"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
