@@ -45,7 +45,7 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 # LDBC-SNB tiers (l2 lane, BENCH_GRAPH_SOURCE=ldbc)
                 "sf1": "8g", "sf10": "24g",
                 # DEEP-10M dense tier (l3d)
-                "deep10m": "24g"}
+                "deep10m": "28g"}
 # Per-cell watchdog: a cell exceeding this is killed and recorded as a timeout.
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
