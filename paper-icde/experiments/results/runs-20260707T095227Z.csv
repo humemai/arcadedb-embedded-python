@@ -1,2 +1,0 @@
-backend,build_docs_per_s,build_s,client_cpu_usec,client_peak_mib,connect_s,cpu_usec_sum,cpuset,dims,engine_version,k,lane,manifest,n_docs,n_queries,peak_mib_sum,qps,query_mean_ms,query_n,query_p50_ms,query_p95_ms,query_p99_ms,rc,recall_at_10,rep,run_id,scale,tier,topology,ts_utc,workload
-arcadedb_sparse_embedded,18767.7,53.28,211774618,2877.8,0.425,211774618,0-11,30000,26.7.2.dev0,10,l3s,20260707T095227Z,1000000,500,2877.8,138.6,7.215,495,6.894,8.761,10.864,0,0.9902,1,l3s_arcadedb_sparse_embedded_search_r1,small,paper,embedded,2026-07-07T09:52:27.705021+00:00,search
