@@ -30,12 +30,30 @@ K = 10
 M = 16
 EF_CONSTRUCTION = 100
 EF_SEARCH = 100
-SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000}
+SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000,
+              "deep10m": 9_990_000}
 N_QUERIES = 1_000
 BATCH = 10_000
 
 
 def load_dataset(scale):
+    global DIM
+    if scale == "deep10m":
+        # ann-benchmarks deep-image-96-angular: cosine GT. Rows are normalized
+        # to unit length so L2 ranking == cosine ranking and every adapter's
+        # L2 configuration (and the shipped GT) stays valid unchanged.
+        DIM = 96
+        base = np.asarray(
+            np.load(os.path.join(DATA, "..", "deep10m", "deep_base.npy"),
+                    mmap_mode="r"), dtype=np.float32)
+        base /= np.maximum(np.linalg.norm(base, axis=1, keepdims=True), 1e-12)
+        test = np.load(os.path.join(DATA, "..", "deep10m",
+                                    "deep_query.npy"))[:N_QUERIES]
+        test = test / np.maximum(
+            np.linalg.norm(test, axis=1, keepdims=True), 1e-12)
+        gt = np.load(os.path.join(DATA, "..", "deep10m",
+                                  "deep_gt.npy"))[:N_QUERIES, :K]
+        return base, test.astype(np.float32), gt
     train = np.load(os.path.join(DATA, "sift_train.npy"), mmap_mode="r")
     test = np.load(os.path.join(DATA, "sift_test.npy"))[:N_QUERIES]
     n = SCALE_DOCS[scale]

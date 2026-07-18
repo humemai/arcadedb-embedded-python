@@ -43,17 +43,19 @@ CPUSET = os.environ.get("BENCH_CPUSET", "0-11")
 MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 "large": "48g",
                 # LDBC-SNB tiers (l2 lane, BENCH_GRAPH_SOURCE=ldbc)
-                "sf1": "8g", "sf10": "24g"}
+                "sf1": "8g", "sf10": "24g",
+                # DEEP-10M dense tier (l3d)
+                "deep10m": "24g"}
 # Per-cell watchdog: a cell exceeding this is killed and recorded as a timeout.
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "medium": 6 * 3600, "large": 24 * 3600,
-                    "sf1": 3600, "sf10": 6 * 3600}
+                    "sf1": 3600, "sf10": 6 * 3600, "deep10m": 6 * 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  "large": "24g",
                  # heap must fit inside the 75% server-container share of
                  # MEM_BY_SCALE with headroom (JVMs pin -Xms): 8g*0.75=6g -> 4g
-                 "sf1": "4g", "sf10": "12g"}
+                 "sf1": "4g", "sf10": "12g", "deep10m": "12g"}
 SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
 
 # ---------------------------------------------------------------- backends
