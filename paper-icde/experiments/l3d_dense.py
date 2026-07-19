@@ -171,10 +171,10 @@ class ArcadeServer(Base):
         except Exception:
             self.version = "server:?"
 
-    def _cmd(self, language, command):
+    def _cmd(self, language, command, timeout=1800):
         r = self.rq.post(f"{self.base}/command/bench",
                          json={"language": language, "command": command},
-                         timeout=1800)
+                         timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])
 
@@ -194,7 +194,8 @@ class ArcadeServer(Base):
         self._cmd("sql", f'''CREATE INDEX ON Article (embedding) LSM_VECTOR
                   METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
                   "maxConnections": {M}, "beamWidth": {EF_CONSTRUCTION},
-                  "storeVectorsInGraph": false, "addHierarchy": true }}''')
+                  "storeVectorsInGraph": false, "addHierarchy": true }}''',
+                  timeout=6 * 3600)  # synchronous 10M HNSW build exceeds 30min
 
     def search(self, qvec, k):
         w = ", ".join("%.6f" % x for x in qvec)
