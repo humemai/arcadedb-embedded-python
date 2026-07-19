@@ -52,7 +52,7 @@ def load_dataset(scale):
         base = np.empty(mm.shape, dtype=np.float32)
         CH = 500_000
         for s in range(0, mm.shape[0], CH):
-            c = np.asarray(mm[s:s + CH], dtype=np.float32)
+            c = np.array(mm[s:s + CH], dtype=np.float32)  # copy: asarray on a float32 memmap returns a read-only view
             c /= np.maximum(np.linalg.norm(c, axis=1, keepdims=True), 1e-12)
             base[s:s + CH] = c
         test = np.load(os.path.join(DATA, "..", "deep10m",
