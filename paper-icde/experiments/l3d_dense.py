@@ -43,10 +43,18 @@ def load_dataset(scale):
         # to unit length so L2 ranking == cosine ranking and every adapter's
         # L2 configuration (and the shipped GT) stays valid unchanged.
         DIM = 96
-        base = np.array(
-            np.load(os.path.join(DATA, "..", "deep10m", "deep_base.npy"),
-                    mmap_mode="r"), dtype=np.float32)  # writable copy
-        base /= np.maximum(np.linalg.norm(base, axis=1, keepdims=True), 1e-12)
+        mm = np.load(os.path.join(DATA, "..", "deep10m", "deep_base.npy"),
+                     mmap_mode="r")
+        # chunked copy+normalize: a single np.array(memmap) holds the 3.8GB
+        # anon copy WHILE the read fills 3.8GB of page cache — transiently
+        # ~7.6GB, which OOM-killed the 7GB client share of server-topology
+        # cells. Chunking keeps cache pages clean/reclaimable (peak ~4.2GB).
+        base = np.empty(mm.shape, dtype=np.float32)
+        CH = 500_000
+        for s in range(0, mm.shape[0], CH):
+            c = np.asarray(mm[s:s + CH], dtype=np.float32)
+            c /= np.maximum(np.linalg.norm(c, axis=1, keepdims=True), 1e-12)
+            base[s:s + CH] = c
         test = np.load(os.path.join(DATA, "..", "deep10m",
                                     "deep_query.npy"))[:N_QUERIES]
         test = test / np.maximum(
