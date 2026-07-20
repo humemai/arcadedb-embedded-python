@@ -11,6 +11,7 @@ Output: one JSON line per (maxConnections, efSearch) to --out.
 """
 import argparse
 import json
+import os
 import statistics
 import time
 
@@ -22,7 +23,7 @@ import l3d_dense as base
 def run(mc, out_path):
     import arcadedb_embedded as arcadedb
     train, test, gt = base.load_dataset("deep10m")
-    heap = "16g"
+    heap = os.environ.get("ARCADEDB_HEAP", "16g")
     db = arcadedb.create_database(f"/tmp/probe_arcade_mc{mc}",
                                   jvm_kwargs={"heap_size": heap,
                                               "jvm_args": f"-Xms{heap}"})
