@@ -314,7 +314,7 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
     (which exposes `max_connections`, `beam_width`, `dimensions`, etc.), or SQL
     `CREATE INDEX ... LSM_VECTOR METADATA {...}`.
 
-- **max_connections**: Max connections per node (default: 16; typical 8-32). Maps to
+- **max_connections**: Per-layer graph degree (default: 32; typical 16-64). Vamana degree, not doubled at the base layer like hnswlib M (use 2*M to match an hnswlib config). Maps to
   JVector `maxConnections`.
 - **beam_width**: Beam width for build/search (default: 100; typical 64-200). Maps to
   JVector `beamWidth`.

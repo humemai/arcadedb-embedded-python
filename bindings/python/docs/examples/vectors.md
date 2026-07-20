@@ -250,7 +250,7 @@ with arcadedb.create_database("./vector_demo") as db:
         METADATA {
             "dimensions": 384,
             "similarity": "COSINE",
-            "maxConnections": 16,
+            "maxConnections": 32,
             "beamWidth": 100
         }
         """

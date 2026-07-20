@@ -52,7 +52,7 @@ with arcadedb.create_database("./test_db") as db:
         METADATA {
             "dimensions": 384,
             "similarity": "COSINE",
-            "maxConnections": 16,
+            "maxConnections": 32,
             "beamWidth": 100
         }
         ''',

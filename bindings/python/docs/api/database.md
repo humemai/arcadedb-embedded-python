@@ -661,7 +661,7 @@ db.create_vector_index(
     dimensions: int,
     id_property: str | None = None,
     distance_function: str = "cosine",
-    max_connections: int = 16,
+    max_connections: int = 32,
     beam_width: int = 100,
     quantization: str = "INT8",
     encoding: str | None = None,
@@ -694,7 +694,7 @@ specifically need that surface.
 - `dimensions` (int): Vector dimensionality
 - `id_property` (str | None): Optional property used for key-based vector lookup.
 - `distance_function` (str): `"cosine"`, `"euclidean"`, or `"inner_product"`
-- `max_connections` (int): Max connections per node (default: 16). Maps to
+- `max_connections` (int): Per-layer graph degree (default: 32; Vamana degree, use 2*M to match an hnswlib M). Maps to
   `maxConnections` in HNSW (JVector).
 - `beam_width` (int): Beam width for search/construction (default: 100). Maps to
   `beamWidth` in HNSW (JVector).
