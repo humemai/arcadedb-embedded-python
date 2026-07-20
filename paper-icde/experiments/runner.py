@@ -44,8 +44,9 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 "large": "48g",
                 # LDBC-SNB tiers (l2 lane, BENCH_GRAPH_SOURCE=ldbc)
                 "sf1": "8g", "sf10": "24g",
-                # DEEP-10M dense tier (l3d)
-                "deep10m": "28g"}
+                # DEEP-10M dense tier (l3d); 36g since the degree-matched
+                # ablation (maxConnections=32, #5352) peaks ~19GB build heap
+                "deep10m": "36g"}
 # Per-cell watchdog: a cell exceeding this is killed and recorded as a timeout.
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
@@ -57,7 +58,7 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # MEM_BY_SCALE with headroom (JVMs pin -Xms): 8g*0.75=6g -> 4g
                  # deep10m: 16g fits the 18g (75% of 24g) server share and
                  # clears the embedded 10M JVector build (12g OOMed)
-                 "sf1": "4g", "sf10": "12g", "deep10m": "16g"}
+                 "sf1": "4g", "sf10": "12g", "deep10m": "24g"}
 SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
 
 # ---------------------------------------------------------------- backends
@@ -420,9 +421,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             client_caps = ["--memory", str(total_mem), "--memory-swap", str(total_mem)]
             bench_env = []
 
-        # forward data-source selection into the container (sparse + graph)
+        # forward data-source selection into the container (sparse + graph + dense)
         for _k in ("BENCH_SPARSE_SOURCE", "BENCH_SPARSE_DATA",
-                   "BENCH_GRAPH_SOURCE", "BENCH_GRAPH_DATA"):
+                   "BENCH_GRAPH_SOURCE", "BENCH_GRAPH_DATA",
+                   "BENCH_DENSE_DATA", "BENCH_DENSE_M"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 

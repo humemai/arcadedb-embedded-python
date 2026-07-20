@@ -27,7 +27,7 @@ import numpy as np
 DATA = os.environ.get("BENCH_DENSE_DATA", "/data/dense")
 DIM = 128
 K = 10
-M = 16
+M = int(os.environ.get("BENCH_DENSE_M", "16"))  # degree-matched ablation: 32 = hnswlib-M16 equivalent (see #5352)
 EF_CONSTRUCTION = 100
 EF_SEARCH = 100
 SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000,
@@ -413,6 +413,7 @@ def main():
            "ef_search": EF_SEARCH}
 
     b = BACKENDS[args.backend]()
+    out["hnsw_M"] = M  # recorded so degree-matched ablation rows are self-describing
     t0 = time.perf_counter()
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
