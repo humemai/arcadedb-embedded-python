@@ -112,6 +112,14 @@ class ArcadeE2:
         self.db.close()
 
 
+def _srows(res):
+    """surrealdb 2.x embedded returns flat row lists; older/ws shapes nest
+    under [{"result": ...}] -- normalize both."""
+    if isinstance(res, list) and res and isinstance(res[0], dict) and "result" in res[0]:
+        return res[0]["result"]
+    return res if isinstance(res, list) else []
+
+
 class SurrealE2:
     name = "surrealdb_e2"
 
@@ -140,11 +148,11 @@ class SurrealE2:
         q = self.db.query
         vec = json.dumps([float(x) for x in qvec])
         res = q(f"SELECT pid FROM product WHERE embedding <|{K},100|> {vec}")
-        rows = res[0]["result"] if isinstance(res, list) and res and isinstance(res[0], dict) else res
+        rows = _srows(res)
         pids = [r["pid"] for r in rows][:K]
         best = pids[0]
         rel = q(f"SELECT VALUE ->related->product.pid FROM product:{best}")
-        relp = rel[0]["result"] if isinstance(rel, list) and rel and isinstance(rel[0], dict) else rel
+        relp = _srows(rel)
         flat = relp[0] if relp and isinstance(relp[0], list) else relp
         touched = list(pids[:3]) + list(flat[:3] if flat else [])
         upd = ";".join(f"UPDATE product:{p} SET views += 1" for p in set(touched))
@@ -157,7 +165,7 @@ class SurrealE2:
 
     def total_views(self):
         r = self.db.query("SELECT math::sum(views) AS s FROM product GROUP ALL")
-        rows = r[0]["result"] if isinstance(r, list) and r and isinstance(r[0], dict) else r
+        rows = _srows(r)
         return int(rows[0]["s"]) if rows else 0
 
     def close(self):
