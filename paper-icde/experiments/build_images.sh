@@ -15,7 +15,7 @@ fi
 declare -A PKGS=(
   [arcadedb]="$ARCADE_PKGS"
   [duckdb]="duckdb pandas pyarrow"
-  [client]="requests psycopg[binary] pandas pyarrow numpy surrealdb==1.0.4 qdrant-client==1.18.0 pymilvus==3.0.0 elasticsearch==9.4.1 neo4j==6.2.0 ladybug==0.18.1"
+  [client]="requests psycopg[binary] pandas pyarrow numpy surrealdb==2.0.0 qdrant-client==1.18.0 pymilvus==3.0.0 elasticsearch==9.4.1 neo4j==6.2.0 ladybug==0.18.1"
   [dense]="chromadb==1.5.9 lancedb==0.34.0 sqlite-vec==0.1.9 duckdb==1.5.4 numpy pandas pyarrow"
 )
 targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense)
