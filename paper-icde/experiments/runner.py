@@ -46,19 +46,21 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 "sf1": "8g", "sf10": "24g",
                 # DEEP-10M dense tier (l3d); 36g since the degree-matched
                 # ablation (maxConnections=32, #5352) peaks ~19GB build heap
-                "deep10m": "36g"}
+                "deep10m": "36g",
+                "e2": "12g"}
 # Per-cell watchdog: a cell exceeding this is killed and recorded as a timeout.
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "medium": 6 * 3600, "large": 24 * 3600,
-                    "sf1": 3600, "sf10": 6 * 3600, "deep10m": 6 * 3600}
+                    "sf1": 3600, "sf10": 6 * 3600, "deep10m": 6 * 3600,
+                    "e2": 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  "large": "24g",
                  # heap must fit inside the 75% server-container share of
                  # MEM_BY_SCALE with headroom (JVMs pin -Xms): 8g*0.75=6g -> 4g
                  # deep10m: 16g fits the 18g (75% of 24g) server share and
                  # clears the embedded 10M JVector build (12g OOMed)
-                 "sf1": "4g", "sf10": "12g", "deep10m": "24g"}
+                 "sf1": "4g", "sf10": "12g", "deep10m": "24g", "e2": "6g"}
 SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
 
 # ---------------------------------------------------------------- backends
@@ -134,6 +136,25 @@ BACKENDS = {
         # embedded engine, runs in-process in the client image
         "topology": "embedded",
         "image": "icde-bench:client",
+    },
+    # ---- E2 hybrid-ACID lane ----
+    "arcadedb_e2": {
+        "topology": "embedded",
+        "image": "icde-bench:arcadedb",
+    },
+    "surrealdb_e2": {
+        "topology": "embedded",
+        "image": "icde-bench:client",
+    },
+    "composed_qdrant_neo4j": {
+        "topology": "client_server",
+        "image": "icde-bench:client",
+        "server_image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
+        "server_env": ["-e", "NEO4J_AUTH=neo4j/icdebench",
+                       "-e", "NEO4J_server_memory_heap_initial__size={heap}",
+                       "-e", "NEO4J_server_memory_heap_max__size={heap}"],
+        "server_port": 7687,
+        "ready_regex": r"Started\.",
     },
     "arcadedb_sparse_embedded": {
         "topology": "embedded",
@@ -245,6 +266,9 @@ LANES = {
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
             "neo4j_graph", "ladybug_graph"],
            ["oltp", "olap"]),
+    "e2": ("e2_hybrid.py",
+           ["arcadedb_e2", "surrealdb_e2", "composed_qdrant_neo4j"],
+           ["hybrid", "atomicity"]),
     "l3s": ("l3_sparse.py",
             ["arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32",
              "arcadedb_sparse_embedded_nocompact", "arcadedb_sparse_server",
