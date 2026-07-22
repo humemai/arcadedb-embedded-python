@@ -607,15 +607,25 @@ of SingleStore-V~\cite{chen2024singlestorev}, applied to the data-model axis
 rather than the serving/analytics axis.
 
 \section{Conclusion}\label{sec:conclusion}
-\todo{}
+\arcadedb{} demonstrates that storage-level multi-model unification is
+buildable and operable: one page/WAL/transaction/replication pipeline serving
+five data models, competitive with specialists on operational workloads,
+honest about where it is not, and uniquely able to give cross-model
+operations a transaction boundary. The measured bill of unification is real
+but itemizable, and several line items shrank upstream during the writing of
+this paper. We offer the design, the numbers, and the lessons as a reference
+point for the next engine that considers taking the same bet.
 
 \section*{Acknowledgment}
 We thank Christian Himpe (University of M\"unster) for his contributions to
 ArcadeDB, for sharing his experience operating it in
 DatAasee~\cite{himpe2024dataasee}, and for feedback on this manuscript.
-\todo{AI-generated-content disclosure REQUIRED by ICDE 2027: name tools and
-affected content areas (drafting/editing assistance, experiment tooling).
-Keep updated as the paper evolves.}
+
+\emph{AI-generated content disclosure (per ICDE policy):} large language
+models (Anthropic Claude) were used as drafting and editing assistants for
+prose in all sections and for benchmark-harness code under author direction;
+all measurements, claims, and conclusions were verified by the authors, who
+take full responsibility for the content.\todo{keep current at submission}
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
