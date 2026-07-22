@@ -61,8 +61,11 @@ def load_frames():
     li = pq.read_table(os.path.join(DATA, f"sf{SF}_lineitem.parquet"),
                        columns=LI_COLS).to_pandas()
     li["l_shipdate"] = li["l_shipdate"].astype(str)
+    for col in ("l_quantity", "l_extendedprice", "l_discount"):
+        li[col] = li[col].astype("float64")  # parquet DECIMAL -> uniform DOUBLE
     part = pq.read_table(os.path.join(DATA, f"sf{SF}_part.parquet"),
                          columns=["p_partkey", "p_retailprice"]).to_pandas()
+    part["p_retailprice"] = part["p_retailprice"].astype("float64")
     return li, part
 
 
