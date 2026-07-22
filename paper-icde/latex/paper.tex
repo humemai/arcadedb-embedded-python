@@ -53,10 +53,62 @@ embedded databases
 \end{IEEEkeywords}
 
 \section{Introduction}\label{sec:intro}
-\todo{Vector-era motivation: apps hold documents + relationships + embeddings of
-the same entities; composed specialist stacks pay consistency/ops glue. Thesis:
-unification at the storage layer, not the API gateway. Claims 1--4 from the
-audit. Explicitly claim integration, not new algorithms.}
+
+A production application in 2026 routinely holds three representations of the
+same entities: documents describing them, a graph relating them, and
+embeddings of them for semantic search. The standard architecture assigns
+each representation a specialist engine and connects them with glue code, and
+the glue is where correctness goes to die: there is no transaction spanning a
+vector store and a graph database, so every crash between writes leaves the
+stores disagreeing about facts they both describe. In our measurements
+(\S\ref{sec:eval}), a composed Qdrant+Neo4j stack ended a
+vector-search/graph-update operation in a torn state in five of five induced
+failures; the same operation in one multi-model engine rolled back cleanly
+five of five times, and ran 6$\times$ faster end-to-end.
+
+This paper is an industry-track systems paper about \arcadedb{}, an
+open-source engine that takes the opposite bet: one storage substrate, one
+page/WAL/transaction pipeline, one replication mechanism, with documents,
+graphs, key-value, time series, and dense and sparse vectors as record and
+index types above it. The multi-model idea has an academic
+literature~\cite{lu2019multimodel,zhang2018unibench,m2bench} and commercial
+claimants, but published designs unify at the API gateway over a single
+document core (Cosmos DB~\cite{shukla2015documentdb}), or route to multiple
+specialized engines under one service (X-Stor~\cite{lei2024xstor},
+M2~\cite{kim2025m2}). To our knowledge no native multi-model
+\emph{operational} engine that unifies all models at the storage layer has a
+systems paper at a major database venue; the closest is the workshop paper on
+OrientDB~\cite{ritter2021orientdb}, \arcadedb{}'s direct ancestor. We claim
+the unification, not the parts: every individual mechanism (paged storage,
+LSM indexing, MVCC-style optimistic transactions, Raft) is deliberately
+conventional; what is uncommon is that one instance of each serves five data
+models, and what that buys and costs in practice.
+
+Concretely, we contribute: (1) the architecture of a storage-level
+multi-model engine, with the precise inheritance rule that makes model count
+cheap (a model whose writes are paginated gets durability, transactions, and
+replication by construction, \S\ref{sec:architecture}); (2) a case study of
+adding the vector model to that substrate, including the one deliberate
+relaxation, an eventually-consistent derived ANN graph over transactional
+vector records, and what integration cost in measured
+memory and latency (\S\ref{sec:vector}); (3) an evaluation against eight
+specialist and embedded engines on community benchmarks (LDBC, TPC-H,
+Big-ANN, DEEP, TSBS) with exact ground truth, disclosed durability contracts,
+and $N{=}5$ dispersion on every number, exceeding the statistical-rigor norm
+of this track; and (4) engineering lessons with production evidence,
+including seven engine defects found by this paper's own harness and fixed
+upstream during its writing (\S\ref{sec:lessons}).
+
+We write in an honest register throughout: \arcadedb{} loses columnar
+analytics by three orders of magnitude, loses bulk time-series ingest, builds
+ANN indexes slower than specialists, and one of our own findings is a sparse
+retrieval latency cliff on real term distributions that specialist engines do
+not exhibit. The paper's argument is not that one engine beats $N$
+specialists at their own games; it is that for operational workloads spanning
+models, storage-level unification delivers competitive per-model performance
+plus cross-model transactions that composed stacks cannot offer at any
+price.\todo{deployment/adoption sentence with metrics.arcadedb.com numbers +
+Lucas Health + DatAasee; running-example figure F2 reference}
 
 \section{Background and Design Goals}\label{sec:background}
 \todo{PROSE PASS NEEDED. Raw co-author input below (Garulli, 2026-07-08).}
