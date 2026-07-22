@@ -47,20 +47,20 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 # DEEP-10M dense tier (l3d); 36g since the degree-matched
                 # ablation (maxConnections=32, #5352) peaks ~19GB build heap
                 "deep10m": "36g",
-                "e2": "12g"}
+                "e2": "12g", "tpch1": "16g"}
 # Per-cell watchdog: a cell exceeding this is killed and recorded as a timeout.
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "medium": 6 * 3600, "large": 24 * 3600,
                     "sf1": 3600, "sf10": 6 * 3600, "deep10m": 6 * 3600,
-                    "e2": 3600}
+                    "e2": 3600, "tpch1": 3 * 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  "large": "24g",
                  # heap must fit inside the 75% server-container share of
                  # MEM_BY_SCALE with headroom (JVMs pin -Xms): 8g*0.75=6g -> 4g
                  # deep10m: 16g fits the 18g (75% of 24g) server share and
                  # clears the embedded 10M JVector build (12g OOMed)
-                 "sf1": "4g", "sf10": "12g", "deep10m": "24g", "e2": "6g"}
+                 "sf1": "4g", "sf10": "12g", "deep10m": "24g", "e2": "6g", "tpch1": "8g"}
 SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
 
 # ---------------------------------------------------------------- backends
@@ -266,6 +266,9 @@ LANES = {
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
             "neo4j_graph", "ladybug_graph"],
            ["oltp", "olap"]),
+    "l1tpc": ("l1_tpc.py",
+              ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"],
+              ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "surrealdb_e2", "composed_qdrant_neo4j"],
            ["hybrid", "atomicity"]),
@@ -448,7 +451,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         # forward data-source selection into the container (sparse + graph + dense)
         for _k in ("BENCH_SPARSE_SOURCE", "BENCH_SPARSE_DATA",
                    "BENCH_GRAPH_SOURCE", "BENCH_GRAPH_DATA",
-                   "BENCH_DENSE_DATA", "BENCH_DENSE_M"):
+                   "BENCH_DENSE_DATA", "BENCH_DENSE_M",
+                   "BENCH_TPC_DATA", "BENCH_TPC_SF"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
