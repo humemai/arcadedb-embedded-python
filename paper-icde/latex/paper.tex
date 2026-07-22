@@ -554,10 +554,57 @@ multi-model engine, and all of them worth stating plainly.
 metrics.arcadedb.com numbers here or in intro}
 
 \section{Related Work}\label{sec:related}
-\todo{Multi-model (Cosmos DB API-level vs our storage-level; ArangoDB;
-Lu \& Holubov\'a survey; UniBench/M2Bench), vector DBs (Milvus, Manu, Qdrant,
-pgvector), sparse retrieval (SPLADE, BlockMax-WAND), embedded engines
-(SQLite, DuckDB).}
+
+\textbf{Multi-model systems.} Lu and Holubov{\'a}'s
+survey~\cite{lu2019multimodel} distinguishes single-engine multi-model
+systems from polyglot federations; benchmarks followed
+(UniBench~\cite{zhang2018unibench}, M2Bench~\cite{m2bench}). Among engines,
+Cosmos DB's published design projects every API (SQL, Mongo, Cassandra,
+Gremlin) onto one schema-agnostic document core~\cite{shukla2015documentdb}:
+multi-model at the API layer over a single storage model, with graph edges
+stored as documents. Recent cloud services go the other way and route models
+to multiple specialized engines (X-Stor~\cite{lei2024xstor}; the M2 analytic
+system~\cite{kim2025m2}). ArangoDB and SurrealDB, the commercial systems
+closest in spirit, have no peer-reviewed engine papers; OrientDB has one
+workshop paper~\cite{ritter2021orientdb}. \arcadedb{} occupies the
+unclaimed cell: one storage engine, model-specific record and index types,
+unification at the page/WAL/transaction/replication layer, described at a
+database venue.
+
+\textbf{Vectors in databases.} Purpose-built vector DBMSs established the
+workload~\cite{wang2021milvus,guo2022manu}; a counter-thread integrates
+vector search into general-purpose engines:
+AnalyticDB-V~\cite{wei2020analyticdbv}, PASE~\cite{yang2020pase},
+VBASE~\cite{zhang2023vbase}, SingleStore-V~\cite{chen2024singlestorev}, and
+Cosmos DB's DiskANN integration~\cite{upreti2025cosmosvector}, which argues
+explicitly that vector indices belong inside operational databases. Our case
+study extends that argument to an embeddable multi-model engine and adds the
+learned-sparse workload, which prior integrations do not cover. Index
+algorithms are imported, not invented, here: HNSW~\cite{malkov2020hnsw} and
+Vamana~\cite{subramanya2019diskann} via JVector~\cite{jvector2024repo}.
+
+\textbf{Sparse retrieval.} Learned sparse models
+(SPLADE~\cite{formal2021splade}) are served by inverted indexes with dynamic
+pruning, from WAND~\cite{broder2003wand} through Block-Max
+WAND~\cite{ding2011blockmax} to recent learned-sparse-specific
+structures~\cite{bruch2024seismic}; Tonellotto et
+al.~survey the area~\cite{tonellotto2018efficient}. This literature lives on
+standalone index engines; to our knowledge \arcadedb{} is the first
+transactional DBMS shipping block-max sparse retrieval natively, and our 1M
+finding (\S\ref{sec:eval}) shows real term distributions stress exactly the
+part this literature optimizes.
+
+\textbf{Embedded engines.} SQLite~\cite{gaffney2022sqlite} and
+DuckDB~\cite{duckdb,raasveldt-duckdb-cidr} define the embedded poles
+(operational and analytical) and Berkeley DB the
+lineage~\cite{olson1999berkeleydb}; none spans embedded-to-replicated-server
+with one artifact, the continuum \S\ref{sec:surfaces} describes.
+
+\textbf{Industry-track systems papers.} Our structure follows the
+unification narratives of Procella~\cite{chattopadhyay2019procella} and
+Snowflake~\cite{dageville2016snowflake} and the integration case-study form
+of SingleStore-V~\cite{chen2024singlestorev}, applied to the data-model axis
+rather than the serving/analytics axis.
 
 \section{Conclusion}\label{sec:conclusion}
 \todo{}
