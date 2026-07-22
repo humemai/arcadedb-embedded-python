@@ -452,9 +452,30 @@ its memory profile is dissected in \S\ref{sec:lessons}. We consider mid-pack
 latency at matched recall, plus transactions and replication the specialists
 lack, the honest summary of where integration stands today.
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/f5_sparse_scaling}
+\caption{Sparse retrieval p50 vs.\ corpus size on real SPLADE vectors
+(Big-ANN), log-log, median [min--max] over $N{=}5$. \arcadedb{} is
+competitive at 100k and cliffs at 1M; the same engine on a synthetic corpus
+shows no cliff even at 10M (hollow marker), locating the problem in real
+term distributions (\S\ref{sec:lessons}).}
+\label{fig:sparsescale}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.92\columnwidth]{figures/f7_e2_hybrid}
+\caption{Cross-model operation (vector hit $\to$ graph expansion $\to$
+document update): end-to-end p50 and the outcome of killing the writer
+mid-operation, 5 trials each. The composed stack has no transaction boundary
+spanning its stores.}
+\label{fig:e2}
+\end{figure}
+
 \subsection{Sparse Vectors: Big-ANN SPLADE}
-Table~\ref{tab:sparse} (real SPLADE/MS MARCO vectors, 100k and 1M tiers,
-exact MIPS GT). At 100k \arcadedb{} is competitive (1.45\,ms p50, recall
+Table~\ref{tab:sparse} and Fig.~\ref{fig:sparsescale} (real SPLADE/MS MARCO
+vectors, 100k and 1M tiers, exact MIPS GT). At 100k \arcadedb{} is competitive (1.45\,ms p50, recall
 0.996, twice Qdrant's latency). At 1M it is not: p50 degrades to 165\,ms, a
 cliff our specialists do not exhibit, which we traced to head-term posting
 lists on real term distributions (\S\ref{sec:lessons}; upstream issue filed
@@ -475,8 +496,9 @@ embedded time-series side channel get it for free, but a dedicated TSDB it is
 not.
 
 \subsection{Cross-Model: One Transaction vs.\ a Composed Stack}
-The workload no specialist runs: a vector hit expands over graph edges and
-updates a document, atomically. In \arcadedb{} this is one transaction at
+The workload no specialist runs (Fig.~\ref{fig:e2}): a vector hit expands
+over graph edges and updates a document, atomically. In \arcadedb{} this is
+one transaction at
 3.36\,ms median end-to-end [3.20--3.49]; SurrealDB (the one embeddable
 multi-model rival) needs 7.02\,ms; a composed Qdrant+Neo4j stack needs
 22.35\,ms of network and glue. Then the failure injection: killing the writer
@@ -515,11 +537,15 @@ moved one headline result by two orders of magnitude.
 \textbf{Synthetic benchmark data hides real behavior.} The sparse index shows
 no latency cliff at 10M synthetic documents and a 100$\times$ cliff at 1M
 real SPLADE documents: real term distributions concentrate mass in head terms
-whose posting lists dominate scoring. The engine's own regression benchmarks,
-built on synthetic corpora, could not have caught this. Community datasets
-with exact ground truth (Big-ANN, DEEP, LDBC, TPC) are not academic
-formality; they are where the bugs are.\todo{probe findings + upstream issue
-number + fix status}
+whose posting lists dominate scoring. A per-query analysis over the 1000 dev
+queries makes it precise: latency is rank-correlated 0.95 with the summed
+posting length of a query's terms, the signature of an exhaustive
+document-at-a-time pass, because SPLADE's query expansion gives every query
+several head terms and flat weights that defeat the engine's block-max
+pruning. The engine's own regression benchmarks, built on synthetic corpora,
+could not have caught this. Community datasets with exact ground truth
+(Big-ANN, DEEP, LDBC, TPC) are not academic formality; they are where the
+bugs are.\todo{fix status of upstream issue \#5388 at freeze}
 
 \textbf{Matched operating points, not matched parameter names.} JVector's
 \texttt{maxConnections} is a per-layer degree where hnswlib's $M$ doubles at
