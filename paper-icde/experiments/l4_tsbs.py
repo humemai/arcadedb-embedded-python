@@ -168,17 +168,21 @@ class QuestTS:
 
     def q_last(self):
         return self.cx.execute(
-            f"SELECT ts, uu FROM p WHERE host='{HOST}' ORDER BY ts DESC LIMIT 1").fetchall()
+            f"SELECT timestamp, uu FROM p WHERE host='{HOST}' "
+            f"ORDER BY timestamp DESC LIMIT 1").fetchall()
 
     def q_range(self):
+        # QuestDB idiom: SAMPLE BY (its native time-bucketing)
         return self.cx.execute(
-            f"SELECT (ts - ts % 60) AS m, max(uu) FROM p WHERE host='{HOST}' "
-            f"AND ts >= {T0} AND ts < {T0+3600} GROUP BY m ORDER BY m").fetchall()
+            f"SELECT timestamp, max(uu) FROM p WHERE host='{HOST}' "
+            f"AND timestamp >= '2026-01-01T00:00:00Z' "
+            f"AND timestamp < '2026-01-01T01:00:00Z' SAMPLE BY 1m").fetchall()
 
     def q_global(self):
         return self.cx.execute(
-            f"SELECT (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
-            f"AND ts < {T0+43200} GROUP BY h ORDER BY h").fetchall()
+            f"SELECT timestamp, avg(uu) FROM p "
+            f"WHERE timestamp >= '2026-01-01T00:00:00Z' "
+            f"AND timestamp < '2026-01-01T12:00:00Z' SAMPLE BY 1h").fetchall()
 
     def close(self):
         self.cx.close()
