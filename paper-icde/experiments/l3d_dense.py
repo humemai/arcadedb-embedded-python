@@ -117,9 +117,13 @@ class ArcadeEmbedded(Base):
         import arcadedb_embedded as arcadedb
         self._a = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
+        # ARCADEDB_EXTRA_JVM_ARGS: space-separated extras (e.g. an
+        # -agentpath:...  profiler agent for the #3144 heap investigation)
+        extra = os.environ.get("ARCADEDB_EXTRA_JVM_ARGS", "")
         self.db = arcadedb.create_database(
             "/tmp/l3d_arcade",
-            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
+            jvm_kwargs={"heap_size": heap,
+                        "jvm_args": f"-Xms{heap} {extra}".strip()})
         from importlib.metadata import version as _pv
         self.version = _pv("arcadedb-embedded")
 
