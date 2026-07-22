@@ -245,6 +245,14 @@ class ArcadeServerTPC(ArcadeTPC):
 
     def build(self, li, part):
         for ddl in ("CREATE DOCUMENT TYPE LineItem",
+                    "CREATE PROPERTY LineItem.l_shipdate STRING",
+                    "CREATE PROPERTY LineItem.l_returnflag STRING",
+                    "CREATE PROPERTY LineItem.l_linestatus STRING",
+                    "CREATE PROPERTY LineItem.l_orderkey LONG",
+                    "CREATE PROPERTY LineItem.l_partkey LONG",
+                    "CREATE PROPERTY LineItem.l_quantity DOUBLE",
+                    "CREATE PROPERTY LineItem.l_extendedprice DOUBLE",
+                    "CREATE PROPERTY LineItem.l_discount DOUBLE",
                     "CREATE DOCUMENT TYPE Part",
                     "CREATE PROPERTY Part.p_partkey LONG",
                     "CREATE INDEX ON Part (p_partkey) UNIQUE",
