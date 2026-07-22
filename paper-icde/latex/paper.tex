@@ -82,18 +82,164 @@ layer for an antibacterial-aptamer database), both independent multi-model
 graph uses. Christian's "why we chose it" paragraph goes here or in Lessons.}
 
 \section{Architecture: One Substrate, Five Models}\label{sec:architecture}
-\todo{Page -> WAL -> optimistic-MVCC transaction pipeline; PaginatedComponent
-inventory (buckets, LSM trees, vector segments, time-series buckets); index
-changes committed in commit1stPhase; RID-linked adjacency + LightEdges (honest
-framing); time-series engine paragraph.}
+
+\arcadedb{} is organized around a single storage abstraction rather than a
+federation of per-model engines. Everything that persists, whether it holds
+documents, graph adjacency, key-value pairs, time-series points, or vector
+index segments, is a \emph{paginated component}: a file of fixed-size pages
+managed by one page manager, modified through one transaction context, and
+made durable by one write-ahead log. The data models differ in the record
+types and index structures layered on top; they do not differ in how bytes
+reach disk, how changes become durable, or how replicas stay consistent. This
+section walks that pipeline bottom-up and states precisely which guarantees
+each model inherits from it.
+
+\subsection{Pages, Transactions, and the Log}\label{sec:pipeline}
+
+All reads and writes go through page-level copy-on-write. A transaction that
+modifies any record obtains private copies of the affected pages from the page
+manager and accumulates its changes there; concurrent readers continue to see
+the unmodified originals. Commit is optimistic: at first phase, the engine
+validates that the pages read by the transaction have not been changed by a
+concurrent committer (a per-page version check), then serializes every dirty
+page, \emph{including index pages}, into a single WAL entry. There is no
+separate index log and no index-specific recovery path: a secondary-index
+update, a graph edge insertion, and a document field change that happen in the
+same transaction land in the same log record and either all survive a crash or
+none do. Recovery replays the WAL forward from the last checkpoint; we measure
+recovery time and post-crash integrity under \texttt{kill -9} in
+\S\ref{sec:eval}.
+
+Durability is configurable per deployment in one dimension only: when the WAL
+buffer reaches the operating system (asynchronously on a background flusher by
+default, or \texttt{fsync} per commit under the strictest setting). We flag
+this knob here because it moves throughput by more than an order of magnitude
+and is therefore the first thing our evaluation pins when comparing against
+engines with different default contracts (\S\ref{sec:eval}).
+
+\subsection{One Index Family Tree}\label{sec:indexes}
+
+Table~\ref{tab:inventory} inventories the index and storage structures. The
+workhorse is an LSM tree~\cite{oneil1996lsm} implemented as a paginated
+component: mutable in-memory pages absorb writes, immutable compacted segments
+serve reads, and compaction is an ordinary paginated write path. The full-text
+index is a thin analyzer layer over the same LSM tree (tokens as keys), and
+the geospatial index likewise reduces to LSM entries over space-filling-curve
+keys. The practical consequence of this reuse is uniform transactional
+behavior: because every index is a paginated component, the commit path of
+\S\ref{sec:pipeline} covers all of them with no per-index machinery. The two
+vector index families are the newest members of the tree and the most
+demanding test of the claim that the substrate generalizes; they get their own
+section (\S\ref{sec:vector}).
+
+\subsection{Graph Storage, Stated Honestly}\label{sec:graph}
+
+Vertices and edges are records in buckets, and adjacency is maintained as
+RID-linked lists attached to each vertex, a design inherited from
+OrientDB~\cite{ritter2021orientdb} and refined (the tree-bag edge container
+was replaced by a LIFO linked list that behaves better at high fan-out,
+\S\ref{sec:background}). Edges without properties are stored as
+\emph{light edges}: pure RID pairs in the adjacency structure with no edge
+record at all, which roughly halves the storage and I/O cost of plain
+connections. Traversal is pointer-chasing over the record store through the
+same page cache as every other access. We do not claim parity with
+purpose-built native graph storage on every workload; we claim, and measure in
+\S\ref{sec:eval}, that RID-linked adjacency over a shared substrate delivers
+competitive point-traversal latency while inheriting transactions, recovery,
+and replication that a bolted-on graph layer would have to re-implement.
+
+\subsection{Replication Is Model-Agnostic}\label{sec:replication-arch}
+
+Because every model's changes reduce to WAL'd page deltas, replication does
+not know what a document, an edge, or a vector is. The high-availability
+module (\S\ref{sec:ha}) ships transaction page deltas through a Raft
+log~\cite{ongaro2014raft}; followers apply them through the same recovery
+code path used after a crash. Adding a new data model to \arcadedb{}, as
+\S\ref{sec:vector} recounts for vectors, required \emph{no} replication work:
+a model whose writes are paginated is replicated by construction. The one
+deliberate exception, derived search structures that are rebuilt rather than
+replicated, is discussed in \S\ref{sec:vector}.
 
 \section{Case Study: Adding the Vector Model}\label{sec:vector}
-\todo{Dense (JVector HNSW) + LSM\_SPARSE\_VECTOR (BlockMax-WAND DAAT, RID-delta
-compression, quantization, size-tiered compaction). The tradeoff, stated
-plainly: vector records are transactional/WAL'd/Raft-replicated; the ANN graph
-is an asynchronously maintained, rebuildable derived structure. Include the
-measurement-integrity story (retracted early number) in a sidebar-style
-paragraph if space allows.}
+
+Vector search is the sharpest recent test of the unification thesis: it
+arrived as a workload after the substrate was fixed, it is dominated by
+specialist engines with no transactional obligations, and it stresses exactly
+the properties (index build cost, memory, approximate results) that a shared
+substrate might be suspected of handling poorly. This section describes what
+adding dense and sparse vector search to \arcadedb{} actually took, in the
+spirit of integration case studies such as
+SingleStore-V~\cite{chen2024singlestorev} and Cosmos DB's DiskANN
+integration~\cite{upreti2025cosmosvector}, and states the one place where we
+deliberately relaxed the substrate's guarantees.
+
+\subsection{Dense Vectors: Transactional Records, Derived Graph}
+
+Dense embeddings are ordinary record properties: they live in buckets, are
+WAL'd, versioned, and replicated like any other field. Approximate search is
+served by a graph index built with the JVector
+library~\cite{jvector2024repo}, which combines an HNSW-style layer
+hierarchy~\cite{malkov2020hnsw} with Vamana-style graphs within each
+layer~\cite{subramanya2019diskann}. Here we made the one deliberate exception
+to full unification: the ANN graph itself is an asynchronously maintained,
+WAL-disabled structure. Vector \emph{records} are the transactional source of
+truth; the search graph is derived state, rebuilt from records if lost, and
+followers rebuild rather than receive it. The alternative, WAL-logging every
+neighbor-list mutation of an incremental graph build, would have coupled
+commit latency of unrelated transactions to ANN maintenance. The consequence
+is a bounded staleness window between a committed insert and its
+visibility in approximate search (newly inserted vectors are meanwhile served
+exactly from a delta buffer), which we consider the correct trade for an
+operational engine and state openly rather than claim a fully transactional
+ANN index. One design decision this enabled: because vectors-as-records are
+the ground truth, index parameters can be changed and the graph rebuilt
+without touching data, which we used in \S\ref{sec:eval} to match graph
+degrees fairly across engines.
+
+\subsection{Sparse Vectors: An Inverted Index That Commits}
+
+Learned sparse retrieval (SPLADE-style~\cite{formal2021splade}) maps text to
+high-dimensional sparse weight vectors and is conventionally served by
+standalone inverted-index engines with block-max
+pruning~\cite{broder2003wand,ding2011blockmax,tonellotto2018efficient}. To our
+knowledge \arcadedb{} is the first general-purpose transactional DBMS to ship
+this workload natively: \texttt{LSM\_SPARSE\_VECTOR} stores posting lists as
+LSM segments (the same paginated component family as every other index), with
+RID-delta compression, per-block weight quantization to int8, block maxima
+for WAND-style pruning at query time, and size-tiered compaction as the
+settle step. Because postings ride the LSM commit path, sparse index updates
+are transactional with document writes, a property none of the standalone
+engines offer. The quantization choice is a measured trade: int8 posting
+weights cost about half a point of recall@10 against exact scoring
+(\S\ref{sec:eval}) and can be disabled per index (fp32 segments) where exact
+weights matter more than space.
+
+\subsection{What Integration Cost, Measured}
+
+Honesty about the bill: the substrate gave vectors durability, transactions,
+and replication for free, but not specialist performance for free. Three
+costs surfaced in our own measurements (\S\ref{sec:eval},
+\S\ref{sec:lessons}): graph index construction at 10M vectors requires several
+times the raw vector size in heap because build-time structures hold vectors
+on-heap alongside JVector's construction state; sparse query latency on real
+SPLADE term distributions degrades at corpus sizes where specialist engines
+do not; and settle steps (compaction) that specialists hide behind background
+services are visible operations here. We report these as findings with the
+same prominence as the wins, and several became upstream fixes during the
+course of this work (\S\ref{sec:lessons}).
+
+\subsection{A Note on Measurement Integrity}
+
+The sparse index's original design documentation reported a 766$\times$
+speedup over brute-force scoring at 1M documents, a number that survived
+review because the same document also \emph{retracted} an earlier
+41{,}613$\times$ claim traced to a broken baseline. We mention this not as
+trivia but as method: every headline number in this paper carries its
+measurement protocol, and where our own instruments were later found
+misleading (a memory metric that counted reclaimable page cache; a timeout
+that was our harness's fault) the corrected number replaced the flattering
+one. \S\ref{sec:eval} states the protocol once, and the raw results are
+published with the paper.
 
 \section{Query and Deployment Surfaces}\label{sec:surfaces}
 \todo{One executor + result model behind SQL/Cypher/GraphQL/Mongo (Gremlin via
