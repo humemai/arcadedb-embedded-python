@@ -22,7 +22,7 @@ import time
 LP = os.environ.get("TSBS_LP", "/data/tsbs/cpu_influx.lp")
 LIMIT = int(os.environ.get("TSBS_LIMIT", "0"))  # 0 = all
 QITER = 10
-HOST = "host_042"
+HOST = "host_42"
 T0 = 1767225600  # 2026-01-01T00:00:00Z epoch seconds
 
 
@@ -76,12 +76,12 @@ class ArcadeTS:
 
     def q_range(self):
         return self.db.query("sql",
-            f"SELECT ts/60 AS m, max(uu) AS v FROM Point WHERE host='{HOST}' "
+            f"SELECT (ts - ts % 60) AS m, max(uu) AS v FROM Point WHERE host='{HOST}' "
             f"AND ts >= {T0} AND ts < {T0+3600} GROUP BY m ORDER BY m").to_list()
 
     def q_global(self):
         return self.db.query("sql",
-            f"SELECT ts/3600 AS h, avg(uu) AS v FROM Point "
+            f"SELECT (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
             f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY h ORDER BY h").to_list()
 
     def close(self):
@@ -113,12 +113,12 @@ class DuckTS:
 
     def q_range(self):
         return self.cx.execute(
-            f"SELECT ts/60 AS m, max(uu) FROM p WHERE host='{HOST}' "
+            f"SELECT (ts - ts % 60) AS m, max(uu) FROM p WHERE host='{HOST}' "
             f"AND ts >= {T0} AND ts < {T0+3600} GROUP BY m ORDER BY m").fetchall()
 
     def q_global(self):
         return self.cx.execute(
-            f"SELECT ts/3600 AS h, avg(uu) FROM p WHERE ts >= {T0} "
+            f"SELECT (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
             f"AND ts < {T0+43200} GROUP BY h ORDER BY h").fetchall()
 
     def close(self):
@@ -172,12 +172,12 @@ class QuestTS:
 
     def q_range(self):
         return self.cx.execute(
-            f"SELECT ts/60 AS m, max(uu) FROM p WHERE host='{HOST}' "
+            f"SELECT (ts - ts % 60) AS m, max(uu) FROM p WHERE host='{HOST}' "
             f"AND ts >= {T0} AND ts < {T0+3600} GROUP BY m ORDER BY m").fetchall()
 
     def q_global(self):
         return self.cx.execute(
-            f"SELECT ts/3600 AS h, avg(uu) FROM p WHERE ts >= {T0} "
+            f"SELECT (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
             f"AND ts < {T0+43200} GROUP BY h ORDER BY h").fetchall()
 
     def close(self):
