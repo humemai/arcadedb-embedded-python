@@ -168,7 +168,6 @@ class ArcadeTPC:
             t = ("STRING" if c in ("l_returnflag", "l_linestatus", "l_shipdate")
                  else ("LONG" if c.endswith("key") else "DOUBLE"))
             db.command("sql", f"CREATE PROPERTY LineItem.{c} {t}")
-        db.command("sql", "CREATE PROPERTY LineItem.l_quantity DOUBLE")
         db.command("sql", "CREATE DOCUMENT TYPE Part")
         db.command("sql", "CREATE PROPERTY Part.p_partkey LONG")
         db.command("sql", "CREATE INDEX ON Part (p_partkey) UNIQUE")
@@ -334,8 +333,14 @@ def main():
     b.close()
     with open(args.out, "w") as f:
         json.dump(out, f)
-    print("RESULT " + json.dumps(out))
+    print("RESULT " + json.dumps(out), flush=True)
+    os._exit(0)  # JVM non-daemon threads must not keep a finished container alive
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        os._exit(1)  # guarantee container death on failure too
