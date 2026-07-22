@@ -66,11 +66,36 @@ vector-search/graph-update operation in a torn state in five of five induced
 failures; the same operation in one multi-model engine rolled back cleanly
 five of five times, and ran 6$\times$ faster end-to-end.
 
+\begin{figure}[t]
+\begin{footnotesize}
+\begin{verbatim}
+db.begin()
+hits = db.query("sql",
+  "SELECT FROM Product
+   WHERE vector_neighbors(embedding, :q, 10)")
+for p in hits:
+    db.command("sql",
+      "UPDATE Supplier SET flagged = true
+       WHERE in('Supplies') CONTAINS :p", p=p)
+db.command("sql",
+  "INSERT INTO AuditLog SET ts = sysdate(),
+   query = :q, n = :n", q=qid, n=len(hits))
+db.commit()   # vector read, graph filter,
+              # document writes: one txn
+\end{verbatim}
+\end{footnotesize}
+\caption{The running example (Python, embedded): an operation touching the
+vector, graph, and document models under a single ACID transaction. The
+composed-stack equivalent spans three systems and has no commit point.}
+\label{fig:example}
+\end{figure}
+
 This paper is an industry-track systems paper about \arcadedb{}, an
 open-source engine that takes the opposite bet: one storage substrate, one
 page/WAL/transaction pipeline, one replication mechanism, with documents,
 graphs, key-value, time series, and dense and sparse vectors as record and
-index types above it. The multi-model idea has an academic
+index types above it (Fig.~\ref{fig:example}). The multi-model idea has an
+academic
 literature~\cite{lu2019multimodel,zhang2018unibench,m2bench} and commercial
 claimants, but published designs unify at the API gateway over a single
 document core (Cosmos DB~\cite{shukla2015documentdb}), or route to multiple
@@ -111,27 +136,34 @@ price.\todo{deployment/adoption sentence with metrics.arcadedb.com numbers +
 Lucas Health + DatAasee; running-example figure F2 reference}
 
 \section{Background and Design Goals}\label{sec:background}
-\todo{PROSE PASS NEEDED. Raw co-author input below (Garulli, 2026-07-08).}
 
-ArcadeDB descends from OrientDB, and its design goals are best understood as
-deliberate corrections of three OrientDB limitations its authors lived with:
-\begin{itemize}
-  \item \textbf{Durability.} OrientDB's write-ahead log was asynchronous,
-  single-threaded, and (in the authors' assessment) unreliable. ArcadeDB's
-  journal is synchronous, parallel, and crash-proof. It follows the point-of-no-return
-  discipline detailed in \S\ref{sec:architecture}.
-  \item \textbf{Edge storage.} OrientDB managed edges with a tree-bag
-  structure; ArcadeDB replaces it with a LIFO linked list that scales
-  substantially better at high edge counts.
-  \item \textbf{High availability.} The OrientDB multi-master model ``simply
-  doesn't work'' (authors' words); ArcadeDB abandons it for a Raft
-  leader/follower architecture (\S\ref{sec:ha}).
-\end{itemize}
-\todo{Design goals framing; what industry usage demanded. Third-party academic
-adoption: DatAasee~\cite{himpe2024dataasee} (metadata catalog for research
-libraries) and AptBacterialDB~\cite{aptbacterialdb} (ArcadeDB/openCypher graph
-layer for an antibacterial-aptamer database), both independent multi-model
-graph uses. Christian's "why we chose it" paragraph goes here or in Lessons.}
+\arcadedb{} descends from OrientDB~\cite{ritter2021orientdb}, the multi-model
+engine its lead author previously created, and its design is best understood
+as a set of deliberate corrections to limitations the authors lived with in
+production for a decade. Three matter for this paper. First, durability:
+OrientDB's write-ahead log was asynchronous, single-threaded, and in the
+authors' assessment unreliable; \arcadedb{}'s journal is synchronous with the
+commit path, parallel, and follows the recovery discipline of
+\S\ref{sec:pipeline}. Second, edge storage: OrientDB's tree-bag edge
+container degraded at high fan-out and was replaced by the LIFO-linked
+adjacency of \S\ref{sec:graph}. Third, high availability: the predecessor's
+multi-master replication, in the authors' words, ``simply doesn't work,''
+and \arcadedb{} abandons it for Raft leader/follower replication of WAL page
+deltas (\S\ref{sec:ha}). The redesign also inverted the deployment default:
+\arcadedb{} is embedded-first, with the server as a wrapper around the same
+engine rather than the engine being carved out of a server.
+
+The engine is Apache-2.0 open source with an active upstream; the fix
+cadence documented in \S\ref{sec:lessons} is part of the system description,
+not a courtesy. Independent adoption exists outside the vendor's orbit,
+including DatAasee~\cite{himpe2024dataasee}, a metadata catalog for research
+libraries whose authors selected \arcadedb{} over alternatives against a
+sixteen-criteria requirements matrix (multi-model storage, embedded and
+server modes, and query-language plurality among them), and
+AptBacterialDB~\cite{aptbacterialdb}, an openCypher graph layer for an
+antibacterial-aptamer database.\todo{metrics.arcadedb.com adoption figures +
+Lucas Health flagship deployment, pending co-author sign-off on citable
+numbers}
 
 \section{Architecture: One Substrate, Five Models}\label{sec:architecture}
 
@@ -517,13 +549,24 @@ writes 0.2--3.3\,s after the leader is killed, with all acknowledged writes
 present afterward in 5 of 5 trials. Replication required no vector- or
 graph-specific code (\S\ref{sec:replication-arch}).
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\columnwidth]{figures/f8_deployment}
+\caption{The deployment axis: same engine, same storage format, server cost
+relative to embedded per workload (ratios of medians, $N{=}5$). The
+per-operation transport fee dominates point workloads and vanishes for
+scan-bound ones.}
+\label{fig:deployment}
+\end{figure}
+
 \subsection{Embedded vs.\ Server}
-Across lanes, the same engine in-process versus behind HTTP: OLTP 5,929 vs.\
-1,288 ops/s, graph 1-hop 0.49 vs.\ 1.25\,ms, dense p50 5.45 vs.\ 6.82\,ms.
-The deployment axis costs a fixed per-operation transport fee that dominates
-point workloads and vanishes for scan-bound ones; one engine spans both
-deployment points, which neither SQLite-class embedded engines nor
-server-only specialists offer.\todo{F8 figure}
+Across lanes, the same engine in-process versus behind HTTP
+(Fig.~\ref{fig:deployment}): OLTP 5{,}929 vs.\ 1{,}288 ops/s, graph 1-hop
+0.56 vs.\ 1.37\,ms at SF10, dense p50 5.45 vs.\ 6.82\,ms, and TPC-H Q1
+within 2\% of embedded. The deployment axis costs a fixed per-operation
+transport fee that dominates point workloads and vanishes for scan-bound
+ones; one engine spans both deployment points, which neither SQLite-class
+embedded engines nor server-only specialists offer.
 
 \section{Lessons Learned and Tradeoffs}\label{sec:lessons}
 

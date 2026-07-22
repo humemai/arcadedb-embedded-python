@@ -134,11 +134,56 @@ def f7_e2(rows):
     gs_crop(path)
 
 
+def f8_deployment(rows):
+    """Server/embedded ratio per metric: the transport fee, same engine."""
+    def med(lane, scale, wl, be, field):
+        g = [r[field] for r in rows if r["lane"] == lane and r["scale"] == scale
+             and r.get("workload") == wl and r["backend"] == be
+             and isinstance(r.get(field), (int, float))]
+        return st.median(g) if g else None
+
+    pairs = [
+        ("OLTP\nthroughput", med("l1", "medium", "oltp", "arcadedb_embedded", "oltp_ops_per_s"),
+         med("l1", "medium", "oltp", "arcadedb_server", "oltp_ops_per_s"), True),
+        ("Insert\np99", med("l1", "medium", "oltp", "arcadedb_embedded", "insert_p99_ms"),
+         med("l1", "medium", "oltp", "arcadedb_server", "insert_p99_ms"), False),
+        ("Graph\n1-hop p50", med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "hop1_p50_ms"),
+         med("l2", "sf10", "oltp", "arcadedb_graph_server", "hop1_p50_ms"), False),
+        ("Sparse\np50", med("l3s", "small", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
+         med("l3s", "small", "search", "arcadedb_sparse_server", "query_p50_ms"), False),
+        ("Dense\np50", med("l3d", "deep10m", "search", "arcadedb_dense_embedded", "query_p50_ms"),
+         med("l3d", "deep10m", "search", "arcadedb_dense_server", "query_p50_ms"), False),
+        ("TPC-H Q1", med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "q1_ms"),
+         med("l1tpc", "tpch1", "olap", "arcadedb_server", "q1_ms"), False),
+    ]
+    labels, ratios = [], []
+    for label, emb, srv, higher_better in pairs:
+        if emb is None or srv is None:
+            continue
+        labels.append(label)
+        ratios.append((emb / srv) if higher_better else (srv / emb))
+    fig, ax = plt.subplots(figsize=(3.45, 1.9))
+    ax.bar(range(len(ratios)), ratios, width=0.6, color="C0", alpha=0.85)
+    ax.axhline(1.0, color="k", lw=0.8, ls="--")
+    for i, v in enumerate(ratios):
+        ax.annotate(f"{v:.1f}x", (i, v), textcoords="offset points",
+                    xytext=(0, 3), ha="center", fontsize=6.5)
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, fontsize=6.5)
+    ax.set_ylabel("server cost / embedded")
+    fig.tight_layout()
+    path = os.path.join(FIGS, "f8_deployment.pdf")
+    fig.savefig(path)
+    plt.close(fig)
+    gs_crop(path)
+
+
 def main():
     os.makedirs(FIGS, exist_ok=True)
     rows = canonical()
     f5_sparse_scaling(rows)
     f7_e2(rows)
+    f8_deployment(rows)
 
 
 if __name__ == "__main__":
