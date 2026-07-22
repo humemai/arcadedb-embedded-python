@@ -266,13 +266,45 @@ one. \S\ref{sec:eval} states the protocol once, and the raw results are
 published with the paper.
 
 \section{Query and Deployment Surfaces}\label{sec:surfaces}
-\todo{One executor + result model behind SQL/Cypher/GraphQL/Mongo (Gremlin via
-TinkerPop over the same storage); embedded in-process vs server; six wire
-protocols; cite the SciPy paper for Python binding internals.}
+
+Unification below enables plurality above. One query executor and one result
+model sit behind four query languages (SQL with graph-traversal extensions,
+Cypher, GraphQL, and the MongoDB query language; Gremlin runs via TinkerPop
+over the same storage), so a Cypher \texttt{MATCH}, a SQL join to the same
+vertices, and a Mongo-style document filter compile to plans over identical
+components and compose in one transaction. Language support is a translation
+concern, not a storage concern, which is what keeps four surfaces
+maintainable by a small team.
+
+The same engine deploys two ways from one artifact. Embedded, it runs
+in-process (JVM native; Python via the bindings whose internals are described
+elsewhere\todo{cite SciPy paper when published}) with function-call latency
+and no server to operate, the mode SQLite~\cite{gaffney2022sqlite} and
+DuckDB~\cite{raasveldt-duckdb-cidr} made standard for their respective
+niches but that no multi-model or vector-capable engine occupied. As a
+server, the identical engine speaks HTTP/JSON, the PostgreSQL wire protocol,
+Redis, Mongo, and Bolt, letting existing drivers connect unmodified. The
+embedded and server rows in every evaluation table are the same engine and
+storage format; \S\ref{sec:eval} quantifies the transport fee, and teams in
+practice prototype embedded and promote to server without a migration.
 
 \section{High Availability}\label{sec:ha}
-\todo{Ratis-based Raft shipping shared-WAL page diffs => model-agnostic
-replication; quorum/membership hardening lessons.}
+
+The HA module replicates at the same layer everything else lives: committed
+transactions ship as WAL page deltas through a Raft
+log~\cite{ongaro2014raft} (Apache Ratis), and followers apply them with the
+crash-recovery code path. Leader election, membership, and quorum are
+Ratis's; \arcadedb{}'s contribution is the state machine, which is small
+precisely because deltas are model-agnostic bytes. The design was adopted
+after the predecessor system's multi-master replication proved operationally
+unsound (\S\ref{sec:background}); the trade accepted is a single writer per
+database. Under write load, killing the leader yields resumed writes in
+0.2--3.3\,s with no acknowledged-write loss in our trials
+(\S\ref{sec:eval}). Because replication never inspects model types, the
+vector, graph, and time-series models documented in this paper were
+replicated correctly the day they were merged, with one deliberate carve-out:
+derived ANN graphs are rebuilt on followers rather than shipped
+(\S\ref{sec:vector}).
 
 \section{Evaluation}\label{sec:eval}
 
@@ -420,8 +452,54 @@ deployment points, which neither SQLite-class embedded engines nor
 server-only specialists offer.\todo{F8 figure}
 
 \section{Lessons Learned and Tradeoffs}\label{sec:lessons}
-\todo{The cost of unification (measured); where specialists win; single-node
-ceiling; async-ANN consequences; production war stories (co-authors).}
+
+\textbf{Benchmarks compare durability contracts before they compare
+engines.} Our first tabular results showed \arcadedb{} an order of magnitude
+ahead of engines that were simply fsyncing more honestly. Every cross-engine
+throughput table in the literature that omits the commit contract should be
+read with suspicion; ours state it per table, and the strict-contract pairing
+moved one headline result by two orders of magnitude.
+
+\textbf{Synthetic benchmark data hides real behavior.} The sparse index shows
+no latency cliff at 10M synthetic documents and a 100$\times$ cliff at 1M
+real SPLADE documents: real term distributions concentrate mass in head terms
+whose posting lists dominate scoring. The engine's own regression benchmarks,
+built on synthetic corpora, could not have caught this. Community datasets
+with exact ground truth (Big-ANN, DEEP, LDBC, TPC) are not academic
+formality; they are where the bugs are.\todo{probe findings + upstream issue
+number + fix status}
+
+\textbf{Matched operating points, not matched parameter names.} JVector's
+\texttt{maxConnections} is a per-layer degree where hnswlib's $M$ doubles at
+the base layer, so equal parameter values silently compare graphs of half the
+degree. Discovering this raised \arcadedb{}'s dense recall from 0.87 to 0.95
+at matched cost and became an upstream default change. Fair comparison
+requires matching what parameters \emph{do}, not what they are called.
+
+\textbf{The build-side bill of on-heap integration.} Dense index construction
+at 10M vectors needs roughly 5$\times$ the raw vector size in JVM heap: the
+engine holds vectors in a delta buffer and, during build, a second boxed copy
+in the builder's cache, alongside JVector's graph construction state. We
+documented the breakdown upstream during this work; bounding either copy is
+mechanical, and a PQ-scored build path already in the code would cut it
+further. The lesson generalizes: integrating a library that assumes
+ownership of memory into an engine that also does requires an explicit
+budget, or the sum exceeds both.
+
+\textbf{Working in the open converts benchmarking into engineering.} Seven
+engine issues found by this paper's harness were filed with reproductions and
+fixed upstream, most within days, several changing engine defaults. A
+benchmark against a closed system produces a table; against an open system
+with a responsive maintainer it produces a better system and then a table.
+The October re-measurement on a single pinned release will carry those fixes.
+
+\textbf{Where the specialists keep winning.} Columnar scans (three orders of
+magnitude on TPC-H Q1), bulk time-series ingest (62$\times$), ANN build
+time (5$\times$), and the last factor of 2--4 in specialist query latency at
+matched recall. We consider none of these disqualifying for an operational
+multi-model engine, and all of them worth stating plainly.
+\todo{production war stories (Roberto); adoption-paradox paragraph;
+metrics.arcadedb.com numbers here or in intro}
 
 \section{Related Work}\label{sec:related}
 \todo{Multi-model (Cosmos DB API-level vs our storage-level; ArangoDB;
