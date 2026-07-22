@@ -24,10 +24,10 @@ import com.arcadedb.database.Record;
 import com.arcadedb.engine.Bucket;
 import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.log.LogManager;
-import com.arcadedb.query.select.SelectIterator;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.EdgeType;
 import com.arcadedb.utility.Pair;
+import com.arcadedb.utility.ProgressCallback;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -43,9 +43,65 @@ public class GraphDatabaseChecker {
   private final DatabaseInternal database;
   private final GraphEngine      graphEngine;
 
+  // Progress reporting (issue #5372): the step identity (name/index/totalSteps) is assigned by the caller
+  // (DatabaseChecker owns the step plan); this class emits within-step done/total, throttled to integer
+  // percentage changes so the scan hot loops never pay for the callback.
+  private ProgressCallback progress;
+  private String           progressStepName;
+  private int              progressStepIndex;
+  private int              progressTotalSteps;
+  private long             progressDone;
+  private long             progressTotal;
+  private int              lastReportedPct;
+
   public GraphDatabaseChecker(DatabaseInternal database) {
     this.database = database;
     this.graphEngine = database.getGraphEngine();
+  }
+
+  /** Installs the progress receiver and this checker's step identity in the caller's step plan. */
+  public GraphDatabaseChecker setProgress(final ProgressCallback progress, final String stepName, final int stepIndex,
+      final int totalSteps) {
+    this.progress = progress;
+    this.progressStepName = stepName;
+    this.progressStepIndex = stepIndex;
+    this.progressTotalSteps = totalSteps;
+    return this;
+  }
+
+  /** Starts a (sub-)phase of the current step, emitting it immediately so pollers see the transition. */
+  private void progressBegin(final String name, final long total) {
+    if (progress == null)
+      return;
+    progressStepName = name;
+    progressDone = 0;
+    progressTotal = total;
+    lastReportedPct = -1;
+    progress.onProgress(progressStepName, progressStepIndex, progressTotalSteps, 0, total);
+  }
+
+  /** One unit of work done; emits only when the integer percentage changes. */
+  private void progressTick() {
+    if (progress == null)
+      return;
+    ++progressDone;
+    if (progressTotal > 0 && progressDone > progressTotal)
+      progressDone = progressTotal; // COUNT DRIFT (concurrent writes, placeholders): clamp, never report over 100%
+    final int pct = progressTotal > 0 ? (int) (progressDone * 100 / progressTotal) : (int) (progressDone >>> 13);
+    if (pct != lastReportedPct) {
+      lastReportedPct = pct;
+      progress.onProgress(progressStepName, progressStepIndex, progressTotalSteps, progressDone, progressTotal);
+    }
+  }
+
+  /** Emits the current phase as finished (done == total). */
+  private void progressComplete() {
+    if (progress == null)
+      return;
+    if (progressTotal > 0)
+      progressDone = progressTotal;
+    progress.onProgress(progressStepName, progressStepIndex, progressTotalSteps, progressDone,
+        progressTotal > 0 ? progressTotal : progressDone);
   }
 
   public Map<String, Object> checkVertices(final String typeName, final boolean fix, final int verboseLevel) {
@@ -69,6 +125,10 @@ public class GraphDatabaseChecker {
 
     database.begin();
     try {
+      // TWO FULL PASSES OVER THE TYPE (record-type scan + connectivity walk): progress total is 2x the count.
+      // countType reads the maintained bucket counters (no scan), so sizing the total is negligible.
+      progressBegin(progressStepName, 2 * database.countType(typeName, false));
+
       // CHECK RECORD IS OF THE RIGHT TYPE
       final DocumentType type = database.getSchema().getType(typeName);
       for (final Bucket b : type.getBuckets(false)) {
@@ -80,21 +140,25 @@ public class GraphDatabaseChecker {
             addWarning(warnings, totalWarnings, maxWarnings, "vertex " + rid + " cannot be loaded, removing it");
             addCorrupted(corruptedRecords, totalCorrupted, maxCorrupted, rid);
           }
+          progressTick();
           return true;
         }, null);
       }
 
       database.scanType(typeName, false, record -> {
+        progressTick();
         try {
           Vertex vertex = record.asVertex(true);
 
           final RID vertexIdentity = vertex.getIdentity();
 
           vertex = checkOutgoingEdges(fix, vertex, warnings, totalWarnings, maxWarnings, vertexIdentity, invalidLinks,
-              corruptedRecords, totalCorrupted, maxCorrupted, reconnectOutEdges, missingReferences, missingReferenceErrors);
+              corruptedRecords, totalCorrupted, maxCorrupted, reconnectOutEdges, reconnectInEdges, missingReferences,
+              missingReferenceErrors);
 
           checkIncomingEdges(fix, vertex, warnings, totalWarnings, maxWarnings, vertexIdentity, invalidLinks,
-              corruptedRecords, totalCorrupted, maxCorrupted, reconnectInEdges, missingReferences, missingReferenceErrors);
+              corruptedRecords, totalCorrupted, maxCorrupted, reconnectInEdges, reconnectOutEdges, missingReferences,
+              missingReferenceErrors);
 
         } catch (final Throwable e) {
           addWarning(warnings, totalWarnings, maxWarnings,
@@ -104,15 +168,18 @@ public class GraphDatabaseChecker {
 
         return true;
       }, (rid, exception) -> {
+        progressTick();
         addWarning(warnings, totalWarnings, maxWarnings,
             "vertex " + rid + " cannot be loaded (error: " + describe(exception) + ")");
         addCorrupted(corruptedRecords, totalCorrupted, maxCorrupted, rid);
         return true;
       });
 
+      progressComplete();
+
       if (fix) {
         if (!reconnectOutEdges.isEmpty() || !reconnectInEdges.isEmpty())
-          reconnectEdges(reconnectOutEdges, reconnectInEdges, warnings, totalWarnings, maxWarnings, stats);
+          reconnectEdges(reconnectOutEdges, reconnectInEdges, corruptedRecords, warnings, totalWarnings, maxWarnings, stats);
 
         for (final RID rid : corruptedRecords) {
           if (rid == null)
@@ -150,8 +217,15 @@ public class GraphDatabaseChecker {
     return stats;
   }
 
-  private void reconnectEdges(Set<RID> reconnectOutEdges, Set<RID> reconnectInEdges, List<String> warnings,
-      AtomicLong totalWarnings, int maxWarnings, Map<String, Object> stats) {
+  /**
+   * Rebuilds the edge lists of the registered vertices from the surviving edge records. NOTE: this is a FULL
+   * scan of every edge type, even when a single vertex needs reconnection - acceptable because it runs only in
+   * fix mode on an already-damaged database, and the pre-existing reconnect path had the same cost. A rebuilt
+   * entry may still point to a far endpoint vertex that no longer exists (the edge record survives, its target
+   * does not): that is the same behaviour as before and the {@code checkEdges} pass reports it.
+   */
+  private void reconnectEdges(Set<RID> reconnectOutEdges, Set<RID> reconnectInEdges, Set<RID> corruptedRecords,
+      List<String> warnings, AtomicLong totalWarnings, int maxWarnings, Map<String, Object> stats) {
     // BROWSE ALL THE EDGES AND COLLECT THE ONES PART OF THE RECONNECTION
     final List<EdgeType> edgeTypes = new ArrayList<>();
     for (DocumentType schemaType : database.getSchema().getTypes()) {
@@ -162,15 +236,33 @@ public class GraphDatabaseChecker {
     final List<Edge> outEdgesToReconnect = new ArrayList<>();
     final List<Edge> inEdgesToReconnect = new ArrayList<>();
 
+    progressBegin(progressStepName == null ? "Rebuilding edge lists" : progressStepName + " - rebuilding edge lists", -1);
+
     for (EdgeType edgeType : edgeTypes) {
-      final SelectIterator<Edge> edges = database.select().fromType(edgeType.getName()).edges();
-      while (edges.hasNext()) {
-        final Edge e = edges.next();
-        if (reconnectOutEdges.contains(e.getOut()))
-          outEdgesToReconnect.add(e);
-        if (reconnectInEdges.contains(e.getIn()))
-          inEdgesToReconnect.add(e);
-      }
+      final boolean bidirectional = edgeType.isBidirectional();
+      // Scan with an error callback: on a damaged database an unreadable edge record must not abort the whole
+      // rebuild - it is skipped (checkEdges reports/deletes it), the surviving records still reconnect.
+      database.scanType(edgeType.getName(), false, record -> {
+        progressTick();
+        try {
+          final Edge e = record.asEdge(true);
+          if (corruptedRecords.contains(e.getIdentity()))
+            // ABOUT TO BE DELETED BY THE FIX: re-adding it would rebuild a dangling entry
+            return true;
+          if (reconnectOutEdges.contains(e.getOut()))
+            outEdgesToReconnect.add(e);
+          // A unidirectional edge is never stored in the target's IN list: rebuilding it there would invent
+          // adjacency that never existed.
+          if (bidirectional && reconnectInEdges.contains(e.getIn()))
+            inEdgesToReconnect.add(e);
+        } catch (final Exception e) {
+          warnUnreadableEdgeDuringRebuild(warnings, totalWarnings, maxWarnings, record.getIdentity(), e);
+        }
+        return true;
+      }, (rid, exception) -> {
+        warnUnreadableEdgeDuringRebuild(warnings, totalWarnings, maxWarnings, rid, exception);
+        return true;
+      });
     }
 
     if (!outEdgesToReconnect.isEmpty()) {
@@ -193,28 +285,55 @@ public class GraphDatabaseChecker {
     }
   }
 
+  private static void warnUnreadableEdgeDuringRebuild(final List<String> warnings, final AtomicLong totalWarnings,
+      final int maxWarnings, final Object rid, final Throwable error) {
+    addWarning(warnings, totalWarnings, maxWarnings,
+        "edge " + rid + " could not be read during the edge-list rebuild, skipping it (error: " + describe(error) + ")");
+  }
+
   private void checkIncomingEdges(boolean fix, Vertex vertex, List<String> warnings, AtomicLong totalWarnings, int maxWarnings,
       RID vertexIdentity, AtomicLong invalidLinks, LinkedHashSet<RID> corruptedRecords, AtomicLong totalCorrupted,
-      int maxCorrupted, Set<RID> reconnectInEdges, Map<RID, Long> missingReferences, Map<RID, String> missingReferenceErrors) {
+      int maxCorrupted, Set<RID> reconnectInEdges, Set<RID> reconnectOutEdges, Map<RID, Long> missingReferences,
+      Map<RID, String> missingReferenceErrors) {
     if (((VertexInternal) vertex).getInEdgesHeadChunk() != null) {
       EdgeLinkedList inEdges = null;
       try {
         inEdges = graphEngine.getEdgeHeadChunk((VertexInternal) vertex, Vertex.DIRECTION.IN);
       } catch (Exception e) {
-        // IGNORE IT
+        // IGNORE IT: HANDLED AS AN UNREADABLE LIST BELOW
       }
 
       if (inEdges == null) {
+        final RID headChunkRID = ((VertexInternal) vertex).getInEdgesHeadChunk();
+        addWarning(warnings, totalWarnings, maxWarnings, "vertex " + vertexIdentity + " in edges record " + headChunkRID
+            + " is not valid" + (fix ? ", rebuilding the edge list from the surviving edge records" : ""));
         if (fix) {
-          vertex = vertex.modify();
-          ((VertexInternal) vertex).setInEdgesHeadChunk(null);
-          ((MutableVertex) vertex).save();
-          addWarning(warnings, totalWarnings, maxWarnings, "vertex " + vertexIdentity + " in edges record "
-              + ((VertexInternal) vertex).getInEdgesHeadChunk() + " is not valid, removing it");
+          vertex = resetChain(vertex, Vertex.DIRECTION.IN);
+          reconnectInEdges.add(vertexIdentity);
         }
       } else {
-        final Iterator<Pair<RID, RID>> in = inEdges.entryIterator();
-        while (in.hasNext()) {
+        Iterator<Pair<RID, RID>> in = null;
+        boolean chainBroken = false;
+        String chainError = null;
+        try {
+          in = inEdges.entryIterator();
+        } catch (final Exception e) {
+          chainBroken = true;
+          chainError = describe(e);
+        }
+
+        while (in != null) {
+          try {
+            // hasNext() HOPS ONTO THE NEXT CHUNK OF THE LINKED LIST, so an unreadable chunk fails HERE, not in
+            // next(). Before this guard the failure escaped the walk, the scan callback flagged the whole VERTEX
+            // as corrupted and fix mode deleted it: the vertex was lost over a repairable adjacency list.
+            if (!in.hasNext())
+              break;
+          } catch (final Exception e) {
+            chainBroken = true;
+            chainError = describe(e);
+            break;
+          }
           try {
             final Pair<RID, RID> current = in.next();
             final RID edgeRID = current.getFirst();
@@ -302,13 +421,12 @@ public class GraphDatabaseChecker {
                     // ORIGINAL OUT VERTEX POINTER MUST BE WRONG, CHECKING
                     final VertexInternal wrongInVertex = (VertexInternal) edge.getIn().asVertex(false);
                     if (((VertexInternal) vertex).getInEdgesHeadChunk().equals(wrongInVertex.getInEdgesHeadChunk())) {
-                      // CURRENT VERTEX POINTS TO ANOTHER LINKED LIST. SEARCHING FOR ITS CORRECT LINKED LIST LATER
-                      reconnectInEdges.add(vertexIdentity);
-
-                      // RESET POINTER TO OUT EDGES
-                      vertex = vertex.modify();
-                      ((VertexInternal) vertex).setInEdgesHeadChunk(null);
-                      ((MutableVertex) vertex).save();
+                      // CURRENT VERTEX POINTS TO ANOTHER LINKED LIST. SEARCHING FOR ITS CORRECT LINKED LIST LATER.
+                      // Mutate ONLY in fix mode: a plain check must stay read-only.
+                      if (fix) {
+                        reconnectInEdges.add(vertexIdentity);
+                        vertex = resetChain(vertex, Vertex.DIRECTION.IN);
+                      }
 
                       // SKIP THE REST OF THE EDGES
                       break;
@@ -331,8 +449,23 @@ public class GraphDatabaseChecker {
                   invalidLinks.incrementAndGet();
                 }
 
-                if (((EdgeType) edge.getType()).isBidirectional()) {
-                  if (inVertex != null && !inVertex.isConnectedTo(vertexIdentity, Vertex.DIRECTION.OUT, edge.getTypeName())) {
+                if (((EdgeType) edge.getType()).isBidirectional() && inVertex != null) {
+                  Boolean connected = null;
+                  try {
+                    connected = inVertex.isConnectedTo(vertexIdentity, Vertex.DIRECTION.OUT, edge.getTypeName());
+                  } catch (final Exception probeError) {
+                    // The FAR vertex's OUT list is unreadable: never blame this edge record for it (before this
+                    // guard the probe failure flagged the edge as corrupted and fix mode deleted a VALID edge).
+                    // Register the far vertex so its list is rebuilt from the surviving edge records instead.
+                    if (reconnectOutEdges.add(inVertex.getIdentity())) {
+                      addWarning(warnings, totalWarnings, maxWarnings,
+                          "vertex " + inVertex.getIdentity() + " outgoing edge list is unreadable (error: "
+                              + describe(probeError) + ")" + (fix ? ", rebuilding it from the surviving edge records" : ""));
+                      if (fix)
+                        resetChain(inVertex, Vertex.DIRECTION.OUT);
+                    }
+                  }
+                  if (connected != null && !connected && !reconnectOutEdges.contains(inVertex.getIdentity())) {
                     addWarning(warnings, totalWarnings, maxWarnings,
                         "edge " + edgeRID + " was not connected from the incoming vertex " + edge.getOut() + " to the vertex "
                             + vertexIdentity);
@@ -361,18 +494,20 @@ public class GraphDatabaseChecker {
             if (fix && removeEntry)
               in.remove();
           } catch (Exception e) {
-            // UNKNOWN ERROR ON LOADING EDGES
-            addWarning(warnings, totalWarnings, maxWarnings,
-                "error on loading incoming edges from vertex " + vertexIdentity + " (error: " + describe(e) + ")");
-
-            if (fix) {
-              vertex = vertex.modify();
-              ((VertexInternal) vertex).setInEdgesHeadChunk(null);
-              ((MutableVertex) vertex).save();
-              addWarning(warnings, totalWarnings, maxWarnings, "vertex " + vertexIdentity + " in edges record "
-                  + ((VertexInternal) vertex).getInEdgesHeadChunk() + " is not valid, removing it");
-            }
+            // UNKNOWN ERROR WHILE WALKING THE LIST: the chain is unreliable, rebuild it below
+            chainBroken = true;
+            chainError = describe(e);
             break;
+          }
+        }
+
+        if (chainBroken) {
+          addWarning(warnings, totalWarnings, maxWarnings,
+              "error on loading incoming edges from vertex " + vertexIdentity + " (error: " + chainError + ")"
+                  + (fix ? ", rebuilding the edge list from the surviving edge records" : ""));
+          if (fix) {
+            vertex = resetChain(vertex, Vertex.DIRECTION.IN);
+            reconnectInEdges.add(vertexIdentity);
           }
         }
       }
@@ -382,28 +517,48 @@ public class GraphDatabaseChecker {
   private Vertex checkOutgoingEdges(final boolean fix, Vertex vertex, final List<String> warnings,
       final AtomicLong totalWarnings, final int maxWarnings, final RID vertexIdentity, final AtomicLong invalidLinks,
       final LinkedHashSet<RID> corruptedRecords, final AtomicLong totalCorrupted, final int maxCorrupted,
-      final Set<RID> reconnectOutEdges, final Map<RID, Long> missingReferences, final Map<RID, String> missingReferenceErrors) {
+      final Set<RID> reconnectOutEdges, final Set<RID> reconnectInEdges, final Map<RID, Long> missingReferences,
+      final Map<RID, String> missingReferenceErrors) {
     // CHECK THE EDGE IS CONNECTED FROM THE OTHER SIDE
     if (((VertexInternal) vertex).getOutEdgesHeadChunk() != null) {
       EdgeLinkedList outEdges = null;
       try {
         outEdges = graphEngine.getEdgeHeadChunk((VertexInternal) vertex, Vertex.DIRECTION.OUT);
       } catch (Exception e) {
-        // IGNORE IT
+        // IGNORE IT: HANDLED AS AN UNREADABLE LIST BELOW
       }
 
       if (outEdges == null) {
+        final RID headChunkRID = ((VertexInternal) vertex).getOutEdgesHeadChunk();
+        addWarning(warnings, totalWarnings, maxWarnings, "vertex " + vertexIdentity + " out edges record " + headChunkRID
+            + " is not valid" + (fix ? ", rebuilding the edge list from the surviving edge records" : ""));
         if (fix) {
-          vertex = vertex.modify();
-          ((VertexInternal) vertex).setOutEdgesHeadChunk(null);
-          ((MutableVertex) vertex).save();
-          addWarning(warnings, totalWarnings, maxWarnings, "vertex " + vertexIdentity + " out edges record "
-              + ((VertexInternal) vertex).getOutEdgesHeadChunk() + " is not valid, removing it");
+          vertex = resetChain(vertex, Vertex.DIRECTION.OUT);
+          reconnectOutEdges.add(vertexIdentity);
         }
       } else {
+        Iterator<Pair<RID, RID>> out = null;
+        boolean chainBroken = false;
+        String chainError = null;
+        try {
+          out = outEdges.entryIterator();
+        } catch (final Exception e) {
+          chainBroken = true;
+          chainError = describe(e);
+        }
 
-        final Iterator<Pair<RID, RID>> out = outEdges.entryIterator();
-        while (out.hasNext()) {
+        while (out != null) {
+          try {
+            // hasNext() HOPS ONTO THE NEXT CHUNK OF THE LINKED LIST, so an unreadable chunk fails HERE, not in
+            // next(). Before this guard the failure escaped the walk, the scan callback flagged the whole VERTEX
+            // as corrupted and fix mode deleted it: the vertex was lost over a repairable adjacency list.
+            if (!out.hasNext())
+              break;
+          } catch (final Exception e) {
+            chainBroken = true;
+            chainError = describe(e);
+            break;
+          }
           try {
             final Pair<RID, RID> current = out.next();
             final RID edgeRID = current.getFirst();
@@ -489,13 +644,12 @@ public class GraphDatabaseChecker {
                     // ORIGINAL OUT VERTEX POINTER MUST BE WRONG, CHECKING
                     final VertexInternal wrongOutVertex = (VertexInternal) edge.getOut().asVertex(false);
                     if (((VertexInternal) vertex).getOutEdgesHeadChunk().equals(wrongOutVertex.getOutEdgesHeadChunk())) {
-                      // CURRENT VERTEX POINTS TO ANOTHER LINKED LIST. SEARCHING FOR ITS CORRECT LINKED LIST LATER
-                      reconnectOutEdges.add(vertexIdentity);
-
-                      // RESET POINTER TO OUT EDGES
-                      vertex = vertex.modify();
-                      ((VertexInternal) vertex).setOutEdgesHeadChunk(null);
-                      ((MutableVertex) vertex).save();
+                      // CURRENT VERTEX POINTS TO ANOTHER LINKED LIST. SEARCHING FOR ITS CORRECT LINKED LIST LATER.
+                      // Mutate ONLY in fix mode: a plain check must stay read-only.
+                      if (fix) {
+                        reconnectOutEdges.add(vertexIdentity);
+                        vertex = resetChain(vertex, Vertex.DIRECTION.OUT);
+                      }
 
                       // SKIP THE REST OF THE EDGES
                       break;
@@ -519,9 +673,24 @@ public class GraphDatabaseChecker {
                   invalidLinks.incrementAndGet();
                 }
 
-                if (((EdgeType) edge.getType()).isBidirectional()) {
+                if (((EdgeType) edge.getType()).isBidirectional() && outVertex != null) {
                   // CHECK THE EDGE IS CONNECTED FROM THE OTHER SIDE
-                  if (outVertex != null && !outVertex.isConnectedTo(vertexIdentity, Vertex.DIRECTION.IN, edge.getTypeName())) {
+                  Boolean connected = null;
+                  try {
+                    connected = outVertex.isConnectedTo(vertexIdentity, Vertex.DIRECTION.IN, edge.getTypeName());
+                  } catch (final Exception probeError) {
+                    // The FAR vertex's IN list is unreadable: never blame this edge record for it (before this
+                    // guard the probe failure flagged the edge as corrupted and fix mode deleted a VALID edge).
+                    // Register the far vertex so its list is rebuilt from the surviving edge records instead.
+                    if (reconnectInEdges.add(outVertex.getIdentity())) {
+                      addWarning(warnings, totalWarnings, maxWarnings,
+                          "vertex " + outVertex.getIdentity() + " incoming edge list is unreadable (error: "
+                              + describe(probeError) + ")" + (fix ? ", rebuilding it from the surviving edge records" : ""));
+                      if (fix)
+                        resetChain(outVertex, Vertex.DIRECTION.IN);
+                    }
+                  }
+                  if (connected != null && !connected && !reconnectInEdges.contains(outVertex.getIdentity())) {
                     addWarning(warnings, totalWarnings, maxWarnings,
                         "edge " + edgeRID + " was not connected from the outgoing vertex " + edge.getIn() + " back to the vertex "
                             + vertexIdentity);
@@ -551,23 +720,41 @@ public class GraphDatabaseChecker {
               out.remove();
 
           } catch (Exception e) {
-            // UNKNOWN ERROR ON LOADING EDGES
-            addWarning(warnings, totalWarnings, maxWarnings,
-                "error on loading outgoing edges from vertex " + vertexIdentity + " (error: " + describe(e) + ")");
-
-            if (fix) {
-              vertex = vertex.modify();
-              ((VertexInternal) vertex).setOutEdgesHeadChunk(null);
-              ((MutableVertex) vertex).save();
-              addWarning(warnings, totalWarnings, maxWarnings, "vertex " + vertexIdentity + " out edges record "
-                  + ((VertexInternal) vertex).getOutEdgesHeadChunk() + " is not valid, removing it");
-            }
+            // UNKNOWN ERROR WHILE WALKING THE LIST: the chain is unreliable, rebuild it below
+            chainBroken = true;
+            chainError = describe(e);
             break;
+          }
+        }
+
+        if (chainBroken) {
+          addWarning(warnings, totalWarnings, maxWarnings,
+              "error on loading outgoing edges from vertex " + vertexIdentity + " (error: " + chainError + ")"
+                  + (fix ? ", rebuilding the edge list from the surviving edge records" : ""));
+          if (fix) {
+            vertex = resetChain(vertex, Vertex.DIRECTION.OUT);
+            reconnectOutEdges.add(vertexIdentity);
           }
         }
       }
     }
     return vertex;
+  }
+
+  /**
+   * Nulls the vertex's head-chunk pointer for the given direction, dropping the unreadable chain so the
+   * adjacency can be rebuilt from the surviving edge records by {@link #reconnectEdges}. Each edge record
+   * stores its own out/in vertex RIDs, so losing the linked list does not lose the graph. Returns the saved
+   * mutable copy so callers keep operating on the fresh vertex.
+   */
+  private Vertex resetChain(final Vertex vertex, final Vertex.DIRECTION direction) {
+    final MutableVertex mutable = vertex.modify();
+    if (direction == Vertex.DIRECTION.OUT)
+      mutable.setOutEdgesHeadChunk(null);
+    else
+      mutable.setInEdgesHeadChunk(null);
+    mutable.save();
+    return mutable;
   }
 
   public Map<String, Object> checkEdges(final String typeName, final boolean fix, final int verboseLevel) {
@@ -593,6 +780,9 @@ public class GraphDatabaseChecker {
     database.begin();
 
     try {
+      // TWO FULL PASSES OVER THE TYPE (record-type scan + endpoint checks): progress total is 2x the count.
+      progressBegin(progressStepName, 2 * database.countType(typeName, false));
+
       // CHECK RECORD IS OF THE RIGHT TYPE
       final DocumentType type = database.getSchema().getType(typeName);
       for (final Bucket b : type.getBuckets(false)) {
@@ -604,11 +794,13 @@ public class GraphDatabaseChecker {
             addWarning(warnings, totalWarnings, maxWarnings, "edge " + rid + " cannot be loaded, removing it");
             addCorrupted(corruptedRecords, totalCorrupted, maxCorrupted, rid);
           }
+          progressTick();
           return true;
         }, null);
       }
 
       database.scanType(typeName, false, record -> {
+        progressTick();
         final RID edgeRID = record.getIdentity();
 
         try {
@@ -687,11 +879,14 @@ public class GraphDatabaseChecker {
 
         return true;
       }, (rid, exception) -> {
+        progressTick();
         addWarning(warnings, totalWarnings, maxWarnings,
             "edge " + rid + " cannot be loaded (error: " + describe(exception) + ")");
         addCorrupted(corruptedRecords, totalCorrupted, maxCorrupted, rid);
         return true;
       });
+
+      progressComplete();
 
       if (fix) {
         for (final RID rid : corruptedRecords) {
