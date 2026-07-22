@@ -236,9 +236,9 @@ class ArcadeServerTPC(ArcadeTPC):
         self.rq.auth = ("root", "icdebench")
         self.version = "server"
 
-    def _cmd(self, command, timeout=1800):
+    def _cmd(self, command, timeout=1800, language="sql"):
         r = self.rq.post(f"{self.base}/command/bench",
-                         json={"language": "sql", "command": command},
+                         json={"language": language, "command": command},
                          timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])
@@ -259,19 +259,19 @@ class ArcadeServerTPC(ArcadeTPC):
                           t.l_extendedprice, t.l_discount, t.l_returnflag,
                           t.l_linestatus, t.l_shipdate))
             if len(buf) >= 2_000:
-                self._cmd(";".join(buf))
+                self._cmd(";".join(buf), language="sqlscript")
                 buf = []
         if buf:
-            self._cmd(";".join(buf))
+            self._cmd(";".join(buf), language="sqlscript")
         buf = []
         for t in part.itertuples(index=False):
             buf.append("INSERT INTO Part SET p_partkey=%d, p_retailprice=%f, "
                        "stock=100" % (t.p_partkey, t.p_retailprice))
             if len(buf) >= 2_000:
-                self._cmd(";".join(buf))
+                self._cmd(";".join(buf), language="sqlscript")
                 buf = []
         if buf:
-            self._cmd(";".join(buf))
+            self._cmd(";".join(buf), language="sqlscript")
         self._cmd("CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
 
     def olap(self, which):
@@ -280,7 +280,8 @@ class ArcadeServerTPC(ArcadeTPC):
     def new_order(self, i, pkey):
         self._cmd(f"SELECT p_retailprice, stock FROM Part WHERE p_partkey={pkey};"
                   f"INSERT INTO OrderNew SET okey={i}, pkey={pkey}, qty=1;"
-                  f"UPDATE Part SET stock = stock - 1 WHERE p_partkey={pkey}")
+                  f"UPDATE Part SET stock = stock - 1 WHERE p_partkey={pkey}",
+                  language="sqlscript")
 
     def close(self):
         pass
