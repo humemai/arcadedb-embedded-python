@@ -71,24 +71,46 @@ def cells(rows, key):
 
 
 def fmt(v, unit=""):
+    """Compact number: unit-scale k/M above 10^4/10^6 to keep table cells
+    inside the column width."""
     if v is None:
         return "--"
-    if abs(v) >= 10000:
-        return f"{v:,.0f}{unit}"
-    if abs(v) >= 100:
+    a = abs(v)
+    if a >= 1e6:
+        return f"{v / 1e6:.2f}M{unit}"
+    if a >= 1000:
+        return f"{v / 1e3:.1f}k{unit}"
+    if a >= 100:
         return f"{v:.0f}{unit}"
-    if abs(v) >= 1:
+    if a >= 1:
         return f"{v:.2f}{unit}"
     return f"{v:.3f}{unit}"
+
+
+def fmtb(v):
+    """Bracket endpoints: one step coarser than fmt to save width."""
+    a = abs(v)
+    if a >= 1000:
+        return f"{v / 1e3:.1f}k" if a < 1e6 else f"{v / 1e6:.2f}M"
+    if a >= 1e6:
+        return f"{v / 1e6:.2f}M"
+    if a >= 1e4:
+        return f"{v / 1e3:.1f}k"
+    if a >= 100:
+        return f"{v:.0f}"
+    if a >= 1:
+        return f"{v:.1f}"
+    return f"{v:.2f}"
 
 
 def mmm(rs, field, scale=1.0):
     v = [r[field] * scale for r in rs if isinstance(r.get(field), (int, float))]
     if not v:
         return "--"
-    if len(v) < 5:
-        pass  # still report, caption states N per cell
-    return f"{fmt(st.median(v))} [{fmt(min(v))}--{fmt(max(v))}]"
+    med, lo, hi = fmt(st.median(v)), fmtb(min(v)), fmtb(max(v))
+    if lo == hi:  # degenerate range at rendered precision
+        return med
+    return f"{med} [{lo}--{hi}]"
 
 
 def write(name, body):
@@ -102,14 +124,14 @@ def tabular_table(rows):
     l1 = [r for r in rows if r["lane"] == "l1"]
     tpc = [r for r in rows if r["lane"] == "l1tpc"]
     order = ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"]
-    lines = [r"\begin{tabular}{lrrrrr}", r"\toprule",
-             r"System & Ingest (rows/s) & OLTP (ops/s) & Insert p99 (ms) & "
-             r"TPC-H Q1 (ms) & Q6 (ms) \\", r"\midrule"]
+    lines = [r"\begin{tabular}{lrrrr}", r"\toprule",
+             r"System & OLTP (ops/s) & Ins.\ p99 (ms) & "
+             r"Q1 (ms) & Q6 (ms) \\", r"\midrule"]
     for be in order:
         oltp = [r for r in l1 if r["backend"] == be and r["workload"] == "oltp"]
         tq = [r for r in tpc if r["backend"] == be and r["workload"] == "olap"]
         lines.append(" & ".join([
-            NAMES[be], mmm(oltp, "ingest_rows_per_s"),
+            NAMES[be],
             mmm(oltp, "oltp_ops_per_s"), mmm(oltp, "insert_p99_ms"),
             mmm(tq, "q1_ms"), mmm(tq, "q6_ms")]) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
@@ -120,8 +142,8 @@ def graph_table(rows):
     l2 = [r for r in rows if r["lane"] == "l2"]
     order = ["arcadedb_graph_embedded", "arcadedb_graph_server",
              "neo4j_graph", "ladybug_graph"]
-    lines = [r"\begin{tabular}{llrrrr}", r"\toprule",
-             r"System & Scale & Build (s) & 1-hop p50 (ms) & 1-hop p99 (ms) & "
+    lines = [r"\begin{tabular}{llrrr}", r"\toprule",
+             r"System & Scale & 1-hop p50 (ms) & 1-hop p99 (ms) & "
              r"2-hop p99 (ms) \\", r"\midrule"]
     for be in order:
         for sc in ("sf1", "sf10"):
@@ -130,7 +152,7 @@ def graph_table(rows):
             if not g:
                 continue
             lines.append(" & ".join([
-                NAMES[be], sc.upper(), mmm(g, "build_s"),
+                NAMES[be], sc.upper(),
                 mmm(g, "hop1_p50_ms"), mmm(g, "hop1_p99_ms"),
                 mmm(g, "hop2_p99_ms")]) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
@@ -142,8 +164,8 @@ def sparse_table(rows):
     order = ["arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32",
              "arcadedb_sparse_server", "qdrant_sparse", "milvus_sparse",
              "elasticsearch_sparse"]
-    lines = [r"\begin{tabular}{llrrrr}", r"\toprule",
-             r"System & Corpus & Build (s) & p50 (ms) & p99 (ms) & "
+    lines = [r"\begin{tabular}{llrrr}", r"\toprule",
+             r"System & Corpus & p50 (ms) & p99 (ms) & "
              r"Recall@10 \\", r"\midrule"]
     for be in order:
         for sc, label in (("tiny", "100k"), ("small", "1M")):
@@ -151,7 +173,7 @@ def sparse_table(rows):
             if not g:
                 continue
             lines.append(" & ".join([
-                NAMES[be], label, mmm(g, "build_s"),
+                NAMES[be], label,
                 mmm(g, "query_p50_ms"), mmm(g, "query_p99_ms"),
                 mmm(g, "recall_at_10")]) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
