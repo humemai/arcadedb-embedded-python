@@ -178,10 +178,107 @@ def f8_deployment(rows):
     gs_crop(path)
 
 
+def f4_one_vs_n(rows):
+    """ArcadeDB embedded relative to the best specialist per workload,
+    log scale; >1 = ArcadeDB ahead. The honest summary figure."""
+    def med(lane, scale, wl, be, f):
+        g = [r[f] for r in rows if r["lane"] == lane and r["scale"] == scale
+             and r.get("workload") == wl and r["backend"] == be
+             and isinstance(r.get(f), (int, float))]
+        return st.median(g) if g else None
+
+    ts = [json.loads(l) for l in open(os.path.join(RESULTS, "l4_tsbs.jsonl"))
+          if l.strip()]
+
+    def tsmed(be, f):
+        return st.median([r[f] for r in ts if r["backend"] == be])
+
+    entries = [  # (label, arcade value, best specialist value, higher_better)
+        ("Cross-model txn p50", med("e2", "e2", "hybrid", "arcadedb_e2", "hybrid_p50_ms"),
+         med("e2", "e2", "hybrid", "composed_qdrant_neo4j", "hybrid_p50_ms"), False),
+        ("OLTP ops/s", med("l1", "medium", "oltp", "arcadedb_embedded", "oltp_ops_per_s"),
+         med("l1", "medium", "oltp", "postgres", "oltp_ops_per_s"), True),
+        ("Graph 1-hop p50", med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "hop1_p50_ms"),
+         med("l2", "sf10", "oltp", "ladybug_graph", "hop1_p50_ms"), False),
+        ("TS last-point p50", tsmed("arcadedb", "q_last_ms"),
+         tsmed("questdb", "q_last_ms"), False),
+        ("Sparse 100k p50", med("l3s", "tiny", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
+         med("l3s", "tiny", "search", "qdrant_sparse", "query_p50_ms"), False),
+        ("Dense 10M p50", med("l3d", "deep10m", "search", "arcadedb_dense_embedded", "query_p50_ms"),
+         med("l3d", "deep10m", "search", "qdrant_dense", "query_p50_ms"), False),
+        ("Sparse 1M p50", med("l3s", "small", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
+         med("l3s", "small", "search", "qdrant_sparse", "query_p50_ms"), False),
+        ("TS ingest pts/s", tsmed("arcadedb", "ingest_pts_per_s"),
+         tsmed("duckdb", "ingest_pts_per_s"), True),
+        ("TPC-H Q1", med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "q1_ms"),
+         med("l1tpc", "tpch1", "olap", "duckdb", "q1_ms"), False),
+    ]
+    labels, ratios = [], []
+    for label, a, s, hb in entries:
+        if a is None or s is None:
+            continue
+        labels.append(label)
+        ratios.append((a / s) if hb else (s / a))
+    fig, ax = plt.subplots(figsize=(3.45, 2.5))
+    ys = range(len(ratios))[::-1]
+    colors = ["C0" if r >= 1 else "C3" for r in ratios]
+    ax.barh(list(ys), ratios, color=colors, alpha=0.85, height=0.6)
+    ax.axvline(1.0, color="k", lw=0.8, ls="--")
+    for y, r in zip(ys, ratios):
+        ax.annotate(f"{r:.3g}x" if r < 1 else f"{r:.2g}x", (max(r, 0.002), y),
+                    textcoords="offset points", xytext=(3, -2), fontsize=6.5)
+    ax.set_yticks(list(ys))
+    ax.set_yticklabels(labels, fontsize=6.5)
+    ax.set_xscale("log")
+    ax.set_xlim(5e-4, 50)
+    ax.set_xlabel("ArcadeDB (embedded) vs best specialist, log scale")
+    fig.tight_layout()
+    path = os.path.join(FIGS, "f4_one_vs_n.pdf")
+    fig.savefig(path)
+    plt.close(fig)
+    gs_crop(path)
+
+
+def f6_memory_ceiling(rows):
+    """Peak anon working set at DEEP-10M: memory is the scale ceiling."""
+    order = [("arcadedb_dense_embedded", "ArcadeDB (emb)"),
+             ("arcadedb_dense_server", "ArcadeDB (srv)"),
+             ("duckdb_vss_dense", "DuckDB-VSS"),
+             ("lancedb_dense", "LanceDB"), ("chroma_dense", "Chroma"),
+             ("milvus_dense", "Milvus"), ("sqlite_vec_dense", "sqlite-vec"),
+             ("qdrant_dense", "Qdrant")]
+    labels, vals = [], []
+    for be, label in order:
+        g = [r["peak_anon_mib_sum"] / 1024 for r in rows
+             if r["lane"] == "l3d" and r["scale"] == "deep10m"
+             and r["backend"] == be
+             and isinstance(r.get("peak_anon_mib_sum"), (int, float))]
+        if g:
+            labels.append(label)
+            vals.append(st.median(g))
+    fig, ax = plt.subplots(figsize=(3.45, 1.9))
+    ax.bar(range(len(vals)), vals, width=0.6, color="C0", alpha=0.85)
+    ax.axhline(3.84, color="C2", lw=1, ls=":")
+    ax.annotate("raw vectors 3.8 GiB", (len(vals) - 3.6, 4.1), fontsize=6.5,
+                color="C2")
+    ax.annotate("build OOMs at 16 GiB heap;\nneeds 19+ (\\#3144)",
+                (0.4, 22), fontsize=6.5, color="C3")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, fontsize=6, rotation=20, ha="right")
+    ax.set_ylabel("peak anon (GiB)")
+    fig.tight_layout()
+    path = os.path.join(FIGS, "f6_memory_ceiling.pdf")
+    fig.savefig(path)
+    plt.close(fig)
+    gs_crop(path)
+
+
 def main():
     os.makedirs(FIGS, exist_ok=True)
     rows = canonical()
+    f4_one_vs_n(rows)
     f5_sparse_scaling(rows)
+    f6_memory_ceiling(rows)
     f7_e2(rows)
     f8_deployment(rows)
 
