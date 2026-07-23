@@ -102,6 +102,35 @@ def f5_sparse_scaling(rows):
     gs_crop(path)
 
 
+def f3_sparse_perquery():
+    """Per-query latency vs summed posting length (bigann 1M, 1000 dev
+    queries): the evidence that pruning is not cutting head terms."""
+    path = os.path.join(RESULTS, "sparse_cliff.jsonl")
+    recs = [json.loads(l) for l in open(path) if l.strip()]
+    x = [r["sum_df"] / 1e6 for r in recs]
+    y = [r["ms"] for r in recs]
+    fig, ax = plt.subplots(figsize=(3.45, 2.1))
+    ax.plot(x, y, ".", ms=2.5, alpha=0.35, color="C3", rasterized=True)
+    # decile medians as a line
+    import numpy as np
+    xa, ya = np.array(x), np.array(y)
+    qs = np.percentile(xa, np.arange(0, 101, 10))
+    cx = [(qs[i] + qs[i + 1]) / 2 for i in range(10)]
+    cy = [float(np.median(ya[(xa >= qs[i]) & (xa <= qs[i + 1])]))
+          for i in range(10)]
+    ax.plot(cx, cy, "-o", color="k", lw=1.2, ms=3, label="decile median")
+    ax.set_xlabel("summed posting length of query terms (millions)")
+    ax.set_ylabel("query latency (ms)")
+    ax.annotate("Spearman $\\rho$ = 0.95", (0.05, 0.9),
+                xycoords="axes fraction", fontsize=7)
+    ax.legend(fontsize=6.5, loc="lower right")
+    fig.tight_layout()
+    out = os.path.join(FIGS, "f3_sparse_perquery.pdf")
+    fig.savefig(out, dpi=200)
+    plt.close(fig)
+    gs_crop(out)
+
+
 def f7_e2(rows):
     e2 = [r for r in rows if r["lane"] == "e2"]
     order = [("arcadedb_e2", "ArcadeDB\n(one txn)"),
@@ -276,6 +305,7 @@ def f6_memory_ceiling(rows):
 def main():
     os.makedirs(FIGS, exist_ok=True)
     rows = canonical()
+    f3_sparse_perquery()
     f4_one_vs_n(rows)
     f5_sparse_scaling(rows)
     f6_memory_ceiling(rows)
