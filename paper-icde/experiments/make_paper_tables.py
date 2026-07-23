@@ -15,7 +15,7 @@ import statistics as st
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
-OUT = os.path.join(HERE, "..", "latex", "tables")
+OUT = os.path.join(HERE, "..", "..", ".notes", "papers", "icde-2027", "latex", "tables")
 
 PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
                 "l3s": ["tiny", "small"], "l3d": ["small", "deep10m"],

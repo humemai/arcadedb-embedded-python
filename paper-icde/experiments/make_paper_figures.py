@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
-FIGS = os.path.join(HERE, "..", "latex", "figures")
+FIGS = os.path.join(HERE, "..", "..", ".notes", "papers", "icde-2027", "latex", "figures")
 
 plt.rcParams.update({"font.size": 8, "axes.grid": True, "grid.alpha": 0.3,
                      "figure.dpi": 150})
