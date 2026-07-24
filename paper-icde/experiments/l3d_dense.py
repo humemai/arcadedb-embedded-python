@@ -140,9 +140,11 @@ class ArcadeEmbedded(Base):
                 db.commit()
                 db.begin()
         db.commit()
+        quant = os.environ.get("BENCH_DENSE_QUANT", "")  # e.g. INT8 (#3144)
+        qline = f'"quantization": "{quant}", ' if quant else ""
         db.command("sql", f'''CREATE INDEX ON Article (embedding) LSM_VECTOR
                    METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
-                   "maxConnections": {M}, "beamWidth": {EF_CONSTRUCTION},
+                   "maxConnections": {M}, "beamWidth": {EF_CONSTRUCTION}, {qline}
                    "storeVectorsInGraph": false, "addHierarchy": true }}''')
 
     def search(self, qvec, k):
@@ -418,6 +420,7 @@ def main():
 
     b = BACKENDS[args.backend]()
     out["hnsw_M"] = M  # recorded so degree-matched ablation rows are self-describing
+    out["quantization"] = os.environ.get("BENCH_DENSE_QUANT", "none")
     t0 = time.perf_counter()
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
