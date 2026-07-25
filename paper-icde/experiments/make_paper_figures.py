@@ -222,6 +222,13 @@ def f4_one_vs_n(rows):
     def tsmed(be, f):
         return st.median([r[f] for r in ts if r["backend"] == be])
 
+    import glob as _glob
+    _native = [json.load(open(fp)) for fp in
+               _glob.glob(os.path.join(RESULTS, "batch1", "l4n_r*.json"))]
+
+    def _ts_native_med(f):
+        return st.median([r[f] for r in _native]) if _native else None
+
     entries = [  # (label, arcade value, best specialist value, higher_better)
         ("Cross-model txn p50", med("e2", "e2", "hybrid", "arcadedb_e2", "hybrid_p50_ms"),
          med("e2", "e2", "hybrid", "composed_qdrant_neo4j", "hybrid_p50_ms"), False),
@@ -229,15 +236,15 @@ def f4_one_vs_n(rows):
          med("l1", "medium", "oltp", "postgres", "oltp_ops_per_s"), True),
         ("Graph 1-hop p50", med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "hop1_p50_ms"),
          med("l2", "sf10", "oltp", "ladybug_graph", "hop1_p50_ms"), False),
-        ("TS last-point p50", tsmed("arcadedb", "q_last_ms"),
-         tsmed("questdb", "q_last_ms"), False),
+        ("TS 12h agg p50", _ts_native_med("q_global_ms"),
+         tsmed("questdb", "q_global_ms"), False),
         ("Sparse 100k p50", med("l3s", "tiny", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
          med("l3s", "tiny", "search", "qdrant_sparse", "query_p50_ms"), False),
         ("Dense 10M p50", med("l3d", "deep10m", "search", "arcadedb_dense_embedded", "query_p50_ms"),
          med("l3d", "deep10m", "search", "qdrant_dense", "query_p50_ms"), False),
         ("Sparse 1M p50", med("l3s", "small", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
          med("l3s", "small", "search", "qdrant_sparse", "query_p50_ms"), False),
-        ("TS ingest pts/s", tsmed("arcadedb", "ingest_pts_per_s"),
+        ("TS ingest pts/s", _ts_native_med("ingest_pts_per_s"),
          tsmed("duckdb", "ingest_pts_per_s"), True),
         ("TPC-H Q1", med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "q1_ms"),
          med("l1tpc", "tpch1", "olap", "duckdb", "q1_ms"), False),

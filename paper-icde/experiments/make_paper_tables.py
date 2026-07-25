@@ -159,10 +159,25 @@ def graph_table(rows):
     write("t3_graph.tex", "\n".join(lines) + "\n")
 
 
+def _dev6_sparse_rows():
+    """Rolling-update overlay: N=5 dev6 cells for the embedded int8 config
+    (verify6 re-runs after the MaxScore fix). Same harness, same data."""
+    import glob
+    out = {"tiny": [], "small": []}
+    for sc in out:
+        for fp in glob.glob(os.path.join(RESULTS, "verify6",
+                                         f"l3s_dev6_{sc}_r*.json")):
+            out[sc].append(json.load(open(fp)))
+    return out
+
+
 def sparse_table(rows):
     l3s = [r for r in rows if r["lane"] == "l3s"]
-    order = ["arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32",
-             "arcadedb_sparse_server", "qdrant_sparse", "milvus_sparse",
+    dev6 = _dev6_sparse_rows()
+    # Single-version discipline: only the dev6-remeasured arcade config is
+    # shown; fp32/no-settle/server ablations await re-measurement on the
+    # current line (their July rows would cross engine versions in-table).
+    order = ["arcadedb_sparse_embedded", "qdrant_sparse", "milvus_sparse",
              "elasticsearch_sparse"]
     lines = [r"\begin{tabular}{llrrr}", r"\toprule",
              r"System & Corpus & p50 (ms) & p99 (ms) & "
@@ -170,6 +185,8 @@ def sparse_table(rows):
     for be in order:
         for sc, label in (("tiny", "100k"), ("small", "1M")):
             g = [r for r in l3s if r["backend"] == be and r["scale"] == sc]
+            if be == "arcadedb_sparse_embedded" and dev6.get(sc):
+                g = dev6[sc]  # dev6 overlay (MaxScore), caption discloses
             if not g:
                 continue
             lines.append(" & ".join([
@@ -204,11 +221,21 @@ def dense_ts_table(rows):
               r"(2.59M points)}} \\",
               r"System & Ingest (pts/s) & Last point (ms) & 1h bucket (ms) & "
               r"12h global (ms) \\", r"\midrule"]
+    import glob
+    native = [json.load(open(fp)) for fp in
+              glob.glob(os.path.join(RESULTS, "batch1", "l4n_r*.json"))]
+    if native:
+        lines.append(" & ".join([
+            r"ArcadeDB (native TS)", mmm(native, "ingest_pts_per_s"),
+            mmm(native, "q_last_ms") + r"$^{b}$", mmm(native, "q_range_ms"),
+            mmm(native, "q_global_ms")]) + " " + chr(92)*2)
     for be in ("arcadedb", "duckdb", "questdb"):
         g = [r for r in ts if r["backend"] == be]
+        label = ("ArcadeDB (document path)" if be == "arcadedb"
+                 else NAMES[be])
         lines.append(" & ".join([
-            NAMES[be], mmm(g, "ingest_pts_per_s"), mmm(g, "q_last_ms"),
-            mmm(g, "q_range_ms"), mmm(g, "q_global_ms")]) + r" \\")
+            label, mmm(g, "ingest_pts_per_s"), mmm(g, "q_last_ms"),
+            mmm(g, "q_range_ms"), mmm(g, "q_global_ms")]) + " " + chr(92)*2)
     lines += [r"\bottomrule", r"\end{tabular}"]
     write("t5_dense_ts.tex", "\n".join(lines) + "\n")
 
