@@ -1018,8 +1018,20 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       case "rid":
         if (valueObj instanceof Rid) {
           item.rid = (Rid) valueObj;
+        } else if (valueObj instanceof final Expression expr) {
+          if (expr.rid != null) {
+            // Literal RID such as #13:32960 - visitRidLiteral wraps the Rid in an Expression
+            item.rid = expr.rid;
+          } else {
+            // Parameterized or computed RID such as :rid - keep the expression and resolve it against
+            // the command context at plan time (Rid.toRecordId)
+            final Rid computed = new Rid(-1);
+            computed.expression = expr;
+            item.rid = computed;
+          }
+        } else {
+          throw new CommandSQLParsingException("MATCH rid filter must be a RID or an expression evaluating to a RID, got: " + valueObj);
         }
-        // RID might be embedded in a complex expression, for now just skip if not direct Rid
         break;
       case "as":
         // Extract identifier name from the expression
@@ -4187,12 +4199,11 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
             item.setAlias(baseExpr.identifier.suffix.identifier.getValue());
             // Set the modifier chain
             item.modifier = baseExpr.modifier;
-          } else {
-            // Fallback: use string representation
-            final StringBuilder sb = new StringBuilder();
-            baseExpr.toString(Collections.emptyMap(), sb);
-            item.setAlias(sb.toString());
           }
+          // else: a non-identifier base with modifiers (e.g. ORDER BY both().size()) - the alias/recordAttr/
+          // modifier fields stay null and the tail below stores the FULL expression. Collapsing it to its
+          // string representation as an alias made every sort key resolve to a non-existent property (null),
+          // silently returning the rows unsorted.
         } else if (baseExpr.identifier != null) {
           // No modifiers - try simple identifier extraction
           final SuffixIdentifier suffix = baseExpr.identifier.suffix;
@@ -4607,11 +4618,13 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       if (expr.json != null) {
         // Direct JSON literal from jsonLiteral alternative
         ops.json = expr.json;
-      } else if (expr.mathExpression instanceof final BaseExpression baseExpr) {
+      } else if (expr.mathExpression instanceof final BaseExpression baseExpr && baseExpr.expression != null
+          && baseExpr.expression.json != null) {
         // JSON literal parsed as baseExpression mapLit alternative
-        if (baseExpr.expression != null && baseExpr.expression.json != null) {
-          ops.json = baseExpr.expression.json;
-        }
+        ops.json = baseExpr.expression.json;
+      } else {
+        // Not a JSON literal: keep the expression (input parameter, LET variable, sub-query, ...) and resolve it at execution time
+        ops.expression = expr;
       }
     } else if (ctx.CONTENT() != null) {
       ops.type = UpdateOperations.TYPE_CONTENT;
@@ -4949,6 +4962,8 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       }
     }
 
+    collectCustomMetadata(bodyCtx.customMetadataItem(), stmt.customProperties);
+
     return stmt;
   }
 
@@ -5026,6 +5041,8 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
         }
       }
     }
+
+    collectCustomMetadata(bodyCtx.customMetadataItem(), stmt.customProperties);
 
     return stmt;
   }
@@ -5108,7 +5125,23 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       }
     }
 
+    collectCustomMetadata(bodyCtx.customMetadataItem(), stmt.customProperties);
+
     return stmt;
+  }
+
+  /**
+   * Collect the inline {@code CUSTOM key = value (, key = value)*} clause shared by
+   * {@code CREATE ... TYPE} and {@code CREATE PROPERTY} (issue #5409) into the target map,
+   * preserving declaration order so the statement round-trips through {@code toString()}.
+   */
+  private void collectCustomMetadata(final List<SQLParser.CustomMetadataItemContext> items,
+      final Map<Identifier, Expression> target) {
+    if (items == null)
+      return;
+
+    for (final SQLParser.CustomMetadataItemContext itemCtx : items)
+      target.put((Identifier) visit(itemCtx.identifier()), (Expression) visit(itemCtx.expression()));
   }
 
   /**
@@ -5478,6 +5511,8 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       }
     }
 
+    collectCustomMetadata(bodyCtx.customMetadataItem(), stmt.customProperties);
+
     return stmt;
   }
 
@@ -5682,18 +5717,18 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     // Function name (second identifier)
     stmt.functionName = (Identifier) visit(ctx.identifier(1));
 
-    // Code (quoted string)
-    stmt.codeQuoted = ctx.STRING_LITERAL().getText();
+    // Code (quoted string). Kept verbatim (quotes + escapes) for statement re-serialization in toString().
+    final String codeText = ctx.STRING_LITERAL().getText();
+    stmt.codeQuoted = codeText;
 
-    // Code (unquoted - remove surrounding quotes)
-    String codeText = ctx.STRING_LITERAL().getText();
-    if (codeText.startsWith("\"") && codeText.endsWith("\"")) {
-      stmt.code = codeText.substring(1, codeText.length() - 1);
-    } else if (codeText.startsWith("'") && codeText.endsWith("'")) {
-      stmt.code = codeText.substring(1, codeText.length() - 1);
-    } else {
+    // Code (unquoted): strip the surrounding quotes AND decode the escape sequences (backslash-quote to a
+    // quote, double-backslash to a single one, backslash-n to a newline, unicode escapes, ...) the same way
+    // every other SQL string literal is decoded. Without this the raw escapes were stored verbatim, so a body
+    // containing an escaped quote or newline produced an invalid function declaration (issue #5121).
+    if ((codeText.startsWith("\"") && codeText.endsWith("\"")) || (codeText.startsWith("'") && codeText.endsWith("'")))
+      stmt.code = BaseExpression.decode(codeText.substring(1, codeText.length() - 1));
+    else
       stmt.code = codeText;
-    }
 
     // Parameters (optional)
     if (ctx.parameterList() != null) {
@@ -5765,6 +5800,21 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       }
     }
 
+    return stmt;
+  }
+
+  /**
+   * Visit COMPACT INDEX statement (issue #5144).
+   * Grammar: COMPACT INDEX (identifier | STAR)
+   */
+  @Override
+  public CompactIndexStatement visitCompactIndexStmt(final SQLParser.CompactIndexStmtContext ctx) {
+    final SQLParser.CompactIndexStatementContext body = ctx.compactIndexStatement();
+    final CompactIndexStatement stmt = new CompactIndexStatement(-1);
+    if (body.STAR() != null)
+      stmt.all = true;
+    else
+      stmt.name = (Identifier) visit(body.identifier());
     return stmt;
   }
 

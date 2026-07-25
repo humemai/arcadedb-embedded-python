@@ -77,6 +77,112 @@ class PolyglotScriptingAuthorizationIT extends BaseGraphServerTest {
     });
   }
 
+  /**
+   * Regression test for GHSA-vwjc-v7x7-cm6g: {@code DEFINE FUNCTION ... LANGUAGE js} is arbitrary host code
+   * execution and must require security-admin privileges (UPDATE_SECURITY), not merely UPDATE_SCHEMA.
+   * Otherwise a schema administrator could define a JavaScript function and invoke it, bypassing the polyglot
+   * scripting gate. A declarative SQL function stays available to a schema admin.
+   */
+  @Test
+  void schemaAdminCannotDefineJsFunctionButRootCan() throws Exception {
+    testEachServer((serverIndex) -> {
+      createSchemaAdminUser(serverIndex);
+      try {
+        final String schemaAdminAuth = basicAuth(SCHEMA_ADMIN_USER, SCHEMA_ADMIN_PWD);
+
+        // The escalation path: defining a JS function must now require UPDATE_SECURITY -> 403 for a schema admin.
+        assertThat(command(serverIndex, schemaAdminAuth, "sql",
+            "DEFINE FUNCTION libjs.jsFn \"return 1\" LANGUAGE js"))
+            .as("schema admin must NOT define a js function").isEqualTo(403);
+
+        // Control: a schema admin CAN define a declarative SQL function (needs UPDATE_SCHEMA, which it has).
+        assertThat(command(serverIndex, schemaAdminAuth, "sql",
+            "DEFINE FUNCTION libsql.sqlFn \"SELECT 1 AS r\" LANGUAGE sql"))
+            .as("schema admin may define a SQL function").isEqualTo(200);
+
+        // Positive control: root (security admin) can still define a JS function.
+        assertThat(command(serverIndex, basicAuth("root", DEFAULT_PASSWORD_FOR_TESTS), "sql",
+            "DEFINE FUNCTION libroot.jsFnRoot \"return 1\" LANGUAGE js"))
+            .as("root may define a js function").isEqualTo(200);
+      } finally {
+        deleteUser(serverIndex, SCHEMA_ADMIN_USER);
+      }
+    });
+  }
+
+  /**
+   * Regression test for GHSA-38pf-6hp2-pxww: a JAVASCRIPT trigger binds the real database object into a GraalVM
+   * context (HostAccess.ALL minus reflection), so its script can call {@code database.getSecurity().createUser(...)}
+   * and escalate a schema administrator to server-wide admin. Creating a JAVASCRIPT (or JAVA) trigger must therefore
+   * require security-admin privileges (UPDATE_SECURITY), not merely UPDATE_SCHEMA. A declarative SQL trigger stays
+   * available to a schema admin.
+   */
+  @Test
+  void schemaAdminCannotCreateJsTriggerButRootCan() throws Exception {
+    testEachServer((serverIndex) -> {
+      createSchemaAdminUser(serverIndex);
+      try {
+        final String schemaAdminAuth = basicAuth(SCHEMA_ADMIN_USER, SCHEMA_ADMIN_PWD);
+
+        // The escalation path: creating a JS trigger must now require UPDATE_SECURITY -> 403 for a schema admin.
+        assertThat(command(serverIndex, schemaAdminAuth, "sql",
+            "CREATE TRIGGER jsTrig BEFORE CREATE ON " + VERTEX1_TYPE_NAME
+                + " EXECUTE JAVASCRIPT 'database.getSecurity().createUser(\"ev\",\"p\"); true'"))
+            .as("schema admin must NOT create a JS trigger").isEqualTo(403);
+
+        // A JAVA trigger is arbitrary host code too and must be denied to a schema admin.
+        assertThat(command(serverIndex, schemaAdminAuth, "sql",
+            "CREATE TRIGGER javaTrig BEFORE CREATE ON " + VERTEX1_TYPE_NAME + " EXECUTE JAVA 'com.example.MyTrigger'"))
+            .as("schema admin must NOT create a JAVA trigger").isEqualTo(403);
+
+        // Control: a schema admin CAN create a declarative SQL trigger (needs UPDATE_SCHEMA, which it has).
+        assertThat(command(serverIndex, schemaAdminAuth, "sql",
+            "CREATE TRIGGER sqlTrig BEFORE CREATE ON " + VERTEX1_TYPE_NAME + " EXECUTE SQL 'SELECT 1'"))
+            .as("schema admin may create a SQL trigger").isEqualTo(200);
+
+        // Positive control: root (security admin) can still create a JS trigger.
+        assertThat(command(serverIndex, basicAuth("root", DEFAULT_PASSWORD_FOR_TESTS), "sql",
+            "CREATE TRIGGER jsTrigRoot BEFORE CREATE ON " + VERTEX1_TYPE_NAME + " EXECUTE JAVASCRIPT 'true'"))
+            .as("root may create a JS trigger").isEqualTo(200);
+      } finally {
+        deleteUser(serverIndex, SCHEMA_ADMIN_USER);
+      }
+    });
+  }
+
+  private static final String SCHEMA_ADMIN_USER = "schema-admin";
+  private static final String SCHEMA_ADMIN_PWD  = "schemaadmin1";
+
+  private void createSchemaAdminUser(final int serverIndex) throws Exception {
+    final ServerSecurity security = getServer(serverIndex).getSecurity();
+
+    // A group that grants database-level UPDATE_SCHEMA (but NOT updateSecurity) plus record reads/writes.
+    security.getDatabaseGroupsConfiguration(getDatabaseName()).put("schemaAdmin",
+        new JSONObject().put("access", new JSONArray().put("updateSchema")).put("types",
+            new JSONObject().put("*",
+                new JSONObject().put("access", new JSONArray().put("readRecord").put("createRecord").put("updateRecord")))));
+    security.saveGroups();
+
+    if (security.existsUser(SCHEMA_ADMIN_USER))
+      security.dropUser(SCHEMA_ADMIN_USER);
+
+    final JSONObject payload = new JSONObject()
+        .put("name", SCHEMA_ADMIN_USER)
+        .put("password", SCHEMA_ADMIN_PWD)
+        .put("databases", new JSONObject().put(getDatabaseName(), new JSONArray().put("schemaAdmin")));
+
+    final HttpURLConnection connection = open(serverIndex, "/api/v1/server/users", basicAuth("root", DEFAULT_PASSWORD_FOR_TESTS));
+    connection.setDoOutput(true);
+    connection.setRequestProperty("Content-Type", "application/json");
+    connection.getOutputStream().write(payload.toString().getBytes());
+    connection.connect();
+    try {
+      assertThat(connection.getResponseCode()).isEqualTo(201);
+    } finally {
+      connection.disconnect();
+    }
+  }
+
   private void createReaderUser(final int serverIndex) throws Exception {
     final ServerSecurity security = getServer(serverIndex).getSecurity();
 

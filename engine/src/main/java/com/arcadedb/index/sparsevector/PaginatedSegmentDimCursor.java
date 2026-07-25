@@ -46,18 +46,44 @@ public final class PaginatedSegmentDimCursor implements SourceCursor {
   private float   currentWeight;
   private boolean currentTombstone;
 
-  private final RID[]   blockRids;
+  // Decoded postings of the current block, held as parallel primitive arrays. An earlier version
+  // materialised a RID per posting at decode time; on a learned-sparse query that is millions of
+  // short-lived objects per query, and it dominated the traversal cost (issue #5388). Only the
+  // posting the cursor is actually positioned on ever becomes a RID.
+  private final int[]   blockBuckets;
+  private final long[]  blockPositions;
   private final float[] blockWeights;
   private final boolean[] blockTombstones;
   private int           blockSize;
   private boolean       blockDecoded;
   private boolean       exhausted;
 
+  // Lazy-decode state for Block-Max WAND skips (issue #5388). When {@code pendingDecode} is true
+  // the cursor is parked at the FIRST posting of {@code currentBlock} ({@code currentInBlock == 0},
+  // {@code currentRid == blockHeader(currentBlock).firstRid()}) without the block payload having
+  // been read. {@link #currentWeight()} / {@link #isTombstone()} and any navigation resolve it on
+  // demand. This lets a block-max skip hop from block boundary to block boundary consulting only
+  // in-memory headers, decoding a payload solely when a document is actually scored - which is
+  // what turns the pruning from "skips scoring" into "skips decoding", the cost the reporter sees.
+  private boolean       pendingDecode;
+
+  // Memo for {@link #blockContaining}: the block index returned for {@code shallowRid}. Block-max
+  // probes arrive in non-decreasing RID order during a DAAT traversal, so resuming the header walk
+  // from here makes it amortised O(blocks) per query instead of O(blocks) per probe.
+  private int           shallowBlock = -1;
+  private RID           shallowRid;
+
+  // Per-cursor count of block payloads actually decoded (page reads). Bumped once per
+  // {@link #decodeBlockIfNeeded} that hits the wire. This is the real cost signal BMW pruning
+  // drives down: block-max checks read only in-memory headers and never touch this counter.
+  // Per-cursor (per-query) state, so it is contention-free even under concurrent queries.
+  private long          decodedBlockCount;
+
   // Required scratch capacity (one full page of payload). The byte[] / ByteBuffer pair is
   // borrowed from {@link com.arcadedb.database.DatabaseContext.DatabaseContextTL#getTemporaryBuffer1()}
   // inside {@link #decodeBlockIfNeeded} - the same per-thread Binary that BinarySerializer and
-  // friends already share. Decoded values land in this cursor's {@code blockRids} /
-  // {@code blockWeights} / {@code blockTombstones} arrays before the call returns, so the
+  // friends already share. Decoded values land in this cursor's
+  // {@code blockBuckets} / {@code blockPositions} / {@code blockWeights} / {@code blockTombstones} arrays before the call returns, so the
   // buffer can be clobbered by any subsequent caller on the same thread without affecting us
   // (issue #4086).
   private final int scratchSize;
@@ -66,7 +92,8 @@ public final class PaginatedSegmentDimCursor implements SourceCursor {
     this.reader = reader;
     this.meta = meta;
     this.params = reader.parameters();
-    this.blockRids = new RID[params.blockSize()];
+    this.blockBuckets = new int[params.blockSize()];
+    this.blockPositions = new long[params.blockSize()];
     this.blockWeights = new float[params.blockSize()];
     this.blockTombstones = new boolean[params.blockSize()];
     this.scratchSize = reader.component().pageContentSize();
@@ -92,11 +119,13 @@ public final class PaginatedSegmentDimCursor implements SourceCursor {
 
   @Override
   public float currentWeight() {
+    resolvePendingDecode();
     return currentWeight;
   }
 
   @Override
   public boolean isTombstone() {
+    resolvePendingDecode();
     return currentTombstone;
   }
 
@@ -113,6 +142,63 @@ public final class PaginatedSegmentDimCursor implements SourceCursor {
     if (idx >= sl.length)
       idx = sl.length - 1;
     return sl[idx].maxWeightToEnd();
+  }
+
+  @Override
+  public long documentFrequency() {
+    return meta.df();
+  }
+
+  @Override
+  public float blockMaxAt(final RID rid) {
+    if (exhausted)
+      return 0.0f;
+    final int b = blockContaining(rid);
+    if (b >= meta.blockCount())
+      return 0.0f;
+    return meta.blockHeader(b).bmwUpperBound();
+  }
+
+  @Override
+  public RID blockEndAt(final RID rid) {
+    if (exhausted)
+      return null;
+    final int b = blockContaining(rid);
+    if (b >= meta.blockCount())
+      return null;
+    return meta.blockHeader(b).lastRid();
+  }
+
+  /**
+   * Index of the first block at or after the current position whose {@code lastRid} is &gt;=
+   * {@code rid}, i.e. the block that would contain {@code rid} (or the block immediately after a
+   * gap that swallows it). Reads only in-memory block headers - no page decode. Returns
+   * {@link PaginatedDimMetadata#blockCount()} when every remaining block ends before {@code rid}.
+   * <p>
+   * The scan starts from {@code currentBlock} and only moves forward. The result of the previous
+   * call is memoised in {@code shallowBlock} and reused whenever the new {@code rid} is at or after
+   * the previous one, which is the access pattern of a DAAT traversal (candidates only move
+   * forward). Without that memo the scan restarts from {@code currentBlock} on every probe and, for
+   * a cursor that is being skipped over rather than advanced, degrades into a repeated walk of the
+   * whole header array - the per-query overhead reported on the memtable/unsettled path of issue
+   * #5388. The memo is bypassed for an out-of-order (smaller) {@code rid} so an over-tight bound can
+   * never be returned.
+   */
+  private int blockContaining(final RID rid) {
+    int b = currentBlock < 0 ? 0 : currentBlock;
+    if (shallowRid != null && shallowBlock > b && SparseSegmentBuilder.compareRid(rid, shallowRid) >= 0)
+      b = shallowBlock;
+    final int total = meta.blockCount();
+    while (b < total && SparseSegmentBuilder.compareRid(meta.blockHeader(b).lastRid(), rid) < 0)
+      b++;
+    shallowBlock = b;
+    shallowRid = rid;
+    return b;
+  }
+
+  /** Test/observability hook: total block payloads decoded by this cursor since construction. */
+  public long decodedBlockCount() {
+    return decodedBlockCount;
   }
 
   @Override
@@ -136,6 +222,9 @@ public final class PaginatedSegmentDimCursor implements SourceCursor {
       start();
       return !exhausted;
     }
+    // A lazily-parked block start represents the posting at index 0; resolve it so we advance off
+    // the real posting rather than re-parking, and so blockSize is known.
+    resolvePendingDecode();
     if (currentInBlock + 1 < blockSize) {
       materializePosting(currentInBlock + 1);
       return true;
@@ -194,6 +283,18 @@ public final class PaginatedSegmentDimCursor implements SourceCursor {
       return false;
     }
 
+    // Block-Max WAND fast path (issue #5388): when the target falls at or before this block's first
+    // posting the seek lands exactly on a block boundary, so park there without reading the payload.
+    // A subsequent skip re-parks off headers alone; the block is decoded only if it is scored.
+    final RID targetFirstRid = meta.blockHeader(targetBlock).firstRid();
+    if (SparseSegmentBuilder.compareRid(targetFirstRid, target) >= 0) {
+      positionAtBlock(targetBlock);
+      currentInBlock = 0;
+      currentRid = targetFirstRid;
+      pendingDecode = true;
+      return true;
+    }
+
     if (targetBlock != currentBlock) {
       positionAtBlock(targetBlock);
       decodeBlockIfNeeded();
@@ -203,7 +304,7 @@ public final class PaginatedSegmentDimCursor implements SourceCursor {
 
     final int startIdx = oldBlock == targetBlock ? Math.max(0, oldInBlock) : 0;
     for (int i = startIdx; i < blockSize; i++) {
-      if (SparseSegmentBuilder.compareRid(blockRids[i], target) >= 0) {
+      if (SparseSegmentBuilder.compareRid(blockBuckets[i], blockPositions[i], target) >= 0) {
         materializePosting(i);
         return true;
       }
@@ -224,9 +325,28 @@ public final class PaginatedSegmentDimCursor implements SourceCursor {
   public void close() {
     exhausted = true;
     currentRid = null;
+    pendingDecode = false;
   }
 
   // --- internals ------------------------------------------------------------
+
+  /**
+   * Materialise a block start that was parked without decoding (see {@code pendingDecode}). Decodes
+   * the payload now and re-materialises posting 0. Called on the first read of a weight/tombstone or
+   * on any navigation off a parked block. Wraps the checked {@link IOException} because the
+   * {@link SourceCursor} value getters it backs are not declared to throw.
+   */
+  private void resolvePendingDecode() {
+    if (!pendingDecode)
+      return;
+    pendingDecode = false;
+    try {
+      decodeBlockIfNeeded();
+    } catch (final IOException e) {
+      throw new RuntimeException("failed to decode sparse-vector block " + currentBlock + " of dim " + meta.dimId(), e);
+    }
+    materializePosting(0);
+  }
 
   private void positionAtBlock(final int block) {
     if (block != currentBlock) {
@@ -249,30 +369,33 @@ public final class PaginatedSegmentDimCursor implements SourceCursor {
     final Binary scratch = reader.component().getDatabase().getContext().getTemporaryBuffer1();
     scratch.size(scratchSize);
     final ByteBuffer buf = reader.readBlockPayloadInto(pageNum, offsetInPage, scratch.getContent(), scratch.getByteBuffer());
+    decodedBlockCount++;
 
     final int n = bh.postingCount();
     blockSize = n;
-    blockRids[0] = bh.firstRid();
+    final RID first = bh.firstRid();
+    blockBuckets[0] = first.getBucketId();
+    blockPositions[0] = first.getPosition();
 
     if (params.ridCompression() == RidCompression.VARINT_DELTA) {
-      RID prev = bh.firstRid();
+      int prevBucket = blockBuckets[0];
+      long prevPosition = blockPositions[0];
       for (int i = 1; i < n; i++) {
         final long bucketDelta = VarInt.readUnsignedVarLong(buf);
         final long secondField = VarInt.readUnsignedVarLong(buf);
-        final RID curr;
         if (bucketDelta == 0L) {
-          curr = new RID(prev.getBucketId(), prev.getPosition() + secondField);
+          prevPosition += secondField;
         } else {
-          curr = new RID(prev.getBucketId() + (int) bucketDelta, secondField);
+          prevBucket += (int) bucketDelta;
+          prevPosition = secondField;
         }
-        blockRids[i] = curr;
-        prev = curr;
+        blockBuckets[i] = prevBucket;
+        blockPositions[i] = prevPosition;
       }
     } else {
       for (int i = 1; i < n; i++) {
-        final int bucket = buf.getInt();
-        final long pos = buf.getLong();
-        blockRids[i] = new RID(bucket, pos);
+        blockBuckets[i] = buf.getInt();
+        blockPositions[i] = buf.getLong();
       }
     }
 
@@ -316,8 +439,9 @@ public final class PaginatedSegmentDimCursor implements SourceCursor {
   }
 
   private void materializePosting(final int idxInBlock) {
+    pendingDecode = false;
     currentInBlock = idxInBlock;
-    currentRid = blockRids[idxInBlock];
+    currentRid = new RID(blockBuckets[idxInBlock], blockPositions[idxInBlock]);
     currentWeight = blockWeights[idxInBlock];
     currentTombstone = blockTombstones[idxInBlock];
   }

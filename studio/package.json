@@ -1,6 +1,6 @@
 {
   "name": "arcadedb-studio",
-  "version": "26.7.2-SNAPSHOT",
+  "version": "26.8.1-SNAPSHOT",
   "description": "ArcadeDB Studio Frontend - Multi-Model Database Administration Interface",
   "main": "src/main/resources/static/index.html",
   "scripts": {
@@ -20,9 +20,9 @@
     "version": "npm run security-check && npm run build && git add src/main/resources/static/dist package.json package-lock.json"
   },
   "dependencies": {
-    "@fortawesome/fontawesome-free": "^7.3.0",
+    "@fortawesome/fontawesome-free": "^7.3.1",
     "@popperjs/core": "^2.11.8",
-    "apexcharts": "^5.16.0",
+    "apexcharts": "^6.1.0",
     "bootstrap": "^5.3.8",
     "codemirror": "^5.65.21",
     "cytoscape": "^3.34.0",
@@ -39,10 +39,10 @@
     "datatables.net-select": "^3.1.3",
     "datatables.net-select-bs5": "^3.1.3",
     "jquery": "^4.0.0",
-    "marked": "^18.0.5",
+    "marked": "^18.0.6",
     "jszip": "^3.10.1",
     "pdfmake": "^0.3.11",
-    "swagger-ui-dist": "^5.32.8",
+    "swagger-ui-dist": "^5.32.9",
     "sweetalert2": "^11.26.25"
   },
   "devDependencies": {

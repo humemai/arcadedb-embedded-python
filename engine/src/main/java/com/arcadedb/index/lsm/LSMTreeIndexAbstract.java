@@ -211,6 +211,15 @@ public abstract class LSMTreeIndexAbstract extends PaginatedComponent {
     return rid.getBucketId() < 0;
   }
 
+  /**
+   * The LSMTreeIndex this component belongs to. For a compacted sub-index loaded from disk it is null until
+   * the owning mutable index claims it while reading its header (SUB-INDEX FILE ID): a compacted component
+   * still unclaimed AFTER the schema load is an orphan left behind by an interrupted compaction.
+   */
+  public LSMTreeIndex getMainIndex() {
+    return mainIndex;
+  }
+
   public void drop() throws IOException {
     if (database.isOpen()) {
       database.getPageManager().deleteFile(database, file.getFileId());
@@ -615,6 +624,87 @@ public abstract class LSMTreeIndexAbstract extends PaginatedComponent {
 
   protected void setCount(final MutablePage currentPage, final int newCount) {
     currentPage.writeInt(INT_SERIALIZED_SIZE, newCount);
+  }
+
+  /**
+   * Verifies that the keys physically stored in a page are in non-decreasing order according to the comparator the
+   * lookup uses. Every page of an LSM index (mutable page, compacted leaf, compacted root) is a sorted array, so a
+   * violation means the page was written under a different key order than the one the reader applies: the binary
+   * search then stops short of the matching range (rows silently missing from a lookup) or lands on an unrelated one
+   * (foreign rows returned). Indexes written before #5321 - where the string seek compared bytes as signed while the
+   * rest of the engine compared them unsigned - are left in exactly this state when a key holds multi-byte UTF-8
+   * characters, and they stay wrong after an upgrade until they are rebuilt.
+   *
+   * @return the number of violations found (only the first {@code maxProblems} are described in {@code problems})
+   */
+  protected int checkKeyOrderInPage(final BasePage page, final int count, final List<String> problems, final int maxProblems) {
+    if (count < 2)
+      return 0;
+
+    final int pageNumber = page.getPageId().getPageNumber();
+    final Binary pageBuffer = new Binary(page.slice());
+
+    int violations = 0;
+    try {
+      Object[] previous = getKeyInPagePosition(pageNumber, pageBuffer, 0);
+      for (int i = 1; i < count; ++i) {
+        final Object[] current = getKeyInPagePosition(pageNumber, pageBuffer, i);
+        // A null component has no defined position in the comparator, so a pair holding one is not evidence of disorder.
+        if (!hasNull(previous) && !hasNull(current) && compareKeys(comparator, binaryKeyTypes, previous, current) > 0) {
+          ++violations;
+          if (problems != null && problems.size() < maxProblems)
+            problems.add(
+                "page " + pageNumber + " entry " + i + ": key " + Arrays.toString(current) + " is stored after the greater key "
+                    + Arrays.toString(previous) + " (the physical key order does not match the current comparator)");
+        }
+        previous = current;
+      }
+    } catch (final Exception e) {
+      ++violations;
+      if (problems != null && problems.size() < maxProblems)
+        problems.add("page " + pageNumber + ": keys cannot be read (" + e.getMessage() + ")");
+    }
+
+    return violations;
+  }
+
+  private static boolean hasNull(final Object[] keys) {
+    for (int i = 0; i < keys.length; ++i)
+      if (keys[i] == null)
+        return true;
+    return false;
+  }
+
+  /**
+   * Walks every page of this component checking the physical key order (see
+   * {@link #checkKeyOrderInPage(BasePage, int, List, int)}). It reads the whole index, so it belongs to CHECK
+   * DATABASE and not to the open path, which uses the bounded check on the compacted root pages instead.
+   */
+  public List<String> checkKeyOrder(final int maxProblems) {
+    final List<String> problems = new ArrayList<>();
+    final int totalPages = getCheckablePages();
+
+    for (int pageNumber = 0; pageNumber < totalPages && problems.size() < maxProblems; ++pageNumber) {
+      try {
+        final BasePage page = database.getPageManager()
+            .getImmutablePage(new PageId(database, file.getFileId(), pageNumber), pageSize, false, true);
+        checkKeyOrderInPage(page, getCount(page), problems, maxProblems);
+      } catch (final Exception e) {
+        problems.add("page " + pageNumber + " cannot be read (" + e.getMessage() + ")");
+      }
+    }
+
+    return problems;
+  }
+
+  /**
+   * Number of pages {@link #checkKeyOrder(int)} may inspect. By default every physical page, but
+   * components whose readers see only a published subset (the compacted sub-index, whose in-flight
+   * compaction pages are flushed before page 0's counter announces them) narrow it to match reader
+   * visibility, so the check never mistakes a not-yet-published page for corruption.
+   */
+  protected int getCheckablePages() {
+    return getTotalPages();
   }
 
   public void setStoreTermFrequency(final boolean storeTermFrequency) {

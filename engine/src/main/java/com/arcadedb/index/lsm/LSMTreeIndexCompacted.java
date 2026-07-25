@@ -29,6 +29,7 @@ import com.arcadedb.engine.MutablePage;
 import com.arcadedb.engine.PageId;
 import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.index.IndexCursorEntry;
+import com.arcadedb.index.IndexException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.Type;
 import com.arcadedb.utility.RidHashSet;
@@ -47,6 +48,21 @@ import static com.arcadedb.database.Binary.INT_SERIALIZED_SIZE;
 public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
   public static final String UNIQUE_INDEX_EXT    = "uctidx";
   public static final String NOTUNIQUE_INDEX_EXT = "nuctidx";
+
+  private static final int MAX_SERIES_CHECKED_ON_LOAD    = 2;
+  private static final int MAX_PROBLEMS_REPORTED_ON_LOAD = 3;
+
+  /** The load-time key-order check runs once per loaded instance, not on every schema change that reloads the index. */
+  private volatile boolean keyOrderCheckedOnLoad = false;
+
+  /**
+   * Number of live {@link LSMTreeIndexUnderlyingCompactedSeriesCursor}s over this file. Series cursors load
+   * their pages LAZILY (page by page as the scan advances), so unlike the mutable-page cursors - which grab
+   * every page buffer eagerly at construction - they cannot survive their file being dropped. A full
+   * compaction that replaces this file must therefore defer the physical drop until this count drains to
+   * zero (see LSMTreeIndex's retired-file handling).
+   */
+  private final AtomicInteger activeCursors = new AtomicInteger();
 
   /**
    * Called at cloning time.
@@ -95,6 +111,14 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
     if (keys == null)
       throw new IllegalArgumentException("Keys parameter is null");
 
+    return appendDuringCompactionConverted(keyValueContent, currentPage, currentPageBuffer, compactedPageNumberOfSeries,
+        keys, convertKeysForCompaction(keys), rids);
+  }
+
+  List<MutablePage> appendDuringCompactionConverted(final Binary keyValueContent, MutablePage currentPage,
+      final TrackableBinary currentPageBuffer, final AtomicInteger compactedPageNumberOfSeries, final Object[] keys,
+      final Object[] convertedKeys, final RID[] rids)
+      throws IOException, InterruptedException {
     final List<MutablePage> newPages = new ArrayList<>();
 
     TrackableBinary pageBuffer = currentPageBuffer;
@@ -115,8 +139,6 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
     int count = getCount(currentPage);
 
     int pageNum = currentPage.getPageId().getPageNumber();
-
-    final Object[] convertedKeys = convertKeys(keys, binaryKeyTypes);
 
     int keyValueFreePosition = getValuesFreePosition(currentPage);
     int freeSpaceInPage = keyValueFreePosition - (getHeaderSize(pageNum) + (count * INT_SERIALIZED_SIZE) + INT_SERIALIZED_SIZE);
@@ -167,7 +189,8 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
       keyValueFreePosition -= keyValueContent.size();
 
       // WRITE KEY/VALUE PAIR CONTENT
-      pageBuffer.putByteArray(keyValueFreePosition, keyValueContent.toByteArray());
+      pageBuffer.putByteArray(keyValueFreePosition, keyValueContent.getContent(), keyValueContent.getContentBeginOffset(),
+          keyValueContent.size());
 
       final int startPos = getHeaderSize(pageNum) + (count * INT_SERIALIZED_SIZE);
       pageBuffer.putInt(startPos, keyValueFreePosition);
@@ -206,6 +229,54 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
     } while (true);
 
     return newPages;
+  }
+
+  int availableSpaceForEntries(final MutablePage page) {
+    final int count = getCount(page);
+    return getValuesFreePosition(page)
+        - (getHeaderSize(page.getPageId().getPageNumber()) + count * INT_SERIALIZED_SIZE);
+  }
+
+  int requiredSpaceForEntry(final MutablePage page, final Object[] keys, final RID[] rids) {
+    return requiredSpaceForEntry(new Binary(), page, keys, convertKeysForCompaction(keys), rids);
+  }
+
+  int requiredSpaceForEntry(final Binary scratch, final MutablePage page, final Object[] keys,
+      final Object[] convertedKeys, final RID[] rids) {
+    final int pageNumber = page.getPageId().getPageNumber();
+    final int pageUsableSpace = page.getMaxContentSize() - getHeaderSize(pageNumber);
+    final int written = writeEntryMultipleValues(scratch, convertedKeys, rids, pageUsableSpace, pageUsableSpace,
+        page.getPageId());
+    if (written != rids.length)
+      throw new IndexException("Key/value group for " + Arrays.toString(keys) + " does not fit in one compacted page");
+    return INT_SERIALIZED_SIZE + scratch.size();
+  }
+
+  boolean canAppendWholeEntry(final MutablePage page, final Object[] keys, final RID[] rids) {
+    return requiredSpaceForEntry(page, keys, rids) <= availableSpaceForEntries(page);
+  }
+
+  int valuesFittingInEmptyLeaf(final MutablePage referencePage, final Object[] keys, final RID[] rids) {
+    return valuesFittingInEmptyLeaf(new Binary(), referencePage, keys, convertKeysForCompaction(keys), rids);
+  }
+
+  int valuesFittingInEmptyLeaf(final Binary scratch, final MutablePage referencePage, final Object[] keys,
+      final Object[] convertedKeys, final RID[] rids) {
+    final int pageUsableSpace = referencePage.getMaxContentSize() - getHeaderSize(1);
+    final int written = writeEntryMultipleValues(scratch, convertedKeys, rids,
+        pageUsableSpace - INT_SERIALIZED_SIZE, pageUsableSpace, referencePage.getPageId());
+    if (written < 1)
+      throw new IndexException(
+          "Key/value group for " + Arrays.toString(keys) + " does not fit in an empty compacted leaf page");
+    return written;
+  }
+
+  int requiredSpaceForSerializedEntry(final Binary serializedEntry) {
+    return INT_SERIALIZED_SIZE + serializedEntry.size();
+  }
+
+  Object[] convertKeysForCompaction(final Object[] keys) {
+    return convertKeys(keys, binaryKeyTypes);
   }
 
   protected LookupResult compareKey(final Binary currentPageBuffer, final int startIndexArray, final Object[] convertedKeys,
@@ -332,7 +403,9 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
 
       LSMTreeIndexUnderlyingCompactedSeriesCursor iterator = null;
 
-      int startingPageNumber = rootPageNumber + 1 + (ascendingOrder ? 0 : rootPageCount);
+      // Each series stores its root first, followed by rootPageCount data pages. DESC must start on the last data page,
+      // not one page beyond it (which may be the next series' root page).
+      final int startingPageNumber = rootPageNumber + (ascendingOrder ? 1 : rootPageCount);
       final int lastPageNumber = rootPageNumber + (ascendingOrder ? rootPageCount : 1);
 
       if (fromKeys != null) {
@@ -342,19 +415,23 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
         // keys are partial (fewer components than the composite index defines). Purpose=1 rejects
         // partial keys with "key is composed of N items, while the index defined M items".
         // Purpose=2 allows partial key comparison which correctly matches by prefix.
-        // For full keys, keep purpose=1 to preserve exact boundary behavior for descending ranges.
+        // For full keys, keep purpose=1 to preserve exact boundary behavior for descending ranges and the shared-leaf
+        // (multi-page duplicate) positioning, both of which depend on purpose=1's value-run result.
         final int fromPurpose = fromKeys.length < binaryKeyTypes.length ? 2 : 1;
-        LookupResult resultInRootPage = lookupInPage(rootPageNumber, rootPageCount + 1, rootPageBuffer, fromKeys,
+        final LookupResult resultInRootPage = lookupInPage(rootPageNumber, rootPageCount + 1, rootPageBuffer, fromKeys,
             fromPurpose);
-        iterator = searchInCurrentPage(ascendingOrder, fromKeys, rootPageNumber, rootPageCount, rootPage, lastPageNumber,
-            resultInRootPage);
-        if (iterator == null) {
-          // LOOK FOR TO KEY IF ANY
-          final int toPurpose = toKeys != null && toKeys.length < binaryKeyTypes.length ? 2 : 1;
-          resultInRootPage = lookupInPage(rootPageNumber, rootPageCount + 1, rootPageBuffer, toKeys, toPurpose);
-          iterator = searchInCurrentPage(ascendingOrder, toKeys, rootPageNumber, rootPageCount, rootPage, lastPageNumber,
+        if (!resultInRootPage.outside)
+          iterator = searchInCurrentPage(ascendingOrder, fromKeys, rootPageNumber, rootPageCount, rootPage, lastPageNumber,
               resultInRootPage);
-        }
+        else if (ascendingOrder == (resultInRootPage.keyIndex == 0))
+          // fromKeys is OUTSIDE this series' key range and the series sits on the scanned side of fromKeys, so the whole
+          // series belongs to the result: emit a full-series cursor. keyIndex==0 means fromKeys is below the series
+          // (LOWER); a non-zero keyIndex means it is above (HIGHER). Ascending keeps series above the (lower) fromKeys
+          // bound; descending keeps series below the (upper) fromKeys bound. The opposite (far) bound is enforced by
+          // LSMTreeIndexCursor's toKeys termination. Without this, a series lying wholly inside [fromKeys, toKeys] -
+          // containing neither endpoint - produced no cursor and every interior series was silently dropped (#5214).
+          iterator = new LSMTreeIndexUnderlyingCompactedSeriesCursor(this, startingPageNumber, lastPageNumber, binaryKeyTypes,
+              ascendingOrder, -1);
       } else
         iterator = new LSMTreeIndexUnderlyingCompactedSeriesCursor(this, startingPageNumber, lastPageNumber, binaryKeyTypes,
             ascendingOrder, -1);
@@ -377,7 +454,16 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
       int pageInSeries = resultInRootPage.keyIndex;
 
       if (resultInRootPage.found) {
-        if (pageInSeries >= rootPageCount)
+        if (ascendingOrder && !unique) {
+          // Start at the first matching leaf plus its possible shared predecessor. Legacy files can contain a key that began
+          // on its predecessor and then overflowed; the bounded writer can also place a complete leading RID chunk there
+          // before later chunks move to matching leaves. A non-matching predecessor advances to the next page below. Unique
+          // indexes are exempt: a unique key holds one value and cannot span leaves.
+          final int firstMatchingRootEntry = resultInRootPage.valueBeginPositions != null
+              ? resultInRootPage.keyIndex - resultInRootPage.valueBeginPositions.length + 1
+              : resultInRootPage.keyIndex;
+          pageInSeries = Math.max(0, firstMatchingRootEntry - 1);
+        } else if (pageInSeries >= rootPageCount)
           // LAST ITEM + FOUND = IT'S THE LAST ELEMENT OF THE LAST PAGE
           --pageInSeries;
       } else
@@ -409,9 +495,14 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
       } else {
         startingPageNumber = firstPageNumber;
         posInPage = result.keyIndex;
-        if (ascendingOrder)
+        if (ascendingOrder) {
+          // Binary search may land in the middle of a repeated-key run. This matters when a bounded write starts a
+          // high-cardinality key on its predecessor leaf: starting at the middle drops the earlier RID chunks on that leaf.
+          // Position immediately before the first matching entry so the series cursor emits the complete run.
+          if (result.found && !unique)
+            posInPage = findFirstEntryOfSameKey(firstPageBuffer, convertedFromKeys, getHeaderSize(firstPageNumber), posInPage);
           --posInPage;
-        else
+        } else
           ++posInPage;
       }
 
@@ -485,6 +576,11 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
       if (!resultInRootPage.outside) {
         // IT'S IN PAGE RANGE
         int pageInSeries = resultInRootPage.keyIndex;
+        // Unique indexes are exempt: a unique key holds a single value that never overflows a page, so the shared-leaf
+        // layout cannot occur and the extra preceding-leaf read below is pure overhead.
+        final int firstMatchingRootEntry = !unique && resultInRootPage.found && resultInRootPage.valueBeginPositions != null
+            ? resultInRootPage.keyIndex - resultInRootPage.valueBeginPositions.length + 1
+            : -1;
 
         if (resultInRootPage.found) {
           if (pageInSeries >= rootPageCount)
@@ -495,9 +591,14 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
           --pageInSeries;
 
         if (resultInRootPage.valueBeginPositions != null && resultInRootPage.valueBeginPositions.length > 1) {
+          // Newest leaf first. A key whose values overflow one leaf is written oldest-chunk-first onto ascending pages, so
+          // walking the root entries in order would visit the oldest chunk first. That inverts the deletion semantics of
+          // lookupInPageAndAddInResultset, whose deletedRIDs set only suppresses RIDs encountered AFTER the tombstone: a
+          // tombstone in an early chunk would then kill the live re-add sitting in a later chunk. Every other level of this
+          // reader (mutable pages, series, values within a page) already walks newest to oldest for the same reason.
           final List<RID> pages = readAllValuesFromResult(rootPageBuffer, resultInRootPage);
-          for (RID page : pages) {
-            final int pageNum = (int) page.getPosition();
+          for (int p = pages.size() - 1; p > -1; --p) {
+            final int pageNum = (int) pages.get(p).getPosition();
             if (pageNum < 1)
               continue;
 
@@ -520,6 +621,21 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
               removedKeys, deletedRIDs))
             return;
         }
+
+        // Compacted files written before the shared-leaf writer safeguard can store the first chunk of an overflowing key on
+        // the leaf that ends with the preceding key. Later chunks have root entries for the searched key, but that first chunk
+        // is reachable only through the immediately preceding leaf. The result set removes any overlap.
+        if (firstMatchingRootEntry > 0) {
+          final int precedingPageNum = rootPage.getPageId().getPageNumber() + firstMatchingRootEntry;
+          final BasePage precedingPage = database.getTransaction()
+              .getPage(new PageId(database, file.getFileId(), precedingPageNum), pageSize);
+          final Binary precedingPageBuffer = new Binary(precedingPage.slice());
+          final int precedingCount = getCount(precedingPage);
+
+          if (!lookupInPageAndAddInResultset(precedingPage, precedingPageBuffer, precedingCount, originalKeys, convertedKeys,
+              limit, set, removedKeys, deletedRIDs))
+            return;
+        }
       }
 
       --pageNumber;
@@ -528,6 +644,150 @@ public class LSMTreeIndexCompacted extends LSMTreeIndexAbstract {
 
   private int getCompactedPageNumberOfSeries(final BasePage currentPage) {
     return currentPage.readInt(INT_SERIALIZED_SIZE + INT_SERIALIZED_SIZE + BYTE_SERIALIZED_SIZE);
+  }
+
+  /**
+   * Runs {@link #checkRootPagesKeyOrder(int, int)} once per loaded instance and reports the outcome as a WARNING, so an
+   * index left physically mis-ordered by an older build is reported at startup instead of silently under-returning on
+   * every lookup. Never propagates: a failure to run the check must not stop the database from opening.
+   */
+  void checkKeyOrderOnLoad() {
+    if (keyOrderCheckedOnLoad)
+      return;
+    keyOrderCheckedOnLoad = true;
+
+    try {
+      final List<String> problems = checkRootPagesKeyOrder(MAX_SERIES_CHECKED_ON_LOAD, MAX_PROBLEMS_REPORTED_ON_LOAD);
+      if (!problems.isEmpty())
+        LogManager.instance().log(this, Level.WARNING,
+            "Index '%s' is physically ordered differently than the current key comparator, so lookups can return fewer (or foreign) records than a scan: run 'REBUILD INDEX %s'. Details: %s",
+            null, getName(), getName(), problems);
+    } catch (final Exception e) {
+      LogManager.instance()
+          .log(this, Level.FINE, "Error on checking the key order of index '%s' at load time (%s)", null, getName(),
+              e.getMessage());
+    }
+  }
+
+  /**
+   * Bounded variant of {@link #checkKeyOrder(int)} for the open path: it only reads the root page of the most recent
+   * compacted series (one entry per leaf page, so a handful of page reads per index) and checks their order. An index
+   * physically written under a different key order - the state an upgrade past #5321 leaves behind for keys with
+   * multi-byte UTF-8 characters - carries the very same disorder in its root pages, so this catches it at startup and
+   * points at a rebuild, instead of the divergence surfacing much later as a lookup that silently returns fewer rows
+   * than a scan.
+   *
+   * @param maxSeries   maximum number of series to inspect, starting from the most recent one
+   * @param maxProblems maximum number of problems to describe
+   */
+  public List<String> checkRootPagesKeyOrder(final int maxSeries, final int maxProblems) throws IOException {
+    final List<String> problems = new ArrayList<>();
+
+    final int totalPages = getTotalPages();
+    if (totalPages < 2)
+      return problems;
+
+    final BasePage mainPage = database.getPageManager()
+        .getImmutablePage(new PageId(database, file.getFileId(), 0), pageSize, false, true);
+
+    final int effectivePageCount = Math.min(getCompactedPageNumberOfSeries(mainPage), totalPages);
+
+    int series = 0;
+    for (int pageNumber = effectivePageCount - 1; pageNumber > 0 && series < maxSeries && problems.size() < maxProblems; ) {
+      final BasePage lastPage = database.getPageManager()
+          .getImmutablePage(new PageId(database, file.getFileId(), pageNumber), pageSize, false, true);
+
+      final int rootPageCount = getCompactedPageNumberOfSeries(lastPage);
+      if (rootPageCount == 0 || rootPageCount > pageNumber) {
+        // EMPTY OR INVALID SERIES MARKER: LEAVE IT TO THE FULL CHECK, JUST MOVE TO THE PREVIOUS PAGE
+        --pageNumber;
+        continue;
+      }
+
+      pageNumber -= rootPageCount;
+
+      final BasePage rootPage = database.getPageManager()
+          .getImmutablePage(new PageId(database, file.getFileId(), pageNumber), pageSize, false, true);
+
+      checkKeyOrderInPage(rootPage, getCount(rootPage), problems, maxProblems);
+
+      ++series;
+      --pageNumber;
+    }
+
+    return problems;
+  }
+
+  void onCursorOpened() {
+    activeCursors.incrementAndGet();
+  }
+
+  void onCursorClosed() {
+    activeCursors.decrementAndGet();
+  }
+
+  /** Live series cursors over this file; the file cannot be physically dropped while > 0. */
+  public int getActiveCursors() {
+    return activeCursors.get();
+  }
+
+  /**
+   * Number of compacted series currently published (page 0's counter), walking the same root-page chain the
+   * readers walk. Grows by at least one per incremental compaction round - more when the round is RAM-bound -
+   * and collapses back to one after a full compaction.
+   */
+  public int getSeriesCount() {
+    final int totalPages = getTotalPages();
+    if (totalPages < 1)
+      return 0;
+
+    try {
+      final BasePage mainPage = database.getPageManager()
+          .getImmutablePage(new PageId(database, file.getFileId(), 0), pageSize, false, true);
+      final int effectivePageCount = Math.min(getCompactedPageNumberOfSeries(mainPage), totalPages);
+
+      int series = 0;
+      for (int pageNumber = effectivePageCount - 1; pageNumber > 0; ) {
+        final BasePage lastPage = database.getPageManager()
+            .getImmutablePage(new PageId(database, file.getFileId(), pageNumber), pageSize, false, true);
+
+        final int rootPageCount = getCompactedPageNumberOfSeries(lastPage);
+        if (rootPageCount == 0 || rootPageCount > pageNumber) {
+          // EMPTY OR INVALID SERIES MARKER: SKIP THE PAGE (same tolerance as newIterators)
+          --pageNumber;
+          continue;
+        }
+
+        pageNumber -= rootPageCount;
+        ++series;
+        --pageNumber;
+      }
+      return series;
+    } catch (final IOException e) {
+      throw new IndexException("Error on counting the series of compacted index '" + getName() + "'", e);
+    }
+  }
+
+  /**
+   * Readers only see the pages page 0's series counter has published ({@link #newIterators} clamps to it):
+   * an in-flight compaction flushes its series pages BEFORE bumping the counter, and a failed round leaves
+   * orphans beyond it (#4946). The full key-order walk must apply the same clamp, or it inspects pages no
+   * reader would ever touch - half-written or orphaned - and reports a healthy index as corrupt.
+   */
+  @Override
+  protected int getCheckablePages() {
+    final int totalPages = getTotalPages();
+    if (totalPages < 1)
+      return totalPages;
+
+    try {
+      final BasePage mainPage = database.getPageManager()
+          .getImmutablePage(new PageId(database, file.getFileId(), 0), pageSize, false, true);
+      return Math.min(getCompactedPageNumberOfSeries(mainPage), totalPages);
+    } catch (final IOException e) {
+      // let the walk itself surface the unreadable page 0
+      return totalPages;
+    }
   }
 
   /**

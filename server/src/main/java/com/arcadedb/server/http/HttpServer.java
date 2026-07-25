@@ -37,6 +37,7 @@ import com.arcadedb.server.http.handler.GetDynamicContentHandler;
 import com.arcadedb.server.http.handler.GetExistsDatabaseHandler;
 import com.arcadedb.server.http.handler.GetHealthHandler;
 import com.arcadedb.server.http.handler.GetOpenApiHandler;
+import com.arcadedb.server.http.handler.GetProgressHandler;
 import com.arcadedb.server.http.handler.GetQueryHandler;
 import com.arcadedb.server.http.handler.GetReadyHandler;
 import com.arcadedb.server.http.handler.GetServerHandler;
@@ -137,7 +138,9 @@ public class HttpServer implements ServerPlugin {
     this.webSocketEventBus = new WebSocketEventBus(this.server);
     final long ttlMs = server.getConfiguration().getValueAsLong(GlobalConfiguration.HA_IDEMPOTENCY_CACHE_TTL_MS);
     final int maxEntries = server.getConfiguration().getValueAsInteger(GlobalConfiguration.HA_IDEMPOTENCY_CACHE_MAX_ENTRIES);
-    this.idempotencyCache = new IdempotencyCache(ttlMs, maxEntries);
+    final long maxBytes = server.getConfiguration().getValueAsLong(GlobalConfiguration.HA_IDEMPOTENCY_CACHE_MAX_BYTES);
+    final long maxBodyBytes = server.getConfiguration().getValueAsLong(GlobalConfiguration.HA_IDEMPOTENCY_CACHE_MAX_BODY_BYTES);
+    this.idempotencyCache = new IdempotencyCache(ttlMs, maxEntries, maxBytes, maxBodyBytes);
     this.idempotencyCleanupExecutor = Executors.newSingleThreadScheduledExecutor(
         r -> new Thread(r, "IdempotencyCache-cleanup"));
     this.idempotencyCleanupExecutor.scheduleAtFixedRate(idempotencyCache::cleanupExpired, 30, 30, TimeUnit.SECONDS);
@@ -222,6 +225,7 @@ public class HttpServer implements ServerPlugin {
         .post("/commit/{database}", new PostCommitHandler(this))
         .get("/databases", new GetDatabasesHandler(this))
         .get("/exists/{database}", new GetExistsDatabaseHandler(this))
+        .get("/progress/{database}", new GetProgressHandler(this))
         .post("/login", new PostLoginHandler(this))
         .post("/logout", new PostLogoutHandler(this))
         .get("/query/{database}/{language}/{command}", new GetQueryHandler(this))

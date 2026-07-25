@@ -158,16 +158,62 @@ public class SetStep extends AbstractExecutionStep {
       if (!wasInTransaction)
         context.getDatabase().begin();
 
-      for (final SetClause.SetItem item : setClause.getItems()) {
+      final List<SetClause.SetItem> items = setClause.getItems();
+
+      // Phase 1: evaluate all right-hand-side expressions against the graph state *before* the SET
+      // clause runs. openCypher / Neo4j SET is a simultaneous assignment: every read must observe
+      // the pre-clause value, never a value written by an earlier item in the same clause
+      // (issue #5190). E.g. "SET a.x = a.y, a.y = a.x" must swap rather than copy.
+      //
+      // #5227: the pre-clause snapshot must be the LATEST COMMITTED state (what a locked read would
+      // observe), NOT the possibly-stale record snapshot the MATCH loaded. reloadLatestDoc() below
+      // reloads each variable target to its current committed version before its right-hand side is
+      // evaluated, so a concurrent transaction that committed between the MATCH read and this write is
+      // observed here instead of being silently overwritten (a lost update on e.g. "SET a.c = a.c + 1").
+      // The page pinned by the reload makes any commit that lands AFTER this point fail the MVCC
+      // version check at commit, surfacing a retryable conflict the auto-retry loop re-runs cleanly.
+      final Object[] values = new Object[items.size()];
+      final String[] keys = new String[items.size()];
+      final boolean[] keyIsNull = new boolean[items.size()];
+      for (int i = 0; i < items.size(); i++) {
+        final SetClause.SetItem item = items.get(i);
         switch (item.getType()) {
           case PROPERTY:
-            applyPropertySet(item, result, writtenDocs);
+            // Resolve the latest doc first so self-referential reads across row fanout (e.g. via
+            // UNWIND) observe prior-row writes, then snapshot key + value.
+            if (item.getVariable() != null)
+              reloadLatestDoc(item.getVariable(), result, writtenDocs);
+            if (item.getKeyExpression() != null) {
+              final Object keyValue = evaluator.evaluate(item.getKeyExpression(), result, context);
+              if (keyValue == null)
+                keyIsNull[i] = true;
+              else
+                keys[i] = keyValue.toString();
+            }
+            values[i] = evaluator.evaluate(item.getValueExpression(), result, context);
             break;
           case REPLACE_MAP:
-            applyReplaceMap(item, result, writtenDocs);
+          case MERGE_MAP:
+            reloadLatestDoc(item.getVariable(), result, writtenDocs);
+            values[i] = evaluator.evaluate(item.getValueExpression(), result, context);
+            break;
+          case LABELS:
+            break;
+        }
+      }
+
+      // Phase 2: apply the writes using the pre-computed snapshot values.
+      for (int i = 0; i < items.size(); i++) {
+        final SetClause.SetItem item = items.get(i);
+        switch (item.getType()) {
+          case PROPERTY:
+            applyPropertySet(item, result, writtenDocs, values[i], keys[i], keyIsNull[i]);
+            break;
+          case REPLACE_MAP:
+            applyReplaceMap(item, result, writtenDocs, values[i]);
             break;
           case MERGE_MAP:
-            applyMergeMap(item, result, writtenDocs);
+            applyMergeMap(item, result, writtenDocs, values[i]);
             break;
           case LABELS:
             applyLabels(item, result, writtenDocs, labelReplacements);
@@ -185,7 +231,8 @@ public class SetStep extends AbstractExecutionStep {
   }
 
   private void applyPropertySet(final SetClause.SetItem item, final Result result,
-      final Map<RID, MutableDocument> writtenDocs) {
+      final Map<RID, MutableDocument> writtenDocs, final Object precomputedValue, final String precomputedKey,
+      final boolean keyIsNull) {
     final Object obj;
     final String variableToUpdate;
 
@@ -213,17 +260,27 @@ public class SetStep extends AbstractExecutionStep {
     if (mutableDoc != doc && variableToUpdate != null)
       ((ResultInternal) result).setProperty(variableToUpdate, mutableDoc);
 
-    Object value = evaluator.evaluate(item.getValueExpression(), result, context);
+    // Resolve the property name. For dynamic bracket syntax (SET n[keyExpr] = value) the name is
+    // computed at runtime (snapshotted in phase 1); otherwise it is the static dot-syntax name.
+    final String propertyName;
+    if (item.getKeyExpression() != null) {
+      if (keyIsNull)
+        return; // null key is a no-op
+      propertyName = precomputedKey;
+    } else
+      propertyName = item.getProperty();
+
+    Object value = precomputedValue;
     final boolean propertyExisted;
     if (value == null) {
       // Removing an absent property is a no-op for Neo4j-compatible statistics: only count it
       // when the property actually existed before the removal.
-      propertyExisted = mutableDoc.has(item.getProperty());
-      mutableDoc.remove(item.getProperty());
+      propertyExisted = mutableDoc.has(propertyName);
+      mutableDoc.remove(propertyName);
     } else {
       value = TemporalUtil.toCoreJavaType(value);
       validatePropertyValue(value);
-      mutableDoc.set(item.getProperty(), value);
+      mutableDoc.set(propertyName, value);
       propertyExisted = true;
     }
     mutableDoc.save();
@@ -246,12 +303,12 @@ public class SetStep extends AbstractExecutionStep {
 
   @SuppressWarnings("unchecked")
   private void applyReplaceMap(final SetClause.SetItem item, final Result result,
-      final Map<RID, MutableDocument> writtenDocs) {
+      final Map<RID, MutableDocument> writtenDocs, final Object precomputedValue) {
     final Document doc = resolveLatestDoc(item.getVariable(), result, writtenDocs);
     if (doc == null)
       return;
 
-    final Object mapValue = evaluator.evaluate(item.getValueExpression(), result, context);
+    final Object mapValue = precomputedValue;
     if (!(mapValue instanceof Map))
       return;
 
@@ -293,12 +350,12 @@ public class SetStep extends AbstractExecutionStep {
 
   @SuppressWarnings("unchecked")
   private void applyMergeMap(final SetClause.SetItem item, final Result result,
-      final Map<RID, MutableDocument> writtenDocs) {
+      final Map<RID, MutableDocument> writtenDocs, final Object precomputedValue) {
     final Document doc = resolveLatestDoc(item.getVariable(), result, writtenDocs);
     if (doc == null)
       return;
 
-    final Object mapValue = evaluator.evaluate(item.getValueExpression(), result, context);
+    final Object mapValue = precomputedValue;
     if (!(mapValue instanceof Map))
       return;
 
@@ -347,6 +404,28 @@ public class SetStep extends AbstractExecutionStep {
       }
     }
     return rawDoc;
+  }
+
+  /**
+   * #5227: resolves the target variable and replaces it in the result row with its mutable, latest-committed
+   * version so a SET right-hand side is evaluated against the current state of the record, not the snapshot the
+   * MATCH loaded. {@link com.arcadedb.database.ImmutableDocument#modify()} force-reloads a record that was read
+   * outside the write path to its latest committed version and pins its page in the transaction; evaluating the
+   * right-hand side against that (instead of a stale MATCH buffer) prevents concurrent read-modify-write updates
+   * from being silently lost, while the pinned page makes any later concurrent commit fail the commit-time MVCC
+   * version check as a retryable conflict. A record already written earlier in this transaction (in
+   * {@code writtenDocs}) is a {@link MutableDocument} whose {@code modify()} returns itself, so cross-row
+   * read-your-writes semantics are preserved.
+   */
+  private void reloadLatestDoc(final String variable, final Result result, final Map<RID, MutableDocument> writtenDocs) {
+    if (variable == null)
+      return;
+    final Document doc = resolveLatestDoc(variable, result, writtenDocs);
+    if (doc == null)
+      return;
+    final MutableDocument mutable = doc.modify();
+    if (mutable != doc)
+      ((ResultInternal) result).setProperty(variable, mutable);
   }
 
   /**

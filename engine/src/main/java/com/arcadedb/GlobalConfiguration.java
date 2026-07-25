@@ -395,6 +395,26 @@ public enum GlobalConfiguration {
       "Maximum amount of milliseconds to compute a random number to wait for the next retry. This setting is helpful in case of high concurrency on the same pages (multi-thread insertion over the same bucket)",
       Integer.class, 100),
 
+  GRAPH_EDGE_APPEND_MERGE("arcadedb.graph.edgeAppendMerge", SCOPE.DATABASE,
+      "At commit, when the only conflict on an edge-list page is concurrent in-chunk edge appends (which commute), re-apply the appends on top of the newer page version instead of failing the whole transaction with a ConcurrentModificationException. Removes the retry storm on super-node (hot vertex) edge insertion",
+      Boolean.class, true),
+
+  TX_PAGE_SLOT_MERGE("arcadedb.txPageSlotMerge", SCOPE.DATABASE,
+      "Generalization of GRAPH_EDGE_APPEND_MERGE to arbitrary records. At commit, when a bucket page conflicts only because concurrent transactions touched DIFFERENT record slots on it (logically-unrelated records sharing a page), re-apply this transaction's slot writes on top of the newer committed page instead of failing the whole transaction with a ConcurrentModificationException. Covers new-record inserts into free slots and same-or-smaller in-place updates (e.g. the vertex edge-list head-pointer flip on super-node insertion); a genuine same-record conflict, or any non-rebasable change (delete, multi-page/placeholder record, record growth), still raises the exception so it is retried",
+      Boolean.class, true),
+
+  TX_PAGE_SLOT_MERGE_MAX_BYTES("arcadedb.txPageSlotMergeMaxBytes", SCOPE.DATABASE,
+      "Per-transaction soft cap (in bytes) on the record pre-images/final images retained for the disjoint-slot merge (TX_PAGE_SLOT_MERGE). When a transaction's tracked images exceed this, the merge is disabled for the rest of that transaction and its conflicting pages fall back to a normal retry - bounding heap on a very large transaction (e.g. a bulk in-place update) instead of retaining ~2x every touched record until commit",
+      Long.class, 16L * 1024 * 1024),
+
+  GRAPH_SUPERNODE_THRESHOLD("arcadedb.graph.supernodeThreshold", SCOPE.DATABASE,
+      "Approximate number of edges (per vertex, per direction) after which the vertex's edge list is promoted to the striped super-node layout, spreading further appends over multiple files so concurrent insertions on the same hot vertex do not contend. FORWARD-INCOMPATIBLE ON FIRST USE: promotion writes a new record type (the stripe directory), so once any vertex promotes, the database can no longer be opened by releases older than 26.8.1; promotion is one-way. Iteration order on promoted vertices is approximate (newest-generation-first) instead of strict reverse-insertion. 0 disables promotion entirely (databases stay fully readable by older versions)",
+      Integer.class, 4096),
+
+  GRAPH_SUPERNODE_STRIPES("arcadedb.graph.supernodeStripes", SCOPE.DATABASE,
+      "Number of stripes (separate edge-list files) a super-node's edge list is spread over at promotion. The stripes are hosted in a per-type bucket pool of this many files, created once per type at its first promotion (types without super-nodes cost no files). Write parallelism saturates at the number of concurrent writers, so values beyond the CPU cores rarely help. Values below 2 disable promotion entirely. Recorded per vertex at promotion time",
+      Integer.class, 16),
+
   BACKUP_ENABLED("arcadedb.backup.enabled", SCOPE.DATABASE,
       "Allow a database to be backup. Disabling backup gives a huge boost in performance because no lock will be used for every operations",
       Boolean.class, true),
@@ -431,6 +451,23 @@ public enum GlobalConfiguration {
       Root directory for LOAD CSV file:/// URLs. When set, file paths are resolved relative to this \
       directory and path traversal (../) is blocked. Empty string means no restriction.""",
       String.class, ""),
+
+  OPENCYPHER_LOAD_CSV_ALLOW_REMOTE_URLS("arcadedb.opencypher.loadCsv.allowRemoteUrls", SCOPE.DATABASE,
+      """
+      Allow LOAD CSV to fetch data from remote http:// and https:// URLs. When enabled (default), remote fetches are still \
+      restricted by arcadedb.opencypher.loadCsv.blockedIpRanges to prevent Server-Side Request Forgery (SSRF) against internal \
+      services. Disable to block all remote URL access in locked-down or multi-tenant deployments.""",
+      Boolean.class, true),
+
+  OPENCYPHER_LOAD_CSV_BLOCKED_IP_RANGES("arcadedb.opencypher.loadCsv.blockedIpRanges", SCOPE.DATABASE,
+      """
+      Comma-separated list of CIDR ranges that LOAD CSV remote http(s) fetches are NOT allowed to reach. Enforced against the \
+      resolved IP address of the target host and re-checked on every redirect hop to prevent Server-Side Request Forgery (SSRF). \
+      Defaults to loopback, private (RFC 1918), link-local (including the cloud metadata address 169.254.169.254), carrier-grade \
+      NAT, multicast and reserved ranges. Set to an empty string to disable IP filtering (not recommended).""",
+      String.class,
+      "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,0.0.0.0/8,100.64.0.0/10,192.0.0.0/24,198.18.0.0/15,"
+          + "224.0.0.0/4,240.0.0.0/4,255.255.255.255/32,::1/128,::/128,fe80::/10,fc00::/7,ff00::/8"),
 
   OPENCYPHER_ID_BUCKET_BITS("arcadedb.opencypher.idBucketBits", SCOPE.JVM,
       """
@@ -475,10 +512,20 @@ public enum GlobalConfiguration {
       Boolean.class, true),
 
   QUERY_MAX_HEAP_ELEMENTS_ALLOWED_PER_OP("arcadedb.queryMaxHeapElementsAllowedPerOp", SCOPE.DATABASE, """
-      Maximum number of elements (records) allowed in a single query for memory-intensive operations (eg. ORDER BY in heap). \
-      If exceeded, the query fails with an OCommandExecutionException. Negative number means no limit.\
-      This setting is intended as a safety measure against excessive resource consumption from a single query (eg. prevent OutOfMemory)""",
-      Long.class, 500_000),
+      Maximum number of elements (records/groups) allowed in a single query for memory-intensive operations (eg. ORDER BY, GROUP BY \
+      and DISTINCT in heap). If exceeded, the query fails with a CommandExecutionException. Negative number means no limit. \
+      This setting is intended as a safety measure against excessive resource consumption from a single query (eg. prevent OutOfMemory). \
+      When left at the default it auto-scales with the JVM max heap (roughly one element every 2KB of heap, never below 500000), so \
+      large-cardinality analytical queries (eg. top-N-by-aggregate over millions of distinct keys) complete out of the box on servers \
+      with a big heap while small footprints stay protected. Set an explicit value to override the auto-scaling.""",
+      Long.class, 500_000L, null, value -> {
+        // Auto-scale the default with the JVM max heap: roughly one element every 2KB, never below the historical 500000 floor.
+        final long maxHeap = Runtime.getRuntime().maxMemory();
+        if (maxHeap == Long.MAX_VALUE)
+          // Heap is unbounded (no -Xmx): keep the conservative floor rather than an effectively unlimited cap.
+          return 500_000L;
+        return Math.max(500_000L, maxHeap / 2048);
+      }),
 
   QUERY_PARALLEL_SCAN("arcadedb.queryParallelScan", SCOPE.DATABASE,
       """
@@ -512,6 +559,10 @@ public enum GlobalConfiguration {
   INDEX_COMPACTION_MIN_PAGES_SCHEDULE("arcadedb.indexCompactionMinPagesSchedule", SCOPE.DATABASE,
       "Minimum number of mutable pages for an index to be schedule for automatic compaction. 0 = disabled", Integer.class, 10),
 
+  INDEX_COMPACTION_FULL_SERIES("arcadedb.indexCompactionFullSeriesThreshold", SCOPE.DATABASE,
+      "Number of compacted series at which an index compaction runs as a full compaction: every existing series is merged together with the mutable pages into a single fresh series, deletions are resolved and dead entries dropped. Keeps delete-heavy indexes from accumulating unbounded tombstone runs and series. 0 = disabled",
+      Integer.class, 10),
+
   VECTOR_INDEX_LOCATION_CACHE_SIZE("arcadedb.vectorIndex.locationCacheSize", SCOPE.DATABASE,
       """
       Maximum number of vector locations to cache in memory per vector index. \
@@ -535,6 +586,24 @@ public enum GlobalConfiguration {
       Lower values provide fresher results but rebuild more frequently. \
       Recommended: 50-200 for read-heavy, 200-500 for write-heavy workloads.""",
       Integer.class, 100),
+
+  VECTOR_INDEX_REBUILD_GRAPH_RATIO("arcadedb.vectorIndex.rebuildGraphRatio", SCOPE.DATABASE,
+      """
+      Fraction of the current graph size that must accumulate as pending mutations before the HNSW graph is \
+      rebuilt, on top of the absolute mutationsBeforeRebuild floor. A rebuild always re-indexes the whole graph, \
+      so a fixed absolute threshold makes it cost O(index size) for every few new vectors and turns bulk \
+      ingestion quadratic. Scaling the threshold with the graph amortizes rebuilds geometrically. \
+      Pending vectors stay exactly searchable through the in-memory delta buffer meanwhile, so a higher ratio \
+      trades a slightly longer per-query delta scan for far less rebuild CPU. Set to 0 to disable scaling and \
+      use only the absolute threshold.""",
+      Float.class, 0.2f),
+
+  VECTOR_INDEX_MAX_PENDING_MUTATIONS("arcadedb.vectorIndex.maxPendingMutations", SCOPE.DATABASE,
+      """
+      Hard ceiling on the rebuild threshold computed from rebuildGraphRatio. Pending vectors are held in an \
+      in-memory delta buffer until the next rebuild, so this bounds that buffer's footprint \
+      (RAM = pendingMutations * dimensions * 4 bytes). Set to 0 for no ceiling.""",
+      Integer.class, 50_000),
 
   VECTOR_INDEX_INACTIVITY_REBUILD_TIMEOUT_MS("arcadedb.vectorIndex.inactivityRebuildTimeoutMs", SCOPE.DATABASE,
       """
@@ -884,9 +953,15 @@ public enum GlobalConfiguration {
   HA_RAFT_STORAGE_DIRECTORY("arcadedb.ha.raftStorageDirectory", SCOPE.SERVER,
       """
       Parent directory where Raft storage sub-folders (raft-storage-<nodeName>) are created. \
-      When empty (the default), the server root path is used, preserving the previous default layout. \
-      Set to an absolute path (e.g. /var/lib/arcadedb/raft) to decouple Raft persistence from \
-      the server installation directory, which is required for Kubernetes readOnlyRootFilesystem deployments.""",
+      When empty (the default), Raft storage is placed under the database directory \
+      (<databaseDirectory>/.raft-storage), so persisting the database directory - which every durable \
+      deployment already does - persists the Raft log too. This avoids losing all Raft state on pod \
+      recreation in Kubernetes, where only the database directory is on a PersistentVolume while the \
+      server root path is ephemeral. A legacy raft-storage-<nodeName> directory already present under the \
+      server root path (pre-fix layout) is still reused for backward compatibility. \
+      Set to an absolute path (e.g. /var/lib/arcadedb/raft) to decouple Raft persistence from the \
+      database directory, which is required for Kubernetes readOnlyRootFilesystem deployments with a \
+      dedicated Raft volume.""",
       String.class, ""),
 
   HA_SNAPSHOT_THRESHOLD("arcadedb.ha.snapshotThreshold", SCOPE.SERVER,
@@ -894,6 +969,35 @@ public enum GlobalConfiguration {
       Number of Raft log entries after which the leader automatically takes a snapshot. \
       Lower values cause more frequent snapshots and earlier log compaction.""",
       Long.class, 100_000L),
+
+  HA_SNAPSHOT_INTERVAL("arcadedb.ha.snapshotInterval", SCOPE.SERVER,
+      """
+      Interval in milliseconds between periodic Raft snapshot checkpoints on every node. \
+      HA_SNAPSHOT_THRESHOLD alone counts entries, so a low-write cluster can run for weeks without ever \
+      reaching it: the snapshot index stays frozen, no log segment is ever purged, and the Raft log grows \
+      until the volume is full. This time-based trigger bounds the retained log by wall-clock age instead. \
+      An ArcadeDB snapshot is a zero-byte marker (the database files on disk are the durable state), so a \
+      tick is cheap; it is additionally a no-op when fewer than HA_SNAPSHOT_MIN_ENTRIES entries were \
+      applied since the last snapshot. Set to 0 to disable and rely on HA_SNAPSHOT_THRESHOLD only. \
+      Note this interval also bounds the reaction time to disk pressure, not just steady-state log \
+      retention: the free-space escalation described in HA_RAFT_STORAGE_MIN_FREE_SPACE_PERC fires on the \
+      next tick, so a volume that fills faster than one interval needs a shorter interval.""",
+      Long.class, 300_000L),
+
+  HA_SNAPSHOT_MIN_ENTRIES("arcadedb.ha.snapshotMinEntries", SCOPE.SERVER,
+      """
+      Minimum number of Raft log entries applied since the last snapshot before a periodic \
+      HA_SNAPSHOT_INTERVAL tick actually takes one. Keeps an idle cluster from rewriting a snapshot marker \
+      that would not advance the purge point. Values below 1 are clamped to 1.""",
+      Long.class, 64L),
+
+  HA_RAFT_STORAGE_MIN_FREE_SPACE_PERC("arcadedb.ha.raftStorageMinFreeSpacePerc", SCOPE.SERVER,
+      """
+      Percentage of free space on the volume hosting HA_RAFT_STORAGE_DIRECTORY below which the periodic \
+      snapshot tick escalates: it forces a snapshot and log purge regardless of HA_SNAPSHOT_MIN_ENTRIES and \
+      logs a throttled WARNING. Guards against the Raft log filling the volume, after which Ratis marks the \
+      log permanently failed and the node rejects every append until restarted. Set to 0 to disable the check.""",
+      Integer.class, 20),
 
   HA_LOG_VERBOSE("arcadedb.ha.logVerbose", SCOPE.SERVER,
       "HA verbose logging level: 0=off, 1=basic (elections, leader changes), 2=detailed (replication, forwarding), 3=trace (every state machine apply)",
@@ -971,6 +1075,10 @@ public enum GlobalConfiguration {
   HA_PEER_CHANNEL_RESET_DURATION("arcadedb.ha.peerChannelResetDuration", SCOPE.SERVER,
       "Time in milliseconds a follower must stay continuously unreachable (no successful RPC, beyond HA_PEER_UNREACHABLE_THRESHOLD) before the leader resets that one follower's replication gRPC channel, closing the wedged channel so the next send re-resolves DNS and reconnects. Recovers a leader appender channel stuck on a stale DNS result after a follower restarts with a new address (e.g. a Kubernetes pod-IP change, issue #4696) without a leadership transfer, so there is no flapping risk. Only the unreachable peer's channel is touched. While the follower stays unreachable the reset is retried once per interval, up to a small bounded number of attempts, after which the leader gives up and logs for operator intervention; the counter re-arms when the follower reconnects. Requires HA_PEER_UNREACHABLE_THRESHOLD > 0 (its 'unreachable' signal). Set to 0 to disable the automatic channel reset (the manual leadership transfer remains available).",
       Long.class, 60000L),
+
+  HA_PEER_CHANNEL_RESET_ESCALATION("arcadedb.ha.peerChannelResetEscalation", SCOPE.SERVER,
+      "When the bounded HA_PEER_CHANNEL_RESET_DURATION retry budget is exhausted and a follower's replication channel is still dead, transfer leadership to a healthy peer so the new leader builds a fresh appender to that follower (issue #5346). Without it the leader stays wedged until an operator restarts the process, because the reset streak only re-arms when the follower becomes reachable again. The target is chosen with the same rules as a manual step-down and is never the wedged follower itself; when no healthy target exists the leader keeps the previous behaviour and logs for operator intervention. When the follower is unreachable for a reason a fresh appender cannot fix, each healthy peer escalates it at most once per 30-minute cooldown before the cluster settles on the operator-intervention path, so the leadership churn is bounded rather than perpetual. Set to false to only log.",
+      Boolean.class, true),
 
   HA_RESYNC_CATCHUP_LAG_THRESHOLD("arcadedb.ha.resyncCatchupLagThreshold", SCOPE.SERVER,
       "Minimum apply backlog (Raft log entries a follower has committed/received but not yet applied to its state machine) before the catch-up resync narrative is logged. This is a locally observable signal, not the distance from the leader's commit index. Keeps the small steady-state apply backlog under write load from being narrated; only a genuine post-restart burst crosses this threshold. The narrative finishes once the backlog drains to within a tenth of it.",
@@ -1066,7 +1174,11 @@ public enum GlobalConfiguration {
   HA_RATIS_RESTART_MAX_RETRIES("arcadedb.ha.ratisRestartMaxRetries", SCOPE.SERVER,
       """
       Maximum consecutive Ratis restart attempts by the health monitor before the server shuts down \
-      for cluster-level recovery. Raise when partition-recovery scenarios cause legitimate rapid restarts.""",
+      for cluster-level recovery. Raise when partition-recovery scenarios cause legitimate rapid restarts. \
+      Also bounds the crash-loop escalation: when a RECOVER restart keeps returning to CLOSED (e.g. a \
+      term-inverted persisted Raft log or a poisoned snapshot-install) without the restart itself failing, \
+      the health monitor escalates after this many non-sticking restarts (reformat + rejoin once, then give \
+      up with a SEVERE alert) instead of restarting forever (issue #5291).""",
       Integer.class, 10),
 
   HA_STOP_SERVER_ON_REPLICATION_FAILURE("arcadedb.ha.stopServerOnReplicationFailure", SCOPE.SERVER,
@@ -1159,8 +1271,12 @@ public enum GlobalConfiguration {
       How long in milliseconds a replica must stay continuously STALLED (its matchIndex not advancing while the leader \
       keeps committing - e.g. stuck at -1 after a rolling upgrade) before the LEADER actively forces it to resync from \
       the leader. This is the leader-driven counterpart to HA_STALE_FOLLOWER_LAG_THRESHOLD: it covers the case where the \
-      follower cannot self-detect the stall because its own commit index never advances. Defaults to 60000; set to 0 to \
-      disable leader-driven stalled-replica recovery (the STALLED condition is still detected and logged).""",
+      follower cannot self-detect the stall because its own commit index never advances. A follower still at the \
+      never-appended sentinel (matchIndex = -1 while the leader holds committed entries, issue #5295) is treated as \
+      STALLED regardless of the numeric lag, so it is recovered even when the leader is only a few entries ahead (where \
+      the lag stays below HA_REPLICATION_LAG_WARNING); the same duration doubles as the grace before its status flips \
+      from HEALTHY to STALLED, so a brief join / snapshot-install window is not misreported. Defaults to 60000; set to 0 \
+      to disable leader-driven stalled-replica recovery (the STALLED condition is still detected and logged).""",
       Long.class, 60_000L),
 
   HA_SNAPSHOT_MAX_ENTRY_SIZE("arcadedb.ha.snapshotMaxEntrySize", SCOPE.SERVER,
@@ -1174,6 +1290,14 @@ public enum GlobalConfiguration {
   HA_IDEMPOTENCY_CACHE_MAX_ENTRIES("arcadedb.ha.idempotencyCacheMaxEntries", SCOPE.SERVER,
       "Maximum number of entries in the HTTP idempotency cache. Oldest entry is evicted when full.",
       Integer.class, 10_000),
+
+  HA_IDEMPOTENCY_CACHE_MAX_BYTES("arcadedb.ha.idempotencyCacheMaxBytes", SCOPE.SERVER,
+      "Maximum total size in bytes of the cached response bodies in the HTTP idempotency cache. Oldest entries are evicted when exceeded.",
+      Long.class, 67_108_864L),
+
+  HA_IDEMPOTENCY_CACHE_MAX_BODY_BYTES("arcadedb.ha.idempotencyCacheMaxBodyBytes", SCOPE.SERVER,
+      "Maximum size in bytes of a single response body eligible for caching in the HTTP idempotency cache. Larger responses are not cached.",
+      Long.class, 1_048_576L),
 
   HA_PEER_ALLOWLIST_ENABLED("arcadedb.ha.peerAllowlist.enabled", SCOPE.SERVER,
       """
@@ -1216,6 +1340,11 @@ public enum GlobalConfiguration {
 
   POSTGRES_DEBUG("arcadedb.postgres.debug", SCOPE.SERVER,
       "Enables the printing of Postgres protocol to the console. Default is false", Boolean.class, false),
+
+  POSTGRES_QUOTED_IDENTIFIERS("arcadedb.postgres.quotedIdentifiers", SCOPE.SERVER, """
+      Interprets double-quoted tokens in SQL statements received through the Postgres wire protocol as identifiers, as \
+      PostgreSQL and the SQL standard mandate, instead of as string literals. Set to false to restore the legacy \
+      behaviour where a double-quoted token is a string literal. Default is true""", Boolean.class, true),
 
   // BOLT (Neo4j)
   BOLT_PORT("arcadedb.bolt.port", SCOPE.SERVER,

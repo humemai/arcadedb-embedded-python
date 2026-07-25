@@ -15,7 +15,6 @@ from .importer import ImportResult
 from .importer import import_documents as run_document_import
 from .jvm import start_jvm
 from .results import ResultSet
-from .type_conversion import convert_python_to_java
 from .transactions import TransactionContext
 from .type_conversion import convert_python_to_java
 from .vector import to_java_float_array
@@ -339,7 +338,7 @@ class Database:
         dimensions: int,
         id_property: Optional[str] = None,
         distance_function: str = "cosine",
-        max_connections: int = 16,
+        max_connections: int = 32,
         beam_width: int = 100,
         quantization: str = "INT8",
         encoding: Optional[str] = None,
@@ -371,8 +370,11 @@ class Database:
             id_property: Optional property used for key-based vector lookup.
                 Defaults to the engine default (usually "id") when omitted.
             distance_function: "cosine", "euclidean", or "inner_product"
-            max_connections: Max connections per node (default: 16).
-                Maps to `maxConnections` in JVector.
+            max_connections: Per-layer graph degree (default: 32, matching the
+                engine default since #5352). Maps to `maxConnections` in
+                JVector, which is a Vamana per-layer degree and is NOT doubled
+                at the base layer like hnswlib's M: to reproduce an
+                hnswlib-style configuration use max_connections = 2 * M.
             beam_width: Beam width for search/construction (default: 100).
                 Maps to `beamWidth` in JVector.
             quantization: Vector quantization type (default: INT8).

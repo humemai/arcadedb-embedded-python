@@ -39,11 +39,89 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
+import java.util.regex.Pattern;
 
 public class PostCommandHandler extends AbstractQueryHandler {
 
+  // Precompiled once: recompiling the line-break pattern on every command carrying an explicit LIMIT is wasteful.
+  private static final Pattern LINE_BREAK = Pattern.compile("\\R");
+
   public PostCommandHandler(final HttpServer httpServer) {
     super(httpServer);
+  }
+
+  /**
+   * Appends an automatic trailing {@code LIMIT} to SELECT/MATCH SQL commands that do not already carry one,
+   * mirroring the historical heuristic while avoiding a full-command {@code toLowerCase} copy per request.
+   * The command is expected to be already trimmed. Only case-insensitive prefix/substring probes are used,
+   * and the last line is lowercased only when an explicit LIMIT may already be present.
+   */
+  static String appendAutomaticLimit(final String command, final String language, final int limit) {
+    if (limit == -1)
+      return command;
+    if (!"sql".equalsIgnoreCase(language) && !"sqlScript".equalsIgnoreCase(language))
+      return command;
+
+    final boolean isSelect = command.regionMatches(true, 0, "select", 0, 6);
+    final boolean isMatch = command.regionMatches(true, 0, "match", 0, 5);
+    if ((!isSelect && !isMatch) || command.endsWith(";"))
+      return command;
+
+    if (!containsIgnoreCase(command, " limit ") && !containsIgnoreCase(command, "\nlimit "))
+      return command + " limit " + limit;
+
+    // An explicit LIMIT may already be present somewhere: only the last line decides whether to append.
+    final String[] lines = LINE_BREAK.split(command);
+    final String[] words = lines[lines.length - 1].toLowerCase(Locale.ENGLISH).split(" ");
+    if (words.length > 1 //
+        && !"limit".equals(words[words.length - 2]) //
+        && (words.length < 5 || !"limit".equals(words[words.length - 4])))
+      return command + " limit " + limit;
+
+    return command;
+  }
+
+  /**
+   * Allocation-free case-insensitive substring test, avoiding the full-command lowercase copy the previous
+   * {@code String.contains} check required.
+   */
+  private static boolean containsIgnoreCase(final String haystack, final String needle) {
+    final int needleLen = needle.length();
+    if (needleLen == 0)
+      return true;
+    final int max = haystack.length() - needleLen;
+    for (int i = 0; i <= max; i++)
+      if (haystack.regionMatches(true, i, needle, 0, needleLen))
+        return true;
+    return false;
+  }
+
+  /**
+   * Returns the value of a request field that must be a JSON string, or {@code null} when absent. A present
+   * value of the wrong JSON type (number, array, object) is rejected with an {@link IllegalArgumentException},
+   * which the HTTP layer maps to a clean 400 Bad Request instead of leaking a raw {@link ClassCastException}
+   * as HTTP 500 (issue #5222).
+   */
+  private static String requireStringField(final Map<String, Object> map, final String field) {
+    return requireStringField(map, field, null);
+  }
+
+  private static String requireStringField(final Map<String, Object> map, final String field, final String defaultValue) {
+    final Object value = map.get(field);
+    if (value == null)
+      return defaultValue;
+    if (value instanceof String s)
+      return s;
+    throw new IllegalArgumentException("Field '" + field + "' must be a string");
+  }
+
+  private static int requireIntField(final Map<String, Object> map, final String field, final int defaultValue) {
+    final Object value = map.get(field);
+    if (value == null)
+      return defaultValue;
+    if (value instanceof Number n)
+      return n.intValue();
+    throw new IllegalArgumentException("Field '" + field + "' must be an integer");
   }
 
   @Override
@@ -76,14 +154,14 @@ public class PostCommandHandler extends AbstractQueryHandler {
     if (requestMap.get("command") == null)
       throw new IllegalArgumentException("command missing");
 
-    final String language = (String) requestMap.get("language");
+    final String language = requireStringField(requestMap, "language");
     // Do NOT HTML-decode the command: the command is already transported losslessly as a JSON string,
     // and a command can legitimately carry HTML entities (e.g. &quot;, &amp;) inside its data. Decoding
     // them here corrupts the payload (e.g. breaks the embedded JSON of an INSERT ... CONTENT { ... }).
-    String command = (String) requestMap.get("command");
-    final int limit = (int) requestMap.getOrDefault("limit", DEFAULT_LIMIT);
-    final String serializer = (String) requestMap.getOrDefault("serializer", "record");
-    final String profileExecution = (String) requestMap.getOrDefault("profileExecution", null);
+    String command = requireStringField(requestMap, "command");
+    final int limit = requireIntField(requestMap, "limit", DEFAULT_LIMIT);
+    final String serializer = requireStringField(requestMap, "serializer", "record");
+    final String profileExecution = requireStringField(requestMap, "profileExecution", null);
 
     if (command == null || command.isEmpty())
       return new ExecutionResponse(400, "{ \"error\" : \"Command text is null\"}");
@@ -120,24 +198,7 @@ public class PostCommandHandler extends AbstractQueryHandler {
     // and downgraded to HTTP 500.
     paramMap = AbstractQueryHandler.decodeTypedJsonMarkers(paramMap);
 
-    if (limit != -1) {
-      if ("sql".equalsIgnoreCase(language) || "sqlScript".equalsIgnoreCase(language)) {
-        final String commandLC = command.toLowerCase(Locale.ENGLISH).trim();
-        if ((commandLC.startsWith("select") || commandLC.startsWith("match")) && !commandLC.endsWith(";")) {
-          if (!commandLC.contains(" limit ") && !commandLC.contains("\nlimit ")) {
-            command += " limit " + limit;
-          } else {
-            final String[] lines = commandLC.split("\\R");
-            final String[] words = lines[lines.length - 1].split(" ");
-            if (words.length > 1) {
-              if (!"limit".equals(words[words.length - 2]) && //
-                  (words.length < 5 || !"limit".equals(words[words.length - 4])))
-                command += " limit " + limit;
-            }
-          }
-        }
-      }
-    }
+    command = appendAutomaticLimit(command, language, limit);
 
     if ("sqlScript".equalsIgnoreCase(language) && !command.endsWith(";"))
       command += ";";
@@ -200,7 +261,7 @@ public class PostCommandHandler extends AbstractQueryHandler {
 
           if (qResult != null && qResult.getExecutionPlan().isPresent() &&
               (profileExecution != null ||
-                  command.toUpperCase(Locale.ENGLISH).startsWith("PROFILE "))) {
+                  command.regionMatches(true, 0, "PROFILE ", 0, 8))) {
             final var executionPlan = qResult.getExecutionPlan().get();
             response.put("explain", executionPlan.prettyPrint(0, 2));
             response.put("explainPlan", executionPlan.toResult().toJSON());

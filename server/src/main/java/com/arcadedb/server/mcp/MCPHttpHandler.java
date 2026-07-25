@@ -18,56 +18,39 @@
  */
 package com.arcadedb.server.mcp;
 
-import com.arcadedb.Constants;
 import com.arcadedb.log.LogManager;
-import com.arcadedb.server.mcp.tools.ExecuteCommandTool;
-import com.arcadedb.server.mcp.tools.GetSchemaTool;
-import com.arcadedb.server.mcp.tools.GetServerSettingsTool;
-import com.arcadedb.server.mcp.tools.ListDatabasesTool;
-import com.arcadedb.server.mcp.tools.ProfilerStartTool;
-import com.arcadedb.server.mcp.tools.ProfilerStatusTool;
-import com.arcadedb.server.mcp.tools.ProfilerStopTool;
-import com.arcadedb.server.mcp.tools.QueryTool;
-import com.arcadedb.server.mcp.tools.ServerStatusTool;
-import com.arcadedb.server.mcp.tools.SetServerSettingTool;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.http.handler.AbstractServerHttpHandler;
 import com.arcadedb.server.http.handler.ExecutionResponse;
+import com.arcadedb.server.mcp.MCPDispatcher.MCPResponse;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.undertow.server.HttpServerExchange;
+import io.undertow.util.Headers;
+import io.undertow.util.Methods;
 
+import java.net.URI;
+import java.util.Locale;
 import java.util.logging.Level;
 
 /**
+ * HTTP transport for MCP. Owns the HTTP envelope only; all protocol routing lives in {@link MCPDispatcher}.
+ * Implements the envelope rules of the MCP 2025-03-26 Streamable HTTP transport: POST-only (no Server-Sent
+ * Events stream is offered, so any other method is answered with {@code 405}), {@code Origin} validation
+ * against DNS rebinding, JSON-RPC batches, and {@code 202 Accepted} with no body for a POST that carried
+ * only notifications and/or responses.
+ *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
 public class MCPHttpHandler extends AbstractServerHttpHandler {
-  private static final String    MCP_PROTOCOL_VERSION = "2025-03-26";
-  private static final JSONArray TOOLS_LIST;
-
-  static {
-    TOOLS_LIST = new JSONArray();
-    TOOLS_LIST.put(ListDatabasesTool.getDefinition());
-    TOOLS_LIST.put(GetSchemaTool.getDefinition());
-    TOOLS_LIST.put(QueryTool.getDefinition());
-    TOOLS_LIST.put(ExecuteCommandTool.getDefinition());
-    TOOLS_LIST.put(ServerStatusTool.getDefinition());
-    TOOLS_LIST.put(ProfilerStartTool.getDefinition());
-    TOOLS_LIST.put(ProfilerStopTool.getDefinition());
-    TOOLS_LIST.put(ProfilerStatusTool.getDefinition());
-    TOOLS_LIST.put(GetServerSettingsTool.getDefinition());
-    TOOLS_LIST.put(SetServerSettingTool.getDefinition());
-  }
-
-  private final ArcadeDBServer  server;
+  private final MCPDispatcher    dispatcher;
   private final MCPConfiguration config;
 
   public MCPHttpHandler(final HttpServer httpServer, final ArcadeDBServer server, final MCPConfiguration config) {
     super(httpServer);
-    this.server = server;
+    this.dispatcher = new MCPDispatcher(server, config, "http");
     this.config = config;
   }
 
@@ -83,181 +66,106 @@ public class MCPHttpHandler extends AbstractServerHttpHandler {
 
   @Override
   protected ExecutionResponse execute(final HttpServerExchange exchange, final ServerSecurityUser user, final JSONObject payload) {
-    // Auth check first to avoid leaking server state to unauthenticated requests
-    if (user == null)
-      return jsonRpcError(null, -32600, "Authentication required", 401);
+    // This endpoint carries JSON-RPC over POST only. MCP allows a GET to open an SSE stream instead, which
+    // this server does not implement, and requires the endpoint to answer 405 when it does not.
+    if (!Methods.POST.equals(exchange.getRequestMethod())) {
+      exchange.getResponseHeaders().put(Headers.ALLOW, "POST");
+      return new ExecutionResponse(405,
+          MCPDispatcher.errorObject(null, -32600, "Method Not Allowed: the MCP endpoint accepts POST only").toString());
+    }
 
-    if (!config.isEnabled())
-      return jsonRpcError(null, -32600, "MCP server is disabled", 503);
+    if (!isOriginAllowed(exchange))
+      return new ExecutionResponse(403, MCPDispatcher.errorObject(null, -32600, "Origin not allowed").toString());
 
-    if (payload == null)
-      return jsonRpcError(null, -32700, "Parse error: empty request body");
+    // A top-level array is a JSON-RPC batch. The shared payload parsing produces a single JSONObject and
+    // leaves 'payload' null for an array, so the batch is read back from the raw body.
+    final String raw = exchange.getAttachment(RAW_PAYLOAD);
+    if (raw != null && isBatch(raw))
+      return executeBatch(raw, user);
 
-    if (!config.isUserAllowed(user.getName()))
-      return jsonRpcError(payload.opt("id"), -32600, "User not authorized for MCP access", 403);
+    final MCPResponse response = dispatcher.dispatch(payload, user);
 
-    final String method = payload.getString("method", "");
-    final JSONObject params = payload.getJSONObject("params", new JSONObject());
-    final Object id = payload.opt("id");
+    // A null body is a one-way notification or response: 202 Accepted, no content.
+    if (response.json() == null)
+      return new ExecutionResponse(response.httpStatus(), "");
 
-    LogManager.instance().log(this, Level.INFO, "MCP %s (user=%s)", method, user.getName());
-
-    return switch (method) {
-      case "initialize" -> handleInitialize(id);
-      case "notifications/initialized" -> handleNotification();
-      case "tools/list" -> handleToolsList(id);
-      case "tools/call" -> handleToolsCall(id, params, user);
-      case "ping" -> jsonRpcResult(id, new JSONObject());
-      default -> jsonRpcError(id, -32601, "Method not found: " + method);
-    };
+    return new ExecutionResponse(response.httpStatus(), response.json().toString());
   }
 
-  private ExecutionResponse handleInitialize(final Object id) {
-    final JSONObject result = new JSONObject();
-    result.put("protocolVersion", MCP_PROTOCOL_VERSION);
-
-    final JSONObject serverInfo = new JSONObject();
-    serverInfo.put("name", "arcadedb");
-    serverInfo.put("version", Constants.getVersion());
-    result.put("serverInfo", serverInfo);
-
-    final JSONObject capabilities = new JSONObject();
-    capabilities.put("tools", new JSONObject().put("listChanged", false));
-    result.put("capabilities", capabilities);
-
-    result.put("instructions",
-        """
-        You are connected to an ArcadeDB multi-model database server. Follow these rules:
-        1. ALWAYS call list_databases first when you do not know the target database name. Never guess it.
-        2. Prefer Cypher (language: 'cypher') for graph queries unless SQL is explicitly requested.
-        3. Use the 'query' tool for read-only operations (SELECT, MATCH, RETURN) and 'execute_command' for writes (CREATE, INSERT, UPDATE, DELETE, MERGE).
-        4. Call get_schema before writing queries against an unfamiliar database to understand its types and properties.
-        5. If a query returns no results, verify the type/property names with get_schema before concluding the data does not exist.""");
-
-    return jsonRpcResult(id, result);
-  }
-
-  private ExecutionResponse handleNotification() {
-    // Notifications don't get a response in JSON-RPC; return 204 No Content
-    return new ExecutionResponse(204, "");
-  }
-
-  private ExecutionResponse handleToolsList(final Object id) {
-    final JSONObject result = new JSONObject();
-    result.put("tools", TOOLS_LIST);
-    return jsonRpcResult(id, result);
-  }
-
-  private ExecutionResponse handleToolsCall(final Object id, final JSONObject params, final ServerSecurityUser user) {
-    final String toolName = params.getString("name", "");
-    final JSONObject args = params.getJSONObject("arguments", new JSONObject());
-
-    LogManager.instance().log(this, Level.INFO, "MCP tools/call '%s' %s (user=%s)", toolName, formatArgs(args), user.getName());
-
+  private ExecutionResponse executeBatch(final String raw, final ServerSecurityUser user) {
+    final JSONArray batch;
     try {
-      final JSONObject toolResult = switch (toolName) {
-        case "list_databases" -> ListDatabasesTool.execute(server, user, args, config);
-        case "get_schema" -> GetSchemaTool.execute(server, user, args, config);
-        case "query" -> QueryTool.execute(server, user, args, config);
-        case "execute_command" -> ExecuteCommandTool.execute(server, user, args, config);
-        case "server_status" -> ServerStatusTool.execute(server, user, args, config);
-        case "profiler_start" -> ProfilerStartTool.execute(server, user, args, config);
-        case "profiler_stop" -> ProfilerStopTool.execute(server, user, args, config);
-        case "profiler_status" -> ProfilerStatusTool.execute(server, user, args, config);
-        case "get_server_settings" -> GetServerSettingsTool.execute(server, user, args, config);
-        case "set_server_setting" -> SetServerSettingTool.execute(server, user, args, config);
-        default -> throw new IllegalArgumentException("Unknown tool: " + toolName);
-      };
-
-      LogManager.instance().log(this, Level.INFO, "MCP tools/call '%s' -> %s", toolName, formatResult(toolName, toolResult));
-
-      final JSONObject result = new JSONObject();
-      final JSONArray content = new JSONArray();
-      content.put(new JSONObject()
-          .put("type", "text")
-          .put("text", toolResult.toString()));
-      result.put("content", content);
-      result.put("isError", false);
-      return jsonRpcResult(id, result);
-
-    } catch (final SecurityException e) {
-      LogManager.instance().log(this, Level.INFO, "MCP tools/call '%s' -> permission denied: %s", toolName, e.getMessage());
-      return toolError(id, e.getMessage());
+      batch = new JSONArray(raw.trim());
     } catch (final Exception e) {
-      LogManager.instance().log(this, Level.WARNING, "MCP tools/call '%s' -> error: %s", toolName, e.getMessage());
-      return toolError(id, e.getMessage());
+      return new ExecutionResponse(200, MCPDispatcher.errorObject(null, -32700, "Parse error: " + e.getMessage()).toString());
+    }
+
+    if (batch.isEmpty())
+      return new ExecutionResponse(200, MCPDispatcher.errorObject(null, -32600, "Invalid Request: empty batch").toString());
+
+    final JSONArray responses = dispatcher.dispatchBatch(batch, user);
+
+    // Nothing to correlate means the batch held only notifications and/or responses: accepted, with no body.
+    if (responses.isEmpty())
+      return new ExecutionResponse(202, "");
+
+    return new ExecutionResponse(200, responses.toString());
+  }
+
+  /**
+   * Cheap check for a top-level JSON array without paying for a full parse of a body that is usually a single
+   * request object.
+   */
+  private static boolean isBatch(final String raw) {
+    for (int i = 0; i < raw.length(); i++) {
+      final char c = raw.charAt(i);
+      if (!Character.isWhitespace(c))
+        return c == '[';
+    }
+    return false;
+  }
+
+  /**
+   * Validates the {@code Origin} header, which MCP requires of a Streamable HTTP server to mitigate DNS
+   * rebinding: a page loaded from an attacker origin resolving a hostname to a loopback address would
+   * otherwise be able to drive a locally bound MCP endpoint.
+   * <p>
+   * A request with no {@code Origin} is accepted, because a non-browser MCP client sends none and it is the
+   * browser that attaches the header a rebinding attack cannot forge. When present, the origin is accepted
+   * only if it is explicitly configured or is a loopback address. The request {@code Host} header is not a
+   * trust source: in a DNS-rebinding attack, the attacker-controlled Origin and Host names deliberately match.
+   */
+  private boolean isOriginAllowed(final HttpServerExchange exchange) {
+    final String origin = exchange.getRequestHeaders().getFirst(Headers.ORIGIN);
+    if (origin == null || origin.isBlank())
+      return true;
+
+    if (config.isOriginAllowed(origin))
+      return true;
+
+    final String originHost = hostOf(origin);
+    if (originHost == null) {
+      LogManager.instance().log(this, Level.FINE, "MCP[http] rejected malformed Origin '%s'", origin);
+      return false;
+    }
+
+    if (isLoopback(originHost))
+      return true;
+
+    LogManager.instance().log(this, Level.FINE, "MCP[http] rejected cross-origin request from '%s'", origin);
+    return false;
+  }
+
+  private static String hostOf(final String origin) {
+    try {
+      final String host = URI.create(origin.trim()).getHost();
+      return host == null ? null : host.toLowerCase(Locale.ROOT);
+    } catch (final IllegalArgumentException e) {
+      return null;
     }
   }
 
-  private static String formatArgs(final JSONObject args) {
-    if (args.length() == 0)
-      return "{}";
-    final StringBuilder sb = new StringBuilder("{");
-    boolean first = true;
-    for (final String key : args.keySet()) {
-      if (!first)
-        sb.append(", ");
-      first = false;
-      final Object value = args.get(key);
-      if (value instanceof String s) {
-        final String sanitized = sanitizeForLog(s);
-        if (sanitized.length() > 100)
-          sb.append(key).append("=\"").append(sanitized, 0, 100).append("...\"");
-        else
-          sb.append(key).append("=\"").append(sanitized).append("\"");
-      } else
-        sb.append(key).append("=").append(value);
-    }
-    return sb.append("}").toString();
-  }
-
-  private static String sanitizeForLog(final String value) {
-    return value.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
-  }
-
-  private static String formatResult(final String toolName, final JSONObject result) {
-    return switch (toolName) {
-      case "list_databases" -> result.getJSONArray("databases", new JSONArray()).length() + " database(s)";
-      case "get_schema" -> result.getJSONArray("types", new JSONArray()).length() + " type(s)";
-      case "query", "execute_command" -> result.getInt("count", 0) + " record(s)";
-      case "server_status" -> "ok";
-      case "profiler_start" -> result.getString("status", "ok");
-      case "profiler_stop" -> result.getInt("totalQueries", 0) + " queries captured";
-      case "profiler_status" -> result.getBoolean("recording", false) ? "recording" : "idle";
-      case "get_server_settings" -> result.getJSONArray("settings", new JSONArray()).length() + " setting(s)";
-      case "set_server_setting" -> result.getString("key", "") + " updated";
-      default -> "ok";
-    };
-  }
-
-  private ExecutionResponse toolError(final Object id, final String message) {
-    final JSONObject result = new JSONObject();
-    final JSONArray content = new JSONArray();
-    content.put(new JSONObject()
-        .put("type", "text")
-        .put("text", message));
-    result.put("content", content);
-    result.put("isError", true);
-    return jsonRpcResult(id, result);
-  }
-
-  private ExecutionResponse jsonRpcResult(final Object id, final JSONObject result) {
-    final JSONObject response = new JSONObject();
-    response.put("jsonrpc", "2.0");
-    response.put("id", id);
-    response.put("result", result);
-    return new ExecutionResponse(200, response.toString());
-  }
-
-  private ExecutionResponse jsonRpcError(final Object id, final int code, final String message) {
-    return jsonRpcError(id, code, message, 200);
-  }
-
-  private ExecutionResponse jsonRpcError(final Object id, final int code, final String message, final int httpStatus) {
-    final JSONObject response = new JSONObject();
-    response.put("jsonrpc", "2.0");
-    response.put("id", id);
-    response.put("error", new JSONObject().put("code", code).put("message", message));
-    return new ExecutionResponse(httpStatus, response.toString());
+  private static boolean isLoopback(final String host) {
+    return "localhost".equals(host) || "127.0.0.1".equals(host) || "::1".equals(host) || "[::1]".equals(host);
   }
 }

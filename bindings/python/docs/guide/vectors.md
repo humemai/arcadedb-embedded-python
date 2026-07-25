@@ -88,7 +88,7 @@ Important:
 ## Tuning Knobs
 
 - `dimensions`: must match your embedding length.
-- `max_connections` (HNSW M): higher → better recall, more memory/slow build (default: 16).
+- `max_connections` (Vamana per-layer degree; use 2*M to match an hnswlib M): higher → better recall, more memory/slower build (default: 32).
 - `beam_width` (ef/efConstruction): higher → better recall, slower search/build (default: 100).
 - `ef_search` (runtime, exact search only): higher → better recall, slower search.
     - Leave it unset to use the Java engine's default/adaptive behavior.
@@ -96,7 +96,7 @@ Important:
 Suggested presets from tests/examples (k=10):
 
 - Min: `max_connections=12`, `beam_width=64`, `ef_search=32`.
-- Normal (default/adaptive): `max_connections=16`, `beam_width=100`, `ef_search=None`.
+- Normal (default/adaptive): `max_connections=32`, `beam_width=100`, `ef_search=None`.
 - Max: `max_connections=32`, `beam_width=200`, `ef_search=200`.
 
 ## Memory & Heap Requirements (1024-dim vectors)

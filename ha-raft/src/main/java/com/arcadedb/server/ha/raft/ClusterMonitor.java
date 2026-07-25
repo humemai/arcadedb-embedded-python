@@ -52,6 +52,16 @@ public class ClusterMonitor {
   static final long LAG_LOG_THROTTLE_MS = 30_000;
 
   /**
+   * Fallback grace window (ms) a follower may sit at the never-appended sentinel ({@code matchIndex < 0}
+   * while the leader holds committed entries, issue #5295) before it is reported {@link ReplicaStatus#STALLED}
+   * instead of {@link ReplicaStatus#HEALTHY}. Used only when leader-driven resync is disabled
+   * ({@code stalledResyncDurationMs <= 0}); when it is enabled the resync duration is used as the grace so the
+   * status flips exactly when the leader acts. The grace absorbs the brief window of a normal join or an
+   * in-progress snapshot install, where the follower is legitimately still at {@code -1} for a few ticks.
+   */
+  static final long NEVER_APPENDED_STALL_GRACE_MS = 30_000L;
+
+  /**
    * Maximum number of replication-channel resets attempted for a single continuous unreachable streak
    * (issue #4696). One reset fires per {@code peerChannelResetDurationMs} the follower stays unreachable,
    * so a first attempt that does not stick (e.g. the rebuilt channel still resolves stale DNS inside the
@@ -84,6 +94,7 @@ public class ClusterMonitor {
   private final    long                            peerUnreachableThresholdMs;
   private final    long                            peerChannelResetDurationMs;
   private final    Consumer<String>                unreachablePeerChannelHandler;
+  private final    Consumer<String>                exhaustedPeerChannelHandler;
   private volatile long                            leaderCommitIndex;
   private final    ConcurrentHashMap<String, ReplicaState> replicaStates = new ConcurrentHashMap<>();
   // Injectable clock for deterministic tests; defaults to the wall clock. Volatile because the test
@@ -128,6 +139,22 @@ public class ClusterMonitor {
       final Consumer<String> stalledReplicaHandler, final boolean resyncNarrativeEnabled,
       final long peerUnreachableThresholdMs, final long peerChannelResetDurationMs,
       final Consumer<String> unreachablePeerChannelHandler) {
+    this(lagWarningThreshold, stalledResyncDurationMs, stalledReplicaHandler, resyncNarrativeEnabled,
+        peerUnreachableThresholdMs, peerChannelResetDurationMs, unreachablePeerChannelHandler, null);
+  }
+
+  /**
+   * @param exhaustedPeerChannelHandler callback invoked (once per unreachable streak) with the peer id when
+   *                                    the bounded {@link #CHANNEL_RESET_MAX_ATTEMPTS} reset budget is
+   *                                    exhausted and the follower is still unreachable (issue #5346). Lets
+   *                                    the leader escalate - e.g. transfer leadership so a fresh appender is
+   *                                    built - instead of only logging. {@code null} keeps the previous
+   *                                    log-and-stop behaviour.
+   */
+  public ClusterMonitor(final long lagWarningThreshold, final long stalledResyncDurationMs,
+      final Consumer<String> stalledReplicaHandler, final boolean resyncNarrativeEnabled,
+      final long peerUnreachableThresholdMs, final long peerChannelResetDurationMs,
+      final Consumer<String> unreachablePeerChannelHandler, final Consumer<String> exhaustedPeerChannelHandler) {
     if (stalledResyncDurationMs > 0 && stalledReplicaHandler == null)
       throw new IllegalArgumentException(
           "stalledReplicaHandler must be non-null when stalledResyncDurationMs > 0 (leader-driven recovery enabled)");
@@ -150,6 +177,7 @@ public class ClusterMonitor {
     this.peerUnreachableThresholdMs = peerUnreachableThresholdMs;
     this.peerChannelResetDurationMs = peerChannelResetDurationMs;
     this.unreachablePeerChannelHandler = unreachablePeerChannelHandler;
+    this.exhaustedPeerChannelHandler = exhaustedPeerChannelHandler;
   }
 
   /** Package-private test hook to drive the stall-duration logic deterministically. */
@@ -173,9 +201,36 @@ public class ClusterMonitor {
     final long leaderDelta = leaderIdx - state.lastLeaderCommitIndex;
     final long previousLag = state.lastLag;
 
+    // Issue #5295: a follower still at the never-appended sentinel (matchIndex < 0) while the leader
+    // already holds committed entries (leaderIdx >= 0) has a dead replication path - not a single
+    // AppendEntries has ever landed on it. Its numeric lag (leaderIdx - (-1)) can sit below the warning
+    // threshold and mask it as HEALTHY, which also starves both leader-driven recoveries (they key on a
+    // large lag). Track how long it has stayed at the sentinel so a brief join / snapshot-install window
+    // is not misreported, then classify it STALLED once it persists past the grace.
+    final boolean neverAppended = matchIndex < 0 && leaderIdx >= 0;
+    if (!neverAppended)
+      state.neverAppendedSinceMs = -1;
+    else if (state.neverAppendedSinceMs == -1)
+      state.neverAppendedSinceMs = now;
+    final long neverAppendedGraceMs = stalledResyncDurationMs > 0 ? stalledResyncDurationMs : NEVER_APPENDED_STALL_GRACE_MS;
+    final boolean neverAppendedStalled = neverAppended && now - state.neverAppendedSinceMs >= neverAppendedGraceMs;
+
+    // Issue #5291: a follower can be caught up by matchIndex (lag <= threshold) yet not have answered a
+    // single RPC for a long time - e.g. its Ratis member is CLOSED and crash-looping, so appends fail with
+    // ServerNotReadyException while matchIndex stays frozen at its last high-water mark. Keying health on
+    // lag alone reports it HEALTHY/lag-0 while it crashes ~20x/min. A follower that has not answered an RPC
+    // within the unreachable threshold is not live: matchIndex is a stale high-water mark, not health.
+    // Reuse the existing peer-unreachable threshold (0 = disabled, preserving the lag-only behaviour).
+    final boolean unreachableStale = peerUnreachableThresholdMs > 0 && lastRpcElapsedMs >= peerUnreachableThresholdMs;
+
     // Compute current status based on this tick.
     final ReplicaStatus status;
-    if (lag <= lagWarningThreshold)
+    if (neverAppendedStalled)
+      status = ReplicaStatus.STALLED;
+    else if (unreachableStale && lag <= lagWarningThreshold)
+      // Caught up but not responding: report STALLED rather than masking it as HEALTHY (issue #5291).
+      status = ReplicaStatus.STALLED;
+    else if (lag <= lagWarningThreshold)
       status = ReplicaStatus.HEALTHY;
     else if (replicaDelta <= 0 && leaderDelta > 0)
       status = ReplicaStatus.STALLED;
@@ -202,15 +257,19 @@ public class ClusterMonitor {
 
     // Leader-driven recovery (#4728): if the replica stays stuck long enough, the leader actively
     // forces it to resync instead of merely logging forever. Tracked regardless of the log throttle.
-    trackStallForRecovery(replicaId, state, matchIndex, replicaDelta, lag, now);
+    // The never-appended case (#5295) counts as stuck even with a small numeric lag, so the resync the
+    // #4728 doc already promises for "matchIndex stuck at -1" actually engages here.
+    trackStallForRecovery(replicaId, state, matchIndex, replicaDelta, lag, neverAppended, now);
 
     // Channel-level recovery (#4696): if the follower stays unreachable long enough, the leader resets
     // that follower's replication gRPC channel so a wedged appender re-resolves DNS and reconnects.
     // Independent of the resync narrative and of the lag-based stall recovery above.
     trackUnreachableForChannelReset(replicaId, state, lastRpcElapsedMs, now);
 
-    // HEALTHY: nothing to say.
-    if (status == ReplicaStatus.HEALTHY)
+    // HEALTHY: nothing to say. A caught-up-but-unreachable replica is now reported STALLED for status and
+    // metrics (issue #5291), but the reachability narrative (and, if enabled, the channel-reset path) already
+    // own its logging, so skip the lag-warning switch below to avoid a duplicate, mislabeled "disk stall" log.
+    if (status == ReplicaStatus.HEALTHY || (unreachableStale && lag <= lagWarningThreshold))
       return;
 
     // Throttle per replica so a sustained bulk load doesn't spam the log.
@@ -219,12 +278,25 @@ public class ClusterMonitor {
     state.lastWarnAtMs = now;
 
     switch (status) {
-      case STALLED -> LogManager.instance().log(this, Level.SEVERE,
-          """
-          Replica '%s' STALLED: matchIndex stuck at %d while leader advanced by %d (current lag=%d). \
-          This will trigger a leader election if it continues. Likely cause: replica disk \
-          saturation or network stall. Check replica I/O, GC, and heartbeat connectivity.""",
-          replicaId, matchIndex, leaderDelta, lag);
+      case STALLED -> {
+        if (neverAppendedStalled)
+          // Issue #5295: distinct message - this is not a slow/disk-saturated replica, it has never
+          // received a single append. The leader-driven resync (if enabled) re-engages it; a leadership
+          // transfer, which rebuilds the appender, is the operator fallback.
+          LogManager.instance().log(this, Level.SEVERE,
+              """
+              Replica '%s' has NEVER received a single append (matchIndex=%d) while the leader committed up to \
+              %d, for %dms: its replication path is dead. The leader will force a resync to re-engage it; if it \
+              persists, transfer leadership to that follower's healthy peer to rebuild the appender.""",
+              replicaId, matchIndex, leaderIdx, now - state.neverAppendedSinceMs);
+        else
+          LogManager.instance().log(this, Level.SEVERE,
+              """
+              Replica '%s' STALLED: matchIndex stuck at %d while leader advanced by %d (current lag=%d). \
+              This will trigger a leader election if it continues. Likely cause: replica disk \
+              saturation or network stall. Check replica I/O, GC, and heartbeat connectivity.""",
+              replicaId, matchIndex, leaderDelta, lag);
+      }
       case FALLING_BEHIND -> LogManager.instance().log(this, Level.WARNING,
           """
           Replica '%s' falling behind: lag=%d (was %d, growing). Replica advanced %d entries; \
@@ -258,11 +330,15 @@ public class ClusterMonitor {
    * and re-arms only after a reset.
    */
   private void trackStallForRecovery(final String replicaId, final ReplicaState state, final long matchIndex,
-      final long replicaDelta, final long lag, final long now) {
+      final long replicaDelta, final long lag, final boolean neverAppended, final long now) {
     if (stalledResyncDurationMs <= 0 || stalledReplicaHandler == null)
       return; // detection/logging still run, but leader-driven recovery is disabled
 
-    final boolean behind = lag > lagWarningThreshold;
+    // A follower is "behind" enough to recover either when it lags past the warning threshold, or when it
+    // has never received a single append (issue #5295): the latter is a dead replication path whose tiny
+    // numeric lag would otherwise never reach the threshold, so the resync #4728 promises for it would
+    // never fire. Both share the same duration guard below.
+    final boolean behind = lag > lagWarningThreshold || neverAppended;
 
     if (state.stalledSinceMs == -1) {
       // Not in a streak: start one when the replica is over the lag threshold and its matchIndex did
@@ -350,7 +426,10 @@ public class ClusterMonitor {
    * follower stays unreachable, up to {@link #CHANNEL_RESET_MAX_ATTEMPTS} attempts, so a first reset
    * that does not stick (e.g. the rebuilt channel re-resolves stale DNS while the JVM positive-cache
    * TTL has not expired) does not leave the follower stranded - the exact failure mode this recovery
-   * targets. After the cap it gives up and logs once (SEVERE) for operator intervention. Decoupled from
+   * targets. After the cap it fires {@link #exhaustedPeerChannelHandler} once so the leader can escalate
+   * (issue #5346); with no such handler it logs once (SEVERE) for operator intervention. The escalation is
+   * genuinely terminal for the streak: a wedged channel never becomes reachable again on its own, so
+   * without it the recovery would sit in the given-up state until the leader process restarts. Decoupled from
    * the resync narrative ({@link #resyncNarrativeEnabled}) so it works even with narrative logging off.
    * State is mutated only from the single lag-monitor thread.
    * <p>
@@ -389,11 +468,27 @@ public class ClusterMonitor {
 
     if (state.channelResetCount >= CHANNEL_RESET_MAX_ATTEMPTS) {
       if (!state.channelResetGaveUp) {
+        // Latch BEFORE invoking the handler so a handler that throws is not retried on every later tick
+        // (issue #5346): the budget is spent either way, and a tight escalation loop would be worse than
+        // the single failed attempt.
         state.channelResetGaveUp = true;
+        if (exhaustedPeerChannelHandler == null) {
+          LogManager.instance().log(this, Level.SEVERE,
+              "Follower '%s' still unreachable after %d replication-channel resets over %dms; giving up automatic channel "
+                  + "recovery - operator intervention (e.g. a leadership transfer) is required.",
+              replicaId, state.channelResetCount, now - state.channelUnreachableSinceMs);
+          return;
+        }
         LogManager.instance().log(this, Level.SEVERE,
-            "Follower '%s' still unreachable after %d replication-channel resets over %dms; giving up automatic channel "
-                + "recovery - operator intervention (e.g. a leadership transfer) is required.",
+            "Follower '%s' still unreachable after %d replication-channel resets over %dms; escalating to rebuild the "
+                + "appender for it.",
             replicaId, state.channelResetCount, now - state.channelUnreachableSinceMs);
+        try {
+          exhaustedPeerChannelHandler.accept(replicaId);
+        } catch (final Exception e) {
+          LogManager.instance().log(this, Level.WARNING,
+              "Channel-reset escalation for follower '%s' failed: %s", replicaId, e.getMessage());
+        }
       }
       return;
     }
@@ -506,6 +601,10 @@ public class ClusterMonitor {
     long          stalledAtMatchIndex   = -1;
     // True once the leader-driven resync has been fired for the current streak (re-armed on recovery).
     boolean       resyncTriggered       = false;
+    // Wall-clock time (ms) when the replica was first observed still at the never-appended sentinel
+    // (matchIndex < 0 while the leader already holds committed entries); -1 = it has appended at least
+    // once or the leader has no committed entries yet (issue #5295).
+    long          neverAppendedSinceMs  = -1;
     // Reachability-narrative state, mutated only from the single lag-monitor thread.
     long          unreachableSinceMs      = -1;
     long          lastUnreachableWarnAtMs = 0;

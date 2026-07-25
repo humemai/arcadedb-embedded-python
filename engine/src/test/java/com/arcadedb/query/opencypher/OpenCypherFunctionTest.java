@@ -18,13 +18,13 @@
  */
 package com.arcadedb.query.opencypher;
 
+import com.arcadedb.TestHelper;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseFactory;
+import com.arcadedb.exception.CommandSemanticException;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 /**
@@ -40,13 +41,9 @@ import static org.assertj.core.api.Assertions.within;
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
-class OpenCypherFunctionTest {
-  private Database database;
-
-  @BeforeEach
-  void setup() {
-    database = new DatabaseFactory("./databases/test-function").create();
-
+class OpenCypherFunctionTest extends TestHelper {
+  @Override
+  protected void beginTest() {
     // Create schema
     database.getSchema().createVertexType("Person");
     database.getSchema().createVertexType("Company");
@@ -81,13 +78,6 @@ class OpenCypherFunctionTest {
       bob.newEdge("WORKS_AT", arcadedb, "since", 2022).save();
       charlie.newEdge("KNOWS", alice, "since", 2019).save();
     });
-  }
-
-  @AfterEach
-  void teardown() {
-    if (database != null) {
-      database.drop();
-    }
   }
 
   @Test
@@ -149,6 +139,51 @@ class OpenCypherFunctionTest {
     final List<?> keysList = (List<?>) keys;
     assertThat(keysList.contains("name")).isTrue();
     assertThat(keysList.contains("age")).isTrue();
+  }
+
+  @Test
+  void keysFunctionOnMap() {
+    final ResultSet resultSet = database.query("opencypher",
+        "RETURN keys({a: 1, b: 2}) AS result");
+
+    assertThat(resultSet.hasNext()).isTrue();
+    final Result result = resultSet.next();
+    final List<String> keys = result.getProperty("result");
+    assertThat(keys).containsExactlyInAnyOrder("a", "b");
+  }
+
+  @Test
+  void keysFunctionOnEmptyMap() {
+    final ResultSet resultSet = database.query("opencypher",
+        "RETURN keys({}) AS result");
+
+    assertThat(resultSet.hasNext()).isTrue();
+    final Result result = resultSet.next();
+    final List<?> keys = result.getProperty("result");
+    assertThat(keys).isEmpty();
+  }
+
+  @Test
+  void keysFunctionOnNull() {
+    final ResultSet resultSet = database.query("opencypher",
+        "RETURN keys(null) AS result");
+
+    assertThat(resultSet.hasNext()).isTrue();
+    final Result result = resultSet.next();
+    assertThat(result.<Object>getProperty("result")).isNull();
+  }
+
+  @Test
+  void keysFunctionRejectsUnsupportedTypes() {
+    // Issue #5281: keys() must reject scalar and list arguments with a type error
+    // instead of silently returning an empty list, matching Neo4j/openCypher semantics.
+    for (final String expr : new String[] { "42", "'hello'", "true", "[1, 2, 3]" }) {
+      assertThatThrownBy(() -> {
+        final ResultSet rs = database.query("opencypher", "RETURN keys(" + expr + ") AS result");
+        rs.hasNext();
+      }).as("keys(%s) must raise a type error", expr)
+          .hasMessageContaining("keys() requires a node, relationship, or map argument");
+    }
   }
 
   @Test
@@ -513,6 +548,72 @@ class OpenCypherFunctionTest {
       final Result r = resultSet.next();
       final List<Object> list = (List<Object>) r.getProperty("result");
       assertThat(list).containsExactly(1L, 2L, 3L);
+    } finally {
+      db.drop();
+    }
+  }
+
+  // Issue #5298: || rejects mixed STRING/non-STRING operands instead of implicitly coercing them.
+  // Neo4j (the OpenCypher reference implementation) raises a type error for these; only + coerces.
+  @Test
+  void stringConcatenationWithBooleanIsRejected() {
+    final Database db = newIsolatedDatabase("concat-string-boolean");
+    try {
+      assertThatThrownBy(() -> db.query("opencypher", "RETURN 'prefix' || true AS result").nextIfAvailable())
+          .isInstanceOf(CommandSemanticException.class)
+          .hasMessageContaining("||");
+    } finally {
+      db.drop();
+    }
+  }
+
+  // Issue #5298: STRING || INTEGER must be a type error, not "prefix42".
+  @Test
+  void stringConcatenationWithIntegerIsRejected() {
+    final Database db = newIsolatedDatabase("concat-string-integer");
+    try {
+      assertThatThrownBy(() -> db.query("opencypher", "RETURN 'prefix' || 42 AS result").nextIfAvailable())
+          .isInstanceOf(CommandSemanticException.class)
+          .hasMessageContaining("||");
+    } finally {
+      db.drop();
+    }
+  }
+
+  // Issue #5298: STRING || DATE must be a type error, not "prefix2025-01-01".
+  @Test
+  void stringConcatenationWithDateIsRejected() {
+    final Database db = newIsolatedDatabase("concat-string-date");
+    try {
+      assertThatThrownBy(() -> db.query("opencypher", "RETURN 'prefix' || date('2025-01-01') AS result").nextIfAvailable())
+          .isInstanceOf(CommandSemanticException.class)
+          .hasMessageContaining("||");
+    } finally {
+      db.drop();
+    }
+  }
+
+  // Issue #5298: explicit toString() conversion keeps working after the strict check.
+  @Test
+  void stringConcatenationWithExplicitConversion() {
+    final Database db = newIsolatedDatabase("concat-string-explicit");
+    try {
+      final ResultSet rs = db.query("opencypher", "RETURN 'prefix' || toString(42) AS result");
+      assertThat(rs.hasNext()).isTrue();
+      assertThat(rs.next().<String>getProperty("result")).isEqualTo("prefix42");
+    } finally {
+      db.drop();
+    }
+  }
+
+  // Issue #5298: unlike +, || cannot append a single element to a LIST (Neo4j parity).
+  @Test
+  void listAppendViaConcatIsRejected() {
+    final Database db = newIsolatedDatabase("concat-list-append");
+    try {
+      assertThatThrownBy(() -> db.query("opencypher", "RETURN [1, 2] || 3 AS result").nextIfAvailable())
+          .isInstanceOf(CommandSemanticException.class)
+          .hasMessageContaining("||");
     } finally {
       db.drop();
     }

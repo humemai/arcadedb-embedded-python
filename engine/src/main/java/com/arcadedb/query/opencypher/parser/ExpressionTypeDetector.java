@@ -22,6 +22,7 @@ import com.arcadedb.query.opencypher.ast.Expression;
 import com.arcadedb.query.opencypher.ast.FunctionCallExpression;
 import com.arcadedb.query.opencypher.ast.StarExpression;
 import com.arcadedb.query.opencypher.grammar.Cypher25Parser;
+import org.antlr.v4.runtime.ParserRuleContext;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,16 +46,16 @@ class ExpressionTypeDetector {
    * Returns null if not a special function.
    */
   Expression tryParseSpecialFunctions(final Cypher25Parser.ExpressionContext ctx) {
-    // All recursive searches below use a length guard: only match when the found
-    // context covers (almost) the full expression text.  Without this, expressions
-    // like sum(CASE WHEN ... END) would be mis-parsed as just the inner special
-    // expression, losing the outer function wrapper.  The - 2 tolerance allows for
-    // whitespace that ANTLR's getText() strips from tokens.
-    final String exprText = ctx.getText();
+    // All recursive searches below use a span guard: only match when the found context spans the
+    // ENTIRE expression (same start and stop tokens). Without this, expressions like
+    // sum(CASE WHEN ... END) would be mis-parsed as just the inner special expression, losing the
+    // outer function wrapper, and COUNT { ... } = 0 would be mis-parsed as just the COUNT block,
+    // dropping the trailing comparison (issue #5140). Token-boundary checks are exact and, unlike a
+    // text-length tolerance, never swallow a short trailing operator such as "= 0".
 
     // count(*) - special grammar rule
     final Cypher25Parser.CountStarContext countStarCtx = builder.findCountStarRecursive(ctx);
-    if (countStarCtx != null && countStarCtx.getText().length() >= exprText.length() - 2) {
+    if (spansFullExpression(countStarCtx, ctx)) {
       final List<Expression> args = new ArrayList<>();
       args.add(new StarExpression());
       return new FunctionCallExpression("count", args, false);
@@ -62,34 +63,45 @@ class ExpressionTypeDetector {
 
     // EXISTS expression
     final Cypher25Parser.ExistsExpressionContext existsCtx = builder.findExistsExpressionRecursive(ctx);
-    if (existsCtx != null && existsCtx.getText().length() >= exprText.length() - 2)
+    if (spansFullExpression(existsCtx, ctx))
       return builder.parseExistsExpression(existsCtx);
 
     // COLLECT { ... } subquery expression
     final Cypher25Parser.CollectExpressionContext collectCtx = builder.findCollectExpressionRecursive(ctx);
-    if (collectCtx != null && collectCtx.getText().length() >= exprText.length() - 2)
+    if (spansFullExpression(collectCtx, ctx))
       return builder.parseCollectExpression(collectCtx);
 
     // COUNT { ... } subquery expression
     final Cypher25Parser.CountExpressionContext countCtx = builder.findCountExpressionRecursive(ctx);
-    if (countCtx != null && countCtx.getText().length() >= exprText.length() - 2)
+    if (spansFullExpression(countCtx, ctx))
       return builder.parseCountExpression(countCtx);
 
     // CASE expressions (both forms)
     final Cypher25Parser.CaseExpressionContext caseCtx = builder.findCaseExpressionRecursive(ctx);
-    if (caseCtx != null && caseCtx.getText().length() >= exprText.length() - 2)
+    if (spansFullExpression(caseCtx, ctx))
       return builder.parseCaseExpression(caseCtx);
 
     final Cypher25Parser.ExtendedCaseExpressionContext extCaseCtx = builder.findExtendedCaseExpressionRecursive(ctx);
-    if (extCaseCtx != null && extCaseCtx.getText().length() >= exprText.length() - 2)
+    if (spansFullExpression(extCaseCtx, ctx))
       return builder.parseExtendedCaseExpression(extCaseCtx);
 
     // shortestPath expressions
     final Cypher25Parser.ShortestPathExpressionContext shortestPathCtx = builder.findShortestPathExpressionRecursive(ctx);
-    if (shortestPathCtx != null && shortestPathCtx.getText().length() >= exprText.length() - 2)
+    if (spansFullExpression(shortestPathCtx, ctx))
       return builder.parseShortestPathExpression(shortestPathCtx);
 
     return null;
+  }
+
+  /**
+   * Returns true when {@code sub} covers the whole {@code full} expression, i.e. they share the
+   * same first and last tokens. Using token boundaries (rather than a text-length tolerance) is
+   * exact: a trailing operator such as {@code = 0} shifts {@code full}'s stop token past
+   * {@code sub}'s, so the special-function context is correctly recognized as only a sub-part of a
+   * larger comparison/arithmetic expression (issue #5140).
+   */
+  private static boolean spansFullExpression(final ParserRuleContext sub, final ParserRuleContext full) {
+    return sub != null && sub.getStart() == full.getStart() && sub.getStop() == full.getStop();
   }
 
   /**
@@ -97,26 +109,29 @@ class ExpressionTypeDetector {
    * Returns null if not a comprehension.
    */
   Expression tryParseComprehensions(final Cypher25Parser.ExpressionContext ctx) {
-    final String exprText = ctx.getText();
+    // A comprehension is only the whole expression when its parse-tree span covers the entire
+    // expression. The previous length-tolerance heuristic (len >= exprText.length() - 2) wrongly
+    // swallowed a trailing 2-char arithmetic operator such as /2, *2 or +1, silently dropping it
+    // (issue #5342). Token-span equality is exact and lets those cases fall through to arithmetic.
 
     // reduce expressions
     final Cypher25Parser.ReduceExpressionContext reduceCtx = builder.findReduceExpressionRecursive(ctx);
-    if (reduceCtx != null && reduceCtx.getText().length() >= exprText.length() - 2)
+    if (reduceCtx != null && spansFullExpression(reduceCtx, ctx))
       return builder.parseReduceExpression(reduceCtx);
 
     // allReduce expressions
     final Cypher25Parser.AllReduceExpressionContext allReduceCtx = builder.findAllReduceExpressionRecursive(ctx);
-    if (allReduceCtx != null && allReduceCtx.getText().length() >= exprText.length() - 2)
+    if (allReduceCtx != null && spansFullExpression(allReduceCtx, ctx))
       return builder.parseAllReduceExpression(allReduceCtx);
 
     // Pattern comprehensions
     final Cypher25Parser.PatternComprehensionContext patternCompCtx = builder.findPatternComprehensionRecursive(ctx);
-    if (patternCompCtx != null && patternCompCtx.getText().length() >= exprText.length() - 2)
+    if (patternCompCtx != null && spansFullExpression(patternCompCtx, ctx))
       return builder.parsePatternComprehension(patternCompCtx);
 
     // List comprehensions
     final Cypher25Parser.ListComprehensionContext listCompCtx = builder.findListComprehensionRecursive(ctx);
-    if (listCompCtx != null && listCompCtx.getText().length() >= exprText.length() - 2)
+    if (listCompCtx != null && spansFullExpression(listCompCtx, ctx))
       return builder.parseListComprehension(listCompCtx);
 
     return null;
@@ -226,6 +241,18 @@ class ExpressionTypeDetector {
    * Returns null if not a primary expression.
    */
   Expression tryParsePrimary(final Cypher25Parser.ExpressionContext ctx) {
+    // A parenthesized expression that spans the ENTIRE expression must be unwrapped and re-parsed
+    // BEFORE the recursive function-invocation finder below. Otherwise an expression such as
+    // (toString(null) IS NULL OR toString(null) = '') has its inner function call grabbed by
+    // findFunctionInvocationRecursive, silently dropping the surrounding IS NULL / OR / comparison
+    // and collapsing the whole expression to just the function result (issue #5383). The span guard
+    // (same start and stop tokens) ensures we only unwrap a full-span wrapper, so cases like
+    // (a) + (b) or (a) IS NULL - already handled by the arithmetic/comparison detectors above - are
+    // left untouched.
+    final Cypher25Parser.ParenthesizedExpressionContext fullParenCtx = builder.findParenthesizedExpressionRecursive(ctx);
+    if (fullParenCtx != null && fullParenCtx.getStart() == ctx.getStart() && fullParenCtx.getStop() == ctx.getStop())
+      return builder.parseExpression(fullParenCtx.expression());
+
     // Check for vector functions BEFORE list literals, because vector functions
     // contain list literals as arguments (e.g., vector([1.0, 2.0], 2, FLOAT32))
     // and the recursive list finder would incorrectly match the inner list.

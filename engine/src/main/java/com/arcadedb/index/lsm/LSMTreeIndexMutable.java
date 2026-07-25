@@ -132,6 +132,15 @@ public class LSMTreeIndexMutable extends LSMTreeIndexAbstract {
         subIndex = (LSMTreeIndexCompacted) database.getSchema().getFileById(subIndexFileId);
         subIndex.mainIndex = mainIndex;
         subIndex.binaryKeyTypes = binaryKeyTypes;
+        // The flag is not persisted in the page header: a sub-index materialised by the component factory defaults to false. It
+        // must match this index, because it decides whether the tf/docLength varints trailing every posting are consumed when a
+        // value is read back. A mismatch desynchronises the value stream and silently decodes the rest of the entry as garbage.
+        subIndex.setStoreTermFrequency(isStoreTermFrequency());
+
+        // Cheap (root pages only) guard against an index physically written under a different key order than the one
+        // the reader applies, the state an upgrade past #5321 leaves behind: without it the index keeps serving
+        // incomplete lookups silently until someone compares them against a full scan.
+        subIndex.checkKeyOrderOnLoad();
       }
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.SEVERE,
@@ -196,9 +205,12 @@ public class LSMTreeIndexMutable extends LSMTreeIndexAbstract {
 
   public IndexCursor iterator(final boolean ascendingOrder, final Object[] fromKeys, final boolean inclusive) throws IOException {
     if (ascendingOrder)
-      return range(fromKeys, inclusive, null, true);
+      return range(true, fromKeys, inclusive, null, true);
 
-    return range(null, true, fromKeys, inclusive);
+    // Descending scan from fromKeys down to the smallest key. fromKeys is the (high) start bound; the low end is open.
+    // Use the explicit-direction range: the auto-detecting range() defaults to ascending when a bound is null, which
+    // would silently iterate a descending request in ascending order (#5214).
+    return range(false, fromKeys, inclusive, null, true);
   }
 
   /**

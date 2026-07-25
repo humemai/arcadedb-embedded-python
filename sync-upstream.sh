@@ -34,6 +34,7 @@ FORK_EXCLUDED_PATHS=(
     "CLAUDE.md"
     ".github/workflows/benchmark-tests.yml"
     ".github/workflows/bolt-conformance-spec.yml"
+    ".github/workflows/bolt-nightly.yml"
     ".github/workflows/claude-code-review.yml"
     ".github/workflows/claude.yml"
     ".github/workflows/ha-resilience-tests.yml"

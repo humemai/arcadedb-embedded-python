@@ -141,9 +141,46 @@ public class ArcadeGremlin extends ArcadeQuery {
 
       return result;
 
-    } catch (Exception e) {
+    } catch (final ScriptException e) {
+      // eval() both builds the traversal and, for eager terminal steps such as .next()/.value(), iterates it.
+      // A ScriptException can therefore be either a genuine parse/build failure (e.g. a Groovy closure like
+      // `filter { ... }` or any syntax the secure gremlin-lang engine rejects, root cause GremlinParserException)
+      // or a runtime execution error surfaced during eager iteration (e.g. `.next()` on an empty traversal raises
+      // NoSuchElementException). Only the former is a client-side parsing error: it maps to HTTP 400 with the real
+      // parser message. A runtime error must stay a CommandExecutionException so it is not misreported as invalid
+      // syntax. See issues #5201 (parse) and #5219 (runtime NoSuchElementException misclassified as parse).
+      if (isParsingFailure(e))
+        throw new CommandParsingException("Error on parsing gremlin query: " + e.getMessage(), e);
+      final Throwable root = getRootCause(e);
+      final String reason = root.getMessage() != null ? root.getMessage() : root.getClass().getName();
+      throw new CommandExecutionException("Error on executing gremlin query: " + reason, e);
+    } catch (final Exception e) {
       throw new CommandExecutionException("Error on executing command", e);
     }
+  }
+
+  /**
+   * Distinguishes a genuine Gremlin parse/compilation failure from a runtime error surfaced by an eager terminal
+   * step during eval(). Parse failures from the secure gremlin-lang (java) engine surface as
+   * {@code GremlinParserException}; the legacy Groovy engine reports them as a compilation error. Anything else
+   * (e.g. {@link java.util.NoSuchElementException} from {@code .next()} on an empty traversal) is a runtime error.
+   */
+  private static boolean isParsingFailure(final Throwable e) {
+    for (Throwable c = e; c != null && c != c.getCause(); c = c.getCause()) {
+      final String className = c.getClass().getName();
+      if (className.equals("org.apache.tinkerpop.gremlin.language.grammar.GremlinParserException")
+          || className.equals("org.codehaus.groovy.control.MultipleCompilationErrorsException")
+          || className.equals("org.codehaus.groovy.control.CompilationFailedException"))
+        return true;
+    }
+    return false;
+  }
+
+  private static Throwable getRootCause(final Throwable e) {
+    Throwable root = e;
+    while (root.getCause() != null && root.getCause() != root)
+      root = root.getCause();
+    return root;
   }
 
   public static Map<String, Object> getStringObjectMap(final Map<Object, Object> originalMap) {
@@ -158,7 +195,9 @@ public class ArcadeGremlin extends ArcadeQuery {
 
   public QueryEngine.AnalyzedQuery parse() {
     try {
-      final DefaultGraphTraversal<?,?> resultSet = (DefaultGraphTraversal<?,?>) executeStatement();
+      // ANALYSIS-ONLY: THE ANALYZE() PATH (e.g. HA FOLLOWER IDEMPOTENCY CHECK) DOES NOT RECEIVE THE PARAMETER
+      // BINDINGS, SO USE THE NULL-TOLERANT JAVA ENGINE TO BUILD THE TRAVERSAL SHAPE WITHOUT REQUIRING THEM. #5187
+      final DefaultGraphTraversal<?,?> resultSet = (DefaultGraphTraversal<?,?>) executeStatement(true);
 
       boolean idempotent = true;
       final EnumSet<OperationType> ops = EnumSet.noneOf(OperationType.class);
@@ -225,33 +264,43 @@ public class ArcadeGremlin extends ArcadeQuery {
   }
 
   private Iterator<?> executeStatement() throws ScriptException {
+    return executeStatement(false);
+  }
+
+  private Iterator<?> executeStatement(final boolean analysis) throws ScriptException {
     String gremlinEngine = getEffectiveEngine();
 
     if ("auto".equals(gremlinEngine) || "java".equals(gremlinEngine)) {
       // TRY THE NATIVE JAVA ENGINE FIRST
       try {
-        return executeStatement("java");
+        return executeStatement("java", analysis);
       } catch (ScriptException e) {
-        if ("java".equals(gremlinEngine) && (parameters == null || parameters.isEmpty()))
-          // STRICT JAVA MODE WITH NO PARAMETERS: DO NOT FALLBACK
+        if ("java".equals(gremlinEngine))
+          // STRICT JAVA MODE (THE SECURE DEFAULT): NEVER FALL BACK TO THE INSECURE GROOVY ENGINE, REGARDLESS OF
+          // PARAMETERS. THE GROOVY ENGINE IS VULNERABLE TO RCE (SEE GHSA-wcm5-4wjm-9wj3): A QUERY THE GREMLIN-LANG
+          // PARSER REJECTS (E.G. A GROOVY CLOSURE `filter { ... }`) MUST SURFACE AS A PARSING ERROR, NOT BE
+          // SILENTLY EXECUTED AS GROOVY. USE 'auto' (OR 'groovy') EXPLICITLY TO OPT IN TO THE GROOVY FALLBACK.
           throw e;
 
-        // FALLBACK TO GROOVY FOR QUERIES WITH PARAMETERS OR IN AUTO MODE
-        // (TinkerPop 3.8.0 restricted parameter placement in gremlin-lang grammar)
+        // AUTO MODE ONLY: FALL BACK TO GROOVY FOR COMPATIBILITY (E.G. QUERIES THE gremlin-lang GRAMMAR CANNOT
+        // PARSE AFTER TinkerPop 3.8.0 RESTRICTED PARAMETER PLACEMENT). 'auto' IS DOCUMENTED AS NOT RECOMMENDED
+        // FOR SECURITY-CRITICAL DEPLOYMENTS.
         LogManager.instance()
             .log(this, Level.FINE, "The gremlin query '%s' could not be parsed by the Java engine, falling back to the `groovy` engine", e, query);
       }
       gremlinEngine = "groovy";
     }
 
-    return executeStatement(gremlinEngine);
+    return executeStatement(gremlinEngine, analysis);
   }
 
-  private Iterator<?> executeStatement(final String gremlinEngine) throws ScriptException {
+  private Iterator<?> executeStatement(final String gremlinEngine, final boolean analysis) throws ScriptException {
     final Object result;
     if ("java".equals(gremlinEngine)) {
-      // USE THE NATIVE GREMLIN PARSER
-      final GremlinLangScriptEngine gremlinEngineImpl = graph.getGremlinJavaEngine();
+      // USE THE NATIVE GREMLIN PARSER. THE ANALYSIS ENGINE TOLERATES UNBOUND PARAMETERS (#5187).
+      final GremlinLangScriptEngine gremlinEngineImpl = analysis ?
+          graph.getGremlinJavaAnalysisEngine() :
+          graph.getGremlinJavaEngine();
 
       final SimpleBindings bindings = new SimpleBindings();
       bindings.put("g", graph.traversal());

@@ -18,11 +18,8 @@
  */
 package com.arcadedb.query.opencypher.functions;
 
-import com.arcadedb.database.Database;
-import com.arcadedb.database.DatabaseFactory;
+import com.arcadedb.TestHelper;
 import com.arcadedb.query.sql.executor.ResultSet;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -35,22 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Comprehensive tests for OpenCypher String functions based on Neo4j Cypher documentation.
  * Tests cover all 18 string functions with their various parameters and edge cases.
  */
-class OpenCypherStringFunctionsComprehensiveTest {
-  private Database database;
-
-  @BeforeEach
-  void setUp() {
-    final DatabaseFactory factory = new DatabaseFactory("./databases/test-cypher-string-functions");
-    if (factory.exists())
-      factory.open().drop();
-    database = factory.create();
-  }
-
-  @AfterEach
-  void tearDown() {
-    if (database != null)
-      database.drop();
-  }
+class OpenCypherStringFunctionsComprehensiveTest extends TestHelper {
 
   // ==================== btrim() Tests ====================
 
@@ -451,6 +433,29 @@ class OpenCypherStringFunctionsComprehensiveTest {
   }
 
   @Test
+  void splitEmptyDelimiter() {
+    // Issue #5390: an empty delimiter must split into individual characters with no spurious trailing empty string.
+    ResultSet result = database.command("opencypher", "RETURN split('hello', '') AS result");
+    Assertions.assertThat(result.hasNext()).isTrue();
+    @SuppressWarnings("unchecked")
+    List<String> parts = (List<String>) result.next().getProperty("result");
+    assertThat(parts).containsExactly("h", "e", "l", "l", "o");
+
+    result = database.command("opencypher", "RETURN split('a', '') AS result");
+    Assertions.assertThat(result.hasNext()).isTrue();
+    @SuppressWarnings("unchecked")
+    final List<String> single = (List<String>) result.next().getProperty("result");
+    assertThat(single).containsExactly("a");
+
+    // Empty input string still yields a single empty element (consistent with split('', ',')).
+    result = database.command("opencypher", "RETURN split('', '') AS result");
+    Assertions.assertThat(result.hasNext()).isTrue();
+    @SuppressWarnings("unchecked")
+    final List<String> empty = (List<String>) result.next().getProperty("result");
+    assertThat(empty).containsExactly("");
+  }
+
+  @Test
   void splitNullHandling() {
     ResultSet result = database.command("opencypher", "RETURN split(null, ',') AS result");
     Assertions.assertThat(result.hasNext() != false).isTrue();
@@ -504,6 +509,15 @@ class OpenCypherStringFunctionsComprehensiveTest {
     final ResultSet result = database.command("opencypher", "RETURN substring('hello', null, 2) AS result");
     Assertions.assertThat(result.hasNext() != false).isTrue();
     Assertions.assertThat(result.next().getProperty("result") == null).isTrue();
+  }
+
+  @Test
+  void substringNullLengthReturnsNull() {
+    // Issue #5193: an explicitly supplied null length must propagate null (as Neo4j does),
+    // not be treated as an omitted argument (which would return 'ello').
+    final ResultSet result = database.command("opencypher", "RETURN substring('hello', 1, null) AS result");
+    Assertions.assertThat(result.hasNext()).isTrue();
+    Assertions.assertThat(result.next().<Object>getProperty("result")).isNull();
   }
 
   @Test

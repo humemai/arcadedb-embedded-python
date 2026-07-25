@@ -19,6 +19,7 @@
 package com.arcadedb.query.opencypher.optimizer;
 
 import com.arcadedb.query.opencypher.ast.*;
+import com.arcadedb.query.opencypher.executor.operators.InListValues;
 import com.arcadedb.query.opencypher.optimizer.plan.AnchorSelection;
 import com.arcadedb.query.opencypher.optimizer.plan.LogicalNode;
 import com.arcadedb.query.opencypher.optimizer.plan.LogicalPlan;
@@ -68,20 +69,31 @@ public class AnchorSelector {
       throw new IllegalArgumentException("Cannot select anchor from empty logical plan");
     }
 
-    AnchorSelection bestAnchor = null;
-    double lowestCost = Double.MAX_VALUE;
+    AnchorSelection bestIndexed = null;
+    double lowestIndexedCost = Double.MAX_VALUE;
+    AnchorSelection bestScan = null;
+    double lowestScanCost = Double.MAX_VALUE;
 
-    // Evaluate each node as a potential anchor
+    // Evaluate each node as a potential anchor. An index-backed anchor (equality/IN-list seek or
+    // range scan) is a bounded, selective seed and is always preferred over an unfiltered full scan
+    // of another label - the classic index-seek-as-driver rule (issue #5306). Picking a tiny
+    // unfiltered label purely because its raw count is low would seed the pattern from the wrong end
+    // and force a reverse expansion, which silently returns empty over unidirectional edges or a GAV.
     for (final LogicalNode node : plan.getNodes().values()) {
       final AnchorSelection candidate = evaluateNode(node, plan);
 
-      if (candidate.getEstimatedCost() < lowestCost) {
-        lowestCost = candidate.getEstimatedCost();
-        bestAnchor = candidate;
+      if (candidate.useIndex()) {
+        if (candidate.getEstimatedCost() < lowestIndexedCost) {
+          lowestIndexedCost = candidate.getEstimatedCost();
+          bestIndexed = candidate;
+        }
+      } else if (candidate.getEstimatedCost() < lowestScanCost) {
+        lowestScanCost = candidate.getEstimatedCost();
+        bestScan = candidate;
       }
     }
 
-    return bestAnchor;
+    return bestIndexed != null ? bestIndexed : bestScan;
   }
 
   /**
@@ -124,7 +136,14 @@ public class AnchorSelector {
     }
     allPredicates.putAll(wherePredicates);
 
-    if (!allPredicates.isEmpty()) {
+    // ALSO check WHERE clause for IN-list predicates on indexed properties (issue #5306).
+    // Membership against a constant list is a set of equality seeks, so an indexed property with an
+    // IN-list is anchorable exactly like equality. Recognizing it here makes the planner start a
+    // multi-hop pattern from the filtered node and expand forward, instead of anchoring on the far
+    // side and reverse-traversing (which silently returns empty over unidirectional edges or a GAV).
+    final Map<String, List<Expression>> inListPredicates = extractInListPredicates(variable, plan);
+
+    if (!allPredicates.isEmpty() || !inListPredicates.isEmpty()) {
       // Look for indexed properties with equality predicates
       final List<IndexStatistics> indexes = statisticsProvider.getIndexesForType(label);
 
@@ -154,6 +173,38 @@ public class AnchorSelector {
         }
       }
 
+      // IN-list over an indexed property → multi-value index seek (one seek per list value).
+      for (final Map.Entry<String, List<Expression>> property : inListPredicates.entrySet()) {
+        final String propertyName = property.getKey();
+        final List<Expression> values = property.getValue();
+
+        final IndexStatistics indexStats = findIndexForProperty(indexes, propertyName);
+
+        if (indexStats != null) {
+          final int nValues = Math.max(1, values.size());
+          // Per-seek selectivity: a unique index returns ~1 row per value, a non-unique one ~10%.
+          final double perSeekSelectivity = indexStats.isUnique() ? 1.0 / Math.max(1, typeCount) : 0.1;
+          final long estimatedRows = indexStats.isUnique()
+              ? nValues
+              : Math.min(typeCount, (long) (nValues * typeCount * perSeekSelectivity));
+          // Cost of nValues independent seeks. Still far below a full scan for any sane list size.
+          final double cost = nValues * costModel.estimateIndexSeekCost(label, propertyName, perSeekSelectivity);
+
+          return new AnchorSelection(
+              variable,
+              node,
+              true, // useIndex
+              indexStats,
+              propertyName,
+              new InListValues(values),
+              cost,
+              estimatedRows
+          );
+        }
+      }
+    }
+
+    if (!allPredicates.isEmpty()) {
       // FILTERED SCAN - ACCEPTABLE (no index available)
       // Use first property for selectivity estimation
       final Map.Entry<String, Object> firstProperty = allPredicates.entrySet().iterator().next();
@@ -273,68 +324,139 @@ public class AnchorSelector {
       return predicates;
     }
 
-    for (final WhereClause whereClause : plan.getWhereFilters()) {
-      final BooleanExpression condition = whereClause.getConditionExpression();
-      if (condition == null) {
-        continue;
-      }
-
-      // Check if it's a comparison expression
-      if (condition instanceof ComparisonExpression) {
-        final ComparisonExpression comparison =
-            (ComparisonExpression) condition;
-
-        // Only handle EQUALS comparisons
-        if (comparison.getOperator() != ComparisonExpression.Operator.EQUALS) {
-          continue;
-        }
-
-        // Check if left side is a property access on our variable
-        final Expression left = comparison.getLeft();
-        final Expression right = comparison.getRight();
-
-        if (left instanceof PropertyAccessExpression) {
-          final PropertyAccessExpression propAccess =
-              (PropertyAccessExpression) left;
-
-          if (propAccess.getVariableName().equals(variable)) {
-            // Extract the property name and value
-            final String propertyName = propAccess.getPropertyName();
-
-            // Try to extract constant value from right side
-            if (right instanceof LiteralExpression) {
-              final Object value = ((LiteralExpression) right).getValue();
-              predicates.put(propertyName, value);
-            } else if (right instanceof ParameterExpression) {
-              // Store the ParameterExpression so NodeIndexSeek can resolve it at runtime
-              predicates.put(propertyName, right);
-            }
-          }
-        }
-
-        // Also check reverse: value = property (e.g., 500 = p.id)
-        if (right instanceof PropertyAccessExpression) {
-          final PropertyAccessExpression propAccess =
-              (PropertyAccessExpression) right;
-
-          if (propAccess.getVariableName().equals(variable)) {
-            final String propertyName = propAccess.getPropertyName();
-
-            if (left instanceof LiteralExpression) {
-              final Object value = ((LiteralExpression) left).getValue();
-              predicates.put(propertyName, value);
-            } else if (left instanceof ParameterExpression) {
-              // Store the ParameterExpression so NodeIndexSeek can resolve it at runtime
-              predicates.put(propertyName, left);
-            }
-          }
-        }
-      }
-
-      // TODO: Handle logical expressions (AND/OR) to extract more predicates
-    }
+    for (final WhereClause whereClause : plan.getWhereFilters())
+      extractEqualityPredicatesFromExpression(variable, whereClause.getConditionExpression(), predicates);
 
     return predicates;
+  }
+
+  /**
+   * Recursively extracts equality predicates from a boolean expression (issue #5362). Parentheses and
+   * AND branches are traversed, so {@code WHERE (n.id = 1) AND (n.id = 1)} - or any equality merely
+   * ANDed with other conditions - still seeds an index seek instead of degrading to a label scan.
+   * <p>
+   * Only AND is traversed: an OR/XOR/NOT branch is not guaranteed to hold for every returned row, so
+   * its equality cannot drive the anchor. The whole WHERE clause is still evaluated by the Filter
+   * operator above the anchor, so keeping the first binding for a property is always safe (a
+   * contradictory {@code n.id = 1 AND n.id = 2} simply seeks 1 and is then filtered out).
+   */
+  private void extractEqualityPredicatesFromExpression(final String variable, final BooleanExpression expression,
+      final Map<String, Object> predicates) {
+    if (expression == null)
+      return;
+
+    if (expression instanceof BooleanWrapperExpression wrapper) {
+      extractEqualityPredicatesFromExpression(variable, wrapper.getBooleanExpression(), predicates);
+      return;
+    }
+
+    if (expression instanceof LogicalExpression logical) {
+      if (logical.getOperator() == LogicalExpression.Operator.AND) {
+        extractEqualityPredicatesFromExpression(variable, logical.getLeft(), predicates);
+        extractEqualityPredicatesFromExpression(variable, logical.getRight(), predicates);
+      }
+      return;
+    }
+
+    if (!(expression instanceof ComparisonExpression comparison))
+      return;
+
+    // Only handle EQUALS comparisons
+    if (comparison.getOperator() != ComparisonExpression.Operator.EQUALS)
+      return;
+
+    final Expression left = comparison.getLeft();
+    final Expression right = comparison.getRight();
+
+    // Check if left side is a property access on our variable
+    if (left instanceof PropertyAccessExpression propAccess && propAccess.getVariableName().equals(variable)) {
+      // Try to extract constant value from right side
+      if (right instanceof LiteralExpression literal)
+        predicates.putIfAbsent(propAccess.getPropertyName(), literal.getValue());
+      else if (right instanceof ParameterExpression)
+        // Store the ParameterExpression so NodeIndexSeek can resolve it at runtime
+        predicates.putIfAbsent(propAccess.getPropertyName(), right);
+    }
+
+    // Also check reverse: value = property (e.g., 500 = p.id)
+    if (right instanceof PropertyAccessExpression propAccess && propAccess.getVariableName().equals(variable)) {
+      if (left instanceof LiteralExpression literal)
+        predicates.putIfAbsent(propAccess.getPropertyName(), literal.getValue());
+      else if (left instanceof ParameterExpression)
+        predicates.putIfAbsent(propAccess.getPropertyName(), left);
+    }
+  }
+
+  /**
+   * Extracts IN-list predicates ({@code variable.prop IN [c1, c2, ...]}) from WHERE clauses for a
+   * given variable (issue #5306). Only membership tests against a constant list (literals and/or
+   * query parameters) are returned, since those are the ones that can drive a static index seek.
+   * {@code NOT IN} is excluded (it is an anti-membership, not seekable).
+   *
+   * @param variable the variable name to search for
+   * @param plan     the logical plan containing WHERE clauses
+   * @return map of property names to the list of value expressions to seek
+   */
+  private Map<String, List<Expression>> extractInListPredicates(final String variable, final LogicalPlan plan) {
+    final Map<String, List<Expression>> predicates = new HashMap<>();
+
+    if (plan.getWhereFilters() == null || plan.getWhereFilters().isEmpty())
+      return predicates;
+
+    for (final WhereClause whereClause : plan.getWhereFilters())
+      extractInListPredicatesFromExpression(variable, whereClause.getConditionExpression(), predicates);
+
+    return predicates;
+  }
+
+  private void extractInListPredicatesFromExpression(final String variable, final BooleanExpression expression,
+      final Map<String, List<Expression>> predicates) {
+    if (expression == null)
+      return;
+
+    if (expression instanceof BooleanWrapperExpression wrapper) {
+      extractInListPredicatesFromExpression(variable, wrapper.getBooleanExpression(), predicates);
+      return;
+    }
+
+    // Only AND lets us treat a branch as an independent, always-applied predicate. OR/XOR/NOT do not.
+    if (expression instanceof LogicalExpression logical) {
+      if (logical.getOperator() == LogicalExpression.Operator.AND) {
+        extractInListPredicatesFromExpression(variable, logical.getLeft(), predicates);
+        extractInListPredicatesFromExpression(variable, logical.getRight(), predicates);
+      }
+      return;
+    }
+
+    if (expression instanceof InExpression inExpr) {
+      if (inExpr.isNot())
+        return;
+
+      if (!(inExpr.getExpression() instanceof PropertyAccessExpression propAccess))
+        return;
+      if (!propAccess.getVariableName().equals(variable))
+        return;
+
+      List<Expression> list = inExpr.getList();
+      if (list == null || list.isEmpty())
+        return;
+
+      // A parenthesized list literal (x IN [a, b, c]) is parsed as a single ListExpression element;
+      // unwrap it to the individual value expressions.
+      if (list.size() == 1 && list.get(0) instanceof ListExpression listExpr)
+        list = listExpr.getElements();
+
+      if (list.isEmpty())
+        return;
+
+      // Only constant elements (literals / parameters) can seed a static anchor seek. A single
+      // parameter is allowed too (it resolves to a whole list at runtime, e.g. x IN $ids).
+      for (final Expression element : list)
+        if (!(element instanceof LiteralExpression) && !(element instanceof ParameterExpression))
+          return;
+
+      predicates.putIfAbsent(propAccess.getPropertyName(), list);
+    }
   }
 
   /**

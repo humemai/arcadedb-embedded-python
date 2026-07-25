@@ -62,6 +62,8 @@ public class PageManager extends LockContext {
   private final    AtomicLong                        cacheHits                             = new AtomicLong();
   private final    AtomicLong                        cacheMiss                             = new AtomicLong();
   private final    AtomicLong                        totalConcurrentModificationExceptions = new AtomicLong();
+  private final    AtomicLong                        totalEdgeAppendMerges                 = new AtomicLong();
+  private final    AtomicLong                        totalTxPageSlotMerges                 = new AtomicLong();
   private final    AtomicLong                        evictionRuns                          = new AtomicLong();
   private final    AtomicLong                        pagesEvicted                          = new AtomicLong();
   private volatile long                              lastCheckForRAM                       = 0;
@@ -90,6 +92,8 @@ public class PageManager extends LockContext {
     public long cacheHits;
     public long cacheMiss;
     public long concurrentModificationExceptions;
+    public long edgeAppendMerges;
+    public long txPageSlotMerges;
     public long evictionRuns;
     public long pagesEvicted;
     public int  readCachePages;
@@ -306,6 +310,23 @@ public class PageManager extends LockContext {
     return null;
   }
 
+  /**
+   * Counts a resolved commutative edge-append merge: a commit-time page conflict avoided by replaying appends
+   * on the newer version instead of failing the whole transaction. Surfaced via {@link #getStats()}.
+   */
+  public void incrementEdgeAppendMerges() {
+    totalEdgeAppendMerges.incrementAndGet();
+  }
+
+  /**
+   * Counts a resolved disjoint-slot page merge: a commit-time page conflict avoided by re-applying this
+   * transaction's slot writes (inserts / in-place updates of records the concurrent commit left untouched) on
+   * the newer committed page instead of failing the whole transaction. Surfaced via {@link #getStats()}.
+   */
+  public void incrementTxPageSlotMerges() {
+    totalTxPageSlotMerges.incrementAndGet();
+  }
+
   public void checkPageVersion(final MutablePage page, final boolean isNew) throws IOException {
     final PageId pageId = page.getPageId();
 
@@ -478,6 +499,59 @@ public class PageManager extends LockContext {
     totalPagesWritten.incrementAndGet();
   }
 
+  /**
+   * Writes to disk, and takes out of the asynchronous flush pipeline, any page still pending for {@code pageId}.
+   * <p>
+   * Callers that write a page directly to its file instead of going through the flush queue
+   * ({@link TransactionManager#applyChanges} during replicated / recovery replay) must call this first. A committed
+   * page is published to the read cache and to the flush thread's index before it reaches the disk, and while that
+   * older copy is still pending {@link #loadPage} resolves the page from the queue instead of from the file - so the
+   * replicated write stays invisible to every later read - and the eventual flush of that copy overwrites the
+   * replicated page, rolling its version backwards. Pushing the pending copy to disk here (rather than discarding it)
+   * preserves its content, which is the only baseline the WAL delta can be applied on top of.
+   */
+  void materializePendingFlushOfPage(final Database database, final PageId pageId)
+      throws IOException, InterruptedException {
+    final PageManagerFlushThread thread = flushThread;
+    if (thread == null)
+      return;
+
+    final List<MutablePage> pending = thread.detachPendingPages(database, pageId);
+    if (pending.isEmpty())
+      return;
+
+    // The flush thread may have taken a batch before the detach reached it: let the in-flight write finish, or it
+    // could still land after the caller's write and revert the page on disk. An interrupt here leaves the copies
+    // detached but not yet written: they stay durable because their WAL acks have NOT been released
+    // (notifyPageFlushed runs inside flushPage below), so their WAL entries are preserved and replayed on the next
+    // open.
+    thread.waitForCurrentFlushToComplete(database);
+
+    // Successive commits can leave more than one copy pending. The most recent one is a full page image covering
+    // every older one, so writing it alone puts the whole pending content on disk.
+    MutablePage mostRecent = pending.getFirst();
+    for (int i = 1; i < pending.size(); i++)
+      if (pending.get(i).getVersion() > mostRecent.getVersion())
+        mostRecent = pending.get(i);
+
+    flushPage(mostRecent);
+
+    // The superseded copies will never be written. Release their WAL acks - as the dropped-file purge does - or the
+    // stale pending count would keep their WAL files alive forever (the close-time ack gate, #4928). takeWALFile
+    // makes the release exactly-once.
+    for (int i = 0; i < pending.size(); i++) {
+      final MutablePage page = pending.get(i);
+      if (page != mostRecent) {
+        final WALFile walFile = page.takeWALFile();
+        if (walFile != null)
+          walFile.notifyPageFlushed();
+      }
+    }
+
+    // The read cache holds the same pending copy: drop it so the caller reads the content just written.
+    removePageFromCache(pageId);
+  }
+
   public PPageManagerStats getStats() {
     final PPageManagerStats stats = new PPageManagerStats();
     stats.maxRAM = maxRAM;
@@ -494,6 +568,8 @@ public class PageManager extends LockContext {
     stats.cacheHits = cacheHits.get();
     stats.cacheMiss = cacheMiss.get();
     stats.concurrentModificationExceptions = totalConcurrentModificationExceptions.get();
+    stats.edgeAppendMerges = totalEdgeAppendMerges.get();
+    stats.txPageSlotMerges = totalTxPageSlotMerges.get();
     stats.evictionRuns = evictionRuns.get();
     stats.pagesEvicted = pagesEvicted.get();
     return stats;

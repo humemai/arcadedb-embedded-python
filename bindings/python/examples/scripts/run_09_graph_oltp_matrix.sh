@@ -207,7 +207,7 @@ EOF
             "$target_dir" \
             "$collected_at" \
             "arcadedb_embedded" "auto" \
-            "real_ladybug" "auto" \
+            "ladybug" "auto" \
             "neo4j" "auto" \
             "graphqlite" "auto" \
             "duckdb" "auto" \

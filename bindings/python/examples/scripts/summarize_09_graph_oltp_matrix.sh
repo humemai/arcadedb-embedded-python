@@ -114,7 +114,7 @@ def add_version(version_sets, key, value):
 
 def collect_version_metadata(version_sets, data, run_dir):
     add_version(version_sets, "arcadedb_embedded", data.get("arcadedb_version"))
-    add_version(version_sets, "real_ladybug", data.get("ladybug_version"))
+    add_version(version_sets, "ladybug", data.get("ladybug_version"))
     add_version(version_sets, "neo4j", data.get("neo4j_version"))
     add_version(version_sets, "graphqlite", data.get("graphqlite_version"))
     add_version(
@@ -183,7 +183,7 @@ def ensure_versions_for_db_set(version_sets, db_values):
     if any(v in db_values for v in ("arcadedb", "arcadedb_sql", "arcadedb_cypher")):
         expected.add("arcadedb_embedded")
     if any(v in db_values for v in ("ladybug", "ladybugdb")):
-        expected.add("real_ladybug")
+        expected.add("ladybug")
     if "neo4j" in db_values:
         expected.add("neo4j")
     if "graphqlite" in db_values:

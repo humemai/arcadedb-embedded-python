@@ -83,6 +83,15 @@ def test_import_documents_applies_and_restores_runtime_settings(temp_db_path, tm
         assert async_exec.is_transaction_use_wal() is True
 
 
+def test_set_commit_every_rejects_below_one(temp_db_path):
+    with arcadedb.create_database(temp_db_path) as db:
+        async_exec = db.async_executor()
+        with pytest.raises(ValueError, match="commit_every must be >= 1"):
+            async_exec.set_commit_every(0)
+        with pytest.raises(ValueError, match="commit_every must be >= 1"):
+            async_exec.set_commit_every(-5)
+
+
 def test_import_documents_missing_file_raises_arcadedb_error(temp_db_path, tmp_path):
     missing_path = tmp_path / "missing.csv"
 

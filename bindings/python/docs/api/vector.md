@@ -152,7 +152,7 @@ db.create_vector_index(
     dimensions: int,
     id_property: str | None = None,
     distance_function: str = "cosine",
-    max_connections: int = 16,
+    max_connections: int = 32,
     beam_width: int = 100,
     quantization: str = "INT8",
     encoding: str | None = None,
@@ -180,7 +180,7 @@ db.create_vector_index(
     - `"cosine"`: Cosine distance (1 - cosine similarity)
     - `"euclidean"`: Euclidean distance (L2 norm)
     - `"inner_product"`: Negative inner product
-- `max_connections` (int): Max connections per node (default: 16)
+- `max_connections` (int): Per-layer graph degree (default: 32; Vamana degree, NOT doubled at the base layer like hnswlib M — use 2*M to match an hnswlib config)
     - Maps to `maxConnections` in JVector
     - Higher = better recall, more memory
         - Typical range: 8-64
@@ -464,7 +464,7 @@ db.command(
     METADATA {
         "dimensions": 384,
         "similarity": "COSINE",
-        "maxConnections": 16,
+        "maxConnections": 32,
         "beamWidth": 100
     }
     """

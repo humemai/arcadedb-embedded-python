@@ -46,12 +46,14 @@ public class TransactionManager {
   private static final long MAX_LOG_FILE_SIZE = 64 * 1024 * 1024;
   private static final int  WRITE_WAL_TIMEOUT = 30_000;
   /**
-   * On-disk record of the highest assigned transaction id, written on close and read on open. Lets
-   * {@link #getLastTransactionId()} return a meaningful value even after a clean shutdown wiped the
-   * WAL. Used by the HA bootstrap path (issue #4147) so a peer staged from a clean backup can
-   * report its database recency without having to scan WAL files.
+   * On-disk record of the highest assigned transaction id, written on close and whenever a runtime
+   * WAL rotation drops log files (issue #5277), read on open. Lets {@link #getLastTransactionId()}
+   * return a meaningful value even after the WAL is gone - on a clean shutdown (which purges it) or
+   * on a force-kill after the rotation dropped it. Used by the HA bootstrap path (issue #4147) so a
+   * peer can report its database recency without having to scan WAL files. Public because the HA
+   * snapshot transfer ships this marker alongside the data files (issue #5277).
    */
-  static final  String LAST_TX_ID_FILE_NAME = "last-tx-id.bin";
+  public static final String LAST_TX_ID_FILE_NAME = "last-tx-id.bin";
 
   private final DatabaseInternal             database;
   private       WALFile[]                    activeWALFilePool;
@@ -204,7 +206,7 @@ public class TransactionManager {
       // above; leave them (and the caller leaves the lock file) so the next open runs recovery and replays.
       LogManager.instance().log(this, Level.SEVERE,
           "Preserving the WAL files of database '%s': not all pages reached the disk (%s), the next open will recover them",
-          null, database.getName(), preserveWalFiles ? "flush wait gave up" : "unacked WAL pages");
+          null, database.getName(), preserveWalFiles ? "caller requested preservation" : "unacked WAL pages");
     } else {
       // DELETE ALL THE WAL FILES AT OS-LEVEL
       final File dir = new File(database.getDatabasePath());
@@ -419,6 +421,26 @@ public class TransactionManager {
     }
   }
 
+  /**
+   * Point-in-time view of every commit-lock currently HELD on this database: the file, its owner, when
+   * it was acquired, how long it has been held and how many transactions are queued behind it.
+   * <p>
+   * Exposed because the lock table is otherwise unreachable from outside this class — {@code toString()}
+   * renders it, but only as a debug string a caller would have to parse. Locks have no lease: a resource
+   * is released by its owner or not at all, and the abandoned-lock sweep reclaims one only after the
+   * owning thread has DIED, so a lock leaked by a live-but-stuck thread is held until the process
+   * restarts. This is what lets an operator see that happening instead of inferring it from a wave of
+   * {@link com.arcadedb.exception.LockTimeoutException}s and restarting blind.
+   * <p>
+   * Returns a snapshot of rendered values, deliberately NOT the {@link LockManager}: diagnostics must be
+   * able to read the lock table without being able to unlock anything.
+   *
+   * @return one entry per held file, empty when nothing is locked (the normal, healthy state)
+   */
+  public List<LockManager.LockStats> getLockStats() {
+    return fileIdsLockManager.statsSnapshot();
+  }
+
   public Map<String, Object> getStats() {
     final Map<String, Object> map = new HashMap<>();
     map.put("logFiles", logFileCounter.get());
@@ -485,6 +507,12 @@ public class TransactionManager {
       }
 
       try {
+        // The asynchronous flush pipeline may still hold an older copy of this page. It must reach the disk BEFORE
+        // the replicated write below: while it is pending, every read resolves the page from the flush queue instead
+        // of from the file (so the replicated write stays invisible), and its eventual flush overwrites the
+        // replicated page and rolls the version backwards - the version-gap cascade this replay exists to close.
+        database.getPageManager().materializePendingFlushOfPage(database, pageId);
+
         final ImmutablePage page = database.getPageManager().getImmutablePage(pageId, file.getPageSize(), false, true);
 
         LogManager.instance()
@@ -611,6 +639,11 @@ public class TransactionManager {
 
       } catch (final ClosedByInterruptException e) {
         // NORMAL EXCEPTION IN CASE THE CONNECTION/THREAD IS CLOSED (=INTERRUPTED)
+        Thread.currentThread().interrupt();
+        throw new WALException("Cannot apply changes to page " + pageId, e);
+      } catch (final InterruptedException e) {
+        // Interrupted while draining the pending flush of this page: the page was NOT applied, so fail loud with the
+        // interrupt flag restored instead of leaving a silent version gap behind.
         Thread.currentThread().interrupt();
         throw new WALException("Cannot apply changes to page " + pageId, e);
       } catch (final IOException e) {
@@ -772,7 +805,8 @@ public class TransactionManager {
         if (attemptFileId != null)
           throw new LockTimeoutException(
               "Timeout on locking file " + attemptFileId + " (" + database.getFileManager().getFile(attemptFileId).getFileName()
-                  + ") during commit (fileIds=" + orderedFilesIds + ", timeout=" + timeout + "ms");
+                  + ") during commit (fileIds=" + orderedFilesIds + ", timeout=" + timeout + "ms" + describeHolder(attemptFileId)
+                  + ")");
 
         throw new LockTimeoutException("Timeout on locking files during commit (fileIds=" + orderedFilesIds + ")");
       }
@@ -809,7 +843,8 @@ public class TransactionManager {
 
         throw new LockTimeoutException(
             "Timeout on locking file " + attemptFileId + " (" + database.getFileManager().getFile(attemptFileId).getFileName()
-                + ") during commit (fileIds=" + Arrays.toString(fileIds) + ", timeout=" + timeout + "ms");
+                + ") during commit (fileIds=" + Arrays.toString(fileIds) + ", timeout=" + timeout + "ms"
+                + describeHolder(attemptFileId) + ")");
       }
     }
 
@@ -818,6 +853,26 @@ public class TransactionManager {
       LogManager.instance().log(this, Level.FINE, "Locked files %s (threadId=%d)", null, Arrays.toString(fileIds),
           Thread.currentThread().threadId());
     return lockedFiles;
+  }
+
+  /**
+   * Renders who holds {@code fileId} right now, as a suffix for a {@link LockTimeoutException} message,
+   * or an empty string when the lock was released in the meantime.
+   * <p>
+   * Without this the exception names only the file that could not be locked, which is the one thing an
+   * operator can already guess. The holder is knowable ONLY while the lock is still held: a lock leaked
+   * by a live thread is never reclaimed (the abandoned-lock sweep requires the owner to have died), so
+   * by the time the log is read the evidence is gone and the usual remedy is a blind restart. Building
+   * the string is safe here because the acquisition has already failed.
+   */
+  private String describeHolder(final int fileId) {
+    try {
+      final String holder = fileIdsLockManager.describeOwner(fileId);
+      return holder != null ? ", " + holder : "";
+    } catch (final Exception e) {
+      // Diagnostics must never replace the real failure with one of their own.
+      return "";
+    }
   }
 
   public void unlockFilesInOrder(final List<Integer> lockedFileIds, final Object requester) {
@@ -917,6 +972,7 @@ public class TransactionManager {
    */
   private boolean cleanWALFiles(final boolean dropFiles, final boolean force, final boolean syncDataOnDrop) {
     boolean dataSynced = false;
+    boolean droppedAny = false;
     for (final Iterator<WALFile> it = inactiveWALFilePool.iterator(); it.hasNext(); ) {
       final WALFile file = it.next();
 
@@ -939,6 +995,7 @@ public class TransactionManager {
               dataSynced = true;
             }
             file.drop();
+            droppedAny = true;
           } else
             file.close();
 
@@ -949,7 +1006,35 @@ public class TransactionManager {
       }
     }
 
+    // Runtime WAL rotation (uniquely identified by syncDataOnDrop; the clean-close path persists the
+    // marker itself): the dropped WAL was the only recovery source for the transaction counter, so a
+    // later force-kill (no clean close) would make an intact database report lastTxId=-1 to the HA
+    // bootstrap protocol and be needlessly re-installed from a full leader snapshot (issue #5277).
+    // Persist the marker the moment that recovery source disappears.
+    if (dropFiles && syncDataOnDrop && droppedAny)
+      writePersistedLastTransactionId();
+
     return inactiveWALFilePool.isEmpty();
+  }
+
+  /**
+   * Package-private test hook: runs one runtime WAL-rotation pass exactly as the background timer
+   * does - retires every active WAL file (ignoring the size threshold) and drops the inactive ones,
+   * fsyncing data first. Lets tests exercise the rotation persistence (issue #5277) without writing
+   * 64MB of log to cross {@link #MAX_LOG_FILE_SIZE}.
+   */
+  void rotateAndDropWALForTesting() throws IOException {
+    if (activeWALFilePool != null)
+      for (int i = 0; i < activeWALFilePool.length; ++i) {
+        final WALFile file = activeWALFilePool[i];
+        if (file != null && file.isOpen()) {
+          activeWALFilePool[i] = database.getWALFileFactory()
+              .newInstance(database.getDatabasePath() + "/txlog_" + logFileCounter.getAndIncrement() + ".wal");
+          file.setActive(false);
+          inactiveWALFilePool.add(file);
+        }
+      }
+    cleanWALFiles(true, true, true);
   }
 
   @Override

@@ -39,6 +39,7 @@ import com.arcadedb.engine.WALFileFactoryEmbedded;
 import com.arcadedb.engine.timeseries.TimeSeriesBucket;
 import com.arcadedb.exception.ArcadeDBException;
 import com.arcadedb.exception.CommandExecutionException;
+import com.arcadedb.exception.ConcurrentModificationException;
 import com.arcadedb.exception.DatabaseIsClosedException;
 import com.arcadedb.exception.DatabaseIsReadOnlyException;
 import com.arcadedb.exception.DatabaseMetadataException;
@@ -53,7 +54,9 @@ import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.GraphBatch;
 import com.arcadedb.graph.GraphEngine;
 import com.arcadedb.graph.GraphTraversalProviderRegistry;
+import com.arcadedb.graph.MutableEdgeSegment;
 import com.arcadedb.graph.MutableVertex;
+import com.arcadedb.graph.StripeDirectory;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.graph.VertexInternal;
 import com.arcadedb.graph.olap.GraphAnalyticalView;
@@ -1018,6 +1021,13 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       transaction.updateRecordInCache(record);
       transaction.updateBucketRecordDelta(bucket.getFileId(), +1);
 
+      // A brand-new edge chunk cannot be edge-append rebased: the committed version of its page does not contain
+      // this chunk yet, so replaying appends against it would target the wrong bytes. Exclude the whole page
+      // (it may be shared with a pre-existing chunk) from the commutative append merge. Same for a new stripe
+      // directory (super-node promotion, #5156). See TransactionContext.
+      if (record instanceof MutableEdgeSegment || record instanceof StripeDirectory)
+        transaction.poisonEdgeAppendPage(record.getIdentity());
+
       // TRACK USER DOCUMENTS (NOT INTERNAL RECORDS LIKE EDGE SEGMENTS) SO A ROLLBACK CAN RESET THEIR IDENTITY AND ALLOW
       // A CLEAN RE-INSERT INSTEAD OF AN UPDATE OF A MISSING RECORD (ISSUE #4562).
       if (record instanceof MutableDocument)
@@ -1191,6 +1201,11 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     try {
       final LocalBucket bucket = schema.getBucketById(record.getIdentity().getBucketId());
 
+      // Set only when the index-cleanup read confirmed a structurally broken multi-page chain (below): the physical
+      // removal must then also use the force path, otherwise deleteRecordInternal would re-hit the broken link and throw
+      // the #4932 retry signal, leaving the record undeletable. Scoped to the exact record the caller asked to delete.
+      boolean forceBrokenChainDelete = false;
+
       if (record instanceof Document document) {
         try {
           indexer.deleteDocument(document);
@@ -1209,15 +1224,46 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           LogManager.instance().log(this, Level.WARNING,
               "Cannot read record %s for index/external cleanup on delete (corrupted buffer): %s. Deleting the record anyway; "
                   + "run a database check to repair any dangling index entries.", record.getIdentity(), e.getMessage());
+        } catch (final ConcurrentModificationException e) {
+          // The record body could not be assembled for a consistent read, so its indexed keys and EXTERNAL pointers could
+          // not be read for cleanup. loadMultiPageRecord throws this after exhausting TX_RETRIES, but exhausted retries do
+          // NOT prove corruption: its page-version validation also fails when concurrent writes touch OTHER records
+          // sharing the chain's pages, so under a busy bucket this can be pure contention. Deleting anyway in that case
+          // would leak index entries for a healthy record. Disambiguate with a version-blind STRUCTURAL walk of the chunk
+          // chain: only a genuinely broken chain (a bad continuation pointer - the case that would otherwise make the
+          // record undeletable forever) takes the tolerant path below; transient contention rethrows, preserving the
+          // NeedRetryException semantics so the retry machinery re-runs the DELETE with intact index cleanup.
+          if (!bucket.isChunkChainBroken(record.getIdentity()))
+            throw e;
+          forceBrokenChainDelete = true;
+          logBrokenChainForceDelete(record.getIdentity(), e);
         }
       }
 
       if (record instanceof Edge edge) {
         graphEngine.deleteEdge(edge);
       } else if (record instanceof Vertex) {
-        graphEngine.deleteVertex((VertexInternal) record);
-      } else
-        bucket.deleteRecord(record.getIdentity());
+        try {
+          graphEngine.deleteVertex((VertexInternal) record, forceBrokenChainDelete);
+        } catch (final ConcurrentModificationException e) {
+          // The physical removal can raise the #4932 retry signal even when index cleanup did not (e.g. the type has no
+          // index left to read, so the broken chain is only discovered here). Fall back to force ONLY when the chain is
+          // confirmed structurally broken; a genuine transient conflict (or an already-forced delete) rethrows to retry.
+          if (forceBrokenChainDelete || !bucket.isChunkChainBroken(record.getIdentity()))
+            throw e;
+          logBrokenChainForceDelete(record.getIdentity(), e);
+          graphEngine.deleteVertex((VertexInternal) record, true);
+        }
+      } else {
+        try {
+          bucket.deleteRecord(record.getIdentity(), forceBrokenChainDelete);
+        } catch (final ConcurrentModificationException e) {
+          if (forceBrokenChainDelete || !bucket.isChunkChainBroken(record.getIdentity()))
+            throw e;
+          logBrokenChainForceDelete(record.getIdentity(), e);
+          bucket.deleteRecord(record.getIdentity(), true);
+        }
+      }
 
       success = true;
       stats.deleteRecord.incrementAndGet();
@@ -1238,6 +1284,12 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           wrappedDatabaseInstance.rollback();
       }
     }
+  }
+
+  private void logBrokenChainForceDelete(final RID rid, final ConcurrentModificationException e) {
+    LogManager.instance().log(this, Level.WARNING,
+        "Cannot read record %s for index/external cleanup on delete (broken multi-page chunk chain): %s. Deleting the "
+            + "record anyway; run a database check to repair any dangling index entries.", rid, e.getMessage());
   }
 
   /**
@@ -1496,7 +1548,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       final Object[] destinationVertexKeyValues, final boolean createVertexIfNotExist,
       final String edgeType,
       final boolean bidirectional, final Object... properties) {
-    if (!bidirectional && ((EdgeType) schema.getType(edgeType)).isBidirectional())
+    if (!bidirectional && schema.getType(edgeType) instanceof EdgeType type && type.isBidirectional())
       throw new IllegalArgumentException("Edge type '" + edgeType + "' is not bidirectional");
 
     return newEdgeByKeys(sourceVertex, destinationVertexType, destinationVertexKeyNames, destinationVertexKeyValues,
@@ -2269,7 +2321,17 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     return pageManagerReferenceReleased.get();
   }
 
-  private void checkForRecovery() throws IOException {
+  /**
+   * Takes ownership of the database before any of its content is touched: acquires the exclusive lock on
+   * {@code database.lck} and settles the read-only rejection. Runs BEFORE the schema is loaded, because loading a
+   * database that needs recovery writes to it - the sorted-index-build marker cleanup drops component files, and a
+   * dictionary whose page never reached disk has its header page written and committed. Doing that ahead of the lock
+   * let an open mutate a database another process owns.
+   *
+   * @return {@code true} when the marker file was present, so the WAL still has to be replayed by
+   * {@link #performRecovery()} once the schema is loaded.
+   */
+  private boolean prepareRecovery() throws IOException {
     lockFile = new File(databasePath + "/database.lck");
 
     if (lockFile.exists()) {
@@ -2282,24 +2344,32 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       }
 
       lockDatabase();
-
-      // RECOVERY
-      LogManager.instance().log(this, Level.WARNING, "Database '%s' was not closed properly last time", null, name);
-
-      // RESET THE COUNT OF RECORD IN CASE THE DATABASE WAS NOT CLOSED PROPERLY
-      for (Bucket b : schema.getBuckets())
-        ((LocalBucket) b).setCachedRecordCount(-1);
-
-      executeCallbacks(CALLBACK_EVENT.DB_NOT_CLOSED);
-
-      transactionManager.checkIntegrity();
-    } else {
-      if (mode == ComponentFile.MODE.READ_WRITE) {
-        lockFile.createNewFile();
-        lockDatabase();
-      } else
-        lockFile = null;
+      return true;
     }
+
+    if (mode == ComponentFile.MODE.READ_WRITE) {
+      lockFile.createNewFile();
+      lockDatabase();
+    } else
+      lockFile = null;
+
+    return false;
+  }
+
+  /**
+   * Replays the WAL of a database that was not closed properly. Runs after the schema is loaded, because the replay
+   * resolves file ids and the dictionary through the registered components.
+   */
+  private void performRecovery() throws IOException {
+    LogManager.instance().log(this, Level.WARNING, "Database '%s' was not closed properly last time", null, name);
+
+    // RESET THE COUNT OF RECORD IN CASE THE DATABASE WAS NOT CLOSED PROPERLY
+    for (Bucket b : schema.getBuckets())
+      ((LocalBucket) b).setCachedRecordCount(-1);
+
+    executeCallbacks(CALLBACK_EVENT.DB_NOT_CLOSED);
+
+    transactionManager.checkIntegrity();
   }
 
   private void openInternal() {
@@ -2315,6 +2385,9 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       try {
         schema = new LocalSchema(wrappedDatabaseInstance, databasePath, security);
 
+        // OWN THE DATABASE BEFORE READING IT: LOADING THE SCHEMA OF A CRASHED DATABASE WRITES TO IT.
+        final boolean recoveryPending = prepareRecovery();
+
         if (fileManager.getFiles().isEmpty())
           schema.create(mode);
         else
@@ -2323,7 +2396,8 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         serializer.setDateImplementation(configuration.getValue(GlobalConfiguration.DATE_IMPLEMENTATION));
         serializer.setDateTimeImplementation(configuration.getValue(GlobalConfiguration.DATE_TIME_IMPLEMENTATION));
 
-        checkForRecovery();
+        if (recoveryPending)
+          performRecovery();
 
         if (security != null)
           security.updateSchema(this);
@@ -2395,7 +2469,12 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
     try {
       if (transactionManager != null)
-        transactionManager.close(false);
+        // preserveWalFiles: an open that failed is not a clean close and must never delete the WAL. The
+        // deletion branch is directory-wide and mode-blind, so a rejected open (a READ_ONLY open of a
+        // database needing recovery, for instance) would otherwise remove the very WAL files the next
+        // recovery-capable open needs to replay - discarding every change that had not yet reached the
+        // data files. This instance may not even own a WAL pool; it never owns the right to delete one.
+        transactionManager.close(false, true);
     } catch (final Exception e) {
       LogManager.instance()
           .log(this, Level.WARNING, "Error on closing transaction manager after a failed open of database '%s'", e, name);

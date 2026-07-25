@@ -18,15 +18,12 @@
  */
 package com.arcadedb.query.opencypher;
 
-import com.arcadedb.database.Database;
-import com.arcadedb.database.DatabaseFactory;
+import com.arcadedb.TestHelper;
 import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
@@ -41,13 +38,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
-class CypherReduceAndShortestPathTest {
-  private Database database;
-
-  @BeforeEach
-  void setup() {
-    database = new DatabaseFactory("./databases/test-reduce-shortestpath").create();
-
+class CypherReduceAndShortestPathTest extends TestHelper {
+  @Override
+  protected void beginTest() {
     // Create schema for graph tests
     database.getSchema().createVertexType("Person");
     database.getSchema().createEdgeType("KNOWS");
@@ -72,12 +65,6 @@ class CypherReduceAndShortestPathTest {
       bob.newEdge("KNOWS", eve, true, (Object[]) null).save();
       alice.newEdge("KNOWS", frank, true, (Object[]) null).save();
     });
-  }
-
-  @AfterEach
-  void teardown() {
-    if (database != null)
-      database.drop();
   }
 
   // ============================================================================
@@ -508,6 +495,57 @@ class CypherReduceAndShortestPathTest {
   // ============================================================================
   // Integration Tests (reduce + shortestPath combined)
   // ============================================================================
+
+  /**
+   * Regression test for https://github.com/ArcadeData/arcadedb/issues/5342
+   * A reduce() expression followed by a trailing arithmetic operator in RETURN silently
+   * dropped the operator, returning the raw reduce value instead of applying the operator.
+   * reduce(s=0, x IN [1,4] | s+x) = 5, so /2 -> 2, *2 -> 10, +1 -> 6.
+   */
+  @Test
+  void reduceFollowedByArithmeticOperator() {
+    // Division
+    ResultSet rs = database.query("opencypher", "RETURN reduce(s=0, x IN [1,4] | s+x)/2 AS r");
+    assertThat(rs.hasNext()).isTrue();
+    assertThat(rs.next().<Number>getProperty("r").longValue()).isEqualTo(2L);
+    assertThat(rs.hasNext()).isFalse();
+
+    // Multiplication
+    rs = database.query("opencypher", "RETURN reduce(s=0, x IN [1,4] | s+x)*2 AS r");
+    assertThat(rs.hasNext()).isTrue();
+    assertThat(rs.next().<Number>getProperty("r").longValue()).isEqualTo(10L);
+    assertThat(rs.hasNext()).isFalse();
+
+    // Addition
+    rs = database.query("opencypher", "RETURN reduce(s=0, x IN [1,4] | s+x)+1 AS r");
+    assertThat(rs.hasNext()).isTrue();
+    assertThat(rs.next().<Number>getProperty("r").longValue()).isEqualTo(6L);
+    assertThat(rs.hasNext()).isFalse();
+
+    // Subtraction
+    rs = database.query("opencypher", "RETURN reduce(s=0, x IN [1,4] | s+x)-1 AS r");
+    assertThat(rs.hasNext()).isTrue();
+    assertThat(rs.next().<Number>getProperty("r").longValue()).isEqualTo(4L);
+    assertThat(rs.hasNext()).isFalse();
+
+    // Multi-digit operand (was already working: > 2 trailing chars) - guard against regression
+    rs = database.query("opencypher", "RETURN reduce(s=0, x IN [1,4] | s+x)+10 AS r");
+    assertThat(rs.hasNext()).isTrue();
+    assertThat(rs.next().<Number>getProperty("r").longValue()).isEqualTo(15L);
+    assertThat(rs.hasNext()).isFalse();
+
+    // Control: parenthesized reduce must still work
+    rs = database.query("opencypher", "RETURN (reduce(s=0, x IN [1,4] | s+x))/2 AS r");
+    assertThat(rs.hasNext()).isTrue();
+    assertThat(rs.next().<Number>getProperty("r").longValue()).isEqualTo(2L);
+    assertThat(rs.hasNext()).isFalse();
+
+    // Control: bare reduce must still work
+    rs = database.query("opencypher", "RETURN reduce(s=0, x IN [1,4] | s+x) AS r");
+    assertThat(rs.hasNext()).isTrue();
+    assertThat(rs.next().<Number>getProperty("r").longValue()).isEqualTo(5L);
+    assertThat(rs.hasNext()).isFalse();
+  }
 
   @Test
   void reduceInListComprehension() {

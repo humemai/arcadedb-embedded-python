@@ -138,6 +138,7 @@ statement
 
     // Index Management
     | rebuildIndexStatement                          # rebuildIndexStmt
+    | compactIndexStatement                          # compactIndexStmt
 
     // Type Re-serialisation (e.g. relocate property values after toggling EXTERNAL flag)
     | REBUILD TYPE rebuildTypeBody                   # rebuildTypeStmt
@@ -448,6 +449,16 @@ createTypeBody
       (BUCKET bucketIdentifier (COMMA bucketIdentifier)*)?
       (BUCKETS INTEGER_LITERAL)?
       (PAGESIZE INTEGER_LITERAL)?
+      (CUSTOM customMetadataItem (COMMA customMetadataItem)*)?
+    ;
+
+/**
+ * Inline CUSTOM metadata pair, e.g. `CUSTOM coolness = 10, unit = 'meters'` (issue #5409). Same
+ * key/value shape as `ALTER TYPE ... CUSTOM key = value`, so a type or property can carry its
+ * metadata straight from the CREATE statement instead of needing a follow-up ALTER.
+ */
+customMetadataItem
+    : identifier EQ expression
     ;
 
 /**
@@ -522,6 +533,7 @@ createEdgeTypeBody
       (BUCKET bucketIdentifier (COMMA bucketIdentifier)*)?
       (BUCKETS INTEGER_LITERAL)?
       (PAGESIZE INTEGER_LITERAL)?
+      (CUSTOM customMetadataItem (COMMA customMetadataItem)*)?
     ;
 
 /**
@@ -539,10 +551,11 @@ bucketIdentifier
 
 /**
  * CREATE PROPERTY statement
- * CREATE PROPERTY Type.property [IF NOT EXISTS] propertyType [OF ofType] [(attributes)]
+ * CREATE PROPERTY Type.property [IF NOT EXISTS] propertyType [OF ofType] [(attributes)] [CUSTOM key = value, ...]
  */
 createPropertyBody
     : identifier DOT propertyName (IF NOT EXISTS)? propertyType (LPAREN propertyAttributes RPAREN)?
+      (CUSTOM customMetadataItem (COMMA customMetadataItem)*)?
     ;
 
 propertyAttributes
@@ -915,6 +928,16 @@ findReferencesClassItem
 
 rebuildIndexStatement
     : REBUILD INDEX (identifier | STAR) (WITH identifier EQ expression (COMMA identifier EQ expression)*)?
+    ;
+
+/**
+ * COMPACT INDEX statement (issue #5144)
+ * Forces a foreground merge of the index segments (the SQL/HTTP surface for {@code Index.compact()}),
+ * so client-server users can settle an index after a bulk load without a full REBUILD.
+ * Syntax: COMPACT INDEX indexName | *
+ */
+compactIndexStatement
+    : COMPACT INDEX (identifier | STAR)
     ;
 
 /**
@@ -1656,6 +1679,7 @@ identifier
     | AUTO
     | PROPERTIES
     | COMPACTION
+    | COMPACT
     | THRESHOLD
     | OVERWRITE
     ;

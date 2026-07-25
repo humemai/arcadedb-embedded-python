@@ -62,6 +62,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -79,6 +80,15 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
   private final        String                        name;
   private final        RWLockContext                 lock         = new RWLockContext();
   protected final      AtomicReference<INDEX_STATUS> status       = new AtomicReference<>(INDEX_STATUS.AVAILABLE);
+  /**
+   * Compacted files replaced by a FULL compaction, awaiting their physical drop. The swap (under the write
+   * lock) guarantees no NEW cursor can reach them, but live series cursors load pages lazily and may still
+   * read them: each file is dropped only once its active-cursor count drains to zero (checked at every
+   * subsequent compaction round and at close/drop time).
+   */
+  private final        List<LSMTreeIndexCompacted>   retiredCompactedIndexes = new CopyOnWriteArrayList<>();
+  /** Cumulative dead (tombstone-resolved) keys skipped by scans since this index was loaded. */
+  private final        AtomicLong                    statsDeadEntriesSkipped = new AtomicLong();
   private              TypeIndex                     typeIndex;
   private              boolean                       valid        = true;
   private              IndexMetadata                 metadata;
@@ -148,6 +158,49 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
     this.name = name;
     this.metadata = new IndexMetadata(null, null, -1);
     this.mutable = new LSMTreeIndexMutable(this, database, name, unique, filePath, id, mode, pageSize, version);
+  }
+
+  /**
+   * Registers a compacted file replaced by a full compaction and immediately attempts the physical drop
+   * (it succeeds right away when no scan holds a series cursor over it).
+   */
+  void retireCompactedIndex(final LSMTreeIndexCompacted retired) {
+    retiredCompactedIndexes.add(retired);
+    dropRetiredCompactedIndexes();
+  }
+
+  /**
+   * Physically drops every retired compacted file whose active-cursor count drained to zero. The count can
+   * only decrease: the swap that retired the file happened under the write lock, so all cursor construction
+   * since then targets the replacement file. Each drop also takes the file's transaction lock (same protocol
+   * as splitIndex for the old mutable file), so a transaction mid-commit that locked the old file id never
+   * has it dropped underneath it; transactions that resolved the old id but have not locked yet converge via
+   * the migrated-file mapping. Synchronized so concurrent callers (a compaction round and a close) cannot
+   * double-drop the same file.
+   */
+  synchronized void dropRetiredCompactedIndexes() {
+    for (final LSMTreeIndexCompacted retired : retiredCompactedIndexes) {
+      if (retired.getActiveCursors() != 0)
+        continue;
+
+      final int fileId = retired.getFileId();
+      final LockManager.LOCK_STATUS locked = getDatabase().getTransactionManager().tryLockFile(fileId, 0,
+          Thread.currentThread());
+      if (locked == LockManager.LOCK_STATUS.NO)
+        // a committing transaction still holds the file lock: retry at the next round
+        continue;
+
+      try {
+        retired.drop();
+        retiredCompactedIndexes.remove(retired);
+      } catch (final IOException e) {
+        LogManager.instance()
+            .log(this, Level.WARNING, "Error on dropping retired compacted index file '%s'", e, retired.getName());
+      } finally {
+        if (locked == LockManager.LOCK_STATUS.YES)
+          getDatabase().getTransactionManager().unlockFile(fileId, Thread.currentThread());
+      }
+    }
   }
 
   public boolean scheduleCompaction() {
@@ -310,13 +363,40 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
     final JSONObject json = new JSONObject();
     json.put("type", getType());
 
-    json.put("bucket", getDatabase().getSchema().getBucketById(getAssociatedBucketId()).getName());
+    json.put("bucket", resolveBucketNameForJSON());
     json.put("properties", getPropertyNames());
     json.put("nullStrategy", getNullStrategy());
     json.put("unique", isUnique());
     if (metadata.hasAnyCaseInsensitive())
       json.put("collations", metadata.collations);
     return json;
+  }
+
+  /**
+   * Best-effort bucket name for schema serialization. A healthy sub-index resolves by its associated bucket id;
+   * an orphan whose association was lost (associatedBucketId == -1, e.g. a bucket file deleted before its index,
+   * or a failed reload) is recovered from the {@code <bucketName>_<uniqueId>} naming convention so the schema
+   * still serializes - never crashing on {@code getBucketById(-1)} - and the loader can relink it. Falls back to
+   * the empty string when nothing resolves; the loader then treats the index as an orphan (bucket not found),
+   * which is exactly what it is.
+   */
+  private String resolveBucketNameForJSON() {
+    final Schema schema = getDatabase().getSchema();
+    final int bucketId = getAssociatedBucketId();
+    if (bucketId >= 0) {
+      try {
+        return schema.getBucketById(bucketId).getName();
+      } catch (final SchemaException e) {
+        // recorded id no longer exists; fall through to name-based recovery
+      }
+    }
+    final int pos = name.lastIndexOf('_');
+    if (pos > 0) {
+      final String candidate = name.substring(0, pos);
+      if (schema.existsBucket(candidate))
+        return candidate;
+    }
+    return "";
   }
 
   @Override
@@ -340,6 +420,8 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
   @Override
   public void close() {
     checkIsValid();
+    // last chance to reclaim files retired by a full compaction before the database closes
+    dropRetiredCompactedIndexes();
     // #4960: a compaction that is merely SCHEDULED has not started yet, so it is safely cancelled here
     // (its own CAS COMPACTION_SCHEDULED -> COMPACTION_IN_PROGRESS will fail) and the close proceeds.
     // Before this fix the AVAILABLE-only CAS made close() a silent no-op in that state, leaving the
@@ -368,6 +450,17 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
 
     lock.executeInWriteLock(() -> {
       try {
+        // the whole index is going away: any reader still on a retired file is invalidated anyway
+        for (final LSMTreeIndexCompacted retired : retiredCompactedIndexes) {
+          try {
+            retired.drop();
+          } catch (final IOException e) {
+            LogManager.instance()
+                .log(this, Level.WARNING, "Error on dropping retired compacted index file '%s'", e, retired.getName());
+          }
+        }
+        retiredCompactedIndexes.clear();
+
         final LSMTreeIndexCompacted subIndex = mutable.getSubIndex();
         if (subIndex != null)
           subIndex.drop();
@@ -571,7 +664,49 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
 
   @Override
   public Map<String, Long> getStats() {
-    return mutable.getStats();
+    final Map<String, Long> stats = mutable.getStats();
+    stats.put("deadEntriesSkipped", statsDeadEntriesSkipped.get());
+    return stats;
+  }
+
+  /**
+   * Accumulates the dead (tombstone-resolved) keys a finished scan had to skip. A steadily growing value
+   * signals tombstone build-up on a delete-heavy index: every range scan pays for the dead run until a full
+   * compaction (see {@link com.arcadedb.GlobalConfiguration#INDEX_COMPACTION_FULL_SERIES}) purges it.
+   * Surfaced as {@code deadEntriesSkipped} in {@link #getStats()}.
+   */
+  void addDeadEntriesSkipped(final long skipped) {
+    statsDeadEntriesSkipped.addAndGet(skipped);
+  }
+
+  /**
+   * Checks that both the mutable pages and the compacted sub-index are physically sorted in the order the lookup
+   * applies. A mismatch makes every binary search unreliable - lookups silently return fewer records than a scan, or
+   * records of unrelated keys - and is exactly the state an index created before #5321 is in after an upgrade, when
+   * its keys contain multi-byte UTF-8 characters. Reported as a corrupt index so CHECK DATABASE FIX rebuilds it.
+   */
+  @Override
+  public List<String> checkIntegrity() {
+    // The walk must run under the same read lock as every other reader (get(), range(), iterator()):
+    // splitIndex() publishes a compaction under the write lock by swapping in a new mutable file and
+    // then DROPPING the old one (deleteFile also purges its pages from the page cache). An unlocked
+    // walk that captured the old mutable index would fail every remaining page read with "File with
+    // id N was not found" and report a healthy index as corrupt. Holding the read lock does not block
+    // other readers nor the compaction merge itself - only the final publication waits for the walk.
+    return lock.executeInReadLock(() -> {
+      final int maxProblems = 20;
+
+      final List<String> problems = new ArrayList<>(mutable.checkKeyOrder(maxProblems));
+
+      final LSMTreeIndexCompacted subIndex = mutable.getSubIndex();
+      if (subIndex != null && problems.size() < maxProblems)
+        problems.addAll(subIndex.checkKeyOrder(maxProblems - problems.size()));
+
+      if (!problems.isEmpty())
+        problems.add(0, "the physical key order does not match the current comparator, the index must be rebuilt");
+
+      return problems;
+    });
   }
 
   @Override
@@ -624,6 +759,11 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
   }
 
   protected LSMTreeIndexMutable splitIndex(final int startingFromPage, final LSMTreeIndexCompacted compactedIndex) {
+    return splitIndex(startingFromPage, compactedIndex, true);
+  }
+
+  protected LSMTreeIndexMutable splitIndex(final int startingFromPage, final LSMTreeIndexCompacted compactedIndex,
+      final boolean saveSchema) {
     checkIsValid();
     final DatabaseInternal database = getDatabase();
     if (database.isTransactionActive())
@@ -704,10 +844,9 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
         newMutableIndex.removeTempSuffix();
 
         mutable = newMutableIndex;
+        updateCaseInsensitiveKeys();
 
-        ((LocalSchema) database.getSchema()).setMigratedFileId(fileId, newMutableIndex.getFileId());
-
-        database.getSchema().getEmbedded().saveConfiguration();
+        ((LocalSchema) database.getSchema()).setMigratedFileId(fileId, newMutableIndex.getFileId(), saveSchema);
         return newMutableIndex;
       });
 
@@ -789,6 +928,10 @@ public class LSMTreeIndex implements RangeIndex, IndexInternal {
       throw new NeedRetryException("Error on building index '" + name + "' because not available");
 
     return total.get();
+  }
+
+  Object[] normalizeKeysForBulkBuild(final Object[] keys) {
+    return convertKeys(keys);
   }
 
   protected RWLockContext getLock() {

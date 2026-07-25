@@ -27,6 +27,8 @@ import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.http.HttpAuthSession;
 import com.arcadedb.server.http.HttpServer;
+import com.arcadedb.server.http.HttpSessionException;
+import com.arcadedb.server.http.HttpSessionManager;
 import com.arcadedb.server.http.IdempotencyCache;
 import com.arcadedb.server.security.ApiTokenConfiguration;
 import com.arcadedb.server.security.ServerSecurityException;
@@ -37,30 +39,69 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.transport.RequestReplyReceiverContext;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
+import io.undertow.util.AttachmentKey;
 import io.undertow.util.HeaderValues;
 import io.undertow.util.Headers;
 import io.undertow.util.HttpString;
 import io.undertow.util.PathTemplateMatch;
 import io.undertow.util.StatusCodes;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.Set;
-import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
 public abstract class AbstractServerHttpHandler implements HttpHandler {
+  // Raw request body, kept on the exchange for the handlers that need the text rather than the JSONObject
+  // parsed from it: the request body is consumed once and cannot be read again from the exchange.
+  public static final AttachmentKey<String> RAW_PAYLOAD = AttachmentKey.create(String.class);
+
   private static final String AUTHORIZATION_BASIC  = "Basic";
   private static final String AUTHORIZATION_BEARER = "Bearer";
   // Cached once: tryFromString scans/validates the header name, wasteful to repeat on every request.
   private static final HttpString REQUEST_ID_HEADER = HttpString.tryFromString(IdempotencyCache.HEADER_REQUEST_ID);
+  // Response header set by session-establishing routes (e.g. /begin). Its presence means the response
+  // is session-scoped and must not be replayed from the idempotency cache (the session id would be lost).
+  private static final HttpString SESSION_ID_HEADER = HttpString.tryFromString(HttpSessionManager.ARCADEDB_SESSION_ID);
+  // Bounded wait for a concurrent identical retry to observe the in-flight winner's result before it
+  // gives up and executes on its own. Caps worker-thread blocking so a slow request cannot pile up retries.
+  private static final long       IN_FLIGHT_WAIT_MS = 5_000L;
+  // Per-thread SHA-256 for the idempotency key: reused (reset) each call so the request hot path avoids the
+  // JCA provider lookup of MessageDigest.getInstance() per request. SHA-256 is JCA-mandated, so init cannot
+  // fail in practice; if it ever did the digest would be unusable, so we fail fast.
+  private static final ThreadLocal<MessageDigest> SHA_256_DIGEST = ThreadLocal.withInitial(() -> {
+    try {
+      return MessageDigest.getInstance("SHA-256");
+    } catch (final NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is a JCA-mandated algorithm but was not found", e);
+    }
+  });
   // Upper bound on a client-supplied X-Request-Id we echo and log, to keep a hostile value bounded.
   private static final int        MAX_REQUEST_ID_LENGTH = 128;
+  // Process-wide monotonic counter used, together with a per-thread random, to mint cheap correlation ids
+  // when the client sends no X-Request-Id. Avoids the shared-SecureRandom cost of UUID.randomUUID() per request.
+  private static final AtomicLong CORRELATION_ID_COUNTER = new AtomicLong();
+  // Constant path tag used for any request that does not resolve to a route template (Studio "/"
+  // static fallback, prefix handlers, 404 probes). Never echo the raw client URI as a tag value: it
+  // is attacker-controlled and would register an unbounded number of permanent meters (issue #5025).
+  private static final String     UNMATCHED_PATH_TAG = "unmatched";
+  // Cache of resolved arcadedb.http.requests timers keyed by the bounded tag tuple
+  // (method|path|status|db). Avoids rebuilding the Timer.Builder/Tags/Meter.Id and doing a registry
+  // hash lookup on every request. The key space is bounded because every tag is low-cardinality: the
+  // path is collapsed to a route template or the constant "unmatched", method and status are small
+  // enumerations, and db is the finite set of database names.
+  private static final ConcurrentHashMap<String, Timer> HTTP_REQUEST_TIMERS = new ConcurrentHashMap<>();
   protected final HttpServer httpServer;
 
   public AbstractServerHttpHandler(final HttpServer httpServer) {
@@ -94,6 +135,19 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   @Override
   public void handleRequest(final HttpServerExchange exchange) {
     if (mustExecuteOnWorkerThread() && exchange.isInIoThread()) {
+      exchange.dispatch(this);
+      return;
+    }
+
+    // An idempotent POST may block briefly on IdempotencyCache await() while a concurrent identical retry
+    // is in flight; that must never happen on an Undertow IO thread (blocking IO threads starves the
+    // server). Dispatch to a worker thread first for handlers that would otherwise run on the IO thread.
+    // A blank X-Request-Id is not treated as idempotent (matches the gating below).
+    final String dispatchRequestId = exchange.getRequestHeaders().getFirst(IdempotencyCache.HEADER_REQUEST_ID);
+    if (exchange.isInIoThread()
+        && "POST".equalsIgnoreCase(exchange.getRequestMethod().toString())
+        && dispatchRequestId != null && !dispatchRequestId.isBlank()
+        && exchange.getRequestHeaders().getFirst(SESSION_ID_HEADER) == null) {
       exchange.dispatch(this);
       return;
     }
@@ -137,6 +191,12 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
     // with an error rather than propagating an uncaught exception.
     Observation.Scope observationScope = null;
 
+    // Idempotency reservation bookkeeping, visible to the finally block: when this request owns a PENDING
+    // marker and execution throws, the finally clears exactly that marker so a concurrent identical retry
+    // is released instead of blocking until the marker's TTL expires.
+    String                       idempotencyKey         = null;
+    IdempotencyCache.Reservation idempotencyReservation = null;
+
     try {
       observationScope = observation.openScope();
       LogManager.instance().setContext(httpServer.getServer().getServerName());
@@ -148,7 +208,7 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       // leaking across pooled Undertow worker threads.
       String correlationRequestId = sanitizeRequestId(exchange.getRequestHeaders().getFirst(IdempotencyCache.HEADER_REQUEST_ID));
       if (correlationRequestId == null)
-        correlationRequestId = UUID.randomUUID().toString();
+        correlationRequestId = generateCorrelationId();
       exchange.getResponseHeaders().put(REQUEST_ID_HEADER, correlationRequestId);
       // The supplier is an SPI: tolerate an array shorter than 2 (or null) instead of indexing blindly.
       final String[] traceContext = LogManager.instance().currentTraceContext();
@@ -240,37 +300,72 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       }
 
       JSONObject payload = null;
+      String payloadAsString = null;
       if (mustExecuteOnWorkerThread()) {
-        final String payloadAsString = parseRequestPayload(exchange);
+        payloadAsString = parseRequestPayload(exchange);
+        // The body can only be read once from the exchange, so keep the raw text available to handlers whose
+        // payload is not a single JSON object (the MCP endpoint accepts a top-level JSON-RPC batch array).
+        if (payloadAsString != null)
+          exchange.putAttachment(RAW_PAYLOAD, payloadAsString);
         if (requiresJsonPayload() && payloadAsString != null && !payloadAsString.isBlank())
           try {
             payload = new JSONObject(payloadAsString.trim());
           } catch (Exception e) {
-            LogManager.instance().log(this, Level.WARNING, "Error parsing request payload: %s", e.getMessage());
+            // A top-level JSON array is not an error for every route: the MCP endpoint reads a JSON-RPC batch
+            // back from RAW_PAYLOAD. Warn only for a body that is not one, so a valid batch is not logged as
+            // a failure on every request.
+            if (payloadAsString.trim().charAt(0) != '[')
+              LogManager.instance().log(this, Level.WARNING, "Error parsing request payload: %s", e.getMessage());
           }
       }
 
-      final String requestId = exchange.getRequestHeaders().getFirst(IdempotencyCache.HEADER_REQUEST_ID);
-      if (requestId != null && "POST".equalsIgnoreCase(exchange.getRequestMethod().toString())) {
-        final IdempotencyCache.CachedEntry cached = httpServer.getIdempotencyCache().get(requestId);
-        if (cached != null) {
-          final String currentPrincipal = user != null ? user.getName() : null;
-          if (cached.principal == null || cached.principal.equals(currentPrincipal)) {
-            exchange.setStatusCode(cached.statusCode);
-            exchange.getResponseSender().send(cached.body != null ? cached.body : "");
+      // Idempotency applies only to POST requests that carry a non-blank X-Request-Id and are NOT part of
+      // an open, client-managed session transaction (a session-scoped request's outcome is not settled
+      // until the client commits, so it must never be cached/replayed). A blank id is ignored: distinct
+      // clients sending an empty header would otherwise collide on the same composite key.
+      final String rawRequestId = exchange.getRequestHeaders().getFirst(IdempotencyCache.HEADER_REQUEST_ID);
+      final boolean idempotentPost = "POST".equalsIgnoreCase(exchange.getRequestMethod().toString())
+          && rawRequestId != null && !rawRequestId.isBlank()
+          && exchange.getRequestHeaders().getFirst(SESSION_ID_HEADER) == null;
+
+      if (idempotentPost) {
+        // Bind the key to method/path/database/body so a reused correlation id cannot replay a different
+        // request's response (the core defect: same X-Request-Id across distinct writes).
+        idempotencyKey = buildIdempotencyKey(rawRequestId, exchange.getRequestMethod().toString(),
+            exchange.getRelativePath(), databaseTag(exchange), payloadAsString);
+        final String currentPrincipal = user != null ? user.getName() : null;
+
+        final IdempotencyCache.Reservation reservation = httpServer.getIdempotencyCache().reserve(idempotencyKey);
+        if (reservation.isHit()) {
+          if (replayCachedResponse(exchange, reservation.entry(), currentPrincipal))
             return;
-          }
-        }
+          // Principal mismatch: fall through and execute as this caller, without owning the reservation.
+        } else if (reservation.isInFlight()) {
+          // A concurrent identical retry is already executing. Wait briefly for its result rather than
+          // running the write a second time; if it does not settle in time, fall through and execute uncached.
+          if (reservation.entry().await(IN_FLIGHT_WAIT_MS)
+              && replayCachedResponse(exchange, httpServer.getIdempotencyCache().get(idempotencyKey), currentPrincipal))
+            return;
+        } else if (reservation.isReserved())
+          idempotencyReservation = reservation;
       }
 
       final ExecutionResponse response = execute(exchange, user, payload);
       if (response != null) {
         response.send(exchange);
-        if (requestId != null && "POST".equalsIgnoreCase(exchange.getRequestMethod().toString())) {
-          final String currentPrincipal = user != null ? user.getName() : null;
-          httpServer.getIdempotencyCache().putSuccess(requestId, response.getCode(), response.getResponse(), response.getBinary(),
-              currentPrincipal);
+        if (idempotencyReservation != null) {
+          // Do not cache a response that established a client session (e.g. /begin): replaying it would
+          // return the body without the arcadedb-session-id header, orphaning the real session.
+          if (exchange.getResponseHeaders().contains(SESSION_ID_HEADER))
+            httpServer.getIdempotencyCache().abort(idempotencyKey, idempotencyReservation);
+          else
+            httpServer.getIdempotencyCache().complete(idempotencyKey, idempotencyReservation, response.getCode(),
+                response.getResponse(), response.getBinary(), user != null ? user.getName() : null);
+          idempotencyReservation = null;
         }
+      } else if (idempotencyReservation != null) {
+        httpServer.getIdempotencyCache().abort(idempotencyKey, idempotencyReservation);
+        idempotencyReservation = null;
       }
 
     } catch (final ServerSecurityException e) {
@@ -358,12 +453,38 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
                         realException.getMessage());
         sendErrorResponse(exchange, 409, "Found duplicate key in index", dup,
                 dup.getIndexName() + "|" + dup.getKeys() + "|" + dup.getCurrentIndexedRID());
-      } else {
+      } else if (e instanceof CommandParsingException || realException instanceof CommandParsingException) {
+        // A parsing/semantic validation error (malformed query, unknown variable, invalid MERGE
+        // rebind, unsupported Gremlin syntax such as Groovy closures, ...) is a client error - the query
+        // text is invalid, not an internal server fault. Surface as HTTP 400 with the real validation
+        // message so API consumers can fix the query, instead of a misleading 500. The check covers a
+        // CommandParsingException wrapped as the cause of a CommandExecutionException as well as a
+        // directly-thrown CommandParsingException, even when it carries its own cause (e.g. a Gremlin
+        // ScriptException, in which case realException is that cause). See issues #5191 and #5201.
+        final Throwable reported = e instanceof CommandParsingException ? e : realException;
         LogManager.instance()
                 .log(this, getUserSevereErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(),
-                        e.getMessage());
+                        reported.getMessage());
+        sendErrorResponse(exchange, 400, "Cannot execute command", reported, null);
+      } else {
+        // UNEXPECTED INTERNAL ERROR (not a client/validation error handled above): log the FULL stack trace so
+        // an internal fault - e.g. a BufferUnderflowException from a truncated/corrupted record read - is
+        // diagnosable. Passing the throwable is what makes the logger emit the trace; without it no stack trace
+        // is ever printed, at any log level. Use realException (the actual cause) for a useful trace.
+        LogManager.instance()
+                .log(this, getInternalErrorLogLevel(), "Error on command execution (%s)", realException,
+                        getClass().getSimpleName());
         sendErrorResponse(exchange, 500, "Cannot execute command", realException, null);
       }
+    } catch (final HttpSessionException e) {
+      // A referenced HTTP transaction session id is no longer resolvable (committed/rolled back, expired,
+      // owned by another principal, or invalidated). Surface as an explicit 404 client error - never a 500,
+      // and never a silent implicit-transaction commit. Must precede the TransactionException arm below since
+      // HttpSessionException extends it.
+      LogManager.instance()
+              .log(this, Level.FINE, "Transaction session error on command execution (%s): %s", getClass().getSimpleName(),
+                      e.getMessage());
+      sendErrorResponse(exchange, 404, "Remote transaction session not found or expired", e, null);
     } catch (final TransactionException e) {
       Throwable realException = e;
       if (e.getCause() != null)
@@ -405,10 +526,36 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
                         realException.getMessage());
         sendErrorResponse(exchange, 409, "Found duplicate key in index", dup,
                 dup.getIndexName() + "|" + dup.getKeys() + "|" + dup.getCurrentIndexedRID());
-      } else {
+      } else if (realException instanceof CommandParsingException) {
+        // Symmetric with the un-wrapped CommandParsingException arm above. A Cypher/SQL validation
+        // error thrown during execution is wrapped by the auto-commit transaction wrapper in
+        // DatabaseAbstractHandler (TransactionException -> CommandParsingException cause). Without this
+        // branch the response degraded to 500 "Error on transaction commit", hiding the real
+        // client-side validation message. Surface as HTTP 400 instead. See issue #5191.
         LogManager.instance()
-                .log(this, getUserSevereErrorLogLevel(), "Error on transaction execution (%s): %s", getClass().getSimpleName(),
-                        e.getMessage());
+                .log(this, getUserSevereErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(),
+                        realException.getMessage());
+        sendErrorResponse(exchange, 400, "Cannot execute command", realException, null);
+      } else if (realException instanceof CommandExecutionException) {
+        // Symmetric with the un-wrapped CommandExecutionException arm above. A runtime execution error
+        // (valid query, but the command failed while running - e.g. a Gremlin `.next()` on an empty
+        // traversal raising NoSuchElementException) is wrapped by the auto-commit transaction wrapper in
+        // DatabaseAbstractHandler (TransactionException -> CommandExecutionException cause). The failure
+        // happened during execute(), not at commit, so the honest label is "Cannot execute command", not
+        // the misleading "Error on transaction commit". Keep the HTTP 500 (runtime server-side error,
+        // matching Apache TinkerPop's SERVER_ERROR_SCRIPT_EVALUATION mapping). See issue #5219.
+        LogManager.instance()
+                .log(this, getUserSevereErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(),
+                        realException.getMessage());
+        sendErrorResponse(exchange, 500, "Cannot execute command", realException, null);
+      } else {
+        // UNEXPECTED INTERNAL ERROR wrapped by the auto-commit transaction wrapper (the client sees the generic
+        // "Error on transaction commit"). Log the FULL stack trace of the real cause: without passing the
+        // throwable the logger never prints a trace, at any level, which is why a BufferUnderflowException on a
+        // read-only command surfaced with no diagnosable trace even at DEBUG.
+        LogManager.instance()
+                .log(this, getInternalErrorLogLevel(), "Error on transaction execution (%s)", realException,
+                        getClass().getSimpleName());
         sendErrorResponse(exchange, 500, "Error on transaction commit", realException, null);
       }
     } catch (final Throwable e) {
@@ -423,10 +570,22 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
         }
         cause = cause.getCause();
       }
+      // UNEXPECTED RAW THROWABLE (typical for non-database handlers): same treatment as the other
+      // unexpected-internal-error arms - full stack trace, visible in production mode (issue #5374).
       LogManager.instance()
-              .log(this, getErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(), e.getMessage());
+              .log(this, getInternalErrorLogLevel(), "Error on command execution (%s)", e, getClass().getSimpleName());
       sendErrorResponse(exchange, 500, "Internal error", e, null);
     } finally {
+      // If execution threw after this request reserved the idempotency key, clear the PENDING marker so a
+      // concurrent identical retry is released immediately instead of blocking until the marker's TTL.
+      if (idempotencyReservation != null) {
+        try {
+          httpServer.getIdempotencyCache().abort(idempotencyKey, idempotencyReservation);
+        } catch (final Throwable t) {
+          LogManager.instance().log(this, Level.WARNING, "Error aborting idempotency reservation", t);
+        }
+      }
+
       // Finalize the optional tracing span. Each step is isolated so a failure in the optional
       // tracing layer can never skip the core cleanup or the RED timer below; closing the scope is
       // attempted independently to avoid thread-local context leaking across pooled worker threads.
@@ -454,29 +613,101 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       // inside an ObservationHandler.onStop callback, so this clear must remain the last step.
       LogManager.instance().clearCorrelation();
 
-      Timer.builder("arcadedb.http.requests")
-          .description("HTTP request duration")
-          .tag("method", exchange.getRequestMethod().toString())
-          .tag("path", pathTemplate(exchange))
-          .tag("status", Integer.toString(exchange.getStatusCode()))
-          .tag("db", databaseTag(exchange))
-          .publishPercentileHistogram()
-          .register(Metrics.globalRegistry)
+      httpRequestTimer(exchange.getRequestMethod().toString(), pathTemplate(exchange),
+          Integer.toString(exchange.getStatusCode()), databaseTag(exchange))
           .record(System.nanoTime() - httpStartNanos, TimeUnit.NANOSECONDS);
     }
   }
 
   /**
+   * Resolves (and caches) the {@code arcadedb.http.requests} RED timer for the given bounded tag tuple.
+   * Building the timer once per distinct {@code method|path|status|db} tuple and reusing it removes the
+   * per-request {@code Timer.Builder}/{@code Tags}/{@code Meter.Id} allocation and registry hash lookup
+   * on the hot path. The cache stays bounded because every tag is low-cardinality (issue #5025).
+   * Package-private for direct unit testing.
+   */
+  static Timer httpRequestTimer(final String method, final String path, final String status, final String db) {
+    return HTTP_REQUEST_TIMERS.computeIfAbsent(method + '|' + path + '|' + status + '|' + db,
+        k -> Timer.builder("arcadedb.http.requests")
+            .description("HTTP request duration")
+            .tag("method", method)
+            .tag("path", path)
+            .tag("status", status)
+            .tag("db", db)
+            .publishPercentileHistogram()
+            .register(Metrics.globalRegistry));
+  }
+
+  /**
    * Returns a bounded, low-cardinality path tag for the request: the route template
    * (e.g. {@code /command/{database}}) resolved by the Undertow routing handler, never the raw URI
-   * carrying the concrete database name. Falls back to the relative path for fixed routes
-   * registered without a path template.
+   * carrying the concrete database name. All {@code /api/v1/*} routes (including fixed ones such as
+   * {@code /ready} and {@code /server}) are registered through a {@code RoutingHandler}, which always
+   * attaches a {@link PathTemplateMatch}; only prefix/fallback traffic (the Studio {@code /} static
+   * handler and unmatched 404 probes) reaches the fallback branch. That path is client-controlled, so it
+   * is collapsed to the constant {@link #UNMATCHED_PATH_TAG} to keep the meter cardinality bounded and
+   * avoid a heap-growth DoS driven by arbitrary URIs (issue #5025). Package-private for direct unit testing.
    */
-  private static String pathTemplate(final HttpServerExchange exchange) {
+  static String pathTemplate(final HttpServerExchange exchange) {
     final PathTemplateMatch match = exchange.getAttachment(PathTemplateMatch.ATTACHMENT_KEY);
     if (match != null)
       return match.getMatchedTemplate();
-    return exchange.getRelativePath();
+    return UNMATCHED_PATH_TAG;
+  }
+
+  /**
+   * Replays a cached idempotent response onto {@code exchange}, honoring the stored principal so a
+   * different user cannot replay another caller's response merely by guessing the request id. Returns
+   * false (nothing written) when there is no usable entry or the principal does not match, so the caller
+   * can fall back to executing the request.
+   */
+  private boolean replayCachedResponse(final HttpServerExchange exchange, final IdempotencyCache.CachedEntry cached,
+      final String currentPrincipal) {
+    if (cached == null)
+      return false;
+    if (cached.principal != null && !cached.principal.equals(currentPrincipal))
+      return false;
+    exchange.setStatusCode(cached.statusCode);
+    // Replay a binary body faithfully; falling back to the string body would send an empty response for a
+    // cached binary export/backup and silently lose data.
+    if (cached.binary != null)
+      exchange.getResponseSender().send(ByteBuffer.wrap(cached.binary));
+    else
+      exchange.getResponseSender().send(cached.body != null ? cached.body : "");
+    return true;
+  }
+
+  /**
+   * Builds the idempotency cache key for a POST request. The key is a SHA-256 over the client
+   * {@code X-Request-Id} joined with the HTTP method, path, database and request body, so two unrelated
+   * requests that reuse the same correlation id (a common proxy / client practice) never collide and
+   * replay each other's response. Package-private for direct unit testing.
+   */
+  static String buildIdempotencyKey(final String requestId, final String method, final String path,
+      final String database, final String body) {
+    final MessageDigest md = SHA_256_DIGEST.get();
+    md.reset();
+    final Charset cs = DatabaseFactory.getDefaultCharset();
+    updateDigest(md, requestId, cs);
+    updateDigest(md, method, cs);
+    updateDigest(md, path, cs);
+    updateDigest(md, database, cs);
+    if (body != null)
+      md.update(body.getBytes(cs));
+    final byte[] digest = md.digest();
+    final StringBuilder sb = new StringBuilder(digest.length * 2);
+    for (final byte b : digest) {
+      sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+      sb.append(Character.forDigit(b & 0xF, 16));
+    }
+    return sb.toString();
+  }
+
+  private static void updateDigest(final MessageDigest md, final String value, final Charset cs) {
+    if (value != null)
+      md.update(value.getBytes(cs));
+    // NUL separator delimits fields so ("a","b") and ("ab","") cannot produce the same digest.
+    md.update((byte) 0);
   }
 
   /**
@@ -502,6 +733,20 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
     final String result = cleaned != null ? cleaned.toString()
         : raw.length() > MAX_REQUEST_ID_LENGTH ? raw.substring(0, MAX_REQUEST_ID_LENGTH) : raw;
     return result.isEmpty() ? null : result;
+  }
+
+  /**
+   * Mints a cheap, non-cryptographic correlation id for a request that carries no {@code X-Request-Id}.
+   * This value is used only for response echo and log correlation - it is never the idempotency key, which
+   * always comes from the raw client header - so a fast {@link ThreadLocalRandom} high-entropy prefix plus a
+   * process-wide monotonic counter is sufficient and avoids the shared-{@code SecureRandom} synchronization
+   * of {@code UUID.randomUUID()} on the request hot path. The result is short and printable, so
+   * {@link #sanitizeRequestId(String)} returns it unchanged.
+   * Package-private for direct unit testing.
+   */
+  static String generateCorrelationId() {
+    return Long.toHexString(ThreadLocalRandom.current().nextLong()) + "-"
+        + Long.toHexString(CORRELATION_ID_COUNTER.incrementAndGet());
   }
 
   /**
@@ -577,6 +822,21 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   }
 
   /**
+   * Authorization choke point for database-scoped routes that do NOT extend {@link DatabaseAbstractHandler}
+   * (time-series, batch, Prometheus and Grafana handlers). Without this check those handlers resolved and
+   * operated on any database named in the path, letting a user authorized for one database read and write
+   * another (cross-database IDOR, GHSA-x8mg-6r4p-87pf). Mirrors the gate in
+   * {@link DatabaseAbstractHandler#execute}. Throws {@link SecurityException} (mapped to HTTP 403) when the
+   * authenticated user cannot access the database; fails closed on a missing database name.
+   */
+  protected void checkAuthorizationOnDatabase(final ServerSecurityUser user, final String databaseName) {
+    if (databaseName == null || databaseName.isEmpty())
+      throw new IllegalArgumentException("Database parameter is null");
+    if (user != null && !user.canAccessToDatabase(databaseName))
+      throw new SecurityException("User '" + user.getName() + "' is not allowed to access database '" + databaseName + "'");
+  }
+
+  /**
    * Ensures only the root user can execute server administration commands.
    * API token-authenticated users have synthetic names like "apitoken:&lt;name&gt;" and will
    * always fail this check — this is intentional, as token management requires root credentials.
@@ -616,6 +876,15 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
     return message.replace("\\\\", " ").replace('\n', ' ');
   }
 
+  /**
+   * Returns the per-request correlation id echoed in the response header (issue #4466), or {@code null} if none is set.
+   * Handlers that build a bespoke error body (e.g. the streaming batch endpoint) reuse this so their client-facing
+   * error stays cross-referenceable with the server log, exactly like the standard {@code sendErrorResponse} envelope.
+   */
+  protected String getCorrelationId(final HttpServerExchange exchange) {
+    return exchange.getResponseHeaders().getFirst(REQUEST_ID_HEADER);
+  }
+
   protected String getQueryParameter(final HttpServerExchange exchange, final String name) {
     return getQueryParameter(exchange, name, null);
   }
@@ -625,10 +894,16 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
     return par == null || par.isEmpty() ? defaultValue : par.getFirst();
   }
 
-  private Level getErrorLogLevel() {
+  /**
+   * Log level for UNEXPECTED INTERNAL faults (potential data corruption, engine bugs): SEVERE in development
+   * mode, WARNING in production. Unlike user-triggered errors (see {@link #getUserSevereErrorLogLevel()}),
+   * these must stay visible with default logging in production - demoting them to FINE is how a
+   * BufferUnderflowException on a read-only command went undiagnosable (issue #5374).
+   */
+  private Level getInternalErrorLogLevel() {
     return "development".equals(httpServer.getServer().getConfiguration().getValueAsString(GlobalConfiguration.SERVER_MODE)) ?
             Level.SEVERE :
-            Level.FINE;
+            Level.WARNING;
   }
 
   private Level getUserSevereErrorLogLevel() {

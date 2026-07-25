@@ -18,29 +18,20 @@
  */
 package com.arcadedb.query.opencypher;
 
-import com.arcadedb.database.Database;
-import com.arcadedb.database.DatabaseFactory;
+import com.arcadedb.TestHelper;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.schema.Schema;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-
-;
 
 /**
  * Cypher Verification test for Cost-Based Query Optimizer.
  * Ensures that optimizations are correctly applied by checking EXPLAIN output.
  */
-public class OpenCypherOptimizerVerificationTest {
-  private Database database;
-
-  @BeforeEach
-  void setup() {
-    database = new DatabaseFactory("./databases/test-optimizer-verification").create();
-
+public class OpenCypherOptimizerVerificationTest extends TestHelper {
+  @Override
+  protected void beginTest() {
     // Create schema with properties
     database.transaction(() -> {
       final var personType = database.getSchema().createVertexType("Person");
@@ -94,14 +85,6 @@ public class OpenCypherOptimizerVerificationTest {
       database.getSchema().getOrCreateVertexType("Company")
         .createTypeIndex(Schema.INDEX_TYPE.LSM_TREE, true, "name");
     });
-  }
-
-  @AfterEach
-  void teardown() {
-    if (database != null) {
-      database.drop();
-      database = null;
-    }
   }
 
   @Test
@@ -283,9 +266,8 @@ public class OpenCypherOptimizerVerificationTest {
 
   @Test
   void complexWhereClauseWithIndex() {
-    // Note: Complex WHERE clauses with AND/OR are not yet optimized
-    // The optimizer currently only extracts equality predicates from simple comparisons
-    // TODO: Future enhancement - extract predicates from LogicalExpression (AND/OR)
+    // Since issue #5362 the optimizer descends into AND branches, so an indexed equality ANDed with
+    // any other condition still anchors on the index; the whole WHERE stays applied by the Filter.
     final String query = "MATCH (p:Person) WHERE p.id = 30 AND p.age > 25 RETURN p";
     final ResultSet results = database.query("opencypher", query);
 
@@ -304,8 +286,8 @@ public class OpenCypherOptimizerVerificationTest {
     explainResult.close();
 
     assertThat(plan).contains("Using Cost-Based Query Optimizer");
-    // Current limitation: AND expressions not yet decomposed for index selection
-    assertThat(plan).contains("NodeByLabelScan(p:Person)");
+    assertThat(plan).contains("NodeIndexSeek(p:Person)");
+    assertThat(plan).doesNotContain("NodeByLabelScan(p:Person)");
     assertThat(plan).contains("Filter");
   }
 
