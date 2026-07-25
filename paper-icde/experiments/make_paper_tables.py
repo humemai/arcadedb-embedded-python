@@ -159,22 +159,23 @@ def graph_table(rows):
     write("t3_graph.tex", "\n".join(lines) + "\n")
 
 
-def _dev6_sparse_rows():
-    """Rolling-update overlay: N=5 dev6 cells for the embedded int8 config
-    (verify6 re-runs after the MaxScore fix). Same harness, same data."""
+def _dev15_sparse_rows():
+    """Rolling-update overlay: N=5 dev15 cells for the embedded int8 config
+    (verify5411 re-runs after the append-only txn-lane fix; supersedes the
+    dev6/verify6 overlay). Same harness, same data."""
     import glob
     out = {"tiny": [], "small": []}
     for sc in out:
-        for fp in glob.glob(os.path.join(RESULTS, "verify6",
-                                         f"l3s_dev6_{sc}_r*.json")):
+        for fp in glob.glob(os.path.join(RESULTS, "verify5411",
+                                         f"l3s_dev15_bigann_{sc}_r*.json")):
             out[sc].append(json.load(open(fp)))
     return out
 
 
 def sparse_table(rows):
     l3s = [r for r in rows if r["lane"] == "l3s"]
-    dev6 = _dev6_sparse_rows()
-    # Single-version discipline: only the dev6-remeasured arcade config is
+    dev15 = _dev15_sparse_rows()
+    # Single-version discipline: only the dev15-remeasured arcade config is
     # shown; fp32/no-settle/server ablations await re-measurement on the
     # current line (their July rows would cross engine versions in-table).
     order = ["arcadedb_sparse_embedded", "qdrant_sparse", "milvus_sparse",
@@ -185,8 +186,8 @@ def sparse_table(rows):
     for be in order:
         for sc, label in (("tiny", "100k"), ("small", "1M")):
             g = [r for r in l3s if r["backend"] == be and r["scale"] == sc]
-            if be == "arcadedb_sparse_embedded" and dev6.get(sc):
-                g = dev6[sc]  # dev6 overlay (MaxScore), caption discloses
+            if be == "arcadedb_sparse_embedded" and dev15.get(sc):
+                g = dev15[sc]  # dev15 overlay, caption discloses
             if not g:
                 continue
             lines.append(" & ".join([
