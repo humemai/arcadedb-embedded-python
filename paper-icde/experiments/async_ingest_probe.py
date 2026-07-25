@@ -55,18 +55,53 @@ def async_path(db):
     return time.perf_counter() - t0
 
 
+def insert_many_path(db):
+    db.command("sql", "CREATE DOCUMENT TYPE OrderM")
+    t0 = time.perf_counter()
+    buf = []
+    for oid, cust, amt, status in rows():
+        buf.append({"oid": oid, "customer": cust, "amount": amt,
+                    "status": status})
+        if len(buf) >= 100_000:
+            db.insert_many("OrderM", buf, commit_every=BATCH)
+            buf = []
+    if buf:
+        db.insert_many("OrderM", buf, commit_every=BATCH)
+    return time.perf_counter() - t0
+
+
+def insert_many_parallel(db):
+    db.command("sql", "CREATE DOCUMENT TYPE OrderP")
+    t0 = time.perf_counter()
+    buf = []
+    for oid, cust, amt, status in rows():
+        buf.append({"oid": oid, "customer": cust, "amount": amt,
+                    "status": status})
+        if len(buf) >= 100_000:
+            db.insert_many("OrderP", buf, parallel=True)
+            buf = []
+    if buf:
+        db.insert_many("OrderP", buf, parallel=True)
+    return time.perf_counter() - t0
+
+
 def main():
     import arcadedb_embedded as arcadedb
     base = os.environ.get("PROBE_DB_BASE", "/tmp/async_probe")
     heap = os.environ.get("ARCADEDB_HEAP", "3g")
     out = {"n_rows": N}
-    for name, fn in (("serial_sql", serial), ("async_parallel", async_path)):
+    variants = (("serial_sql", serial), ("async_parallel", async_path),
+                ("insert_many", insert_many_path),
+                ("insert_many_parallel", insert_many_parallel))
+    for name, fn in variants:
         db = arcadedb.create_database(f"{base}_{name}",
                                       jvm_kwargs={"heap_size": heap,
                                                   "jvm_args": f"-Xms{heap}"})
         dt = fn(db)
-        n = db.query("sql", f"SELECT count(*) AS n FROM "
-                     f"{'OrderS' if name == 'serial_sql' else 'OrderA'}"
+        tname = {"serial_sql": "OrderS", "async_parallel": "OrderA",
+                 "insert_many": "OrderM",
+                 "insert_many_parallel": "OrderP"}[name]
+        n = db.query("sql", f"SELECT count(*) AS n FROM {tname}"
                      ).to_list()[0]["n"]
         db.close()
         out[name] = {"s": round(dt, 2), "rows_per_s": round(N / dt, 1),
