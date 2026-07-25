@@ -9,6 +9,21 @@ import tempfile
 import pytest
 
 
+def pytest_configure(config):
+    # HotSpot routinely raises access violations it handles itself
+    # (safepoints, implicit null checks). On Windows, pytest's faulthandler
+    # prints a fatal-looking Python stack for each one even though nothing
+    # crashed. Disable it there; real crashes still fail the run.
+    import sys
+
+    if sys.platform == "win32":
+        import faulthandler
+
+        if faulthandler.is_enabled():
+            faulthandler.disable()
+
+
+
 @pytest.fixture
 def temp_db_path():
     """Create a temporary database path."""
