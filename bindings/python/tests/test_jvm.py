@@ -56,3 +56,27 @@ def test_create_close_reopen_same_process(tmp_path):
     rows = db2.query("sql", "SELECT k FROM Doc").to_list()
     db2.close()
     assert rows == [{"k": 1}]
+
+
+def test_interpreter_exits_with_unclosed_database(tmp_path):
+    """A leaked (unclosed) Database must not hang interpreter exit.
+
+    The engine's non-daemon background threads (e.g. AsyncFlush) keep the
+    JVM alive; the bindings close active databases from an atexit hook so
+    JPype's shutdown can complete. Without the hook this hangs forever.
+    """
+    import subprocess
+    import sys as _sys
+
+    script = (
+        "import arcadedb_embedded as a\n"
+        f"db = a.create_database({str(tmp_path / 'leak_db')!r})\n"
+        "db.command('sql', 'CREATE DOCUMENT TYPE Doc')\n"
+        "print('OK', flush=True)\n"
+    )
+    proc = subprocess.run(
+        [_sys.executable, "-c", script],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert "OK" in proc.stdout
+    assert proc.returncode == 0
