@@ -310,6 +310,31 @@ async_exec.close()
 
 ---
 
+### append_samples
+
+```python
+ex.append_samples(type_name: str, timestamps, *column_values)
+```
+
+Columnar bulk append into a native `TIMESERIES` type: one call per batch,
+columns ordered as tags then fields per the type declaration. Timestamps
+are epoch values in the type's precision (ms by default).
+
+numpy fast path: an `ndarray` for timestamps or for a numeric field column
+crosses the FFI as a single buffer copy (with Java-side boxing), instead of
+per-element conversion. Lists work too, converted per element.
+
+**Example:**
+
+```python
+ts = base_ms + np.arange(n, dtype=np.int64) * 1000
+ex = db.async_executor()
+ex.append_samples("Sensor", ts, hosts, cpu_ndarray, mem_ndarray)
+ex.wait_completion()
+```
+
+---
+
 ### create_record
 
 ```python

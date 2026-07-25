@@ -135,6 +135,33 @@ print(df.describe())
 
 ---
 
+### `to_columns(batch_size: int = 25_000)`
+
+Bulk-materialize all rows as columns: a dict of column name to numpy array
+(`int64`/`float64`/`bool`/`datetime64[ms]`) or Python list (strings and
+JSON-typed values). The fastest bulk path (~1.2x Java-native scans,
+measured); `to_dataframe()` uses it internally.
+
+Fixed-dimension vector properties (e.g. `ARRAY_OF_FLOATS` embedding
+columns) come back as one contiguous 2-D array of shape `(rows, dim)`
+(`float32` or `float64`), ready for scikit-learn/faiss without per-row
+conversion; ragged array columns fall back to lists.
+
+Null handling follows pandas conventions: int/datetime columns with nulls
+are promoted to float64 with NaN / datetime64 NaT; a null row in a vector
+column becomes a NaN row. Returns `None` when numpy or the bridge jar is
+unavailable (callers fall back to row-based paths).
+
+**Example:**
+
+```python
+cols = db.query("sql", "SELECT cid, embedding FROM Chunk").to_columns()
+emb = cols["embedding"]        # float32, shape (n, dim)
+sims = emb @ query_vector      # immediately usable
+```
+
+---
+
 ### `iter_chunks(size: int = 1000, convert_types: bool = True) -> Iterator[List[Dict[str, Any]]]`
 
 Iterate results in chunks for memory-efficient processing.
