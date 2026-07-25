@@ -72,6 +72,16 @@ email = doc.get("email")               # Returns None if not found
 email = doc.get("email") or "unknown"  # Use default pattern
 ```
 
+#### `get_raw(name) -> Any`
+
+Get a property value without Java-to-Python conversion. Returns the raw Java-backed
+value, or `None` if the property doesn't exist. Equivalent to
+`get(name, convert_types=False)`.
+
+```python
+java_value = doc.get_raw("created_at")  # Raw Java object
+```
+
 #### `get_property_names() -> List[str]`
 
 Get all property names on the document.
@@ -176,6 +186,17 @@ Get the type name of the document.
 ```python
 type_name = doc.get_type_name()
 print(type_name)  # Output: Note
+```
+
+#### `get_java_document()`
+
+Expose the wrapped Java document object for low-level integrations. Use this only when
+you need the underlying Java API directly (camelCase JPype methods); normal code should
+stay on the Python wrapper.
+
+```python
+java_doc = doc.get_java_document()
+print(java_doc.getTypeName())
 ```
 
 #### `modify() -> Document`

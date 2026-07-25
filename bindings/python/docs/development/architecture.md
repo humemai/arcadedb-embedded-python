@@ -528,7 +528,7 @@ The Python binding is distributed as a **single, self-contained package** (`arca
 **Features:**
 
 - **Bundled JRE**: Includes a minimal Java 25 Runtime Environment (JRE) bundled directly in the wheel.
-- **Full Feature Set**: Includes all ArcadeDB engines (SQL, OpenCypher, GraphQL, MongoDB).
+- **Full Feature Set**: Includes all ArcadeDB engines (SQL, OpenCypher, GraphQL).
 - **Zero Configuration**: No external Java installation required.
 
 ```python
@@ -539,7 +539,6 @@ db = arcadedb.create_database("./mydb")
 db.query("sql", "SELECT FROM User")              # ✓
 db.query("opencypher", "MATCH (n) RETURN n")     # ✓
 db.query("graphql", "{users{name}}")             # ✓
-db.query("mongodb", "db.User.find()")            # ✓
 ```
 
 ## Extension Points

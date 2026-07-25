@@ -143,7 +143,7 @@ Execute a query and return results. Queries are read-only and don't require a tr
 
 **Parameters:**
 
-- `language` (str): Query language - `"sql"`, `"opencypher"`, `"mongo"`, `"graphql"`
+- `language` (str): Query language - `"sql"`, `"opencypher"`, `"graphql"`
 - `command` (str): Query string
 - `*args`: Optional positional parameters, or one mapping for named parameters
 
@@ -187,7 +187,6 @@ result = db.query("opencypher", """
 |----------|-------|
 | `sql` | ArcadeDB SQL |
 | `opencypher` | OpenCypher graph query language |
-| `mongo` | MongoDB query syntax |
 | `graphql` | GraphQL queries |
 
 ---
@@ -330,6 +329,45 @@ Rollback the current transaction.
 **Raises:**
 
 - `ArcadeDBError`: If rollback fails
+
+---
+
+### run_in_transaction
+
+```python
+db.run_in_transaction(fn, retries: int = 12, backoff_s: float = 0.005)
+```
+
+Execute a callable inside a transaction with automatic retry on concurrent-modification
+conflicts. Mirrors the Java API's `database.transaction(lambda)` semantics: on
+`ConcurrentModificationException` / `NeedRetryException` the transaction is rolled back
+and `fn` is re-executed, with linear backoff. The `with db.transaction():` context
+manager cannot retry (a `with` block can't be re-entered), so use this for contended
+multi-threaded writes.
+
+**Parameters:**
+
+- `fn`: Zero-argument callable executed inside the transaction
+- `retries` (int): Max retry attempts on conflict (default: 12)
+- `backoff_s` (float): Base sleep between attempts, grows linearly (default: 0.005)
+
+**Returns:**
+
+- The return value of `fn`
+
+**Raises:**
+
+- `ArcadeDBError`: If `fn` fails with a non-retryable error, or retries are exhausted
+
+**Example:**
+
+```python
+def transfer():
+    db.command("sql", "UPDATE Account SET balance = balance - 10 WHERE id = 1")
+    db.command("sql", "UPDATE Account SET balance = balance + 10 WHERE id = 2")
+
+db.run_in_transaction(transfer)
+```
 
 ---
 
@@ -501,7 +539,7 @@ if record:
 ### lookup_by_key
 
 ```python
-db.lookup_by_key(type_name: str, keys: List[str], values: List[Any]) -> Optional[Record]
+db.lookup_by_key(type_name: str, keys: List[str], values: List[Any]) -> Optional[Document]
 ```
 
 Lookup a record by an indexed key (O(1) index-based lookup).
@@ -514,7 +552,8 @@ Lookup a record by an indexed key (O(1) index-based lookup).
 
 **Returns:**
 
-- `Record` (Vertex/Document/Edge) or `None` if not found
+- Python record wrapper (`Document`, `Vertex`, or `Edge`, matching the underlying
+  record type) or `None` if not found
 
 **Example:**
 
@@ -529,6 +568,33 @@ with db.transaction():
 found = db.lookup_by_key("User", ["email"], ["alice@example.com"])
 if found:
     print(found.get("email"))
+```
+
+---
+
+### to_java_rid
+
+```python
+db.to_java_rid(value) -> Any
+```
+
+Convert a Python-side value into a Java `RID` object suitable for low-level Java API
+calls. Accepts a RID string (e.g. `"#10:5"`), a Python record wrapper
+(`Document`/`Vertex`/`Edge`), or a Java record/identifiable; values that are already
+Java RIDs pass through unchanged.
+
+**Parameters:**
+
+- `value`: RID string, record wrapper, or Java record/RID object
+
+**Returns:**
+
+- Java `com.arcadedb.database.RID` object (or the input's identity)
+
+**Example:**
+
+```python
+java_rid = db.to_java_rid("#10:5")
 ```
 
 ---
@@ -579,7 +645,23 @@ Configure WAL flush strategy. Modes: `"no"`, `"yes_nometadata"`, `"yes_full"`.
 db.set_read_your_writes(enabled: bool)
 ```
 
-Toggle read-your-writes consistency for the current connection.
+Toggle read-your-writes consistency for the current connection. When enabled,
+uncommitted changes in the current transaction are visible in subsequent reads.
+Disabling can improve concurrency but may show stale data.
+
+---
+
+### is_read_your_writes
+
+```python
+db.is_read_your_writes() -> bool
+```
+
+Return whether read-your-writes consistency is currently enabled.
+
+**Returns:**
+
+- `bool`: True if read-your-writes is enabled
 
 ---
 
@@ -869,6 +951,29 @@ Get the file system path to the database.
 **Returns:**
 
 - `str`: Database path
+
+---
+
+### get_java_database
+
+```python
+db.get_java_database() -> Any
+```
+
+Expose the wrapped Java `Database` object for low-level integrations. Use this only
+when you need direct access to the underlying Java API (camelCase JPype methods);
+normal application code should stay on the Python wrapper.
+
+**Returns:**
+
+- Java `com.arcadedb.database.Database` object
+
+**Example:**
+
+```python
+java_db = db.get_java_database()
+print(java_db.getSchema().getTypes().size())
+```
 
 ---
 

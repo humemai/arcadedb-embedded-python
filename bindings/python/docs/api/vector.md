@@ -371,6 +371,82 @@ returned. If you want to exclude it, do that in SQL/Cypher with a `WHERE` clause
 
 ---
 
+### `VectorIndex.find_nearest_approximate(query_vector, k=10, allowed_rids=None)`
+
+Find k nearest neighbors using Product Quantization (PQ) approximate search.
+
+Only available on indexes created with `quantization="PRODUCT"`; calling it on any
+other index raises `ArcadeDBError`.
+
+**Parameters:**
+
+- `query_vector`: Query vector as Python list, NumPy array, or array-like
+- `k` (int): Number of nearest neighbors to return (default: 10)
+- `allowed_rids` (List[str] | None): Optional list of RID strings (e.g.
+  `["#1:0", "#2:5"]`) to restrict search (default: `None`)
+
+**Returns:**
+
+- `List[Tuple[record, float]]`: Same `(record, score)` shape as `find_nearest()`
+
+**Raises:**
+
+- `ArcadeDBError`: If the index quantization is not `PRODUCT`, or the search fails
+
+**Example:**
+
+```python
+index = db.create_vector_index(
+    "Document", "embedding", dimensions=384, quantization="PRODUCT"
+)
+
+neighbors = index.find_nearest_approximate(query_vector, k=5)
+for record, score in neighbors:
+    print(record.get("id"), score)
+```
+
+---
+
+### `VectorIndex.get_size()`
+
+Get the current number of items in the index.
+
+**Returns:**
+
+- `int`: Number of items currently indexed
+
+**Raises:**
+
+- `ArcadeDBError`: If the size cannot be read
+
+**Example:**
+
+```python
+print(f"Indexed vectors: {index.get_size()}")
+```
+
+---
+
+### `VectorIndex.get_quantization()`
+
+Get the quantization type of the index.
+
+**Returns:**
+
+- `str`: `"NONE"`, `"INT8"`, `"BINARY"`, or `"PRODUCT"` (returns `"NONE"` if the
+  quantization cannot be determined)
+
+**Example:**
+
+```python
+if index.get_quantization() == "PRODUCT":
+    results = index.find_nearest_approximate(query_vector, k=10)
+else:
+    results = index.find_nearest(query_vector, k=10)
+```
+
+---
+
 ### `VectorIndex.get_metadata()`
 
 Return stable vector index metadata as a Python dictionary.

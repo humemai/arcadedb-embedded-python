@@ -18,7 +18,7 @@ the official ArcadeDB server for client-server deployments.
 | Area | Status | Notes |
 | --- | --- | --- |
 | Core Database | ✅ Supported | `DatabaseFactory`, `Database`, transactions, lookups, async helpers |
-| Query Execution | ✅ Supported | SQL, OpenCypher, MongoDB, GraphQL passthrough |
+| Query Execution | ✅ Supported | SQL, OpenCypher, GraphQL passthrough |
 | Schema & Indexes | ✅ Supported | Types, properties, LSM_TREE/HASH/FULL_TEXT/LSM_VECTOR/GEOSPATIAL indexes |
 | Graph API | ✅ Supported | SQL/OpenCypher graph workflows plus `Document`/`Vertex`/`Edge` wrapper compatibility |
 | Vector Search | ✅ Supported | JVector indexes + NumPy conversion helpers |
@@ -55,7 +55,6 @@ All query languages supported by the underlying ArcadeDB engine can be used via
 
 - ✅ SQL
 - ✅ OpenCypher
-- ✅ MongoDB query syntax
 - ✅ GraphQL
 
 **ResultSet & Results:**

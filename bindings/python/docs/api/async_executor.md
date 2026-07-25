@@ -164,6 +164,38 @@ async_exec = db.async_executor().set_transaction_use_wal(False)
 
 ---
 
+### set_transaction_sync
+
+```python
+async_exec.set_transaction_sync(sync_mode: str) -> AsyncExecutor
+```
+
+Set the WAL flush strategy for the durability vs. performance trade-off.
+
+**Parameters:**
+
+- `sync_mode` (str): One of:
+    - `"no"` - No fsync (fastest, least durable)
+    - `"yes_nometadata"` - Sync data but not metadata
+    - `"yes_full"` - Full fsync (slowest, most durable)
+
+**Returns:**
+
+- `AsyncExecutor`: Self for chaining
+
+**Raises:**
+
+- `ValueError`: If `sync_mode` is invalid
+
+**Example:**
+
+```python
+# Use no-sync for maximum performance
+async_exec = db.async_executor().set_transaction_sync("no")
+```
+
+---
+
 ### set_back_pressure
 
 ```python
@@ -206,6 +238,30 @@ async_exec = (db.async_executor()
     .set_transaction_use_wal(True)
     .set_back_pressure(75)
 )
+```
+
+---
+
+### Configuration Getters
+
+Each setter has a read-only counterpart that returns the current value:
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `get_parallel_level()` | `int` | Current number of worker threads |
+| `get_commit_every()` | `int` | Current auto-commit batch size |
+| `get_back_pressure()` | `int` | Current back-pressure threshold (0-100) |
+| `is_transaction_use_wal()` | `bool` | Whether WAL is enabled for async transactions |
+| `get_transaction_sync()` | `str` | Current WAL flush mode (`"no"`, `"yes_nometadata"`, or `"yes_full"`) |
+| `get_thread_count()` | `int` | Number of executor threads actually spawned |
+
+**Example:**
+
+```python
+async_exec = db.async_executor().set_parallel_level(8).set_commit_every(5000)
+print(async_exec.get_parallel_level())   # 8
+print(async_exec.get_commit_every())     # 5000
+print(async_exec.is_transaction_use_wal())  # True
 ```
 
 ## Operation Methods
@@ -386,6 +442,62 @@ created_dest_vertex)`.
 
 ---
 
+### new_edge_by_keys
+
+```python
+async_exec.new_edge_by_keys(
+    source_vertex_type: str,
+    source_key_names: Union[str, Sequence[str]],
+    source_key_values: Union[Any, Sequence[Any]],
+    destination_vertex_type: str,
+    destination_key_names: Union[str, Sequence[str]],
+    destination_key_values: Union[Any, Sequence[Any]],
+    create_vertex_if_not_exist: bool,
+    edge_type: str,
+    bidirectional: bool,
+    light: bool,
+    callback: Optional[Callable[[Any, bool, bool], None]] = None,
+    **properties,
+)
+```
+
+Asynchronously create an edge by looking up both endpoint vertices via indexed keys
+instead of RIDs. Key names/values may be a single string/value or parallel sequences
+for composite keys (name and value sequences must have the same length, otherwise
+`ValueError` is raised).
+
+**Parameters:**
+
+- `source_vertex_type` (str): Source vertex type name
+- `source_key_names`: Indexed property name(s) identifying the source vertex
+- `source_key_values`: Value(s) for the source key properties
+- `destination_vertex_type` (str): Destination vertex type name
+- `destination_key_names`: Indexed property name(s) identifying the destination vertex
+- `destination_key_values`: Value(s) for the destination key properties
+- `create_vertex_if_not_exist` (bool): Create missing endpoint vertices on the fly
+- `edge_type` (str): Edge type name
+- `bidirectional` (bool): Store back-pointers on the destination vertex
+- `light` (bool): Create a property-less light edge
+- `callback` (Optional[Callable]): Receives `(edge, created_source_vertex, created_dest_vertex)`
+- `**properties`: Edge properties
+
+**Example:**
+
+```python
+async_exec.new_edge_by_keys(
+    "Person", "email", "alice@example.com",
+    "Person", "email", "bob@example.com",
+    False,          # don't create missing vertices
+    "Knows",
+    True,           # bidirectional
+    False,          # regular (non-light) edge
+    since=2024,
+)
+async_exec.wait_completion()
+```
+
+---
+
 ### transaction
 
 ```python
@@ -416,6 +528,58 @@ async_exec.scan_type(
 
 Asynchronously scan all records of a type, invoking `callback` per record. Returning
 `False` from the callback stops the scan.
+
+## Global Callbacks
+
+### on_ok
+
+```python
+async_exec.on_ok(callback: Callable[[], None]) -> AsyncExecutor
+```
+
+Set a global success callback for all operations.
+
+**Note:** Global callbacks have JPype proxy compatibility issues. Prefer per-operation
+callbacks on async SQL/Cypher commands:
+
+```python
+async_exec.command(
+    "sql", "INSERT INTO Log SET id = :id", callback=on_success, id=1
+)
+```
+
+**Parameters:**
+
+- `callback` (Callable): Success callback, no arguments
+
+**Returns:**
+
+- `AsyncExecutor`: Self for chaining
+
+---
+
+### on_error
+
+```python
+async_exec.on_error(callback: Callable[[Exception], None]) -> AsyncExecutor
+```
+
+Set a global error callback for all operations. Called for every failed operation if no
+per-operation error callback was provided.
+
+**Parameters:**
+
+- `callback` (Callable): Error callback, receives the exception
+
+**Returns:**
+
+- `AsyncExecutor`: Self for chaining
+
+**Example:**
+
+```python
+async_exec.on_error(lambda e: print(f"Error: {e}"))
+```
 
 ## Status Methods
 
@@ -478,6 +642,36 @@ while async_exec.is_pending():
 
 ---
 
+### is_processing
+
+```python
+async_exec.is_processing() -> bool
+```
+
+Check whether the executor is currently processing queued operations. Similar to
+`is_pending()`, but also falls back to a zero-timeout `waitCompletion(0)` probe when
+the engine's `isProcessing()` call is unavailable.
+
+**Returns:**
+
+- `bool`: True if operations are still being processed
+
+---
+
+### is_closed
+
+```python
+async_exec.is_closed() -> bool
+```
+
+Return True once the executor has been closed.
+
+**Returns:**
+
+- `bool`: True if `close()` has been called
+
+---
+
 ### close
 
 ```python
@@ -498,6 +692,18 @@ try:
 finally:
     async_exec.close()
 ```
+
+---
+
+### kill
+
+```python
+async_exec.kill()
+```
+
+Forcibly stop the executor's worker threads without waiting for queued operations to
+complete. Prefer `wait_completion()` followed by `close()` for orderly shutdown; use
+`kill()` only to abort a runaway workload (queued but unprocessed operations are lost).
 
 ## Complete Example
 

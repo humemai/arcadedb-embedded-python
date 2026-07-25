@@ -16,7 +16,10 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(citation, "_zenodo_get", boom)
 
 
-def test_cached_version_no_network():
+def test_cached_version_no_network(monkeypatch):
+    monkeypatch.setitem(
+        citation._VERSION_DOI_MAP, "26.1.1.post3", "10.5281/zenodo.18399749"
+    )
     assert (
         citation.cite("26.1.1.post3")
         == "https://doi.org/10.5281/zenodo.18399749"
