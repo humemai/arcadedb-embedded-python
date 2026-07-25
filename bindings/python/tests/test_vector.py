@@ -514,12 +514,21 @@ class TestLSMVectorIndex:
             index.build_graph_now()
 
         with arcadedb.open_database(db_path) as db:
-            rs = db.query(
-                "sql",
-                "SELECT vectorNeighbors('Doc[embedding]', [1.0, 0.0, 0.0], 1) as res",
-            ).to_list()
-            assert len(rs) == 1
-            neighbors = rs[0].get("res")
+            # The ANN graph loads asynchronously after reopen; poll briefly
+            # so slow CI runners (Windows especially) don't race it.
+            import time as _time
+
+            neighbors = []
+            for _ in range(50):
+                rs = db.query(
+                    "sql",
+                    "SELECT vectorNeighbors('Doc[embedding]', [1.0, 0.0, 0.0], 1) as res",
+                ).to_list()
+                assert len(rs) == 1
+                neighbors = rs[0].get("res")
+                if neighbors:
+                    break
+                _time.sleep(0.1)
             assert len(neighbors) == 1
             vertex = neighbors[0]
             assert vertex is not None
