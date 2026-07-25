@@ -108,6 +108,23 @@ db = arcadedb.create_database("./mydb")
 
 ---
 
+### Script Hangs at Exit
+
+**Symptom:** The Python process finishes its work but never exits (or, on
+older versions, printed `Windows fatal exception: access violation` during
+shutdown).
+
+**Cause:** A `Database` was left open. The engine runs non-daemon
+background threads (asynchronous WAL flushing, index maintenance) until
+`close()` is called, and the JVM cannot terminate while they are alive.
+
+**Solution:** Since 26.8.1.dev17 the bindings close any database still
+open when the interpreter exits, so this resolves itself. Explicit
+`db.close()` (or a `with` block) is still the recommended pattern: it
+flushes deterministically and releases the lock for other processes.
+
+---
+
 ### Database Locked
 
 **Symptom:** `ArcadeDBError: Database is locked by another process`
