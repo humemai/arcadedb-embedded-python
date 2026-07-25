@@ -257,6 +257,36 @@ class AsyncExecutor:
 
     # Graph and time-series operations
 
+    def create_record(self, document, callback: Optional[Callable] = None):
+        """Queue a document for asynchronous creation.
+
+        The engine's parallel bucket writers persist it off the calling
+        thread; call :meth:`wait_completion` before relying on visibility.
+        This is the idiomatic bulk-write path for single documents built
+        with ``Database.new_document``; for many uniform rows prefer
+        ``Database.insert_many(..., parallel=True)``, which crosses the
+        FFI boundary once per batch instead of per document.
+
+        Args:
+            document: A ``Document`` created by ``Database.new_document``
+                (not yet saved).
+            callback: Optional callable invoked with the created record.
+        """
+        java_cb = (self._create_new_record_callback(callback)
+                   if callback is not None else None)
+        self._java_async.createRecord(document._java_document, java_cb)
+
+    def _create_new_record_callback(self, python_callback):
+        from .graph import Document
+
+        @jpype.JImplements("com.arcadedb.database.async.NewRecordCallback")
+        class _NewRecordCallback:
+            @jpype.JOverride
+            def call(self, record):
+                python_callback(Document.wrap(record))
+
+        return _NewRecordCallback()
+
     def new_edge(
         self,
         source_vertex,

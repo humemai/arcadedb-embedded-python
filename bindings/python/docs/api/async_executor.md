@@ -310,6 +310,36 @@ async_exec.close()
 
 ---
 
+### create_record
+
+```python
+ex.create_record(document, callback=None)
+```
+
+Queue a document (built with `db.new_document`, not yet saved) for
+asynchronous creation by the engine's parallel bucket writers. Call
+`wait_completion()` before relying on visibility. For many uniform rows
+prefer `db.insert_many(..., parallel=True)`, which crosses the FFI boundary
+once per batch instead of per document.
+
+**Parameters:**
+
+- `document` (Document): Unsaved document from `db.new_document`
+- `callback` (callable, optional): Invoked with the created record
+
+**Example:**
+
+```python
+ex = db.async_executor()
+for i in range(100_000):
+    doc = db.new_document("Event")
+    doc.set("seq", i)
+    ex.create_record(doc)
+ex.wait_completion()
+```
+
+---
+
 ### new_edge
 
 ```python

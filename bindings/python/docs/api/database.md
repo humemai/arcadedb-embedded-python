@@ -429,6 +429,47 @@ with db.transaction():
 
 ---
 
+### insert_many
+
+```python
+db.insert_many(type_name: str, rows, commit_every: int = 10_000,
+               parallel: bool = False) -> int
+```
+
+Bulk-insert documents with **one FFI crossing per batch** instead of several
+JNI calls per row. Rows are serialized to a single JSON string and looped
+Java-side, which makes this the fastest document-ingest path from Python
+(measured ~3x over a per-row SQL loop and ~1.7x over per-row async
+creation). Manages its own transactions unless one is already active.
+
+**Parameters:**
+
+- `type_name` (str): Target document type (must exist)
+- `rows` (iterable of dict): One dict per document; values must be
+  JSON-representable (str/int/float/bool/None, nested lists/dicts). Rows
+  with other types (e.g. `datetime`, `bytes`) fall back transparently to
+  the per-row path.
+- `commit_every` (int): Transaction batch size in synchronous mode
+  (0 = single transaction; ignored when a transaction is already open)
+- `parallel` (bool): Route rows through the async executor's parallel
+  bucket writers and wait for completion (out-of-order writes)
+
+**Returns:**
+
+- `int`: Number of documents inserted
+
+**Example:**
+
+```python
+db.command("sql", "CREATE DOCUMENT TYPE Order")
+n = db.insert_many(
+    "Order",
+    ({"oid": i, "amount": i * 1.5} for i in range(1_000_000)),
+)
+```
+
+---
+
 ### lookup_by_rid
 
 ```python
