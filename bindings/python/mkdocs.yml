@@ -162,6 +162,7 @@ nav:
   - 19 - Hash Index Exact Match: examples/19_hash_index_exact_match.md
   - 20 - Graph Algorithms Route Planning: examples/20_graph_algorithms_route_planning.md
   - 21 - Graph Analytical View SQL Workflow: examples/21_graph_analytical_view_sql.md
+  - 22 - numpy Bulk I/O Workflow: examples/22_numpy_bulk_io.md
   - Data Import Patterns: examples/import.md
   - Vector Search Patterns: examples/vectors.md
 - User Guide:
