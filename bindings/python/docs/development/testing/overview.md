@@ -74,6 +74,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | Test File | Description |
 | --------- | ----------- |
 | [`test_async_executor.py`](test-async-executor.md) | Async command/query execution and callback behavior |
+| `test_bulk_insert.py` | `Database.insert_many`, `AsyncExecutor.create_record`, vector columns, and numpy `append_samples` bulk ingest |
 | [`test_core.py`](test-core.md) | Core database operations, CRUD, transactions, queries |
 | [`test_database_utils.py`](test-database-utils.md) | Database utility helpers and initialization behavior |
 | [`test_docs_examples.py`](test-docs-examples.md) | Executes representative Python snippets from the documentation site |
@@ -88,6 +89,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_import_database.py`](test-importer.md) | SQL `IMPORT DATABASE` scenarios and format coverage |
 | [`test_cypher.py`](test-opencypher.md) | OpenCypher query language |
 | [`test_graph_batch.py`](test-graph-batch.md) | Bulk graph-ingest helper coverage |
+| `test_graph.py` | `GraphBatch.new_edges` bulk edge creation coverage |
 | [`test_geo_predicate_sql.py`](test-geo-predicate-sql.md) | Geospatial SQL predicate semantics |
 | [`test_timeseries_sql.py`](test-timeseries-sql.md) | Time-series SQL type creation, range filters, and bucketing |
 | [`test_materialized_view_sql.py`](test-materialized-view-sql.md) | Materialized view lifecycle and refresh behavior |

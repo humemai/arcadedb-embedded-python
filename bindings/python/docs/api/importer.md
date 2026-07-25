@@ -45,12 +45,12 @@ default Python-side ingest path right now.
 
 - For focused ingest benchmarks, use Example 15 and 16 style comparisons across
     transactional SQL, async SQL, and SQL import rather than assuming one winner.
-- Async SQL remains the safest default recommendation for Python-managed ingest
-    experiments, but measured results are workload-dependent.
+- For bulk document ingest from Python, prefer `db.insert_many(...)` (optionally with
+    `parallel=True`), which batches rows across the FFI boundary; see Example 22.
 - Treat `db.import_documents(...)` as a narrow convenience wrapper, not as the default
     ingest story for Python.
-- For bulk table/document ingest from Python, prefer async SQL insert with a single
-    async worker.
+- Async SQL insert with a single async worker remains a secondary option for
+    Python-managed ingest experiments; measured results are workload-dependent.
 - Do not rely on multi-threaded async SQL insert for that path in the current Python
     examples. It has not been safe or reliable in testing.
 - For bulk graph ingest, prefer `GraphBatch` rather than importer-based graph loading.

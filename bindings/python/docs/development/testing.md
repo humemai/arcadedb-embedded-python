@@ -5,7 +5,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 !!! success "Test Coverage"
     Current bindings suite
 
-    - **Current package**: 351 passed
+    - **Current package**: 370 passed
     - All embedded ArcadeDB features working (SQL, OpenCypher, vectors, graphs)
 
 ## Quick Navigation
@@ -22,7 +22,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
     ---
 
-    CRUD, transactions, queries, graph operations (13 tests)
+    CRUD, transactions, queries, graph operations (34 tests)
 
 -   :material-lock: **[Concurrency Tests](testing/test-concurrency.md)**
 
@@ -162,6 +162,7 @@ This is the current live test tree under `bindings/python/tests`. Exact test cou
 tests/
 ├── conftest.py                         # Shared fixtures
 ├── test_async_executor.py             # Async execution tests
+├── test_bulk_insert.py                # insert_many / create_record bulk ingest tests
 ├── test_concurrency.py                # Concurrency tests
 ├── test_core.py                       # Core operations
 ├── test_cypher.py                     # OpenCypher tests
@@ -169,6 +170,7 @@ tests/
 ├── test_docs_examples.py              # Runnable docs example tests
 ├── test_exporter.py                   # Exporter tests
 ├── test_geo_predicate_sql.py          # Geospatial SQL predicate tests
+├── test_graph.py                      # GraphBatch new_edges bulk edge tests
 ├── test_graph_algorithms_sql.py       # shortestPath / dijkstra / astar
 ├── test_graph_api.py                  # Graph API tests
 ├── test_graph_batch.py                # Bulk graph ingest helper

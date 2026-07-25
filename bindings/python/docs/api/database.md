@@ -11,7 +11,7 @@ Complete API reference for working with ArcadeDB databases in Python.
 ### create_database
 
 ```python
-arcadedb.create_database(path: str) -> Database
+arcadedb.create_database(path: str, jvm_kwargs: Optional[dict] = None) -> Database
 ```
 
 Create a new database at the specified path.
@@ -19,6 +19,7 @@ Create a new database at the specified path.
 **Parameters:**
 
 - `path` (str): File system path where the database will be created
+- `jvm_kwargs` (Optional[dict]): Optional JVM args passed to `start_jvm()` (e.g. `{"heap_size": "8g"}`)
 
 **Returns:**
 
@@ -52,7 +53,7 @@ with arcadedb.create_database("./mydb") as db:
 ### open_database
 
 ```python
-arcadedb.open_database(path: str) -> Database
+arcadedb.open_database(path: str, jvm_kwargs: Optional[dict] = None) -> Database
 ```
 
 Open an existing database.
@@ -60,6 +61,7 @@ Open an existing database.
 **Parameters:**
 
 - `path` (str): Path to the existing database
+- `jvm_kwargs` (Optional[dict]): Optional JVM args passed to `start_jvm()` (e.g. `{"heap_size": "8g"}`)
 
 **Returns:**
 
@@ -877,12 +879,13 @@ Factory for creating and opening databases with custom configuration.
 ### Constructor
 
 ```python
-DatabaseFactory(path: str)
+DatabaseFactory(path: str, jvm_kwargs: Optional[dict] = None)
 ```
 
 **Parameters:**
 
 - `path` (str): Database path
+- `jvm_kwargs` (Optional[dict]): Optional JVM args passed to `start_jvm()` (e.g. `{"heap_size": "8g"}`)
 
 **Example:**
 

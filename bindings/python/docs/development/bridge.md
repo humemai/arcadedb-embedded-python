@@ -1,13 +1,14 @@
 # Java Bridge (`arcadedb-python-bridge.jar`)
 
 The bindings ship a small Java helper jar alongside the engine JARs. Its
-sources live in `bindings/python/src/java/com/arcadedb/python/` — four
-classes, ~450 lines total:
+sources live in `bindings/python/src/java/com/arcadedb/python/` — five
+classes, ~506 lines total:
 
 | Class | Purpose |
 |---|---|
 | `RowBatcher` | Serializes up to N result rows into one JSON-array string per call (batched row transport) |
 | `ColumnBatcher` | Encodes up to N rows into one `byte[]` of typed little-endian column buffers plus null bitmaps (binary columnar transport) |
+| `DocumentBatcher` | Inserts a whole batch of documents from one JSON-rows string (transactional or async parallel writers); also boxes numpy numeric arrays for `append_samples` |
 | `EdgeBatcher` | Buffers a whole batch of edges into `GraphBatch` from one call (RID strings, or JSON rows for edges with properties) |
 | `VertexBatcher` | Creates a whole batch of vertices from one JSON-rows string, returning all RIDs as one joined string |
 
@@ -32,6 +33,8 @@ crossing per batch**, receiving a bulk payload it can decode at C speed — the
 |---|---|
 | `ResultSet.to_json_list()` / `iter_json_batches()` | `RowBatcher` |
 | `ResultSet.to_columns()` / fast `to_dataframe()` | `ColumnBatcher` |
+| `Database.insert_many()` | `DocumentBatcher` |
+| `AsyncExecutor.append_samples()` (numpy numeric-column boxing) | `DocumentBatcher` |
 | `GraphBatch.new_edges()` (with and without properties) | `EdgeBatcher` |
 | `GraphBatch.create_vertices()` bulk path | `VertexBatcher` |
 | `Database.export_to_csv()` (streams JSON batches) | `RowBatcher` |

@@ -315,13 +315,11 @@ jobs:
 
             # Set example-specific parameters and timeout
             case "$example" in
-              "21_server_mode_http_access.py")
-                # Example 21 is kept in the repo for local/manual use, but is
-                # excluded from GitHub Actions because it is CI-unstable.
-                echo "⏭️  SKIPPED: $example (excluded from GitHub Actions due to CI instability)" | tee -a $results_file
-                skipped=$((skipped + 1))
-                echo ""
-                continue
+              "21_graph_analytical_view_sql.py")
+                example_args="--base-cities 1200 --stale-growth-cities 300 --sync-growth-cities 200 --regions 12 --batch-size 300 --sample-limit 5"
+                example_name="$example (reduced scale for CI)"
+                timeout_duration=900  # 15 minutes
+                example_jvm_args=""
                 ;;
               "22_numpy_bulk_io.py")
                 example_args="--rows 50000 --points 100000 --vectors 5000"
@@ -507,6 +505,10 @@ jobs:
           echo "Detailed Results:"
           cat $results_file
 
+          # Save list of examples for summary (before the failure exit, so
+          # the summary is populated even when some examples fail)
+          echo "$examples" > examples-ran.txt
+
           # Exit with error if any failed
           if [ $failed -gt 0 ]; then
             echo "❌ Some examples failed!"
@@ -514,9 +516,6 @@ jobs:
           else
             echo "✅ All examples passed!"
           fi
-
-          # Save list of examples for summary
-          echo "$examples" > examples-ran.txt
 
       - name: Generate test summary
         if: always()

@@ -15,9 +15,10 @@ pip install arcadedb-embedded
 
 ## Access Methods
 
-ArcadeDB Python bindings support **two access methods**:
+ArcadeDB Python bindings are **embedded-only**: the database runs in your Python
+process.
 
-### Embedded Mode (SQL) - Recommended for Getting Started
+### Embedded Mode (SQL)
 
 Direct local database access via JPype, using SQL for schema and CRUD:
 

@@ -178,6 +178,12 @@ class ResultSet:
             # row path and ~6x the per-row path on 100k-row scans
             columns = self.to_columns()
             if columns is not None:
+                # pandas rejects 2-D ndarrays as column values; vector
+                # columns (f4v/f8v) become object columns of row slices
+                columns = {
+                    k: (list(v) if getattr(v, "ndim", 1) > 1 else v)
+                    for k, v in columns.items()
+                }
                 return pd.DataFrame(columns)
 
         return pd.DataFrame(self.to_list(convert_types=convert_types))
@@ -242,10 +248,8 @@ class ResultSet:
                         arr[mask] = np.nan
                     values = arr
                 elif ctype == "f8":
-                    arr = np.frombuffer(data, dtype="<f8").copy()
-                    if has_nulls:
-                        arr[mask] = np.nan
-                    values = arr
+                    # Java already writes NaN into null slots
+                    values = np.frombuffer(data, dtype="<f8")
                 elif ctype == "dt":
                     arr = np.frombuffer(data, dtype="<i8").astype("datetime64[ms]")
                     if has_nulls:
@@ -260,14 +264,11 @@ class ResultSet:
                     else:
                         values = arr
                 elif ctype in ("f4v", "f8v"):
-                    # fixed-dimension vector column -> 2-D array (count, dim)
+                    # fixed-dimension vector column -> 2-D array (count, dim);
+                    # Java already writes NaN rows into null slots
                     dim = col["dim"]
                     dt = "<f4" if ctype == "f4v" else "<f8"
-                    arr = np.frombuffer(data, dtype=dt).reshape(count, dim)
-                    if has_nulls:
-                        arr = arr.copy()
-                        arr[mask] = np.nan
-                    values = arr
+                    values = np.frombuffer(data, dtype=dt).reshape(count, dim)
                 elif ctype == "json":
                     values = json.loads(bytes(data))
                 else:  # str
