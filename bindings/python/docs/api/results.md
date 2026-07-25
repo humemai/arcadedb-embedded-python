@@ -109,6 +109,60 @@ Iterate results as dictionaries.
 
 ---
 
+### `to_json_list(batch_size: int = 10_000) -> List[Dict[str, Any]]`
+
+Bulk-materialize all rows via batched Java-side JSON serialization.
+
+The fast path for large result sets: rows are serialized to JSON in batches on the Java
+side (one JPype crossing per batch instead of several per row) and parsed with the C
+json module — measured ~6x faster than `to_list()` on wide 100k-row scans.
+
+**Trade-off:** values carry JSON-native types. Numbers, strings, booleans, lists and
+nested maps convert as expected, but temporal values arrive as ISO strings (not
+`datetime`) and DECIMALs as floats. Use `to_list()` when full Python-type fidelity
+matters more than speed.
+
+**Parameters:**
+
+- `batch_size` (int): Rows serialized per Java crossing (default: `10_000`)
+
+**Returns:**
+
+- `List[Dict[str, Any]]`: List of dictionaries with JSON-native values
+
+**Example:**
+
+```python
+rows = db.query("sql", "SELECT FROM Doc").to_json_list()
+```
+
+---
+
+### `iter_json_batches(batch_size: int = 10_000) -> Iterator[List[Dict[str, Any]]]`
+
+Yield rows as lists of dicts, one Java-serialized batch at a time.
+
+Streaming counterpart of `to_json_list()` with the same JSON-native type semantics;
+bounds memory to one batch. Falls back to chunked per-row conversion when the bridge
+jar is unavailable.
+
+**Parameters:**
+
+- `batch_size` (int): Rows serialized per Java crossing (default: `10_000`)
+
+**Yields:**
+
+- Lists of dictionaries (up to `batch_size` elements each)
+
+**Example:**
+
+```python
+for batch in db.query("sql", "SELECT FROM LargeTable").iter_json_batches():
+    process_batch(batch)
+```
+
+---
+
 ### `to_dataframe(convert_types: bool = True)`
 
 Convert results to a pandas DataFrame. Requires pandas to be installed.
@@ -248,6 +302,34 @@ print(user.get("name"))
 
 ---
 
+### `close() -> None`
+
+Close the underlying Java result set.
+
+Optional: memory-benchmarked as GC-safe to omit (drained or abandoned result sets are
+collected without measurable heap growth), but closing deterministically matches the
+Java API's try-with-resources idiom and releases any engine-side iteration state
+immediately.
+
+`ResultSet` is also a context manager (`__enter__`/`__exit__`), so `with` blocks close
+it automatically.
+
+**Example:**
+
+```python
+# Explicit close
+result_set = db.query("sql", "SELECT FROM User")
+names = [r.get("name") for r in result_set]
+result_set.close()
+
+# Context-manager usage (closes automatically)
+with db.query("sql", "SELECT FROM User") as result_set:
+    for result in result_set:
+        print(result.get("name"))
+```
+
+---
+
 ## Result Class
 
 Represents a single result row/record from a query.
@@ -305,6 +387,27 @@ for result in result_set:
 
 ---
 
+### `get_raw(name: str) -> Any`
+
+Get a property value without Java-to-Python conversion.
+
+**Parameters:**
+
+- `name` (str): Property name
+
+**Returns:**
+
+- Raw Java-backed property value, or `None` if the property doesn't exist
+
+**Example:**
+
+```python
+result = db.query("sql", "SELECT FROM User LIMIT 1").first()
+java_value = result.get_raw("created_at")  # Java object, no conversion
+```
+
+---
+
 ### `has_property(name: str) -> bool`
 
 Check if a property exists in the result.
@@ -352,6 +455,25 @@ for result in result_set:
     for prop in properties:
         value = result.get(prop)
         print(f"  {prop}: {value}")
+```
+
+---
+
+### `property_names -> List[str]`
+
+Property (attribute-style) equivalent of `get_property_names()`: all property names in
+this result.
+
+**Returns:**
+
+- `List[str]`: List of property names
+
+**Example:**
+
+```python
+result = db.query("sql", "SELECT FROM User LIMIT 1").first()
+print(result.property_names)
+# ['name', 'email', 'age', 'created_at']
 ```
 
 ---
@@ -602,6 +724,22 @@ with db.transaction():
         if edge:
             edge.set("strength", 0.95)
             edge.save()
+```
+
+#### `get_element() -> Optional[Document]`
+
+Get the underlying element regardless of kind. Returns the matching wrapper
+(`Document`, `Vertex`, or `Edge`) or `None` if the result carries no element (e.g. a
+projection or aggregation row).
+
+```python
+result_set = db.query("sql", "SELECT FROM Person")
+
+with db.transaction():
+    for result in result_set:
+        element = result.get_element()
+        if element:
+            print(element.get_rid(), element.get_type_name())
 ```
 
 #### Full Example: Bulk Update with Caching

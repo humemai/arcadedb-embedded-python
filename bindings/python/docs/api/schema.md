@@ -137,6 +137,120 @@ log_type = schema.create_document_type("LogEntry")
 event_type = schema.create_document_type("Event", buckets=8)
 ```
 
+---
+
+### get_or_create_document_type
+
+```python
+schema.get_or_create_document_type(
+    name: str,
+    buckets: Optional[int] = None
+) -> Any
+```
+
+Get an existing document type or create it if it doesn't exist. Idempotent alternative
+to `create_document_type`. Returns the underlying Java `DocumentType` object.
+
+**Parameters:**
+
+- `name` (str): Type name
+- `buckets` (Optional[int]): Number of buckets if creating a new type (engine default
+  when omitted)
+
+**Returns:**
+
+- `DocumentType`: Existing or newly created document type
+
+**Example:**
+
+```python
+doc_type = db.schema.get_or_create_document_type("Product")
+```
+
+---
+
+### get_or_create_vertex_type
+
+```python
+schema.get_or_create_vertex_type(
+    name: str,
+    buckets: Optional[int] = None
+) -> Any
+```
+
+Get an existing vertex type or create it if it doesn't exist. Idempotent alternative to
+`create_vertex_type`. Returns the underlying Java `VertexType` object.
+
+**Parameters:**
+
+- `name` (str): Type name
+- `buckets` (Optional[int]): Number of buckets if creating a new type (engine default
+  when omitted)
+
+**Returns:**
+
+- `VertexType`: Existing or newly created vertex type
+
+**Example:**
+
+```python
+vertex_type = db.schema.get_or_create_vertex_type("User")
+```
+
+---
+
+### get_or_create_edge_type
+
+```python
+schema.get_or_create_edge_type(
+    name: str,
+    buckets: Optional[int] = None
+) -> Any
+```
+
+Get an existing edge type or create it if it doesn't exist. Idempotent alternative to
+`create_edge_type`. Returns the underlying Java `EdgeType` object.
+
+**Parameters:**
+
+- `name` (str): Type name
+- `buckets` (Optional[int]): Number of buckets if creating a new type (engine default
+  when omitted)
+
+**Returns:**
+
+- `EdgeType`: Existing or newly created edge type
+
+**Example:**
+
+```python
+edge_type = db.schema.get_or_create_edge_type("Follows")
+```
+
+---
+
+### drop_type
+
+```python
+schema.drop_type(name: str)
+```
+
+Drop a type and all its data.
+
+**Parameters:**
+
+- `name` (str): Type name to drop
+
+**Raises:**
+
+- `ArcadeDBError`: If the drop fails
+
+**Example:**
+
+```python
+db.schema.drop_type("OldType")
+```
+
 ## Property Definition
 
 ### create_property
@@ -247,7 +361,7 @@ schema.create_index(
     type_name: str,
     property_names: List[str],
     unique: bool = False,
-    index_type: Union[str, IndexType] = "LSM_TREE"
+    index_type: Union[str, IndexType] = IndexType.LSM_TREE
 ) -> Index
 ```
 
@@ -259,7 +373,7 @@ Create an index on a type.
 - `property_names` (List[str]): List of property names to index
 - `unique` (bool): Whether the index should enforce uniqueness (default: `False`)
 - `index_type` (str or IndexType): Type of index (`"LSM_TREE"`, `"HASH"`, `"FULL_TEXT"`,
-  `"LSM_VECTOR"`, `"GEOSPATIAL"`)
+  `"LSM_VECTOR"`, `"GEOSPATIAL"`); default: `IndexType.LSM_TREE`
 
 **Returns:**
 
@@ -322,6 +436,198 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
 - **ef_search**: Query-time exact-search beam width override via SQL
   `vectorNeighbors(..., k, ef_search)`. Leave unset to use ArcadeDB's default/adaptive
   behavior.
+
+---
+
+### get_or_create_index
+
+```python
+schema.get_or_create_index(
+    type_name: str,
+    property_names: List[str],
+    unique: bool = False,
+    index_type: Union[str, IndexType] = IndexType.LSM_TREE
+) -> Any
+```
+
+Get an existing index or create it if it doesn't exist. Idempotent alternative to
+`create_index` with the same parameters. Returns the underlying Java `Index` object.
+
+**Parameters:**
+
+- `type_name` (str): Name of the type
+- `property_names` (List[str]): List of property names to index
+- `unique` (bool): Whether the index should enforce uniqueness (default: `False`)
+- `index_type` (str or IndexType): Type of index (default: `IndexType.LSM_TREE`)
+
+**Returns:**
+
+- Java `Index` object
+
+**Raises:**
+
+- `ArcadeDBError`: If the index type is invalid or get/create fails
+
+**Example:**
+
+```python
+idx = db.schema.get_or_create_index("User", ["email"], unique=True)
+```
+
+---
+
+### drop_index
+
+```python
+schema.drop_index(index_name: str, force: bool = False)
+```
+
+Drop an index by name.
+
+**Parameters:**
+
+- `index_name` (str): Name of the index to drop (e.g. `"User[email]"`)
+- `force` (bool): If `True`, skip the existence check (useful for corrupted/partial
+  indexes; default: `False`)
+
+**Raises:**
+
+- `ArcadeDBError`: If the index doesn't exist (when `force=False`) or the drop fails
+
+**Example:**
+
+```python
+db.schema.drop_index("User[email]")
+
+# Force drop corrupted index
+db.schema.drop_index("User[email]", force=True)
+```
+
+---
+
+### get_indexes
+
+```python
+schema.get_indexes() -> List[Any]
+```
+
+Get all indexes in the schema.
+
+**Returns:**
+
+- `List[Any]`: All indexes as Java `Index` objects (camelCase JPype methods, e.g.
+  `getName()`, `getType()`)
+
+**Example:**
+
+```python
+for idx in db.schema.get_indexes():
+    print(idx.getName())
+```
+
+---
+
+### exists_index
+
+```python
+schema.exists_index(index_name: str) -> bool
+```
+
+Check if an index exists.
+
+**Parameters:**
+
+- `index_name` (str): Name of the index
+
+**Returns:**
+
+- `bool`: True if the index exists
+
+**Example:**
+
+```python
+if db.schema.exists_index("User[email]"):
+    print("Index exists")
+```
+
+---
+
+### get_index_by_name
+
+```python
+schema.get_index_by_name(index_name: str) -> Optional[Any]
+```
+
+Get an index by name.
+
+**Parameters:**
+
+- `index_name` (str): Name of the index
+
+**Returns:**
+
+- Java `Index` object, or `None` if not found
+
+**Example:**
+
+```python
+idx = db.schema.get_index_by_name("User[email]")
+if idx:
+    print(f"Index type: {idx.getType()}")
+```
+
+---
+
+### get_vector_index
+
+```python
+schema.get_vector_index(
+    vertex_type: str,
+    vector_property: str
+) -> Optional[VectorIndex]
+```
+
+Get an existing vector (LSM_VECTOR/JVector) index for a type/property pair, wrapped as
+a Python [`VectorIndex`](vector.md). This is the standard way to obtain a search handle
+for an index created via SQL `CREATE INDEX ... LSM_VECTOR`.
+
+**Parameters:**
+
+- `vertex_type` (str): Name of the vertex type
+- `vector_property` (str): Name of the vector property
+
+**Returns:**
+
+- `VectorIndex` object, or `None` if no vector index covers that property
+
+**Example:**
+
+```python
+index = db.schema.get_vector_index("Document", "embedding")
+if index:
+    neighbors = index.find_nearest(query_vector, k=5)
+```
+
+---
+
+### list_vector_indexes
+
+```python
+schema.list_vector_indexes() -> List[str]
+```
+
+List the names of all vector indexes in the database.
+
+**Returns:**
+
+- `List[str]`: Vector index names (empty list if none)
+
+**Example:**
+
+```python
+for name in db.schema.list_vector_indexes():
+    print(name)
+```
 
 ## Type Inspection
 

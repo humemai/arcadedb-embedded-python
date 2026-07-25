@@ -6,8 +6,32 @@ ResultSet and Result classes for wrapping query results.
 
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+from ._logging import get_logger
 from .graph import Document, Edge, Vertex
 from .type_conversion import convert_java_to_python
+
+_logger = get_logger(__name__)
+_BRIDGE_CLASSES: dict = {}
+
+
+def _bridge_class(name):
+    """Cached bridge-class lookup; None (with one warning) if unavailable.
+
+    In an installed wheel the bridge jar is always on the classpath, so the
+    None path only occurs in broken source checkouts."""
+    if name in _BRIDGE_CLASSES:
+        return _BRIDGE_CLASSES[name]
+    import jpype
+
+    try:
+        cls = jpype.JClass(f"com.arcadedb.python.{name}")
+    except Exception:
+        cls = None
+        _logger.warning(
+            "bridge class %s unavailable; falling back to the slow per-row "
+            "path (is the bridge jar missing from this build?)", name)
+    _BRIDGE_CLASSES[name] = cls
+    return cls
 
 
 def _java_class_name(value: Any) -> str:
@@ -121,11 +145,8 @@ class ResultSet:
         """
         import json
 
-        import jpype
-
-        try:
-            row_batcher = jpype.JClass("com.arcadedb.python.RowBatcher")
-        except Exception:
+        row_batcher = _bridge_class("RowBatcher")
+        if row_batcher is None:
             chunk: List[Dict[str, Any]] = []
             for row in self.iter_dicts():
                 chunk.append(row)
@@ -209,11 +230,8 @@ class ResultSet:
 
         import json
 
-        import jpype
-
-        try:
-            column_batcher = jpype.JClass("com.arcadedb.python.ColumnBatcher")
-        except Exception:
+        column_batcher = _bridge_class("ColumnBatcher")
+        if column_batcher is None:
             return None
 
         # column order comes from the first row; empty result -> {}
