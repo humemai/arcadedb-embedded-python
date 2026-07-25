@@ -65,7 +65,7 @@ def test_interpreter_exits_with_unclosed_database(tmp_path):
     JVM alive; the bindings close active databases from an atexit hook so
     JPype's shutdown can complete. Without the hook this hangs forever.
     """
-    import subprocess
+    import subprocess  # nosec B404 - test-controlled child process
     import sys as _sys
 
     script = (
@@ -74,7 +74,7 @@ def test_interpreter_exits_with_unclosed_database(tmp_path):
         "db.command('sql', 'CREATE DOCUMENT TYPE Doc')\n"
         "print('OK', flush=True)\n"
     )
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603 - fixed argv, no shell, test-owned
         [_sys.executable, "-c", script],
         capture_output=True, text=True, timeout=120,
     )
