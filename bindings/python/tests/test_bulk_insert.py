@@ -6,8 +6,8 @@ import pytest
 
 
 def _count(db, type_name):
-    return int(db.query("sql", f"SELECT count(*) AS n FROM {type_name}")
-               .to_list()[0]["n"])
+    return int(db.query(  # nosec B608 - test-controlled type name
+        "sql", f"SELECT count(*) AS n FROM {type_name}").to_list()[0]["n"])
 
 
 class TestInsertMany:
