@@ -219,6 +219,65 @@ class Database:
                 f"Failed to create document of type '{type_name}': {e}"
             ) from e
 
+    def insert_many(
+        self,
+        type_name: str,
+        rows,
+        commit_every: int = 10_000,
+        parallel: bool = False,
+    ) -> int:
+        """Bulk-insert documents with one FFI crossing per batch.
+
+        Rows are serialized to a single JSON string and looped Java-side
+        (``DocumentBatcher``), avoiding the per-row JNI cost that caps
+        ``new_document``-loop ingest. Values must be JSON-representable
+        (str/int/float/bool/None and nested lists/dicts); rows containing
+        other types (e.g. datetime, bytes) fall back transparently to the
+        per-row path.
+
+        Args:
+            type_name: Target document type (must exist).
+            rows: Iterable of dicts, one per document.
+            commit_every: Transaction batch size for the synchronous mode.
+            parallel: If True, route rows through the async executor's
+                parallel bucket writers and wait for completion before
+                returning (higher throughput, out-of-order writes).
+
+        Returns:
+            Number of documents inserted.
+        """
+        self._check_not_closed()
+        import json as _json
+
+        rows = list(rows)
+        if not rows:
+            return 0
+        try:
+            payload = _json.dumps(rows)
+        except (TypeError, ValueError):
+            # Non-JSON-representable values: per-row fallback.
+            n = 0
+            with self.transaction():
+                for row in rows:
+                    doc = self.new_document(type_name)
+                    for k, v in row.items():
+                        doc.set(k, v)
+                    doc.save()
+                    n += 1
+            return n
+        try:
+            batcher = _java_class("com.arcadedb.python.DocumentBatcher")
+            count = int(batcher.insertManyJson(
+                self._java_db, type_name, payload, int(commit_every),
+                bool(parallel)))
+            if parallel:
+                self._java_db.async_().waitCompletion()
+            return count
+        except Exception as e:
+            raise ArcadeDBError(
+                f"Failed to bulk-insert into '{type_name}': {e}"
+            ) from e
+
     def close(self):
         """Close the database."""
         if not self._closed and self._java_db is not None:
