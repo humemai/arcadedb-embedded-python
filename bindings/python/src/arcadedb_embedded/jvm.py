@@ -8,6 +8,7 @@ import glob
 import os
 import platform
 import shlex
+import sys
 import zipfile
 from pathlib import Path
 from typing import Iterable, Optional, Union
@@ -179,28 +180,25 @@ def start_jvm(
                 common_pool_parallelism=common_pool_parallelism,
             )
         )
-        if _JVM_CONFIG is not None:
-            if candidate_args != _JVM_CONFIG:
-                raise ArcadeDBError(
-                    "JVM is already started. Configure JVM args/heap before the "
-                    "first database creation."
-                )
-            return
-
         has_overrides = (
             jvm_args is not None
             or (heap_size not in (None, "4g"))
             or (disable_xml_limits is not True)
             or (common_pool_parallelism is not None)
         )
-        if has_overrides:
-            raise ArcadeDBError(
-                "JVM is already started. Configure JVM args/heap before the "
-                "first database creation."
-            )
+        if not has_overrides:
+            # No explicit configuration requested: join the running JVM
+            # (e.g. open_database() after create_database(jvm_kwargs=...)).
+            if _JVM_CONFIG is None:
+                _JVM_CONFIG = candidate_args
+            return
 
-        _JVM_CONFIG = candidate_args
-        return
+        if _JVM_CONFIG is not None and candidate_args == _JVM_CONFIG:
+            return
+        raise ArcadeDBError(
+            "JVM is already started with different settings. Configure JVM "
+            "args/heap before the first database creation."
+        )
 
     jar_path = get_jar_path()
     jar_files = glob.glob(os.path.join(jar_path, "*.jar"))
@@ -229,6 +227,41 @@ def start_jvm(
         _JVM_CONFIG = tuple(jvm_args)
     except Exception as e:
         raise ArcadeDBError(f"Failed to start JVM: {e}") from e
+
+    # Registered AFTER JPype's own atexit hook so it runs BEFORE it (atexit
+    # is LIFO): close any Database left open, or the engine's non-daemon
+    # background threads (e.g. "ArcadeDB AsyncFlush") keep the JVM alive and
+    # JPype's shutdown blocks the interpreter exit forever.
+    import atexit
+
+    atexit.register(_close_active_databases)
+
+    if sys.platform == "win32":
+        # HotSpot handles SEH access violations internally (safepoint polls,
+        # implicit null checks), but any enabled Python faulthandler prints
+        # them as fake "Windows fatal exception" dumps. Disabling at
+        # configure time is not enough: tools (e.g. pytest's faulthandler
+        # plugin) may re-enable it before the JVM starts, so disable at the
+        # last reliable point, right after JVM start.
+        import faulthandler
+
+        faulthandler.disable()
+
+
+def _close_active_databases():
+    """Close every Database still open so JVM shutdown cannot block."""
+    if not jpype.isJVMStarted():
+        return
+    try:
+        factory = jpype.JClass("com.arcadedb.database.DatabaseFactory")
+        for db in list(factory.getActiveDatabaseInstances()):
+            try:
+                if db.isOpen():
+                    db.close()
+            except Exception:  # nosec B110 - best-effort cleanup at exit
+                pass
+    except Exception:  # nosec B110 - best-effort cleanup at exit
+        pass
 
 def _normalize_jvm_args(jvm_args: Optional[Union[Iterable[str], str]]) -> list[str]:
     if not jvm_args:
@@ -394,6 +427,7 @@ def shutdown_jvm():
     nothing left for us to do.
     """
     if jpype.isJVMStarted():
+        _close_active_databases()
         try:
             jpype.shutdownJVM()
         except RuntimeError:
