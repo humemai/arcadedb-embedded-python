@@ -259,6 +259,15 @@ class ResultSet:
                         ]
                     else:
                         values = arr
+                elif ctype in ("f4v", "f8v"):
+                    # fixed-dimension vector column -> 2-D array (count, dim)
+                    dim = col["dim"]
+                    dt = "<f4" if ctype == "f4v" else "<f8"
+                    arr = np.frombuffer(data, dtype=dt).reshape(count, dim)
+                    if has_nulls:
+                        arr = arr.copy()
+                        arr[mask] = np.nan
+                    values = arr
                 elif ctype == "json":
                     values = json.loads(bytes(data))
                 else:  # str
