@@ -74,7 +74,7 @@ an **embedded engine**:
 
 ## Additional Features
 
-- **Multiple Query Languages**: SQL, OpenCypher, MongoDB syntax
+- **Multiple Query Languages**: SQL, OpenCypher
 - **ACID Transactions**: Full transactional guarantees
 - **Type Safety**: Strong Python type handling and clear errors
 
@@ -87,10 +87,11 @@ are doing.
     `db.query(...)`.
 - For file-driven imports or restore flows, use SQL `IMPORT DATABASE` or the narrow
     `db.import_documents(...)` wrapper when you specifically need document-file import.
-- For bulk table/document ingest from Python, prefer async SQL insert with a single
-    async worker.
-- Do not rely on multi-threaded async SQL insert for that path in the current Python
-    examples. It has not been safe or reliable in testing.
+- For bulk document ingest from Python, prefer `db.insert_many(...)` (optionally with
+    `parallel=True`), which crosses the FFI boundary once per batch.
+- As a secondary option, async SQL insert with a single async worker also works. Do
+    not rely on multi-threaded async SQL insert; it has not been safe or reliable in
+    testing.
 - For bulk graph ingest from Python, prefer `GraphBatch`.
 
 ## Features
@@ -101,7 +102,7 @@ are doing.
     - 🚀 **Embedded Mode** - Direct database access in Python process
     - 📦 **Self-contained** - All JARs and JRE bundled
     - 🔄 **Multi-model** - Graph, Document, Key/Value, Vector
-    - 🔍 **Multiple languages** - SQL, OpenCypher, MongoDB
+    - 🔍 **Multiple languages** - SQL, OpenCypher
 
 !!! success "Advanced Features"
     - ⚡ **High performance** - Direct JVM integration via JPype

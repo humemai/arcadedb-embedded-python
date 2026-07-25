@@ -19,10 +19,10 @@ pip install arcadedb-embedded
 ## What's Included
 
 The `arcadedb-embedded` package includes everything you need. Current Linux x86_64
-package metadata and local installs are about ~74MB as a wheel and ~101-103MB
+package metadata and local installs are about ~62MB as a wheel and ~87MB
 installed, with some variation by platform, version, and filesystem allocation:
 
-- **ArcadeDB JARs**: ~38MB (uncompressed)
+- **ArcadeDB JARs**: ~24MB (uncompressed)
 - **Bundled JRE**: ~63MB (uncompressed, platform-specific Java 25 runtime via jlink)
 
 **Features Included:**
@@ -30,7 +30,6 @@ installed, with some variation by platform, version, and filesystem allocation:
 - ✅ **No Java Installation Required**: Bundled platform-specific JRE
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
 - ✅ **Query Languages**: SQL, OpenCypher
-- ✅ **Wire Protocols**: HTTP REST, PostgreSQL, Redis, Bolt (Neo4j)
 - ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 

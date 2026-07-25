@@ -5,8 +5,7 @@
  * (column names/types/sizes) followed by per-column buffers — fixed-width
  * little-endian for numerics/bools/temporals (epoch millis), offset+UTF-8
  * for strings, plus a null bitmap per column. Columns whose values don't
- * fit those encodings are serialized as a JSON array ("json" type) using
- * RowBatcher's normalization. Python decodes with numpy.frombuffer
+ * fit those encodings are serialized as one JSON array ("json" type). Python decodes with numpy.frombuffer
  * (ResultSet.to_columns / the fast to_dataframe path). Measured ~1.2x of
  * Java-native iteration on 100k-row scans (vs 3.4x for the JSON row path).
  */
@@ -90,7 +89,7 @@ public final class ColumnBatcher {
           t = "b1";
         else if (v instanceof java.util.Date || v instanceof java.time.LocalDateTime
             || v instanceof java.time.LocalDate || v instanceof java.time.Instant
-            || v instanceof java.time.ZonedDateTime)
+            || v instanceof java.time.ZonedDateTime || v instanceof java.time.OffsetDateTime)
           t = "dt";
         else if (v instanceof String || v instanceof Character)
           t = "str";

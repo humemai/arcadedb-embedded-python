@@ -69,6 +69,12 @@ __all__ = [
     # Core classes
     "Database",
     "DatabaseFactory",
+    # Record wrappers
+    "Document",
+    "Vertex",
+    "Edge",
+    # Citation
+    "cite",
     "create_database",
     "open_database",
     "database_exists",

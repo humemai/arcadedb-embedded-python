@@ -4,9 +4,10 @@ Prefer SQL/OpenCypher for schema and CRUD. When you see `temp_db_path`, substitu
 the test harness.
 
 > **Embedded note:** For bulk table/document ingest in embedded mode, the repository
-> recommendation is async SQL insert with a single async worker. Use explicit chunked
-> transactions when you need tight manual control, but do not treat them as the default
-> bulk-ingest recommendation here.
+> recommendation is `db.insert_many(...)`, which batches rows across the FFI boundary
+> (async SQL insert with a single async worker is a secondary option). Use explicit
+> chunked transactions when you need tight manual control, but do not treat them as
+> the default bulk-ingest recommendation here.
 
 ## Basic commit and rollback
 

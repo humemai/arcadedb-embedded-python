@@ -268,8 +268,8 @@ class AsyncExecutor:
         FFI boundary once per batch instead of per document.
 
         Args:
-            document: A ``Document`` created by ``Database.new_document``
-                (not yet saved).
+            document: A ``Document`` (or ``Vertex``/``Edge``) created by
+                ``Database.new_document``/``new_vertex`` (not yet saved).
             callback: Optional callable invoked with the created record.
         """
         java_cb = (self._create_new_record_callback(callback)
@@ -392,6 +392,17 @@ class AsyncExecutor:
         timestamps: Sequence[int],
         *column_values: Sequence[Any],
     ):
+        """Columnar bulk append into a native TIMESERIES type.
+
+        Columns are positional and must follow the type's declaration order:
+        tags first, then fields. Timestamps are epoch values in the type's
+        precision (milliseconds by default).
+
+        numpy fast path: an ndarray for timestamps or a numeric field column
+        crosses the FFI as one buffer copy (int/uint kinds via boxLongs,
+        float kinds via boxDoubles); other sequences convert per element.
+        Call wait_completion() before relying on visibility.
+        """
         try:
             import numpy as _np
         except ImportError:

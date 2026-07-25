@@ -60,6 +60,7 @@ arcadedb_embedded/
 
 - `DatabaseFactory`: create/open databases
 - `Database`: queries/commands, transactions, lookups, vector index builder
+- `insert_many()`: bulk document ingest via the bridge's `DocumentBatcher`
 - Convenience: `async_executor()`, `schema`, export helpers
 
 **`graph.py`**
@@ -117,13 +118,15 @@ arcadedb_embedded/
 ### Java Bridge Jar
 
 Alongside the engine JARs, the wheel ships `arcadedb-python-bridge.jar` —
-four small Java helpers (`RowBatcher`, `ColumnBatcher`, `EdgeBatcher`,
-`VertexBatcher`, sources in `bindings/python/src/java/com/arcadedb/python/`)
+five small Java helpers (`RowBatcher`, `ColumnBatcher`, `DocumentBatcher`,
+`EdgeBatcher`, `VertexBatcher`, sources in
+`bindings/python/src/java/com/arcadedb/python/`)
 that move per-row/per-record loops to the Java side so bulk operations cost
 one JPype crossing per batch instead of several per row. It backs
-`to_json_list()`, `to_columns()`/`to_dataframe()`, `GraphBatch.new_edges()`,
-the `create_vertices()` bulk path, and `export_to_csv()`; every caller falls
-back to pure JPype if the jar is absent. See [Java Bridge](bridge.md) for
+`to_json_list()`, `to_columns()`/`to_dataframe()`, `insert_many()`,
+`GraphBatch.new_edges()`, the `create_vertices()` bulk path, and
+`export_to_csv()`; every caller falls back to pure JPype if the jar is
+absent. See [Java Bridge](bridge.md) for
 details.
 
 ## JPype Integration

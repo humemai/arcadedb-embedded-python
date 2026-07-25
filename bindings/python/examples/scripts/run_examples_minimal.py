@@ -318,6 +318,18 @@ def build_examples(_examples_dir: Path) -> list[ExampleRun]:
                 "5",
             ],
         ),
+        ExampleRun(
+            22,
+            "22_numpy_bulk_io.py",
+            lambda _, __: [
+                "--rows",
+                "20000",
+                "--points",
+                "50000",
+                "--vectors",
+                "2000",
+            ],
+        ),
     ]
 
 

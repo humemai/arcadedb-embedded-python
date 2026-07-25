@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py){ .md-button }
 
-There are 10 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), date/datetime, Decimal, collections (list, set, dict), nested structures, the `property_names` accessor, and the `Result.to_dict()` / `Result.to_json()` helpers.
+There are 14 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), date/datetime, Decimal, collections (list, set, dict), nested structures, the `property_names` accessor, and the `Result.to_dict()` / `Result.to_json()` helpers.
 
 ## Key Types
 

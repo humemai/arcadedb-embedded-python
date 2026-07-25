@@ -255,15 +255,25 @@ class Database:
         try:
             payload = _json.dumps(rows)
         except (TypeError, ValueError):
-            # Non-JSON-representable values: per-row fallback.
+            # Non-JSON-representable values (note: numpy integer scalars land
+            # here too, since json.dumps rejects np.int64): per-row fallback,
+            # honoring commit_every batches like the fast path.
             n = 0
-            with self.transaction():
-                for row in rows:
-                    doc = self.new_document(type_name)
-                    for k, v in row.items():
-                        doc.set(k, v)
-                    doc.save()
-                    n += 1
+            was_active = self.is_transaction_active()
+            if not was_active:
+                self.begin()
+            for row in rows:
+                doc = self.new_document(type_name)
+                for k, v in row.items():
+                    doc.set(k, v)
+                doc.save()
+                n += 1
+                if (not was_active and commit_every > 0
+                        and n % commit_every == 0):
+                    self.commit()
+                    self.begin()
+            if not was_active:
+                self.commit()
             return n
         try:
             batcher = _java_class("com.arcadedb.python.DocumentBatcher")
@@ -749,7 +759,7 @@ class Database:
         """
         Get async executor for parallel operations.
 
-        Experimental: not advised for production use yet.
+        The engine's parallel bulk-write path; insert_many(parallel=True) routes through it.
 
         Returns async executor that enables:
         - Parallel record creation (3-5x faster bulk inserts)

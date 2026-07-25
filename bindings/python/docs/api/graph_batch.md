@@ -49,6 +49,21 @@ Create many vertices efficiently and return their RIDs.
 
 Buffer an edge for creation during flush/close.
 
+### `new_edges(source_rids, edge_type, destination_rids, properties=None)`
+
+Buffer many edges with one JPype crossing per call — the bulk counterpart of
+`new_edge`, which pays one boundary crossing per edge. RIDs may be strings
+(`"#1:0"`) or objects with a string representation; `properties` is an optional
+same-length sequence of per-edge property dicts (JSON-representable values take
+the bulk path, anything else falls back to per-edge buffering). Returns the
+batch for chaining.
+
+```python
+with db.graph_batch(use_wal=False) as batch:
+    rids = batch.create_vertices("Person", [{"id": i} for i in range(100)])
+    batch.new_edges(rids[:-1], "Knows", rids[1:])
+```
+
 ### `flush()`
 
 Force buffered edge work to disk early.

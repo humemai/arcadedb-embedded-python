@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 351 Passed | **Platforms**: 4 Supported
+**Status**: ✅ Production Ready | **Tests**: 370 Passed | **Platforms**: 4 Supported
 
 ---
 
@@ -61,7 +61,7 @@ with arcadedb.create_database("./mydb") as db:
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network); for client-server or multi-process deployments, use the official [ArcadeDB server](https://arcadedb.com/) alongside
 - 📦 **Self-contained**: All dependencies bundled (~62MB current Linux wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
-- 🔍 **Multiple query languages**: SQL, OpenCypher, MongoDB
+- 🔍 **Multiple query languages**: SQL, OpenCypher
 - ⚡ **High performance**: Direct JVM integration via JPype
 - 🔒 **ACID transactions**: Full transaction support
 - 🎯 **Vector storage**: Store and query vector embeddings with HNSW (JVector) indexing
@@ -91,7 +91,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 351 passed
+**Status**: 370 passed
 
 Tests run against the built wheel via the uv project at the repo root — no
 virtualenv activation needed, and `uv run` works from anywhere in the repo:
@@ -146,8 +146,11 @@ arcadedb_embedded/
 ├── exceptions.py        # ArcadeDBError exception
 ├── exporter.py          # Data export (JSONL, GraphML, GraphSON, CSV)
 ├── graph.py             # Graph wrappers
+├── graph_batch.py       # GraphBatch high-throughput graph ingest wrapper
+├── importer.py          # Data import (CSV, XML, ArcadeDB JSONL)
 ├── __init__.py          # Public API exports
 ├── jvm.py               # JVM lifecycle management
+├── _logging.py          # Internal logging helpers
 ├── results.py           # ResultSet and Result wrappers
 ├── schema.py            # Schema management API
 ├── transactions.py      # TransactionContext manager

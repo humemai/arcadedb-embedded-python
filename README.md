@@ -18,7 +18,7 @@ PyPI](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/rele
 ## ✨ What this repo provides
 
 - Native Python bindings for ArcadeDB with a bundled JRE (no local Java required).
-- **Wheels for Linux x86_64, Linux ARM64, and macOS Apple Silicon.**
+- **Wheels for 4 platforms: Linux x86_64, Linux ARM64, macOS Apple Silicon, and Windows x86_64.**
 - Embedded usage (in-process); for client-server deployments use the official ArcadeDB server alongside.
 - Tests and examples validated in CI across supported platforms.
 
@@ -41,11 +41,11 @@ remains the source of the core database.
 
 - Multi-model database built for performance.
 - Document + Graph + Key/Value + Vector + Time Series in one engine.
-- Supports SQL, OpenCypher, and MongoDB query language.
+- Supports SQL and OpenCypher query languages.
 
 ## 📦 What the wheel includes
 
-- Approximate size: ~74MB download, ~101-103MB installed.
+- Approximate size: ~62MB download, ~87MB installed.
 - Lightweight Java 25 runtime (jlink) bundled per platform.
 - ArcadeDB JARs required for the embedded engine.
 - Python bindings and source modules.
@@ -53,7 +53,7 @@ remains the source of the core database.
 ## ✨ ArcadeDB capabilities (via Python)
 
 - Multi-model: Graph, Document, Key/Value, Vector, Time Series.
-- Query languages: SQL, OpenCypher, MongoDB.
+- Query languages: SQL, OpenCypher.
 - ACID transactions and high performance.
 
 ## 🚀 Quick start (Python)

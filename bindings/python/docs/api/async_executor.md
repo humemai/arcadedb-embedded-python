@@ -33,7 +33,7 @@ The `AsyncExecutor` class enables:
 - **Parallel Execution**: 1-16 worker threads for concurrent operations
 - **Automatic Batching**: Auto-commit every N operations
 - **Optimized WAL**: Configurable Write-Ahead Log settings
-- **High Performance**: 50,000-200,000 records/sec throughput
+- **High Performance**: for measured bulk throughput paths, see `Database.insert_many` (documents) and [`append_samples`](#append_samples) (time series)
 - **Fluent Interface**: Method chaining for configuration
 
 ## Getting AsyncExecutor
@@ -211,8 +211,10 @@ async_exec = (db.async_executor()
 ## Operation Methods
 
 The async executor schedules SQL/OpenCypher work and a small set of record-level graph
-and time-series operations. There are no `create_record`/`update_record`/`delete_record`
-methods; perform inserts, updates, and deletes through `command(...)` with SQL.
+and time-series operations. Record creation is available via
+[`create_record`](#create_record); updates and deletes go through `command(...)` with
+SQL. For bulk ingest of many uniform documents, prefer
+`Database.insert_many(..., parallel=True)`.
 
 ### command
 
@@ -247,7 +249,7 @@ Execute an async command (INSERT/UPDATE/DELETE/DDL). The callback is optional.
 ```python
 async_exec = db.async_executor()
 
-# Async inserts via SQL (no create_record helper exists)
+# Async inserts via SQL (see also create_record and db.insert_many for bulk)
 for i in range(10000):
     async_exec.command(
         "sql",

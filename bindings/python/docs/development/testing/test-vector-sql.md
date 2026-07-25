@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_vector_sql.py){ .md-button }
 
-There are 29 tests covering SQL vector functions for math, aggregations, distance metrics, normalization, quantization, native INT8 encoding, sparse vectors, and `LSM_VECTOR` index creation and search.
+There are 35 tests covering SQL vector functions for math, aggregations, distance metrics, normalization, quantization, native INT8 encoding, sparse vectors, and `LSM_VECTOR` index creation and search.
 
 ## Overview
 

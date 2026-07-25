@@ -124,3 +124,20 @@ class TestAppendSamplesNumpy:
         got = temp_db.query(
             "sql", "SELECT count(*) AS n FROM NpTs").to_list()[0]["n"]
         assert int(got) == n
+
+
+class TestVectorColumnsDataFrame:
+    def test_vector_column_to_dataframe(self, temp_db):
+        import arcadedb_embedded as arcadedb
+
+        pd = __import__("pytest").importorskip("pandas")
+        temp_db.command("sql", "CREATE DOCUMENT TYPE EmbDf")
+        temp_db.command("sql", "CREATE PROPERTY EmbDf.v ARRAY_OF_FLOATS")
+        with temp_db.transaction():
+            for i in range(10):
+                temp_db.command(
+                    "sql", "INSERT INTO EmbDf SET v = :v",
+                    {"v": arcadedb.to_java_float_array([i, i + 1.0])})
+        df = temp_db.query("sql", "SELECT v FROM EmbDf").to_dataframe()
+        assert len(df) == 10
+        assert len(df["v"].iloc[3]) == 2

@@ -76,6 +76,9 @@ SQL-first graph algorithms workflow covering minimum-hop `shortestPath`, weighte
 **[21 - Graph Analytical View SQL Workflow](21_graph_analytical_view_sql.md)**
 SQL-first Graph Analytical View workflow covering six-figure synthetic graph generation, `CREATE` / `ALTER` / `REBUILD`, schema metadata polling, stale-versus-ready lifecycle, and persisted GAV restoration.
 
+**[22 - numpy Bulk I/O](22_numpy_bulk_io.md)**
+Batched Python/Java boundary crossings for bulk workloads: `Database.insert_many` (transactional and parallel), `AsyncExecutor.append_samples` from numpy arrays, time-bucketed aggregation, and columnar export with `to_columns()`.
+
 ## Quick Start
 
 **⚠️ Important: Always run examples from the `examples/` directory.**
@@ -103,6 +106,7 @@ python 01_simple_document_store.py
 14. **Hash Index Workflow** (19) - Exact-match HASH indexes, missing-key behavior, and duplicate protection
 15. **Graph Algorithms Workflow** (20) - Minimum-hop versus weighted routing with `shortestPath`, `dijkstra`, and `astar`
 17. **Graph Analytical View Workflow** (21) - Manage GAV lifecycle entirely through SQL and inspect `schema:graphAnalyticalViews`
+18. **numpy Bulk I/O** (22) - Batched bulk ingest with `insert_many` and `append_samples`, plus columnar numpy export with `to_columns()`
 
 ---
 

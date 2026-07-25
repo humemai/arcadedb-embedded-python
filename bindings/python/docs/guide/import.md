@@ -41,10 +41,12 @@ not something we currently encourage as the default Python import story.
 
 + Example 15 plus the larger table examples are the basis for the current repository
     guidance.
-+ For bulk table/document ingest, async SQL with `--async-parallel 1` is the
-    recommended default.
-+ Do not rely on multi-threaded async SQL insert for this path in the current Python
-    examples. It has not been safe or reliable in testing.
++ For bulk document ingest from Python, `db.insert_many(...)` (optionally with
+    `parallel=True`) is the recommended default — it batches rows across the FFI
+    boundary; see Example 22.
++ Async SQL with a single async worker remains a secondary option. Do not rely on
+    multi-threaded async SQL insert for this path in the current Python examples. It
+    has not been safe or reliable in testing.
 + `db.import_documents(...)` exists for document-shaped file import convenience, but in
     current Python testing it has also shown reliability problems under heavier loads.
 + Reserve `IMPORT DATABASE` for supported import formats, restore flows, and cases where

@@ -8,8 +8,9 @@
  * string copy plus the engine's own write path.
  *
  * Two modes: transactional batches on the calling thread (commitEvery), or
- * the async executor's parallel bucket writers (parallel=true; caller is
- * responsible for waitCompletion via the AsyncExecutor wrapper).
+ * the async executor's parallel bucket writers (parallel=true; the Python
+ * insert_many wrapper waits for completion itself). The boxDoubles/boxLongs
+ * helpers below serve AsyncExecutor.append_samples' numpy fast path.
  *
  * JSON-representable property values only (str/int/float/bool/null and
  * nested lists/maps thereof) — the Python side falls back to the per-row
