@@ -80,3 +80,47 @@ class TestAsyncCreateRecord:
         ex.wait_completion()
         assert _count(temp_db, "CRec") == 1
         assert len(seen) == 1
+
+
+class TestVectorColumns:
+    """f4v/f8v columnar export: embedding columns as 2-D numpy arrays."""
+
+    def test_float_array_column_to_columns(self, temp_db):
+        import numpy as np
+        import arcadedb_embedded as arcadedb
+
+        temp_db.command("sql", "CREATE DOCUMENT TYPE Emb")
+        temp_db.command("sql", "CREATE PROPERTY Emb.vid INTEGER")
+        temp_db.command("sql", "CREATE PROPERTY Emb.v ARRAY_OF_FLOATS")
+        with temp_db.transaction():
+            for i in range(50):
+                temp_db.command(
+                    "sql", "INSERT INTO Emb SET vid = :i, v = :v",
+                    {"i": i,
+                     "v": arcadedb.to_java_float_array([i, i + 0.5, i + 0.25])})
+        cols = temp_db.query("sql", "SELECT vid, v FROM Emb ORDER BY vid"
+                             ).to_columns()
+        assert cols is not None
+        arr = cols["v"]
+        assert isinstance(arr, np.ndarray) and arr.shape == (50, 3)
+        assert arr[10][1] == np.float32(10.5)
+
+
+class TestAppendSamplesNumpy:
+    def test_numpy_columns(self, temp_db):
+        import numpy as np
+
+        temp_db.command(
+            "sql",
+            "CREATE TIMESERIES TYPE NpTs TIMESTAMP ts "
+            "TAGS (host STRING) FIELDS (val DOUBLE) SHARDS 2")
+        n = 10_000
+        ts = np.arange(n, dtype=np.int64) * 1000
+        vals = np.linspace(0.0, 1.0, n)
+        hosts = [f"h{i % 4}" for i in range(n)]
+        ex = temp_db.async_executor()
+        ex.append_samples("NpTs", ts, hosts, vals)
+        ex.wait_completion()
+        got = temp_db.query(
+            "sql", "SELECT count(*) AS n FROM NpTs").to_list()[0]["n"]
+        assert int(got) == n

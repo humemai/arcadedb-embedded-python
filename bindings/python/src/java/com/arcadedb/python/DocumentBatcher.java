@@ -56,6 +56,23 @@ public final class DocumentBatcher {
     return n;
   }
 
+  /** Box primitive columns Java-side so numpy arrays can cross the FFI as
+   * one buffer copy and still feed Object[]-typed engine APIs (e.g.
+   * TimeSeriesEngine.appendSamples). */
+  public static Object[] boxDoubles(final double[] a) {
+    final Object[] out = new Object[a.length];
+    for (int i = 0; i < a.length; i++)
+      out[i] = a[i];
+    return out;
+  }
+
+  public static Object[] boxLongs(final long[] a) {
+    final Object[] out = new Object[a.length];
+    for (int i = 0; i < a.length; i++)
+      out[i] = a[i];
+    return out;
+  }
+
   private static void fill(final MutableDocument doc, final JSONObject row) {
     for (final String key : row.keySet())
       doc.set(key, row.isNull(key) ? null : row.get(key));

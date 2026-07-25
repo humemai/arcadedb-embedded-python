@@ -392,13 +392,35 @@ class AsyncExecutor:
         timestamps: Sequence[int],
         *column_values: Sequence[Any],
     ):
+        try:
+            import numpy as _np
+        except ImportError:
+            _np = None
         JLongArray = jpype.JArray(jpype.JLong)
-        timestamps_java = JLongArray([int(value) for value in timestamps])
+        if _np is not None and isinstance(timestamps, _np.ndarray):
+            # buffer-protocol bulk copy: one FFI crossing for the column
+            timestamps_java = JLongArray(
+                _np.ascontiguousarray(timestamps, dtype=_np.int64))
+        else:
+            timestamps_java = JLongArray([int(value) for value in timestamps])
         JObjectArray = jpype.JArray(jpype.JObject)
-        columns_java = [
-            JObjectArray([convert_python_to_java(value) for value in values])
-            for values in column_values
-        ]
+        boxer = None
+        columns_java = []
+        for values in column_values:
+            if _np is not None and isinstance(values, _np.ndarray) \
+                    and values.dtype.kind in "fiu":
+                if boxer is None:
+                    boxer = jpype.JClass("com.arcadedb.python.DocumentBatcher")
+                if values.dtype.kind == "f":
+                    col = boxer.boxDoubles(jpype.JArray(jpype.JDouble)(
+                        _np.ascontiguousarray(values, dtype=_np.float64)))
+                else:
+                    col = boxer.boxLongs(jpype.JArray(jpype.JLong)(
+                        _np.ascontiguousarray(values, dtype=_np.int64)))
+                columns_java.append(col)
+            else:
+                columns_java.append(JObjectArray(
+                    [convert_python_to_java(value) for value in values]))
         self._java_async.appendSamples(type_name, timestamps_java, *columns_java)
 
     # Query operations
