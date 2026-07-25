@@ -92,6 +92,7 @@ public enum GlobalConfiguration {
         ASYNC_OPERATIONS_QUEUE_IMPL.setValue("fast");
         VECTOR_INDEX_GRAPH_BUILD_CACHE_SIZE.setValue(-1);
         VECTOR_INDEX_LOCATION_CACHE_SIZE.setValue(-1);
+        VECTOR_INDEX_SEARCH_CACHE_MAX_HEAP_PERCENT.setValue(50);
 
         if (cores > 1)
           // USE ONLY HALF OF THE CORES MINUS ONE
@@ -124,6 +125,7 @@ public enum GlobalConfiguration {
         SERVER_HTTP_WORKER_THREADS.setValue(16);
         VECTOR_INDEX_GRAPH_BUILD_CACHE_SIZE.setValue(10_000);
         VECTOR_INDEX_LOCATION_CACHE_SIZE.setValue(10_000);
+        VECTOR_INDEX_SEARCH_CACHE_SIZE.setValue(10_000);
 
         POLYGLOT_ENGINE_ENABLED.setValue(false);
 
@@ -578,6 +580,32 @@ public enum GlobalConfiguration {
       RAM usage = cacheSize * (dimensions * 4 + 64) bytes. \
       Recommended: 100000 for 768-dim vectors (~30MB), scale based on dimensionality.""",
       Integer.class, 100_000),
+
+  VECTOR_INDEX_SEARCH_CACHE_SIZE("arcadedb.vectorIndex.searchCacheSize", SCOPE.DATABASE,
+      """
+      Maximum number of vectors kept in the per-index search cache. The cache is shared by every query on the \
+      index and survives across queries, so a working set that fits stays resident instead of being re-read from \
+      the documents (or from the quantized index pages) on every beam-search hop. \
+      RAM usage = cacheSize * (dimensions * 4 + 64) bytes. \
+      0 (default) sizes it automatically from the number of indexed vectors, capped by \
+      arcadedb.vectorIndex.searchCacheMaxHeapPercent. -1 disables the cache entirely.""",
+      Integer.class, 0),
+
+  VECTOR_INDEX_SEARCH_CACHE_MAX_HEAP_PERCENT("arcadedb.vectorIndex.searchCacheMaxHeapPercent", SCOPE.DATABASE,
+      """
+      Upper bound, as a percentage of the maximum JVM heap, on the RAM an automatically sized per-index search \
+      cache may use (see arcadedb.vectorIndex.searchCacheSize). Ignored when the cache size is set explicitly.""",
+      Integer.class, 25),
+
+  VECTOR_INDEX_SEARCHER_POOL_SIZE("arcadedb.vectorIndex.searcherPoolSize", SCOPE.DATABASE,
+      """
+      Maximum number of JVector graph searchers kept alive per vector index for reuse across queries. Each \
+      searcher owns the beam-search scratch state (candidate heap, result heaps, visited set) plus a graph view; \
+      allocating one per query made that scratch state the largest single source of garbage on a dense-search \
+      workload, and the resulting young-GC frequency dominated the query tail latency. \
+      0 (default) sizes the pool automatically as 2x the available cores. -1 disables pooling and allocates a \
+      searcher per query.""",
+      Integer.class, 0),
 
   VECTOR_INDEX_MUTATIONS_BEFORE_REBUILD("arcadedb.vectorIndex.mutationsBeforeRebuild", SCOPE.DATABASE,
       """
