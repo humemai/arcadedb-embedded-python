@@ -179,28 +179,25 @@ def start_jvm(
                 common_pool_parallelism=common_pool_parallelism,
             )
         )
-        if _JVM_CONFIG is not None:
-            if candidate_args != _JVM_CONFIG:
-                raise ArcadeDBError(
-                    "JVM is already started. Configure JVM args/heap before the "
-                    "first database creation."
-                )
-            return
-
         has_overrides = (
             jvm_args is not None
             or (heap_size not in (None, "4g"))
             or (disable_xml_limits is not True)
             or (common_pool_parallelism is not None)
         )
-        if has_overrides:
-            raise ArcadeDBError(
-                "JVM is already started. Configure JVM args/heap before the "
-                "first database creation."
-            )
+        if not has_overrides:
+            # No explicit configuration requested: join the running JVM
+            # (e.g. open_database() after create_database(jvm_kwargs=...)).
+            if _JVM_CONFIG is None:
+                _JVM_CONFIG = candidate_args
+            return
 
-        _JVM_CONFIG = candidate_args
-        return
+        if _JVM_CONFIG is not None and candidate_args == _JVM_CONFIG:
+            return
+        raise ArcadeDBError(
+            "JVM is already started with different settings. Configure JVM "
+            "args/heap before the first database creation."
+        )
 
     jar_path = get_jar_path()
     jar_files = glob.glob(os.path.join(jar_path, "*.jar"))
