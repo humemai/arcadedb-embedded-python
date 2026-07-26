@@ -198,14 +198,14 @@ def sparse_table(rows):
     write("t4_sparse.tex", "\n".join(lines) + "\n")
 
 
-def _dev16_dense_rows(prefix="fp32_5412"):
-    """Rolling-update overlay for the embedded dense rows: N=4 warm-cache
-    query passes over one dev16-line build each (verify5412, after the
-    #5412 shared-cache fix). Pass 1 (cold, cache filling) is disclosed in
-    prose, not averaged in. Field names mapped to the campaign schema."""
+def _dev16_dense_rows(prefix="fp32_5412", subdir="verify5412"):
+    """Rolling-update overlay for the dense rows: N=4 warm-cache query
+    passes over one current-line build each (verify5412/verify5413, after
+    the #5412 shared-cache fix). Pass 1 (cold, cache filling) is disclosed
+    in prose, not averaged in. Field names mapped to the campaign schema."""
     import glob
     out = []
-    for fp in glob.glob(os.path.join(RESULTS, "verify5412",
+    for fp in glob.glob(os.path.join(RESULTS, subdir,
                                      f"{prefix}_rep*.json")):
         r = json.load(open(fp))
         if r.get("rep", 0) < 2:
@@ -228,10 +228,13 @@ def dense_ts_table(rows):
              r"System & Build (s) & p50 (ms) & p99 (ms) & Recall@10 \\",
              r"\midrule"]
     int8 = _dev16_dense_rows("int8_dev16")
+    srv = _dev16_dense_rows("srv5413", "verify5413")
     for be in order:
         g = [r for r in l3d if r["backend"] == be]
         if be == "arcadedb_dense_embedded" and dev16:
             g = dev16  # dev16 overlay (shared warm cache), caption discloses
+        if be == "arcadedb_dense_server" and srv:
+            g = srv  # matched-config re-run (#5413), caption discloses
         if not g:
             continue
         lines.append(" & ".join([
