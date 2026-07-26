@@ -93,6 +93,7 @@ public enum GlobalConfiguration {
         VECTOR_INDEX_GRAPH_BUILD_CACHE_SIZE.setValue(-1);
         VECTOR_INDEX_LOCATION_CACHE_SIZE.setValue(-1);
         VECTOR_INDEX_SEARCH_CACHE_MAX_HEAP_PERCENT.setValue(50);
+        VECTOR_INDEX_GRAPH_BUILD_CACHE_MAX_HEAP_PERCENT.setValue(50);
 
         if (cores > 1)
           // USE ONLY HALF OF THE CORES MINUS ONE
@@ -578,8 +579,18 @@ public enum GlobalConfiguration {
       Maximum number of vectors to cache in memory during HNSW graph building. \
       Higher values speed up construction but use more RAM. \
       RAM usage = cacheSize * (dimensions * 4 + 64) bytes. \
-      Recommended: 100000 for 768-dim vectors (~30MB), scale based on dimensionality.""",
-      Integer.class, 100_000),
+      0 (default) sizes it automatically: an index whose vectors live in the documents (no quantization, or \
+      PRODUCT) caches the whole set when it fits arcadedb.vectorIndex.graphBuildCacheMaxHeapPercent, because \
+      every miss costs a record read; an inline-quantized index (INT8/BINARY) reads a miss straight from an \
+      index page and keeps a small bound instead.""",
+      Integer.class, 0),
+
+  VECTOR_INDEX_GRAPH_BUILD_CACHE_MAX_HEAP_PERCENT("arcadedb.vectorIndex.graphBuildCacheMaxHeapPercent", SCOPE.DATABASE,
+      """
+      Maximum share of the JVM heap (percentage) the auto-sized graph-build cache may use. Only applies when \
+      arcadedb.vectorIndex.graphBuildCacheSize is left at 0. A corpus larger than this budget still builds: \
+      the cache evicts instead of holding everything.""",
+      Integer.class, 25),
 
   VECTOR_INDEX_SEARCH_CACHE_SIZE("arcadedb.vectorIndex.searchCacheSize", SCOPE.DATABASE,
       """
@@ -915,7 +926,18 @@ public enum GlobalConfiguration {
       "Maximum Raft log segment size (e.g. '64MB', '128MB')", String.class, "64MB"),
 
   HA_APPEND_BUFFER_SIZE("arcadedb.ha.appendBufferSize", SCOPE.SERVER,
-      "AppendEntries batch byte limit for replication (e.g. '4MB')", String.class, "4MB"),
+      """
+      AppendEntries batch byte limit for replication (e.g. '32MB'). Ratis applies this limit per ENTRY as \
+      well as per batch, so it is also the HARD MAXIMUM SIZE OF A SINGLE REPLICATED TRANSACTION - usually \
+      lower than arcadedb.ha.grpcMessageSizeMax and therefore the limit that actually binds. An entry above \
+      it is rejected with a state-machine error that makes the leader step down; the write then fails with \
+      ReplicatedEntryTooLargeException naming this setting. The size compared against it is the COMPRESSED \
+      WAL of the transaction, so text/JSON payloads shrink far below their raw size while incompressible \
+      ones (binary blobs, base64, encrypted fields, float vectors) map roughly 1:1. Raise it when single \
+      transactions or records are bigger than the default, and raise arcadedb.ha.writeBufferSize with it \
+      (it must stay >= this value + 8 bytes). Cost of raising it: a directly-allocated write buffer of \
+      writeBufferSize per server, plus up to this many bytes of heap per follower appender during catch-up.""",
+      String.class, "32MB"),
 
   HA_APPEND_ELEMENT_LIMIT("arcadedb.ha.appendElementLimit", SCOPE.SERVER,
       """
@@ -929,9 +951,11 @@ public enum GlobalConfiguration {
 
   HA_WRITE_BUFFER_SIZE("arcadedb.ha.writeBufferSize", SCOPE.SERVER,
       """
-      Raft log write buffer size (e.g. '8MB'). Must be at least appendBufferSize + 8 bytes, \
-      otherwise the server fails to start with ConfigurationException.""",
-      String.class, "8MB"),
+      Raft log write buffer size (e.g. '40MB'). Must be at least appendBufferSize + 8 bytes, otherwise the \
+      server fails to start with ConfigurationException. Ratis allocates this as a DIRECT ByteBuffer, once \
+      per server, so it is off-heap memory reserved at startup - keep it just above appendBufferSize rather \
+      than generously oversized.""",
+      String.class, "40MB"),
 
   HA_LOG_PURGE_GAP("arcadedb.ha.logPurgeGap", SCOPE.SERVER,
       """
@@ -1229,8 +1253,8 @@ public enum GlobalConfiguration {
       Maximum size in bytes of a TimeSeries sealed-store file that may be shipped inline inside a single \
       Raft SCHEMA_ENTRY during compaction. When the projected sealed-store size would exceed this cap, the \
       leader skips compacting that shard (data stays in the fully replicated mutable bucket) instead of \
-      producing an entry too large for the Raft transport. Kept below the Raft message size cap (64MB) with \
-      headroom for the schema JSON and the mutable-bucket clear WAL.""",
+      producing an entry too large for the Raft transport. Always clamped down to the real per-entry ceiling, \
+      min(arcadedb.ha.grpcMessageSizeMax, arcadedb.ha.appendBufferSize), so a value above that has no effect.""",
       Long.class, 48 * 1024 * 1024L),
 
   HA_SNAPSHOT_WATCHDOG_TIMEOUT("arcadedb.ha.snapshotWatchdogTimeout", SCOPE.SERVER,
@@ -1578,6 +1602,26 @@ public enum GlobalConfiguration {
         return v;
     }
     return null;
+  }
+
+  /**
+   * Maximum size, in bytes, of a SINGLE replicated Raft log entry: the smaller of
+   * {@link #HA_GRPC_MESSAGE_SIZE_MAX} and {@link #HA_APPEND_BUFFER_SIZE}.
+   * <p>
+   * Issue #4743: the gRPC frame cap is NOT the effective ceiling. Ratis also enforces the appender
+   * buffer byte limit per entry, and rejects an entry above it with a {@code StateMachineException}
+   * whose {@code leaderShouldStepDown()} is {@code true} - so the LEADER STEPS DOWN, the caller retries
+   * the same oversized entry against the next leader and topples it too, and the cluster churns
+   * elections while the write never lands. Since the appender default (4MB) is far below the gRPC
+   * default (128MB), in practice the appender limit is what binds.
+   * <p>
+   * Every component that produces or projects the size of a replicated entry must measure itself
+   * against this value, not against either knob alone.
+   */
+  public static long maxReplicatedRaftEntrySize(final ContextConfiguration configuration) {
+    final long grpcMessageSizeMax = configuration.getValueAsLong(HA_GRPC_MESSAGE_SIZE_MAX);
+    final long appendBufferSize = FileUtils.getSizeAsNumber(configuration.getValueAsString(HA_APPEND_BUFFER_SIZE));
+    return Math.min(grpcMessageSizeMax, appendBufferSize);
   }
 
   /**
