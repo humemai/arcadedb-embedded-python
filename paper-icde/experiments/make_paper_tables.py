@@ -198,15 +198,15 @@ def sparse_table(rows):
     write("t4_sparse.tex", "\n".join(lines) + "\n")
 
 
-def _dev16_dense_rows():
-    """Rolling-update overlay for the embedded dense row: N=4 warm-cache
-    query passes over one dev16-line build (verify5412, after the #5412
-    shared-cache fix). Pass 1 (cold, cache filling) is disclosed in prose,
-    not averaged in. Field names mapped to the campaign schema."""
+def _dev16_dense_rows(prefix="fp32_5412"):
+    """Rolling-update overlay for the embedded dense rows: N=4 warm-cache
+    query passes over one dev16-line build each (verify5412, after the
+    #5412 shared-cache fix). Pass 1 (cold, cache filling) is disclosed in
+    prose, not averaged in. Field names mapped to the campaign schema."""
     import glob
     out = []
     for fp in glob.glob(os.path.join(RESULTS, "verify5412",
-                                     "fp32_5412_rep*.json")):
+                                     f"{prefix}_rep*.json")):
         r = json.load(open(fp))
         if r.get("rep", 0) < 2:
             continue
@@ -227,6 +227,7 @@ def dense_ts_table(rows):
              r"(10M$\times$96d), degree-matched}} \\",
              r"System & Build (s) & p50 (ms) & p99 (ms) & Recall@10 \\",
              r"\midrule"]
+    int8 = _dev16_dense_rows("int8_dev16")
     for be in order:
         g = [r for r in l3d if r["backend"] == be]
         if be == "arcadedb_dense_embedded" and dev16:
@@ -236,6 +237,12 @@ def dense_ts_table(rows):
         lines.append(" & ".join([
             NAMES[be], mmm(g, "build_s"), mmm(g, "query_p50_ms"),
             mmm(g, "query_p99_ms"), mmm(g, "recall_at_10")]) + r" \\")
+        if be == "arcadedb_dense_embedded" and int8:
+            # INT8 sibling row: same line, 16 GiB heap (vs 24), see prose
+            lines.append(" & ".join([
+                r"ArcadeDB (emb, int8, 16\,GiB)", mmm(int8, "build_s"),
+                mmm(int8, "query_p50_ms"), mmm(int8, "query_p99_ms"),
+                mmm(int8, "recall_at_10")]) + r" \\")
     ts = [json.loads(l) for l in open(os.path.join(RESULTS, "l4_tsbs.jsonl"))
           if l.strip()]
     lines += [r"\midrule",

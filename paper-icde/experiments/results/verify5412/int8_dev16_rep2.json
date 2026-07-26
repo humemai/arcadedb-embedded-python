@@ -1,0 +1,1 @@
+{"rep": 2, "build_s": 5840.06, "quantization": "INT8", "engine": "26.8.1.dev16-line (c885235c7)", "n_queries": 1000, "p50": 0.814, "p95": 1.113, "p99": 1.232, "recall_at_10": 0.9412}
