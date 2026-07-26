@@ -1,0 +1,1 @@
+{"rep": 1, "build_s": 11126.49, "quantization": "fp32", "engine": "26.8.1.dev16-line (c885235c7)", "n_queries": 1000, "p50": 4.554, "p95": 36.606, "p99": 64.65, "recall_at_10": 0.9495}

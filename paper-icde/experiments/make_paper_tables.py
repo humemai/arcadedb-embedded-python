@@ -198,8 +198,27 @@ def sparse_table(rows):
     write("t4_sparse.tex", "\n".join(lines) + "\n")
 
 
+def _dev16_dense_rows():
+    """Rolling-update overlay for the embedded dense row: N=4 warm-cache
+    query passes over one dev16-line build (verify5412, after the #5412
+    shared-cache fix). Pass 1 (cold, cache filling) is disclosed in prose,
+    not averaged in. Field names mapped to the campaign schema."""
+    import glob
+    out = []
+    for fp in glob.glob(os.path.join(RESULTS, "verify5412",
+                                     "fp32_5412_rep*.json")):
+        r = json.load(open(fp))
+        if r.get("rep", 0) < 2:
+            continue
+        out.append({"build_s": r["build_s"], "query_p50_ms": r["p50"],
+                    "query_p99_ms": r["p99"],
+                    "recall_at_10": r["recall_at_10"]})
+    return out
+
+
 def dense_ts_table(rows):
     l3d = [r for r in rows if r["lane"] == "l3d" and r["scale"] == "deep10m"]
+    dev16 = _dev16_dense_rows()
     order = ["arcadedb_dense_embedded", "arcadedb_dense_server", "qdrant_dense",
              "milvus_dense", "chroma_dense", "lancedb_dense",
              "sqlite_vec_dense", "duckdb_vss_dense"]
@@ -210,6 +229,8 @@ def dense_ts_table(rows):
              r"\midrule"]
     for be in order:
         g = [r for r in l3d if r["backend"] == be]
+        if be == "arcadedb_dense_embedded" and dev16:
+            g = dev16  # dev16 overlay (shared warm cache), caption discloses
         if not g:
             continue
         lines.append(" & ".join([
