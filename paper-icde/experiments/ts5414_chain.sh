@@ -4,7 +4,7 @@ set -u
 OUT=$HOME/profiling/verify5414
 mkdir -p "$OUT"
 until grep -qa "INT8-REPS-DONE" ~/profiling/int8_reps_outer.log 2>/dev/null; do sleep 60; done
-cd ~/repos/arcadedb-icde/paper-icde/experiments
+cd ~/repos/humemai/arcadedb-icde/paper-icde/experiments
 docker run --rm --cpuset-cpus 0-11 --memory 12g --memory-swap 12g \
   -v "$PWD:/work" -w /work -v "$HOME/icde-data:/data:ro" -v "$OUT:/pout" \
   -v "$HOME/profiling/ts5414_driver.py:/work/ts5414_driver.py" \

@@ -5,7 +5,7 @@
 set -u
 OUT=$HOME/profiling/flame
 until grep -qa "TS5414-DONE" ~/profiling/ts5414_outer.log 2>/dev/null; do sleep 60; done
-cd ~/repos/arcadedb-icde/paper-icde/experiments
+cd ~/repos/humemai/arcadedb-icde/paper-icde/experiments
 docker rm -f prof_dense10m >/dev/null 2>&1
 docker run -d --name prof_dense10m --cpuset-cpus 0-11 --memory 37g --memory-swap 37g \
   -v "$PWD:/work" -w /work -v "$HOME/icde-data:/data:ro" \
