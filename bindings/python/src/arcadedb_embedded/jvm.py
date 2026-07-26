@@ -229,9 +229,10 @@ def start_jvm(
         raise ArcadeDBError(f"Failed to start JVM: {e}") from e
 
     # Registered AFTER JPype's own atexit hook so it runs BEFORE it (atexit
-    # is LIFO): close any Database left open, or the engine's non-daemon
-    # background threads (e.g. "ArcadeDB AsyncFlush") keep the JVM alive and
-    # JPype's shutdown blocks the interpreter exit forever.
+    # is LIFO): close any Database left open. Engine >= 850ce7c37 (#5418)
+    # also daemonizes its background threads and installs its own JVM
+    # shutdown hook, so this is defense-in-depth for older jars and for
+    # deterministic teardown before JPype detaches.
     import atexit
 
     atexit.register(_close_active_databases)
