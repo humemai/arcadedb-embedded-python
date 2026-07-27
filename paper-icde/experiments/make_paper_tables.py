@@ -198,11 +198,15 @@ def sparse_table(rows):
     write("t4_sparse.tex", "\n".join(lines) + "\n")
 
 
-def _dev16_dense_rows(prefix="fp32_5412", subdir="verify5412"):
+def _dev16_dense_rows(prefix="fp32_dev20", subdir="verify5412b"):
     """Rolling-update overlay for the dense rows: N=4 warm-cache query
-    passes over one current-line build each (verify5412/verify5413, after
-    the #5412 shared-cache fix). Pass 1 (cold, cache filling) is disclosed
-    in prose, not averaged in. Field names mapped to the campaign schema."""
+    passes over one current-line build each. Current line is 26.8.1.dev20
+    (verify5412b), which carries both #5412 fixes: the shared warm search
+    cache and the auto-sized graph-build cache. The server row still comes
+    from the matched re-run in verify5413. Pass 1 (cold, cache filling) is
+    disclosed in prose, not averaged in. INT8 row is the 16 GiB-heap cell,
+    its operating point; the matched-24 GiB ablation is prose only.
+    Field names mapped to the campaign schema."""
     import glob
     out = []
     for fp in glob.glob(os.path.join(RESULTS, subdir,
@@ -227,7 +231,7 @@ def dense_ts_table(rows):
              r"(10M$\times$96d), degree-matched}} \\",
              r"System & Build (s) & p50 (ms) & p99 (ms) & Recall@10 \\",
              r"\midrule"]
-    int8 = _dev16_dense_rows("int8_dev16")
+    int8 = _dev16_dense_rows("int8_dev20")
     srv = _dev16_dense_rows("srv5413", "verify5413")
     for be in order:
         g = [r for r in l3d if r["backend"] == be]
