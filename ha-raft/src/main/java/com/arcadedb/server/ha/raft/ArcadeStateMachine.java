@@ -160,6 +160,13 @@ public class ArcadeStateMachine extends BaseStateMachine {
   });
 
   /**
+   * Removes dropped database directories away from the apply loop. Deliberately not the lifecycleExecutor: a
+   * deletion is unbounded in the size of the database and would delay the snapshot-download triggers that
+   * executor carries.
+   */
+  private volatile DeferredDatabaseDeleter deferredDatabaseDeleter = new DeferredDatabaseDeleter();
+
+  /**
    * Per-database bootstrap baseline committed via {@link RaftLogEntryType#BOOTSTRAP_FINGERPRINT_ENTRY}.
    * Populated when the entry is applied (locally on every peer), used by the catch-up decision
    * tree (locally bootstrapped vs leader-shipped vs late-newer-joiner refusal). Issue #4147.
@@ -315,8 +322,13 @@ public class ArcadeStateMachine extends BaseStateMachine {
     if (server != null) {
       final String dbDir = server.getConfiguration().getValueAsString(
           GlobalConfiguration.SERVER_DATABASE_DIRECTORY);
-      if (dbDir != null)
-        SnapshotInstaller.recoverPendingSnapshotSwaps(Path.of(dbDir));
+      if (dbDir != null) {
+        final Path databasesDirectory = Path.of(dbDir);
+        SnapshotInstaller.recoverPendingSnapshotSwaps(databasesDirectory);
+        // Finish any deletion a crash or a shutdown cut short: the directories are reserved, so nothing else
+        // will ever look at them.
+        deferredDatabaseDeleter.sweepOrphanedStagingDirectories(databasesDirectory);
+      }
     }
     LogManager.instance().log(this, Level.INFO, "ArcadeStateMachine initialized (groupId=%s)", groupId);
   }
@@ -1432,15 +1444,19 @@ public class ArcadeStateMachine extends BaseStateMachine {
     final boolean sealedOnlyEntry = isEmptyMap(decoded.filesToAdd()) && isEmptyMap(decoded.filesToRemove())
         && decoded.sealedFileBlobs() != null && !decoded.sealedFileBlobs().isEmpty();
 
-    // #4743: an intermediate chunk of a split schema change (see
-    // RaftTransactionBroker.replicateSchemaInChunks) carries WAL pages only - no files, no schema JSON,
-    // no sealed blobs. The change is published by the LAST chunk, so reloading the schema here would
-    // re-instantiate every component from the still-unchanged schema.json for nothing, on the single
-    // Raft apply thread, once per chunk. Apply the pages and move on.
-    final boolean walOnlyEntry = isEmptyMap(decoded.filesToAdd()) && isEmptyMap(decoded.filesToRemove())
-        && (decoded.schemaJson() == null || decoded.schemaJson().isEmpty())
-        && (decoded.sealedFileBlobs() == null || decoded.sealedFileBlobs().isEmpty())
-        && decoded.walEntries() != null && !decoded.walEntries().isEmpty();
+    // A non-final chunk of a schema change split across several entries (see
+    // RaftTransactionBroker.splitSchemaEntry) only DELIVERS pages: the change is published by the last
+    // chunk. Reloading the schema on such a chunk re-instantiates every component from a state that is
+    // still half-delivered - and that is not merely wasted work on the single Raft apply thread, it is
+    // STICKY: a compacted sub-index that cannot be resolved yet gets detached, and the later publication
+    // reuses the same in-memory component, so the follower keeps serving only its mutable pages for good
+    // (#5443: ~1897 of 60000 entries).
+    //
+    // The producer marks these chunks explicitly. Inferring them from "no schema JSON" was tried and is
+    // WRONG: the first chunk carries filesToAdd and no schema JSON, which is indistinguishable from a
+    // standalone DDL that adds files without changing the schema version - and skipping the reload for
+    // that would leave the new files unregistered in the schema.
+    final boolean deliveryOnlyEntry = decoded.moreChunksFollow();
 
     try {
       if (decoded.filesToAdd() != null)
@@ -1496,8 +1512,8 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // Reload schema after WAL pages are on disk so new index files have valid content
       // and are correctly registered (page counts, type links, in-memory structures).
       // Skipped for sealed-only TimeSeries compaction entries (see sealedOnlyEntry above) and for
-      // intermediate chunks of a split schema change (see walOnlyEntry above).
-      if (!sealedOnlyEntry && !walOnlyEntry)
+      // delivery-only chunks of a split schema change (see deliveryOnlyEntry above).
+      if (!sealedOnlyEntry && !deliveryOnlyEntry)
         db.getSchema().getEmbedded().load(ComponentFile.MODE.READ_WRITE, true);
 
     } catch (final IOException e) {
@@ -1980,9 +1996,28 @@ public class ArcadeStateMachine extends BaseStateMachine {
       return;
     }
 
-    final DatabaseInternal db = (DatabaseInternal) server.getDatabase(databaseName);
-    db.getEmbedded().drop();
-    server.removeDatabase(databaseName);
+    // Only the rename below runs on the apply thread: the recursive delete costs one unlink per file and is
+    // unbounded in the size of the database, and this loop is sequential and shared by every database
+    // multiplexed on the state machine. Close, deregister and rename hold the databases lock as one unit -
+    // mirroring the snapshot installer's swap - so no concurrent open can reopen the directory in between.
+    final Path staged;
+    synchronized (server.getDatabasesLock()) {
+      // Resolved inside the lock: getDatabase reopens a database that is registered-but-closed, so resolving
+      // it outside would let another holder of this lock deregister it between the lookup and the close, and
+      // this thread would reopen the directory from disk only to close it again.
+      final DatabaseInternal embedded = ((DatabaseInternal) server.getDatabase(databaseName)).getEmbedded();
+      final Path databaseDirectory = Path.of(embedded.getDatabasePath());
+      embedded.closeForDrop();
+      server.removeDatabase(databaseName);
+      // stageForDeletion falls back to deleting inline when the rename is impossible, and that fallback
+      // belongs inside the lock even though it is slow: the directory still carries its live name, so
+      // releasing the lock first would let a concurrent create of the same name meet a half-deleted one.
+      staged = deferredDatabaseDeleter.stageForDeletion(databaseDirectory);
+    }
+    // Queued outside the lock: a saturated deletion queue runs the delete on this thread, and that must not
+    // extend to holding the databases lock for the length of a recursive delete.
+    if (staged != null)
+      deferredDatabaseDeleter.deleteInBackground(staged);
 
     // Evict AFTER the drop succeeded, mirroring the applied-index drop eviction which runs only once
     // apply completes: if drop() had thrown and quarantined this database, the baseline must stay so a
@@ -1990,7 +2025,16 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // actually dropped - the #5100 failure mode).
     evictBootstrapBaseline(databaseName);
 
-    LogManager.instance().log(this, Level.INFO, "Database '%s' dropped via Raft drop-database entry", databaseName);
+    LogManager.instance().log(this, Level.INFO, "Database '%s' dropped via Raft drop-database entry%s", databaseName,
+        staged != null ? " (files staged as '" + staged.getFileName() + "' for background deletion)" : "");
+  }
+
+  // @VisibleForTesting
+  void setDeferredDatabaseDeleter(final DeferredDatabaseDeleter deleter) {
+    final DeferredDatabaseDeleter previous = this.deferredDatabaseDeleter;
+    this.deferredDatabaseDeleter = deleter;
+    if (previous != null && previous != deleter)
+      previous.close();
   }
 
   private void applySecurityUsersEntry(final RaftLogEntryCodec.DecodedEntry decoded) {
@@ -2512,6 +2556,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
   @Override
   public void close() throws IOException {
     lifecycleExecutor.shutdownNow();
+    deferredDatabaseDeleter.close();
     super.close();
   }
 
