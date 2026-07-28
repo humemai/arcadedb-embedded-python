@@ -494,9 +494,10 @@ class CypherExpressionBuilder {
    * Shared logic for parsing expressions from text.
    */
   Expression parseExpressionText(final String text) {
-    // Check for parameter: $paramName or $1
+    // Check for parameter: $paramName or $1. Backticks are stripped so an escaped name resolves against
+    // the key the caller bound, e.g. $`my param` -> "my param".
     if (text.startsWith("$")) {
-      final String parameterName = text.substring(1); // Remove the $ prefix
+      final String parameterName = CypherASTBuilder.stripBackticks(text.substring(1)); // Remove the $ prefix
       return new ParameterExpression(parameterName, text);
     }
 
@@ -2507,12 +2508,19 @@ class CypherExpressionBuilder {
     String propertiesParameterName = null;
     if (ctx.properties() != null) {
       if (ctx.properties().parameter() != null)
-        propertiesParameterName = ctx.properties().parameter().parameterName().getText();
+        propertiesParameterName = CypherASTBuilder.stripBackticks(ctx.properties().parameter().parameterName().getText());
       else if (ctx.properties().map() != null)
         properties = parseMapProperties(ctx.properties().map());
     }
 
-    return new NodePattern(variable, labels, properties, propertiesParameterName);
+    // Inline WHERE predicate, e.g. the WHERE x.v = 2 in [(a)-[:E]->(x:A WHERE x.v = 2) | x]. Parsed
+    // as a generic expression and coerced to a predicate, mirroring the relationship form below, so
+    // comparisons, AND/OR/NOT and boolean-typed properties are all covered.
+    BooleanExpression whereExpression = null;
+    if (ctx.expression() != null)
+      whereExpression = new BooleanCoercionExpression(parseExpression(ctx.expression()));
+
+    return new NodePattern(variable, labels, null, properties, propertiesParameterName, false, whereExpression);
   }
 
   /**
@@ -2536,7 +2544,7 @@ class CypherExpressionBuilder {
     String propertiesParameterName = null;
     if (ctx.properties() != null) {
       if (ctx.properties().parameter() != null)
-        propertiesParameterName = ctx.properties().parameter().parameterName().getText();
+        propertiesParameterName = CypherASTBuilder.stripBackticks(ctx.properties().parameter().parameterName().getText());
       else if (ctx.properties().map() != null)
         properties = parseMapProperties(ctx.properties().map());
     }
@@ -2567,7 +2575,15 @@ class CypherExpressionBuilder {
       direction = Direction.BOTH;
     }
 
-    return new RelationshipPattern(variable, types, direction, properties, propertiesParameterName, minHops, maxHops);
+    // Inline WHERE predicate, e.g. the WHERE r.tag = 'ok' in -[r:E WHERE r.tag = 'ok']->. Parsed as
+    // a generic expression and coerced to a predicate so comparisons, AND/OR/NOT and boolean-typed
+    // properties are all covered without duplicating the boolean-parsing hierarchy.
+    BooleanExpression whereExpression = null;
+    if (ctx.expression() != null)
+      whereExpression = new BooleanCoercionExpression(parseExpression(ctx.expression()));
+
+    return new RelationshipPattern(variable, types, direction, properties, propertiesParameterName, minHops, maxHops,
+        whereExpression);
   }
 
   /**

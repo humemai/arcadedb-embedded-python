@@ -20,6 +20,7 @@ package com.arcadedb.query.opencypher.traversal;
 
 import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.Vertex;
+import com.arcadedb.query.opencypher.InlineProperties;
 import com.arcadedb.query.opencypher.ast.Direction;
 import com.arcadedb.query.opencypher.ast.PathMode;
 import com.arcadedb.utility.RidHashSet;
@@ -27,6 +28,7 @@ import com.arcadedb.utility.RidHashSet;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.function.Predicate;
 
 /**
  * Base class for graph traversal implementations.
@@ -41,6 +43,13 @@ public abstract class GraphTraverser {
   protected final boolean trackPaths;
   protected final boolean detectCycles;
   protected final PathMode pathMode;
+  /**
+   * Optional per-relationship predicate, carrying an inline {@code WHERE} such as the
+   * {@code WHERE r.tag = 'ok'} in {@code -[r:E*1..2 WHERE r.tag = 'ok']->}. Every relationship the
+   * path traverses must satisfy it, the same rule the inline property map follows. Null means
+   * unconstrained, which keeps the common path free of any per-edge evaluation.
+   */
+  protected Predicate<Edge> edgePredicate;
 
   /**
    * Creates a graph traverser with specified parameters.
@@ -177,19 +186,53 @@ public abstract class GraphTraverser {
    * @return true if edge matches all property filters (or no filters set)
    */
   protected boolean matchesPropertyFilter(final Edge edge) {
-    if (edgePropertyFilters.isEmpty())
+    return matchesPropertyFilter(edge, edgePropertyFilters);
+  }
+
+  /**
+   * Attaches the per-relationship inline {@code WHERE} predicate. Traversers that delegate to a
+   * nested traverser must forward it, otherwise the predicate is silently dropped for that strategy.
+   *
+   * @param edgePredicate predicate every traversed relationship must satisfy, null for unconstrained
+   *
+   * @return this traverser, for chaining at the construction site
+   */
+  public GraphTraverser withEdgePredicate(final Predicate<Edge> edgePredicate) {
+    this.edgePredicate = edgePredicate;
+    return this;
+  }
+
+  /**
+   * Checks an edge against the inline {@code WHERE} predicate, if one was attached.
+   *
+   * @param edge edge to check
+   *
+   * @return true if the edge satisfies the predicate (or no predicate is set)
+   */
+  protected boolean matchesEdgePredicate(final Edge edge) {
+    return edgePredicate == null || edgePredicate.test(edge);
+  }
+
+  /**
+   * Checks an edge against an inline {@code {prop: value}} filter map, using the same comparison rules as
+   * every other pattern evaluator ({@link InlineProperties#matchesResolvedValue}).
+   * <p>
+   * The filter values must already be resolved: a traverser has neither the query parameters nor the row
+   * a dynamic value would be evaluated against, so the caller resolves the map once per row through
+   * {@link InlineProperties#resolveAll} before handing it over. Filtering on the declared values instead
+   * silently matched nothing whenever the map held anything but a literal (issue #5501).
+   *
+   * @param edge    edge to check
+   * @param filters resolved property constraints, may be null or empty
+   *
+   * @return true if edge matches all property filters (or no filters set)
+   */
+  public static boolean matchesPropertyFilter(final Edge edge, final Map<String, Object> filters) {
+    if (filters == null || filters.isEmpty())
       return true;
 
-    for (final Map.Entry<String, Object> entry : edgePropertyFilters.entrySet()) {
-      final Object actual = edge.get(entry.getKey());
-      final Object expected = entry.getValue();
-      if (actual == null)
-        return false;
-      // Handle numeric type coercion (Integer vs Long)
-      if (actual instanceof Number && expected instanceof Number) {
-        if (((Number) actual).longValue() != ((Number) expected).longValue())
-          return false;
-      } else if (!actual.equals(expected))
+    for (final Map.Entry<String, Object> entry : filters.entrySet()) {
+      if (!InlineProperties.matchesResolvedValue(edge.get(entry.getKey()), entry.getValue()))
         return false;
     }
     return true;

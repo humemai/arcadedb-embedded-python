@@ -63,6 +63,8 @@ public class RemoteGraphBatch implements AutoCloseable {
   private final int                 flushEvery;
   private final StringBuilder       buffer;
   private       int                 vertexCounter;
+  /** Position of the first vertex of the buffer being filled, i.e. what the server has to number this payload from. */
+  private       int                 bufferOrdinalBase;
   private       int                 itemsInBuffer;
   private       boolean             hasEdges;
   private       boolean             closed;
@@ -81,6 +83,15 @@ public class RemoteGraphBatch implements AutoCloseable {
   RemoteGraphBatch(final RemoteDatabase database, final Map<String, String> queryParams, final int flushEvery) {
     this.database = database;
     this.queryParams = queryParams;
+    // Edges buffered in a later flush reference vertices created by an earlier one, so this client cannot work
+    // without the mapping and asks for it explicitly: the endpoint stops echoing it on its own past a size no
+    // client could consume in one response (issue #5470).
+    this.queryParams.put("idMapping", "true");
+    // The temporary ids generated below are already the position of the vertex in the load, so the server is told to
+    // treat them as such: it then keeps two primitive arrays instead of a map of ids, 12 bytes per vertex instead of
+    // ~87, and resolves an edge with an array read (issue #5470). Each flush declares where its own numbering starts,
+    // because this counter spans all of them while the server numbers one request at a time.
+    this.queryParams.put("refMode", "ordinal");
     this.flushEvery = flushEvery;
     this.buffer = new StringBuilder(DEFAULT_BUFFER_SIZE);
     this.resolvedBucketIds = new int[INITIAL_MAPPING_CAPACITY];
@@ -165,17 +176,26 @@ public class RemoteGraphBatch implements AutoCloseable {
     if (buffer.isEmpty())
       return;
 
+    queryParams.put("ordinalBase", Integer.toString(bufferOrdinalBase));
+
     final JSONObject response = database.sendBatch(buffer.toString(), queryParams);
 
     totalVerticesCreated += response.getLong("verticesCreated");
     totalEdgesCreated += response.getLong("edgesCreated");
     totalElapsedMs += response.getLong("elapsedMs");
 
+    if (response.getBoolean("idMappingOmitted", false))
+      // Never resolve edges against a mapping that is not there: it would silently drop every cross-flush edge.
+      throw new IllegalStateException(
+          "The server did not return the temporary-id mapping of the last flush (" + response.getInt("idMappingSize", 0)
+              + " ids). Lower flushEvery so each request stays within what the server echoes back");
+
     // Store resolved temp ID → RID mapping for cross-flush edge references
     if (response.has("idMapping")) {
       final JSONObject idMapping = response.getJSONObject("idMapping");
       for (final String key : idMapping.keySet()) {
-        final int idx = Integer.parseInt(key.substring(1)); // "v123" → 123
+        // "123" in ordinal mode, "v123" when the server resolves by temporary id.
+        final int idx = Integer.parseInt(key.charAt(0) == 'v' ? key.substring(1) : key);
         final String ridStr = idMapping.getString(key);      // "#3:456"
         final int colonPos = ridStr.indexOf(':');
         final int bucketId = Integer.parseInt(ridStr.substring(1, colonPos));
@@ -191,6 +211,7 @@ public class RemoteGraphBatch implements AutoCloseable {
 
     buffer.setLength(0);
     itemsInBuffer = 0;
+    bufferOrdinalBase = vertexCounter;
   }
 
   /**
@@ -363,6 +384,18 @@ public class RemoteGraphBatch implements AutoCloseable {
     /** Number of edges to process before committing within a server-side flush. Default: 50,000. */
     public Builder withCommitEvery(final int commitEvery) {
       queryParams.put("commitEvery", String.valueOf(commitEvery));
+      return this;
+    }
+
+    /**
+     * Number of vertices the server accumulates before creating and committing them in a single transaction.
+     * Default: 10,000. On a replicated database that transaction is shipped as one Raft entry, so lower it
+     * when the server warns that a replicated entry approaches the maximum entry size (issue #5470).
+     */
+    public Builder withVertexBatchSize(final int vertexBatchSize) {
+      if (vertexBatchSize < 1)
+        throw new IllegalArgumentException("vertexBatchSize must be greater than 0");
+      queryParams.put("vertexBatchSize", String.valueOf(vertexBatchSize));
       return this;
     }
 

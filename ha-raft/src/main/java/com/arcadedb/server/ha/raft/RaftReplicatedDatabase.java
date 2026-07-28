@@ -393,7 +393,9 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     // one taken here would make the write unreplayable and lost on this node forever (issue #5407).
     // Only the leader runs phase 2 (see the !leader early return below), so only it needs the ticket.
     final ArcadeStateMachine stateMachine = leader ? stateMachineOrNull() : null;
-    final long phase2Ticket = stateMachine != null ? stateMachine.beginLocalPhase2() : -1L;
+    final long phase2Ticket = stateMachine != null ?
+        stateMachine.beginLocalPhase2() :
+        ArcadeStateMachine.NO_PHASE2_TICKET;
     replicateAndCommitLocally(payload, leader, stateMachine, phase2Ticket);
   }
 
@@ -417,9 +419,11 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   void replicateAndCommitLocally(final ReplicationPayload payload, final boolean leader,
       final ArcadeStateMachine stateMachine, final long phase2Ticket) {
     // --- REPLICATION (no lock held): send WAL to Raft and wait for quorum ---
+    long committedLogIndex = -1;
     try {
       final RaftHAServer raft = requireRaftServer();
-      raft.getTransactionBroker().replicateTransaction(getName(), payload.walData(), payload.bucketDeltas());
+      committedLogIndex = raft.getTransactionBroker()
+          .replicateTransaction(getName(), payload.walData(), payload.bucketDeltas());
     } catch (final MajorityCommittedAllFailedException e) {
       // MAJORITY committed (applyTransaction fired with origin-skip, lastAppliedIndex advanced)
       // but ALL-quorum watch failed. We MUST apply locally to prevent permanent divergence.
@@ -435,7 +439,10 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       // silently dropping the write on the leader. Mark the transaction so that, if the entry does
       // commit, applyTxEntry applies it locally instead of skipping. Then roll back the in-flight
       // (un-applied) local transaction and surface the retryable error to the client.
-      markTransactionAbandonedForLocalApply(payload);
+      // The ticket travels with the mark (#5410): this branch keeps holding it so a crash before the
+      // entry applies still replays it, and whoever finally applies the entry releases it from the
+      // mark - without that correlation the checkpoint stayed pinned until the node restarted.
+      markTransactionAbandonedForLocalApply(payload, phase2Ticket);
       rollback();
       throw e;
     } catch (final ArcadeDBException e) {
@@ -458,6 +465,36 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     // --- PHASE 2 (read lock on leader): quorum reached, apply locally ---
     if (!leader) {
       releasePhase2Ticket(stateMachine, phase2Ticket);
+      // #5503: this replica never runs phase 2 - the state machine writes the pages asynchronously - so
+      // the local page cache still holds the pre-commit version of every page this transaction touched.
+      // reset() below releases the commit locks taken in phase 1, and the next transaction to take them
+      // would read that stale version, pass its own version check and ship a delta stamped with the same
+      // next version, which the state machine then splices onto this one. Wait for THIS entry's index:
+      // the replica's own commit index still trails the leader here, so waiting for it would not cover
+      // the entry just written.
+      //
+      // The field is read directly instead of through requireRaftServer(): the cluster has already
+      // committed this transaction, so a server that disappeared under a concurrent shutdown must not
+      // turn into a NeedRetryException telling the caller to retry a write that is durably committed.
+      final RaftHAServer raft = raftHAServer;
+      if (raft != null && committedLogIndex > 0) {
+        raft.waitForAppliedIndex(committedLogIndex);
+
+        // The wait degrades to best-effort on timeout, and releasing the locks below with the pages still
+        // behind is exactly the pre-#5503 condition. waitForAppliedIndex does log, but as a READ_YOUR_WRITES
+        // consistency warning, which reads like a stale-read risk rather than a page-corruption one - so say
+        // plainly here what is being risked and what to look at.
+        // getLastAppliedIndex() reports -1 ("unknown") while an in-place restart re-initializes the Ratis
+        // division (#5271). That is not a race with another committer, so do not raise the alarm for it -
+        // the wait above will simply have run its full deadline, which is inherent to the restart window.
+        final long applied = raft.getLastAppliedIndex();
+        if (applied >= 0 && applied < committedLogIndex)
+          LogManager.instance().log(this, Level.WARNING,
+              "Replica commit on database '%s' is releasing its commit locks before entry %d was applied locally "
+                  + "(applied=%d). Concurrent transactions on these files can now validate against stale page "
+                  + "versions - the condition behind issue #5503. Investigate the state machine apply lag.",
+              getName(), committedLogIndex, applied);
+      }
       payload.tx().reset();
       final DatabaseContext.DatabaseContextTL ctx = DatabaseContext.INSTANCE.getContext(proxied.getDatabasePath());
       ctx.popIfNotLastTransaction();
@@ -579,14 +616,18 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
    * so the state machine sees the identical value when the entry commits. Best-effort: if anything
    * goes wrong while extracting the txId we log and continue (the caller still rolls back and throws
    * a retryable error), rather than masking the original replication failure.
+   * <p>
+   * {@code phase2Ticket} rides along so the eventual apply can release it (issue #5410). When the
+   * txId cannot be extracted the ticket stays held, which is the safe direction: an entry we cannot
+   * correlate is one we cannot prove was applied.
    */
-  private void markTransactionAbandonedForLocalApply(final ReplicationPayload payload) {
+  private void markTransactionAbandonedForLocalApply(final ReplicationPayload payload, final long phase2Ticket) {
     final ArcadeStateMachine stateMachine = stateMachineOrNull();
     if (stateMachine == null)
       return;
     try {
       final long walTxId = ArcadeStateMachine.deserializeWalTransaction(payload.walData()).txId;
-      stateMachine.markLocalTransactionAbandoned(getName(), walTxId);
+      stateMachine.markLocalTransactionAbandoned(getName(), walTxId, phase2Ticket);
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.WARNING,
           "Could not mark transaction for local apply after indeterminate replication (db=%s): %s",
