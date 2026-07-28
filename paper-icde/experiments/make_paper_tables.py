@@ -18,7 +18,7 @@ RESULTS = os.path.join(HERE, "results")
 OUT = os.path.join(HERE, "..", "..", ".notes", "papers", "icde-2027", "latex", "tables")
 
 PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
-                "l3s": ["tiny", "small"], "l3d": ["small", "deep10m"],
+                "l3s": ["tiny", "small", "medium"], "l3d": ["small", "deep10m"],
                 "e2": ["e2"]}
 
 NAMES = {
@@ -103,6 +103,19 @@ def fmtb(v):
     return f"{v:.2f}"
 
 
+def mmm_rec(rs, field="recall_at_10"):
+    """Recall needs one fixed precision: fmt/fmtb switch format at the 1.0
+    boundary, so 0.9999 and 1.0 rendered as '1.00' and '1.0' and a
+    degenerate range printed as '1.000 [1.00--1.0]'."""
+    v = [r[field] for r in rs if isinstance(r.get(field), (int, float))]
+    if not v:
+        return "--"
+    med, lo, hi = st.median(v), min(v), max(v)
+    if f"{lo:.3f}" == f"{hi:.3f}":
+        return f"{med:.3f}"
+    return f"{med:.3f} [{lo:.3f}--{hi:.3f}]"
+
+
 def mmm(rs, field, scale=1.0):
     v = [r[field] * scale for r in rs if isinstance(r.get(field), (int, float))]
     if not v:
@@ -159,6 +172,16 @@ def graph_table(rows):
     write("t3_graph.tex", "\n".join(lines) + "\n")
 
 
+def _sparse_full_rows():
+    """8.84M Big-ANN tier for the embedded arcade row (N=5, dev20 line).
+    Comparators at this tier come from the canonical runner rows."""
+    import glob
+    out = []
+    for fp in glob.glob(os.path.join(RESULTS, "sparse_full", "l3s_full_r*.json")):
+        out.append(json.load(open(fp)))
+    return out
+
+
 def _dev15_sparse_rows():
     """Rolling-update overlay: N=5 dev15 cells for the embedded int8 config
     (verify5411 re-runs after the append-only txn-lane fix; supersedes the
@@ -175,25 +198,37 @@ def _dev15_sparse_rows():
 def sparse_table(rows):
     l3s = [r for r in rows if r["lane"] == "l3s"]
     dev15 = _dev15_sparse_rows()
-    # Single-version discipline: only the dev15-remeasured arcade config is
-    # shown; fp32/no-settle/server ablations await re-measurement on the
-    # current line (their July rows would cross engine versions in-table).
+    full = _sparse_full_rows()
     order = ["arcadedb_sparse_embedded", "qdrant_sparse", "milvus_sparse",
              "elasticsearch_sparse"]
-    lines = [r"\begin{tabular}{llrrr}", r"\toprule",
-             r"System & Corpus & p50 (ms) & p99 (ms) & "
-             r"Recall@10 \\", r"\midrule"]
+    tiers = (("tiny", "100k"), ("small", "1M"), ("medium", "8.84M"))
+    # Tiers as column groups: one row per system keeps the table to four
+    # data rows instead of twelve and puts the scaling trend on one line.
+    lines = [r"\begin{tabular}{l" + "rrr" * len(tiers) + "}", r"\toprule",
+             "System & " + " & ".join(
+                 r"\multicolumn{3}{c}{%s}" % lab for _, lab in tiers) + r" \\"]
+    cols = "".join(r"\cmidrule(lr){%d-%d}" % (2 + 3 * i, 4 + 3 * i)
+                   for i in range(len(tiers)))
+    lines.append(cols)
+    lines.append(" & " + " & ".join(["p50 & p99 & R@10"] * len(tiers)) + r" \\")
+    lines.append(r"\midrule")
     for be in order:
-        for sc, label in (("tiny", "100k"), ("small", "1M")):
+        cells = [NAMES[be]]
+        for sc, _lab in tiers:
             g = [r for r in l3s if r["backend"] == be and r["scale"] == sc]
-            if be == "arcadedb_sparse_embedded" and dev15.get(sc):
-                g = dev15[sc]  # dev15 overlay, caption discloses
+            if sc == "medium":
+                # medium holds two corpora: the retired synthetic 10M and
+                # Big-ANN's 8.84M. Mixing them is the #5411 error in table form.
+                g = [r for r in g if r.get("n_docs") == 8_841_823]
+            if be == "arcadedb_sparse_embedded" and sc in ("tiny", "small") and dev15.get(sc):
+                g = dev15[sc]
+            elif be == "arcadedb_sparse_embedded" and sc == "medium":
+                g = full
             if not g:
+                cells += ["--", "--", "--"]
                 continue
-            lines.append(" & ".join([
-                NAMES[be], label,
-                mmm(g, "query_p50_ms"), mmm(g, "query_p99_ms"),
-                mmm(g, "recall_at_10")]) + r" \\")
+            cells += [mmm(g, "query_p50_ms"), mmm(g, "query_p99_ms"), mmm_rec(g)]
+        lines.append(" & ".join(cells) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
     write("t4_sparse.tex", "\n".join(lines) + "\n")
 
