@@ -18,6 +18,14 @@ import time
 from l4_tsbs import parse_lp, HOST, T0, QITER
 
 SHARDS = int(os.environ.get("TS_SHARDS", "4"))
+# #5474: route each batch through the engine primitive TimeSeriesBatch
+# instead of Object[] columns, so no numeric sample is boxed on the way in.
+PRIMITIVE = os.environ.get("TS_PRIMITIVE", "0") == "1"
+# Columns cross as ndarrays by default. Passing Python lists makes
+# append_samples convert per element instead of taking the binding's bulk
+# path, which understated this lane 2.9x through the whole July campaign;
+# lists remain reachable (TS_NUMPY=0) only to reproduce that "before" number.
+NUMPY_COLS = os.environ.get("TS_NUMPY", "1") == "1"
 CHUNK = 50_000
 
 
@@ -41,14 +49,21 @@ class ArcadeTSNative:
         ex = self.db.async_executor()
         for lo in range(0, len(pts), CHUNK):
             chunk = pts[lo:lo + CHUNK]
+            ts_col = [p[1] * 1000 for p in chunk]   # ts in ms
+            host_col = [p[0] for p in chunk]        # host (tag)
+            uu_col = [p[2] for p in chunk]
+            us_col = [p[3] for p in chunk]
+            ui_col = [p[4] for p in chunk]
+            if NUMPY_COLS:
+                import numpy as _np
+                ts_col = _np.asarray(ts_col, dtype=_np.int64)
+                uu_col = _np.asarray(uu_col, dtype=_np.float64)
+                us_col = _np.asarray(us_col, dtype=_np.float64)
+                ui_col = _np.asarray(ui_col, dtype=_np.float64)
+            # Released wheels have no primitive= keyword; only send it when asked.
+            kw = {"primitive": True} if PRIMITIVE else {}
             ex.append_samples(
-                "Point",
-                [p[1] * 1000 for p in chunk],          # ts in ms
-                [p[0] for p in chunk],                 # host (tag)
-                [p[2] for p in chunk],                 # uu
-                [p[3] for p in chunk],                 # us
-                [p[4] for p in chunk],                 # ui
-            )
+                "Point", ts_col, host_col, uu_col, us_col, ui_col, **kw)
         ex.wait_completion()
 
     def q_last(self):
@@ -81,7 +96,7 @@ class ArcadeTSNative:
 def main():
     pts = parse_lp()
     out = {"n_points": len(pts), "backend": ArcadeTSNative.name,
-           "shards": SHARDS}
+           "shards": SHARDS, "primitive": PRIMITIVE, "numpy_cols": NUMPY_COLS}
     b = ArcadeTSNative()
     b.tmax_ms = max(p[1] for p in pts) * 1000
     b.connect()
