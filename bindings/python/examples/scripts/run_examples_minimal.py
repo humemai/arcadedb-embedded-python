@@ -65,11 +65,18 @@ def find_example11_output(
     return matches[0]
 
 
-def build_examples(_examples_dir: Path) -> list[ExampleRun]:
-    small_graph_db = Path("my_test_databases") / "movielens_graph_small_db"
-    vector_db_root = Path("my_test_databases") / "example11_minimal"
-    table_work_dir = Path("my_test_databases") / "example15_minimal"
-    graph_work_dir = Path("my_test_databases") / "example16_minimal"
+def build_examples(examples_dir: Path) -> list[ExampleRun]:
+    # Anchored to examples_dir, not to the process cwd. The example subprocesses
+    # already run with cwd=examples_dir, but this runner also globs these paths
+    # itself (find_example11_output), and a relative path there resolves against
+    # whatever directory the runner happened to be launched from. Launching from
+    # bindings/python instead of examples/ therefore failed with a confusing
+    # "Could not find Example 11 output" long after Example 11 had succeeded.
+    db_root = examples_dir / "my_test_databases"
+    small_graph_db = db_root / "movielens_graph_small_db"
+    vector_db_root = db_root / "example11_minimal"
+    table_work_dir = db_root / "example15_minimal"
+    graph_work_dir = db_root / "example16_minimal"
     example11_run_label = "minimal"
 
     return [
