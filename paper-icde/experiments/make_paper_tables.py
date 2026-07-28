@@ -195,10 +195,41 @@ def _dev15_sparse_rows():
     return out
 
 
+def _dev21_sparse_rows():
+    """Released-wheel overlay for the embedded int8 config on 26.8.1.dev21,
+    which carries all three merged sparse rounds (#5388 copy bound,
+    #5467 r1 primitive cursors, #5467 r2 memoised block bounds) plus #5473's
+    parallel-array top-K heap.
+
+    This supersedes the dev15 overlay wherever it is present. It exists so the
+    table can report the current engine from a RELEASED artifact: the same
+    numbers were first measured on a locally compiled wheel for the upstream
+    verification, and those belong in prose, not here.
+    Empty until the dev21 re-run lands, in which case the dev15 overlay stands.
+    """
+    import glob
+    out = {"tiny": [], "small": []}
+    for sc in out:
+        for fp in glob.glob(os.path.join(RESULTS, "dev21_sparse",
+                                         f"l3s_dev21_{sc}_r*.json")):
+            out[sc].append(json.load(open(fp)))
+    return {sc: v for sc, v in out.items() if v}
+
+
+def _dev21_sparse_full_rows():
+    """8.84M Big-ANN tier on dev21. Supersedes _sparse_full_rows (dev20)."""
+    import glob
+    return [json.load(open(fp)) for fp in
+            glob.glob(os.path.join(RESULTS, "dev21_sparse_full",
+                                   "l3s_dev21_full_r*.json"))]
+
+
 def sparse_table(rows):
     l3s = [r for r in rows if r["lane"] == "l3s"]
+    # Prefer the newest released line per tier; fall back rather than mix.
     dev15 = _dev15_sparse_rows()
-    full = _sparse_full_rows()
+    dev15.update(_dev21_sparse_rows())
+    full = _dev21_sparse_full_rows() or _sparse_full_rows()
     order = ["arcadedb_sparse_embedded", "qdrant_sparse", "milvus_sparse",
              "elasticsearch_sparse"]
     tiers = (("tiny", "100k"), ("small", "1M"), ("medium", "8.84M"))
