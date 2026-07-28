@@ -371,7 +371,7 @@ async_exec.close()
 ### append_samples
 
 ```python
-ex.append_samples(type_name: str, timestamps, *column_values)
+ex.append_samples(type_name: str, timestamps, *column_values, primitive: bool = False)
 ```
 
 Columnar bulk append into a native `TIMESERIES` type: one call per batch,
@@ -382,12 +382,25 @@ numpy fast path: an `ndarray` for timestamps or for a numeric field column
 crosses the FFI as a single buffer copy (with Java-side boxing), instead of
 per-element conversion. Lists work too, converted per element.
 
+`primitive=True` routes the batch through the engine's `TimeSeriesBatch`,
+which carries each column as a primitive array and so never boxes a numeric
+sample (ArcadeDB issue #5474, where the boxed path allocated a dead `Double`
+per value only to unbox it again). Each column still crosses the FFI exactly
+once: the per-row loop runs Java-side, because filling the batch from Python
+would cost one JNI call per value and lose far more than the boxing costs.
+Measured 1.38x faster on a 300k-sample, three-field ingest. It needs an engine
+that ships the batch API, so the default stays on the `Object[]` path.
+
 **Example:**
 
 ```python
 ts = base_ms + np.arange(n, dtype=np.int64) * 1000
 ex = db.async_executor()
 ex.append_samples("Sensor", ts, hosts, cpu_ndarray, mem_ndarray)
+ex.wait_completion()
+
+# same data, no per-sample boxing
+ex.append_samples("Sensor", ts, hosts, cpu_ndarray, mem_ndarray, primitive=True)
 ex.wait_completion()
 ```
 

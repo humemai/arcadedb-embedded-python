@@ -391,6 +391,7 @@ class AsyncExecutor:
         type_name: str,
         timestamps: Sequence[int],
         *column_values: Sequence[Any],
+        primitive: bool = False,
     ):
         """Columnar bulk append into a native TIMESERIES type.
 
@@ -402,7 +403,15 @@ class AsyncExecutor:
         crosses the FFI as one buffer copy (int/uint kinds via boxLongs,
         float kinds via boxDoubles); other sequences convert per element.
         Call wait_completion() before relying on visibility.
+
+        primitive=True routes through the engine's TimeSeriesBatch instead,
+        which carries each column as a primitive array and so never boxes a
+        numeric sample (ArcadeDB #5474). It needs an engine that ships that
+        API; the default stays on the Object[] path.
         """
+        if primitive:
+            return self._append_samples_primitive(
+                type_name, timestamps, *column_values)
         try:
             import numpy as _np
         except ImportError:
@@ -433,6 +442,65 @@ class AsyncExecutor:
                 columns_java.append(JObjectArray(
                     [convert_python_to_java(value) for value in values]))
         self._java_async.appendSamples(type_name, timestamps_java, *columns_java)
+
+    def _append_samples_primitive(
+        self,
+        type_name: str,
+        timestamps: Sequence[int],
+        *column_values: Sequence[Any],
+    ):
+        """append_samples over the engine's primitive TimeSeriesBatch.
+
+        Each column crosses the FFI once as a contiguous primitive array and is
+        written into the batch Java-side. Filling the batch from Python instead
+        would cost one JNI call per value, which is worse than the boxing this
+        replaces, so the per-row loop lives in TimeSeriesBatcher.
+        """
+        try:
+            import numpy as _np
+        except ImportError:
+            _np = None
+
+        if self._owner is None:
+            raise RuntimeError(
+                "primitive append_samples needs the owning Database; "
+                "obtain the executor via Database.async_executor()")
+
+        batcher = jpype.JClass("com.arcadedb.python.TimeSeriesBatcher")
+        JLongArray = jpype.JArray(jpype.JLong)
+        if _np is not None and isinstance(timestamps, _np.ndarray):
+            timestamps_java = JLongArray(
+                _np.ascontiguousarray(timestamps, dtype=_np.int64))
+        else:
+            timestamps_java = JLongArray([int(value) for value in timestamps])
+
+        batch = batcher.newBatch(
+            self._owner._java_db, type_name, timestamps_java)
+
+        for index, values in enumerate(column_values):
+            if _np is not None and isinstance(values, _np.ndarray) \
+                    and values.dtype.kind == "f":
+                batcher.setDoubleColumn(batch, index, jpype.JArray(jpype.JDouble)(
+                    _np.ascontiguousarray(values, dtype=_np.float64)))
+            elif _np is not None and isinstance(values, _np.ndarray) \
+                    and values.dtype.kind in "iu":
+                batcher.setLongColumn(batch, index, jpype.JArray(jpype.JLong)(
+                    _np.ascontiguousarray(values, dtype=_np.int64)))
+            elif values and all(isinstance(v, str) for v in values):
+                batcher.setStringColumn(batch, index, jpype.JArray(jpype.JString)(
+                    list(values)))
+            elif values and all(isinstance(v, float) for v in values):
+                batcher.setDoubleColumn(batch, index, jpype.JArray(jpype.JDouble)(
+                    [float(v) for v in values]))
+            elif values and all(isinstance(v, int) and not isinstance(v, bool)
+                                for v in values):
+                batcher.setLongColumn(batch, index, jpype.JArray(jpype.JLong)(
+                    [int(v) for v in values]))
+            else:
+                batcher.setObjectColumn(batch, index, jpype.JArray(jpype.JObject)(
+                    [convert_python_to_java(v) for v in values]))
+
+        self._java_async.appendSamples(type_name, batch)
 
     # Query operations
 

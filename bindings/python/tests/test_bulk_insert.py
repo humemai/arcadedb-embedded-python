@@ -125,6 +125,72 @@ class TestAppendSamplesNumpy:
             "sql", "SELECT count(*) AS n FROM NpTs").to_list()[0]["n"]
         assert int(got) == n
 
+    def test_primitive_batch_matches_object_path(self, temp_db):
+        """primitive=True must store exactly what the Object[] path stores.
+
+        The primitive path exists to skip boxing (engine issue #5474), so the
+        only thing that makes it worth having is that the samples it writes are
+        indistinguishable from the path it replaces.
+        """
+        import numpy as np
+
+        for type_name in ("PrimA", "PrimB"):
+            temp_db.command(
+                "sql",
+                f"CREATE TIMESERIES TYPE {type_name} TIMESTAMP ts "
+                "TAGS (host STRING) FIELDS (val DOUBLE, cnt LONG) SHARDS 2")
+
+        n = 5_000
+        ts = np.arange(n, dtype=np.int64) * 1000 + 1_700_000_000_000
+        vals = np.linspace(-5.0, 5.0, n)
+        cnts = np.arange(n, dtype=np.int64) % 7
+        hosts = [f"h{i % 4}" for i in range(n)]
+
+        ex = temp_db.async_executor()
+        ex.append_samples("PrimA", ts, hosts, vals, cnts)
+        ex.append_samples("PrimB", ts, hosts, vals, cnts, primitive=True)
+        ex.wait_completion()
+
+        def rows(type_name):
+            return temp_db.query(
+                "sql",
+                f"SELECT ts, host, val, cnt FROM {type_name} WHERE host = 'h2' "
+                f"AND ts BETWEEN {int(ts[0])} AND {int(ts[0]) + 200_000} "
+                "ORDER BY ts").to_list()
+
+        boxed, primitive = rows("PrimA"), rows("PrimB")
+        assert len(boxed) == len(primitive) and len(boxed) > 0
+        for row_boxed, row_primitive in zip(boxed, primitive):
+            for key in ("ts", "host", "val", "cnt"):
+                assert row_boxed.get(key) == row_primitive.get(key), key
+
+        counts = [
+            int(temp_db.query(
+                "sql", f"SELECT count(*) AS n FROM {t}").to_list()[0]["n"])
+            for t in ("PrimA", "PrimB")
+        ]
+        assert counts == [n, n]
+
+    def test_primitive_batch_accepts_plain_sequences(self, temp_db):
+        """Lists, not just ndarrays: the batch path types each column itself."""
+        temp_db.command(
+            "sql",
+            "CREATE TIMESERIES TYPE PrimList TIMESTAMP ts "
+            "TAGS (host STRING) FIELDS (val DOUBLE) SHARDS 1")
+        n = 500
+        ex = temp_db.async_executor()
+        ex.append_samples(
+            "PrimList",
+            [1_700_000_000_000 + i * 1000 for i in range(n)],
+            [f"h{i % 3}" for i in range(n)],
+            [float(i) / 4 for i in range(n)],
+            primitive=True,
+        )
+        ex.wait_completion()
+        got = temp_db.query(
+            "sql", "SELECT count(*) AS n FROM PrimList").to_list()[0]["n"]
+        assert int(got) == n
+
 
 class TestVectorColumnsDataFrame:
     def test_vector_column_to_dataframe(self, temp_db):
