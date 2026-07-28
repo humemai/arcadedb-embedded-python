@@ -156,7 +156,8 @@ class TestAppendSamplesNumpy:
                 "sql",
                 f"SELECT ts, host, val, cnt FROM {type_name} WHERE host = 'h2' "
                 f"AND ts BETWEEN {int(ts[0])} AND {int(ts[0]) + 200_000} "
-                "ORDER BY ts").to_list()
+                "ORDER BY ts",  # nosec B608 - test-owned type name
+            ).to_list()
 
         boxed, primitive = rows("PrimA"), rows("PrimB")
         assert len(boxed) == len(primitive) and len(boxed) > 0
@@ -166,7 +167,9 @@ class TestAppendSamplesNumpy:
 
         counts = [
             int(temp_db.query(
-                "sql", f"SELECT count(*) AS n FROM {t}").to_list()[0]["n"])
+                "sql",
+                f"SELECT count(*) AS n FROM {t}",  # nosec B608 - test-owned type name
+            ).to_list()[0]["n"])
             for t in ("PrimA", "PrimB")
         ]
         assert counts == [n, n]
