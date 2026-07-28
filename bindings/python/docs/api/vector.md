@@ -476,6 +476,46 @@ print(meta["dimensions"], meta["similarity_function"], meta["id_property"])
 
 ---
 
+### `VectorIndex.get_stats()`
+
+Return live runtime counters for the index as a Python dictionary.
+
+Where `get_metadata()` returns the index's stable configuration, this returns
+counters that move as the index is built and queried. Keys follow the engine
+and may grow between releases, so read defensively.
+
+**Returns:**
+
+- `dict` mapping counter name to a plain Python scalar, for the primary bucket
+  index (see `get_metadata()["bucket_index_name"]`). Commonly useful keys:
+    - `totalVectors`, `activeVectors`, `deletedVectors`, `graphNodeCount`
+    - `graphState`, `asyncRebuildInProgress`, `graphRebuildCount`
+    - `searchVectorCacheCapacity`, `vectorCacheHits`, `vectorCacheMisses`
+    - `vectorFetchFromDocuments`, `vectorFetchFromGraph`, `vectorFetchFromQuantized`
+    - `searchOperations`, `insertOperations`, `avgSearchLatencyMs`
+
+**Example:**
+
+```python
+stats = index.get_stats()
+
+# Is the search cache holding the working set?
+hits, misses = stats["vectorCacheHits"], stats["vectorCacheMisses"]
+print(f"hit rate: {hits / max(hits + misses, 1):.1%}")
+
+# Did the build have to re-read vectors from documents?
+if stats["vectorFetchFromDocuments"] > 0:
+    print("build cache did not hold the whole set; raise the heap or its share")
+```
+
+**Where vectors are read from.** With the default `storeVectorsInGraph: false`,
+the document is the only copy of an unquantized vector, so a cache miss costs a
+document read (`vectorFetchFromDocuments`). Quantized indexes keep codes in the
+index pages (`vectorFetchFromQuantized`), which is why INT8 tolerates a small
+cache far better than fp32 does.
+
+---
+
 ### `VectorIndex.build_graph_now()`
 
 Force an immediate rebuild/preparation of the vector graph.
@@ -809,6 +849,26 @@ Example for 384-dim vectors with max_connections=16:
 ```
 
 For 1 million vectors: ~1.8 GB RAM
+
+### Vector Caches
+
+Two caches dominate large-index behavior. Both size themselves automatically
+from the index size and the heap, and both are settable as global
+configuration (for example through `jvm_kwargs={"jvm_args": "-Darcadedb...=..."}`
+before the first database is opened):
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `arcadedb.vectorIndex.graphBuildCacheSize` | `0` (automatic) | Vectors held in RAM while the graph is built. Too small and the build re-reads vectors from documents, which is visible as a non-zero `vectorFetchFromDocuments` in `get_stats()`. |
+| `arcadedb.vectorIndex.graphBuildCacheMaxHeapPercent` | `25` | Share of the heap the automatic build-cache sizing may use. |
+| `arcadedb.vectorIndex.searchCacheSize` | `0` (automatic) | Vectors kept warm across queries. `-1` disables it. |
+| `arcadedb.vectorIndex.searchCacheMaxHeapPercent` | `25` | Share of the heap the automatic search-cache sizing may use. |
+
+The search cache is per index and stays warm between queries, so the first
+queries after a fresh build pay a cold-start cost while it fills; check
+`vectorCacheHits` against `vectorCacheMisses` to see when it has settled.
+Sizing headroom matters: a set of 10M 96-dimensional fp32 vectors is roughly
+4.5 GB, so it only stays resident if 25% of the heap can hold it.
 
 ---
 

@@ -72,6 +72,9 @@ Preferred split:
 - Use `vectorNeighbors(..., k, ef_search)` as the default SQL nearest-neighbor surface.
 - `get_metadata()` remains available on the loaded vector index when you need to inspect
   index configuration from Python.
+- `get_stats()` returns live counters (cache hits and misses, where vectors were read
+  from, graph state) for sizing caches and diagnosing build cost. See
+  [Vector Caches](../api/vector.md#vector-caches).
 
 ## Distance Functions (scoring behavior)
 

@@ -901,6 +901,36 @@ class TestLSMVectorIndex:
         # Size should be 2
         assert index.get_size() == 2
 
+    def test_lsm_index_stats(self, test_db):
+        """Live counters are readable and track index activity."""
+        test_db.command("sql", "CREATE VERTEX TYPE Doc")
+        test_db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
+
+        index = test_db.create_vector_index("Doc", "embedding", dimensions=3)
+
+        stats = index.get_stats()
+        assert isinstance(stats, dict) and stats
+        # Counters the engine has reported since vector indexes existed;
+        # the key set may grow, so only these are asserted.
+        assert stats["totalVectors"] == 0
+        assert isinstance(stats["dimensions"], int)
+        assert stats["vectorFetchFromDocuments"] >= 0
+
+        with test_db.transaction():
+            for vec in ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]):
+                test_db.command(
+                    "sql",
+                    "INSERT INTO Doc SET embedding = ?",
+                    arcadedb.to_java_float_array(vec),
+                )
+
+        assert index.get_stats()["totalVectors"] == 2
+        # values are plain Python scalars, not Java objects
+        assert all(
+            v is None or isinstance(v, (int, float, bool, str))
+            for v in index.get_stats().values()
+        )
+
     def test_lsm_persistence(self, temp_db_path):
         """Test that LSM index persists across database restarts."""
         import arcadedb_embedded as arcadedb
