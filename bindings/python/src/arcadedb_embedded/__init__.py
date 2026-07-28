@@ -5,12 +5,21 @@ A native Python bindings for ArcadeDB that embeds the Java database engine
 directly in the Python process using JPype.
 """
 
-# Import version from generated _version.py file (created during build).
-# Source checkouts may not have the generated file yet.
+# The installed distribution's version is the single source of truth: the
+# wheel is versioned from the release tag, while the generated _version.py
+# is derived from the Maven pom, so the two disagree on tagged releases
+# (a 26.8.1.dev20 wheel carried __version__ == "26.8.1.dev0"). Fall back to
+# the generated file, then to a placeholder, for source checkouts that were
+# never installed.
 try:
-    from ._version import __version__
-except ModuleNotFoundError:
-    __version__ = "0.0.0"
+    from importlib.metadata import version as _dist_version
+
+    __version__ = _dist_version("arcadedb-embedded")
+except Exception:  # not installed: fall back to the build-time file
+    try:
+        from ._version import __version__
+    except ModuleNotFoundError:
+        __version__ = "0.0.0"
 
 # Import async execution
 from .async_executor import AsyncExecutor
