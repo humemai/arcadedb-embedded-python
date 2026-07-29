@@ -63,8 +63,10 @@ def spearman(xs, ys):
 
 
 def main():
-    from l2_graph import ADAPTERS as BE, SCALE_PERSONS
-    from ldbc_snb import pick_query_ids
+    from l2_graph import ADAPTERS as BE
+    # SCALE_PERSONS from ldbc_snb, not l2_graph: the latter rebinds it
+    # conditionally and is not keyed by sf1/sf10 unless LDBC mode is active.
+    from ldbc_snb import pick_query_ids, SCALE_PERSONS
 
     out = {"scale": SCALE, "n_seeds": N_SEEDS, "backends": {}}
     seeds = pick_query_ids(SCALE, N_SEEDS)

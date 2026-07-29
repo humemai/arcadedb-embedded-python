@@ -81,9 +81,18 @@ class ArcadeEmbedded(Base):
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         # -Xms pinned to -Xmx for parity with the server deployment
         # (ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap} in runner.py)
+        jvm_args = f"-Xms{heap}"
+        # Engine knobs for an ablation arm, e.g.
+        #   ARCADEDB_JVM_EXTRA=-Darcadedb.sparseVectorScoringMaxPartitions=8
+        # Echoed rather than applied silently: an unread override would make an
+        # ablation measure the default and look like a null result.
+        extra = os.environ.get("ARCADEDB_JVM_EXTRA", "").strip()
+        if extra:
+            jvm_args = f"{jvm_args} {extra}"
+            print(f"JVM-EXTRA {extra}", flush=True)
         self.db = arcadedb.create_database(
             "/tmp/l3_arcade",
-            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
+            jvm_kwargs={"heap_size": heap, "jvm_args": jvm_args})
         from importlib.metadata import version as _pv
         self.version = _pv("arcadedb-embedded")
         self.db.command("sql", "CREATE DOCUMENT TYPE Doc")
