@@ -23,7 +23,9 @@ import numpy as np
 
 DATA = os.environ.get("BENCH_DENSE_DATA", "/data/dense")
 K = 10
-M = int(os.environ.get("BENCH_DENSE_M", "16"))
+# 32 by default, matching l3d_dense: ArcadeDB's maxConnections is per-layer, so
+# 32 is the equivalent of hnswlib M=16 (#5352). See the longer note there.
+M = int(os.environ.get("BENCH_DENSE_M", "32"))
 EF_CONSTRUCTION = 100
 EF_SEARCH = 100
 BATCH = 5000

@@ -27,7 +27,21 @@ import numpy as np
 DATA = os.environ.get("BENCH_DENSE_DATA", "/data/dense")
 DIM = 128
 K = 10
-M = int(os.environ.get("BENCH_DENSE_M", "16"))  # degree-matched ablation: 32 = hnswlib-M16 equivalent (see #5352)
+# Default is 32, NOT 16, and the difference is the whole point of #5352.
+# ArcadeDB's maxConnections is a per-layer bound; hnswlib doubles M at the base
+# layer. So maxConnections=32 is the equivalent of the M=16 that Chroma, Qdrant,
+# Milvus, DuckDB-VSS and LanceDB are all given below, and 16 would silently
+# build ArcadeDB at half their degree. That mistake is already on the record: it
+# published "recall 0.951 vs 0.971, a small deficit" in the scipy paper, and it
+# is what took this lane's dense recall from 0.87 to 0.95 once corrected.
+#
+# The paper reports this lane as "degree-matched", so the DEFAULT has to be the
+# configuration the paper describes. runner.py only passes BENCH_DENSE_M
+# through, it never sets it, so a default of 16 meant every re-run that forgot
+# to export it reproduced the unmatched configuration and would have read as a
+# regression, or worse been folded into the paper at the October freeze re-measure.
+# Set BENCH_DENSE_M=16 explicitly to run the half-degree ablation on purpose.
+M = int(os.environ.get("BENCH_DENSE_M", "32"))
 EF_CONSTRUCTION = 100
 EF_SEARCH = 100
 SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000,
