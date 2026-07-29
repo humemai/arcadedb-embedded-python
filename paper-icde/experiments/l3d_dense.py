@@ -190,7 +190,15 @@ class ArcadeServer(Base):
         self._cmd("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
         buf = []
         for vid in range(len(vecs)):
-            w = ", ".join("%.6f" % x for x in vecs[vid])
+            # 9 significant digits: exact float32 round-trip, matching the
+            # sparse adapter. The embedded side passes exact float32 arrays via
+            # to_java_float_array, so anything lossy here means the two
+            # deployments index different numbers. Measured before changing it:
+            # the previous "%.6f" kept ~4.5 significant digits and changed 0 of
+            # 500 top-10 sets at 200k docs, so this is not a correction to any
+            # published number, just removal of a question a reviewer would
+            # rightly ask. Not tested at 10M, where neighbour gaps are tighter.
+            w = ", ".join("%.9g" % x for x in vecs[vid])
             buf.append(f"INSERT INTO Article SET vid = {vid}, embedding = [{w}]")
             if len(buf) >= 500:
                 self._cmd("sqlscript", ";".join(buf))
@@ -204,7 +212,7 @@ class ArcadeServer(Base):
                   timeout=6 * 3600)  # synchronous 10M HNSW build exceeds 30min
 
     def search(self, qvec, k):
-        w = ", ".join("%.6f" % x for x in qvec)
+        w = ", ".join("%.9g" % x for x in qvec)  # see build(): float32 round-trip
         r = self.rq.post(f"{self.base}/query/bench", json={
             "language": "sql",
             "command": f"SELECT vid FROM (SELECT expand(vectorNeighbors("
