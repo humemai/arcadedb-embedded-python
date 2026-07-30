@@ -211,6 +211,14 @@ CLAIMS = [
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb)", 1), "dense p50 warm"),
     ("l3d.arcadedb.recall", 0.949, 0.001,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb)", 3), "dense recall@10"),
+    # The deployment prose quoted 0.81 (the #5412 close-out figure) while T5
+    # and f8 both said 0.723. Three places, two numbers, same quantity.
+    ("l3d.srv.p50", 1.82, 0.01,
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1), "dense server p50"),
+    ("l3d.deployment_ratio", 2.52, 0.03,
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1)
+               / cell("t5_dense_ts.tex", "ArcadeDB (emb)", 1),
+     "dense transport ratio (prose, table and f8 must agree)"),
 ]
 
 

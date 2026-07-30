@@ -163,6 +163,28 @@ def f7_e2(rows):
     gs_crop(path)
 
 
+
+def _dense_overlay_p50(srv=False):
+    """Dense p50 from the SAME overlay the tables read.
+
+    The dense lane's published numbers do not live in runs.jsonl. They live in
+    verify5412b (embedded, post-#5412 shared warm cache) and verify5413
+    (server), as N=4 warm passes with the cold first pass excluded. Reading
+    runs.jsonl here plotted the pre-#5412 measurement, so the figures and the
+    table disagreed by an order of magnitude on the same quantity.
+
+    Imported from make_paper_tables rather than reimplemented: this file
+    already carries a second copy of the canonical rule, and one duplicated
+    selector per repository is enough.
+    """
+    import make_paper_tables as _T
+    rs = (_T._dev16_dense_rows("srv5413", "verify5413") if srv
+          else _T._dev16_dense_rows())
+    v = [r["query_p50_ms"] for r in rs
+         if isinstance(r.get("query_p50_ms"), (int, float))]
+    return st.median(v) if v else None
+
+
 def f8_deployment(rows):
     """Server/embedded ratio per metric: the transport fee, same engine."""
     def med(lane, scale, wl, be, field):
@@ -180,8 +202,14 @@ def f8_deployment(rows):
          med("l2", "sf10", "oltp", "arcadedb_graph_server", "hop1_p50_ms"), False),
         ("Sparse\np50", med("l3s", "small", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
          med("l3s", "small", "search", "arcadedb_sparse_server", "query_p50_ms"), False),
-        ("Dense\np50", med("l3d", "deep10m", "search", "arcadedb_dense_embedded", "query_p50_ms"),
-         med("l3d", "deep10m", "search", "arcadedb_dense_server", "query_p50_ms"), False),
+        # Dense comes from the same overlays T5 uses, NOT from runs.jsonl.
+        # runs.jsonl still holds the pre-#5412 dense numbers (embedded 5.45 ms,
+        # server 6.82 ms at the 24g heap, and it mixes in the 16g int8 runs on
+        # top of that), so reading it here plotted a 1.25x transport ratio while
+        # the prose two pages earlier said 2.25x from the post-fix warm-cache
+        # measurement. A figure that predates the paper's headline vector fix
+        # is worse than no figure.
+        ("Dense\np50", _dense_overlay_p50(), _dense_overlay_p50(srv=True), False),
         ("TPC-H Q1", med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "q1_ms"),
          med("l1tpc", "tpch1", "olap", "arcadedb_server", "q1_ms"), False),
     ]
@@ -240,7 +268,9 @@ def f4_one_vs_n(rows):
          tsmed("questdb", "q_global_ms"), False),
         ("Sparse 100k p50", med("l3s", "tiny", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
          med("l3s", "tiny", "search", "qdrant_sparse", "query_p50_ms"), False),
-        ("Dense 10M p50", med("l3d", "deep10m", "search", "arcadedb_dense_embedded", "query_p50_ms"),
+        # ArcadeDB's side from the overlay T5 uses (post-#5412); Qdrant has no
+        # overlay and its runs.jsonl row is current, so it stays as it is.
+        ("Dense 10M p50", _dense_overlay_p50(),
          med("l3d", "deep10m", "search", "qdrant_dense", "query_p50_ms"), False),
         ("Sparse 1M p50", med("l3s", "small", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
          med("l3s", "small", "search", "qdrant_sparse", "query_p50_ms"), False),
