@@ -20,7 +20,6 @@ two queries that return different answers would compare different work.
 Prints QUERY-PHASE-START when the loop begins; loops for PROFILE_SECS.
 """
 import os
-import random
 import time
 
 SURFACE = os.environ.get("SURFACE", "cypher")
@@ -49,20 +48,25 @@ def main():
     import ldbc_snb as _ldbc
     from graph_common import OLTP_READS
 
-    # l2_graph rebinds its generators to LDBC only inside its own main(), so a
-    # driver that imports it gets the synthetic graph unless it rebinds too.
-    # This exact bug made an earlier probe measure a graph the seeds did not
-    # address; see hop2_degree_probe.py.
+    # Mirror l2_graph.main()'s LDBC setup exactly. It rebinds these three names
+    # inside its own main(), and adapters resolve them from module globals at
+    # call time, so a driver that imports l2_graph gets the SYNTHETIC graph
+    # unless it rebinds too. pick_query_ids matters as much as the generators:
+    # LDBC person ids are sparse longs, so seeds invented with randrange(n)
+    # address rows that do not exist. That is the same defect that made an
+    # earlier probe measure a graph its seeds could not reach.
     l2_graph.gen_persons = lambda _n: _ldbc.gen_persons(SCALE)
     l2_graph.gen_edges = lambda _n: _ldbc.gen_edges(SCALE)
+    l2_graph.pick_query_ids = lambda _n, k: _ldbc.pick_query_ids(SCALE, k)
 
-    be = l2_graph.BACKENDS["arcadedb_graph_embedded"]()
+    # The registry is ADAPTERS, keyed by each adapter's .name; there is no
+    # BACKENDS here, unlike the sparse and dense lanes.
+    be = l2_graph.ADAPTERS["arcadedb_graph_embedded"]()
     be.connect()
-    be.build(_ldbc.SCALE_PERSONS[SCALE])
+    be.build(l2_graph.SCALE_PERSONS[SCALE])
     be.post_build("oltp")
 
-    rnd = random.Random(20260730)
-    seeds = [rnd.randrange(_ldbc.SCALE_PERSONS[SCALE]) for _ in range(N_SEEDS)]
+    seeds = list(_ldbc.pick_query_ids(SCALE, N_SEEDS))
 
     cy = OLTP_READS[QUERY]
     sq = SQL_READS[QUERY]
