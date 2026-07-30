@@ -111,6 +111,17 @@ class ArcadeGraphEmbedded(Base):
     def post_build(self, workload):
         if workload != "olap":
             return
+        # BENCH_GAV=0 skips the view, so the analytical queries can be run
+        # with and without it. Nothing in the campaign had ever done that: every
+        # OLAP cell built a view, so we have no evidence the executor actually
+        # uses it. Two things make the question worth asking. The view costs
+        # only ~1.5 s to build over SF10 (30.0 s OLAP build against 28.5 s
+        # OLTP) for 65k vertices and ~2.5M edges, which is cheap for an
+        # analytical projection; and our OLAP latencies sit in Neo4j's
+        # traversal band rather than moving toward LadybugDB's columnar one,
+        # which is what an effective projection should look like.
+        if os.environ.get("BENCH_GAV", "1") == "0":
+            return
         # ArcadeDB's documented OLAP mode: build a Graph Analytical View and
         # wait for READY; the executor then uses it for matching traversals.
         self.db.command(
