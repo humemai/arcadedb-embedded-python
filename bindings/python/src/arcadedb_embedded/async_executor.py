@@ -36,6 +36,37 @@ if TYPE_CHECKING:
 _LOGGER = get_logger(__name__)
 
 
+
+def _convert_column(values):
+    """Convert one non-numeric column, reusing the Java object per distinct str.
+
+    TIMESERIES tag columns are strings, so they miss the numeric buffer path
+    and convert one element at a time. Tags are low cardinality by definition,
+    which is the premise the engine's own TAG dictionary rests on (#5574), so
+    almost every one of those conversions repeats work already done: in TSBS
+    `cpu` the ten tag columns hold 233 distinct values across 2,592,000 rows,
+    hostname alone repeating each of 100 values 25,920 times, and `arch`
+    repeating each of 2 values 1,296,000 times.
+
+    Memoising per distinct value turns 25.9M conversions into 233. Restricted
+    to `str` on purpose: a Java String is immutable, so sharing one reference
+    across rows is safe, whereas memoising a converted list or map would alias
+    a mutable object across rows and let a later write show up in earlier ones.
+    Everything else keeps converting per element exactly as before.
+    """
+    out = []
+    seen = {}
+    for value in values:
+        if type(value) is str:
+            java = seen.get(value)
+            if java is None:
+                java = convert_python_to_java(value)
+                seen[value] = java
+            out.append(java)
+        else:
+            out.append(convert_python_to_java(value))
+    return out
+
 class AsyncExecutor:
     """
     Wrapper for Java DatabaseAsyncExecutor with Pythonic interface.
@@ -440,7 +471,7 @@ class AsyncExecutor:
                 columns_java.append(col)
             else:
                 columns_java.append(JObjectArray(
-                    [convert_python_to_java(value) for value in values]))
+                    _convert_column(values)))
         self._java_async.appendSamples(type_name, timestamps_java, *columns_java)
 
     def _append_samples_primitive(
