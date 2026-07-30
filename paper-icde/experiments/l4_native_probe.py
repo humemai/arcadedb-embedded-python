@@ -193,6 +193,17 @@ def main():
                 f"ABORT: {qn} returned 0 rows (TS_TAGS={N_TAGS}, filter column "
                 f"{TAG0!r}); a zero-row query is not a fast query")
     b.close()
+    # Stamp the wheel actually installed in this container. The TS overlay was
+    # the one results directory feeding a published table with no version
+    # recorded anywhere, and a cell whose version is not in the row is a cell
+    # nothing can check later: T5's server build cell was wrong for exactly a
+    # year of that reason. Key name matches the sparse lane (`engine_version`)
+    # so one audit can read every overlay.
+    try:
+        from importlib.metadata import version as _pkgver
+        out["engine_version"] = _pkgver("arcadedb-embedded")
+    except Exception as e:  # never lose a completed run over provenance
+        out["engine_version"] = f"unknown ({e.__class__.__name__})"
     outp = os.environ.get("PROBE_OUT", "")
     if outp:
         with open(outp, "w") as f:
