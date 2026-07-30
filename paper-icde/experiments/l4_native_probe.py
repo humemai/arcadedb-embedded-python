@@ -39,6 +39,11 @@ SETTLE_S = float(os.environ.get("TS_SETTLE_S", "30"))
 TAG_NAMES = ["hostname", "region", "datacenter", "rack", "os",
              "arch", "team", "service", "service_version", "service_environment"]
 N_TAGS = int(os.environ.get("TS_TAGS", "1"))
+# The narrow schema calls its single tag "host"; the wide one uses the real
+# TSBS names, whose first is "hostname". The queries filter on this column, so
+# hardcoding "host" would make the wide arm filter on a column that does not
+# exist and report zero rows as though it were a fast query.
+TAG0 = TAG_NAMES[0] if N_TAGS > 1 else "host"
 CHUNK = 50_000
 
 
@@ -136,7 +141,7 @@ class ArcadeTSNative:
         # (208 ms vs 2.5 ms measured); TSBS's last-point permits recency.
         a = self.tmax_ms - 3600_000
         return self.db.query("sql",
-            f"SELECT ts, uu FROM Point WHERE host = '{HOST}' "
+            f"SELECT ts, uu FROM Point WHERE {TAG0} = '{HOST}' "
             f"AND ts BETWEEN {a} AND {self.tmax_ms} "
             f"ORDER BY ts DESC LIMIT 1").to_list()
 
@@ -144,7 +149,7 @@ class ArcadeTSNative:
         a, b = T0 * 1000, (T0 + 3600) * 1000
         return self.db.query("sql",
             f"SELECT ts.timeBucket('1m', ts) AS m, max(uu) AS v FROM Point "
-            f"WHERE host = '{HOST}' AND ts BETWEEN {a} AND {b - 1} "
+            f"WHERE {TAG0} = '{HOST}' AND ts BETWEEN {a} AND {b - 1} "
             f"GROUP BY m ORDER BY m").to_list()
 
     def q_global(self):
@@ -177,7 +182,16 @@ def main():
             ref = getattr(b, qn)()
             times.append((time.perf_counter() - t) * 1000)
         out[f"{qn}_ms"] = round(statistics.median(times), 2)
-        out[f"{qn}_rows"] = len(ref) if ref is not None else 0
+        rows = len(ref) if ref is not None else 0
+        out[f"{qn}_rows"] = rows
+        # A query that matches nothing is fast, and looks like a result. This
+        # guard exists because the wide-tag arm renames the first tag column
+        # (host -> hostname) and a stale filter would have returned zero rows
+        # at high speed rather than failing.
+        if rows == 0:
+            raise SystemExit(
+                f"ABORT: {qn} returned 0 rows (TS_TAGS={N_TAGS}, filter column "
+                f"{TAG0!r}); a zero-row query is not a fast query")
     b.close()
     outp = os.environ.get("PROBE_OUT", "")
     if outp:
