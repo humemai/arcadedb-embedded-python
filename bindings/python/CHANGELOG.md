@@ -9,6 +9,39 @@ Java behaviour reaches Python users through `pip install` without passing
 through anything they would think to read. Breaking changes are listed first
 for each version.
 
+## 26.8.1.dev23
+
+### Engine
+
+- **TimeSeries `TAG` columns are dictionary-encoded**
+  ([#5574](https://github.com/ArcadeData/arcadedb/pull/5574), closing
+  [#5519](https://github.com/ArcadeData/arcadedb/issues/5519)). A mutable
+  TimeSeries row is fixed-stride, so a `STRING` TAG previously reserved
+  `2 + MAX_STRING_BYTES` = 258 bytes inline whether the value was
+  `us-east-1` or empty. Tags are low-cardinality by definition, so nearly all
+  of that was padding that still got written, flushed and shipped through the
+  WAL. A TAG now holds a 4-byte id into a per-type dictionary.
+
+  For a ten-tag schema (what TSBS `cpu` actually declares) the row stride goes
+  **2,612 B to 72 B** and rows per 64K page **25 to 909**. A single-tag schema
+  improves too, 290 B to 36 B.
+
+  **Existing databases are unaffected and there is no in-place migration.**
+  The row format is versioned per type: a type created by an earlier build
+  keeps the inline layout, and only a newly created type gets the encoding. If
+  you are benchmarking this, point it at a fresh database, or you will measure
+  the old layout and see no change.
+
+  `arcadedb.timeSeriesTagDictionaryMaxSize` (default 1M distinct values) turns
+  a mis-declared high-cardinality TAG into a clear error rather than unbounded
+  growth. STRING *fields* stay inline, deliberately: a field is where
+  high-cardinality text belongs.
+
+- **`LSM_VECTOR` publishes its location map atomically**
+  ([#5568](https://github.com/ArcadeData/arcadedb/issues/5568)) instead of
+  clearing and refilling it, so lookups no longer observe a partially rebuilt
+  map.
+
 ## 26.8.1.dev22
 
 ### Engine
