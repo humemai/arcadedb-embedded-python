@@ -26,6 +26,19 @@ PRIMITIVE = os.environ.get("TS_PRIMITIVE", "0") == "1"
 # path, which understated this lane 2.9x through the whole July campaign;
 # lists remain reachable (TS_NUMPY=0) only to reproduce that "before" number.
 NUMPY_COLS = os.environ.get("TS_NUMPY", "1") == "1"
+# Fixed post-ingest settle so every arm gets the same background-sealing
+# window; see the note at the call site. Default 30 s comfortably exceeds the
+# ~4.7 s spread between the fastest and slowest ingest arms.
+SETTLE_S = float(os.environ.get("TS_SETTLE_S", "30"))
+# TSBS cpu declares TEN tags; this lane declared one, which put our published
+# number on the 290-byte stride arm rather than the 2,612-byte one real users
+# are on, and therefore flattered ArcadeDB. Only became viable to fix with
+# upstream #5574 (a TAG is now a 4-byte dictionary id, not a 258-byte inline
+# slot). Kept configurable so the narrow arm stays reproducible for comparison
+# against what is already published.
+TAG_NAMES = ["hostname", "region", "datacenter", "rack", "os",
+             "arch", "team", "service", "service_version", "service_environment"]
+N_TAGS = int(os.environ.get("TS_TAGS", "1"))
 CHUNK = 50_000
 
 
@@ -41,11 +54,26 @@ class ArcadeTSNative:
 
     def ingest(self, pts):
         db = self.db
+        # N_TAGS>1 needs the real tag values, which parse_lp discards (it keeps
+        # hostname only). ts_stride_probe.parse_full keeps all ten, so the wide
+        # arm uses genuine TSBS cardinality rather than synthesised values;
+        # synthetic tags would change dictionary cardinality and therefore
+        # measure something other than the real schema.
+        if N_TAGS > 1:
+            from ts_stride_probe import parse_full, TAGS as _ALLTAGS
+            rows = parse_full()
+            if not rows:
+                raise SystemExit("ABORT: parse_full returned no rows for the wide-tag arm")
+            tagcols = ", ".join(f"{_ALLTAGS[i]} STRING" for i in range(N_TAGS))
+        else:
+            tagcols = "host STRING"
         db.command("sql",
                    "CREATE TIMESERIES TYPE Point TIMESTAMP ts "
-                   "TAGS (host STRING) "
+                   f"TAGS ({tagcols}) "
                    "FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) "
                    f"SHARDS {SHARDS}")
+        if N_TAGS > 1:
+            return self._ingest_wide(rows)
         ex = self.db.async_executor()
         for lo in range(0, len(pts), CHUNK):
             chunk = pts[lo:lo + CHUNK]
@@ -65,6 +93,43 @@ class ArcadeTSNative:
             ex.append_samples(
                 "Point", ts_col, host_col, uu_col, us_col, ui_col, **kw)
         ex.wait_completion()
+        # SETTLE. wait_completion() returns when the async ingest has been
+        # accepted, not when background sealing has caught up, and this lane
+        # had no settle step at all while every other lane has one (ES
+        # forcemerge, Milvus flush, Qdrant green-wait, ArcadeDB COMPACT INDEX).
+        #
+        # Without it the arms are not comparable: the list-ingest arm spends
+        # ~6.2 s ingesting where the batch arm spends ~1.5 s, so the slow arm
+        # hands sealing ~4.7 s more wall clock before the first query, and the
+        # measured "faster ingest reads slower" effect could be entirely that.
+        # A fixed wait gives every arm the same sealing window regardless of
+        # how fast it ingested. There is no user-facing flush or compact for
+        # TIMESERIES (only an internal flushHeader), so a wall-clock wait is
+        # the honest instrument rather than a chosen one.
+        if SETTLE_S > 0:
+            time.sleep(SETTLE_S)
+
+    def _ingest_wide(self, rows):
+        """Real TSBS tag cardinality: N_TAGS tag columns from parse_full.
+
+        Same chunking, same numpy/primitive switches and the same settle as the
+        narrow path, so the only difference between arms is the tag count.
+        """
+        ex = self.db.async_executor()
+        for lo in range(0, len(rows), CHUNK):
+            chunk = rows[lo:lo + CHUNK]
+            ts_col = [r[1] * 1000 for r in chunk]
+            tag_cols = [[r[0][i] for r in chunk] for i in range(N_TAGS)]
+            fld = [[r[2][j] for r in chunk] for j in range(3)]
+            if NUMPY_COLS:
+                import numpy as _np
+                ts_col = _np.asarray(ts_col, dtype=_np.int64)
+                fld = [_np.asarray(c, dtype=_np.float64) for c in fld]
+            kw = {"primitive": True} if PRIMITIVE else {}
+            ex.append_samples("Point", ts_col, *tag_cols, *fld, **kw)
+        ex.wait_completion()
+        if SETTLE_S > 0:
+            time.sleep(SETTLE_S)
 
     def q_last(self):
         # Bounded window: unbounded ts.last scans the tag's whole series
