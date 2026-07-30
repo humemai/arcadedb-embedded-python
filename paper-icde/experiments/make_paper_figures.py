@@ -285,9 +285,18 @@ def f6_memory_ceiling(rows):
              ("qdrant_dense", "Qdrant")]
     labels, vals = [], []
     for be, label in order:
+        # ArcadeDB ran DEEP-10M at two pinned heaps (16g and 24g) and every
+        # comparator ran at one. Taking a plain median over both put the
+        # ArcadeDB bars at 24.3 GiB, the midpoint of a ~28.4 GiB cluster and a
+        # ~20.3 GiB one, which is neither operating point and is 4 GiB below
+        # the 24 GiB configuration the caption says the bars track. It also
+        # flattered us, which is the direction that matters. Pin the ArcadeDB
+        # bars to the 24 GiB heap the caption claims and the dense table uses.
+        want_heap = "24g" if be.startswith("arcadedb") else None
         g = [r["peak_anon_mib_sum"] / 1024 for r in rows
              if r["lane"] == "l3d" and r["scale"] == "deep10m"
              and r["backend"] == be
+             and (want_heap is None or r.get("heap") == want_heap)
              and isinstance(r.get("peak_anon_mib_sum"), (int, float))]
         if g:
             labels.append(label)
