@@ -381,8 +381,22 @@ def dense_ts_table(rows):
               r"System & Ingest (pts/s) & Last point (ms) & 1h bucket (ms) & "
               r"12h global (ms) \\", r"\midrule"]
     import glob
+    # Native TimeSeries on released dev21 via the IDIOMATIC ingest path, which
+    # supersedes the batch1 rows. Those were measured through the adapter's
+    # per-element conversion (Python lists into an Object[] column), which was
+    # our defect and not the engine's: numpy arrays reach the binding's bulk
+    # path, and routing each batch through the engine's primitive
+    # TimeSeriesBatch (#5474) reaches it fully. Reporting the list arm prices
+    # our own adapter rather than the engine, and contradicts the prose, which
+    # already cites 1.73M pts/s and a 1.12x DuckDB lead.
+    # The full decomposition stays in the text: lists 417k, arrays 1.29M,
+    # arrays + TimeSeriesBatch 1.73M.
     native = [json.load(open(fp)) for fp in
-              glob.glob(os.path.join(RESULTS, "batch1", "l4n_r*.json"))]
+              glob.glob(os.path.join(RESULTS, "dev21_ts",
+                                     "ts_dev21_prim_r*.json"))]
+    if not native:  # fall back rather than mix
+        native = [json.load(open(fp)) for fp in
+                  glob.glob(os.path.join(RESULTS, "batch1", "l4n_r*.json"))]
     if native:
         lines.append(" & ".join([
             r"ArcadeDB (native TS)", mmm(native, "ingest_pts_per_s"),
