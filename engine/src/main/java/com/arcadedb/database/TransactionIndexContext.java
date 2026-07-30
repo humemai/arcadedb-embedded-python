@@ -18,6 +18,7 @@
  */
 package com.arcadedb.database;
 
+import com.arcadedb.engine.LocalBucket;
 import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.index.Index;
@@ -349,10 +350,21 @@ public class TransactionIndexContext {
         if (associatedBucketId >= 0)
           modifiedFiles.add(associatedBucketId);
 
+        // Only the UNIQUE indexes of the type need the all-buckets fan-out (#5499). A unique index is
+        // partitioned by the record's bucket, so a colliding key can sit in ANY bucket's sub-index and
+        // checkUniqueIndexKeys has to read the whole polymorphic TypeIndex - exactly the set locked here -
+        // for the check to be atomic against a concurrent inserter. A NOTUNIQUE sibling enforces no such
+        // cross-bucket invariant and is never read by that check; the only sub-index it can WRITE is its
+        // own, and that one is already covered by the getFileIds() call above, which runs for every index
+        // this transaction registered an entry for. Locking the siblings too multiplied the per-commit lock
+        // set by the number of indexes on the type - 6 indexes x 32 buckets = 192 exclusive locks to insert
+        // one edge in the report that surfaced this - and serialised every writer against every other one
+        // regardless of which keys or buckets they touched.
         final DocumentType type = schema.getType(index.getTypeName());
         for (final TypeIndex typeIndex : type.getAllIndexes(true))
-          for (final IndexInternal idx : typeIndex.getIndexesOnBuckets())
-            modifiedFiles.add(idx.getFileId());
+          if (typeIndex.isUnique())
+            for (final IndexInternal idx : typeIndex.getIndexesOnBuckets())
+              modifiedFiles.add(idx.getFileId());
       } else if (associatedBucketId >= 0)
         modifiedFiles.add(associatedBucketId);
     }
@@ -498,6 +510,15 @@ public class TransactionIndexContext {
             throw new DuplicatedKeyException(idx.getName(), Arrays.toString(key.keyValues), firstEntry.getIdentity());
 
           } catch (final RecordNotFoundException e) {
+            // #5279: "not found" is only evidence of a dirty index when the record is missing from the COMMITTED
+            // state too. This transaction reads through its OWN image of the record's page, which can be older
+            // than the committed one - since concurrent inserts into the same bucket now take different slots of
+            // the same page, a transaction that already modified that page cannot see a record a concurrent
+            // transaction committed into it. Repairing then would silently delete a HEALTHY index entry and let a
+            // duplicate key through: the key is really taken, so fail like any other duplicate.
+            if (existsInCommittedState(firstEntry.getIdentity()))
+              throw new DuplicatedKeyException(idx.getName(), Arrays.toString(key.keyValues), firstEntry.getIdentity());
+
             // INDEX DIRTY: THE RECORD WAS DELETED OR ITS BUCKET IS GONE, REMOVE THE DANGLING ENTRY TO FIX THE INDEX
             LogManager.instance()
                 .log(this, Level.WARNING,
@@ -510,6 +531,16 @@ public class TransactionIndexContext {
       }
     }
 
+  }
+
+  /**
+   * Tells whether a record still lives at {@code rid} in the CURRENT COMMITTED state, ignoring what this
+   * transaction's own (possibly older) image of that page shows. Used to tell a genuinely dangling index entry from
+   * one this transaction simply cannot see yet (#5279).
+   */
+  private boolean existsInCommittedState(final RID rid) {
+    return database.getSchema().getFileByIdIfExists(rid.getBucketId()) instanceof LocalBucket bucket//
+        && bucket.existsRecordInCommittedPage(rid);
   }
 
   /**

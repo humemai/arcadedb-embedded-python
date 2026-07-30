@@ -131,6 +131,12 @@ jobs:
     needs: download-jars
     env:
       BUILD_VERSION: ${{ inputs.build-version }}
+      # Pin the Hugging Face cache inside the workspace so it is cacheable with
+      # one path on every platform (the default differs per OS). The examples
+      # embed with sentence-transformers, and this matrix is 20 jobs, so
+      # uncached that is 20 independent model downloads per release and 20
+      # chances for a transient hub outage to fail a release. It has happened.
+      HF_HOME: ${{ github.workspace }}/.hf-cache
     strategy:
       fail-fast: false
       matrix:
@@ -236,6 +242,38 @@ jobs:
             uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
             uv pip install --system numpy requests sentence-transformers
           fi
+
+      # Restored before the dataset step, which is what triggers the model
+      # download. Keyed on the model name so bumping the model invalidates it.
+      - name: Cache Hugging Face model
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.hf-cache
+          key: hf-all-MiniLM-L6-v2-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: |
+            hf-all-MiniLM-L6-v2-${{ runner.os }}-
+
+      # Pre-warm with bounded retries, separately from the dataset step, so a
+      # transient hub failure is retried here rather than surfacing mid-example
+      # as an OSError that reads like a bindings bug. Retrying is appropriate
+      # for this step specifically: it exercises third-party I/O, not our code.
+      # Deliberately NOT fail-fast: if the hub is truly down the dataset step
+      # below still runs and fails with its own message, so this cannot turn a
+      # real breakage into a silent skip.
+      - name: Pre-warm embedding model
+        shell: bash
+        continue-on-error: true
+        run: |
+          uv pip install --system sentence-transformers >/dev/null 2>&1 || true
+          for attempt in 1 2 3; do
+            if python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2'); print('model ready')"; then
+              echo "✅ model cached on attempt $attempt"
+              exit 0
+            fi
+            echo "⚠️  model fetch failed (attempt $attempt/3)"
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 20))
+          done
+          echo "::warning::could not pre-warm the embedding model after 3 attempts; the dataset step will retry"
 
       - name: Download datasets
         shell: bash

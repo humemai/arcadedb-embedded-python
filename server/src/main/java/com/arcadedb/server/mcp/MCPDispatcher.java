@@ -19,6 +19,7 @@
 package com.arcadedb.server.mcp;
 
 import com.arcadedb.Constants;
+import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.DatabaseContext;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.serializer.json.JSONArray;
@@ -28,6 +29,7 @@ import com.arcadedb.server.mcp.tools.ExecuteCommandTool;
 import com.arcadedb.server.mcp.tools.FullTextSearchTool;
 import com.arcadedb.server.mcp.tools.GetSchemaTool;
 import com.arcadedb.server.mcp.tools.GetServerSettingsTool;
+import com.arcadedb.server.mcp.tools.HybridSearchTool;
 import com.arcadedb.server.mcp.tools.ListDatabasesTool;
 import com.arcadedb.server.mcp.tools.ProfilerStartTool;
 import com.arcadedb.server.mcp.tools.ProfilerStatusTool;
@@ -73,6 +75,14 @@ public class MCPDispatcher {
       5. Use upsert_entity and upsert_relationship to maintain agent memory when the corresponding write permissions are enabled.
       6. ArcadeDB does not generate embeddings; supply vectors produced by your embedding model.""";
 
+  private static final String RESTRICTED_INSTRUCTIONS =
+      """
+      You are connected to an ArcadeDB multi-model database server with a restricted tool surface. Follow these rules:
+      1. Use only tools shown by tools/list; hidden tools cannot be invoked directly by name.
+      2. Call list_databases when you do not know the target database name.
+      3. Call get_schema before querying an unfamiliar database. If your client supports MCP Resources, prefer reading arcadedb://{database}/schema instead.
+      4. Use query for read-only SQL or Cypher retrieval.""";
+
   private static final Set<String> RAG_TOOL_NAMES = Set.of(
       "list_databases",
       "get_schema",
@@ -105,6 +115,7 @@ public class MCPDispatcher {
     TOOLS_LIST.put(SampleRecordsTool.getDefinition());
     TOOLS_LIST.put(VectorSearchTool.getDefinition());
     TOOLS_LIST.put(FullTextSearchTool.getDefinition());
+    TOOLS_LIST.put(HybridSearchTool.getDefinition());
     TOOLS_LIST.put(UpsertEntityTool.getDefinition());
     TOOLS_LIST.put(UpsertRelationshipTool.getDefinition());
     TOOLS_LIST.put(ServerStatusTool.getDefinition());
@@ -191,9 +202,9 @@ public class MCPDispatcher {
 
     try {
       return switch (method) {
-        case "initialize" -> result(id, initialize());
-        case "tools/list" -> result(id, new JSONObject().put("tools", toolsForProfile(config.getToolProfile())));
-        case "tools/call" -> toolsCall(id, params, user);
+        case "initialize" -> result(id, initialize(effectiveProfile(user)));
+        case "tools/list" -> result(id, new JSONObject().put("tools", toolsForProfile(effectiveProfile(user))));
+        case "tools/call" -> toolsCall(id, params, user, effectiveProfile(user));
         case "resources/list" -> resourcesList(id, user);
         case "resources/read" -> resourcesRead(id, params, user);
         case "ping" -> result(id, new JSONObject());
@@ -209,7 +220,7 @@ public class MCPDispatcher {
     }
   }
 
-  private JSONObject initialize() {
+  private JSONObject initialize(final EffectiveToolProfile profile) {
     final JSONObject result = new JSONObject();
     result.put("protocolVersion", MCP_PROTOCOL_VERSION);
 
@@ -223,8 +234,7 @@ public class MCPDispatcher {
     capabilities.put("resources", new JSONObject().put("listChanged", false).put("subscribe", false));
     result.put("capabilities", capabilities);
 
-    result.put("instructions",
-        config.getToolProfile() == MCPConfiguration.ToolProfile.RAG ? RAG_INSTRUCTIONS : INSTRUCTIONS);
+    result.put("instructions", instructionsForProfile(profile));
 
     return result;
   }
@@ -256,19 +266,20 @@ public class MCPDispatcher {
     }
   }
 
-  private MCPResponse toolsCall(final Object id, final JSONObject params, final ServerSecurityUser user) {
+  private MCPResponse toolsCall(final Object id, final JSONObject params, final ServerSecurityUser user,
+      final EffectiveToolProfile profile) {
     final String toolName = params.getString("name", "");
     final JSONObject args = params.getJSONObject("arguments", new JSONObject());
 
     LogManager.instance()
-        .log(this, Level.INFO, "MCP[%s] tools/call '%s' %s (user=%s)", transport, toolName, formatArgs(args), user.getName());
+        .log(this, Level.INFO, "MCP[%s] tools/call '%s' %s (user=%s)", transport, toolName, formatArgs(toolName, args), user.getName());
 
     try {
       if (!REGISTERED_TOOL_NAMES.contains(toolName))
         throw new IllegalArgumentException("Unknown tool: " + toolName);
-      if (!isToolAllowed(config.getToolProfile(), toolName))
+      if (!profile.allows(toolName))
         throw new SecurityException(
-            "Tool '" + toolName + "' is not available in MCP profile '" + config.getToolProfile().configName() + "'");
+            "Tool '" + toolName + "' is not available in " + profile.description());
 
       final JSONObject toolResult = switch (toolName) {
         case "list_databases" -> ListDatabasesTool.execute(server, user, args, config);
@@ -278,6 +289,7 @@ public class MCPDispatcher {
         case "sample_records" -> SampleRecordsTool.execute(server, user, args, config);
         case "vector_search" -> VectorSearchTool.execute(server, user, args, config);
         case "full_text_search" -> FullTextSearchTool.execute(server, user, args, config);
+        case "hybrid_search" -> HybridSearchTool.execute(server, user, args, config);
         case "upsert_entity" -> UpsertEntityTool.execute(server, user, args, config);
         case "upsert_relationship" -> UpsertRelationshipTool.execute(server, user, args, config);
         case "server_status" -> ServerStatusTool.execute(server, user, args, config);
@@ -312,11 +324,17 @@ public class MCPDispatcher {
     }
   }
 
-  private static JSONArray toolsForProfile(final MCPConfiguration.ToolProfile profile) {
+  private EffectiveToolProfile effectiveProfile(final ServerSecurityUser user) {
+    return new EffectiveToolProfile(
+        config.getToolProfile(),
+        config.getPrincipalToolProfile(user.getName()));
+  }
+
+  private static JSONArray toolsForProfile(final EffectiveToolProfile profile) {
     final JSONArray filtered = new JSONArray();
     for (int i = 0; i < TOOLS_LIST.length(); i++) {
       final JSONObject definition = TOOLS_LIST.getJSONObject(i);
-      if (isToolAllowed(profile, definition.getString("name")))
+      if (profile.allows(definition.getString("name")))
         filtered.put(definition);
     }
     return filtered;
@@ -332,15 +350,60 @@ public class MCPDispatcher {
     };
   }
 
-  private static String formatArgs(final JSONObject args) {
+  private static String instructionsForProfile(final EffectiveToolProfile profile) {
+    if (profile.matches(MCPConfiguration.ToolProfile.RAG))
+      return RAG_INSTRUCTIONS;
+    if (profile.matches(MCPConfiguration.ToolProfile.ALL)
+        || profile.matches(MCPConfiguration.ToolProfile.ADMIN))
+      return INSTRUCTIONS;
+    return RESTRICTED_INSTRUCTIONS;
+  }
+
+  private record EffectiveToolProfile(
+      MCPConfiguration.ToolProfile global,
+      MCPConfiguration.ToolProfile principal) {
+
+    private boolean allows(final String toolName) {
+      return isToolAllowed(global, toolName)
+          && (principal == null || isToolAllowed(principal, toolName));
+    }
+
+    private boolean matches(final MCPConfiguration.ToolProfile profile) {
+      for (final String toolName : REGISTERED_TOOL_NAMES)
+        if (allows(toolName) != isToolAllowed(profile, toolName))
+          return false;
+      return true;
+    }
+
+    private String description() {
+      if (principal == null)
+        return "MCP profile '" + global.configName() + "'";
+      return "global MCP profile '" + global.configName()
+          + "' intersected with principal profile '" + principal.configName() + "'";
+    }
+  }
+
+  /**
+   * Renders a tool's arguments for the request log. The value a caller writes to a secret setting is masked here,
+   * because this line is emitted before the tool runs and would otherwise place the secret in the log regardless of
+   * how the tool's own response is redacted. Masking is deliberately limited to the one argument that is a secret by
+   * definition: arguments elsewhere carry caller data, which cannot be told apart from a secret without guessing, and
+   * blanking it would leave the log unable to explain what a call did.
+   */
+  static String formatArgs(final String toolName, final JSONObject args) {
     if (args.length() == 0)
       return "{}";
+    final boolean maskValue = "set_server_setting".equals(toolName) && isHiddenSetting(args.getString("key", null));
     final StringBuilder sb = new StringBuilder("{");
     boolean first = true;
     for (final String key : args.keySet()) {
       if (!first)
         sb.append(", ");
       first = false;
+      if (maskValue && "value".equals(key)) {
+        sb.append(key).append("=\"*****\"");
+        continue;
+      }
       final Object value = args.get(key);
       if (value instanceof String s) {
         final String sanitized = sanitizeForLog(s);
@@ -356,6 +419,18 @@ public class MCPDispatcher {
     return sb.append("}").toString();
   }
 
+  /**
+   * Reports whether a configuration key names a setting the server treats as secret, using the same
+   * {@link GlobalConfiguration#isHidden()} rule the settings tools apply. An unresolvable key is not secret: the
+   * tool rejects it before it can change anything.
+   */
+  private static boolean isHiddenSetting(final String key) {
+    if (key == null || key.isEmpty())
+      return false;
+    final GlobalConfiguration cfg = GlobalConfiguration.findByKey(key);
+    return cfg != null && cfg.isHidden();
+  }
+
   private static String sanitizeForLog(final String value) {
     return value.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
   }
@@ -369,6 +444,7 @@ public class MCPDispatcher {
           + result.getInt("sampledTypes", 0) + " type(s)";
       case "vector_search" -> result.getInt("count", 0) + " neighbor(s)";
       case "full_text_search" -> result.getInt("count", 0) + " hit(s)";
+      case "hybrid_search" -> result.getInt("count", 0) + " fused hit(s)";
       case "upsert_entity", "upsert_relationship" -> result.getInt("count", 0) + " record(s)";
       case "server_status" -> "ok";
       case "profiler_start" -> result.getString("status", "ok");

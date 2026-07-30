@@ -104,13 +104,22 @@ public class TransactionContext implements Transaction {
   // granularity even though their changes commute. On such a commit-time conflict we re-apply THIS transaction's
   // slot writes on top of the newer committed page instead of failing the whole transaction. Tracked per page
   // (packed fileId+pageNumber key): for each written slot we keep the final serialized body, plus - for an
-  // in-place UPDATE - the pre-image, so the rebase can tell a false page conflict (a concurrent write to another
+  // UPDATE - the pre-image, so the rebase can tell a false page conflict (a concurrent write to another
   // slot) from a true one (a concurrent write to the SAME record). A page stays eligible only while every change
-  // this transaction made to it is a tracked disjoint-slot insert or same-or-smaller in-place update; the first
-  // non-rebasable write to it (delete, multi-page/placeholder record, record growth) poisons the page.
+  // this transaction made to it is a tracked disjoint-slot insert or an update that stayed INSIDE the page (an
+  // overwrite, or a growth the page could host by shifting the records that follow - #5279); the first
+  // non-rebasable write to it (delete, multi-page/placeholder record, a record spilled out of the page) poisons it.
   private       Map<Long, SlotRebaseBuffer>          slotRebaseByPage;
   private       LongHashSet                          slotRebasePoisonedPages;
   private       boolean                              slotMerge;
+  // #5279: the insert slots this transaction claimed on EXISTING bucket pages, so concurrent inserts into the same
+  // page get different slots (hence different RIDs) and commute instead of conflicting. Held in parallel primitive
+  // arrays - grown by doubling and reused across transactions - so inserting N records allocates nothing per record,
+  // and released as a block when the transaction ends (see releaseInsertSlotReservations).
+  private       LocalBucket[]                        insertReservationBuckets;
+  private       int[]                                insertReservationPages;
+  private       int[]                                insertReservationSlots;
+  private       int                                  insertReservationCount;
   // Per-transaction soft cap on the bytes retained for the slot merge and the running total: once exceeded the
   // merge is disabled for the rest of the transaction so heap stays bounded on a very large transaction.
   private       long                                 slotMergeMaxBytes;
@@ -128,6 +137,9 @@ public class TransactionContext implements Transaction {
   private       List<Integer>                        explicitLockedFiles   = null;
   private       long                                 txId                  = -1;
   private       STATUS                               status                = STATUS.INACTIVE;
+  // Whether the 1st phase in progress ends by replaying the queued index operations (leader only). See
+  // isIndexChangesReplayed().
+  private       boolean                              indexChangesReplayed  = true;
   // KEEPS TRACK OF MODIFIED RECORD IN TX. AT 1ST PHASE COMMIT TIME THE RECORD ARE SERIALIZED AND INDEXES UPDATED. THIS DEFERRING IMPROVES SPEED ESPECIALLY
   // WITH GRAPHS WHERE EDGES ARE CREATED AND CHUNKS ARE UPDATED MULTIPLE TIMES IN THE SAME TX
   // TODO: OPTIMIZE modifiedRecordsCache STRUCTURE, MAYBE JOIN IT WITH UPDATED RECORDS?
@@ -157,6 +169,10 @@ public class TransactionContext implements Transaction {
   private volatile Object                             requester;
   private       List<Runnable>                       afterCommitCallbacks        = null;
   private       Set<String>                          registeredCallbackKeys      = null;
+
+  // #5279: above this many tracked insert reservations the parallel arrays are dropped instead of being reused, so a
+  // one-off bulk insert does not keep its (per-record) tracking arrays alive on a long-lived transaction context.
+  private static final int MAX_RETAINED_INSERT_RESERVATIONS = 8192;
 
   public enum STATUS {INACTIVE, BEGUN, COMMIT_1ST_PHASE, COMMIT_2ND_PHASE}
 
@@ -776,7 +792,7 @@ public class TransactionContext implements Transaction {
   private static final class SlotRebaseBuffer {
     // slot -> this transaction's FINAL serialized record body (no size prefix); the latest write wins.
     private final Map<Integer, byte[]> finalBody     = new HashMap<>();
-    // slot -> the record body this transaction started from (in-place UPDATES only; absent for inserts).
+    // slot -> the record body this transaction started from (UPDATES only; absent for inserts).
     private final Map<Integer, byte[]> baseBody      = new HashMap<>();
     // slots holding a brand-new record (an INSERT): kept explicit so an insert that is later updated in the same
     // transaction stays an insert (base absent) rather than being mistaken for an in-place update.
@@ -788,6 +804,56 @@ public class TransactionContext implements Transaction {
    */
   public boolean isSlotMergeEnabled() {
     return slotMerge;
+  }
+
+  /**
+   * Registers an insert slot {@link LocalBucket} handed to this transaction on an existing page, so it is given
+   * back when the transaction ends - whatever the outcome (issue #5279). Called once per created record
+   * that lands on a reused page; a record on a brand-new page needs no reservation because the page number itself is
+   * already reserved atomically.
+   */
+  public void trackInsertSlotReservation(final LocalBucket bucket, final int pageNumber, final int slot) {
+    if (insertReservationBuckets == null) {
+      insertReservationBuckets = new LocalBucket[16];
+      insertReservationPages = new int[16];
+      insertReservationSlots = new int[16];
+    } else if (insertReservationCount == insertReservationBuckets.length) {
+      final int newSize = insertReservationCount * 2;
+      insertReservationBuckets = Arrays.copyOf(insertReservationBuckets, newSize);
+      insertReservationPages = Arrays.copyOf(insertReservationPages, newSize);
+      insertReservationSlots = Arrays.copyOf(insertReservationSlots, newSize);
+    }
+
+    insertReservationBuckets[insertReservationCount] = bucket;
+    insertReservationPages[insertReservationCount] = pageNumber;
+    insertReservationSlots[insertReservationCount] = slot;
+    ++insertReservationCount;
+  }
+
+  /**
+   * Gives every insert slot this transaction claimed back to its bucket. Must run on EVERY transaction teardown path
+   * (commit, rollback and kill): a leaked reservation would keep a slot of a live page permanently unusable.
+   */
+  private void releaseInsertSlotReservations() {
+    for (int i = 0; i < insertReservationCount; i++) {
+      final LocalBucket bucket = insertReservationBuckets[i];
+      insertReservationBuckets[i] = null;
+      try {
+        bucket.releaseInsertSlot(insertReservationPages[i], insertReservationSlots[i]);
+      } catch (final Exception e) {
+        // A RELEASE FAILURE (E.G. THE BUCKET WAS DROPPED MEANWHILE) MUST NEVER ABORT THE TRANSACTION TEARDOWN
+        LogManager.instance()
+            .log(this, Level.FINE, "Error on releasing the insert slot reservation of page %d", e, insertReservationPages[i]);
+      }
+    }
+    insertReservationCount = 0;
+
+    if (insertReservationBuckets != null && insertReservationBuckets.length > MAX_RETAINED_INSERT_RESERVATIONS) {
+      // A HUGE BULK INSERT MUST NOT LEAVE ITS ARRAYS BEHIND ON A THREAD-LOCAL, REUSED TRANSACTION CONTEXT
+      insertReservationBuckets = null;
+      insertReservationPages = null;
+      insertReservationSlots = null;
+    }
   }
 
   /**
@@ -813,10 +879,11 @@ public class TransactionContext implements Transaction {
   }
 
   /**
-   * Records a same-or-smaller in-place record update as rebasable, keeping {@code baseBody} (the pre-image) so the
-   * rebase can distinguish a false page conflict (a concurrent write to another slot) from a true one (a
-   * concurrent write to THIS record). No-op when the feature is off or the page is poisoned. The caller passes the
-   * already-computed page/slot so no schema lookup happens per write.
+   * Records a record update that stayed INSIDE its page - an overwrite of the same size or smaller, or a growth the
+   * page could host by shifting the records that follow (#5279) - as rebasable, keeping {@code baseBody} (the
+   * pre-image) so the rebase can distinguish a false page conflict (a concurrent write to another slot) from a
+   * true one (a concurrent write to THIS record). No-op when the feature is off or the page is poisoned. The caller
+   * passes the already-computed page/slot so no schema lookup happens per write.
    */
   public void trackRebasableUpdate(final int fileId, final int pageNumber, final int slot, final byte[] baseBody,
       final byte[] finalBody) {
@@ -840,9 +907,9 @@ public class TransactionContext implements Transaction {
 
   /**
    * Marks the bucket page (fileId, pageNumber) as NOT rebasable via the slot merge: this transaction changed it in
-   * a way that is not a single-slot insert/in-place-update (delete, multi-page/placeholder record, record growth
-   * that shifts other slots). Any tracked slots on it are dropped so a rebase can never silently re-derive the
-   * page from committed-state + our slot writes. No-op when the feature is off.
+   * a way that is not a single-slot insert or an in-page update (delete, multi-page/placeholder record, a record
+   * that had to spill out of the page). Any tracked slots on it are dropped so a rebase can never silently
+   * re-derive the page from committed-state + our slot writes. No-op when the feature is off.
    */
   public void poisonSlotRebasePage(final int fileId, final int pageNumber) {
     if (!slotMerge)
@@ -874,6 +941,20 @@ public class TransactionContext implements Transaction {
   }
 
   /**
+   * True when {@code slot} of page (fileId, pageNumber) holds a record this transaction CREATED and is tracked as a
+   * rebasable insert. Lets the update path recognise a write to a record of its own making: it has no committed
+   * pre-image, so it must keep insert semantics (#5279) - and, for the record kinds normally left to the
+   * edge-append merge, it is the ONLY mechanism that can replay it, since the edge merge cannot rebase a chunk the
+   * committed page does not contain yet.
+   */
+  public boolean isSlotTrackedAsInsert(final int fileId, final int pageNumber, final int slot) {
+    if (!slotMerge || slotRebaseByPage == null)
+      return false;
+    final SlotRebaseBuffer buffer = slotRebaseByPage.get(packPageKey(fileId, pageNumber));
+    return buffer != null && buffer.insertedSlots.contains(slot);
+  }
+
+  /**
    * True when a slot-merge write to page (fileId, pageNumber) has already been poisoned this transaction, so the
    * caller can skip building the (allocation-heavy) record-image copy for a page that can no longer be rebased.
    */
@@ -895,7 +976,7 @@ public class TransactionContext implements Transaction {
    * that page, resolving a version conflict caused solely by concurrent writes to OTHER slots on the same page.
    * Runs only on the leader/embedded commit, while the bucket file's commit lock is held (so the current version
    * is stable), and only for a page whose every modification this transaction made was a tracked disjoint-slot
-   * insert or same-or-smaller in-place update.
+   * insert or an update that stayed inside the page.
    *
    * @return the freshly rebased page, ready to be version-checked and committed.
    *
@@ -983,6 +1064,7 @@ public class TransactionContext implements Transaction {
       database.getTransactionManager().unlockFilesInOrder(lockedFiles, getRequester());
       lockedFiles = null;
     }
+    releaseInsertSlotReservations();
     modifiedPages = null;
     newPages = null;
     edgeAppendsBySegment = null;
@@ -1141,35 +1223,38 @@ public class TransactionContext implements Transaction {
     // Without this, concurrent updateRecordNoLock calls could both load the same page
     // at the same version, bypassing MVCC version checks.
     status = STATUS.COMMIT_1ST_PHASE;
+    // Only the leader replays the queued index operations below: on a replica the index pages arrive with the
+    // leader's changes. An index that skips work during this phase because "the replay will do it" must know.
+    this.indexChangesReplayed = isLeader;
 
     try {
       // #4937: explicit-lock mode captured before checkExplicitLocks nulls explicitLockedFiles, so the
       // late-joiner block below can still tell an explicit-lock transaction from an auto-locked one.
-      boolean explicitLockMode = false;
-      if (isLeader) {
-        // Determine files to lock — must include files from updatedRecords
-        if (updatedRecords != null)
-          for (final Record rec : updatedRecords.values()) {
-            final RID rid = rec.getIdentity();
-            ((LocalBucket) database.getSchema().getBucketById(rid.getBucketId())).fetchPageInTransaction(rid);
-          }
+      // Determine files to lock — must include files from updatedRecords
+      if (updatedRecords != null)
+        for (final Record rec : updatedRecords.values()) {
+          final RID rid = rec.getIdentity();
+          ((LocalBucket) database.getSchema().getBucketById(rid.getBucketId())).fetchPageInTransaction(rid);
+        }
 
-        final IntHashSet modifiedFiles = lockFilesFromChanges();
+      // #5503: replicas lock the modified files too. The page-version validation below is a
+      // check-then-act, and the lock is what makes it atomic against other local committers. A replica
+      // used to skip it, so two concurrent transactions validated against the same base version and both
+      // shipped a delta stamped with the same next version; the state machine applied the first and then
+      // re-applied the second onto it through the equal-version repair path (#4926), splicing two partial
+      // page images together and dropping the records the first delta carried.
+      final IntHashSet modifiedFiles = lockFilesFromChanges();
 
-        // checkExplicitLocks nulls explicitLockedFiles on success, so remember the mode now for the
-        // late-joiner check further down (#4937): otherwise that check always sees null and would
-        // silently expand an explicit-lock transaction's lock set, defeating the explicit-locking contract.
-        explicitLockMode = explicitLockedFiles != null;
+      // checkExplicitLocks nulls explicitLockedFiles on success, so remember the mode now for the
+      // late-joiner check further down (#4937): otherwise that check always sees null and would
+      // silently expand an explicit-lock transaction's lock set, defeating the explicit-locking contract.
+      final boolean explicitLockMode = explicitLockedFiles != null;
 
-        if (explicitLockedFiles != null)
-          checkExplicitLocks(modifiedFiles);
-        else
-          // LOCK FILES IN ORDER (TO AVOID DEADLOCK)
-          lockedFiles = lockFilesInOrder(modifiedFiles);
-
-      } else
-        // IN CASE OF REPLICA THIS IS DEMANDED TO THE LEADER EXECUTION
-        lockedFiles = new ArrayList<>();
+      if (explicitLockedFiles != null)
+        checkExplicitLocks(modifiedFiles);
+      else
+        // LOCK FILES IN ORDER (TO AVOID DEADLOCK)
+        lockedFiles = lockFilesInOrder(modifiedFiles);
 
       // Process updatedRecords AFTER acquiring locks
       if (updatedRecords != null) {
@@ -1215,7 +1300,7 @@ public class TransactionContext implements Transaction {
       // and re-acquire the UNION in order (lock-ordering discipline forbids acquiring extra locks in
       // place). The version checks below run after this block, so anything that changed while unlocked
       // fails validation with the standard retriable ConcurrentModificationException.
-      if (isLeader && lockedFiles != null) {
+      if (lockedFiles != null) {
         // Fast path first: in the overwhelmingly common case every touched file is already locked, and this
         // is one of the hottest paths in the engine - detect late joiners with a plain scan (no allocation,
         // no boxing) and only build the union set when one is actually found.
@@ -1561,6 +1646,7 @@ public class TransactionContext implements Transaction {
     }
 
     indexChanges.reset();
+    releaseInsertSlotReservations();
 
     modifiedPages = null;
     newPages = null;
@@ -1616,6 +1702,18 @@ public class TransactionContext implements Transaction {
 
   public STATUS getStatus() {
     return status;
+  }
+
+  /**
+   * Whether the index operations queued on this transaction are replayed at the end of the 1st commit phase. True on
+   * a leader (and on any non-replicated database); false on a replica, where the index pages come from the leader's
+   * changes and {@link TransactionIndexContext#commit()} is never invoked. An index consulted during
+   * {@link STATUS#COMMIT_1ST_PHASE} - the phase that re-runs {@code DocumentIndexer.updateDocument} while
+   * serializing the records updated in this transaction - uses this to tell whether it can leave the work to the
+   * replay instead of applying it a second time (issue #5516).
+   */
+  public boolean isIndexChangesReplayed() {
+    return indexChangesReplayed;
   }
 
   public void setStatus(final STATUS status) {

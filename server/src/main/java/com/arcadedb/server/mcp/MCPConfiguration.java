@@ -77,6 +77,7 @@ public class MCPConfiguration implements MCPPermissions {
   private volatile List<String> allowedUsers     = new CopyOnWriteArrayList<>(List.of("root"));
   private volatile Map<String, DatabaseOverride> databaseOverrides = Map.of();
   private volatile ToolProfile  toolProfile      = ToolProfile.ALL;
+  private volatile Map<String, ToolProfile> principalProfiles = Map.of();
   // Extra browser origins accepted by the HTTP transport, on top of always-allowed loopback origins.
   // Empty by default: a non-loopback browser page must be opted in explicitly, because deriving trust
   // from its Host header would not prevent DNS rebinding.
@@ -97,8 +98,10 @@ public class MCPConfiguration implements MCPPermissions {
       final String content = new String(Files.readAllBytes(configFile.toPath()), StandardCharsets.UTF_8);
       final JSONObject json = new JSONObject(content);
       final Map<String, DatabaseOverride> loadedDatabaseOverrides =
-          parseDatabaseOverrides(json.getJSONObject("databases", null));
+          parseDatabaseOverrides(objectValue(json, "databases"));
       final ToolProfile loadedProfile = ToolProfile.parse(json.getString("profile", "all"));
+      final Map<String, ToolProfile> loadedPrincipalProfiles =
+          parsePrincipalProfiles(objectValue(json, "principalProfiles"));
 
       enabled = json.getBoolean("enabled", false);
       allowReads = json.getBoolean("allowReads", true);
@@ -109,6 +112,7 @@ public class MCPConfiguration implements MCPPermissions {
       allowAdmin = json.getBoolean("allowAdmin", false);
       databaseOverrides = loadedDatabaseOverrides;
       toolProfile = loadedProfile;
+      principalProfiles = loadedPrincipalProfiles;
 
       final JSONArray usersArray = json.getJSONArray("allowedUsers", null);
       if (usersArray != null) {
@@ -219,6 +223,26 @@ public class MCPConfiguration implements MCPPermissions {
     this.toolProfile = ToolProfile.parse(toolProfile);
   }
 
+  /**
+   * Returns the profile override for the authenticated principal, or {@code null} when the global profile applies
+   * without an additional restriction. API tokens are matched first by their canonical security name,
+   * {@code apitoken:<name>}, then by the bare token name, the same convention {@link #isUserAllowed(String)} accepts.
+   * The bare form can only narrow the surface further, because a principal profile is intersected with the global one
+   * and never grants a tool; matching it keeps an allowlist entry and a profile entry written the same way from
+   * silently disagreeing about which principal they address.
+   */
+  public ToolProfile getPrincipalToolProfile(final String principalName) {
+    if (principalName == null)
+      return null;
+
+    final ToolProfile canonical = principalProfiles.get(principalName);
+    if (canonical != null)
+      return canonical;
+    if (principalName.startsWith("apitoken:"))
+      return principalProfiles.get(principalName.substring("apitoken:".length()));
+    return null;
+  }
+
   public List<String> getAllowedOrigins() {
     return Collections.unmodifiableList(allowedOrigins);
   }
@@ -299,6 +323,12 @@ public class MCPConfiguration implements MCPPermissions {
     json.put("profile", toolProfile.configName());
     json.put("allowedUsers", new JSONArray(allowedUsers));
     json.put("allowedOrigins", new JSONArray(allowedOrigins));
+    if (!principalProfiles.isEmpty()) {
+      final JSONObject principals = new JSONObject();
+      for (final Map.Entry<String, ToolProfile> entry : principalProfiles.entrySet())
+        principals.put(entry.getKey(), entry.getValue().configName());
+      json.put("principalProfiles", principals);
+    }
     final JSONObject databases = new JSONObject();
     for (final Map.Entry<String, DatabaseOverride> entry : databaseOverrides.entrySet())
       databases.put(entry.getKey(), entry.getValue().toJSON());
@@ -307,48 +337,50 @@ public class MCPConfiguration implements MCPPermissions {
     return json;
   }
 
+  /**
+   * Applies a partial configuration update atomically: every field is parsed and validated into a local before the
+   * first one is assigned, so a payload rejected on any field leaves the configuration exactly as it was. Assigning
+   * inline would let a client see a {@code 400} from {@link MCPConfigHandler} while an earlier field of the same
+   * payload had already taken effect, with no way to tell which prefix was applied short of re-reading the
+   * configuration.
+   */
   public synchronized void updateFrom(final JSONObject json) {
     final Map<String, DatabaseOverride> updatedDatabaseOverrides = json.has("databases")
-        ? mergeDatabaseOverrides(databaseOverrides, json.getJSONObject("databases", null))
+        ? mergeDatabaseOverrides(databaseOverrides, objectValue(json, "databases"))
         : databaseOverrides;
     final ToolProfile updatedProfile = json.has("profile")
         ? ToolProfile.parse(json.getString("profile", null))
         : toolProfile;
+    final Map<String, ToolProfile> updatedPrincipalProfiles = json.has("principalProfiles")
+        ? mergePrincipalProfiles(principalProfiles, objectValue(json, "principalProfiles"))
+        : principalProfiles;
+    final boolean updatedEnabled = json.has("enabled") ? booleanValue(json, "enabled") : enabled;
+    final boolean updatedAllowReads = json.has("allowReads") ? booleanValue(json, "allowReads") : allowReads;
+    final boolean updatedAllowInsert = json.has("allowInsert") ? booleanValue(json, "allowInsert") : allowInsert;
+    final boolean updatedAllowUpdate = json.has("allowUpdate") ? booleanValue(json, "allowUpdate") : allowUpdate;
+    final boolean updatedAllowDelete = json.has("allowDelete") ? booleanValue(json, "allowDelete") : allowDelete;
+    final boolean updatedAllowSchemaChange =
+        json.has("allowSchemaChange") ? booleanValue(json, "allowSchemaChange") : allowSchemaChange;
+    final boolean updatedAllowAdmin = json.has("allowAdmin") ? booleanValue(json, "allowAdmin") : allowAdmin;
+    final List<String> updatedAllowedUsers = json.has("allowedUsers")
+        ? new CopyOnWriteArrayList<>(stringListValue(json, "allowedUsers"))
+        : allowedUsers;
+    final List<String> updatedAllowedOrigins = json.has("allowedOrigins")
+        ? new CopyOnWriteArrayList<>(stringListValue(json, "allowedOrigins"))
+        : allowedOrigins;
 
-    if (json.has("enabled"))
-      enabled = booleanValue(json, "enabled");
-    if (json.has("allowReads"))
-      allowReads = booleanValue(json, "allowReads");
-    if (json.has("allowInsert"))
-      allowInsert = booleanValue(json, "allowInsert");
-    if (json.has("allowUpdate"))
-      allowUpdate = booleanValue(json, "allowUpdate");
-    if (json.has("allowDelete"))
-      allowDelete = booleanValue(json, "allowDelete");
-    if (json.has("allowSchemaChange"))
-      allowSchemaChange = booleanValue(json, "allowSchemaChange");
-    if (json.has("allowAdmin"))
-      allowAdmin = booleanValue(json, "allowAdmin");
+    enabled = updatedEnabled;
+    allowReads = updatedAllowReads;
+    allowInsert = updatedAllowInsert;
+    allowUpdate = updatedAllowUpdate;
+    allowDelete = updatedAllowDelete;
+    allowSchemaChange = updatedAllowSchemaChange;
+    allowAdmin = updatedAllowAdmin;
     databaseOverrides = updatedDatabaseOverrides;
     toolProfile = updatedProfile;
-    if (json.has("allowedUsers")) {
-      final JSONArray usersArray = json.getJSONArray("allowedUsers", null);
-      // Treat explicit null as an empty list (client intent to clear all users)
-      final List<String> users = new ArrayList<>();
-      if (usersArray != null)
-        for (int i = 0; i < usersArray.length(); i++)
-          users.add(usersArray.getString(i));
-      allowedUsers = new CopyOnWriteArrayList<>(users);
-    }
-    if (json.has("allowedOrigins")) {
-      final JSONArray originsArray = json.getJSONArray("allowedOrigins", null);
-      // Treat explicit null as an empty list (client intent to clear all extra origins)
-      final List<String> origins = new ArrayList<>();
-      if (originsArray != null)
-        for (int i = 0; i < originsArray.length(); i++)
-          origins.add(originsArray.getString(i));
-      allowedOrigins = new CopyOnWriteArrayList<>(origins);
-    }
+    principalProfiles = updatedPrincipalProfiles;
+    allowedUsers = updatedAllowedUsers;
+    allowedOrigins = updatedAllowedOrigins;
   }
 
   private File getConfigFile() {
@@ -381,6 +413,35 @@ public class MCPConfiguration implements MCPPermissions {
         result.remove(databaseName);
       else
         result.put(databaseName, DatabaseOverride.fromJSON(updates.getJSONObject(databaseName)));
+    }
+    return Collections.unmodifiableMap(result);
+  }
+
+  private static Map<String, ToolProfile> parsePrincipalProfiles(final JSONObject profiles) {
+    if (profiles == null)
+      return Map.of();
+    return mergePrincipalProfiles(Map.of(), profiles);
+  }
+
+  private static Map<String, ToolProfile> mergePrincipalProfiles(
+      final Map<String, ToolProfile> current, final JSONObject updates) {
+    if (updates == null)
+      return Map.of();
+
+    final Map<String, ToolProfile> result = new LinkedHashMap<>(current);
+    for (final String principalName : updates.keySet()) {
+      if (principalName.isBlank())
+        throw new IllegalArgumentException("MCP principal profile names must not be blank");
+      if (updates.isNull(principalName)) {
+        result.remove(principalName);
+        continue;
+      }
+
+      final Object value = updates.opt(principalName);
+      if (!(value instanceof String profileName))
+        throw new IllegalArgumentException(
+            "MCP principal profile for '" + principalName + "' must be a profile name");
+      result.put(principalName, ToolProfile.parse(profileName));
     }
     return Collections.unmodifiableMap(result);
   }
@@ -506,6 +567,38 @@ public class MCPConfiguration implements MCPPermissions {
       return matchesUser(globalUsers, username)
           && (databaseUsers == null || matchesUser(databaseUsers, username));
     }
+  }
+
+  /**
+   * Reads a nested configuration object, mapping an absent or explicitly null value to {@code null} (the caller's
+   * clear-everything intent) and any other non-object value to a rejected update. Returning the value untyped would
+   * surface a malformed payload as an internal error instead of a client error.
+   */
+  private static JSONObject objectValue(final JSONObject json, final String name) {
+    if (json.isNull(name))
+      return null;
+    final Object value = json.opt(name);
+    if (value instanceof JSONObject object)
+      return object;
+    throw new IllegalArgumentException("MCP configuration field '" + name + "' must be an object");
+  }
+
+  /**
+   * Reads a list of strings, mapping an explicitly null value to an empty list (the caller's clear-everything intent)
+   * and any other non-array value to a rejected update. Reading it through {@code getJSONArray} instead would let a
+   * malformed payload surface as an internal error rather than a client error.
+   */
+  private static List<String> stringListValue(final JSONObject json, final String name) {
+    if (json.isNull(name))
+      return List.of();
+    final Object value = json.opt(name);
+    if (!(value instanceof JSONArray array))
+      throw new IllegalArgumentException("MCP configuration field '" + name + "' must be an array of strings");
+
+    final List<String> result = new ArrayList<>(array.length());
+    for (int i = 0; i < array.length(); i++)
+      result.add(array.getString(i));
+    return result;
   }
 
   private static boolean booleanValue(final JSONObject json, final String name) {

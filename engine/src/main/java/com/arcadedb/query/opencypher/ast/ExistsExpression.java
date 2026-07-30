@@ -22,7 +22,6 @@ import com.arcadedb.log.LogManager;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Level;
 
@@ -45,7 +44,7 @@ public class ExistsExpression implements Expression {
 
   @Override
   public Object evaluate(final Result result, final CommandContext context) {
-    final Map<String, Object> params = new HashMap<>();
+    final Map<String, Object> params = CorrelatedSubqueryRewriter.newParams(context);
     final String modifiedSubquery = CorrelatedSubqueryRewriter.correlate(subquery, result, "__exists_", params,
         ExistsExpression::wrapNonMatchBody);
     try (final var resultSet = context.getDatabase().query("opencypher", modifiedSubquery, params)) {
@@ -68,9 +67,7 @@ public class ExistsExpression implements Expression {
    * A bare pattern body becomes the predicate of the injected MATCH.
    */
   private static String wrapNonMatchBody(final String patterns, final String body) {
-    final String upper = body.toUpperCase();
-    if (upper.startsWith("RETURN") || upper.startsWith("WITH") || upper.startsWith("UNWIND")
-        || upper.startsWith("CALL") || upper.startsWith("OPTIONAL"))
+    if (CorrelatedSubqueryRewriter.startsWithClauseKeyword(body))
       return "MATCH " + patterns + " " + body;
     return "MATCH " + patterns + " WHERE " + body;
   }

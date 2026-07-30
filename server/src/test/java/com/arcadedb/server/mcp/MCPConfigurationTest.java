@@ -58,6 +58,7 @@ class MCPConfigurationTest {
     assertThat(config.isAllowSchemaChange()).isFalse();
     assertThat(config.getAllowedUsers()).containsExactly("root");
     assertThat(config.getToolProfile()).isEqualTo(MCPConfiguration.ToolProfile.ALL);
+    assertThat(config.getPrincipalToolProfile("root")).isNull();
   }
 
   @Test
@@ -144,6 +145,7 @@ class MCPConfigurationTest {
     assertThat(json.getJSONArray("allowedUsers").length()).isEqualTo(1);
     assertThat(json.getJSONArray("allowedUsers").getString(0)).isEqualTo("root");
     assertThat(json.has("databases")).isFalse();
+    assertThat(json.has("principalProfiles")).isFalse();
   }
 
   @Test
@@ -311,6 +313,17 @@ class MCPConfigurationTest {
   }
 
   @Test
+  void nullToolProfileIsRejected() {
+    final MCPConfiguration config = new MCPConfiguration(TEST_ROOT);
+
+    assertThatThrownBy(() -> config.setToolProfile((MCPConfiguration.ToolProfile) null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("must not be null");
+
+    assertThat(config.getToolProfile()).isEqualTo(MCPConfiguration.ToolProfile.ALL);
+  }
+
+  @Test
   void invalidBooleanTypeIsRejected() {
     final MCPConfiguration config = new MCPConfiguration(TEST_ROOT);
     config.load();
@@ -323,6 +336,71 @@ class MCPConfigurationTest {
   }
 
   @Test
+  void invalidBooleanIsRejectedWithoutPartialUpdate() {
+    final MCPConfiguration config = new MCPConfiguration(TEST_ROOT);
+    config.load();
+
+    assertThatThrownBy(() -> config.updateFrom(new JSONObject()
+        .put("enabled", true)
+        .put("allowReads", "yes")))
+        .isInstanceOf(JSONException.class)
+        .hasMessageContaining("allowReads").hasMessageContaining("boolean");
+
+    assertThat(config.isEnabled()).isFalse();
+    assertThat(config.isAllowReads()).isTrue();
+  }
+
+  @Test
+  void invalidBooleanLeavesEveryOtherSettingUnchanged() {
+    final MCPConfiguration config = new MCPConfiguration(TEST_ROOT);
+    config.updateFrom(new JSONObject()
+        .put("principalProfiles", new JSONObject().put("retrieval-user", "rag")));
+
+    assertThatThrownBy(() -> config.updateFrom(new JSONObject()
+        .put("enabled", true)
+        .put("allowInsert", true)
+        .put("allowAdmin", "maybe")
+        .put("profile", "admin")
+        .put("principalProfiles", new JSONObject().put("retrieval-user", "admin"))
+        .put("allowedUsers", new JSONArray().put("editor"))
+        .put("allowedOrigins", new JSONArray().put("https://app.example.com"))))
+        .isInstanceOf(JSONException.class)
+        .hasMessageContaining("allowAdmin").hasMessageContaining("boolean");
+
+    assertThat(config.isEnabled()).isFalse();
+    assertThat(config.isAllowInsert()).isFalse();
+    assertThat(config.isAllowAdmin()).isFalse();
+    assertThat(config.getToolProfile()).isEqualTo(MCPConfiguration.ToolProfile.ALL);
+    assertThat(config.getPrincipalToolProfile("retrieval-user"))
+        .isEqualTo(MCPConfiguration.ToolProfile.RAG);
+    assertThat(config.getAllowedUsers()).containsExactly("root");
+    assertThat(config.getAllowedOrigins()).isEmpty();
+  }
+
+  @Test
+  void nonArrayUserAndOriginListsAreRejectedWithoutPartialUpdate() {
+    final MCPConfiguration config = new MCPConfiguration(TEST_ROOT);
+
+    assertThatThrownBy(() -> config.updateFrom(new JSONObject()
+        .put("allowInsert", true)
+        .put("allowedUsers", "editor")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("allowedUsers").hasMessageContaining("must be an array");
+
+    assertThat(config.isAllowInsert()).isFalse();
+    assertThat(config.getAllowedUsers()).containsExactly("root");
+
+    assertThatThrownBy(() -> config.updateFrom(new JSONObject()
+        .put("allowInsert", true)
+        .put("allowedOrigins", "https://app.example.com")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("allowedOrigins").hasMessageContaining("must be an array");
+
+    assertThat(config.isAllowInsert()).isFalse();
+    assertThat(config.getAllowedOrigins()).isEmpty();
+  }
+
+  @Test
   void profileNamesAreCaseInsensitive() {
     final MCPConfiguration config = new MCPConfiguration(TEST_ROOT);
 
@@ -330,6 +408,123 @@ class MCPConfigurationTest {
 
     assertThat(config.getToolProfile()).isEqualTo(MCPConfiguration.ToolProfile.RAG);
     assertThat(config.toJSON().getString("profile")).isEqualTo("rag");
+  }
+
+  @Test
+  void principalProfilesPersistAndUseCanonicalPrincipalNames() {
+    final MCPConfiguration config = new MCPConfiguration(TEST_ROOT);
+    config.updateFrom(new JSONObject()
+        .put("principalProfiles", new JSONObject()
+            .put("retrieval-user", "RaG")
+            .put("apitoken:admin-token", "ADMIN")));
+    config.save();
+
+    final MCPConfiguration loaded = new MCPConfiguration(TEST_ROOT);
+    loaded.load();
+
+    assertThat(loaded.getPrincipalToolProfile("retrieval-user"))
+        .isEqualTo(MCPConfiguration.ToolProfile.RAG);
+    assertThat(loaded.getPrincipalToolProfile("apitoken:admin-token"))
+        .isEqualTo(MCPConfiguration.ToolProfile.ADMIN);
+    assertThat(loaded.getPrincipalToolProfile("admin-token")).isNull();
+    assertThat(loaded.getPrincipalToolProfile("unknown-user")).isNull();
+    assertThat(loaded.toJSON().getJSONObject("principalProfiles").getString("retrieval-user"))
+        .isEqualTo("rag");
+  }
+
+  @Test
+  void principalProfileUpdatesMergeRemoveAndClear() {
+    final MCPConfiguration config = new MCPConfiguration(TEST_ROOT);
+    config.updateFrom(new JSONObject()
+        .put("principalProfiles", new JSONObject()
+            .put("retrieval-user", "rag")
+            .put("apitoken:admin-token", "admin")));
+
+    config.updateFrom(new JSONObject()
+        .put("principalProfiles", new JSONObject().put("retrieval-user", "admin")));
+    assertThat(config.getPrincipalToolProfile("retrieval-user"))
+        .isEqualTo(MCPConfiguration.ToolProfile.ADMIN);
+    assertThat(config.getPrincipalToolProfile("apitoken:admin-token"))
+        .isEqualTo(MCPConfiguration.ToolProfile.ADMIN);
+
+    final JSONObject removal = new JSONObject();
+    removal.put("retrieval-user", (Object) null);
+    config.updateFrom(new JSONObject().put("principalProfiles", removal));
+    assertThat(config.getPrincipalToolProfile("retrieval-user")).isNull();
+    assertThat(config.getPrincipalToolProfile("apitoken:admin-token"))
+        .isEqualTo(MCPConfiguration.ToolProfile.ADMIN);
+
+    final JSONObject clear = new JSONObject();
+    clear.put("principalProfiles", (Object) null);
+    config.updateFrom(clear);
+    assertThat(config.getPrincipalToolProfile("apitoken:admin-token")).isNull();
+    assertThat(config.toJSON().has("principalProfiles")).isFalse();
+  }
+
+  @Test
+  void invalidPrincipalProfileIsRejectedWithoutPartialUpdate() {
+    final MCPConfiguration config = new MCPConfiguration(TEST_ROOT);
+    config.updateFrom(new JSONObject()
+        .put("principalProfiles", new JSONObject().put("retrieval-user", "rag")));
+
+    assertThatThrownBy(() -> config.updateFrom(new JSONObject()
+        .put("allowInsert", true)
+        .put("principalProfiles", new JSONObject().put("retrieval-user", "retrieval"))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("all").hasMessageContaining("rag").hasMessageContaining("admin");
+
+    assertThat(config.isAllowInsert()).isFalse();
+    assertThat(config.getPrincipalToolProfile("retrieval-user"))
+        .isEqualTo(MCPConfiguration.ToolProfile.RAG);
+
+    assertThatThrownBy(() -> config.updateFrom(new JSONObject()
+        .put("principalProfiles", new JSONObject().put("", "rag"))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("must not be blank");
+
+    assertThatThrownBy(() -> config.updateFrom(new JSONObject()
+        .put("principalProfiles", new JSONObject().put("retrieval-user", 42))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("must be a profile name");
+
+    assertThatThrownBy(() -> config.updateFrom(new JSONObject()
+        .put("allowInsert", true)
+        .put("principalProfiles", "rag")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("principalProfiles").hasMessageContaining("must be an object");
+    assertThat(config.isAllowInsert()).isFalse();
+    assertThat(config.getPrincipalToolProfile("retrieval-user"))
+        .isEqualTo(MCPConfiguration.ToolProfile.RAG);
+
+    assertThatThrownBy(() -> config.updateFrom(new JSONObject().put("databases", "graph")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("databases").hasMessageContaining("must be an object");
+  }
+
+  @Test
+  void apiTokenPrincipalProfileMatchesBareTokenName() {
+    final MCPConfiguration config = new MCPConfiguration(TEST_ROOT);
+    config.updateFrom(new JSONObject()
+        .put("principalProfiles", new JSONObject().put("retrieval-token", "rag")));
+
+    // An allowedUsers entry accepts the bare token name, so the same spelling must select the profile too;
+    // otherwise an operator restricting a token would silently leave it on the wider global profile.
+    assertThat(config.isUserAllowed("apitoken:retrieval-token")).isFalse();
+    config.setAllowedUsers(List.of("retrieval-token"));
+    assertThat(config.isUserAllowed("apitoken:retrieval-token")).isTrue();
+    assertThat(config.getPrincipalToolProfile("apitoken:retrieval-token"))
+        .isEqualTo(MCPConfiguration.ToolProfile.RAG);
+
+    // The canonical entry stays authoritative when both spellings are configured.
+    config.updateFrom(new JSONObject()
+        .put("principalProfiles", new JSONObject().put("apitoken:retrieval-token", "admin")));
+    assertThat(config.getPrincipalToolProfile("apitoken:retrieval-token"))
+        .isEqualTo(MCPConfiguration.ToolProfile.ADMIN);
+
+    // A named user is never matched by the token fallback.
+    assertThat(config.getPrincipalToolProfile("retrieval-token"))
+        .isEqualTo(MCPConfiguration.ToolProfile.RAG);
+    assertThat(config.getPrincipalToolProfile("apitoken:other-token")).isNull();
   }
 
   @Test
