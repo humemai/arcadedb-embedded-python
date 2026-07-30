@@ -100,6 +100,37 @@ def gib(rows, field, **kw):
     return None if v is None else v / 1024
 
 
+
+def ts_arm(field, primitive=True, numpy_cols=True):
+    """Median over ONE time-series ingest arm.
+
+    dev21_ts holds three arms (objlist, objnp, prim) and the paper reports the
+    prim one, which is the TimeSeriesBatch primitive path. Pooling them gives
+    1.29M pts/s where the paper says 1.73M, and every ratio in the prose
+    (4.0x QuestDB, 55x the document path, DuckDB ahead by 1.12x) is consistent
+    with 1.73M, so the arm is the claim.
+    """
+    import glob as _glob
+    import json as _json
+    out = []
+    for fp in _glob.glob(os.path.join(M.RESULTS, "dev21_ts", "*.json")):
+        d = _json.load(open(fp))
+        if bool(d.get("primitive")) == primitive and \
+           bool(d.get("numpy_cols")) == numpy_cols and \
+           isinstance(d.get(field), (int, float)):
+            out.append(d[field])
+    return st.median(out) if out else None
+
+
+def l4_median(field, backend):
+    """Median over the l4_tsbs comparator rows."""
+    import json as _json
+    v = [r[field] for r in
+         (_json.loads(l) for l in open(os.path.join(M.RESULTS, "l4_tsbs.jsonl")) if l.strip())
+         if r.get("backend") == backend and isinstance(r.get(field), (int, float))]
+    return st.median(v) if v else None
+
+
 # (id, prose value, tolerance, how to compute it, note)
 # Tolerance is what the prose's own rounding allows, not a fudge factor: a
 # claim printed as "525 ops/s" is satisfied by anything rounding to 525.
@@ -215,6 +246,27 @@ CLAIMS = [
     # and f8 both said 0.723. Three places, two numbers, same quantity.
     ("l3d.srv.p50", 1.82, 0.01,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1), "dense server p50"),
+    # --- L4 time series ---------------------------------------------------
+    ("l4.native.ingest", 1.73e6, 5e3,
+     lambda r: ts_arm("ingest_pts_per_s"), "native ingest pts/s (prim arm)"),
+    ("l4.native.q_global", 29.6, 0.1,
+     lambda r: ts_arm("q_global_ms"), "12h aggregation on the native path"),
+    ("l4.questdb.ingest", 431305, 500,
+     lambda r: l4_median("ingest_pts_per_s", "questdb"), "QuestDB line protocol"),
+    ("l4.duckdb.ingest", 1.94e6, 5e3,
+     lambda r: l4_median("ingest_pts_per_s", "duckdb"), "DuckDB bulk ingest"),
+    ("l4.doc.q_global", 1791.65, 1.0,
+     lambda r: l4_median("q_global_ms", "arcadedb"), "12h aggregation, document path (1.8 s)"),
+    ("l4.ratio.questdb", 4.0, 0.05,
+     lambda r: ts_arm("ingest_pts_per_s") / l4_median("ingest_pts_per_s", "questdb"),
+     "native vs QuestDB"),
+    ("l4.ratio.docpath", 55.0, 0.5,
+     lambda r: ts_arm("ingest_pts_per_s") / l4_median("ingest_pts_per_s", "arcadedb"),
+     "native vs our own document path"),
+    ("l4.ratio.duckdb", 1.12, 0.01,
+     lambda r: l4_median("ingest_pts_per_s", "duckdb") / ts_arm("ingest_pts_per_s"),
+     "DuckDB's remaining lead"),
+
     ("l3d.deployment_ratio", 2.52, 0.03,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1)
                / cell("t5_dense_ts.tex", "ArcadeDB (emb)", 1),
