@@ -62,6 +62,22 @@ def verify():
     out = {"recovery_s": round(recovery_s, 3), "rows": n, "max_key": mx,
            "contiguous": ok, "max_duplicates": max_dup,
            "wal_flush": os.environ.get("BENCH_ARCADE_WAL_FLUSH", "default")}
+    # Stamp the wheel and persist the trial. E3 is the only lane whose paper
+    # claims ("recovers in under one second ... across five trials", failover
+    # "0.2--3.3 s", "251 of 251 rows") trace to a single hand-written line in
+    # CAMPAIGN_2026-07.md rather than to per-trial data, because this script
+    # only ever printed to stdout and the logs that captured it are gone. The
+    # numbers are right, but nothing can re-derive them. Fixed here so the
+    # freeze re-run leaves evidence.
+    try:
+        from importlib.metadata import version as _pkgver
+        out["engine_version"] = _pkgver("arcadedb-embedded")
+    except Exception as e:
+        out["engine_version"] = f"unknown ({e.__class__.__name__})"
+    outp = os.environ.get("PROBE_OUT", "")
+    if outp:
+        with open(outp, "w") as f:
+            json.dump(out, f)
     print("RESULT " + json.dumps(out), flush=True)
     db.close()
 
