@@ -1659,6 +1659,38 @@ def run_in_docker(args) -> bool:
             continue
         filtered_args.append(arg)
 
+    # Host-absolute paths in the forwarded arguments (notably --db-root) do not
+    # exist inside the container when the repo is mounted at /workspace instead
+    # of at its own host path, so rewrite anything under repo_root to its
+    # mounted equivalent. The milvus/qdrant backends mount the repo at the host
+    # path precisely so host paths keep working, and there dst == src makes this
+    # a no-op.
+    #
+    # Without this, the Docker phase dies with FileNotFoundError on the host
+    # prefix, but only when --db-root happens to sit under the repository. A
+    # db-root in /tmp survives by luck because the container can create it.
+    # run_examples_minimal.py passes a repo-relative db-root, so this failed
+    # every time it ran through the suite and passed every time it was run by
+    # hand from a scratch directory.
+    if workspace_mount_dst != workspace_mount_src:
+        src_prefix = workspace_mount_src.rstrip("/")
+
+        def _to_container_path(value: str) -> str:
+            if value == src_prefix:
+                return workspace_mount_dst
+            if value.startswith(src_prefix + "/"):
+                return workspace_mount_dst + value[len(src_prefix) :]
+            return value
+
+        remapped: list[str] = []
+        for arg in filtered_args:
+            if arg.startswith("--") and "=" in arg:
+                flag, _, value = arg.partition("=")
+                remapped.append(f"{flag}={_to_container_path(value)}")
+            else:
+                remapped.append(_to_container_path(arg))
+        filtered_args = remapped
+
     if args.backend == "milvus":
         has_milvus_host = any(
             arg == "--milvus-host" or arg.startswith("--milvus-host=")
