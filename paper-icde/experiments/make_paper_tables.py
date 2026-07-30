@@ -116,11 +116,36 @@ def mmm_rec(rs, field="recall_at_10"):
     return f"{med:.3f} [{lo:.3f}--{hi:.3f}]"
 
 
+def _unfmt(s):
+    """Parse a rendered cell back to a number, for self-checks only."""
+    s = s.strip()
+    mult = 1.0
+    if s.endswith("M"):
+        mult, s = 1e6, s[:-1]
+    elif s.endswith("k"):
+        mult, s = 1e3, s[:-1]
+    try:
+        return float(s) * mult
+    except ValueError:
+        return None
+
+
 def mmm(rs, field, scale=1.0):
     v = [r[field] * scale for r in rs if isinstance(r.get(field), (int, float))]
     if not v:
         return "--"
-    med, lo, hi = fmt(st.median(v)), fmtb(min(v)), fmtb(max(v))
+    mv, lov, hiv = st.median(v), min(v), max(v)
+    med, lo, hi = fmt(mv), fmtb(lov), fmtb(hiv)
+    # fmtb is deliberately one step coarser than fmt to save column width, and
+    # that can round an endpoint PAST the median: reps [3.98, 3.95, 4.20, 4.04,
+    # 3.98] render as "3.98 [4.0--4.2]", a median outside its own range. Every
+    # number there is individually correct and the pair still reads as an
+    # error, which is the worst kind of table defect. Fall back to the median's
+    # precision for the endpoints whenever the coarse rendering would not
+    # contain it. Same failure mmm_rec documents for recall, one band down.
+    lo_v, hi_v = _unfmt(lo), _unfmt(hi)
+    if (lo_v is not None and lo_v > mv) or (hi_v is not None and hi_v < mv):
+        lo, hi = fmt(lov), fmt(hiv)
     if lo == hi:  # degenerate range at rendered precision
         return med
     return f"{med} [{lo}--{hi}]"
