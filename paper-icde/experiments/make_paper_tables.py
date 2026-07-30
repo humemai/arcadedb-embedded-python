@@ -195,6 +195,33 @@ def _dev15_sparse_rows():
     return out
 
 
+# n_docs -> tier, so a released overlay can be read without parsing filenames.
+_SPARSE_TIER_BY_DOCS = {100_000: "tiny", 1_000_000: "small", 8_841_823: "medium"}
+
+
+def _released_sparse_rows(subdir, tag):
+    """Overlay for a released wheel whose run wrote every tier into ONE
+    directory (queue30 onward), returning {tier: [rows]} for all three.
+
+    The tier is taken from ``n_docs`` in the JSON rather than from the
+    filename. This file had grown one bespoke reader per release, each
+    encoding that release's naming, which makes the next release's layout a
+    guess; ``n_docs`` is written by the lane itself and cannot drift from the
+    data it describes. A file whose n_docs matches no known tier is skipped
+    rather than mislabelled, because a silently misfiled row would land in the
+    wrong table column.
+    """
+    import glob
+    out = {}
+    for fp in glob.glob(os.path.join(RESULTS, subdir, f"l3s_{tag}_*_r*.json")):
+        d = json.load(open(fp))
+        tier = _SPARSE_TIER_BY_DOCS.get(d.get("n_docs"))
+        if tier is None:
+            continue
+        out.setdefault(tier, []).append(d)
+    return out
+
+
 def _dev21_sparse_rows():
     """Released-wheel overlay for the embedded int8 config on 26.8.1.dev21,
     which carries all three merged sparse rounds (#5388 copy bound,
@@ -227,9 +254,14 @@ def _dev21_sparse_full_rows():
 def sparse_table(rows):
     l3s = [r for r in rows if r["lane"] == "l3s"]
     # Prefer the newest released line per tier; fall back rather than mix.
+    # Newest released line wins per tier, falling back rather than mixing.
+    # dev22 is the first RELEASED artifact carrying #5518 (sparse parallel
+    # top-K), so wherever it is present it supersedes dev21.
+    dev22 = _released_sparse_rows("dev22_sparse", "26.8.1.dev22")
     dev15 = _dev15_sparse_rows()
     dev15.update(_dev21_sparse_rows())
-    full = _dev21_sparse_full_rows() or _sparse_full_rows()
+    dev15.update({t: v for t, v in dev22.items() if t in ("tiny", "small") and v})
+    full = dev22.get("medium") or _dev21_sparse_full_rows() or _sparse_full_rows()
     order = ["arcadedb_sparse_embedded", "qdrant_sparse", "milvus_sparse",
              "elasticsearch_sparse"]
     tiers = (("tiny", "100k"), ("small", "1M"), ("medium", "8.84M"))
