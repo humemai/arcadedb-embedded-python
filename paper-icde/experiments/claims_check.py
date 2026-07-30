@@ -26,6 +26,8 @@ which prose numbers moved and which did not.
 Exit status is 1 if any claim disagrees with the data.
 """
 import argparse
+import os
+import re
 import statistics as st
 import sys
 
@@ -60,6 +62,34 @@ def max_of(rows, field, **kw):
 def min_of(rows, field, **kw):
     g = [r[field] for r in _sel(rows, **kw) if isinstance(r.get(field), (int, float))]
     return min(g) if g else None
+
+
+TABLES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                      ".notes", "papers", "icde-2027", "latex", "tables")
+
+
+def cell(table, row_label, col):
+    """Numeric value of one cell in a GENERATED table.
+
+    Sparse and dense rows come from overlay directories, not from
+    `load_canonical()`, so re-deriving their selection here would just be a
+    second implementation to drift. The tables themselves regenerate
+    byte-identical from the data (checked separately), so pinning prose to a
+    table cell chains prose -> table -> data without duplicating the middle
+    step. `col` is 0-based over the row's own cells, after the label.
+    """
+    path = os.path.join(TABLES, table)
+    for line in open(path):
+        line = line.strip()
+        if not line.startswith(row_label):
+            continue
+        cells = [c.strip() for c in line.rstrip("\\\\").split("&")][1:]
+        if col >= len(cells):
+            return None
+        # "11.36 [11.2--11.8]" -> 11.36 ; "306 [306--314]" -> 306
+        m = re.match(r"([0-9]*\.?[0-9]+)", cells[col].replace("{", "").replace("}", ""))
+        return float(m.group(1)) if m else None
+    return None
 
 
 def gib(rows, field, **kw):
@@ -151,6 +181,36 @@ CLAIMS = [
     ("l3d.qdrant.mem_gib", 5.97, 0.05,
      lambda r: gib(r, "peak_anon_mib_sum", lane="l3d", scale="deep10m",
                    backend="qdrant_dense"), "Qdrant dense peak anon GiB"),
+
+    # --- L3s sparse, the paper's centrepiece ------------------------------
+    # Pinned to T4's cells: prose -> table -> data. Column layout is
+    # 100k(p50,p99,R) 1M(p50,p99,R) 8.84M(p50,p99,R), so 1M p50 is index 3 and
+    # 8.84M p50 is index 6.
+    ("l3s.arcadedb.1m_p50", 11.4, 0.05,
+     lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3), "1M p50"),
+    ("l3s.arcadedb.full_p50", 83.7, 0.05,
+     lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 6), "8.84M p50"),
+    ("l3s.qdrant.full_p50", 16.4, 0.05,
+     lambda r: cell("t4_sparse.tex", "Qdrant", 6), "Qdrant 8.84M p50"),
+    ("l3s.milvus.full_p50", 40.5, 0.05,
+     lambda r: cell("t4_sparse.tex", "Milvus", 6), "Milvus 8.84M p50"),
+    # The two ratios the sparse argument turns on, recomputed rather than
+    # restated: a ratio that drifts from its operands is the classic stale claim.
+    ("l3s.ratio.qdrant_1m", 3.9, 0.05,
+     lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3)
+               / cell("t4_sparse.tex", "Qdrant", 3), "Qdrant ratio at 1M"),
+    ("l3s.ratio.qdrant_full", 5.1, 0.05,
+     lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 6)
+               / cell("t4_sparse.tex", "Qdrant", 6), "Qdrant ratio at 8.84M"),
+    ("l3s.improvement", 14.5, 0.1,
+     lambda r: 165.0 / cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3),
+     "1M improvement vs the 165 ms originally filed"),
+
+    # --- T5 dense ---------------------------------------------------------
+    ("l3d.arcadedb.p50", 0.723, 0.005,
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb)", 1), "dense p50 warm"),
+    ("l3d.arcadedb.recall", 0.949, 0.001,
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb)", 3), "dense recall@10"),
 ]
 
 
