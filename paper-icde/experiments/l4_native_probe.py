@@ -98,21 +98,6 @@ class ArcadeTSNative:
             ex.append_samples(
                 "Point", ts_col, host_col, uu_col, us_col, ui_col, **kw)
         ex.wait_completion()
-        # SETTLE. wait_completion() returns when the async ingest has been
-        # accepted, not when background sealing has caught up, and this lane
-        # had no settle step at all while every other lane has one (ES
-        # forcemerge, Milvus flush, Qdrant green-wait, ArcadeDB COMPACT INDEX).
-        #
-        # Without it the arms are not comparable: the list-ingest arm spends
-        # ~6.2 s ingesting where the batch arm spends ~1.5 s, so the slow arm
-        # hands sealing ~4.7 s more wall clock before the first query, and the
-        # measured "faster ingest reads slower" effect could be entirely that.
-        # A fixed wait gives every arm the same sealing window regardless of
-        # how fast it ingested. There is no user-facing flush or compact for
-        # TIMESERIES (only an internal flushHeader), so a wall-clock wait is
-        # the honest instrument rather than a chosen one.
-        if SETTLE_S > 0:
-            time.sleep(SETTLE_S)
 
     def _ingest_wide(self, rows):
         """Real TSBS tag cardinality: N_TAGS tag columns from parse_full.
@@ -133,6 +118,30 @@ class ArcadeTSNative:
             kw = {"primitive": True} if PRIMITIVE else {}
             ex.append_samples("Point", ts_col, *tag_cols, *fld, **kw)
         ex.wait_completion()
+
+    def settle(self):
+        """Fixed post-ingest wait, called by the driver AFTER the ingest timer
+        has stopped.
+
+        Why a settle exists at all: wait_completion() returns when the async
+        ingest has been accepted, not when background sealing has caught up,
+        and this lane had none while every other lane has one (ES forcemerge,
+        Milvus flush, Qdrant green-wait, ArcadeDB COMPACT INDEX). Without it
+        the arms are not comparable: the list arm spends ~6.2 s ingesting where
+        the batch arm spends ~1.5 s, so the slow arm hands sealing ~4.7 s more
+        wall clock before the first query, and the "faster ingest reads slower"
+        effect could be entirely that. There is no user-facing flush or compact
+        for TIMESERIES (only an internal flushHeader), so a wall-clock wait is
+        the honest instrument rather than a chosen one.
+
+        Why it is called from the driver rather than from ingest(): it used to
+        sit at the end of each ingest path, inside the timed region. That made
+        `ingest_s` 30 s high and dropped `ingest_pts_per_s` 5.8x (417k to 72k
+        on the same corpus and the same arm), which reads exactly like a
+        TimeSeries ingest regression and is not one. It nearly went into the
+        paper as one. A settle equalises the window before queries; it is not
+        ingest work and must not be timed as any.
+        """
         if SETTLE_S > 0:
             time.sleep(SETTLE_S)
 
@@ -175,6 +184,10 @@ def main():
     dt = time.perf_counter() - t0
     out["ingest_s"] = round(dt, 2)
     out["ingest_pts_per_s"] = round(len(pts) / dt, 1)
+    # Settle AFTER the timer: every arm gets the same sealing window before
+    # queries, and none of it is counted as ingest.
+    out["settle_s"] = SETTLE_S
+    b.settle()
     for qn in ("q_last", "q_range", "q_global"):
         times, ref = [], None
         for _ in range(QITER):
