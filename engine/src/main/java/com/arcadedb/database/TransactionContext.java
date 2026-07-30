@@ -104,10 +104,11 @@ public class TransactionContext implements Transaction {
   // granularity even though their changes commute. On such a commit-time conflict we re-apply THIS transaction's
   // slot writes on top of the newer committed page instead of failing the whole transaction. Tracked per page
   // (packed fileId+pageNumber key): for each written slot we keep the final serialized body, plus - for an
-  // in-place UPDATE - the pre-image, so the rebase can tell a false page conflict (a concurrent write to another
+  // UPDATE - the pre-image, so the rebase can tell a false page conflict (a concurrent write to another
   // slot) from a true one (a concurrent write to the SAME record). A page stays eligible only while every change
-  // this transaction made to it is a tracked disjoint-slot insert or same-or-smaller in-place update; the first
-  // non-rebasable write to it (delete, multi-page/placeholder record, record growth) poisons the page.
+  // this transaction made to it is a tracked disjoint-slot insert or an update that stayed INSIDE the page (an
+  // overwrite, or a growth the page could host by shifting the records that follow - #5279); the first
+  // non-rebasable write to it (delete, multi-page/placeholder record, a record spilled out of the page) poisons it.
   private       Map<Long, SlotRebaseBuffer>          slotRebaseByPage;
   private       LongHashSet                          slotRebasePoisonedPages;
   private       boolean                              slotMerge;
@@ -136,6 +137,9 @@ public class TransactionContext implements Transaction {
   private       List<Integer>                        explicitLockedFiles   = null;
   private       long                                 txId                  = -1;
   private       STATUS                               status                = STATUS.INACTIVE;
+  // Whether the 1st phase in progress ends by replaying the queued index operations (leader only). See
+  // isIndexChangesReplayed().
+  private       boolean                              indexChangesReplayed  = true;
   // KEEPS TRACK OF MODIFIED RECORD IN TX. AT 1ST PHASE COMMIT TIME THE RECORD ARE SERIALIZED AND INDEXES UPDATED. THIS DEFERRING IMPROVES SPEED ESPECIALLY
   // WITH GRAPHS WHERE EDGES ARE CREATED AND CHUNKS ARE UPDATED MULTIPLE TIMES IN THE SAME TX
   // TODO: OPTIMIZE modifiedRecordsCache STRUCTURE, MAYBE JOIN IT WITH UPDATED RECORDS?
@@ -788,7 +792,7 @@ public class TransactionContext implements Transaction {
   private static final class SlotRebaseBuffer {
     // slot -> this transaction's FINAL serialized record body (no size prefix); the latest write wins.
     private final Map<Integer, byte[]> finalBody     = new HashMap<>();
-    // slot -> the record body this transaction started from (in-place UPDATES only; absent for inserts).
+    // slot -> the record body this transaction started from (UPDATES only; absent for inserts).
     private final Map<Integer, byte[]> baseBody      = new HashMap<>();
     // slots holding a brand-new record (an INSERT): kept explicit so an insert that is later updated in the same
     // transaction stays an insert (base absent) rather than being mistaken for an in-place update.
@@ -875,10 +879,11 @@ public class TransactionContext implements Transaction {
   }
 
   /**
-   * Records a same-or-smaller in-place record update as rebasable, keeping {@code baseBody} (the pre-image) so the
-   * rebase can distinguish a false page conflict (a concurrent write to another slot) from a true one (a
-   * concurrent write to THIS record). No-op when the feature is off or the page is poisoned. The caller passes the
-   * already-computed page/slot so no schema lookup happens per write.
+   * Records a record update that stayed INSIDE its page - an overwrite of the same size or smaller, or a growth the
+   * page could host by shifting the records that follow (#5279) - as rebasable, keeping {@code baseBody} (the
+   * pre-image) so the rebase can distinguish a false page conflict (a concurrent write to another slot) from a
+   * true one (a concurrent write to THIS record). No-op when the feature is off or the page is poisoned. The caller
+   * passes the already-computed page/slot so no schema lookup happens per write.
    */
   public void trackRebasableUpdate(final int fileId, final int pageNumber, final int slot, final byte[] baseBody,
       final byte[] finalBody) {
@@ -902,9 +907,9 @@ public class TransactionContext implements Transaction {
 
   /**
    * Marks the bucket page (fileId, pageNumber) as NOT rebasable via the slot merge: this transaction changed it in
-   * a way that is not a single-slot insert/in-place-update (delete, multi-page/placeholder record, record growth
-   * that shifts other slots). Any tracked slots on it are dropped so a rebase can never silently re-derive the
-   * page from committed-state + our slot writes. No-op when the feature is off.
+   * a way that is not a single-slot insert or an in-page update (delete, multi-page/placeholder record, a record
+   * that had to spill out of the page). Any tracked slots on it are dropped so a rebase can never silently
+   * re-derive the page from committed-state + our slot writes. No-op when the feature is off.
    */
   public void poisonSlotRebasePage(final int fileId, final int pageNumber) {
     if (!slotMerge)
@@ -971,7 +976,7 @@ public class TransactionContext implements Transaction {
    * that page, resolving a version conflict caused solely by concurrent writes to OTHER slots on the same page.
    * Runs only on the leader/embedded commit, while the bucket file's commit lock is held (so the current version
    * is stable), and only for a page whose every modification this transaction made was a tracked disjoint-slot
-   * insert or same-or-smaller in-place update.
+   * insert or an update that stayed inside the page.
    *
    * @return the freshly rebased page, ready to be version-checked and committed.
    *
@@ -1218,6 +1223,9 @@ public class TransactionContext implements Transaction {
     // Without this, concurrent updateRecordNoLock calls could both load the same page
     // at the same version, bypassing MVCC version checks.
     status = STATUS.COMMIT_1ST_PHASE;
+    // Only the leader replays the queued index operations below: on a replica the index pages arrive with the
+    // leader's changes. An index that skips work during this phase because "the replay will do it" must know.
+    this.indexChangesReplayed = isLeader;
 
     try {
       // #4937: explicit-lock mode captured before checkExplicitLocks nulls explicitLockedFiles, so the
@@ -1694,6 +1702,18 @@ public class TransactionContext implements Transaction {
 
   public STATUS getStatus() {
     return status;
+  }
+
+  /**
+   * Whether the index operations queued on this transaction are replayed at the end of the 1st commit phase. True on
+   * a leader (and on any non-replicated database); false on a replica, where the index pages come from the leader's
+   * changes and {@link TransactionIndexContext#commit()} is never invoked. An index consulted during
+   * {@link STATUS#COMMIT_1ST_PHASE} - the phase that re-runs {@code DocumentIndexer.updateDocument} while
+   * serializing the records updated in this transaction - uses this to tell whether it can leave the work to the
+   * replay instead of applying it a second time (issue #5516).
+   */
+  public boolean isIndexChangesReplayed() {
+    return indexChangesReplayed;
   }
 
   public void setStatus(final STATUS status) {
