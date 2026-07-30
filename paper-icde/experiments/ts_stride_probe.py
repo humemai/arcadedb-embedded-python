@@ -86,14 +86,29 @@ def run_arm(rows, n_tags, n_fields, label):
     elapsed = time.perf_counter() - t0
 
     n = int(db.query("sql", "SELECT count(*) AS n FROM P").to_list()[0]["n"])
-    # stride as the engine computes it: 8 (ts) + 258 per STRING + 8 per DOUBLE
-    stride = 8 + 258 * n_tags + 8 * n_fields
+    # Row stride, 8 bytes for the timestamp plus each column's slot.
+    #
+    # There are now TWO layouts and the probe must not assume one. Before
+    # #5574 a STRING TAG reserved 2 + MAX_STRING_BYTES = 258 bytes inline;
+    # after it, a TAG holds a 4-byte dictionary id. Reporting only the v0
+    # formula against a v1 engine would print a stride the engine does not
+    # use and make a real improvement look like a measurement error.
+    #
+    # Which layout is live is a property of the TYPE, not the build: #5574
+    # versions the row format per type and does not migrate in place, so a
+    # type created by an older build keeps the inline layout even on a new
+    # engine. This probe issues CREATE TIMESERIES TYPE into a fresh database
+    # every arm, so it always exercises whatever the running build creates.
+    stride_v0 = 8 + 258 * n_tags + 8 * n_fields
+    stride_v1 = 8 + 4 * n_tags + 8 * n_fields
     db.close()
     return {"label": label, "n_tags": n_tags, "n_fields": n_fields,
             "rows": n, "ingest_s": round(elapsed, 3),
             "pts_per_s": round(len(rows) / elapsed, 1),
-            "predicted_stride_bytes": stride,
-            "predicted_rows_per_64k_page": 65536 // stride}
+            "predicted_stride_bytes_inline_v0": stride_v0,
+            "predicted_rows_per_64k_page_v0": 65536 // stride_v0,
+            "predicted_stride_bytes_tagdict_v1": stride_v1,
+            "predicted_rows_per_64k_page_v1": 65536 // stride_v1}
 
 
 def main():
