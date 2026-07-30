@@ -131,6 +131,22 @@ def l4_median(field, backend):
     return st.median(v) if v else None
 
 
+
+def torn_count(backend):
+    """Trials in which the atomicity injection left a torn state.
+
+    This is the paper's thesis in one number, so it is pinned like any other.
+    Note the asymmetry it does NOT prove: for a single engine `torn_state` is
+    False by construction, since tearing is defined as two systems disagreeing
+    and there is only one system to ask. The force of the demonstration is
+    entirely in the composed stack's 5/5.
+    """
+    rows = [r for r in M.load_canonical()
+            if r.get("lane") == "e2" and r.get("workload") == "atomicity"
+            and r.get("backend") == backend]
+    return sum(1 for r in rows if r.get("torn_state"))
+
+
 # (id, prose value, tolerance, how to compute it, note)
 # Tolerance is what the prose's own rounding allows, not a fudge factor: a
 # claim printed as "525 ops/s" is satisfied by anything rounding to 525.
@@ -246,6 +262,14 @@ CLAIMS = [
     # and f8 both said 0.723. Three places, two numbers, same quantity.
     ("l3d.srv.p50", 1.82, 0.01,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1), "dense server p50"),
+    # --- E2 atomicity, the thesis experiment -------------------------------
+    ("e2.torn.composed", 5, 0,
+     lambda r: torn_count("composed_qdrant_neo4j"), "composed stack torn 5/5"),
+    ("e2.torn.arcadedb", 0, 0,
+     lambda r: torn_count("arcadedb_e2"), "ArcadeDB torn 0/5"),
+    ("e2.torn.surrealdb", 0, 0,
+     lambda r: torn_count("surrealdb_e2"), "SurrealDB torn 0/5"),
+
     # --- L4 time series ---------------------------------------------------
     ("l4.native.ingest", 1.73e6, 5e3,
      lambda r: ts_arm("ingest_pts_per_s"), "native ingest pts/s (prim arm)"),
