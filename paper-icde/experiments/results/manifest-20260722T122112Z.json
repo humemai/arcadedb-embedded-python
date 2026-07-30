@@ -1,0 +1,18 @@
+{
+  "ts": "20260722T122112Z",
+  "tier": "sweep",
+  "scale": "tpch1",
+  "cpuset": "0-11",
+  "workers": 1,
+  "shards": [
+    "0-11"
+  ],
+  "reps": 1,
+  "seed": 42,
+  "mem": "16g",
+  "heap": "8g",
+  "server_mem_fraction": 0.75,
+  "images": {
+    "icde-bench:duckdb": "sha256:54c6aac52f5f40ab44f54d04d52d72408bb9f31beb2a666e67e26f93a0bcdbf0"
+  }
+}
