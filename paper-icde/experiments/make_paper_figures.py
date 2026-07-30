@@ -23,17 +23,18 @@ plt.rcParams.update({"font.size": 8, "axes.grid": True, "grid.alpha": 0.3,
 
 
 def canonical():
-    rows = [json.loads(l) for l in open(os.path.join(RESULTS, "runs.jsonl"))
-            if l.strip()]
-    best = {}
-    for r in rows:
-        if r.get("rc") != 0:
-            continue
-        k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
-             r["backend"], r["rep"])
-        if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
-            best[k] = r
-    return list(best.values())
+    """The tables' canonical rule, imported rather than reimplemented.
+
+    This file used to carry its own copy, identical except that it lacked the
+    PAPER_SCALES filter. Two copies of a selection rule is how the dense
+    figures came to plot pre-#5412 numbers while the table showed post-fix
+    ones: nothing forced them to agree. Verified identity-preserving before
+    switching, since every lane/scale pair the tables filter out (l1 tiny and
+    small, l2 micro/tiny/small/medium, l3d micro, l3s micro) is one no figure
+    selects.
+    """
+    import make_paper_tables as _T
+    return _T.load_canonical()
 
 
 def gs_crop(path, margin=4):
