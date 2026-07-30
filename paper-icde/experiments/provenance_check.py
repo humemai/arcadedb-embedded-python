@@ -65,6 +65,15 @@ LANDMARKS = [
     ("5d9f9ff72f", "auto-sized HNSW build cache fixes the above"),
     ("9e8935ce50", "index-scoped shared vector cache (#5412) speeds dense "
                    "queries"),
+    # Not a behaviour change: a change in what a REPORTED NUMBER MEANS, which is
+    # just as capable of producing a fake regression. estimatedLocationIndexBytes
+    # switched from the 24-byte payload to APPROX_RETAINED_BYTES_PER_LOCATION=90,
+    # so the identical index reports 3.75x more on this side of the commit
+    # (239,760,000 -> ~899,100,000 at 10M vectors). Comparing a dev23 reading to
+    # a dev22 one reads as a memory regression and is an estimator change.
+    ("de1df644a6", "estimatedLocationIndexBytes now quotes retained heap "
+                   "(90 B/location) instead of the 24 B payload (#5568): the "
+                   "same index reports 3.75x more after this commit"),
 ]
 
 
