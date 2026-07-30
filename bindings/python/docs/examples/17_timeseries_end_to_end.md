@@ -16,6 +16,27 @@ It covers:
 - deriving alert-style views from SQL aggregates
 - reading back the latest sample per sensor
 
+!!! note "TAG storage changed in 26.8.1.dev23"
+
+    A mutable TimeSeries row is fixed-stride, so a `STRING` TAG used to reserve
+    258 bytes inline whatever the value was. Since 26.8.1.dev23 a TAG holds a
+    4-byte dictionary id instead
+    ([#5574](https://github.com/ArcadeData/arcadedb/pull/5574)), which for a
+    ten-tag schema takes the row stride from 2,612 B to 72 B.
+
+    **The row format is versioned per type and there is no in-place
+    migration.** A type created by an earlier build keeps the inline layout;
+    only a newly created type gets the encoding. Existing databases keep
+    working, but they do not get the smaller stride, and a benchmark pointed at
+    a database created before dev23 measures the old layout and shows no
+    change. Recreate the type against a fresh database to see the difference.
+
+    TAGs are for low-cardinality values by definition;
+    `arcadedb.timeSeriesTagDictionaryMaxSize` (default 1M distinct values)
+    turns a mis-declared high-cardinality TAG into a clear error rather than
+    unbounded growth. High-cardinality text belongs in a STRING *field*, which
+    stays inline.
+
 ## Run
 
 From `bindings/python/examples`:
