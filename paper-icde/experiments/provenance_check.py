@@ -228,6 +228,103 @@ def run_conditions():
     return bad
 
 
+def caption_n():
+    """Does each published cell rest on as many repetitions as its caption says?
+
+    The captions assert N. Until this check existed, nothing compared that
+    assertion against the arrays the tables were actually built from, and it
+    had already drifted twice. T4's "N=5 except the 8.84M row, which is N=3"
+    was correct only because that one exception was caught by hand. T5
+    asserted a bare N=5 while printing a native-TS row built from three files
+    and three DEEP-10M rows built from four warm passes.
+
+    The protocol section, the intro's contribution list and the integrity
+    section each restated N=5 globally, so one undisclosed short row made four
+    statements wrong at once. That is the restatement failure mode the
+    integrity section itself catalogues, turned on the paper.
+
+    Re-deriving group sizes from results/ would be a second implementation
+    that can disagree with the first, which is the same class of bug. So wrap
+    the real mmm() from make_paper_tables, tag every rendered cell with the
+    length of the array it was handed, and read the tagged rows back. What the
+    tables printed is what this reports, by construction.
+
+    EXPECTED holds the disclosed exceptions. A row whose N is not 5 and not
+    listed here is an undisclosed shortfall and reports BAD; a row listed here
+    whose N no longer matches also reports BAD, so a re-measure that reaches
+    N=5 forces the caption to be corrected rather than left stale.
+    """
+    EXPECTED = {
+        # rendered row label -> (N, where it is disclosed)
+        "ArcadeDB (emb, int8)": ({3, 5}, "T4 caption: N=5 except the 8.84M row"),
+        "ArcadeDB (emb)": ({4, 5}, "T5 caption: four warm passes over one build"),
+        "ArcadeDB (emb, int8, 16GiB)": ({4}, "T5 caption: same treatment"),
+        "ArcadeDB (srv)": ({4, 5}, "T5 caption: same treatment"),
+        "ArcadeDB (native TS)": ({3}, "T5 caption: native-TS row, N=3"),
+    }
+    print("=== repetitions behind each published cell ===")
+    try:
+        sys.path.insert(0, HERE)
+        import make_paper_tables as M
+    except Exception as e:
+        print(f"  SKIPPED: cannot import make_paper_tables ({e})\n")
+        return 0
+
+    _mmm, _rec, _write = M.mmm, M.mmm_rec, M.write
+    captured = {}
+
+    def _tag(fn):
+        def inner(rs, *a, **kw):
+            n = len([r for r in rs if isinstance(r, dict)])
+            return f"\x01{n}\x02" + fn(rs, *a, **kw)
+        return inner
+
+    bad = 0
+    try:
+        M.mmm, M.mmm_rec = _tag(_mmm), _tag(_rec)
+        M.write = lambda name, body: captured.__setitem__(name, body)
+        rows = M.load_canonical()
+        for fn in (M.tabular_table, M.graph_table, M.sparse_table,
+                   M.dense_ts_table):
+            try:
+                fn(rows)
+            except TypeError:
+                fn()
+    except Exception as e:
+        print(f"  SKIPPED: table generation failed ({e})\n")
+        return 0
+    finally:
+        M.mmm, M.mmm_rec, M.write = _mmm, _rec, _write
+
+    for name, body in sorted(captured.items()):
+        if not name.endswith(".tex"):
+            continue
+        for line in body.splitlines():
+            ns = {int(x) for x in re.findall("\x01(\\d+)\x02", line)}
+            if not ns:
+                continue
+            label = re.sub("\x01\\d+\x02", "", line).split("&")[0]
+            label = re.sub(r"\\[a-zA-Z]+\{?|\}|\\,|\\", "", label).strip()
+            if ns == {5}:
+                continue
+            exp = EXPECTED.get(label)
+            if exp and ns <= exp[0]:
+                print(f"  {name} {label:32} N={sorted(ns)} disclosed ({exp[1]})")
+            elif exp:
+                print(f"  {name} {label:32} N={sorted(ns)} BAD: caption says "
+                      f"{sorted(exp[0])} ({exp[1]}); update the caption")
+                bad += 1
+            else:
+                print(f"  {name} {label:32} N={sorted(ns)} BAD: below N=5 and "
+                      f"disclosed in no caption")
+                bad += 1
+    if bad:
+        print("  The protocol section, the intro and the integrity section all\n"
+              "  restate N globally. An undisclosed short row makes each wrong.")
+    print()
+    return bad
+
+
 def _repo_root():
     try:
         out = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=HERE,
@@ -297,7 +394,8 @@ def main():
 
     bad_caption = 0 if args.table else caption_versions()
     bad_cond = 0 if args.table else run_conditions()
-    bad_captions = bad_caption + bad_cond
+    bad_n = 0 if args.table else caption_n()
+    bad_captions = bad_caption + bad_cond + bad_n
 
     asserted = _asserted_versions()
     if asserted:
