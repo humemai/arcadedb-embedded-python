@@ -186,6 +186,39 @@ def _dense_overlay_p50(srv=False):
     return st.median(v) if v else None
 
 
+def _sparse_overlay_p50(tier):
+    """ArcadeDB sparse p50 from the SAME overlays the table reads.
+
+    The identical defect _dense_overlay_p50 documents, left unfixed one lane
+    over. The sparse ArcadeDB rows do not live in runs.jsonl either: the table
+    takes tiny/small from the dev22 overlay and medium from dev22's 8.84M
+    cell, falling back rather than mixing. Reading canonical rows here plotted
+    dev0 at 100k and dev3 at 1M, so f4, the figure captioned "the whole
+    evaluation in one figure", showed sparse 1M at 56.8x behind Qdrant while
+    Table IV two pages later said 3.90x.
+
+    Worth noting which direction it ran: 100k was FLATTERED by the stale data
+    (2.12x plotted against 5.84x real) and 1M was punished by it. A figure
+    wrong in both directions at once is the signature of stale inputs rather
+    than a thumb on the scale, and neither error is one a reader could catch
+    without recomputing the figure.
+
+    Mirrors the table's precedence exactly by calling into it.
+    """
+    import make_paper_tables as _T
+    dev22 = _T._released_sparse_rows("dev22_sparse", "26.8.1.dev22")
+    if tier == "medium":
+        g = dev22.get("medium") or _T._dev21_sparse_full_rows() or _T._sparse_full_rows()
+    else:
+        g = _T._dev15_sparse_rows()
+        g.update(_T._dev21_sparse_rows())
+        g.update({t: v for t, v in dev22.items() if t in ("tiny", "small") and v})
+        g = g.get(tier)
+    v = [r["query_p50_ms"] for r in (g or [])
+         if isinstance(r.get("query_p50_ms"), (int, float))]
+    return st.median(v) if v else None
+
+
 def f8_deployment(rows):
     """Server/embedded ratio per metric: the transport fee, same engine."""
     def med(lane, scale, wl, be, field):
@@ -267,13 +300,13 @@ def f4_one_vs_n(rows):
          med("l2", "sf10", "oltp", "ladybug_graph", "hop1_p50_ms"), False),
         ("TS 12h agg p50", _ts_native_med("q_global_ms"),
          tsmed("questdb", "q_global_ms"), False),
-        ("Sparse 100k p50", med("l3s", "tiny", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
+        ("Sparse 100k p50", _sparse_overlay_p50("tiny"),
          med("l3s", "tiny", "search", "qdrant_sparse", "query_p50_ms"), False),
         # ArcadeDB's side from the overlay T5 uses (post-#5412); Qdrant has no
         # overlay and its runs.jsonl row is current, so it stays as it is.
         ("Dense 10M p50", _dense_overlay_p50(),
          med("l3d", "deep10m", "search", "qdrant_dense", "query_p50_ms"), False),
-        ("Sparse 1M p50", med("l3s", "small", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
+        ("Sparse 1M p50", _sparse_overlay_p50("small"),
          med("l3s", "small", "search", "qdrant_sparse", "query_p50_ms"), False),
         ("TS ingest pts/s", _ts_native_med("ingest_pts_per_s"),
          tsmed("duckdb", "ingest_pts_per_s"), True),
