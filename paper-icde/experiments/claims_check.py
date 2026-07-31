@@ -66,6 +66,7 @@ def min_of(rows, field, **kw):
 
 TABLES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                       ".notes", "papers", "icde-2027", "latex", "tables")
+PAPER = os.path.join(TABLES, "..", "paper.tex")
 
 
 def cell(table, row_label, col):
@@ -337,10 +338,68 @@ CLAIMS = [
 ]
 
 
+def sweep():
+    """List every ratio in the prose that no CLAIM pins, with its context.
+
+    The gap this closes is the one that let "13x, closed from 18x" survive:
+    CLAIMS verifies what it was told about, so a stale number in a paragraph
+    nobody registered is invisible to it, no matter how many claims pass.
+    Ratios get swept specifically because they are the summary-shaped numbers,
+    the ones restating a comparison made elsewhere, and so the ones that go
+    stale when the operands are re-measured.
+
+    This does not judge: an uncovered ratio is not necessarily wrong, and
+    several here are legitimately unpinnable (4--5x raw vector size, a
+    citation's number). It only makes the uncovered set visible so the freeze
+    reviews it deliberately instead of assuming a green CLAIMS run covered
+    the prose. Ranges like "3--20x" are reported by their endpoints.
+    """
+    try:
+        body = open(PAPER).read()
+    except OSError as e:
+        print(f"cannot read paper: {e}")
+        return 0
+    body = re.sub(r"(?m)^\s*%.*$", "", body)          # drop comment lines
+    pinned = [c[1] for c in CLAIMS if isinstance(c[1], (int, float))]
+
+    def covered(v):
+        # 2% relative, so 57 covers a prose "57" computed as 56.7
+        return any(abs(v - p) <= max(0.02 * abs(p), 0.05) for p in pinned)
+
+    seen, out = set(), []
+    # \,{,}\ is LaTeX's thousands separator: without it in the pattern,
+    # "41{,}613$\times$" is read as 613 and the sweep quietly reports a
+    # different number than the paper prints.
+    num = r"[0-9]+(?:\{,\}[0-9]{3})*(?:\.[0-9]+)?"
+    for m in re.finditer(rf"({num})(?:--({num}))?\s*\$\\times\$", body):
+        for g in (m.group(1), m.group(2)):
+            if not g:
+                continue
+            v = float(g.replace("{,}", ""))
+            ctx = " ".join(body[max(0, m.start() - 90):m.end() + 12].split())
+            key = (v, ctx[-60:])
+            if key in seen:
+                continue
+            seen.add(key)
+            if not covered(v):
+                out.append((v, ctx))
+    print(f"=== ratios in prose with no CLAIM pinning them ({len(out)}) ===")
+    print("(not errors; the set the freeze must review deliberately)\n")
+    for v, ctx in out:
+        print(f"  {v}x  ...{ctx[-108:]}")
+    print(f"\n{len(seen)} ratio mentions scanned, {len(seen) - len(out)} covered")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lane", help="only claims whose id starts with this")
+    ap.add_argument("--sweep", action="store_true",
+                    help="list prose ratios that no claim pins, and exit")
     args = ap.parse_args()
+
+    if args.sweep:
+        return sweep()
 
     rows = M.load_canonical()
     print(f"canonical rows: {len(rows)}  "
