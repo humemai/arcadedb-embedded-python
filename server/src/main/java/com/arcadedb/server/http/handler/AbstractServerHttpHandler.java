@@ -52,9 +52,11 @@ import java.nio.charset.Charset;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -447,6 +449,9 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       Throwable realException = e;
       if (e.getCause() != null)
         realException = e.getCause();
+      // Resolved once: the arm below needs both the answer and the exception itself, and the chain walk is not worth
+      // repeating.
+      final ArithmeticErrorException arithmetic = arithmeticError(e);
 
       if (realException instanceof QueryNotIdempotentException) {
         LogManager.instance()
@@ -477,6 +482,15 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
                         realException.getMessage());
         sendErrorResponse(exchange, 409, "Found duplicate key in index", dup,
                 dup.getIndexName() + "|" + dup.getKeys() + "|" + dup.getCurrentIndexedRID());
+      } else if (arithmetic != null) {
+        // An integer overflow or a division by zero is decided by the values the caller supplied, not by anything
+        // wrong with the server, and Neo4j classifies the whole category as a client error
+        // (Neo.ClientError.Statement.ArithmeticError). Reported as 400 with the arithmetic message rather than the
+        // 500 it used to degrade to. See issue #5602.
+        LogManager.instance()
+                .log(this, getUserSevereErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(),
+                        arithmetic.getMessage());
+        sendErrorResponse(exchange, 400, "Cannot execute command", arithmetic, null);
       } else if (e instanceof CommandParsingException || realException instanceof CommandParsingException) {
         // A parsing/semantic validation error (malformed query, unknown variable, invalid MERGE
         // rebind, unsupported Gremlin syntax such as Groovy closures, ...) is a client error - the query
@@ -513,6 +527,7 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       Throwable realException = e;
       if (e.getCause() != null)
         realException = e.getCause();
+      final ArithmeticErrorException arithmetic = arithmeticError(e);
 
       if (realException instanceof SecurityException) {
         LogManager.instance().log(this, getUserSevereErrorLogLevel(), "Security error on transaction execution (%s): %s",
@@ -550,6 +565,14 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
                         realException.getMessage());
         sendErrorResponse(exchange, 409, "Found duplicate key in index", dup,
                 dup.getIndexName() + "|" + dup.getKeys() + "|" + dup.getCurrentIndexedRID());
+      } else if (arithmetic != null) {
+        // Symmetric with the un-wrapped arithmetic arm above (#5602): the auto-commit wrapper in
+        // DatabaseAbstractHandler re-wraps the failure as a TransactionException, and without this branch the
+        // client error would degrade back to 500.
+        LogManager.instance()
+                .log(this, getUserSevereErrorLogLevel(), "Error on command execution (%s): %s", getClass().getSimpleName(),
+                        arithmetic.getMessage());
+        sendErrorResponse(exchange, 400, "Cannot execute command", arithmetic, null);
       } else if (realException instanceof CommandParsingException) {
         // Symmetric with the un-wrapped CommandParsingException arm above. A Cypher/SQL validation
         // error thrown during execution is wrapped by the auto-commit transaction wrapper in
@@ -871,6 +894,28 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   }
 
   /**
+   * Companion of {@link #checkAuthorizationOnDatabase} for the server-scoped routes that enumerate the whole
+   * database registry instead of naming one database in the path (database listing, server status, cluster
+   * status). Those routes stay open to any authenticated user because what they primarily report is
+   * server-level - but every per-database entry they emit has to be reduced to what the caller may access,
+   * otherwise a tenant scoped to one database learns the names of all the others, and with them whatever the
+   * route hangs off a name: transaction ids, bootstrap fingerprints, schema, index metrics.
+   * <p>
+   * Authorization is delegated to {@link ServerSecurityUser#canAccessToDatabase}, so the wildcard grant is
+   * honoured in exactly one place. A {@code null} user means the route runs without authentication and
+   * everything is returned, matching the permissive behaviour of {@link #checkAuthorizationOnDatabase}.
+   *
+   * @return a new set holding the accessible subset, in the iteration order of {@code databaseNames}
+   */
+  protected Set<String> filterAuthorizedDatabases(final ServerSecurityUser user, final Collection<String> databaseNames) {
+    final Set<String> authorized = new LinkedHashSet<>(databaseNames.size());
+    for (final String databaseName : databaseNames)
+      if (user == null || user.canAccessToDatabase(databaseName))
+        authorized.add(databaseName);
+    return authorized;
+  }
+
+  /**
    * Ensures only the root user can execute server administration commands.
    * API token-authenticated users have synthetic names like "apitoken:&lt;name&gt;" and will
    * always fail this check — this is intentional, as token management requires root credentials.
@@ -982,6 +1027,19 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
    */
   private boolean isProductionMode() {
     return "production".equals(httpServer.getServer().getConfiguration().getValueAsString(GlobalConfiguration.SERVER_MODE));
+  }
+
+  /**
+   * The arithmetic error - a 64-bit overflow or a division by zero (issue #5602) - anywhere in the cause chain, or
+   * {@code null} when there is none. Returning the exception itself rather than a boolean lets the caller report
+   * ArcadeDB's message ({@code long overflow}) instead of whatever the wrapper happened to say.
+   * <p>
+   * The whole chain is searched rather than only the outermost throwable and its immediate cause, because the
+   * exception is wrapped differently depending on how the request arrived: directly, inside the auto-commit
+   * {@code TransactionException} wrapper, or with the JDK {@code ArithmeticException} it came from as its own cause.
+   */
+  private static ArithmeticErrorException arithmeticError(final Throwable error) {
+    return CauseChain.find(error, ArithmeticErrorException.class);
   }
 
   private void sendErrorResponse(final HttpServerExchange exchange, final int code, final String errorMessage, final Throwable e,

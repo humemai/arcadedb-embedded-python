@@ -18,8 +18,8 @@
  */
 package com.arcadedb.function.math;
 
-import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.function.StatelessFunction;
+import com.arcadedb.function.cypher.CypherFunctionHelper;
 import com.arcadedb.query.sql.executor.CommandContext;
 
 import java.util.function.DoubleUnaryOperator;
@@ -45,13 +45,20 @@ public class MathUnaryFunction implements StatelessFunction {
   }
 
   @Override
+  public int getMinArgs() {
+    return 1;
+  }
+
+  @Override
+  public int getMaxArgs() {
+    return 1;
+  }
+
+  @Override
   public Object execute(final Object[] args, final CommandContext context) {
-    if (args.length != 1)
-      throw new CommandExecutionException(name + "() requires exactly one argument");
-    if (args[0] == null)
-      return null;
-    if (args[0] instanceof Number)
-      return op.applyAsDouble(((Number) args[0]).doubleValue());
-    throw new CommandExecutionException(name + "() requires a numeric argument");
+    checkArity(args);
+    // Rejects anything outside INTEGER | FLOAT as a client-facing type error rather than a 500 (issue #5484).
+    final Number value = CypherFunctionHelper.requireNumberArgument(args[0], name);
+    return value == null ? null : op.applyAsDouble(value.doubleValue());
   }
 }

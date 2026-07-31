@@ -26,6 +26,7 @@ import com.arcadedb.database.Document;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.DatabaseRID;
 import com.arcadedb.database.RID;
+import com.arcadedb.database.async.DatabaseAsyncExecutorImpl;
 import com.arcadedb.database.Record;
 import com.arcadedb.database.TransactionContext;
 import com.arcadedb.database.TransactionIndexContext;
@@ -67,6 +68,7 @@ import com.arcadedb.utility.RidHashSet;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -692,6 +694,17 @@ public class LSMVectorIndex implements Index, IndexInternal {
     @Override
     public IndexInternal create(final IndexBuilder<? extends Index> builder) {
       final BucketLSMVectorIndexBuilder vectorBuilder = (BucketLSMVectorIndexBuilder) builder;
+
+      // "dimensions" is the one vector setting with no usable default: every put() and every graph
+      // build compares the candidate vector length against metadata.dimensions, so a zero (or
+      // negative) value yields an index that silently accepts writes and never indexes a single
+      // vector. Refusing it here covers all creation entry points at once - SQL METADATA, the
+      // schema builders and the importers - instead of only the SQL one (issue #5607).
+      if (vectorBuilder.dimensions < 1)
+        throw new IndexException(
+            "LSM_VECTOR index '" + builder.getIndexName() + "' requires a positive 'dimensions' setting (got "
+                + vectorBuilder.dimensions
+                + "): it must match the number of components of the indexed vectors, e.g. METADATA {\"dimensions\": 384}");
 
       // Reject the (encoding=INT8, quantization=INT8) combination: wire/storage is already int8,
       // and JVector's internal INT8 scalar quantization re-runs the same lossy reduction on the
@@ -1384,6 +1397,91 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * Using a per-index pool allows us to cancel long-running builds on shutdown
    * by calling shutdownNow() on this pool.
    */
+  /**
+   * Ordinals that no path from the entry node reaches. Beam search only ever follows edges forward from the entry
+   * node, so such a node can never be returned no matter how wide the beam - the graph build occasionally leaves one
+   * with a full out-degree and no in-edges (issue #5615). Callers keep those vectors searchable through the delta
+   * scan instead.
+   * <p>
+   * The walk unions the edges of every level, while a search descends the levels before beam-searching level 0.
+   * Union-reachability is therefore a superset of what a search can reach: this never invents an orphan, but a node
+   * reachable only through a higher-level in-edge is not reported. That suits the observed defect, which is a node
+   * with no in-edges at any level, and keeps the check conservative - a false orphan would cost a duplicate delta
+   * entry on every search.
+   *
+   * @return the unreachable ordinals, empty when every node is reachable
+   */
+  int[] findUnreachableOrdinals(final ImmutableGraphIndex graph) {
+    try (final ImmutableGraphIndex.View view = graph.getView()) {
+      final int upper = graph.getIdUpperBound();
+      if (upper <= 0)
+        return EMPTY_ORDINALS;
+
+      final boolean[] reached = new boolean[upper];
+      final int[] queue = new int[upper];
+      int head = 0, tail = 0;
+
+      final ImmutableGraphIndex.NodeAtLevel entryNode = view.entryNode();
+      if (entryNode == null) {
+        LogManager.instance().log(this, Level.WARNING,
+            "Graph for index %s has no entry node, skipping the connectivity check", indexName);
+        return EMPTY_ORDINALS;
+      }
+      final int entry = entryNode.node;
+      if (entry < 0 || entry >= upper)
+        return EMPTY_ORDINALS;
+      reached[entry] = true;
+      queue[tail++] = entry;
+
+      final int maxLevel = graph.getMaxLevel();
+      while (head < tail) {
+        final int node = queue[head++];
+        for (int level = 0; level <= maxLevel; level++) {
+          final NodesIterator neighbors;
+          try {
+            // A node absent from a level yields an empty iterator rather than an exception
+            // (OnHeapGraphIndex.getNeighborsIterator returns EMPTY_NODE_ITERATOR for both an out-of-range level
+            // and an unmapped node), so this walks the levels without paying for control flow. The catch only
+            // guards View implementations that choose to throw instead.
+            neighbors = view.getNeighborsIterator(level, node);
+          } catch (final Exception e) {
+            continue;
+          }
+          // Skip one node rather than letting an NPE unwind to the outer catch, which would abandon the walk and
+          // silently treat every remaining node as reachable.
+          if (neighbors == null)
+            continue;
+          while (neighbors.hasNext()) {
+            final int next = neighbors.nextInt();
+            if (next >= 0 && next < upper && !reached[next]) {
+              reached[next] = true;
+              queue[tail++] = next;
+            }
+          }
+        }
+      }
+
+      int unreachable = 0;
+      for (int node = 0; node < upper; node++)
+        if (!reached[node] && graph.containsNode(node))
+          unreachable++;
+
+      if (unreachable == 0)
+        return EMPTY_ORDINALS;
+
+      final int[] result = new int[unreachable];
+      int i = 0;
+      for (int node = 0; node < upper; node++)
+        if (!reached[node] && graph.containsNode(node))
+          result[i++] = node;
+      return result;
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.WARNING,
+          "Could not verify graph connectivity for index %s: %s", indexName, e.getMessage());
+      return EMPTY_ORDINALS;
+    }
+  }
+
   private synchronized ForkJoinPool getOrCreateGraphBuildPool() {
     ForkJoinPool pool = graphBuildPool;
     if (pool == null || pool.isShutdown()) {
@@ -1975,6 +2073,52 @@ public class LSMVectorIndex implements Index, IndexInternal {
         throw e;
       }
 
+      // The build occasionally leaves a node with a full out-degree and no in-edges, which no beam search can reach
+      // at any efSearch (issue #5615). Collect those vectors here, before the write lock, so neither the O(V+E)
+      // walk nor the vector reads stall concurrent searches; they are re-queued into the delta buffer below and
+      // stay searchable through the delta scan until the next rebuild wires them into the graph.
+      //
+      // Only the from-scratch build needs this. Vectors ingested through the live builder are already in the
+      // delta buffer from the moment they are inserted, so an orphan there is served by the delta scan until a
+      // rebuild absorbs it - at which point this check runs over it.
+      //
+      // Re-queueing deliberately does not bump mutationsSinceSerialize: a re-queued vector is not a mutation, and
+      // counting it would let an index whose last build orphaned a node rebuild itself forever. Two consequences,
+      // both accepted:
+      //  - the decrement just above may take the counter to zero and cancel the inactivity rebuild timer, so an
+      //    otherwise idle index has no self-scheduled path out of scanning these entries until the next real
+      //    mutation. That is the price of not spinning on rebuilds;
+      //  - deltaVectors is in-memory, so a restart drops the re-queue. The persisted graph still physically holds
+      //    the orphan and reports the same node count as the ordinal map, so the staleness check on load sees an
+      //    up-to-date graph and the vector is unsearchable again until some mutation triggers a rebuild. Closing
+      //    that would mean persisting the orphan set; it is left open because any rebuild re-detects it.
+      final List<DeltaVectorEntry> unreachableEntries = new ArrayList<>();
+      for (final int ordinal : findUnreachableOrdinals(builtGraph)) {
+        if (ordinal >= finalActiveVectorIds.length)
+          continue;
+        final int vectorId = finalActiveVectorIds[ordinal];
+        // Anything at or past the snapshot is already carried over by the trim below; re-adding it here would
+        // score the same vector twice in the delta scan.
+        if (vectorId >= deltaSnapshotId)
+          continue;
+        final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
+        if (loc == null || loc.deleted)
+          continue;
+        // getVector() resolves the location through the build snapshot and never returns null: an unreadable
+        // ordinal comes back as the sentinel, which would pair a real RID with a meaningless distance in the
+        // delta scan. The location check above cannot stand in for this - it reads the live index, not the
+        // snapshot, and says nothing about the six document-read failures that also yield the sentinel.
+        final VectorFloat<?> vector = vectors.getVector(ordinal);
+        if (vector == null || (vectors instanceof final ArcadePageVectorValues pageValues
+            && pageValues.isDeletedSentinel(vector)))
+          continue;
+        unreachableEntries.add(new DeltaVectorEntry(vectorId, loc.rid, vector));
+      }
+      if (!unreachableEntries.isEmpty())
+        LogManager.instance().log(this, Level.WARNING,
+            "Graph build left %d of %d vectors unreachable for index %s: serving them from the delta scan until the "
+                + "next rebuild", unreachableEntries.size(), finalActiveVectorIds.length, indexName);
+
       // Reacquire write lock to update graph state
       lock.writeLock().lock();
       try {
@@ -1989,6 +2133,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
         for (final DeltaVectorEntry e : deltaVectors)
           if (e.vectorId >= deltaSnapshotId)
             remaining.add(e);
+
+        remaining.addAll(unreachableEntries);
+
         this.deltaVectors = remaining;
 
         // Subtract only mutations present at build start, preserving concurrent ones
@@ -2400,6 +2547,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * Above this threshold, a full rebuild can take seconds to minutes, so async is preferred.
    */
   private static final int ASYNC_REBUILD_MIN_GRAPH_SIZE = 1000;
+  private static final int[] EMPTY_ORDINALS             = new int[0];
 
   /**
    * Check if the graph needs rebuilding before a search, and trigger the appropriate rebuild strategy.
@@ -4243,19 +4391,149 @@ public class LSMVectorIndex implements Index, IndexInternal {
     }
   }
 
+  /**
+   * Schedules a compaction when the data file has grown well past what its live vectors need.
+   * <p>
+   * The file is append-only: an update writes a new vector plus a tombstone for the one it supersedes, a delete
+   * writes a tombstone, and nothing reclaims either - so a workload that keeps re-embedding the same vectors grows
+   * the file without bound while the live set stays the same size. That was the other half of issue #5516, the half
+   * a heap dump cannot show, and leaving it to an operator remembering to run COMPACT INDEX is not a fix.
+   * <p>
+   * The trigger is the garbage ratio rather than a page count, because a vector compaction is not the cheap merge an
+   * LSM-tree compaction is: it rebuilds the graph and rewrites the file, so it has to pay for itself in reclaimed
+   * space. The work happens on the async executor - never on the committing thread - and goes through
+   * {@link #compact()}, so it is the same replication-safe path an explicit COMPACT INDEX takes.
+   */
   public void onAfterCommit() {
-    // DISABLED: Compaction for vector indexes is currently disabled
-    // Vector indexes don't benefit much from compaction since vectors are rarely updated
-    // Re-enable once compaction properly handles uninitialized pages
+    // The whole body is guarded, the decision included: this runs inside the commit, before it is marked
+    // committed, so anything thrown here would fail a transaction whose data is already durable.
+    try {
+      if (!isCompactionDue())
+        return;
 
-    // Check if compaction should be triggered after commit
-    // Operations are applied immediately during TransactionIndexContext replay (not buffered here)
-    // if (minPagesToScheduleACompaction > 1 && currentMutablePages.get() >= minPagesToScheduleACompaction) {
-    //   LogManager.instance()
-    //       .log(this, Level.FINE, "Scheduled compaction of vector index '%s' (currentMutablePages=%d totalPages=%d)",
-    //           null, getComponentName(), currentMutablePages.get(), getTotalPages());
-    //   ((com.arcadedb.database.async.DatabaseAsyncExecutorImpl) getDatabase().async()).compact(this);
-    // }
+      // scheduleCompaction() inside async().compact() flips AVAILABLE -> COMPACTION_SCHEDULED, so a second commit
+      // arriving while one is still pending is a no-op instead of a queue of redundant rewrites.
+      ((DatabaseAsyncExecutorImpl) getDatabase().async()).compact(this);
+    } catch (final Exception e) {
+      // Scheduling must never fail the commit that just succeeded - the file simply stays as it is and the next
+      // commit, or an explicit COMPACT INDEX, picks it up. On a closing database (the async executor is already
+      // gone) that is routine and stays quiet; anywhere else it means this index has stopped reclaiming on its
+      // own, which nobody would notice at FINE.
+      // toString() rather than getMessage(): an exception that only carries a cause has a null message, and the one
+      // line that says this index stopped reclaiming on its own must not read "... : null".
+      LogManager.instance().log(this, getDatabase().isOpen() ? Level.WARNING : Level.FINE,
+          "Could not schedule the compaction of vector index '%s': %s", indexName, e.toString());
+    }
+  }
+
+  /**
+   * Whether the data file holds enough garbage to be worth rewriting: at least
+   * {@link GlobalConfiguration#VECTOR_INDEX_COMPACTION_BLOAT_FACTOR} times the pages its live vectors need.
+   * <p>
+   * Runs after every commit, so it stays on counters and configuration lookups already in memory - the page count,
+   * the number of resident locations, two settings read live - and never touches a page.
+   */
+  private boolean isCompactionDue() {
+    if (!isCompactionAllowedOnThisNode(getDatabase()))
+      return false;
+
+    final ContextConfiguration configuration = getDatabase().getConfiguration();
+
+    // Read both knobs live so they behave the same way: the cached minPagesToScheduleACompaction only reflects the
+    // value an index was built with, which would make one of the two gates ignore a runtime change.
+    final int minPages = configuration.getValueAsInteger(GlobalConfiguration.INDEX_COMPACTION_MIN_PAGES_SCHEDULE);
+    if (minPages <= 0)
+      // Automatic compaction disabled for every index type.
+      return false;
+
+    final int bloatFactor = configuration.getValueAsInteger(GlobalConfiguration.VECTOR_INDEX_COMPACTION_BLOAT_FACTOR);
+    if (bloatFactor <= 0)
+      // Explicit COMPACT INDEX only.
+      return false;
+
+    if (vectorIndex.isBounded())
+      // A bounded location map evicts, so its size is a lower bound on the live set rather than the live set, and an
+      // index holding more live vectors than it caches would read as permanently bloated and rewrite itself after
+      // nearly every commit. Nothing asks for that backend today - #5568 stopped honouring
+      // arcadedb.vectorIndex.locationCacheSize precisely because an evicted location cannot be recovered - so this
+      // asks the map itself rather than the setting, and answers false. It exists so that wiring bounded mode back
+      // in cannot silently turn the ratio into a rewrite loop; whoever does that owes this an explicit live count,
+      // which COMPACT INDEX already derives by parsing the pages.
+      return false;
+
+    final int totalPages = totalPagesForBloatRatio();
+    if (totalPages < minPages)
+      // Too small to be worth a rewrite whatever its garbage ratio is.
+      return false;
+
+    final int pagesForLiveSet = estimatePagesForLiveSet();
+    if (pagesForLiveSet < 1)
+      return false;
+
+    return totalPages >= (long) pagesForLiveSet * bloatFactor;
+  }
+
+  /**
+   * Every page the ratio has to account for. {@link #getTotalPages()} is the mutable file alone, but the live set the
+   * estimate is built from spans the compacted companion too when one is loaded ({@code loadVectorsFromFile} pulls its
+   * locations into the same map), so counting only the mutable would compare a part against the whole and let the file
+   * grow well past the configured factor before anything fired.
+   * <p>
+   * A companion only exists on a database whose index was compacted by a build older than #5521 - nothing writes one
+   * any more, and the first compaction folds it into the new mutable and drops it - so this is the upgrade window
+   * rather than the steady state. Cheap enough to be right in it anyway.
+   * <p>
+   * {@code compactedSubIndex} is not volatile and this reads it from the committing thread while a compaction may be
+   * clearing it on an async one. Deliberate: the answer feeds a heuristic, so a stale read moves one compaction by
+   * one commit and nothing else, and a volatile read on the commit path would cost more than that is worth.
+   */
+  private int totalPagesForBloatRatio() {
+    return getTotalPages() + (compactedSubIndex != null ? compactedSubIndex.getTotalPages() : 0);
+  }
+
+  /**
+   * Whether this node is the one that compacts. A Raft follower receives the compacted file from the leader, and
+   * {@code runWithCompactionReplication} already declines on a follower - but it declines from inside an async task
+   * that had to be queued, run and reset first. A write-heavy follower is exactly the node whose garbage ratio keeps
+   * crossing the threshold, so without this gate every one of its commits schedules a task that does nothing.
+   * Mirrors the leader check {@code TimeSeriesMaintenanceScheduler.runMaintenance} makes for the same reason.
+   *
+   * @return true when standalone (never replicated) or on the current leader
+   */
+  static boolean isCompactionAllowedOnThisNode(final DatabaseInternal database) {
+    return !database.isReplicated() || database.isLeader();
+  }
+
+  /**
+   * Pages the live vectors alone would occupy, derived from the entry layout {@code persistVectorWithLocation}
+   * writes. An estimate on purpose: it feeds a ratio against a configurable factor, so being a few percent out
+   * moves when a compaction happens, never whether the result is correct.
+   */
+  private int estimatePagesForLiveSet() {
+    // size() is the resident location count, which is the live count: markDeleted() and an addOrUpdate() that
+    // supersedes an id both remove the old entry from the map rather than flagging it (getActiveCount() filters
+    // defensively, but on this backend it has nothing left to filter). Only the unbounded backend reaches here -
+    // isCompactionDue() turns back a map that evicts, which is what would break that equivalence. Counting the
+    // values instead would be a full map scan on every commit, which this check must not do.
+    final int liveVectors = vectorIndex.size();
+    if (liveVectors < 1)
+      return 0;
+
+    // vectorId + bucketId + position are zig-zag varints, so 4+4+8 is their typical size, not their maximum (a
+    // 32-bit id can reach 5 bytes and a 64-bit position 10). Under-counting here over-counts how many entries fit
+    // in a page, which makes the trigger marginally eager - harmless for a ratio against a configurable factor.
+    // Plus the deleted flag and the quantization-type byte, both always written.
+    // A quantized entry then carries the array length as an int, plus the array and its min/max (INT8) or median
+    // (BINARY) - exactly what calculateQuantizedDataSize returns, so the size comes from the reader's own arithmetic
+    // instead of a second copy of it here. NONE and PRODUCT return 0 there: they keep the vector in the document,
+    // which leaves the page entry as the header above.
+    final int quantizedSize = LSMVectorIndexPageParser.calculateQuantizedDataSize(metadata.dimensions,
+        metadata.quantizationType);
+    final int entrySize = 4 + 4 + 8 + 1 + 1 + (quantizedSize > 0 ? 4 + quantizedSize : 0);
+
+    final int usablePerPage = getPageSize() - BasePage.PAGE_HEADER_SIZE - HEADER_BASE_SIZE;
+    final int entriesPerPage = Math.max(1, usablePerPage / entrySize);
+    return (liveVectors + entriesPerPage - 1) / entriesPerPage;
   }
 
   @Override
@@ -4467,64 +4745,79 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
   @Override
   public boolean compact() throws IOException, InterruptedException {
-
-    LogManager.instance().log(this, Level.INFO, "compact() called for index: %s", null, getName());
-    checkIsValid();
-    final DatabaseInternal database = getDatabase();
-
-    if (database.getMode() == ComponentFile.MODE.READ_ONLY)
-      throw new DatabaseIsReadOnlyException("Cannot update the index '" + getName() + "'");
-
-    if (database.getPageManager().isPageFlushingSuspended(database)) {
-      LogManager.instance().log(this, Level.INFO, "compact() returning false: page flushing suspended");
-      // POSTPONE COMPACTING (DATABASE BACKUP IN PROGRESS?)
-      return false;
-    }
-
-    LogManager.instance().log(this, Level.INFO,
-        "compact() current status: %s, attempting compareAndSet from COMPACTION_SCHEDULED to COMPACTION_IN_PROGRESS",
-        status.get());
-    if (!status.compareAndSet(INDEX_STATUS.COMPACTION_SCHEDULED, INDEX_STATUS.COMPACTION_IN_PROGRESS)) {
-      LogManager.instance()
-          .log(this, Level.INFO, "compact() returning false: status compareAndSet failed (current status: %s)",
-              status.get());
-      // COMPACTION NOT SCHEDULED
-      return false;
-    }
-
+    // Every exit before the state moves to COMPACTION_IN_PROGRESS has to hand the scheduling slot back. A
+    // compaction that gives up here - a backup suspended page flushing, the index went invalid - would otherwise
+    // leave the status at COMPACTION_SCHEDULED for good, and since scheduleCompaction() only moves AVAILABLE ->
+    // SCHEDULED, that silently disables every later compaction of this index, the explicit COMPACT INDEX included,
+    // until the database is reopened. Rare while compaction was operator-driven; reachable on any backup window now
+    // that a commit can schedule one.
+    boolean compactionStarted = false;
     try {
-      // Compaction IS a rebuild that also rewrites the data file: the rebuild already reads every page, resolves
-      // the LSM merge and produces the live set, so the compacted content is exactly what it computes. Running the
-      // two as one pass is what keeps them from disagreeing about which vectors are live - a standalone compactor
-      // with its own merge rules used to resurrect deleted vectors and duplicate updated ones.
-      //
-      // Same component-shipping pipeline as LSMTreeIndex compaction and PaginatedSparseVectorEngine flush: the
-      // recording session captures registerFile + the page writes + the drop of the files they replace, and the
-      // synthetic WAL ships the new component to followers atomically with the leader's commit. The compacted
-      // pages are written synchronously, so the wait below is not what makes THEM durable: it is the guard that
-      // the session ships nothing still pending from the rest of the rebuild (#4928).
-      final boolean success = database.getWrappedDatabaseInstance().runWithCompactionReplication(() -> {
-        final int fileIdBefore = getFileId();
-        buildGraphFromScratch(null, true);
-        // If the bounded wait gives up (#4928), the shipped component could contain unflushed (zero) pages:
-        // fail the compaction, it is rescheduled later.
-        if (!database.getPageManager().waitAllPagesOfDatabaseAreFlushed(database))
-          throw new IOException("Vector index compaction aborted: pages are still pending flush after the no-progress timeout");
-        // The data file is swapped only when the rewrite actually ran (it is skipped on an empty or
-        // partially-recovered live set), so the file id is what says whether anything was compacted.
-        return getFileId() != fileIdBefore;
-      });
-      if (success) {
-        // Track successful compaction
-        metrics.incrementCompactionCount();
+      LogManager.instance().log(this, Level.FINE, "compact() called for index: %s", null, getName());
+      checkIsValid();
+      final DatabaseInternal database = getDatabase();
+
+      if (database.getMode() == ComponentFile.MODE.READ_ONLY)
+        throw new DatabaseIsReadOnlyException("Cannot update the index '" + getName() + "'");
+
+      if (database.getPageManager().isPageFlushingSuspended(database)) {
+        LogManager.instance().log(this, Level.FINE, "compact() returning false: page flushing suspended");
+        // POSTPONE COMPACTING (DATABASE BACKUP IN PROGRESS?)
+        return false;
       }
-      return success;
-    } catch (final TimeoutException e) {
-      LogManager.instance().log(this, Level.INFO, "compact() caught TimeoutException: %s", e.getMessage());
-      // IGNORE IT, WILL RETRY LATER
-      return false;
+
+      LogManager.instance().log(this, Level.FINE,
+          "compact() current status: %s, attempting compareAndSet from COMPACTION_SCHEDULED to COMPACTION_IN_PROGRESS",
+          status.get());
+      if (!status.compareAndSet(INDEX_STATUS.COMPACTION_SCHEDULED, INDEX_STATUS.COMPACTION_IN_PROGRESS)) {
+        LogManager.instance()
+            .log(this, Level.FINE, "compact() returning false: status compareAndSet failed (current status: %s)",
+                status.get());
+        // COMPACTION NOT SCHEDULED
+        return false;
+      }
+      compactionStarted = true;
+
+      try {
+          // Compaction IS a rebuild that also rewrites the data file: the rebuild already reads every page, resolves
+        // the LSM merge and produces the live set, so the compacted content is exactly what it computes. Running the
+        // two as one pass is what keeps them from disagreeing about which vectors are live - a standalone compactor
+        // with its own merge rules used to resurrect deleted vectors and duplicate updated ones.
+        //
+        // Same component-shipping pipeline as LSMTreeIndex compaction and PaginatedSparseVectorEngine flush: the
+        // recording session captures registerFile + the page writes + the drop of the files they replace, and the
+        // synthetic WAL ships the new component to followers atomically with the leader's commit. The compacted
+        // pages are written synchronously, so the wait below is not what makes THEM durable: it is the guard that
+        // the session ships nothing still pending from the rest of the rebuild (#4928).
+        final boolean success = database.getWrappedDatabaseInstance().runWithCompactionReplication(() -> {
+          final int fileIdBefore = getFileId();
+          buildGraphFromScratch(null, true);
+          // If the bounded wait gives up (#4928), the shipped component could contain unflushed (zero) pages:
+          // fail the compaction, it is rescheduled later.
+          if (!database.getPageManager().waitAllPagesOfDatabaseAreFlushed(database))
+            throw new IOException("Vector index compaction aborted: pages are still pending flush after the no-progress timeout");
+          // The data file is swapped only when the rewrite actually ran (it is skipped on an empty or
+          // partially-recovered live set), so the file id is what says whether anything was compacted.
+          return getFileId() != fileIdBefore;
+        });
+        if (success) {
+          // Track successful compaction
+          metrics.incrementCompactionCount();
+        }
+        return success;
+      } catch (final TimeoutException e) {
+        LogManager.instance().log(this, Level.FINE, "compact() caught TimeoutException: %s", e.getMessage());
+        // IGNORE IT, WILL RETRY LATER
+        return false;
+      } finally {
+        status.set(INDEX_STATUS.AVAILABLE);
+      }
+
     } finally {
-      status.set(INDEX_STATUS.AVAILABLE);
+      if (!compactionStarted)
+        // Never reached COMPACTION_IN_PROGRESS: release the slot this attempt reserved so the next commit, or an
+        // operator, can schedule again.
+        status.compareAndSet(INDEX_STATUS.COMPACTION_SCHEDULED, INDEX_STATUS.AVAILABLE);
     }
   }
 
@@ -5127,6 +5420,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
     return currentMutablePages.get();
   }
 
+  /** The pages the live vectors alone would need - exposed so a test can express its threshold in those terms. */
+  int estimatePagesForLiveSetForTest() {
+    return estimatePagesForLiveSet();
+  }
+
   /**
    * Get the VectorLocationIndex (used by the tests to inspect the resident locations)
    */
@@ -5394,11 +5692,19 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
   /**
    * Epoch used to decide whether a pooled searcher (and the graph view it holds) is still valid. It must change on
-   * anything that can alter what a search would see: a graph rebuild swaps {@link #graphIndex}, and every
-   * insert/update/delete bumps {@link #mutationsSinceSerialize}.
+   * anything that can alter what a search would see: a graph rebuild swaps {@link #graphIndex} and advances
+   * {@link #rebuildSnapshotGeneration}, and every insert/update/delete bumps {@link #mutationsSinceSerialize}.
+   * <p>
+   * The value never repeats. That matters because graph identity is not a sufficient guard on its own: the
+   * live-builder path keeps serving searches from the same graph instance while it grows, so the epoch is the only
+   * thing that can tell a pooled view its contents moved underneath it.
    */
   private long searcherPoolEpoch() {
-    return mutationsSinceSerialize.get();
+    // The mutation counter alone cannot carry this: a rebuild subtracts back exactly what it absorbed
+    // (mutationsAtBuildStart), so a settled index reads the same value after every rebuild and an epoch taken from it
+    // repeats. Pairing it with the rebuild generation, which only ever increases, makes the epoch strictly monotonic
+    // across both kinds of event. The generation occupies the high bits so ordinary mutations still move the low ones.
+    return (rebuildSnapshotGeneration << 32) | (mutationsSinceSerialize.get() & 0xFFFFFFFFL);
   }
 
   /**

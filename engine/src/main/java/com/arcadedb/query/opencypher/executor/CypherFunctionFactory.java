@@ -98,6 +98,7 @@ import com.arcadedb.function.temporal.TimeTruncateFunction;
 import com.arcadedb.function.temporal.TimestampFunction;
 import com.arcadedb.function.text.CharLengthFunction;
 import com.arcadedb.function.text.FormatFunction;
+import com.arcadedb.function.text.IsNormalizedFunction;
 import com.arcadedb.function.text.LTrimFunction;
 import com.arcadedb.function.text.LeftFunction;
 import com.arcadedb.function.text.NormalizeFunction;
@@ -118,6 +119,7 @@ import com.arcadedb.function.vector.VectorSimilarityEuclideanFunction;
 import com.arcadedb.query.sql.executor.SQLFunction;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -191,7 +193,7 @@ public class CypherFunctionFactory {
    * Check if a function is available (either as SQL function or Cypher-specific).
    */
   public boolean hasFunction(final String cypherFunctionName) {
-    final String functionName = cypherFunctionName.toLowerCase();
+    final String functionName = cypherFunctionName.toLowerCase(Locale.ROOT);
 
     // Check for sql. prefix - explicit SQL function access
     if (functionName.startsWith(SQL_PREFIX)) {
@@ -236,7 +238,7 @@ public class CypherFunctionFactory {
    * @param distinct           true if DISTINCT keyword was used
    */
   public StatelessFunction getFunctionExecutor(final String cypherFunctionName, final boolean distinct) {
-    final String functionName = cypherFunctionName.toLowerCase();
+    final String functionName = cypherFunctionName.toLowerCase(Locale.ROOT);
 
     // Handle sql. prefix - explicit SQL function access
     if (functionName.startsWith(SQL_PREFIX)) {
@@ -318,7 +320,8 @@ public class CypherFunctionFactory {
       case "left", "right", "reverse", "split", "substring", "tolower", "toupper", "lower", "upper", "ltrim", "rtrim", "btrim" ->
           true;
       // String functions (additional)
-      case "trim", "replace", "char.length", "character.length", "char_length", "character_length", "normalize" -> true;
+      case "trim", "replace", "char.length", "character.length", "char_length", "character_length", "charlength",
+           "normalize", "isnormalized" -> true;
       // Type conversion functions
       case "tostring", "tointeger", "tofloat", "toboolean",
            "tostringornull", "tointegerornull", "tofloatornull", "tobooleanornull",
@@ -405,7 +408,9 @@ public class CypherFunctionFactory {
       case "haversin" -> new MathUnaryFunction("haversin", v -> (1.0 - Math.cos(v)) / 2.0);
       // Logarithmic functions
       case "exp" -> new MathUnaryFunction("exp", Math::exp);
-      case "log", "ln" -> new MathUnaryFunction("log", Math::log);
+      // ln() is an alias of log(), but each keeps its own name so a type error echoes the one the client wrote (#5484).
+      case "log" -> new MathUnaryFunction("log", Math::log);
+      case "ln" -> new MathUnaryFunction("ln", Math::log);
       case "log10" -> new MathUnaryFunction("log10", Math::log10);
       // General functions
       case "coalesce" -> new CoalesceFunction();
@@ -443,8 +448,10 @@ public class CypherFunctionFactory {
       case "rtrim" -> new RTrimFunction();
       case "trim", "btrim" -> new CypherTrimFunction();
       case "replace" -> new ReplaceFunction();
-      case "char.length", "character.length", "char_length", "character_length" -> new CharLengthFunction();
+      // charLength is the camel-case spelling Neo4j 5 uses; the underscored and dotted forms were already here.
+      case "char.length", "character.length", "char_length", "character_length", "charlength" -> new CharLengthFunction();
       case "normalize" -> new NormalizeFunction();
+      case "isnormalized" -> new IsNormalizedFunction();
       // Type conversion functions
       case "tostring" -> new ToStringFunction();
       case "tointeger" -> new ToIntegerFunction();

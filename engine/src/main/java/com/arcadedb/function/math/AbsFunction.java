@@ -18,8 +18,9 @@
  */
 package com.arcadedb.function.math;
 
-import com.arcadedb.exception.CommandExecutionException;
+import com.arcadedb.exception.ArithmeticErrorException;
 import com.arcadedb.function.StatelessFunction;
+import com.arcadedb.function.cypher.CypherFunctionHelper;
 import com.arcadedb.query.sql.executor.CommandContext;
 
 /**
@@ -35,22 +36,33 @@ public class AbsFunction implements StatelessFunction {
   }
 
   @Override
+  public int getMinArgs() {
+    return 1;
+  }
+
+  @Override
+  public int getMaxArgs() {
+    return 1;
+  }
+
+  @Override
   public Object execute(final Object[] args, final CommandContext context) {
-    if (args.length != 1)
-      throw new CommandExecutionException("abs() requires exactly one argument");
-    if (args[0] == null)
+    checkArity(args);
+    // Rejects anything outside INTEGER | FLOAT as a client-facing type error rather than a 500 (issue #5484).
+    final Number value = CypherFunctionHelper.requireNumberArgument(args[0], "abs");
+    if (value == null)
       return null;
-    if (args[0] instanceof Byte || args[0] instanceof Short || args[0] instanceof Integer || args[0] instanceof Long) {
+    if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
       try {
         // absExact() fails on Long.MIN_VALUE, whose magnitude is not representable in a signed 64-bit
         // integer and which Math.abs() would silently return unchanged - a negative "absolute value".
-        return Math.absExact(((Number) args[0]).longValue());
+        return Math.absExact(value.longValue());
       } catch (final ArithmeticException e) {
-        throw new CommandExecutionException("long overflow", e);
+        // Same classification as the +, - and * operators (issue #5602): no representable answer is the caller's
+        // pair of values, not a server fault, so it reports as a client error rather than a 500.
+        throw new ArithmeticErrorException("long overflow", e);
       }
     }
-    if (args[0] instanceof Number)
-      return Math.abs(((Number) args[0]).doubleValue());
-    throw new CommandExecutionException("abs() requires a numeric argument");
+    return Math.abs(value.doubleValue());
   }
 }

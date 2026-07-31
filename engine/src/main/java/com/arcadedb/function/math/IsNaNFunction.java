@@ -18,8 +18,8 @@
  */
 package com.arcadedb.function.math;
 
-import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.function.StatelessFunction;
+import com.arcadedb.function.cypher.CypherFunctionHelper;
 import com.arcadedb.query.sql.executor.CommandContext;
 
 /**
@@ -32,13 +32,20 @@ public class IsNaNFunction implements StatelessFunction {
   }
 
   @Override
+  public int getMinArgs() {
+    return 1;
+  }
+
+  @Override
+  public int getMaxArgs() {
+    return 1;
+  }
+
+  @Override
   public Object execute(final Object[] args, final CommandContext context) {
-    if (args.length != 1)
-      throw new CommandExecutionException("isNaN() requires exactly one argument");
-    if (args[0] == null)
-      return null;
-    if (args[0] instanceof Number)
-      return Double.isNaN(((Number) args[0]).doubleValue());
-    throw new CommandExecutionException("isNaN() requires a numeric argument");
+    checkArity(args);
+    // Rejects anything outside INTEGER | FLOAT as a client-facing type error rather than a 500 (issue #5484).
+    final Number value = CypherFunctionHelper.requireNumberArgument(args[0], "isNaN");
+    return value == null ? null : Double.isNaN(value.doubleValue());
   }
 }

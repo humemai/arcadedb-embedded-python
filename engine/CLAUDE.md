@@ -9,9 +9,11 @@ Guidance for working under `engine/`. This file records things the code does not
 Two mechanisms undo that false verdict at commit time, both leader/embedded-only and both running while the file's commit lock is held (see `TransactionContext.commit1stPhase`):
 
 - **`GRAPH_EDGE_APPEND_MERGE`** replays this transaction's in-chunk edge appends on the newer committed edge-list page.
-- **`TX_PAGE_SLOT_MERGE`** (#5381, #5279) replays this transaction's per-slot record writes on the newer committed bucket page: inserts into free slots, and updates that stayed **inside** the page - an overwrite of the same size or smaller, or a growth the page could host by shifting the records that follow (`LocalBucket.growRecordInPage`, shared with the replay so both grow a record identically). `LocalBucket` also reserves the insert slot per in-flight transaction, so concurrent inserts into one page get different slots (hence different RIDs) instead of all being handed the same one.
+- **`TX_PAGE_SLOT_MERGE`** (#5381, #5279, #5569) replays this transaction's per-slot record writes on the newer committed bucket page: inserts into free slots, updates that stayed **inside** the page - an overwrite of the same size or smaller, or a growth the page could host by shifting the records that follow (`LocalBucket.growRecordInPage`, shared with the replay so both grow a record identically) - and the delete of a plain in-place record (`rebaseRecordDeleteOnPage`), which only zeroes its own slot-table entry. `LocalBucket` also reserves the insert slot per in-flight transaction, so concurrent inserts into one page get different slots (hence different RIDs) instead of all being handed the same one.
 
-What still raises a `ConcurrentModificationException`: two transactions writing the **same** record (by design - the byte-for-byte pre-image check catches it and the application must reload), a delete, a placeholder or multi-page record, a record that had to spill out of its page, and any page its owner poisoned with one of those.
+What still raises a `ConcurrentModificationException`: two transactions writing the **same** record (by design - the byte-for-byte pre-image check catches it and the application must reload), a placeholder or multi-page record, a record that had to spill out of its page, and any page its owner poisoned with one of those.
+
+The delete is tracked with a `null` final image in `TransactionContext.SlotRebaseBuffer.finalBody`, which is why `deleteRecordInternal` decides where to poison only **after** reading the record's marker: every non-plain shape (placeholder pointer or content, chunk chain, corrupted slot, and the error fallback) poisons its own page. A slot the transaction both inserted and deleted is skipped at replay - it never existed on the committed page, so checking for a pre-image would invent a conflict.
 
 `ConcurrentModificationException extends NeedRetryException`, so retry is the designed response. **Retry safety is asymmetric:** on retry an INSERT gets a fresh slot and RID from `findAvailableSpace`, so nothing is overwritten and retrying is safe. For UPDATE, blind retry can overwrite a concurrent write - re-read first.
 
@@ -49,9 +51,11 @@ This matters as soon as any index has been compacted: an LSM index with a compac
 
 To disable auto-compaction reliably mid-test: set the config, `database.async().waitCompletion()`, then force `scheduleCompaction()` + `compact()` on each LSM index (this creates a fresh mutable that reads the new value), then `waitCompletion()` again.
 
-## `countEntries()` is not O(1) on vector indexes
+## `countEntries()` is O(1) only on `HASH`
 
-On a dense `LSM_VECTOR`, `countEntries()` streams the entire location map filtering deleted entries, and on the bounded backend does so while holding the `locations` monitor, so concurrent callers serialize. On a sparse `LSM_SPARSE_VECTOR` it returns **postings**, not records: a 2-record fixture with 2 dimensions each reports 4. `TypeIndex.countEntries()` sums over buckets and inherits whichever applies.
+On an LSM index it is a full ascending cursor walk. It counts LIVE entries - the value that survives a `next()`, not the call - so tombstones are excluded whether or not a compaction has purged them (#5601). Getting that wrong is easy in this codebase: `LSMTreeIndexCursor.hasNext()` is optimistic, so `next()` answers `null` at the tail of a scan whose remaining keys are all dead, and any `while (hasNext()) { next(); ++n; }` over-counts.
+
+On a dense `LSM_VECTOR`, `countEntries()` streams the entire location map filtering deleted entries, and on the bounded backend does so while holding the `locations` monitor, so concurrent callers serialize. On a sparse `LSM_SPARSE_VECTOR` it returns **postings**, not records: a 2-record fixture with 2 dimensions each reports 4. A full-text index counts one entry per analyzed token and a geospatial one per covering cell. `TypeIndex.countEntries()` sums over buckets and inherits whichever applies.
 
 Never call it on a query path. If you need an "is there more?" signal, derive it from the result window or the candidate budget you already have.
 

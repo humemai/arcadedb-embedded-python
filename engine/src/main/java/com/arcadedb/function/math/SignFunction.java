@@ -18,8 +18,8 @@
  */
 package com.arcadedb.function.math;
 
-import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.function.StatelessFunction;
+import com.arcadedb.function.cypher.CypherFunctionHelper;
 import com.arcadedb.query.sql.executor.CommandContext;
 
 /**
@@ -32,20 +32,29 @@ public class SignFunction implements StatelessFunction {
   }
 
   @Override
+  public int getMinArgs() {
+    return 1;
+  }
+
+  @Override
+  public int getMaxArgs() {
+    return 1;
+  }
+
+  @Override
   public Object execute(final Object[] args, final CommandContext context) {
-    if (args.length != 1)
-      throw new CommandExecutionException("sign() requires exactly one argument");
-    if (args[0] == null)
+    checkArity(args);
+    // Rejects anything outside INTEGER | FLOAT as a client-facing type error rather than a 500 (issue #5484).
+    final Number number = CypherFunctionHelper.requireNumberArgument(args[0], "sign");
+    if (number == null)
       return null;
-    if (args[0] instanceof Number) {
-      final double value = ((Number) args[0]).doubleValue();
-      if (value > 0)
-        return 1L;
-      else if (value < 0)
-        return -1L;
-      else
-        return 0L;
-    }
-    throw new CommandExecutionException("sign() requires a numeric argument");
+
+    final double value = number.doubleValue();
+    if (value > 0)
+      return 1L;
+    else if (value < 0)
+      return -1L;
+    else
+      return 0L;
   }
 }

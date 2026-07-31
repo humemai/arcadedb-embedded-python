@@ -54,7 +54,6 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
   private static final int DEFAULT_SORTED_BUILD_MERGE_FAN_IN = 8;
   private static final long MIN_SORTED_BUILD_MEMORY_BUDGET    = 1L << 20;
 
-  public IndexMetadata metadata;
   // When set, lets {@link #create()} accept properties that aren't declared on the type yet:
   // the index is materialised with this Type as the key serialisation, while the property
   // stays "free-form" on the document type so writes don't get coerced. Used by the OpenCypher
@@ -123,9 +122,10 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
   }
 
   /**
-   * Sets the index type. For LSM_VECTOR indexes, returns an LSMVectorIndexBuilder
-   * to enable vector-specific configuration methods. For FULL_TEXT indexes, returns
-   * a TypeFullTextIndexBuilder.
+   * Sets the index type, returning the builder subclass that carries the settings of that index type: an
+   * LSMVectorIndexBuilder for LSM_VECTOR, a TypeFullTextIndexBuilder for FULL_TEXT, a TypeGeoIndexBuilder for
+   * GEOSPATIAL, and so on. An index type missing from this list ends up with the generic {@link IndexMetadata} and
+   * therefore has nowhere to keep its own settings.
    *
    * @param indexType the index type
    *
@@ -135,13 +135,20 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
   public TypeIndexBuilder withType(final Schema.INDEX_TYPE indexType) {
     if (buildMode == IndexBuildMode.SORTED && indexType != Schema.INDEX_TYPE.LSM_TREE)
       throw new IllegalArgumentException("Sorted build currently supports only LSM_TREE indexes");
+
+    // Record the type on THIS builder before handing back a specialised one: a caller that ignores the returned
+    // instance (`builder.withType(X); builder.create();`) still gets a builder that knows what to create, instead of
+    // "indexType was not specified" from an object the type never landed on.
+    super.withType(indexType);
+
     if (indexType == Schema.INDEX_TYPE.LSM_VECTOR && !(this instanceof TypeLSMVectorIndexBuilder))
       return new TypeLSMVectorIndexBuilder(this);
     if (indexType == Schema.INDEX_TYPE.LSM_SPARSE_VECTOR && !(this instanceof TypeLSMSparseVectorIndexBuilder))
       return new TypeLSMSparseVectorIndexBuilder(this);
     if (indexType == Schema.INDEX_TYPE.FULL_TEXT && !(this instanceof TypeFullTextIndexBuilder))
       return new TypeFullTextIndexBuilder(this);
-    super.withType(indexType);
+    if (indexType == Schema.INDEX_TYPE.GEOSPATIAL && !(this instanceof TypeGeoIndexBuilder))
+      return new TypeGeoIndexBuilder(this);
     return this;
   }
 
@@ -158,6 +165,21 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
     if (indexType != Schema.INDEX_TYPE.FULL_TEXT)
       throw new IllegalStateException("withFullTextType() can only be called after withType(FULL_TEXT)");
     return new TypeFullTextIndexBuilder(this);
+  }
+
+  /**
+   * Returns this builder as a TypeGeoIndexBuilder for geospatial specific configuration.
+   * Only valid after withType(GEOSPATIAL) has been called.
+   *
+   * @return a TypeGeoIndexBuilder for geospatial configuration
+   * @throws IllegalStateException if withType(GEOSPATIAL) has not been called
+   */
+  public TypeGeoIndexBuilder withGeoType() {
+    if (this instanceof TypeGeoIndexBuilder)
+      return (TypeGeoIndexBuilder) this;
+    if (indexType != Schema.INDEX_TYPE.GEOSPATIAL)
+      throw new IllegalStateException("withGeoType() can only be called after withType(GEOSPATIAL)");
+    return new TypeGeoIndexBuilder(this);
   }
 
   @Override
@@ -383,8 +405,11 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
       if (cleanupIndexes(schema, indexes, e)
           && (recoveryMarker[0] == null || recoveryMarker[0].baselineRestored(database)))
         clearRecoveryMarker(recoveryMarker[0], e);
-      throw new IndexException("Error on creating index on type '" + metadata.typeName + "', properties " + metadata.propertyNames,
-          e);
+      // Carry the root cause into the message: this exception is what the SQL/HTTP layers report back, and
+      // without the reason a configuration mistake (a missing vector 'dimensions', an incompatible property
+      // type, ...) reaches the user as a bare "Error on creating index" with nowhere to go (issue #5607).
+      throw new IndexException("Error on creating index on type '" + metadata.typeName + "', properties " + metadata.propertyNames
+          + (e.getMessage() != null ? ": " + e.getMessage() : ""), e);
     }
   }
 

@@ -56,7 +56,7 @@ ArcadeDB detects write conflicts per *page*, so two transactions that touched th
 share it. On a type with few buckets and many concurrent writers this made a retry pointless: the retry ran
 straight into the same collision ([#5279](https://github.com/ArcadeData/arcadedb/issues/5279)).
 
-Both halves of that are gone in 26.8.1:
+All three halves of that are gone in 26.8.1:
 
 - **Inserts** into one page now reserve their slot per in-flight transaction, so concurrent inserts get
   different positions (and different RIDs) instead of all being handed the same one, and the commit-time
@@ -65,6 +65,12 @@ Both halves of that are gone in 26.8.1:
   record that GREW - a longer string, one more property - and not only an overwrite of the same size or
   smaller. Growth is the normal update shape, so leaving it out kept concurrent updates of unrelated records
   conflicting for good.
+- **Deletes** of a plain in-place record are replayed too
+  ([#5569](https://github.com/ArcadeData/arcadedb/issues/5569)). Such a delete only zeroes one slot-table
+  entry, so it commutes with writes to every other slot - yet it used to take the whole page out of the merge,
+  which meant that deleting record A made every concurrent transaction that merely updated record B on the
+  same page fail. The pre-image is still compared byte for byte, so deleting a record another transaction is
+  updating remains a real conflict.
 
 Measured on the reported workload (one single bucket, `attempts=1`, no retry):
 
@@ -74,12 +80,14 @@ Measured on the reported workload (one single bucket, `attempts=1`, no retry):
 | Concurrent sub-graph creation (6 vertices + 5 edges per transaction) | ~270 / 320 | 0 |
 | 10 transactions updating 10 different records of one page | 9 failed / 10 | 0 |
 | Sustained updates, 8 writers on their own records of one page | ~2083 / 2880 | 0 |
+| 8 deletes + 8 updates of 16 different records of one page | 15 failed / 16 | 0 |
+| 10 transactions deleting 10 different records of one page | 9 failed / 10 | 0 |
 
 A `ConcurrentModificationException` is still raised - by design - when two transactions really write the
 **same** record: a byte-for-byte pre-image check makes sure no concurrent write is ever silently overwritten.
-The same goes for the write shapes no merge can replay (a delete, a placeholder or multi-page record, a
-record that has to spill out of its page). Nothing changes for single-writer workloads, and no application
-change is needed. The merge can be switched off with `arcadedb.txPageSlotMerge=false`.
+The same goes for the write shapes no merge can replay (a placeholder or multi-page record, a record that has
+to spill out of its page). Nothing changes for single-writer workloads, and no application change is needed.
+The merge can be switched off with `arcadedb.txPageSlotMerge=false`.
 
 #### `dateTimeImplementation=java.time.Instant` no longer breaks reading DATETIME values
 
@@ -375,5 +383,525 @@ with a single reference assignment, so a reader sees either the whole old set or
 compaction publishes it inside the same critical section that swaps the data file - closing a window in which a
 search could resolve pre-compaction offsets against the new file
 ([#5568](https://github.com/ArcadeData/arcadedb/issues/5568)).
+
+## Geospatial index: a point now costs one index entry instead of eleven
+
+A `GEOSPATIAL` index decomposed every shape into GeoHash cells and stored the WHOLE ancestor chain, so a single
+point wrote one entry per tree level - `precision` of them, 11 by default. Everything an index write costs was
+therefore multiplied by 11: the per-record work, the WAL, the pages a cluster replicates, and the compaction that
+has to merge them all again. Worse, the cells at the top of the tree are continent-sized and shared by the whole
+dataset, so a handful of keys collected one posting per record and grew without bound; each compaction rewrote
+those complete lists, which is why a bulk load with a geospatial index got slower the longer it ran and finally
+failed with `ReplicatedEntryTooLargeException`
+([#5478](https://github.com/ArcadeData/arcadedb/issues/5478)).
+
+That layout comes from Lucene, where a term's postings are a compressed doc-id list. On an LSM-Tree - a sorted
+key/value store - "every cell below C" is simply the key range `[C, C+\uFFFF]`, so the ancestors do not need to be
+materialised at all. A geospatial index now stores only the cells the decomposition stops at (**exactly one** for a
+point) and answers a query with a prefix RANGE SCAN over the covering cells of the search shape, plus an exact
+lookup on the covering cells that still have children - those can only match a shape indexed at a coarser
+resolution, such as a stored polygon.
+
+On a 1M-point load into one country-sized box, measured in a single JVM run (`GeoIndexIngestBenchmark`):
+
+| arm | wall clock | index entries |
+|---|---|---|
+| no index (the floor) | 10.8 s | - |
+| new layout | 13.0 s | 1,000,000 |
+| old layout | 22.4 s | 11,000,000 |
+
+The index costs **5.3x less** than it did (2.2 s of overhead against 11.6 s), the whole load is 1.7x faster, and
+the index is 11x smaller on disk.
+
+Two query-side consequences come with it:
+
+- **Selectivity.** The old layout answered a query by looking up each covering cell exactly, including the
+  level-1 cell, which returned every record on the same continent as candidates for the SQL predicate to
+  re-check. A prefix scan returns what is actually under the queried cells.
+- **A POINT search shape works.** Every cell of a point's covering carries a null `shapeRel`, and the old lookup
+  loop skipped exactly those, so `geo.equals` / `geo.contains` against an indexed type found nothing and had to
+  fall back to a full scan. The walk no longer filters on `shapeRel` - the cell iterator only ever yields cells
+  that do intersect the shape.
+
+> **Upgrading? Your existing geospatial indexes change behaviour the moment the jar is swapped, before any
+> rebuild.** The `shapeRel` fix above lives in the shared query walk, so an index still on the old layout also
+> stops skipping those covering cells. A `geo.equals` / `geo.contains` query against it goes from returning
+> **nothing** to returning the right rows - the reason those two predicates were documented as index-less - and
+> every other query on it pays a few more lookups and carries a few more candidates into the predicate. Results
+> stay a superset that the predicate re-checks, so nothing gets worse than it was; the ingest and selectivity
+> gains still need the rebuild below.
+
+**Existing indexes keep working and are not rewritten.** The layout is recorded per index (`tokenization` in the
+schema), a definition written before this release loads as `FULL` and keeps reading and writing the ancestor
+chain, so nothing on disk is reinterpreted. To move an existing index to the compact layout - which is where the
+ingest and selectivity gains are - rebuild it:
+
+```sql
+REBUILD INDEX `Address[location]`
+```
+
+Opening a database **says so**, once per logical index and not again on every schema reload:
+
+```
+WARNI [LocalSchema] Index 'Address[location]' of database 'mydb' should be rebuilt: This geospatial index uses
+the legacy FULL cell layout: ... Run: REBUILD INDEX `Address[location]`
+```
+
+The same advice reaches Studio: the Indexes tab shows a banner with the ready-to-run `REBUILD INDEX` for each
+affected index and flags the rows, and the type detail marks the index too. Under the hood this is a general
+mechanism, not a geospatial one - `IndexInternal.getUpgradeWarning()` defaults to `null` and is surfaced as
+`upgradeWarning` on `schema:indexes`, `schema:index:<name>` and `schema:types`, so any future layout change can
+use the same channel.
+
+A row `LIMIT` is now ignored by a geospatial index rather than truncating its candidates. What the index returns
+is a superset the `geo.*` predicate re-checks, so cutting it at N before the filter runs drops rows that would
+have survived - silently, and only on some queries. `IndexInternal.isResultApproximate()` marks such an index and
+both `Index.get(keys, limit)` and the `TypeIndex` fan-out over it now return every candidate; the limit applies to
+the filtered rows, as it always did through SQL.
+
+`REBUILD INDEX` also no longer resets a non-default GeoHash `precision` back to 11, the same defect fixed for
+`FULL_TEXT` in #4732. Its cause was one level up: `TypeIndexBuilder` declared a `metadata` field that shadowed
+`IndexBuilder`'s, so `withMetadata()` wrote to one and `create()` read the other for every index type without a
+dedicated builder subclass. The duplicate field is gone.
+## Cypher: a non-numeric argument to `abs()` and friends is a client error, not a 500
+
+`RETURN abs('hello')` answered HTTP `500 Cannot execute command` with an otherwise perfectly good message,
+`abs() requires a numeric argument`. The type check was right; only its class was wrong, and a `500` tells a
+client the server broke when in fact the query did. Neo4j reports these as `Neo.ClientError.Statement.TypeError`
+([#5484](https://github.com/ArcadeData/arcadedb/issues/5484)).
+
+Every function declared as `f(input :: INTEGER | FLOAT)` now raises `CommandSemanticException`, so HTTP answers
+`400` and Bolt answers a client error: `abs`, `ceil`, `ceiling`, `floor`, `sqrt`, `sign`, `round`, `isNaN`,
+`exp`, `log`, `ln`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `cot`, `coth`, `sinh`,
+`cosh`, `tanh`, `degrees`, `radians`, `haversin`, plus the `math.*` extensions. The message is now phrased with
+the vocabulary of the language, matching the one `size()` and `head()` already used:
+
+```
+Type mismatch: abs() expects an INTEGER or a FLOAT argument but got STRING
+```
+
+- **A literal is rejected before the query runs**, as in Neo4j, so `MATCH (n:Nothing) RETURN abs('hello')` fails
+  even though the function would never be called. Both paths raise the same exception with the same wording, and
+  every argument position is covered: `atan2('hello', 1)` and `round(x, 2, 'SIDEWAYS')` fail there too, not only
+  the single-argument functions. That pass walks `RETURN` and `WITH` projections, which is the scope `size()` and
+  `head()` have always used; anywhere else the runtime check reports the same error with the same message when the
+  function runs.
+- **`round()` also covers its other two arguments**: a non-numeric precision, and a rounding mode outside
+  `UP, DOWN, CEILING, FLOOR, HALF_UP, HALF_DOWN, HALF_EVEN` (whose message now lists them).
+- **Null propagation is untouched**: `abs(null)` still answers `null`. In the two-argument `atan2()` both
+  arguments are type-checked before null decides the answer, so a bad one is still reported when the other is
+  null.
+- **The `math.*` extensions no longer leak `NumberFormatException`** for an unparseable argument. They still
+  accept a numeric *string* (`math.sigmoid('1.5')` works), which the Cypher-standard functions never did and
+  still do not (`abs('1.5')` is a type error). That asymmetry is deliberate: the `math.*` extensions have always
+  parsed strings and queries depend on it, while the standard ones follow the Cypher signature. Only a string is
+  parsed now, where before any value at all was run through `toString()` first, so a type whose text happens to
+  look like a number is a type error rather than a silent coercion.
+- **The wrong number of arguments is now caught while parsing**, with a message naming the function and the
+  count it expects (`Function 'abs' expects 1 argument but got 2`) - the same sentence the functions' own guards
+  use, so it does not matter which caught it. `distance()` was declared as taking exactly two arguments although
+  it has always accepted an optional unit; the declaration was corrected rather than the behaviour, and every
+  other variadic function was swept for the same mistake and found correct.
+
+## Partitioned types: lookups on a secondary index no longer read the wrong bucket
+
+A type using `partitioned(...)` bucket selection places each record in the bucket its **partition** key hashes to,
+but every index lookup was pruned to the bucket the **lookup** key hashed to. For the partition index itself those
+are the same bucket; for any other index of the type they are unrelated, so the pruned search read a bucket the
+record was not in. The lookup silently returned nothing, and because the commit-time duplicate check reads through
+the same path, a secondary `UNIQUE` index stopped rejecting duplicates
+([#5589](https://github.com/ArcadeData/arcadedb/issues/5589)).
+
+The bucket-selection contract now carries the property names the key values belong to
+(`BucketSelectionStrategy.getBucketIdByKeys(List, Object[], boolean)`), so a partitioning strategy verifies the
+lookup covers exactly its partition properties before pruning and otherwise declines, which fans the search out
+across every bucket - correct, only slower. Pruning on the partition key itself is unchanged, including composite
+partition keys, and the SQL and Cypher planner pruning rules are unaffected.
+
+- **Databases that ran `partitioned(...)` on a type carrying more than one index may already hold duplicates in a
+  secondary `UNIQUE` index**, admitted while the check was reading the wrong bucket. The constraint is enforced
+  again from this release, but existing rows are not retro-validated: check those indexes for duplicate keys and
+  `REBUILD INDEX` them.
+- The single-argument `getBucketIdByKeys(Object[], boolean)` and `DocumentType.getBucketIndexByKeys(Object[],
+  boolean)` are deprecated. They still compile, and they never prune, since the keys alone cannot be verified
+  against the partition properties.
+
+## Partitioned types: a lookup key boxed differently than the stored value now finds its record
+
+Follow-up to the above. `partitioned(...)` derives the bucket from `Object.hashCode()` on both sides, but the two
+sides saw differently boxed objects: placement hashes the value **after** the schema coerced it to the declared
+property type, while a lookup hashed whatever the caller passed. `Long.hashCode(v)` is `(int) (v ^ (v >>> 32))`
+and `Integer.hashCode(v)` is `v`, so the two agree only for positive values below 2^31. On a `LONG` partition key
+every negative value, and every value outside the `int` range, pruned to a bucket the record had never been placed
+in ([#5595](https://github.com/ArcadeData/arcadedb/issues/5595)).
+
+This was not limited to the Java index API: a plain `SELECT FROM T WHERE id = -5` hits it, because a SQL integer
+literal that fits an `int` arrives as an `Integer` and the planner prunes buckets through the same strategy.
+
+The lookup key is now converted to the declared property type - the very coercion the write path applies - before
+being hashed. Placement is untouched, so **no existing database needs a repartition**. Where the stored form cannot
+be reproduced the strategy declines to prune and the search fans out across every bucket, which is correct and only
+slower:
+
+- the partition property is not declared in the schema, so the record kept whatever Java type the writer used and
+  there is no conversion target;
+- the key does not coerce to the declared type at all;
+- the partition index declares `COLLATE CI`. Case folding is an index-level normalisation that placement never
+  applied, so `'Hello'` and `'hello'` are a single index key living in two different buckets. Only a change to
+  placement could reconcile that, and that would force a repartition, so such a partition is no longer pruned.
+  (Bucket counts that are a power of two up to 32 hid this by arithmetic accident: flipping the case of an ASCII
+  letter shifts the Java string hash by a multiple of 32.)
+
+## Partitioned types: an unusable partition key is refused instead of quietly breaking `UNIQUE`
+
+Third and last of the series, and the one that closes the hole rather than the symptom
+([#5603](https://github.com/ArcadeData/arcadedb/issues/5603)). On a partitioned type a `UNIQUE` index is a set of
+per-bucket sub-indexes, so the constraint is global only while every record carrying one index key lands in one
+bucket. Placement hashes the value; the index decides two keys are equal a different way. Where those disagree the
+same key lives in several buckets and **each of them accepts its own copy**. Measured against a round-robin control
+that rejects the duplicate every time, a partitioned type admitted 3 of 4 rescaled `DECIMAL` values, 3 of 6
+identical `BINARY` values and 3 of 6 spellings of one instant:
+
+- **`BINARY`** - the stored form is a `byte[]`, which inherits identity `hashCode`, so every single write of the
+  same bytes drew a fresh bucket;
+- **`DECIMAL`** - `BigDecimal.hashCode` folds in the scale, so `1.1` and `1.10` hash apart while the index compares
+  them equal;
+- **`DATE`/`DATETIME` under a zone-carrying `dateTimeImplementation`** (`ZonedDateTime`, `Calendar`) - only the
+  instant reaches disk, so the writer's zone is hashed at placement and gone on the way back. This covers every
+  datetime precision (`DATETIME_SECOND`, `DATETIME_MICROS`, `DATETIME_NANOS`), which the deserializer reads back
+  through the configured implementation just like the base type. The zone-free implementations (`java.util.Date`,
+  `Instant`, `LocalDate`, `LocalDateTime`) round-trip unchanged and are unaffected.
+
+Such a partition is now never pruned, which restores the constraint by making the uniqueness check fan out, and
+**`ALTER TYPE ... BucketSelectionStrategy partitioned(...)` refuses the configuration outright** rather than
+attaching it and letting the damage surface at read time - the common root behind #5589 and #5595. `COLLATE CI`,
+already unprunable since #5595, is refused on the same footing. Placement is untouched, so no existing database
+needs a repartition.
+
+- **An existing database in one of these states still opens.** The same check runs when the schema is read back,
+  but only logs a warning: a refusal at load would turn a slow database into an unopenable one. Once open, its
+  `UNIQUE` index is enforced again. Duplicates already on disk are not retro-validated - scan those indexes and
+  `REBUILD INDEX` them.
+- **A second index on non-partition properties is a warning, not a refusal.** Those lookups fan out (#5589), which
+  is correct but no faster than not partitioning; the schema is otherwise perfectly reasonable, so it is reported
+  and accepted.
+- **`ALTER TYPE ... BucketSelectionStrategy` now says what actually went wrong.** Every failure used to be
+  rewritten as `implementation '...' was not found`, so a `partitioned('x')` rejected for want of a unique index on
+  `x` sent you hunting for a typo in a name that was perfectly valid. A genuinely unknown implementation still
+  reports that it cannot be found. Only the message changed: the refusal is still a client error and still answers
+  HTTP 400.
+
+Two states the issue asked about turned out not to be reachable, and are pinned by tests rather than fixed: an
+**undeclared partition property** cannot occur, because the strategy demands a unique automatic index and an index
+cannot be created on a property that does not exist; and a **`DATETIME` key under a non-default
+`dateTimeImplementation` does not shift bucket across a rebuild**, because the write path already truncates to the
+declared precision, so a freshly built record and one deserialized from disk hash identically.
+
+## Commit-time page merges now prove their coverage instead of trusting every writer
+
+The two commit-time page merges - the commutative edge-append merge and the disjoint-slot merge - resolve a page
+version conflict by discarding this transaction's whole image of the page and replaying only its *tracked* writes
+on top of the newer committed version. That is sound only when every byte the transaction wrote to that page
+belongs to a tracked write. Until now nothing checked it: the invariant was maintained by hand, through
+`poisonEdgeAppendPage`/`poisonSlotRebasePage` calls scattered across the writers. A writer that forgot one
+committed a page from which its own change had silently vanished - no exception, no log line, and the merged bytes
+then replicated faithfully to every follower. The same gap had already been found and patched three times by
+people reading the code rather than by a test.
+
+The eligibility test is now the other way round: a byte counts as replayable only while its writer says so
+(`MutablePage.beginCoveredWrite`), and a page that carries even one byte written outside such a declaration is
+refused. `LocalBucket` declares exactly the writes each merge re-applies - the single-slot insert, the in-page
+update (overwrite or growth), the plain-record delete, the in-place rewrite behind a tracked edge append, and
+`compressPage`, whose defrag the commit path re-runs on the rebased page. Everything else - the inline
+record-table writes of the multi-page writers, a placeholder, a record spilling out of its page, a
+stripe-directory update co-located with a segment append, a `GraphBatch` bulk load, any writer added in the
+future - leaves the page undeclared and falls back to the ordinary retry it would have taken before the merges
+existed ([#5596](https://github.com/ArcadeData/arcadedb/issues/5596)).
+
+- **No configuration change and no new failure mode.** The existing poison calls stay as the fast, precise path;
+  the coverage proof only ever turns a would-be silent lost write into a retry.
+- **Merge rates are unchanged on the workloads the merges were built for** (concurrent appends to one super-node,
+  concurrent updates, inserts and deletes of unrelated records sharing a page): those pages are fully declared.
+- **Cost is two ints per page and one OR per page write.**
+
+## The page-merge counters are now visible to an operator
+
+`mergesDeclinedByCoverage`, introduced above as *the* signal that some writer is dirtying a mergeable page without
+declaring it, could not actually be read outside a debugger or a unit test: `Profiler` surfaced exactly one
+page-manager contention stat, `concurrentModificationExceptions`, and none of the three merge counters. The advice
+that came with it - "watch it next to `edgeAppendMerges`/`txPageSlotMerges`: a jump here with a dip there is
+exactly the shape of a forgotten declaration" - was therefore unfollowable in production
+([#5608](https://github.com/ArcadeData/arcadedb/issues/5608)).
+
+All three now reach the `PAGE-MANAGER` block of the text dump, the `/api/v1/server` JSON, the Studio metrics table
+and `/prometheus` (`arcadedb.engine.page.merges.edge.append`, `.slot`, `.declined`). They are also **rate-tracked**
+alongside `concurrentModificationExceptions`, because the signal is a derivative: monotonic counters cannot show a
+jump-with-a-dip without an operator sampling and subtracting them by hand.
+
+Two smaller hardenings shipped with it:
+
+- **The compression a merge owes the page it re-derives is now structural.** `LocalBucket.compressPage` declares
+  its writes covered by *every* merge, which is true only because the compression is re-run on the rebased page.
+  That re-run moved from the commit loop into `rebaseEdgeAppends`/`rebaseSlots` themselves, so reordering or
+  optimising the commit loop can no longer invalidate the declaration - the consequence being a lost defrag, which
+  no correctness assertion would have caught. A regression test now asserts a merged page is committed hole-free.
+- **A diagnostic can no longer replace the conflict it is reporting.** `reportCoverageDecline` runs inside the
+  commit loop's `catch (ConcurrentModificationException)`, one statement before the rethrow, and reached a bucket
+  lookup that raised `SchemaException` for an unknown id. Escaping there, it would have been wrapped as a plain
+  `TransactionException` - turning a conflict the caller would have retried into a hard failure. The diagnostic is
+  now total by construction.
+- **An unresolvable edge bucket is the retryable conflict it always claimed to be.** The lookup above sat under a
+  `bucket == null` branch documented to "treat a missing one as a retryable conflict", which could never run: the
+  single-argument `getBucketById` raises before it can return null, so the `ConcurrentModificationException` that
+  branch promised was never the exception anyone actually got. The lookup now asks for the null its own contract
+  was written against, and every caller of it - tracking, poisoning and the rebase itself - retries as designed.
+
+## A `STRING` property no longer reads back as a geometry
+
+Deserializing any string looked at its first characters and, when they were `POINT`, `CIRCLE`, `LINESTRING`,
+`POLYGON`, `ENVELOPE` or `BUFFER`, parsed the value as WKT and handed back a spatial4j `Shape` instead of the
+`String` that had been written ([#5600](https://github.com/ArcadeData/arcadedb/issues/5600)). A property declared
+`STRING` therefore did not round-trip: `getString()` returned spatial4j's `Pt(x=..,y=..)` form, which is not valid
+WKT, so feeding it back into a geo function failed. The trigger was a prefix match on arbitrary user text, not a
+schema decision, so a `description` column holding `"POLYGON shaped, see attached"` went through it too - and the
+prefix chain ran on **every** string read in the database.
+
+The storage layer no longer changes the declared type of a value: a string reads back as the string that was
+written. The conversion happens where a geometry is actually asked for - `GeoUtils.parseGeometry()`,
+`GeoUtils.parseJtsGeometry()` and the geospatial index all accept a WKT string - so a database written before
+26.2.1, when shapes were stored as WKT text, keeps working unchanged; `geo.point()` likewise still returns WKT and
+is still indexable and queryable. Only code that relied on `document.get("wktColumn") instanceof Shape` sees a
+difference, and it now gets the type the schema declares.
+
+## GEOSPATIAL: `precision` is settable from SQL, and an ignored `METADATA` is now an error
+
+`CREATE INDEX ... GEOSPATIAL METADATA {"precision": 6}` parsed, ran, and silently built the index at the default
+precision of 11: `CreateIndexStatement` forwarded `METADATA` for `LSM_VECTOR`, `FULL_TEXT` and `LSM_SPARSE_VECTOR`
+and fell through to a bare `create()` for everything else, so only the Java API could set it. Precision drives cell
+resolution (11 is about 2.4 m, 6 about 1.2 km) and therefore index size and query selectivity.
+
+`GEOSPATIAL` now has a builder of its own, `TypeGeoIndexBuilder`, in the same shape as the full-text and vector
+ones, and `withType(GEOSPATIAL)` returns it - so `precision` and `tokenization` are settable from SQL and from the
+Java API alike:
+
+```sql
+CREATE INDEX ON Location (coords) GEOSPATIAL METADATA {"precision": 6}
+```
+
+A `METADATA` clause the index cannot use is now reported instead of dropped. An unknown key (`{"precisin": 6}`), a
+precision that is not a whole number in 1-12, an invalid tokenization, or a `METADATA` on an index type that has
+no settings at all raise a `CommandSQLParsingException`. Silently ignoring the clause is what kept this gap
+invisible in the first place.
+
+> **Breaking change, at execution time.** `CREATE INDEX ... UNIQUE METADATA {"test": 3}` - a `METADATA` clause on
+> a plain `LSM_TREE` or `HASH` index, which has no settings to configure - used to be accepted and ignored, and
+> now fails the statement. The SQL **grammar** is unchanged, so such a statement still parses; only running it
+> is refused. If a schema script carries a `METADATA` that was never doing anything, drop the clause.
+
+One more sharp edge went with it: **`withType()` no longer leaves the original builder unconfigured.** It returns
+a specialised subclass for `LSM_VECTOR`, `FULL_TEXT`, `LSM_SPARSE_VECTOR` and now `GEOSPATIAL`, so a caller that
+ignored the return value (`builder.withType(X); builder.create();`) hit `indexType was not specified`. The type is
+recorded on the original builder as well.
+
+## GEOSPATIAL: an area shape indexes fewer cells
+
+The FRONTIER layout introduced above stores the cells a shape's decomposition stops at. A complete set of sibling
+cells is now collapsed into its parent, recursively - the reduction Lucene calls `pruneLeafyBranches` and applies
+by default on its own indexing path. A parent covers the union of its children, so the cover can only grow and a
+match is never lost; the `geo.*` predicate post-filters the superset either way. Measured on the frontier cell
+count: 57% fewer for a small square, 74% fewer for a jagged outline, and unchanged for a linestring or a wide
+rectangle. A point decomposes into a chain of single-child cells and is never affected, so the one-entry-per-point
+guarantee stands.
+
+Lucene's own implementation buffers the entire decomposition in a list, which is why its javadoc warns against the
+option "for high precision (low distErrPct) shapes". ArcadeDB's is a streaming walk: only the frontier tokens on
+the current root-to-leaf path can still be revoked by an ancestor collapsing, bounding what is held to
+`subCellsSize * detailLevel` tokens regardless of shape size. The two produce identical token sets, which is
+asserted directly against Lucene in `LSMTreeGeoIndexCellPruningTest`.
+
+This changes what a **new** index writes for area shapes; an index already in the `FULL` layout is untouched, and
+`FRONTIER` has not shipped in any release, so no published database holds the unpruned form.
+
+> Running a **nightly 26.8.1-SNAPSHOT** build from between the `FRONTIER` change and this one is the one case that
+> needs attention: a geospatial index written by those builds holds unpruned cells for its area shapes, while this
+> build recomputes the pruned - smaller - set when a record is deleted, which would leave the extra entries behind.
+> `REBUILD INDEX` on such an index rewrites it in the current layout. Point-only indexes are unaffected, since
+> pruning never applies to them.
+
+## Cypher: the follow-ups left by the `abs()` fix
+
+Five loose ends recorded while fixing [#5484](https://github.com/ArcadeData/arcadedb/issues/5484), collected as
+[#5602](https://github.com/ArcadeData/arcadedb/issues/5602) and closed together.
+
+**The guard that was supposed to stop the `distance()` mistake from recurring now actually compares something.**
+`FunctionValidator`'s `minArgs`/`maxArgs` went from unused metadata to a hard parse-time gate in #5484, which is
+how a declaration narrower than the function's real signature started rejecting valid queries. The drift guard
+added alongside it compared a registered signature against the bounds its executor declares - and asserted it had
+compared *zero* of them, because no executor declared any, and the seven functions that reach a SQL function
+through `SQLFunctionBridge` (`count`, `distance`, `stdev`, `stdev_pop`, `stdev_samp`, `stdevp`, `sum` - `distance`
+among them, the one entry that was actually wrong) had nothing to delegate to. Every Cypher executor now declares
+its argument-count contract and enforces it *from that declaration* (`Function.checkArity`), so there is one
+number per function rather than a hand-written `if` beside a hand-written bound; the bridge passes the wrapped SQL
+function's through. All 129 registered names are checked at build time. Two are pinned as deliberately narrower in
+Cypher than in SQL - `count` (whose star form is a separate parser construct) and `sum` (SQL's is variadic per
+row) - and the pin itself is asserted to still bite.
+
+- **A wrong argument count is now a client error everywhere.** The shared function layer previously answered
+  `CommandExecutionException` (HTTP `500`) from its own runtime guards while the parser answered
+  `CommandSemanticException` (HTTP `400`) for the same mistake. Both now say
+  `Function 'x' expects N arguments but got M` with the client-error class. `Function.validateArgs()` - the entry
+  point the `CALL` path uses - runs the same check rather than its own, so calling a function through `CALL` with
+  the wrong number of arguments no longer reports a different message, or a `500` where an expression gave `400`.
+
+  > **The exception type changed, not only the status.** A wrong argument count now raises
+  > `CommandSemanticException`, which extends `CommandParsingException` - a different branch of the hierarchy from
+  > the `CommandExecutionException` the old runtime guards threw (and from the `IllegalArgumentException`
+  > `validateArgs()` threw). Embedded code that catches `CommandExecutionException` around a call in order to catch
+  > a bad argument count will no longer see it, and should catch `CommandParsingException` instead. This is the
+  > opposite of the arithmetic change below, which deliberately stayed inside `CommandExecutionException`: an
+  > arithmetic failure genuinely happens while executing, whereas a wrong argument count is a property of the query
+  > text that the parser already rejects, so the two belong on different branches.
+
+**Parse-time argument validation is no longer confined to `RETURN` and `WITH`.** `MATCH (n:Nothing) WHERE
+abs('x') > 0 RETURN n` ran to completion - and, matching no row, looked like a success - while the identical call
+in a `RETURN` was rejected before the query started. The clause an expression sits in has no bearing on whether
+the call is valid, so the same checks now run over `WHERE`, `UNWIND`, `SET`, `CREATE`, `MERGE`, `DELETE`,
+`FOREACH`, `ORDER BY`, `SKIP`/`LIMIT` and inline pattern properties, through one traversal rather than a
+per-clause recursion. No check is new; only its reach. A call that does execute still fails with the same message
+from the function's own guard.
+
+> **Potentially breaking.** A query that today runs to completion because its bad call sits in a clause the
+> validation never walked - or in a branch that never executes, such as a `WHERE` on a pattern that matches no row -
+> is now rejected before it starts. The call was always wrong and would always have failed had it run; what changes
+> is that the failure is no longer conditional on the data. If a query of yours starts failing, the error names the
+> function and what it expected.
+
+**`charLength()` and `isNormalized()` work; `charAt()` is gone.** All three were registered as known to the
+parser with no executor behind them, so a call parsed and then failed at execution with the confusing `Unknown
+function` - right after the parser had declared the name valid. `charLength` is now an alias of the
+already-implemented `char_length`, `isNormalized(input[, normalForm])` is implemented as the boolean counterpart
+of `normalize()` (same `NFC, NFD, NFKC, NFKD` form names, same error for an unknown one), and `charAt` - which
+names no function in Neo4j either - is unregistered, so it is rejected up front with the ordinary unknown-function
+error. An unknown-function error now also echoes the spelling you wrote rather than the folded one.
+
+`normalize()` also becomes STRING-only, matching both its new counterpart and Neo4j's `f(input :: STRING)`
+declaration: it used to `toString()` whatever arrived, so `normalize(123)` quietly answered `'123'` instead of
+raising the type error. A non-STRING argument is now a client error, the same treatment `size()` and `head()` got
+in #5477 and #5476.
+
+**Case folding no longer depends on the server's default locale.** #5484 fixed this for function names, where a
+Turkish default made `"ISNAN".toLowerCase()` the dotless `"ısnan"` and `RETURN ISNAN(1.0)` an unknown function.
+The same pattern survived in procedure names, variable names, `IS ::` type names, the `EXPLAIN`/`PROFILE` prefix
+scan, temporal unit names, vector metric names and the graph functions' direction argument. All of them fold with
+`Locale.ROOT` now, and a test reads the sources to keep a new one from slipping in - the two forms behave
+identically under every locale CI runs in, so nothing else would notice.
+
+**An arithmetic error is a client error, not a 500.** `abs(-9223372036854775808)`, `9223372036854775807 + 1` and
+`1 / 0` all have no representable answer, which is decided by the values the caller supplied and not by anything
+wrong with the server; all three answered HTTP `500`. Neo4j classifies the whole category as
+`Neo.ClientError.Statement.ArithmeticError`. The engine now raises `ArithmeticErrorException` for 64-bit overflow
+and for division or modulo by zero (including `duration(...) / 0`, which used to escape as a raw
+`java.lang.ArithmeticException`), HTTP answers `400`, and Bolt answers
+`Neo.ClientError.Statement.ArithmeticError`.
+
+- **Nothing changes for embedded code**: `ArithmeticErrorException` extends `CommandExecutionException`, the
+  class [#5164](https://github.com/ArcadeData/arcadedb/issues/5164) and
+  [#5494](https://github.com/ArcadeData/arcadedb/issues/5494) settled on, so existing catch blocks are unaffected.
+- **Floating-point arithmetic is untouched**: `1.0 / 0.0` is still `Infinity` and `0.0 / 0.0` still `NaN`, as
+  IEEE 754 and Neo4j require.
+- **A retryable conflict still wins over it** in the Bolt classification, so a driver's managed-transaction retry
+  is not lost.
+- **HTTP and Bolt only.** The other wire protocols (Postgres, MongoDB, Redis, GraphQL, Gremlin) still report an
+  arithmetic error through their generic execution-error handling; only the two paths a Cypher statement normally
+  arrives on make the distinction.
+## `countEntries()` no longer counts tombstones as live entries
+
+On any LSM index, deleting records did not bring `countEntries()` back down to the number of live entries: the
+count settled on a residual that only a full compaction cleared. Deleting every record of a type left the index
+reporting `1` with zero records in the database ([#5601](https://github.com/ArcadeData/arcadedb/issues/5601)).
+
+The tombstones were not the problem - the cursor already skips dead keys, and the work it skipped is accounted in
+the `deadEntriesSkipped` stat. The count incremented once per `next()` call, and an LSM index cursor answers
+`hasNext()` optimistically: it reports on how many underlying page cursors are still live, not on whether any of
+them still holds a surviving RID, so `next()` legitimately returns `null` once a trailing run of tombstones leaves
+nothing to emit. That `null` was counted as an entry.
+
+`countEntries()` now counts values rather than calls, and closes its cursor when it is done - a full walk of every
+index being the last place that should leak a compacted-series retire guard. The contract is now stated on
+`Index.countEntries()`: it is the number of LIVE entries, "entry" is the index's own unit (one per analyzed token
+for full-text, one per posting for sparse vectors, one per covering cell for geospatial), and only `HASH` answers
+in constant time.
+
+## Geospatial queries stream instead of materialising every candidate
+
+A geospatial query decomposes its search shape into covering cells - a 10x10-degree box resolves into roughly 4,200
+of them - and answers each with one prefix range scan or one exact lookup on the underlying LSM-Tree. Every one of
+those scans was drained into a candidate set, which was then copied into a list of index entries, before the caller
+saw the first row; the SQL layer then loaded every candidate RECORD of every bucket into a second list before the
+`geo.*` predicate re-checked the first one. A `LIMIT 10` over a wide-area query paid for the entire candidate set
+([#5601](https://github.com/ArcadeData/arcadedb/issues/5601)).
+
+The whole chain is now lazy. The index cursor opens one cell scan at a time and closes it as soon as it is drained,
+the SQL function chains the per-bucket cursors the same way, and a consumer that stops early stops the covering-cell
+walk with it. Deduplication is still a set of RIDs - a polygon decomposes into many cells, so the same record can be
+reached through several of them - but it now holds only what has actually been emitted rather than a second parallel
+copy of the whole candidate set. Results are unchanged: the index still answers with a superset that the `geo.*`
+predicate re-checks, and a row limit is still never applied to the candidates.
+
+Because an abandoned cursor now can leave an underlying scan open, `FETCH FROM INDEXED FUNCTION` releases it on
+`close()` and `reset()`, matching what the regular index fetch step already did: a compacted-series cursor registers
+with its file so a full compaction defers dropping it.
+## Studio can create a vector index, and a vector index can no longer be created without `dimensions`
+
+Studio's "Add Index" dialog offered `LSM_VECTOR` in the algorithm list but built the statement without a
+`METADATA` clause, which the engine refuses outright - and the dialog had no input for the settings the error
+message asked for. Creating a dense vector index from the UI was simply impossible
+([#5607](https://github.com/ArcadeData/arcadedb/issues/5607)). The dialog now collects **dimensions** (required),
+**similarity**, **max connections**, **beam width** and **quantization**, and the sparse branch gained the
+matching **weight quantization** selector.
+
+The underlying contract was loose in three places, and all three are tightened:
+
+- **`dimensions` is now enforced, everywhere.** It is the one vector setting with no usable default: every write
+  and every graph build compares the candidate vector's length against it, so an index created with `dimensions`
+  unset accepted writes and indexed nothing, forever, without a single warning. `CREATE INDEX ... LSM_VECTOR
+  METADATA {}` and the equivalent builder call are now refused at creation time. Indexes created before this
+  release are untouched - the check runs only when a new index is built.
+- **The `CREATE INDEX` error message told the truth about only one of the four settings it named.** It asked for
+  `dimensions`, `similarity`, `maxConnections` and `beamWidth`; the last three have defaults (`COSINE`, `32`,
+  `100`). It now names `dimensions` as the requirement and lists the rest as optional with their defaults.
+- **Index creation failures carry their reason again.** Any error raised while building an index was rewrapped
+  as a bare `Error on creating index on type 'X', properties [y]`, discarding the cause's message on the way to
+  the SQL and HTTP layers. The reason is now part of the message.
+- **A `METADATA` value the vector builder cannot read is a 400, not a 500.** Every value in that clause comes
+  from the statement, so an unparsable number (`{"dimensions": "abc"}` escaped as a raw
+  `NumberFormatException`), an unknown `similarity` or `quantization` name, or an out-of-range `pqClusters` is a
+  client mistake. They are reported as parsing errors now, the same treatment the `GEOSPATIAL` metadata gets.
+
+## Server and cluster status endpoints scope their per-database output to the caller
+
+The routes that enumerate the whole database registry rather than naming one database in the path now reduce
+every per-database entry they emit to the databases the caller is authorized for. This covers the `databases`
+array and the database-scoped `alerts` of `GET /api/v1/cluster`, the `ha.databases` array of
+`GET /api/v1/server?mode=cluster`, and the `metrics.sparseVectorIndexes` map of `GET /api/v1/server`. The
+server-level fields of those responses are unchanged and stay readable by any authenticated user - in
+particular `ha.leaderAddress` and `ha.replicaAddresses`, which the remote driver reads on every connection to
+route requests, and which therefore cannot be restricted to root.
+
+Two cluster endpoints move behind the root check that the seven mutating Raft endpoints already use:
+
+- **`POST /api/v1/cluster/bootstrap-state`** is a peer-to-peer RPC with no browser or driver consumer, and each
+  call computes a SHA-256 over every database directory on the node. Peers are unaffected: they reach it with
+  the cluster token forwarded as root.
+- **`GET /api/v1/cluster?presence=true`** fans that RPC out to every peer to build the presence matrix. The
+  matrix answers a whole-cluster question, and every remedy it points to (resync, transfer leadership) is
+  itself root-only. The cheap `GET /api/v1/cluster` poll without the parameter is unchanged. Note the root
+  check runs before the leader check, so a non-root caller passing the parameter to a **follower** now gets
+  `403` where it previously got a `200` with no matrix in it - tooling that polls followers with the flag
+  will see the change. In Studio the matrix is loaded by an explicit button, not by the cluster tab's
+  auto-poll, so a non-root operator's tab keeps working.
+
+`GET /api/v1/cluster` also stops listing reserved internal databases such as the Raft control directory
+`.raft`, matching what the presence matrix and the bootstrap-state RPC already did.
 
 **Full Changelog**: https://github.com/ArcadeData/arcadedb/compare/26.7.2...26.8.1

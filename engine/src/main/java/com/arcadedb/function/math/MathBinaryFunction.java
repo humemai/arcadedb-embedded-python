@@ -18,8 +18,8 @@
  */
 package com.arcadedb.function.math;
 
-import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.function.StatelessFunction;
+import com.arcadedb.function.cypher.CypherFunctionHelper;
 import com.arcadedb.query.sql.executor.CommandContext;
 
 import java.util.function.DoubleBinaryOperator;
@@ -45,13 +45,24 @@ public class MathBinaryFunction implements StatelessFunction {
   }
 
   @Override
+  public int getMinArgs() {
+    return 2;
+  }
+
+  @Override
+  public int getMaxArgs() {
+    return 2;
+  }
+
+  @Override
   public Object execute(final Object[] args, final CommandContext context) {
-    if (args.length != 2)
-      throw new CommandExecutionException(name + "() requires exactly two arguments");
-    if (args[0] == null || args[1] == null)
+    checkArity(args);
+    // Both arguments are type-checked before null propagation decides the answer, so an out-of-domain argument is
+    // still reported when the other one happens to be null (issue #5484).
+    final Number first = CypherFunctionHelper.requireNumberArgument(args[0], name);
+    final Number second = CypherFunctionHelper.requireNumberArgument(args[1], name);
+    if (first == null || second == null)
       return null;
-    if (args[0] instanceof Number && args[1] instanceof Number)
-      return op.applyAsDouble(((Number) args[0]).doubleValue(), ((Number) args[1]).doubleValue());
-    throw new CommandExecutionException(name + "() requires numeric arguments");
+    return op.applyAsDouble(first.doubleValue(), second.doubleValue());
   }
 }
