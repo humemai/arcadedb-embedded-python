@@ -147,6 +147,32 @@ def torn_count(backend):
     return sum(1 for r in rows if r.get("torn_state"))
 
 
+# The eight rows the dense prose ranks against: T5's dense half minus the
+# server row, which is a deployment axis rather than a competitor.
+DENSE_ROWS = ["ArcadeDB (emb)", "ArcadeDB (emb, int8, 16", "Qdrant", "Milvus",
+              "Chroma", "LanceDB", "sqlite-vec", "DuckDB-VSS"]
+
+
+def _dense_rank(col):
+    """1-based rank of ArcadeDB (emb) in `col` among DENSE_ROWS, lower better.
+
+    Rank claims rot in a way no ratio claim can catch, because the drift is in
+    the ORDERING and every individual cell stays correct. Two such claims were
+    already wrong when this was written: the dense prose said "the best tail"
+    after Chroma's row had moved ahead of it on p99, and the integration-cost
+    prose said "within 2-4x at matched recall" long after the #5412 fixes put
+    ArcadeDB second of eight. Both survived a checker that verified only the
+    numbers it had been told about. A rank is the claim actually being made,
+    so pin the rank.
+    """
+    mine = cell("t5_dense_ts.tex", "ArcadeDB (emb)", col)
+    if mine is None:
+        return None
+    return 1.0 + sum(1 for s in DENSE_ROWS
+                     if s != "ArcadeDB (emb)"
+                     and (cell("t5_dense_ts.tex", s, col) or float("inf")) < mine)
+
+
 # (id, prose value, tolerance, how to compute it, note)
 # Tolerance is what the prose's own rounding allows, not a fudge factor: a
 # claim printed as "525 ops/s" is satisfied by anything rounding to 525.
@@ -252,12 +278,25 @@ CLAIMS = [
     ("l3s.improvement", 14.5, 0.1,
      lambda r: 165.0 / cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3),
      "1M improvement vs the 165 ms originally filed"),
+    # The starting point of the same trajectory, stated as a ratio because the
+    # integration-cost prose quotes it that way ("closed from 57x"). That
+    # sentence carried 18x -> 13x for weeks after the dev22 refresh made it
+    # 57x -> 3.9x: the operands were re-measured and the summary was not.
+    ("l3s.ratio.qdrant_1m_orig", 57.0, 0.5,
+     lambda r: 165.0 / cell("t4_sparse.tex", "Qdrant", 3),
+     "1M Qdrant ratio this work started from"),
 
     # --- T5 dense ---------------------------------------------------------
     ("l3d.arcadedb.p50", 0.723, 0.005,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb)", 1), "dense p50 warm"),
     ("l3d.arcadedb.recall", 0.949, 0.001,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb)", 3), "dense recall@10"),
+    # Both places the dense prose ranks itself. See _dense_rank for why a rank
+    # needs its own claim and cannot be inferred from the cells.
+    ("l3d.rank.p50", 2.0, 0.0, lambda r: _dense_rank(1),
+     "dense p50 rank of 8 (prose: second, behind Chroma)"),
+    ("l3d.rank.p99", 2.0, 0.0, lambda r: _dense_rank(2),
+     "dense p99 rank of 8 (prose: second, behind Chroma)"),
     # The deployment prose quoted 0.81 (the #5412 close-out figure) while T5
     # and f8 both said 0.723. Three places, two numbers, same quantity.
     ("l3d.srv.p50", 1.82, 0.01,
