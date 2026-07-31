@@ -67,6 +67,12 @@ def main():
         lats.sort()
         rec = {"rep": rep, "backend": BACKEND, "scale": SCALE,
                "build_s": build_s, "n_queries": len(test),
+               # Read, not asserted. The dev20 drivers wrote "INT8"/"fp32" as
+               # string literals regardless of what BENCH_DENSE_QUANT actually
+               # said, which is the same self-assertion that let one of them
+               # stamp a version it was not running.
+               "quantization": os.environ.get("BENCH_DENSE_QUANT") or "fp32",
+               "heap_asked": os.environ.get("ARCADEDB_HEAP"),
                "p50": round(lats[len(lats) // 2], 3),
                "p95": round(lats[int(0.95 * len(lats))], 3),
                "p99": round(lats[int(0.99 * len(lats))], 3),
