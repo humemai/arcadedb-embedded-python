@@ -420,6 +420,54 @@ CLAIMS = [
 ]
 
 
+def regen():
+    """Do the committed tables still regenerate byte-identically from the data?
+
+    This file's whole premise is the chain prose -> table -> data: claims are
+    pinned to table cells rather than re-derived, on the stated grounds that
+    "the tables themselves regenerate byte-identical from the data (checked
+    separately)". Nothing was doing that separate check, so the middle link
+    was the one assumption in the chain that nothing verified.
+
+    It matters more than it sounds. If a committed table drifts from what the
+    generator now produces, every claim pinned to a cell keeps passing against
+    the stale file, and the checker reports green precisely when prose, table
+    and data have come apart.
+
+    Generates into a temp directory and diffs; never writes the real tables.
+    """
+    import filecmp
+    import shutil
+    import tempfile
+    real = os.path.normpath(TABLES)
+    tmp = tempfile.mkdtemp(prefix="tabgen_")
+    saved = M.OUT
+    try:
+        M.OUT = tmp
+        M.main()
+    except Exception as e:
+        print(f"  ERROR regenerating: {e.__class__.__name__}: {e}")
+        return 1
+    finally:
+        M.OUT = saved
+    names = sorted(f for f in os.listdir(real) if f.endswith(".tex"))
+    bad = 0
+    print("=== committed tables vs freshly generated ===")
+    for n in names:
+        gen = os.path.join(tmp, n)
+        if not os.path.exists(gen):
+            print(f"  {n:22} BAD committed but the generator no longer emits it")
+            bad += 1
+        elif filecmp.cmp(os.path.join(real, n), gen, shallow=False):
+            print(f"  {n:22} identical")
+        else:
+            print(f"  {n:22} BAD differs from the data it claims to come from")
+            bad += 1
+    shutil.rmtree(tmp, ignore_errors=True)
+    print(f"\n{bad} table(s) out of sync")
+    return bad
+
+
 def sweep():
     """List every ratio in the prose that no CLAIM pins, with its context.
 
@@ -478,10 +526,14 @@ def main():
     ap.add_argument("--lane", help="only claims whose id starts with this")
     ap.add_argument("--sweep", action="store_true",
                     help="list prose ratios that no claim pins, and exit")
+    ap.add_argument("--regen", action="store_true",
+                    help="check committed tables still regenerate from data")
     args = ap.parse_args()
 
     if args.sweep:
         return sweep()
+    if args.regen:
+        return regen()
 
     rows = M.load_canonical()
     print(f"canonical rows: {len(rows)}  "
