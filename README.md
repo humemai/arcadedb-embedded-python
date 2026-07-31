@@ -19,7 +19,7 @@ PyPI](https://github.com/humemai/arcadedb-embedded-python/actions/workflows/rele
 
 - Native Python bindings for ArcadeDB with a bundled JRE (no local Java required).
 - **Wheels for 4 platforms: Linux x86_64, Linux ARM64, macOS Apple Silicon, and Windows x86_64.**
-- Embedded usage (in-process); for client-server deployments use the official ArcadeDB server alongside.
+- Embedded usage (in-process) with optional in-process server mode (HTTP API + Studio).
 - Tests and examples validated in CI across supported platforms.
 
 The Python bindings and packaging live under bindings/python. The upstream Java project

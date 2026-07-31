@@ -42,6 +42,9 @@ from .exceptions import ArcadeDBError
 # Import exporter classes
 from .exporter import export_database, export_to_csv
 
+# Import server classes
+from .server import ArcadeDBServer, create_server
+
 # Import graph classes
 from .graph import Document, Edge, Vertex
 
@@ -108,6 +111,9 @@ __all__ = [
     "to_java_byte_array",
     "to_java_float_array",
     "to_python_array",
+    # Server classes
+    "ArcadeDBServer",
+    "create_server",
     # Data export
     "export_database",
     "export_to_csv",

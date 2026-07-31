@@ -197,7 +197,7 @@ def start_jvm(
             return
         raise ArcadeDBError(
             "JVM is already started with different settings. Configure JVM "
-            "args/heap before the first database creation."
+            "args/heap before the first database or server creation."
         )
 
     jar_path = get_jar_path()

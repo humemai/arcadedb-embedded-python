@@ -487,7 +487,7 @@ with open_with_retry("./mydb") as db:
 import arcadedb_embedded as arcadedb
 from arcadedb_embedded.jvm import start_jvm
 
-# Optional: configure JVM before the first database
+# Optional: configure JVM before first database or server
 start_jvm(heap_size="8g")
 
 # JVM runs for entire Python process
@@ -515,4 +515,5 @@ with arcadedb.open_database("./database1") as db1, \
 
 - [Database API Reference](../../api/database.md) - Complete API documentation
 - [Transactions](transactions.md) - Transaction management
+- [Server Mode](../../api/server.md) - Multi-process database access
 - [Quick Start](../../getting-started/quickstart.md) - Getting started guide

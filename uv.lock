@@ -77,7 +77,7 @@ examples = [
 
 [package.metadata]
 requires-dist = [
-    { name = "arcadedb-embedded", index = "file:///home/tk/repos/humemai/arcadedb-embedded-python/bindings/python/dist" },
+    { name = "arcadedb-embedded", index = "file:///home/tk/bt-server/bindings/python/dist" },
     { name = "numpy", specifier = ">=1.20.0" },
     { name = "py7zr", specifier = ">=0.20.0" },
     { name = "pytest", specifier = ">=7.0.0" },

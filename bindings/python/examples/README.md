@@ -315,6 +315,20 @@ Batched Python/Java boundary crossings for bulk workloads:
 
 **Learn:** Why one crossing per batch (not per value) makes bulk ingest and export fast
 
+### 🌐 [23_server_mode_http_access.py](./23_server_mode_http_access.py)
+**Server Mode | HTTP API | Bearer Auth | Mixed Access Pattern**
+
+Embedded-first server workflow, all in one process:
+- starts ArcadeDB server mode from the Python package
+- reads server metadata over HTTP
+- creates a database through the server-managed Java API
+- mixes embedded writes with HTTP queries and updates
+- opens Studio against the same in-process database
+
+**Learn:** How to expose an embedded database over HTTP without running a
+separate container, and when you should reach for the Docker distribution
+instead
+
 ---
 
 ## 💡 Tips
