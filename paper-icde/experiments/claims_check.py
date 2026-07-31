@@ -425,6 +425,14 @@ CLAIMS = [
     ("l3d.srv.p50", 1.82, 0.01,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1), "dense server p50"),
     # --- E2 atomicity, the thesis experiment -------------------------------
+    # The tear is deterministic, not a race we caught once: all five trials
+    # report the same pair. The prose said "a representative trial", which is
+    # true and weaker than the evidence.
+    ("e2.torn.distinct_evidence", 1.0, 0.0,
+     lambda r: float(len({(e.get("neo4j_view_sum"), e.get("qdrant_bumped_points"))
+                          for e in (x.get("torn_evidence") or {} for x in M.load_canonical())
+                          if e})),
+     "distinct torn-evidence pairs across trials (1 = deterministic)"),
     ("e2.torn.composed", 5, 0,
      lambda r: torn_count("composed_qdrant_neo4j"), "composed stack torn 5/5"),
     ("e2.torn.arcadedb", 0, 0,
