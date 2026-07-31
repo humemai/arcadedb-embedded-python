@@ -28,25 +28,38 @@ SCALE = os.environ.get("BENCH_GRAPH_SCALE", "sf1")
 SECS = int(os.environ.get("PROFILE_SECS", "1200"))
 N_SEEDS = int(os.environ.get("SURFACE_SEEDS", "200"))
 
-# ArcadeDB SQL MATCH equivalents of graph_common.OLTP_READS. Kept beside the
-# Cypher text rather than derived from it: these are two hand-written surfaces
-# and the point is to compare them as a user would write them.
+# ArcadeDB SQL MATCH equivalents, taken from the engine's own
+# performance/GraphBenchmark.java rather than written from the SQL docs.
+#
+# queue46 died on my invented syntax: I wrote `-KNOWS->{as: m}` by analogy with
+# Cypher, and ArcadeDB's MATCH uses method chaining, `.out('KNOWS'){as: m}`.
+# GraphBenchmark carries the same LDBC 2-hop expressed in BOTH surfaces, which
+# is an equivalence the engine authors assert rather than one I assume.
+#
+# Both surfaces here RETURN DISTINCT rows rather than a count. graph_common's
+# hop2 returns count(DISTINCT fof), but a surface comparison wants the same
+# work on both sides and the row set is the directly comparable thing; it is
+# also what GraphBenchmark compares. So these are not the paper's latency
+# cells, they are a matched pair for profiling.
 SQL_READS = {
-    "point": "SELECT name, age FROM Person WHERE id = {id}",
-    "hop1": ("SELECT count(*) AS n, avg(f.age) AS a FROM ("
-             "MATCH {{type: Person, as: p, where: (id = {id})}}"
-             "-KNOWS->{{type: Person, as: f}} RETURN f)"),
-    "hop2": ("SELECT count(DISTINCT fof) AS n FROM ("
-             "MATCH {{type: Person, as: p, where: (id = {id})}}"
-             "-KNOWS->{{as: m}}-KNOWS->{{type: Person, as: fof}} RETURN fof)"),
+    "hop1": ("MATCH {{type: Person, as: p, where: (id = {id})}}"
+             ".out('KNOWS'){{as: f}} RETURN DISTINCT f"),
+    "hop2": ("MATCH {{type: Person, as: p, where: (id = {id})}}"
+             ".out('KNOWS'){{as: m}}.out('KNOWS'){{as: fof}} RETURN DISTINCT fof"),
 }
 
+# Cypher side, matched row-for-row to the SQL above (directed, DISTINCT rows).
+CYPHER_READS = {
+    "hop1": ("MATCH (p:Person)-[:KNOWS]->(f:Person) WHERE p.id = {id} "
+             "RETURN DISTINCT f"),
+    "hop2": ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(fof:Person) "
+             "WHERE p.id = {id} RETURN DISTINCT fof"),
+}
 
 def main():
     os.environ.setdefault("BENCH_GRAPH_SOURCE", "ldbc")
     import l2_graph
     import ldbc_snb as _ldbc
-    from graph_common import OLTP_READS
 
     # Mirror l2_graph.main()'s LDBC setup exactly. It rebinds these three names
     # inside its own main(), and adapters resolve them from module globals at
@@ -68,7 +81,7 @@ def main():
 
     seeds = list(_ldbc.pick_query_ids(SCALE, N_SEEDS))
 
-    cy = OLTP_READS[QUERY]
+    cy = CYPHER_READS[QUERY]
     sq = SQL_READS[QUERY]
 
     def run_cypher(i):
