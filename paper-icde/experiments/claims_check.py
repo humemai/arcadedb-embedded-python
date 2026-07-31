@@ -245,6 +245,25 @@ CLAIMS = [
     ("l2.neo4j.olap_topdeg", 305, 1,
      lambda r: median_of(r, "top_degree_mean_ms", lane="l2", scale="sf10",
                          workload="olap", backend="neo4j_graph"), "Neo4j top-degree"),
+    # The two summary figures in the same sentence, both of which were wrong
+    # while every cell they summarise was right. "within 15%" was 8% on one
+    # pair and 22% on the other; "wins all three by roughly 10x" ran 8.2x to
+    # 20.9x. A spread stated as a single number hides its own worst case, so
+    # pin the endpoints.
+    ("l2.gap.samecity_pct", 22.0, 0.6,
+     lambda r: 100.0 * (median_of(r, "same_city_edges_mean_ms", lane="l2",
+                                  scale="sf10", workload="olap",
+                                  backend="neo4j_graph")
+                        / median_of(r, "same_city_edges_mean_ms", lane="l2",
+                                    scale="sf10", workload="olap",
+                                    backend="arcadedb_graph_embedded") - 1.0),
+     "how far Neo4j trails us on same-city (prose: 22%)"),
+    ("l2.ratio.ladybug_topdeg", 20.9, 0.3,
+     lambda r: median_of(r, "top_degree_mean_ms", lane="l2", scale="sf10",
+                         workload="olap", backend="arcadedb_graph_embedded")
+               / median_of(r, "top_degree_mean_ms", lane="l2", scale="sf10",
+                           workload="olap", backend="ladybug_graph"),
+     "LadybugDB's widest OLAP win, the top of the 8--21x range"),
     # The unit defect this file exists to stop recurring.
     ("l2.arcadedb.mem_gib", 9.4, 0.05,
      lambda r: gib(r, "peak_anon_mib_sum", lane="l2", scale="sf10",
