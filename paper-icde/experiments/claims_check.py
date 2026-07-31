@@ -154,6 +154,31 @@ DENSE_ROWS = ["ArcadeDB (emb)", "ArcadeDB (emb, int8, 16", "Qdrant", "Milvus",
               "Chroma", "LanceDB", "sqlite-vec", "DuckDB-VSS"]
 
 
+def _sparse_reps(n_docs, subdir="dev22_sparse"):
+    """How many reps actually stand behind a published sparse cell.
+
+    T4's caption said N=5 for every cell while its 8.84M ArcadeDB row had
+    three reps, the comparators in the same column having five. A rep count
+    is a claim the caption makes, and nothing was checking it.
+
+    Pinned at 3 deliberately: when the two missing reps land this fails, which
+    is the point. The failure is the reminder to drop the caption's exception
+    rather than leave a stale disclosure claiming a limitation we fixed.
+    """
+    import glob as _glob
+    import json as _json
+    n = 0
+    for fp in _glob.glob(os.path.join(M.RESULTS, subdir, "*.json")):
+        try:
+            d = _json.load(open(fp))
+        except Exception:
+            continue
+        if isinstance(d, dict) and d.get("n_docs") == n_docs \
+           and d.get("query_p50_ms") is not None:
+            n += 1
+    return float(n)
+
+
 def _dense_rank(col):
     """1-based rank of ArcadeDB (emb) in `col` among DENSE_ROWS, lower better.
 
@@ -286,6 +311,12 @@ CLAIMS = [
     ("l3s.ratio.qdrant_1m_orig", 57.0, 0.5,
      lambda r: 165.0 / cell("t4_sparse.tex", "Qdrant", 3),
      "1M Qdrant ratio this work started from"),
+    # Rep counts are caption claims too. See _sparse_reps: this is pinned to
+    # the CURRENT shortfall so completing it forces the caption to be updated.
+    ("l3s.reps.8m84", 3.0, 0.0, lambda r: _sparse_reps(8841823),
+     "reps behind the 8.84M cell (caption discloses N=3)"),
+    ("l3s.reps.1m", 5.0, 0.0, lambda r: _sparse_reps(1000000),
+     "reps behind the 1M cell (caption says N=5)"),
 
     # --- T5 dense ---------------------------------------------------------
     ("l3d.arcadedb.p50", 0.723, 0.005,

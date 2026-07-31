@@ -110,6 +110,69 @@ def _asserted_versions():
     return out
 
 
+# Which \label{} belongs to which FEEDS table, so a caption's asserted version
+# can be compared against the versions actually in that table's overlays.
+LABEL_TO_TABLE = {"tab:sparse": "T4", "tab:denses": "T5"}
+
+
+def caption_versions():
+    """Compare each table caption's ASSERTED engine version against its data.
+
+    T4's caption read "ArcadeDB rows measured on 26.8.1.dev20" while all three
+    of its ArcadeDB cells came from the dev22 overlay. dev20's 8.84M p50 was
+    386.9 ms against the printed 83.7, so the caption was not describing the
+    table by a wide margin.
+
+    This checker already read versions out of result files, which is why the
+    mismatch was invisible: the files were all correctly stamped dev22. The
+    unchecked surface was the sentence a reader actually believes. A caption is
+    a provenance claim, and until something compares it to the data it is
+    exactly as trustworthy as a driver that hardcodes its own version.
+    """
+    paper = os.path.join(HERE, "..", "..", ".notes", "papers", "icde-2027",
+                         "latex", "paper.tex")
+    paper = os.path.normpath(paper)
+    try:
+        body = open(paper).read()
+    except OSError:
+        print("=== caption vs data ===\n  (paper.tex not readable; skipped)\n")
+        return 0
+    bad = 0
+    print("=== caption vs data: versions a caption asserts ===")
+    blocks = re.findall(r"\\begin\{table\*?\}(.*?)\\end\{table\*?\}", body, re.S)
+    for blk in blocks:
+        lab = re.search(r"\\label\{(tab:[a-zA-Z]+)\}", blk)
+        if not lab or lab.group(1) not in LABEL_TO_TABLE:
+            continue
+        table = LABEL_TO_TABLE[lab.group(1)]
+        asserted = set(re.findall(r"\b(\d+\.\d+\.\d+\.dev\d+)\b", blk))
+        if not asserted:
+            continue
+        actual, unstamped = set(), []
+        for sub in FEEDS.get(table, []):
+            vals, _, n, missing = _versions_in(sub)
+            actual.update(vals)
+            if n and missing == n:
+                unstamped.append(sub)
+        for a in sorted(asserted):
+            if any(a in v for v in actual):
+                print(f"  {table} {lab.group(1)}: caption says {a}: present in data")
+            elif unstamped:
+                # Distinguish "the data says otherwise" from "the data cannot
+                # say". Only the first is a defect in the caption; the second
+                # is a gap in the harness, and conflating them makes the gate
+                # fire forever on a disclosed, already-known limitation.
+                print(f"  {table} {lab.group(1)}: UNVERIFIABLE caption says {a}; "
+                      f"no overlay contradicts it, but {', '.join(unstamped)} "
+                      f"carries no version stamps to confirm it")
+            else:
+                print(f"  {table} {lab.group(1)}: BAD caption says {a}, but its "
+                      f"overlays hold {sorted(actual) or ['nothing']}")
+                bad += 1
+    print()
+    return bad
+
+
 def _repo_root():
     try:
         out = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=HERE,
@@ -177,6 +240,8 @@ def main():
         print("NOTE: no landmark commits resolvable in this checkout; the "
               "build-date comparison is skipped (version reporting still runs)\n")
 
+    bad_captions = 0 if args.table else caption_versions()
+
     asserted = _asserted_versions()
     if asserted:
         print("=== drivers that ASSERT their version rather than measure it ===")
@@ -184,7 +249,7 @@ def main():
             print(f"  {name}: {why}")
         print("  Any overlay these produced carries a claim, not a measurement.\n")
 
-    bad = 0
+    bad = bad_captions
     mapped = set()
     for table, subdirs in sorted(FEEDS.items()):
         if args.table and table != args.table:
