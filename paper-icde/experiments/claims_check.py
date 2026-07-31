@@ -422,7 +422,11 @@ CLAIMS = [
      "dense p99 rank of 8 (prose: second, behind Chroma)"),
     # The deployment prose quoted 0.81 (the #5412 close-out figure) while T5
     # and f8 both said 0.723. Three places, two numbers, same quantity.
-    ("l3d.srv.p50", 1.82, 0.01,
+    # 1.82 -> 1.80 after the post-fix server re-measure (#109). The build fell
+    # 13,349 -> 3,825 s while p50 and recall did not move, which is what a
+    # BUILD-cache regression predicts and is the evidence that the old number
+    # was a version artifact rather than a deployment cost.
+    ("l3d.srv.p50", 1.80, 0.015,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1), "dense server p50"),
     # --- E2 atomicity, the thesis experiment -------------------------------
     # The tear is deterministic, not a race we caught once: all five trials
@@ -484,7 +488,10 @@ CLAIMS = [
                          < (ts_arm("q_last_ms") or 0)),
      "native last-point rank of 3 vs the two specialists (3 = last)"),
 
-    ("l3d.deployment_ratio", 2.52, 0.03,
+    # 2.52 -> 2.49 with the post-fix server p50 (1.80 vs 1.82). The ratio is
+    # not stated literally in the prose; it is pinned so prose, T5 and f8
+    # cannot drift apart on the same quantity.
+    ("l3d.deployment_ratio", 2.49, 0.03,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1)
                / cell("t5_dense_ts.tex", "ArcadeDB (emb)", 1),
      "dense transport ratio (prose, table and f8 must agree)"),

@@ -1,0 +1,10 @@
+{
+ "_note": "run_conditions() stamps the container it runs in. For this client/server cell that is the DRIVER (icde-bench:client), so the cpuset/heap/mem_cap inside srv109_rep*.json describe the client. The SERVER's conditions are recorded here.",
+ "server_cpuset": "0-11",
+ "server_heap": "24g",
+ "server_mem_cap": "36g",
+ "server_image": "arcadedata/arcadedb@sha256:c7ebb10234957fb5facdfcd3a6e66a6e2e884f868fc96d3c72c23597d73fa759",
+ "server_version": "26.8.1-SNAPSHOT (build bd0ba0d2339247457bfe22dce7e15d1aee2efe54/1785487978480/main)",
+ "client_cpuset": "0-11",
+ "client_mem_cap": "12g"
+}

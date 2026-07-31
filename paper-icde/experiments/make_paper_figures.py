@@ -179,8 +179,15 @@ def _dense_overlay_p50(srv=False):
     selector per repository is enough.
     """
     import make_paper_tables as _T
-    rs = (_T._dev16_dense_rows("srv5413", "verify5413") if srv
-          else _T._dev16_dense_rows())
+    if srv:
+        # Post-fix server overlay (#109); falls back rather than mixing. f8's
+        # dense bar is the embedded/server pair, so reading the pre-fix
+        # verify5413 here would plot a transport ratio the table no longer
+        # prints, which is the exact drift f4's guard was added to catch.
+        rs = (_T._dev16_dense_rows("srv109", "srv109")
+              or _T._dev16_dense_rows("srv5413", "verify5413"))
+    else:
+        rs = _T._dev16_dense_rows()
     v = [r["query_p50_ms"] for r in rs
          if isinstance(r.get("query_p50_ms"), (int, float))]
     return st.median(v) if v else None

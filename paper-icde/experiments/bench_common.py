@@ -31,6 +31,18 @@ def run_conditions(**extra):
     Merge into a result dict before writing it:
 
         out.update(run_conditions(lane="l3s", scale="medium", rep=rep))
+
+    CLIENT/SERVER CAVEAT. This reads the cgroup of the process it runs in. In
+    an embedded cell that is the engine. In a client/server cell it is the
+    DRIVER container, and the engine under test is in a different container
+    with a different cpuset, heap and memory cap. The #109 server dense run
+    stamped cpuset=0-11, heap=None, mem_cap=12g, which describes the client:
+    the server had 24g of heap under a 36g cap. Those fields are still worth
+    recording, but a server cell must record the SERVER's conditions
+    separately (see results/srv109/server_conditions.json) and a reader must
+    not take the stamped values as the engine's.
+
+    Pass role= to make which side was measured explicit rather than implied.
     """
     def _read(path):
         try:
@@ -52,6 +64,12 @@ def run_conditions(**extra):
         "cpuset": cpus,
         "mem_cap": mem,
         "heap": os.environ.get("ARCADEDB_HEAP"),
+        # "engine" when this process IS the engine, "client" when it drives one
+        # over the wire. Without it, a reader cannot tell whether the cgroup
+        # fields above describe the thing being measured.
+        "role": os.environ.get("BENCH_ROLE",
+                               "client" if os.environ.get("BENCH_SERVER_HOST")
+                               else "engine"),
         "host": os.environ.get("BENCH_HOST", "mini"),
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
     }

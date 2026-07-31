@@ -355,7 +355,15 @@ def dense_ts_table(rows):
              r"System & Build (s) & p50 (ms) & p99 (ms) & Recall@10 \\",
              r"\midrule"]
     int8 = _dev16_dense_rows("int8_dev20")
-    srv = _dev16_dense_rows("srv5413", "verify5413")
+    # Post-fix server re-measure (#109). verify5413's image (build 8bd63ccc8,
+    # 2026-07-25 19:58) sat between the commit that bounded the HNSW build
+    # cache and the one that auto-sized it, so its 13,349 s build was a
+    # version artifact reported as a deployment cost. srv109 is the same cell
+    # on build bd0ba0d233 (2026-07-31), past the fix: 3,825 s, with p50 and
+    # recall unchanged, which is what a BUILD-cache regression predicts.
+    # Falls back rather than mixing if the new overlay is absent.
+    srv = _dev16_dense_rows("srv109", "srv109") or \
+        _dev16_dense_rows("srv5413", "verify5413")
     for be in order:
         g = [r for r in l3d if r["backend"] == be]
         if be == "arcadedb_dense_embedded" and dev16:

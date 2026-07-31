@@ -53,7 +53,11 @@ VERSION_KEYS = ("engine_version", "engine", "server_version", "version", "wheel"
 FEEDS = {
     "T4": ["dev22_sparse", "dev21_sparse", "dev21_sparse_full", "sparse_full",
            "verify5411"],
-    "T5": ["verify5412b", "verify5413", "dev21_ts"],
+    # srv109 is the post-#109 server dense re-measure and now feeds T5's
+    # server row; verify5413 stays listed because it remains the fallback in
+    # make_paper_tables and its landmark warning is the record of WHY it was
+    # superseded, not a live defect in what the table prints.
+    "T5": ["verify5412b", "srv109", "verify5413", "dev21_ts"],
 }
 
 # Engine changes big enough that measuring on the wrong side of one produces a
