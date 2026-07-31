@@ -30,6 +30,14 @@ NUMPY_COLS = os.environ.get("TS_NUMPY", "1") == "1"
 # window; see the note at the call site. Default 30 s comfortably exceeds the
 # ~4.7 s spread between the fastest and slowest ingest arms.
 SETTLE_S = float(os.environ.get("TS_SETTLE_S", "30"))
+# Recency window for the last-point query, in seconds; 0 runs it unbounded.
+# See q_last: the window is a harness workaround for a cost upstream has since
+# fixed, and it stays configurable so the fix can be measured, not assumed.
+LAST_WINDOW_S = float(os.environ.get("TS_LAST_WINDOW_S", "3600"))
+# Also measure the unbounded last-point in the same rep, so footnote b's
+# "retire the window" can be decided from a paired A/B rather than by trusting
+# that an upstream fix reached this path.
+LAST_AB = os.environ.get("TS_LAST_AB", "0") == "1"
 # TSBS cpu declares TEN tags; this lane declared one, which put our published
 # number on the 290-byte stride arm rather than the 2,612-byte one real users
 # are on, and therefore flattered ArcadeDB. Only became viable to fix with
@@ -146,12 +154,32 @@ class ArcadeTSNative:
             time.sleep(SETTLE_S)
 
     def q_last(self):
-        # Bounded window: unbounded ts.last scans the tag's whole series
-        # (208 ms vs 2.5 ms measured); TSBS's last-point permits recency.
-        a = self.tmax_ms - 3600_000
+        # Bounded window: unbounded ts.last scanned the tag's whole series
+        # (208 ms vs 2.5 ms measured), and TSBS's last-point permits recency.
+        # Upstream #5414/#5416 since made the unbounded form cheap, so T5's
+        # footnote b promises to retire the window. TS_LAST_WINDOW_S=0 runs
+        # the unbounded form, which is what lets that be checked rather than
+        # assumed: the window is a harness workaround and reporting a number
+        # that only a workaround makes fast is the same defect as reporting
+        # one only a stale image makes slow.
+        if LAST_WINDOW_S <= 0:
+            return self.q_last_unbounded()
+        a = self.tmax_ms - int(LAST_WINDOW_S * 1000)
         return self.db.query("sql",
             f"SELECT ts, uu FROM Point WHERE {TAG0} = '{HOST}' "
             f"AND ts BETWEEN {a} AND {self.tmax_ms} "
+            f"ORDER BY ts DESC LIMIT 1").to_list()
+
+    def q_last_unbounded(self):
+        """The form without the recency workaround, measured in the SAME rep.
+
+        Running it as a separate campaign arm would pay a second full ingest
+        to compare one query and would put the two numbers in different
+        processes over different builds. Paired in one rep they differ only
+        in the WHERE clause, which is the only difference being claimed.
+        """
+        return self.db.query("sql",
+            f"SELECT ts, uu FROM Point WHERE {TAG0} = '{HOST}' "
             f"ORDER BY ts DESC LIMIT 1").to_list()
 
     def q_range(self):
@@ -188,7 +216,11 @@ def main():
     # queries, and none of it is counted as ingest.
     out["settle_s"] = SETTLE_S
     b.settle()
-    for qn in ("q_last", "q_range", "q_global"):
+    queries = ["q_last", "q_range", "q_global"]
+    if LAST_AB:
+        # Paired against q_last in the same rep; see q_last_unbounded.
+        queries.append("q_last_unbounded")
+    for qn in queries:
         times, ref = [], None
         for _ in range(QITER):
             t = time.perf_counter()
@@ -206,15 +238,17 @@ def main():
                 f"ABORT: {qn} returned 0 rows (TS_TAGS={N_TAGS}, filter column "
                 f"{TAG0!r}); a zero-row query is not a fast query")
     b.close()
-    # Stamp the wheel actually installed in this container. The TS overlay was
-    # the one results directory feeding a published table with no version
-    # recorded anywhere, and a cell whose version is not in the row is a cell
-    # nothing can check later: T5's server build cell was wrong for exactly a
-    # year of that reason. Key name matches the sparse lane (`engine_version`)
-    # so one audit can read every overlay.
+    # Stamp the wheel actually installed in this container, plus the cpuset,
+    # heap and memory cap read out of the container's own cgroup. The TS
+    # overlay was the one results directory feeding a published table with no
+    # version recorded anywhere, and a cell whose conditions are not in the row
+    # is a cell nothing can extend later: T4's 8.84M cell is stuck at N=3
+    # because its first three reps recorded none of this. run_conditions()
+    # reads rather than asserts, which is the point; a driver told its own
+    # version is how fp32_dev22_driver stamped dev22 onto a dev20 run.
     try:
-        from importlib.metadata import version as _pkgver
-        out["engine_version"] = _pkgver("arcadedb-embedded")
+        from bench_common import run_conditions
+        out.update(run_conditions(lane="l4n", last_window_s=LAST_WINDOW_S))
     except Exception as e:  # never lose a completed run over provenance
         out["engine_version"] = f"unknown ({e.__class__.__name__})"
     outp = os.environ.get("PROBE_OUT", "")
