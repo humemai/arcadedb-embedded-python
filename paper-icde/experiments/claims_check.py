@@ -284,6 +284,26 @@ CLAIMS = [
     ("l1.duckdb.oltp", 268, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="duckdb"), "DuckDB ops/s"),
+    # UNSOURCED, pinned so it cannot ship quietly. The prose reads "the
+    # bindings' batched path reaches 36.7k rows/s [36.5--39.5k] ... versus
+    # 27.4k per-record". No selection of the L1 data produces that: a brute
+    # force over every backend/scale/workload combination in runs.jsonl found
+    # zero matches for median 36.7k with that range. The canonical embedded
+    # medium ingest is 31.3k and the server's is 27.4k, and the only raw rows
+    # near 37-39k are a superseded 2026-07-11 campaign that load_canonical
+    # drops. The dedicated #82 probe (results/ingest82, dev23, N=5, conditions
+    # stamped) is a different experiment again and much faster: serial SQL
+    # 67.3k, insert_many 177.1k, insert_many_parallel 181.7k, async_parallel
+    # 122.0k, which does show the "parallel and batched converge" the sentence
+    # describes but nowhere near these rates.
+    # So the sentence needs a source decision, not a nudge: either it
+    # describes the LANE (31.3k, and the 9x-behind-columnar claim moves) or
+    # the PROBE (177k, and it moves the other way). Deliberately left failing.
+    ("l1.ingest.batched_UNSOURCED", 36700, 200,
+     lambda r: median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
+                         backend="arcadedb_embedded", workload="oltp"),
+     "batched ingest: paper says 36.7k, canonical L1 says 31.3k, no selection "
+     "reproduces it"),
     ("l1.arcadedb.insert_p99", 0.54, 0.01,
      lambda r: median_of(r, "insert_p99_ms", lane="l1", scale="medium",
                          workload="oltp", backend="arcadedb_embedded"),
