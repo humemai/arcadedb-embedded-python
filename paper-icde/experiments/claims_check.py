@@ -205,11 +205,44 @@ def _dense_rank(col):
                      and (cell("t5_dense_ts.tex", s, col) or float("inf")) < mine)
 
 
+
+def _comparator_engines():
+    """Distinct comparator ENGINES the evaluation runs against.
+
+    The abstract said eight. The data has twelve, because a backend name is
+    per-lane (qdrant_sparse and qdrant_dense are one engine) and the count was
+    written before the dense, time-series and cross-model lanes existed. It
+    then never moved, like every other summary number this file now pins.
+
+    Collapses per-lane variants to the engine, drops the composed stack (a
+    composition of two engines already counted), and reports specialists
+    separately from SurrealDB, which is the multi-model rival rather than a
+    specialist and so does not belong in "specialist engines".
+    """
+    aliases = {"duckdb_vss_dense": "duckdb", "sqlite_vec_dense": "sqlite",
+               "qdrant_sparse": "qdrant", "qdrant_dense": "qdrant",
+               "milvus_sparse": "milvus", "milvus_dense": "milvus",
+               "chroma_dense": "chroma", "lancedb_dense": "lancedb",
+               "elasticsearch_sparse": "elasticsearch",
+               "neo4j_graph": "neo4j", "ladybug_graph": "ladybug",
+               "surrealdb_e2": "surrealdb"}
+    names = set()
+    for r in M.load_canonical():
+        b = r.get("backend")
+        if not b or "arcadedb" in b or b == "composed_qdrant_neo4j":
+            continue
+        names.add(aliases.get(b, b))
+    names.add("questdb")  # l4_tsbs.jsonl, not in load_canonical
+    return float(len(names - {"surrealdb"}))
+
+
 # (id, prose value, tolerance, how to compute it, note)
 # Tolerance is what the prose's own rounding allows, not a fudge factor: a
 # claim printed as "525 ops/s" is satisfied by anything rounding to 525.
 CLAIMS = [
     # --- L1 tabular -------------------------------------------------------
+    ("abstract.n_specialists", 11.0, 0.0, lambda r: _comparator_engines(),
+     "specialist engines the abstract claims (was 8, data says 11)"),
     ("l1.arcadedb.oltp", 5929, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="arcadedb_embedded"),
