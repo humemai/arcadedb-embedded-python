@@ -536,6 +536,69 @@ CLAIMS = [
 ]
 
 
+def figures_fresh():
+    """Are the committed figures older than the committed tables?
+
+    regen() proves the tables still generate from the data. Nothing said
+    anything about figures, and that is exactly the gap that bit on
+    2026-07-31: the time-series row moved to a new overlay, the tables were
+    regenerated, and the figures were not. make_paper_figures reads some
+    series straight from results/ rather than from the tables, so its bar kept
+    plotting the superseded overlay while the table beside it printed the new
+    one. The PDF shipped both.
+
+    make_paper_figures does carry a guard (_check_f4_against_tables) and it
+    does catch this, but only at the moment figures are regenerated. If nobody
+    regenerates them, nobody runs the guard, and stale files sit there looking
+    exactly like fresh ones.
+
+    Mtimes are a blunt instrument and deliberately so: a figure older than the
+    newest table is not proof of disagreement, but it IS proof that no guard
+    has compared them since the table last changed. That is the condition
+    worth failing on.
+    """
+    import glob as _glob
+    import re as _re
+    # Only figures the paper actually \includegraphics. The figures directory
+    # also holds orphans (an older sparse sweep, and an f5 that is generated
+    # but never included), and flagging those would make this check noise,
+    # which is how checks come to be ignored.
+    try:
+        body = open(PAPER).read()
+    except OSError:
+        body = ""
+    used = set(_re.findall(r"\\includegraphics\[[^\]]*\]\{figures/([^}]+)\}", body))
+    figdir = os.path.join(TABLES, "..", "figures")
+    figs = [os.path.join(figdir, n + ".pdf") for n in sorted(used)
+            if os.path.exists(os.path.join(figdir, n + ".pdf"))]
+    orphans = [os.path.basename(f) for f in _glob.glob(os.path.join(figdir, "*.pdf"))
+               if os.path.basename(f)[:-4] not in used]
+    tabs = _glob.glob(os.path.join(TABLES, "*.tex"))
+    if not figs or not tabs:
+        print("=== figure freshness ===\n  (figures or tables missing; skipped)\n")
+        return 0
+    newest_tab = max(os.path.getmtime(f) for f in tabs)
+    stale = [f for f in figs if os.path.getmtime(f) < newest_tab]
+    print("=== figure freshness ===")
+    if not stale:
+        print(f"  ok: all {len(figs)} figures used by the paper are newer "
+              f"than the newest table")
+        if orphans:
+            print(f"  (not checked, not included by the paper: "
+                  f"{', '.join(sorted(orphans))})")
+        print()
+        return 0
+    import datetime as _dt
+    print(f"  BAD {len(stale)} of {len(figs)} figure(s) predate the newest table")
+    print(f"      newest table: {_dt.datetime.fromtimestamp(newest_tab):%Y-%m-%d %H:%M}")
+    for f in sorted(stale)[:8]:
+        ts = _dt.datetime.fromtimestamp(os.path.getmtime(f))
+        print(f"        {os.path.basename(f):28} {ts:%Y-%m-%d %H:%M}")
+    print("      Regenerate figures; their table-agreement guard only runs then.")
+    print()
+    return len(stale)
+
+
 def regen():
     """Do the committed tables still regenerate byte-identically from the data?
 
@@ -649,13 +712,15 @@ def main():
     if args.sweep:
         return sweep()
     if args.regen:
-        return regen()
+        return regen() + figures_fresh()
+
+    stale_figs = figures_fresh() if not args.lane else 0
 
     rows = M.load_canonical()
     print(f"canonical rows: {len(rows)}  "
           f"(rc=0, PAPER_SCALES, latest ts_utc per lane/scale/workload/backend/rep)\n")
 
-    bad = 0
+    bad = stale_figs
     checked = 0
     for cid, claimed, tol, fn, note in CLAIMS:
         if args.lane and not cid.startswith(args.lane):
