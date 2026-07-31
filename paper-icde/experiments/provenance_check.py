@@ -173,6 +173,57 @@ def caption_versions():
     return bad
 
 
+CONDITION_KEYS = ("cpuset", "heap", "mem_cap", "mem_split", "manifest")
+
+
+def run_conditions():
+    """Do the overlays record the conditions the protocol section promises?
+
+    They do not, and it is systematic. Every overlay directory carries zero of
+    cpuset/heap/mem_cap/mem_split/manifest, while the base campaign in
+    runs.jsonl carries all five. The overlays are what T4 and T5 actually
+    print, so the published cells come from artifacts recording LESS
+    provenance than the campaign they override.
+
+    That fails the program's own criterion, "every result row traces to a JSON
+    manifest (engine version, image digest, cpuset, repeats)", for exactly the
+    rows a reader looks at. The practical cost showed up immediately: T4's
+    8.84M cell has three reps instead of five, and the two missing reps cannot
+    be added now, because nothing records the cpuset, heap and memory cap the
+    first three ran under. Reps measured under guessed conditions would be
+    worse than an honestly disclosed N=3.
+
+    So this reports rather than repairs. The fix belongs in the drivers before
+    the freeze re-measures, not in a backfill of numbers we cannot reconstruct.
+    """
+    print("=== run conditions recorded by the overlays that feed the tables ===")
+    feeding = sorted({s for subs in FEEDS.values() for s in subs})
+    bad = 0
+    for sub in feeding:
+        files = glob.glob(os.path.join(RESULTS, sub, "*.json"))
+        files = [f for f in files if not f.endswith(SIDECAR_SUFFIXES)]
+        if not files:
+            continue
+        have = set()
+        for fp in files:
+            try:
+                d = json.load(open(fp))
+            except Exception:
+                continue
+            if isinstance(d, dict):
+                have |= {k for k in CONDITION_KEYS if d.get(k) not in (None, "")}
+        if have:
+            print(f"  {sub:20} records {', '.join(sorted(have))}")
+        else:
+            print(f"  {sub:20} BAD records none of {CONDITION_KEYS}")
+            bad += 1
+    if bad:
+        print("  These cells cannot be reproduced or extended from their own\n"
+              "  artifacts. Stamp conditions in the drivers before the freeze.")
+    print()
+    return bad
+
+
 def _repo_root():
     try:
         out = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=HERE,
@@ -240,7 +291,9 @@ def main():
         print("NOTE: no landmark commits resolvable in this checkout; the "
               "build-date comparison is skipped (version reporting still runs)\n")
 
-    bad_captions = 0 if args.table else caption_versions()
+    bad_caption = 0 if args.table else caption_versions()
+    bad_cond = 0 if args.table else run_conditions()
+    bad_captions = bad_caption + bad_cond
 
     asserted = _asserted_versions()
     if asserted:
@@ -315,7 +368,10 @@ def main():
                 print(f"  {u}")
             print("  (dead overlay, or an unaudited input: decide which)")
 
-    print(f"\n{bad} BAD finding(s)")
+    print(f"\n{bad} BAD finding(s)"
+          + (f": {bad_caption} caption, {bad_cond} missing run conditions, "
+             f"{bad - bad_caption - bad_cond} version/landmark"
+             if not args.table else ""))
     return 1 if bad else 0
 
 
