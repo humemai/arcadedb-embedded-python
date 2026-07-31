@@ -109,7 +109,28 @@ Milvus or Qdrant sizes pools to 20 while pinned to 12, they oversubscribe and
 pay scheduling we do not. Tracked as task #120; the check is seconds per
 image but must wait for the box to be free.
 
-Related and worth stating in the paper if it holds: ArcadeDB's sparse build
-runs at roughly 2 of the 12 allocated cores. That is a real engine property,
-not a harness defect, but it means the two sides may use an identical
-allocation very differently.
+## Corrected here, because this file asserted it wrongly for an hour
+
+An earlier version of this section said ArcadeDB's sparse build "runs at
+roughly 2 of the 12 allocated cores. That is a real engine property, not a
+harness defect." **It is a harness property.** `ArcadeEmbedded.build` in
+`l3_sparse.py` is a serial Python loop calling `newDocument`/`save` per
+document, so about one core is a single producer thread and the rest is
+engine background work. The engine was never asked for more, and the
+measurement (214% against DuckDB-VSS's 1203% on the same cpuset) says nothing
+about its parallelism.
+
+Nor is it an unfairness: Qdrant, Milvus and Elasticsearch drive ingest from
+the *same* serial `gen_docs` loop, batching into `upsert`, `insert` and
+`bulk`. The producer is symmetric across all four; what differs after the
+handover is architectural (in-process per-document JNI against one client
+call per batch to a server that parallelises internally), which is the
+deployment axis the paper already reports.
+
+What survives is narrow and ours: embedded pays N JNI crossings per batch
+where a client pays one. Sparse build time is not a published column, and
+#5577 bounds the dense one at roughly 7% insertion, so no paper number moves.
+
+The general rule this yields: **a CPU percentage is a fact about a container,
+not about an engine.** Attributing one requires knowing who was asking for
+the work.
