@@ -19,7 +19,29 @@ def test_db(tmp_path):
     db.drop()
 
 
-def test_to_java_byte_array_accepts_bytes_like_fast_paths():
+@pytest.fixture
+def jvm(tmp_path):
+    """Guarantee a running JVM for tests that touch the array converters.
+
+    to_java_byte_array and to_java_float_array go straight to jpype.JArray,
+    which raises JVMNotRunning unless something has already started the JVM.
+    The two tests below have no database fixture, so running this FILE on its
+    own failed both of them while the full suite passed, because some earlier
+    module happened to boot the JVM first.
+
+    That is a test-isolation defect rather than a product one, and it matters
+    more than it looks: running one file in isolation is the first thing
+    anybody does when chasing a flake in it (see upstream #5615, which is
+    about this very file).
+    """
+    import jpype
+
+    if not jpype.isJVMStarted():
+        arcadedb.create_database(str(tmp_path / "_jvm_boot")).close()
+    yield
+
+
+def test_to_java_byte_array_accepts_bytes_like_fast_paths(jvm):
     """to_java_byte_array should preserve signed byte semantics for bytes-like
     inputs."""
     np = pytest.importorskip("numpy")
@@ -36,7 +58,7 @@ def test_to_java_byte_array_accepts_bytes_like_fast_paths():
     ) == [0, 127, -1]
 
 
-def test_to_java_float_array_accepts_numpy_directly():
+def test_to_java_float_array_accepts_numpy_directly(jvm):
     """to_java_float_array should accept NumPy arrays without Python-list copies."""
     np = pytest.importorskip("numpy")
 
