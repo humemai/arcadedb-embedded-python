@@ -264,6 +264,21 @@ CLAIMS = [
                / median_of(r, "top_degree_mean_ms", lane="l2", scale="sf10",
                            workload="olap", backend="ladybug_graph"),
      "LadybugDB's widest OLAP win, the top of the 8--21x range"),
+    # "graph loading beats both comparators" beat one. LadybugDB loads SF10
+    # in 3.5 s against our 26.2, and the sentence sat in a paragraph headed
+    # "competitive on every index-build axis". Pin the ratio to the comparator
+    # we LOSE to: a claim of the form "beats both" is only ever falsified by
+    # the one that is not beaten, so that is the one worth checking.
+    ("l2.load.sf10", 26.2, 0.3,
+     lambda r: median_of(r, "build_s", lane="l2", scale="sf10",
+                         workload="oltp", backend="arcadedb_graph_embedded"),
+     "SF10 graph load (prose: 26 s)"),
+    ("l2.ratio.ladybug_load", 7.4, 0.2,
+     lambda r: median_of(r, "build_s", lane="l2", scale="sf10",
+                         workload="oltp", backend="arcadedb_graph_embedded")
+               / median_of(r, "build_s", lane="l2", scale="sf10",
+                           workload="oltp", backend="ladybug_graph"),
+     "how far LadybugDB's loader beats ours at SF10"),
     # The unit defect this file exists to stop recurring.
     ("l2.arcadedb.mem_gib", 9.4, 0.05,
      lambda r: gib(r, "peak_anon_mib_sum", lane="l2", scale="sf10",
