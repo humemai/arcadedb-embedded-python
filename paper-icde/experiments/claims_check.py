@@ -330,6 +330,23 @@ CLAIMS = [
     ("l4.ratio.duckdb", 1.12, 0.01,
      lambda r: l4_median("ingest_pts_per_s", "duckdb") / ts_arm("ingest_pts_per_s"),
      "DuckDB's remaining lead"),
+    # Last-point had the paper claiming a win it did not have. The prose read
+    # "It wins the operational lookup: 0.52 ms beats both specialists" in a
+    # paragraph whose subject was the NATIVE engine, but 0.52 is the document
+    # path; native is 4.16 ms and loses to QuestDB (0.85) and DuckDB (1.40).
+    # Two arms of our own system in one table, and the flattering row got
+    # attributed to the arm being praised. Pin both arms separately so the
+    # attribution cannot drift again.
+    ("l4.native.q_last", 4.16, 0.05,
+     lambda r: ts_arm("q_last_ms"), "last point, NATIVE arm (loses to both)"),
+    ("l4.doc.q_last", 0.520, 0.01,
+     lambda r: l4_median("q_last_ms", "arcadedb"),
+     "last point, document path (the row that beats both)"),
+    ("l4.rank.q_last_native", 3.0, 0.0,
+     lambda r: 1.0 + sum(1 for b in ("questdb", "duckdb")
+                         if (l4_median("q_last_ms", b) or float("inf"))
+                         < (ts_arm("q_last_ms") or 0)),
+     "native last-point rank of 3 vs the two specialists (3 = last)"),
 
     ("l3d.deployment_ratio", 2.52, 0.03,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1)
