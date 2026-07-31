@@ -1,0 +1,279 @@
+# Server Mode
+
+ArcadeDB Python bindings include a full HTTP server with the Studio web UI. This guide covers server setup, configuration, and management.
+
+## What it costs you
+
+Server mode is bundled by default. It was briefly removed in 26.7.2 to slim
+the wheel and restored after that broke downstream users, so the trade is
+worth stating precisely rather than leaving you to guess.
+
+**Disk.** The server stack is 12 JARs, measured against the 26.8.1 line:
+
+| JAR | MB (uncompressed) | contains |
+|---|---|---|
+| `arcadedb-studio` | 2.60 | web UI assets, **no** `.class` files |
+| `undertow-core` | 2.21 | HTTP server, 1,507 classes |
+| `micrometer-core` | 0.87 | metrics, required at server startup |
+| `arcadedb-server` | 0.66 | the server itself, 255 classes |
+| `xnio-api` | 0.56 | undertow's IO layer |
+| `wildfly-common` | 0.27 | |
+| `jboss-threads` | 0.13 | |
+| `xnio-nio` | 0.11 | |
+| `micrometer-observation` | 0.08 | |
+| `jboss-logging` | 0.06 | |
+| `micrometer-commons` | 0.05 | |
+| `wildfly-client-config` | 0.05 | |
+| **total** | **7.65** | |
+
+**The wheel grows by more than that sum, and it is worth knowing why.** Measured
+on one machine, same commit, same platform, server excluded then included. The
+jars and JRE columns are sizes *as stored in the wheel* (deflated), which is why
+they add up to the wheel column:
+
+| | wheel file | jars (in wheel) | bundled JRE (in wheel) |
+|---|---|---|---|
+| embedded only | 59.06 MiB | 20.70 MiB | 38.30 MiB |
+| with server | **67.08 MiB** | 27.87 MiB | 39.10 MiB |
+| delta | **+8.02 MiB (+13.6%)** | +7.17 MiB | +0.80 MiB |
+
+Unpacked on disk the whole package is 94.45 MiB (31.28 MiB of jars across 63
+files, 62.92 MiB of JRE).
+
+The extra ~0.8 MiB beyond the JARs is the **bundled JRE**, not the JARs. The
+build runs `jdeps` over the shipped JARs and `jlink`s a minimal runtime from
+whatever modules it finds, so adding the server stack pulls in modules nothing
+else needed. Comparing the two builds' module lists, exactly three are new:
+
+```
+embedded only  java.base java.compiler java.desktop java.net.http java.sql
+               jdk.incubator.vector jdk.jfr jdk.management jdk.unsupported
+with server    ... the same, plus java.naming, java.security.jgss,
+               java.security.sasl
+```
+
+which are JNDI and the Kerberos/SASL authentication stack that Undertow needs.
+The linked JRE goes from 62 MB to 63 MB on disk. Estimating this feature's
+cost from JAR sizes alone understates it by roughly 10%.
+
+**Memory and CPU, if you never call `create_server()`: essentially nothing.**
+The JARs sit on the classpath and the JVM loads classes lazily, so nothing is
+initialised, no threads start, and no heap is allocated for them. You pay a
+file handle and a few KB of zip index per JAR.
+
+**If you do start a server**, `undertow-core` and `arcadedb-server` load and
+Undertow starts listener threads and buffer pools. That is the real cost, and
+it arrives when you ask for it.
+
+**Studio specifically is free until browsed.** Its JAR contains 126 entries,
+all static JS/HTML/CSS/SVG/PNG, and **zero** `.class` files: it cannot execute
+anything. Assets are read out of the zip only when a browser requests them.
+(`tests/test_server_packaging.py` asserts this, so the claim fails loudly if a
+future Studio release starts shipping code.)
+
+### When to use the Docker distribution instead
+
+Use the official ArcadeDB server image, not this, when you need multi-process
+access, HA/replication, TLS termination, or a server whose lifetime is
+independent of your Python process. In-process server mode is for the case
+where one process wants both embedded access and an HTTP surface.
+
+## Overview
+
+Server mode provides:
+
+- **HTTP REST API**: Access your database via HTTP
+- **Studio Web UI**: Visual database explorer and query editor
+- **Multi-database Management**: Host multiple databases
+- **Authentication**: User management and security
+- **Development & Production**: Suitable for both environments
+
+## Quick Start
+
+### Basic Server
+
+Start a server with default configuration:
+
+```python
+import arcadedb_embedded as arcadedb
+
+# Create and start server
+server = arcadedb.create_server("./databases")
+server.start()
+
+print(f"🚀 Server started at: {server.get_studio_url()}")
+print("📊 Access Studio UI in your browser")
+
+# Keep server running
+input("Press Enter to stop server...")
+server.stop()
+```
+
+### Context Manager
+
+Use a context manager for automatic cleanup:
+
+```python
+with arcadedb.create_server("./databases") as server:
+    print(f"🚀 Server running at: {server.get_studio_url()}")
+
+    # Server automatically stops on exit
+    input("Press Enter to stop...")
+```
+
+## Server Configuration
+
+### Basic Configuration
+
+```python
+server = arcadedb.create_server(
+    root_path="./databases",
+    root_password="my_secure_password",
+    config={
+        "http_port": 2480,
+        "host": "0.0.0.0",
+        "mode": "development"
+    }
+)
+```
+
+### Configuration Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `root_path` | `"./databases"` | Directory for database storage |
+| `root_password` | None | Root user password (recommended) |
+| `http_port` | 2480 | HTTP API/Studio port (binding pins to a single port; Java default is the 2480-2489 range) |
+| `host` | "localhost" | Host to bind to |
+| `mode` | "development" | Server mode (`development` or `production`) |
+
+## Server Info Endpoint
+
+The server exposes `/api/v1/server` for metadata such as version, server name,
+and supported query languages:
+
+```python
+import requests
+from requests.auth import HTTPBasicAuth
+
+base_url = f"http://localhost:{server.get_http_port()}"
+auth = HTTPBasicAuth("root", "password123")
+
+info = requests.get(f"{base_url}/api/v1/server", auth=auth).json()
+print("Server version:", info.get("version"))
+print("Languages:", info.get("languages"))
+```
+
+## Authentication Tokens (HTTP API)
+
+If you make many HTTP requests, you can obtain a token once and use Bearer
+authentication afterward:
+
+```python
+import requests
+from requests.auth import HTTPBasicAuth
+
+base_url = f"http://localhost:{server.get_http_port()}"
+auth = HTTPBasicAuth("root", "password123")
+
+# Exchange Basic Auth for a token
+token = requests.post(f"{base_url}/api/v1/login", auth=auth).json()["token"]
+
+# Use Bearer token in subsequent requests
+headers = {"Authorization": f"Bearer {token}"}
+requests.post(
+    f"{base_url}/api/v1/command/mydb",
+    headers=headers,
+    json={"language": "sql", "command": "SELECT FROM Person"},
+)
+```
+
+## Multi-Process Access
+
+ArcadeDB's embedded mode uses file-based locking, which prevents multiple processes from accessing the same database simultaneously. **Server mode solves this problem** by providing a central HTTP endpoint that multiple processes (or applications) can connect to.
+
+### Why Use Server Mode for Multi-Process?
+
+#### ❌ Embedded mode - Only ONE process can access the database
+
+```python
+import arcadedb_embedded as arcadedb
+
+# Process 1
+db1 = arcadedb.create_database("./mydb")  # Gets file lock
+
+# Process 2 (different Python process)
+db2 = arcadedb.create_database("./mydb")  # ❌ ERROR: Lock conflict!
+```
+
+#### ✅ Server mode - Multiple processes/apps can access
+
+```python
+import arcadedb_embedded as arcadedb
+
+# Start server once (Process 1)
+with arcadedb.create_server("./databases") as server:
+    print(f"Server at: {server.get_studio_url()}")
+
+    # Now ANY number of clients can connect via HTTP
+    # - Web applications
+    # - Background workers
+    # - Data analysis scripts
+    # - Multiple Python processes
+
+    input("Server running... Press Enter to stop")
+```
+
+### Benefits of Server Mode
+
+1. **True Multi-Process Access**: Multiple Python processes can work with the same database
+2. **Language Agnostic**: Access from JavaScript, Java, Python, curl, etc.
+3. **Network Access**: Remote applications can connect
+4. **Web UI**: Built-in Studio for visual database exploration
+5. **Production Ready**: Proper authentication and security
+
+### When to Use Each Mode
+
+| Use Case | Mode | Reason |
+|----------|------|--------|
+| Single script/notebook | Embedded | Zero setup; keep everything in-process |
+| Agent/AI workloads in one process | Embedded | Fast, low-latency, no network hop |
+| Multi-process on one machine | Server | One shared endpoint avoids file locks |
+| Web app / API clients | Server | Network access for many clients |
+| Distributed workers / pipelines | Server | Parallel workers connect concurrently |
+| Production deployment | Server | Central auth, HTTP, remote access |
+
+### Multi-Threaded Access
+
+Within a **single Python process**, multiple threads can safely share an embedded database:
+
+```python
+import arcadedb_embedded as arcadedb
+from threading import Thread
+
+# Use context manager so the database closes cleanly after threads finish
+with arcadedb.create_database("./mydb") as db:
+    db.command("sql", "CREATE DOCUMENT TYPE Log")
+
+    def worker(thread_id):
+        # ✅ Multiple threads in SAME process can share the database
+        with db.transaction():
+            db.command("sql", "INSERT INTO Log SET thread = ?", thread_id)
+
+# Start multiple threads
+threads = [Thread(target=worker, args=(i,)) for i in range(10)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+
+db.close()
+```
+
+For more details, see [Concurrency Tests](../development/testing/test-concurrency.md).
+
+## Next Steps
+
+- **[Graph Operations](graphs.md)**: Visualize graphs in Studio
+- **[Vector Search](vectors.md)**: Add vector search to your server
+- **[Data Import](import.md)**: Bulk import data into server databases

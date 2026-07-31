@@ -32,6 +32,8 @@ installed, with some variation by platform, version, and filesystem allocation:
 - ✅ **Query Languages**: SQL, OpenCypher
 - ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
+- ✅ **Server Mode**: Optional in-process HTTP server
+- ✅ **Studio Web UI**: Visual database explorer and query editor
 
 !!! tip "Platform Selection"
     pip automatically selects the correct platform-specific wheel for your system. You don't need to specify the platform manually.

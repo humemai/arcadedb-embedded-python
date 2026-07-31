@@ -15,8 +15,9 @@ pip install arcadedb-embedded
 
 ## Access Methods
 
-ArcadeDB Python bindings are **embedded-only**: the database runs in your Python
-process.
+ArcadeDB Python bindings run the database **in your Python process**. That is the
+primary mode. An optional in-process HTTP server is also bundled, for when other
+processes or languages need to reach the same data.
 
 ### Embedded Mode (SQL)
 
@@ -41,12 +42,25 @@ with arcadedb.create_database("./mydb") as db:
         print(record.get("name"))
 ```
 
-### Need remote or multi-process access?
+### Server Mode (HTTP + Studio)
 
-This package is embedded-only. For HTTP access, remote clients, or several
-processes sharing one database, run the official [ArcadeDB server](https://docs.arcadedb.com/#Server)
-(e.g. the `arcadedata/arcadedb` Docker image) and talk to it over its HTTP
-API — see [Access Methods](../api-access-methods.md).
+When another process, another language, or a browser needs the same data, start
+the bundled server. The owning process keeps full-speed embedded access:
+
+```python
+import arcadedb_embedded as arcadedb
+
+with arcadedb.create_server("./databases", root_password="password123") as server:
+    db = server.create_database("mydb")     # embedded access, in this process
+    print("Studio:", server.get_studio_url())  # HTTP access, any process
+```
+
+Server mode adds ~8MB to the wheel and costs nothing at runtime until you call
+`create_server()` — see [Server Mode](../guide/server.md) for the measured
+breakdown, and [Access Methods](../api-access-methods.md) for all three paths.
+
+For a server that outlives your Python process, or for HA/TLS, run the official
+[ArcadeDB server](https://docs.arcadedb.com/#Server) instead.
 
 ## Your First Database
 

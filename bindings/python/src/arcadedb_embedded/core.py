@@ -296,6 +296,17 @@ class Database:
                 async_close_error = self._close_async_executors()
                 self._java_db.close()
             except Exception as e:
+                # A server-managed database is owned by the server lifecycle,
+                # not by this handle: the engine raises
+                # UnsupportedOperationException rather than closing it. That is
+                # the expected outcome for a Database obtained from
+                # ArcadeDBServer.get_database(), so treat it as closed here and
+                # let the server own the real shutdown.
+                if "cannot be closed" in str(e).lower():
+                    self._closed = True
+                    if async_close_error is not None:
+                        raise async_close_error
+                    return
                 raise ArcadeDBError(f"Failed to close database: {e}") from e
             finally:
                 self._closed = True
@@ -1068,6 +1079,8 @@ class Database:
         interpreter is shutting down and logging may already be unavailable,
         so we narrow the catch to AttributeError/RuntimeError that JPype can
         raise when the JVM has been torn down before this finalizer runs.
+        Server-managed databases raise UnsupportedOperationException on close,
+        which close() handles itself and which is also suppressed here.
         """
         try:
             self.close()

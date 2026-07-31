@@ -163,6 +163,7 @@ nav:
   - 20 - Graph Algorithms Route Planning: examples/20_graph_algorithms_route_planning.md
   - 21 - Graph Analytical View SQL Workflow: examples/21_graph_analytical_view_sql.md
   - 22 - numpy Bulk I/O Workflow: examples/22_numpy_bulk_io.md
+  - 23 - Server Mode And HTTP Access: examples/23_server_mode_http_access.md
   - Data Import Patterns: examples/import.md
   - Vector Search Patterns: examples/vectors.md
 - User Guide:
@@ -175,6 +176,7 @@ nav:
   - Vector Search: guide/vectors.md
   - Data Import: guide/import.md
   - Graph Operations: guide/graphs.md
+  - Server Mode: guide/server.md
   - Performance: guide/performance.md
 - API Reference:
   - Database: api/database.md
@@ -188,6 +190,7 @@ nav:
   - Citation: api/citation.md
   - Async Executor: api/async_executor.md
   - Schema: api/schema.md
+  - Server: api/server.md
   - Exporter: api/exporter.md
   - Type Conversion: api/type_conversion.md
   - Exceptions: api/exceptions.md
@@ -219,6 +222,8 @@ nav:
       - Graph API: development/testing/test-graph-api.md
       - Vector SQL: development/testing/test-vector-sql.md
     - Advanced Testing:
+      - Server: development/testing/test-server.md
+      - Server Patterns: development/testing/test-server-patterns.md
       - Concurrency: development/testing/test-concurrency.md
       - Data Import: development/testing/test-importer.md
       - Documentation Examples: development/testing/test-docs-examples.md

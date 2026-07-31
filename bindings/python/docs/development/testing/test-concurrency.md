@@ -370,9 +370,11 @@ response = requests.post(
 **Key insight:**
 
 !!! tip "Multi-Process Architecture"
-    This package is embedded-only (single process owns the files). For
-    multi-process applications, run the standalone ArcadeDB server and have
-    every process talk to it over HTTP.
+    In embedded mode a single process owns the files. For multi-process
+    applications, either start the bundled in-process server with
+    `create_server()` and have the other processes talk to it over HTTP, or run
+    the standalone ArcadeDB server if you want a lifetime independent of any
+    one Python process.
 
 ## Summary Table
 
@@ -381,6 +383,7 @@ response = requests.post(
 | Multiple threads, same process | ✅ Yes | Thread-safe, share database instance |
 | Sequential: open → close → reopen | ✅ Yes | Must close to release lock |
 | Multiple processes, embedded mode | ❌ No | File lock prevents concurrent access |
+| Multiple processes via bundled `create_server()` | ✅ Yes | Owner keeps embedded access; others use HTTP |
 | Multiple processes via standalone ArcadeDB server | ✅ Yes | All processes use its HTTP API |
 
 ## Running These Tests

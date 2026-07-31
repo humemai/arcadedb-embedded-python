@@ -337,6 +337,7 @@ def build_examples(examples_dir: Path) -> list[ExampleRun]:
                 "2000",
             ],
         ),
+        ExampleRun(23, "23_server_mode_http_access.py", lambda _, __: []),
     ]
 
 

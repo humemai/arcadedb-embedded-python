@@ -9,6 +9,61 @@ Java behaviour reaches Python users through `pip install` without passing
 through anything they would think to read. Breaking changes are listed first
 for each version.
 
+## 26.8.1.dev24
+
+### Restored
+
+- **Server mode is back.** `create_server()` / `ArcadeDBServer`, the HTTP API,
+  and the Studio web UI ship in the wheel again, reversing the removal in
+  26.7.2. If you pinned `26.7.1` to keep server mode, you can move forward.
+
+  The removal traded a real feature for ~8 MB and was made without evidence
+  that nobody used it. A downstream user told us otherwise on the removal
+  commit itself, three weeks after it shipped in a stable release.
+
+  **What it costs, measured on one Linux x86_64 build of the same commit:**
+
+  | | wheel file | jars (in wheel) | bundled JRE (in wheel) |
+  | --- | --- | --- | --- |
+  | without server | 59.06 MiB | 20.70 MiB | 38.30 MiB |
+  | with server | 67.08 MiB | 27.87 MiB | 39.10 MiB |
+  | delta | **+8.02 MiB (+13.6%)** | +7.17 MiB | +0.80 MiB |
+
+  The server stack is 12 JARs totalling 7.65 MiB uncompressed. The extra
+  0.8 MiB is the bundled JRE, not the JARs: the build `jdeps`/`jlink`s a
+  runtime from whatever the shipped JARs need, and the server pulls in
+  `java.naming`, `java.security.jgss`, and `java.security.sasl` (JNDI and the
+  Kerberos/SASL stack Undertow wants). Estimating the feature's cost from JAR
+  sizes alone understates it by roughly 10%.
+
+  **What it costs at runtime if you never call `create_server()`: essentially
+  nothing.** The JARs sit on the classpath, the JVM loads classes lazily, no
+  threads start and no heap is allocated. Studio is 126 entries of static
+  JS/HTML/CSS and **zero** `.class` files, so it cannot execute anything until
+  a browser asks for an asset.
+
+- **The suite can no longer go quiet if the server disappears again.** Every
+  pre-existing server test was guarded by `has_server_support()`, so when the
+  JARs were dropped those tests *skipped* and the suite stayed green while the
+  feature was gone. New `tests/test_server_packaging.py` asserts the JARs, the
+  exported API, the honesty of the skip-guard itself, and a real HTTP round
+  trip — and **fails** rather than skips. A deliberately slim wheel now means
+  deleting that file on purpose.
+
+### Fixed
+
+- **Example 23 could not complete a server round trip.** Its readiness poll
+  retried on `RuntimeError`, but a socket timeout raises `TimeoutError`, which
+  is an `OSError` and not a `URLError`, so it escaped the retry loop instead of
+  causing one more attempt. The per-attempt budget was 5.0 s and the first
+  request measured 5.64 s, so the example failed on a machine where the server
+  was working correctly.
+
+  The first HTTP request after `start()` is genuinely slow: **5.64 s**, then
+  0.70 s, then under 10 ms. Undertow and the REST handlers class-load lazily
+  and the root password is verified with a deliberately expensive KDF, and both
+  land on request one. If you poll for readiness, budget for it.
+
 ## 26.8.1.dev23
 
 ### Engine

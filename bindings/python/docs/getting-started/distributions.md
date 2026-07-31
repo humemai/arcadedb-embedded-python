@@ -4,9 +4,9 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 
 ## The Package
 
-| Package | Wheel Size | Installed Size | Java Required | Query Languages |
+| Package | Wheel Size | Installed Size | Java Required | Studio UI | Query Languages |
 |---------|-----------|------------------------------|---------------|----------------|
-| **arcadedb-embedded** | ~62MB | ~87MB | ❌ No | SQL, OpenCypher |
+| **arcadedb-embedded** | ~67MB | ~94MB | ❌ No | ✅ | SQL, OpenCypher |
 
 **Installation:**
 
@@ -20,10 +20,10 @@ pip install arcadedb-embedded
 
 The package includes everything you need:
 
-- **ArcadeDB JARs** (~24MB, uncompressed): Core database with the embedded feature set
+- **ArcadeDB JARs** (~31MB, uncompressed): Core database plus the optional server/Studio stack
 - **Bundled JRE** (~63MB, uncompressed): Platform-specific Java 25 runtime (via jlink)
 
-**Current Linux x86_64 package info:** ~62MB compressed wheel, ~63MB JRE, ~24MB JARs, and ~87MB installed.
+**Current Linux x86_64 package info:** ~67MB compressed wheel, ~63MB JRE, ~31MB JARs, and ~94MB installed.
 
 These numbers are measured from the built wheel file and the extracted
 `site-packages/arcadedb_embedded/` directory, and they vary by platform and version.
@@ -49,16 +49,19 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 - ✅ **Query Languages**: SQL, OpenCypher (all included)
 - ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
+- ✅ **Server Mode**: Optional in-process HTTP server
+- ✅ **Studio Web UI**: Visual database explorer and query editor
 
-**Optimized (embedded-only):**
+**Optimized:**
 
-- The package is embedded-only: the HTTP server, Studio web UI, and wire
-  protocols are not bundled. For client-server deployments, run the official
-  [ArcadeDB server](https://docs.arcadedb.com/#Server) alongside — see
+- Some components are excluded to optimize package size (e.g., the gRPC wire
+  protocol). See `scripts/jar_exclusions.txt` in the repository for the full
+  list.
+- The bundled server is in-process, so its lifetime is your Python process's.
+  For a standalone server, HA/replication, TLS, or the Postgres/Redis/Mongo
+  wire protocols, run the official
+  [ArcadeDB server](https://docs.arcadedb.com/#Server) — see
   [Access Methods](../api-access-methods.md).
-- Additional components are excluded to optimize package size (e.g., gRPC
-  wire protocol). See `scripts/jar_exclusions.txt` in the repository for the
-  full list.
 
 ## Use Cases
 
@@ -70,6 +73,28 @@ Perfect for:
 - Desktop applications
 - Multi-model database needs (Graph, Document, Vector, Time Series)
 - Any scenario requiring SQL or OpenCypher queries
+- Development and debugging (with Studio UI)
+
+## Accessing Studio UI
+
+```python
+from arcadedb_embedded import create_server
+
+# Start HTTP server with Studio UI
+server = create_server("./databases", root_password="password123")
+server.start()
+
+# Studio UI available at the URL below (port 2480 by default)
+print(server.get_studio_url())
+
+# When done
+server.stop()
+```
+
+!!! tip "Studio in Browser"
+    Once the server starts, open the printed URL to reach the Studio UI. Studio
+    ships as static assets with no executable code, so it costs disk and nothing
+    else until a browser actually requests it.
 
 ## Import Statement
 
@@ -86,17 +111,17 @@ Simple and consistent across all platforms!
 Current sizes are ballpark values and can move with ArcadeDB, the bundled JRE, the
 target platform, and filesystem overhead after installation:
 
-- **Wheel (compressed)**: ~62MB
-- **Installed package**: ~87MB
+- **Wheel (compressed)**: ~67MB
+- **Installed package**: ~94MB
 
 **Components (uncompressed):**
 
-- **ArcadeDB JARs**: ~24MB (51 JARs)
+- **ArcadeDB JARs**: ~31MB (63 JARs, of which 12 are the optional server stack at 7.65MB)
 - **Bundled JRE**: ~63MB (platform-specific Java 25 runtime via jlink, 16 modules)
 
 **Optimizations:**
 
-- Embedded-only: server/Studio/wire-protocol JARs excluded
+- The gRPC wire protocol is excluded; server and Studio are included
 - See `scripts/jar_exclusions.txt` in repository for details
 
 ## Installation Tips
@@ -137,5 +162,6 @@ print(f"Python: {platform.python_version()}")
 
 - [Installation Guide](installation.md) - Detailed install instructions
 - [Quick Start](quickstart.md) - Get started in 5 minutes
+- [Server Mode](../guide/server.md) - Using the HTTP server with Studio UI
 - [Build Architecture](../development/build-architecture.md) - How platform-specific wheels are built
 - [Query Languages](../guide/core/queries.md) - SQL and OpenCypher examples

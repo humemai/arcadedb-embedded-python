@@ -20,7 +20,7 @@ This document describes the build architecture for creating platform-specific Py
 **All supported platforms:**
 
 - ✅ Full bindings suite passes on every platform build
-- ✅ ~24M JARs (current Linux x86_64 package info, identical contents across platforms; embedded-only, no server/Studio)
+- ✅ ~31M JARs (current Linux x86_64 package info, identical contents across platforms; includes server/Studio)
 - ✅ All native runners (no QEMU emulation)
 - ✅ Reproducible builds (pinned runner versions)
 

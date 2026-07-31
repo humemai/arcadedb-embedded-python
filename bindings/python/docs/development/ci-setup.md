@@ -105,7 +105,7 @@ All 4 platforms passing the bindings suite and example workflows:
 
 **All platforms include:**
 
-- ~24M JARs (current Linux x86_64 package info, same contents across platforms; embedded-only — server/Studio/gRPC excluded)
+- ~31M JARs (current Linux x86_64 package info, same contents across platforms; includes server/Studio, excludes gRPC)
 - Platform-specific JRE (~63M uncompressed, similar across platforms)
 - Native runners (no QEMU emulation anywhere)
 
