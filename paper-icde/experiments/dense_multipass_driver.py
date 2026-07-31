@@ -31,7 +31,12 @@ import time
 from l3d_dense import BACKENDS, load_dataset, K
 from bench_common import run_conditions
 
-BACKEND = os.environ["BENCH_MP_BACKEND"]
+# Read with .get, not [], so the module can be IMPORTED without the run
+# environment. queue61's contract check does `import dense_multipass_driver`
+# to prove the image can load it, and a module-level os.environ[...] turned
+# that check into a KeyError that aborted the whole run. A contract check must
+# be able to import the thing it is checking.
+BACKEND = os.environ.get("BENCH_MP_BACKEND")
 SCALE = os.environ.get("BENCH_MP_SCALE", "deep10m")
 PASSES = int(os.environ.get("BENCH_MP_PASSES", "5"))
 # Some engines are far enough off the pace that five passes of 1000 queries
@@ -42,6 +47,8 @@ NQ = int(os.environ.get("BENCH_MP_NQUERIES", "0"))  # 0 = all
 
 
 def main():
+    if not BACKEND:
+        raise SystemExit("BENCH_MP_BACKEND is required (e.g. qdrant_dense)")
     train, test, gt = load_dataset(SCALE)
     if NQ:
         test, gt = test[:NQ], gt[:NQ]
