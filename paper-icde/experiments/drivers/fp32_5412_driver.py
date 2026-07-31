@@ -9,6 +9,18 @@ import time
 
 from l3d_dense import BACKENDS, load_dataset, K
 
+def _installed_version():
+    """The wheel actually loaded, not the one this file was named after.
+    See provenance_check._asserted_versions for why a hardcoded version is a
+    claim rather than provenance."""
+    try:
+        from importlib.metadata import version
+        return version("arcadedb-embedded")
+    except Exception as e:
+        return "unknown (%s)" % e.__class__.__name__
+
+
+
 train, test, gt = load_dataset("deep10m")
 b = BACKENDS["arcadedb_dense_embedded"]()
 b.connect()
@@ -29,7 +41,7 @@ for rep in range(1, 6):
         recalls.append(len(set(ids[:K]) & set(gt[qi].tolist())) / K)
     lats.sort()
     out = {"rep": rep, "build_s": build_s, "quantization": "fp32",
-           "engine": "26.8.1.dev16-line (c885235c7)", "n_queries": len(test),
+           "engine": _installed_version(),  # was hardcoded "26.8.1.dev16-line (c885235c7)", "n_queries": len(test),
            "p50": round(lats[len(lats) // 2], 3),
            "p95": round(lats[int(0.95 * len(lats))], 3),
            "p99": round(lats[int(0.99 * len(lats))], 3),

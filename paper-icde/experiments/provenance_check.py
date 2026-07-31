@@ -77,6 +77,39 @@ LANDMARKS = [
 ]
 
 
+
+def _asserted_versions():
+    """Overlays whose version field is a STRING LITERAL in the producing driver.
+
+    A version that a driver hardcodes about itself is not provenance, it is a
+    claim. queue41 proved the failure mode: it ran the dev20 image and the
+    dev23 image, and both results recorded "26.8.1.dev22", because
+    fp32_dev22_driver.py wrote that literal regardless of what was installed.
+    The published verify5412b overlay carries the same kind of self-assertion.
+
+    This checker previously read those fields and reported them as verified,
+    which is the same mistake one level up from the one it was built to catch.
+    So: scan the tracked drivers for a hardcoded version literal and name the
+    overlays they feed, so a self-asserted version is never mistaken for a
+    measured one.
+
+    srv5413_driver.py is the counter-example worth keeping in mind: it records
+    server_version read from the running server, which is measured, and is the
+    only reason the T5 server finding was discoverable at all.
+    """
+    import re as _re
+    out = {}
+    ddir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drivers")
+    for fp in glob.glob(os.path.join(ddir, "*_driver.py")):
+        try:
+            body = open(fp).read()
+        except OSError:
+            continue
+        if _re.search(r'"(?:engine|engine_version|version)"\s*:\s*"[0-9]', body):
+            out[os.path.basename(fp)] = "hardcoded version literal"
+    return out
+
+
 def _repo_root():
     try:
         out = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=HERE,
@@ -143,6 +176,13 @@ def main():
     if not known:
         print("NOTE: no landmark commits resolvable in this checkout; the "
               "build-date comparison is skipped (version reporting still runs)\n")
+
+    asserted = _asserted_versions()
+    if asserted:
+        print("=== drivers that ASSERT their version rather than measure it ===")
+        for name, why in sorted(asserted.items()):
+            print(f"  {name}: {why}")
+        print("  Any overlay these produced carries a claim, not a measurement.\n")
 
     bad = 0
     mapped = set()
