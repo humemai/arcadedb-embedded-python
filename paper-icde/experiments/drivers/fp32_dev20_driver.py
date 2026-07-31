@@ -9,6 +9,7 @@ import statistics
 import time
 
 from l3d_dense import BACKENDS, load_dataset, K
+from bench_common import run_conditions
 
 def _installed_version():
     """The wheel actually loaded, not the one this file was named after.
@@ -71,6 +72,7 @@ for rep in range(1, 6):
            "p95": round(lats[int(0.95 * len(lats))], 3),
            "p99": round(lats[int(0.99 * len(lats))], 3),
            "recall_at_10": round(statistics.mean(recalls), 4)}
+    out.update(run_conditions())
     with open(f"/pout/fp32_dev20_rep{rep}.json", "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out), flush=True)

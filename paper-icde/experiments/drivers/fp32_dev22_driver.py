@@ -9,6 +9,7 @@ import statistics
 import time
 
 from l3d_dense import BACKENDS, load_dataset, K
+from bench_common import run_conditions
 
 def _installed_version():
     """The wheel actually loaded, not the one this file was named after.
@@ -66,11 +67,16 @@ for rep in range(1, 6):
         recalls.append(len(set(ids[:K]) & set(gt[qi].tolist())) / K)
     lats.sort()
     out = {"rep": rep, "build_s": build_s, "quantization": "fp32",
-           "engine": _installed_version(),  # was hardcoded "26.8.1.dev22", "n_queries": len(test),
+           # was hardcoded "26.8.1.dev22"; replacing it swallowed the next
+           # field into this comment and the driver silently stopped recording
+           # n_queries. Both are separate lines now for exactly that reason.
+           "engine": _installed_version(),
+           "n_queries": len(test),
            "p50": round(lats[len(lats) // 2], 3),
            "p95": round(lats[int(0.95 * len(lats))], 3),
            "p99": round(lats[int(0.99 * len(lats))], 3),
            "recall_at_10": round(statistics.mean(recalls), 4)}
+    out.update(run_conditions())
     with open(f"/pout/fp32_dev22_rep{rep}.json", "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out), flush=True)

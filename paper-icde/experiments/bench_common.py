@@ -10,6 +10,60 @@ import statistics as st
 import time
 
 
+def run_conditions(**extra):
+    """The conditions this process is actually running under, read not asserted.
+
+    Every overlay feeding T4 and T5 records zero of cpuset/heap/mem_cap, while
+    runs.jsonl (produced by runner.py) records all of them. The overlays are
+    what the tables print, so the published cells came from artifacts carrying
+    less provenance than the campaign they override.
+
+    The cost was concrete: Table IV's 8.84M cell is stuck at N=3 because the
+    two missing reps cannot be matched to the first three, nothing having
+    recorded what those ran under.
+
+    A driver cannot be trusted to be TOLD its conditions, since that is the
+    same self-assertion that let fp32_dev22_driver stamp "26.8.1.dev22" onto a
+    dev20 run. So read them from the container itself: cgroup v2 exposes the
+    effective cpuset and the memory ceiling, and the heap is whatever we asked
+    the JVM for. Anything unreadable comes back None rather than a guess.
+
+    Merge into a result dict before writing it:
+
+        out.update(run_conditions(lane="l3s", scale="medium", rep=rep))
+    """
+    def _read(path):
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except OSError:
+            return None
+
+    mem = _read("/sys/fs/cgroup/memory.max")
+    if mem and mem.isdigit():
+        mem = f"{int(mem) // (1 << 30)}g"
+    elif mem == "max":
+        mem = None
+
+    cpus = (_read("/sys/fs/cgroup/cpuset.cpus.effective")
+            or _read("/sys/fs/cgroup/cpuset.cpus"))
+
+    out = {
+        "cpuset": cpus,
+        "mem_cap": mem,
+        "heap": os.environ.get("ARCADEDB_HEAP"),
+        "host": os.environ.get("BENCH_HOST", "mini"),
+        "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+    }
+    try:
+        from importlib.metadata import version as _v
+        out["engine_version"] = _v("arcadedb-embedded")
+    except Exception as e:
+        out["engine_version"] = f"unknown ({e.__class__.__name__})"
+    out.update(extra)
+    return out
+
+
 def _pct(sorted_a, p):
     """Linear-interpolation percentile (numpy-compatible), pure-python."""
     n = len(sorted_a)
