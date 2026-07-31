@@ -454,6 +454,28 @@ def main():
         out["recall_at_10"] = None
         out["gt_missing"] = True
 
+    # Read the cpuset, heap and memory cap out of this container's own cgroup.
+    # Without them a cell cannot be reproduced or extended from its own
+    # artifacts, which is why T4's 8.84M row is permanently stuck at N=3: reps
+    # added later under guessed conditions would be worse than an honest N=3.
+    # run_conditions() reads rather than accepts assertions, since a driver
+    # told its own version is how one overlay stamped dev22 onto a dev20 run.
+    #
+    # Careful with engine_version: this lane already set it above to the
+    # BACKEND's version, which for a Qdrant or Elasticsearch row is that
+    # engine's version and not ours. run_conditions() reports the installed
+    # arcadedb-embedded wheel, so letting it merge freely would relabel every
+    # comparator row with ArcadeDB's version. Keep the system-under-test's
+    # version under engine_version and file the wheel separately.
+    try:
+        from bench_common import run_conditions
+        cond = run_conditions(lane="l3s", backend=args.backend,
+                              scale=args.scale)
+        cond["wheel_version"] = cond.pop("engine_version", None)
+        out.update(cond)
+    except Exception as e:  # never lose a completed run over provenance
+        out["conditions_error"] = f"{e.__class__.__name__}: {e}"
+
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(out, open(args.out, "w"), indent=1)
     print(f"RESULT {json.dumps(out)[:400]}")
