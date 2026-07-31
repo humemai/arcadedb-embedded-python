@@ -236,15 +236,41 @@ def _released_sparse_rows(subdir, tag):
     rather than mislabelled, because a silently misfiled row would land in the
     wrong table column.
     """
+    return _sparse_rows_by_docs(subdir, f"l3s_{tag}_*_r*.json")
+
+
+def _sparse_rows_by_docs(subdir, pattern):
+    """{tier: [rows]} for any sparse overlay, keyed by n_docs not by filename.
+
+    Split out of _released_sparse_rows because a second layout arrived
+    (queue60 writes ``<arm>_<scale>_r<rep>.json``) and the alternative was the
+    bespoke-reader-per-release habit the docstring above already objects to.
+    Only the glob differs; the tier still comes from the lane's own n_docs.
+    """
     import glob
     out = {}
-    for fp in glob.glob(os.path.join(RESULTS, subdir, f"l3s_{tag}_*_r*.json")):
+    for fp in glob.glob(os.path.join(RESULTS, subdir, pattern)):
         d = json.load(open(fp))
         tier = _SPARSE_TIER_BY_DOCS.get(d.get("n_docs"))
         if tier is None:
             continue
         out.setdefault(tier, []).append(d)
     return out
+
+
+def _t4dev23_rows(arm="int8"):
+    """queue60's dev23 re-measure, but only once ALL THREE tiers are present.
+
+    The point of that run is to put T4's ArcadeDB row on one line at N=5 with
+    conditions recorded. Taking it tier by tier as the cells arrive would do
+    the opposite: dev23 tiny and small beside a dev22 medium is a version mix
+    inside one row, which is the defect this file falls back rather than
+    commits everywhere else. All or nothing.
+    """
+    got = _sparse_rows_by_docs("t4dev23", f"{arm}_*_r*.json")
+    if all(len(got.get(t, [])) >= 5 for t in ("tiny", "small", "medium")):
+        return got
+    return {}
 
 
 def _dev21_sparse_rows():
@@ -287,6 +313,15 @@ def sparse_table(rows):
     dev15.update(_dev21_sparse_rows())
     dev15.update({t: v for t, v in dev22.items() if t in ("tiny", "small") and v})
     full = dev22.get("medium") or _dev21_sparse_full_rows() or _sparse_full_rows()
+    # queue60's dev23 re-measure supersedes all of the above when it is
+    # complete: one line for every tier, N=5 including the 8.84M cell that
+    # T4's caption has to except today, and cpuset/heap/mem_cap recorded.
+    # Returns {} until all three tiers have five reps, so a partial run cannot
+    # put dev23 tiny beside dev22 medium inside a single row.
+    dev23 = _t4dev23_rows("int8")
+    if dev23:
+        dev15.update({t: dev23[t] for t in ("tiny", "small")})
+        full = dev23["medium"]
     order = ["arcadedb_sparse_embedded", "qdrant_sparse", "milvus_sparse",
              "elasticsearch_sparse"]
     tiers = (("tiny", "100k"), ("small", "1M"), ("medium", "8.84M"))
