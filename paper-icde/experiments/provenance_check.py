@@ -57,7 +57,11 @@ FEEDS = {
     # server row; verify5413 stays listed because it remains the fallback in
     # make_paper_tables and its landmark warning is the record of WHY it was
     # superseded, not a live defect in what the table prints.
-    "T5": ["verify5412b", "srv109", "verify5413", "dev21_ts"],
+    # ts59 is the dev23 native time-series re-measure (N=5, conditions
+    # stamped) and now feeds T5's native row. dev21_ts stays listed for the
+    # same reason verify5413 does: it remains the fallback in
+    # make_paper_tables, and its record is why the row was superseded.
+    "T5": ["verify5412b", "srv109", "verify5413", "ts59", "dev21_ts"],
 }
 
 # Engine changes big enough that measuring on the wrong side of one produces a
@@ -260,7 +264,10 @@ def caption_n():
         "ArcadeDB (emb)": ({4, 5}, "T5 caption: four warm passes over one build"),
         "ArcadeDB (emb, int8, 16GiB)": ({4}, "T5 caption: same treatment"),
         "ArcadeDB (srv)": ({4, 5}, "T5 caption: same treatment"),
-        "ArcadeDB (native TS)": ({3}, "T5 caption: native-TS row, N=3"),
+        # The native-TS row was listed here at N=3. It was re-measured to N=5
+        # on the current line (results/ts59), so the entry is gone and the
+        # caption's exception with it. Leaving a stale disclosure claiming a
+        # limitation we fixed is its own defect.
     }
     print("=== repetitions behind each published cell ===")
     try:

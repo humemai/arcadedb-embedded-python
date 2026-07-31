@@ -399,16 +399,42 @@ def dense_ts_table(rows):
     # already cites 1.73M pts/s and a 1.12x DuckDB lead.
     # The full decomposition stays in the text: lists 417k, arrays 1.29M,
     # arrays + TimeSeriesBatch 1.73M.
+    # dev23 re-measure, N=5, conditions stamped, NO settle. The settle choice
+    # is the load-bearing one: nothing else in this block settles (l4_tsbs.py
+    # has no forcemerge, flush or checkpoint for DuckDB, QuestDB or ArcadeDB's
+    # document path), and the superseded dev21 files carry no settle_s key at
+    # all, so they were the unsettled treatment too. A settled ArcadeDB row
+    # beside unsettled comparators would take a one-sided advantage, and here
+    # that advantage is large and two-directional: settling buys 2.23x on the
+    # 12-hour aggregation and COSTS 2.5x on last-point (8.2x unbounded),
+    # measured as an interleaved A/B on one engine (results/ts59).
+    #
+    # The unsettled q_global lands within 1% of the dev21 row it replaces
+    # (29.86 vs 29.56 ms), which is the control: the two setups are otherwise
+    # matched, so the last-point and bucket gains below are engine changes
+    # (#5414/#5416) and not harness drift.
+    #
+    # Last point reports the UNBOUNDED form. T5 used to print a one-hour
+    # recency window as a workaround for an unbounded query that scanned the
+    # tag's whole series; on this line the unbounded form is not merely
+    # affordable but FASTER than the window it replaced (0.69 vs 0.94 ms),
+    # so the workaround is retired rather than carried with a footnote.
     native = [json.load(open(fp)) for fp in
-              glob.glob(os.path.join(RESULTS, "dev21_ts",
-                                     "ts_dev21_prim_r*.json"))]
-    if not native:  # fall back rather than mix
+              glob.glob(os.path.join(RESULTS, "ts59", "nosettle_r*.json"))]
+    last_key = "q_last_unbounded_ms"
+    if not native:  # fall back rather than mix lines
+        native = [json.load(open(fp)) for fp in
+                  glob.glob(os.path.join(RESULTS, "dev21_ts",
+                                         "ts_dev21_prim_r*.json"))]
+        last_key = "q_last_ms"
+    if not native:
         native = [json.load(open(fp)) for fp in
                   glob.glob(os.path.join(RESULTS, "batch1", "l4n_r*.json"))]
+        last_key = "q_last_ms"
     if native:
         lines.append(" & ".join([
             r"ArcadeDB (native TS)", mmm(native, "ingest_pts_per_s"),
-            mmm(native, "q_last_ms") + r"$^{b}$", mmm(native, "q_range_ms"),
+            mmm(native, last_key), mmm(native, "q_range_ms"),
             mmm(native, "q_global_ms")]) + " " + chr(92)*2)
     for be in ("arcadedb", "duckdb", "questdb"):
         g = [r for r in ts if r["backend"] == be]

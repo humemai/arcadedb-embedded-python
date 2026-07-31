@@ -111,22 +111,31 @@ def gib(rows, field, **kw):
 def ts_arm(field, primitive=True, numpy_cols=True):
     """Median over ONE time-series ingest arm.
 
-    dev21_ts holds three arms (objlist, objnp, prim) and the paper reports the
-    prim one, which is the TimeSeriesBatch primitive path. Pooling them gives
-    1.29M pts/s where the paper says 1.73M, and every ratio in the prose
-    (4.0x QuestDB, 55x the document path, DuckDB ahead by 1.12x) is consistent
-    with 1.73M, so the arm is the claim.
+    The published row is the primitive TimeSeriesBatch path with numpy
+    columns. The other arms (objlist, objnp) exist to decompose the harness
+    correction in the prose (417k -> 1.29M -> 1.73M) and pooling them would
+    report a number the paper never claims.
+
+    Reads ts59's NOSETTLE arm, which is the row T5 prints: nothing else in
+    the time-series block takes a settle step, and settling is not a uniform
+    win here (2.23x faster on the 12-hour aggregation, 2.5x SLOWER on last
+    point), so the arm is part of the claim exactly as primitive= is. Falls
+    back to the superseded dev21 overlay rather than mixing lines.
     """
     import glob as _glob
     import json as _json
-    out = []
-    for fp in _glob.glob(os.path.join(M.RESULTS, "dev21_ts", "*.json")):
-        d = _json.load(open(fp))
-        if bool(d.get("primitive")) == primitive and \
-           bool(d.get("numpy_cols")) == numpy_cols and \
-           isinstance(d.get(field), (int, float)):
-            out.append(d[field])
-    return st.median(out) if out else None
+    for sub, pat in (("ts59", "nosettle_r*.json"),
+                     ("dev21_ts", "*.json")):
+        out = []
+        for fp in _glob.glob(os.path.join(M.RESULTS, sub, pat)):
+            d = _json.load(open(fp))
+            if bool(d.get("primitive")) == primitive and \
+               bool(d.get("numpy_cols")) == numpy_cols and \
+               isinstance(d.get(field), (int, float)):
+                out.append(d[field])
+        if out:
+            return st.median(out)
+    return None
 
 
 def l4_median(field, backend):
@@ -445,9 +454,9 @@ CLAIMS = [
      lambda r: torn_count("surrealdb_e2"), "SurrealDB torn 0/5"),
 
     # --- L4 time series ---------------------------------------------------
-    ("l4.native.ingest", 1.73e6, 5e3,
+    ("l4.native.ingest", 1.92e6, 5e3,
      lambda r: ts_arm("ingest_pts_per_s"), "native ingest pts/s (prim arm)"),
-    ("l4.native.q_global", 29.6, 0.1,
+    ("l4.native.q_global", 29.9, 0.1,
      lambda r: ts_arm("q_global_ms"), "12h aggregation on the native path"),
     ("l4.questdb.ingest", 431305, 500,
      lambda r: l4_median("ingest_pts_per_s", "questdb"), "QuestDB line protocol"),
@@ -455,10 +464,10 @@ CLAIMS = [
      lambda r: l4_median("ingest_pts_per_s", "duckdb"), "DuckDB bulk ingest"),
     ("l4.doc.q_global", 1791.65, 1.0,
      lambda r: l4_median("q_global_ms", "arcadedb"), "12h aggregation, document path (1.8 s)"),
-    ("l4.ratio.questdb", 4.0, 0.05,
+    ("l4.ratio.questdb", 4.4, 0.05,
      lambda r: ts_arm("ingest_pts_per_s") / l4_median("ingest_pts_per_s", "questdb"),
      "native vs QuestDB"),
-    ("l4.ratio.docpath", 55.0, 0.5,
+    ("l4.ratio.docpath", 61.0, 0.5,
      lambda r: ts_arm("ingest_pts_per_s") / l4_median("ingest_pts_per_s", "arcadedb"),
      "native vs our own document path"),
     ("l4.tentag.ingest_cost", 2.0, 0.05,
@@ -467,7 +476,7 @@ CLAIMS = [
     ("l4.tentag.lastpoint_gain", 2.6, 0.05,
      lambda r: _tentag("q_last_ms", 1) / _tentag("q_last_ms", 10),
      "ten-tag last-point speedup, matched A/B"),
-    ("l4.ratio.duckdb", 1.12, 0.01,
+    ("l4.ratio.duckdb", 1.01, 0.01,
      lambda r: l4_median("ingest_pts_per_s", "duckdb") / ts_arm("ingest_pts_per_s"),
      "DuckDB's remaining lead"),
     # Last-point had the paper claiming a win it did not have. The prose read
@@ -477,16 +486,25 @@ CLAIMS = [
     # Two arms of our own system in one table, and the flattering row got
     # attributed to the arm being praised. Pin both arms separately so the
     # attribution cannot drift again.
-    ("l4.native.q_last", 4.16, 0.05,
-     lambda r: ts_arm("q_last_ms"), "last point, NATIVE arm (loses to both)"),
+    # The native arm now reports the UNBOUNDED last point: the one-hour
+    # recency window was a workaround for a scan upstream has since fixed
+    # (#5414/#5416), and on this line the unbounded form is FASTER than the
+    # window it replaced (0.690 vs 0.940 ms), so carrying the window would
+    # cost time and still need a footnote.
+    ("l4.native.q_last", 0.690, 0.05,
+     lambda r: ts_arm("q_last_unbounded_ms"),
+     "last point, NATIVE arm, unbounded (now beats both specialists)"),
+    ("l4.native.q_last_windowed", 0.940, 0.05,
+     lambda r: ts_arm("q_last_ms"),
+     "the retired recency window, kept as a claim so its loss stays visible"),
     ("l4.doc.q_last", 0.520, 0.01,
      lambda r: l4_median("q_last_ms", "arcadedb"),
      "last point, document path (the row that beats both)"),
-    ("l4.rank.q_last_native", 3.0, 0.0,
+    ("l4.rank.q_last_native", 1.0, 0.0,
      lambda r: 1.0 + sum(1 for b in ("questdb", "duckdb")
                          if (l4_median("q_last_ms", b) or float("inf"))
-                         < (ts_arm("q_last_ms") or 0)),
-     "native last-point rank of 3 vs the two specialists (3 = last)"),
+                         < (ts_arm("q_last_unbounded_ms") or 0)),
+     "native last-point rank vs the two specialists (was 3 = last, now 1)"),
 
     # 2.52 -> 2.49 with the post-fix server p50 (1.80 vs 1.82). The ratio is
     # not stated literally in the prose; it is pinned so prose, T5 and f8
