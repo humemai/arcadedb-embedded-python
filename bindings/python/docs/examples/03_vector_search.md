@@ -154,9 +154,9 @@ runtime does not support them.
 Step 5: Creating vector index...
    💡 JVector Parameters:
       • dimensions: 384 (matches embedding size)
-      • distance_function: cosine (best for normalized vectors)
+      • distance_function: COSINE (best for normalized vectors)
       • max_connections: 32 (connections per node, higher = more accurate but slower)
-      • beam_width: 256 (search quality, higher = more accurate)
+      • beam_width: 100 (search quality, higher = more accurate)
    ✅ Created JVector vector index
 
 Step 6: Performing semantic similarity searches...

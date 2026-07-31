@@ -345,9 +345,14 @@ db.command(
 - **`dimensions`:** Vector dimensionality (384 for the sentence-transformers models used).
 - **`similarity`:** `"COSINE"` for cosine distance (lower distance is better).
 
-`create_sql_vector_index()` also prints `metric=cosine, max_connections=32,
-beam_width=256` to describe the underlying JVector graph build. The Python object API can
-still create indexes, but SQL is the cleaner default and is what this example uses.
+`create_sql_vector_index()` also describes the underlying JVector graph build,
+printing something like `metric=COSINE, max_connections=32, beam_width=100
+(engine defaults)`. Those values are read back from the created index rather
+than hardcoded, because the `METADATA` above sets only `dimensions` and
+`similarity` and everything else comes from the engine's defaults. If a future
+release changes a default, the example reports the new one instead of quietly
+printing a stale number. The Python object API can still create indexes, but SQL
+is the cleaner default and is what this example uses.
 
 ## Output
 

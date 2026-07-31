@@ -686,14 +686,22 @@ def test_graph_traversal(database):
 ```python
 # pyproject.toml configuration
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["build>=0.7.0", "setuptools>=61.0", "wheel", "jpype1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "arcadedb-embedded"
-version = "0.1.0"
-dependencies = ["JPype1>=1.4.0", "numpy>=1.20.0"]
+# Placeholder: the build overwrites this from the parent pom.xml
+# (scripts/extract_version.py), so a wheel is versioned 26.8.1.devN.
+version = "0.0.0"
+requires-python = ">=3.10"
+dependencies = ["jpype1>=1.5.0"]
 ```
+
+`jpype1` is the only runtime dependency. `numpy` is an optional extra
+(`arcadedb-embedded[vector]`) rather than a hard requirement, so a plain install
+stays minimal. The extras' floors are audited in CI, so treat
+`bindings/python/pyproject.toml` as authoritative rather than this excerpt.
 
 ### JAR Management
 
