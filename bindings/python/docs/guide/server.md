@@ -56,10 +56,25 @@ which are JNDI and the Kerberos/SASL authentication stack that Undertow needs.
 The linked JRE goes from 62 MB to 63 MB on disk. Estimating this feature's
 cost from JAR sizes alone understates it by roughly 10%.
 
-**Memory and CPU, if you never call `create_server()`: essentially nothing.**
+**Memory and CPU, if you never call `create_server()`: about 10 ms, once.**
 The JARs sit on the classpath and the JVM loads classes lazily, so nothing is
-initialised, no threads start, and no heap is allocated for them. You pay a
-file handle and a few KB of zip index per JAR.
+initialised, no threads start, and no heap is allocated for them. What you do
+pay is a slightly longer classpath for the JVM to open at startup.
+
+Measured by installing one wheel twice and deleting only the 12 server JARs
+from one copy, so the engine and every other variable is identical. 16 fresh
+processes per arm, interleaved, median [min-max] on one developer machine:
+
+| | 51 JARs | 63 JARs | delta |
+|---|---|---|---|
+| JVM start | 0.131 s [0.128-0.136] | 0.141 s [0.135-0.151] | **+9.8 ms** |
+| first database open + query | 0.343 s [0.329-0.385] | 0.335 s [0.322-0.382] | -8.7 ms |
+| peak RSS | 216.9 MB | 201.2 MB | -15.7 MB |
+
+Only the JVM-start row is a real effect; its ranges barely overlap. The other
+two deltas are negative and their ranges overlap heavily, which is measurement
+noise rather than a saving. So there is **no measurable memory cost** to
+carrying the server JARs, and about 10 ms of one-time startup.
 
 **If you do start a server**, `undertow-core` and `arcadedb-server` load and
 Undertow starts listener threads and buffer pools. That is the real cost, and
