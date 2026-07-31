@@ -79,9 +79,21 @@ re-measure every engine at that tier.**
 ## The structural cause
 
 Violations 1 and 3 are both rows produced by a *bespoke driver* rather than
-the lane script. L1, L2 and L3s put every backend through one script, so
-warmup and settle are decided once and apply to everyone; those lanes are
-clean. Every bespoke driver was written to answer a narrow question (close
+the lane script. Protocol audit of every lane, completed 2026-07-31:
+
+| lane | where timing lives | verdict |
+|---|---|---|
+| L1 tabular | shared loop, `WARMUP_OLTP=200` / `WARMUP_OLAP=1` for all | clean |
+| L1 TPC | shared loop in `main()`, backend is a parameter | clean |
+| L2 graph | shared loop, each backend implements its own `post_build` settle | clean |
+| L3s sparse | one lane script for all seven backends | clean |
+| E2 hybrid | shared loop in `main()`, `WARMUP=20` for all three | clean |
+| L3d dense | comparators via the lane script, **ArcadeDB via overlay drivers** | violation 1 |
+| L4 time series | comparators via `l4_tsbs`, **ArcadeDB via `l4_native_probe`** | violation 3 |
+
+Every clean lane puts each backend through one script, so warmup and settle
+are decided once and apply to everyone. Both violations are the two lanes
+where an ArcadeDB row comes from somewhere else. Every bespoke driver was written to answer a narrow question (close
 out an issue, verify a fix) and was later promoted to a published cell,
 carrying whatever protocol its author needed at the time.
 
