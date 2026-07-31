@@ -87,9 +87,15 @@ def cell(table, row_label, col):
         cells = [c.strip() for c in line.rstrip("\\\\").split("&")][1:]
         if col >= len(cells):
             return None
-        # "11.36 [11.2--11.8]" -> 11.36 ; "306 [306--314]" -> 306
-        m = re.match(r"([0-9]*\.?[0-9]+)", cells[col].replace("{", "").replace("}", ""))
-        return float(m.group(1)) if m else None
+        # "11.36 [11.2--11.8]" -> 11.36 ; "306 [306--314]" -> 306 ;
+        # "5.9k [5.5k--6.1k]" -> 5900 ; "1.73M [...]" -> 1730000.
+        # The suffixes matter: without them "5.9k" reads as 5.9 and a checker
+        # comparing it against 5929 reports a mismatch that is its own.
+        txt = cells[col].replace("{", "").replace("}", "")
+        m = re.match(r"([0-9]*\.?[0-9]+)\s*([kM])?", txt)
+        if not m:
+            return None
+        return float(m.group(1)) * {"k": 1e3, "M": 1e6}.get(m.group(2) or "", 1)
     return None
 
 

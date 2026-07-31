@@ -186,6 +186,64 @@ def _dense_overlay_p50(srv=False):
     return st.median(v) if v else None
 
 
+# f4 entry label -> the table cell that must agree with it. Only ArcadeDB's
+# side is mapped: the comparator columns come from runs.jsonl in both the
+# figure and the tables, so they cannot drift apart the way the overlays did.
+F4_VS_TABLE = {
+    "OLTP ops/s":      ("t2_tabular.tex", "ArcadeDB (emb)", 0),
+    # col 0 of this row is the SCALE column ("SF10"), so p50 is col 1.
+    "Graph 1-hop p50": ("t3_graph.tex", "ArcadeDB (emb) & SF10", 1),
+    "Sparse 100k p50": ("t4_sparse.tex", "ArcadeDB (emb, int8)", 0),
+    "Sparse 1M p50":   ("t4_sparse.tex", "ArcadeDB (emb, int8)", 3),
+    "Dense 10M p50":   ("t5_dense_ts.tex", "ArcadeDB (emb)", 1),
+    "TS 12h agg p50":  ("t5_dense_ts.tex", "ArcadeDB (native TS)", 3),
+}
+
+
+def _check_f4_against_tables(entries):
+    """Assert f4 plots the same numbers the tables print.
+
+    Three separate times a figure entry and its table cell came from different
+    sources and nobody noticed until the two were compared by hand:
+
+      dense 10M   figure read runs.jsonl, table read verify5412b (fixed first)
+      sparse 1M   figure read runs.jsonl (dev3), table read dev22:
+                  56.8x behind Qdrant plotted against the table's 3.90x
+      TS ingest   figure read batch1 (the adapter's per-element arm),
+                  table read the dev21 primitive arm: 411k against 1.73M
+
+    Each was fixed in isolation and the next one was found the same way, by
+    hand, later. The pattern is not carelessness: a figure and a table can
+    quietly select differently forever, because nothing forces them to agree
+    and a plotted bar carries no number a reader can check against the table.
+
+    So the generator now checks itself. Runs on every figure build, prints
+    every comparison, and raises on mismatch: a wrong figure is worse than a
+    missing one, since a bar chart is read as summary and trusted.
+    """
+    import claims_check as _C
+    bad = []
+    print("  f4 vs tables:")
+    for label, arcade, _spec, _hb in entries:
+        if label not in F4_VS_TABLE:
+            print(f"    {label:20} (no table cell to compare)")
+            continue
+        tab, row, col = F4_VS_TABLE[label]
+        cell = _C.cell(tab, row, col)
+        if cell is None or arcade is None:
+            bad.append(f"{label}: figure={arcade} table={cell}")
+            continue
+        # 2% covers the tables' own rounding ("1.73M", "29.56", "3.98")
+        ok = abs(arcade - cell) <= max(0.02 * abs(cell), 0.02)
+        print(f"    {label:20} figure={arcade:<12.4g} table={cell:<10.4g} "
+              f"{'ok' if ok else 'MISMATCH'}")
+        if not ok:
+            bad.append(f"{label}: figure={arcade:.4g} table={cell:.4g}")
+    if bad:
+        raise SystemExit("f4 disagrees with the tables it summarises:\n  "
+                         + "\n  ".join(bad))
+
+
 def _sparse_overlay_p50(tier):
     """ArcadeDB sparse p50 from the SAME overlays the table reads.
 
@@ -285,11 +343,22 @@ def f4_one_vs_n(rows):
         return st.median([r[f] for r in ts if r["backend"] == be])
 
     import glob as _glob
+    # Same precedence as the table's native-TS row, and for the reason its
+    # comment gives: the batch1 rows went through the adapter's per-element
+    # conversion, so they price OUR adapter, not the engine. The table moved
+    # to the dev21 primitive-batch arm; this figure did not, and so plotted
+    # 411k pts/s against the table's 1.73M and a 12h aggregation of 14.9 ms
+    # against the table's 29.6. Both bars wrong, in opposite directions.
     _native = [json.load(open(fp)) for fp in
-               _glob.glob(os.path.join(RESULTS, "batch1", "l4n_r*.json"))]
+               _glob.glob(os.path.join(RESULTS, "dev21_ts",
+                                       "ts_dev21_prim_r*.json"))]
+    if not _native:  # fall back rather than mix, exactly as the table does
+        _native = [json.load(open(fp)) for fp in
+                   _glob.glob(os.path.join(RESULTS, "batch1", "l4n_r*.json"))]
 
     def _ts_native_med(f):
-        return st.median([r[f] for r in _native]) if _native else None
+        v = [r[f] for r in _native if isinstance(r.get(f), (int, float))]
+        return st.median(v) if v else None
 
     entries = [  # (label, arcade value, best specialist value, higher_better)
         ("Cross-model txn p50", med("e2", "e2", "hybrid", "arcadedb_e2", "hybrid_p50_ms"),
@@ -313,6 +382,8 @@ def f4_one_vs_n(rows):
         ("TPC-H Q1", med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "q1_ms"),
          med("l1tpc", "tpch1", "olap", "duckdb", "q1_ms"), False),
     ]
+    _check_f4_against_tables(entries)
+
     labels, ratios = [], []
     for label, a, s, hb in entries:
         if a is None or s is None:
