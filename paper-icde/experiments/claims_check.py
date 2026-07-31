@@ -236,6 +236,24 @@ def _comparator_engines():
     return float(len(names - {"surrealdb"}))
 
 
+
+def _tentag(field, tags, arm="prim"):
+    """One arm of the matched one-tag/ten-tag A/B.
+
+    The paper reported this schema's cost as 23x, by dividing the TSBS
+    campaign's 1.90M pts/s by THIS probe's one-tag rate of 82.5k. Two
+    experiments, and the quotient is the gap between them, not the cost of
+    ten tags. Within this probe the cost is 1.97x, and the paper's own
+    #5411 lesson is that comparing across corpora is exactly this mistake.
+    """
+    import json as _json
+    d = _json.load(open(os.path.join(M.RESULTS, "tentag", "tentag_ab.json")))
+    for a in d["arms"]:
+        if a["tags"] == tags and a["arm"] == arm:
+            return float(a[field])
+    return None
+
+
 # (id, prose value, tolerance, how to compute it, note)
 # Tolerance is what the prose's own rounding allows, not a fudge factor: a
 # claim printed as "525 ops/s" is satisfied by anything rounding to 525.
@@ -431,6 +449,12 @@ CLAIMS = [
     ("l4.ratio.docpath", 55.0, 0.5,
      lambda r: ts_arm("ingest_pts_per_s") / l4_median("ingest_pts_per_s", "arcadedb"),
      "native vs our own document path"),
+    ("l4.tentag.ingest_cost", 2.0, 0.05,
+     lambda r: _tentag("ingest_pts_per_s", 1) / _tentag("ingest_pts_per_s", 10),
+     "ten-tag ingest cost, matched A/B (prose said 23x across experiments)"),
+    ("l4.tentag.lastpoint_gain", 2.6, 0.05,
+     lambda r: _tentag("q_last_ms", 1) / _tentag("q_last_ms", 10),
+     "ten-tag last-point speedup, matched A/B"),
     ("l4.ratio.duckdb", 1.12, 0.01,
      lambda r: l4_median("ingest_pts_per_s", "duckdb") / ts_arm("ingest_pts_per_s"),
      "DuckDB's remaining lead"),

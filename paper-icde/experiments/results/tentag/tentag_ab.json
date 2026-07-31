@@ -1,0 +1,58 @@
+{
+ "_provenance": "Extracted from ~/profiling/queue36.log on mini (run 2026-07-30 22:08-22:24 UTC, N=3 per arm). The probe printed a table and wrote no JSON, which is why the paper came to divide this experiment's one-tag rate by a DIFFERENT experiment's rate and call the quotient a ten-tag cost. Recorded here so the ratio is pinnable; the freeze re-measures with the probe writing its own result file.",
+ "_warning": "Absolute rates are NOT comparable to T5's native-TS row (2.59M points, 1.73M pts/s). Different probe. Only the within-probe 1-tag/10-tag ratio transfers.",
+ "reps": 3,
+ "host": "mini",
+ "lane": "l4tentag",
+ "source_log": "queue36.log",
+ "arms": [
+  {
+   "tags": 1,
+   "arm": "objlist",
+   "ingest_pts_per_s": 72065,
+   "q_last_ms": 2.76,
+   "q_1h_ms": 4.27,
+   "q_12h_ms": 12.46
+  },
+  {
+   "tags": 1,
+   "arm": "objnp",
+   "ingest_pts_per_s": 81177,
+   "q_last_ms": 2.69,
+   "q_1h_ms": 4.09,
+   "q_12h_ms": 12.78
+  },
+  {
+   "tags": 1,
+   "arm": "prim",
+   "ingest_pts_per_s": 82535,
+   "q_last_ms": 2.4,
+   "q_1h_ms": 3.69,
+   "q_12h_ms": 11.94
+  },
+  {
+   "tags": 10,
+   "arm": "objlist",
+   "ingest_pts_per_s": 36492,
+   "q_last_ms": 1.08,
+   "q_1h_ms": 5.43,
+   "q_12h_ms": 20.95
+  },
+  {
+   "tags": 10,
+   "arm": "objnp",
+   "ingest_pts_per_s": 38624,
+   "q_last_ms": 1.25,
+   "q_1h_ms": 5.23,
+   "q_12h_ms": 21.31
+  },
+  {
+   "tags": 10,
+   "arm": "prim",
+   "ingest_pts_per_s": 41968,
+   "q_last_ms": 0.93,
+   "q_1h_ms": 5.53,
+   "q_12h_ms": 15.62
+  }
+ ]
+}
