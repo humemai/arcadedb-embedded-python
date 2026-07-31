@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Give a dense comparator the SAME protocol the ArcadeDB rows get.
+
+T5's ArcadeDB dense rows come from an overlay that builds once and then runs
+five timed passes over that index, of which the table medians passes 2-5.
+Every comparator, meanwhile, was measured by l3d_dense.py's campaign path:
+five independent builds, each followed by 20 untimed warmups and exactly ONE
+timed pass. So the overlay's first pass is the comparator protocol, and the
+table puts our later passes beside their first one.
+
+The gap is not small. ArcadeDB fp32 is 4.424 ms on its first pass and 0.723
+on its later ones, and the table prints 0.723 next to Qdrant's 1.295.
+
+What nobody has measured is what a second pass buys a comparator. If Qdrant
+gains 4-6x too, the warm-versus-warm ranking may look like today's table; if
+it gains nothing, today's table is wrong. This driver produces the missing
+half: one build, then five passes of (20 untimed warmups + one timed pass),
+per backend, so cold and warm exist for every engine on the same protocol.
+
+    BENCH_MP_BACKEND=qdrant_dense PROBE_OUT=/pout/mp_qdrant.json \
+        python -u dense_multipass_driver.py
+
+Deliberately mirrors drivers/int8_dev20_driver.py's loop rather than
+paraphrasing it, so the two sides differ in the engine and nothing else.
+"""
+import json
+import os
+import statistics
+import time
+
+from l3d_dense import BACKENDS, load_dataset, K
+from bench_common import run_conditions
+
+BACKEND = os.environ["BENCH_MP_BACKEND"]
+SCALE = os.environ.get("BENCH_MP_SCALE", "deep10m")
+PASSES = int(os.environ.get("BENCH_MP_PASSES", "5"))
+# Some engines are far enough off the pace that five passes of 1000 queries
+# costs more than the answer is worth (sqlite-vec at 882 ms/query is 73
+# minutes of pure query time). Capping is allowed; hiding the cap is not, so
+# the count lands in the output and the runner logs it.
+NQ = int(os.environ.get("BENCH_MP_NQUERIES", "0"))  # 0 = all
+
+
+def main():
+    train, test, gt = load_dataset(SCALE)
+    if NQ:
+        test, gt = test[:NQ], gt[:NQ]
+    b = BACKENDS[BACKEND]()
+    b.connect()
+
+    t0 = time.perf_counter()
+    b.build(train)
+    b.post_build()          # the vendor settle step, same as the campaign
+    build_s = round(time.perf_counter() - t0, 2)
+    print(f"BUILD-DONE {build_s}s", flush=True)
+
+    out_reps = []
+    for rep in range(1, PASSES + 1):
+        for q in test[:20]:          # untimed warmup, exactly l3d_dense's 20
+            b.search(q, K)
+        lats, recalls = [], []
+        for qi in range(len(test)):
+            t1 = time.perf_counter()
+            ids = b.search(test[qi], K)
+            lats.append((time.perf_counter() - t1) * 1e3)
+            recalls.append(len(set(ids[:K]) & set(gt[qi].tolist())) / K)
+        lats.sort()
+        rec = {"rep": rep, "backend": BACKEND, "scale": SCALE,
+               "build_s": build_s, "n_queries": len(test),
+               "p50": round(lats[len(lats) // 2], 3),
+               "p95": round(lats[int(0.95 * len(lats))], 3),
+               "p99": round(lats[int(0.99 * len(lats))], 3),
+               "recall_at_10": round(statistics.mean(recalls), 4)}
+        rec.update(run_conditions(lane="l3d_mp"))
+        out_reps.append(rec)
+        print("RESULT " + json.dumps(rec), flush=True)
+
+    outp = os.environ.get("PROBE_OUT", "")
+    if outp:
+        with open(outp, "w") as f:
+            json.dump(out_reps, f, indent=1)
+    # A dense backend can leave a JVM or a client thread alive; the campaign
+    # has lost whole cells to a driver that finished and never exited.
+    os._exit(0)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        os._exit(1)
