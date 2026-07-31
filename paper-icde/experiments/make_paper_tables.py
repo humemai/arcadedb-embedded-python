@@ -56,6 +56,18 @@ def load_canonical():
             continue
         if r["scale"] not in PAPER_SCALES.get(r["lane"], []):
             continue
+        # A published cell must come from the SERIAL tier. The sweep tier runs
+        # N workers on disjoint cpuset shards, which shows up here as a
+        # partial cpuset like "0-5". Sweeps did run (l2 sf1, l2 sf10, l3s
+        # micro), and none of them currently reaches a table -- but only
+        # because the serial re-runs happened to come later, and this dedupe
+        # keys on latest timestamp and has no idea what a cpuset is. A sweep
+        # run after a serial one would have walked straight into the tables.
+        # Dropped BEFORE the dedupe, so a sharded row cannot shadow the good
+        # serial row it would otherwise outrank on ts_utc. See FAIRNESS.md F2.
+        cpuset = str(r.get("cpuset"))
+        if cpuset not in ("0-11", "None"):
+            continue
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
              r["backend"], r["rep"])
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
