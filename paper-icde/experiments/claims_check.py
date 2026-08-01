@@ -291,6 +291,40 @@ def _tentag(field, tags, arm="prim"):
     return None
 
 
+def e4_protocol_share(which):
+    """Protocol's share of the embedded->containerised-server gap, as a percent.
+
+    Backs the paper's "86--99.8% of the gap to the wire format at every result
+    size". Three arms in one run: embedded, an in-process server over loopback
+    HTTP, and a server in a separate container. protocol = inproc - embedded,
+    boundary = docker - inproc. Reads the artifact rather than a transcribed
+    number, because a prose figure with no artifact is exactly what the
+    UNSOURCED L1 ingest claim is still failing on.
+
+    which="min" or "max" over the measured sizes.
+    """
+    import json as _json
+    fp = os.path.join(M.RESULTS, "e4decomp", "decomp_full.json")
+    if not os.path.exists(fp):
+        return None
+    d = _json.load(open(fp))
+    r = d["results"]
+    shares = []
+    for size in (str(x) for x in d["meta"]["sizes"]):
+        try:
+            e = r["embedded"][size]["p50_ms"]
+            i = r["inproc_http"][size]["p50_ms"]
+            k = r["docker_http"][size]["p50_ms"]
+        except KeyError:
+            continue
+        tot = k - e
+        if tot > 0:
+            shares.append(100.0 * (i - e) / tot)
+    if not shares:
+        return None
+    return min(shares) if which == "min" else max(shares)
+
+
 # (id, prose value, tolerance, how to compute it, note)
 # Tolerance is what the prose's own rounding allows, not a fudge factor: a
 # claim printed as "525 ops/s" is satisfied by anything rounding to 525.
@@ -565,6 +599,13 @@ CLAIMS = [
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1)
                / cell("t5_dense_ts.tex", "ArcadeDB (emb)", 1),
      "dense transport ratio (prose, table and f8 must agree)"),
+    ("e4.protocol_share_min", 85.6, 0.3,
+     lambda r: e4_protocol_share("min"),
+     "protocol's SMALLEST share of the deployment gap across sizes; the "
+     "paper's '86--99.8%' lower bound"),
+    ("e4.protocol_share_max", 99.8, 0.1,
+     lambda r: e4_protocol_share("max"),
+     "protocol's LARGEST share; the paper's upper bound"),
 ]
 
 
