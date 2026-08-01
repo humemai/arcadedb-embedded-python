@@ -246,6 +246,34 @@ def _comparator_engines():
 
 
 
+_NUMWORDS = {"six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+             "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+             "fifteen": 15}
+
+
+def _paper_specialist_count():
+    """The count the PAPER PROSE states, verified to be stated only once.
+
+    _comparator_engines() checks the DATA yields 11. It cannot check that the
+    paper says 11, and that gap is not hypothetical: the abstract was corrected
+    from eight to eleven and Section I was not, so the two sat two paragraphs
+    apart disagreeing about the same evaluation until 2026-08-01. A reviewer
+    reads exactly those two places.
+
+    Returns the single spelled count if every mention agrees, else -1 so the
+    claim fails loudly rather than silently checking one site.
+    """
+    with open(PAPER) as f:
+        text = f.read()
+    # A number word directly before "specialist", allowing an intervening line
+    # break since the prose is hard-wrapped.
+    found = re.findall(r"\b(" + "|".join(_NUMWORDS) + r")\s+specialist", text)
+    if not found:
+        return -1.0
+    vals = {_NUMWORDS[w] for w in found}
+    return float(next(iter(vals))) if len(vals) == 1 else -1.0
+
+
 def _tentag(field, tags, arm="prim"):
     """One arm of the matched one-tag/ten-tag A/B.
 
@@ -270,6 +298,10 @@ CLAIMS = [
     # --- L1 tabular -------------------------------------------------------
     ("abstract.n_specialists", 11.0, 0.0, lambda r: _comparator_engines(),
      "specialist engines the abstract claims (was 8, data says 11)"),
+    ("paper.n_specialists_stated", 11.0, 0.0,
+     lambda r: _paper_specialist_count(),
+     "every 'N specialist' in paper.tex agrees, and agrees with the data "
+     "(-1 means the sites disagree; abstract vs Section I did until 08-01)"),
     ("l1.arcadedb.oltp", 5929, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="arcadedb_embedded"),
