@@ -7,6 +7,7 @@ on-disk size, a raw-latency sidecar dump, and a small timing context manager.
 import json
 import os
 import statistics as st
+import sys
 import time
 
 
@@ -64,6 +65,15 @@ def run_conditions(**extra):
         "cpuset": cpus,
         "mem_cap": mem,
         "heap": os.environ.get("ARCADEDB_HEAP"),
+        # WHICH SCRIPT PRODUCED THIS ROW. FAIRNESS.md's structural finding was
+        # that both known protocol violations came from a bespoke driver rather
+        # than the lane script, and states the rule "bespoke drivers
+        # investigate, lane scripts publish". Nothing enforced it, because a
+        # row did not say where it came from, so the rule could only be
+        # remembered per row by whoever promoted it to a cell. Recording it
+        # makes the rule checkable: a published cell whose producer is not its
+        # lane script is detectable instead of being an act of memory.
+        "producer": os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else None,
         # "engine" when this process IS the engine, "client" when it drives one
         # over the wire. Without it, a reader cannot tell whether the cgroup
         # fields above describe the thing being measured.

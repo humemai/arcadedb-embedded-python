@@ -174,3 +174,43 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# ---------------------------------------------------------------------------
+# F6b: published cells come from lane scripts, not bespoke drivers.
+#
+# FAIRNESS.md's structural finding is that both known protocol violations were
+# rows produced by a bespoke driver rather than the lane script, and it states
+# the rule "bespoke drivers investigate, lane scripts publish". Until now that
+# rule lived only in prose, so honouring it per row was an act of memory by
+# whoever promoted a driver's output to a cell. run_conditions() now stamps a
+# "producer" field, which makes it checkable.
+#
+# A row with no producer is NOT passed. Silence is how the overlays got away
+# with recording no conditions at all (#113); an unstamped row predates the
+# stamp, which is exactly the population that needs looking at.
+LANE_SCRIPT = {
+    "l1": {"l1_tabular.py"},
+    "l1_tpc": {"l1_tpc.py"},
+    "l2": {"l2_graph.py", "ldbc_snb.py"},
+    "l3s": {"l3_sparse.py"},
+    "l3d": {"l3d_dense.py"},
+    "l4": {"l4_tsbs.py"},
+    "e2": {"e2_hybrid.py"},
+    "e4_decomp": {"deployment_decomp_probe.py"},
+}
+
+
+def check_producers(rows):
+    """Return (violations, unstamped) for rows that would feed a table."""
+    violations, unstamped = [], []
+    for r in rows:
+        lane = r.get("lane")
+        if lane not in LANE_SCRIPT:
+            continue
+        prod = r.get("producer")
+        if not prod:
+            unstamped.append((lane, r.get("backend"), r.get("scale")))
+        elif prod not in LANE_SCRIPT[lane]:
+            violations.append((lane, r.get("backend"), r.get("scale"), prod))
+    return violations, unstamped
