@@ -56,9 +56,16 @@ pools from the host core count regardless of the mask they were given. That
 is not equal treatment: an engine running 20 threads on 12 CPUs pays context
 switching its 12-thread neighbour does not.
 
-The only call that sees the restriction is `sched_getaffinity`.
-**`os.cpu_count()`, `nproc` and `/proc/cpuinfo` all ignore cpuset by design**
-and report the host, so any of them appearing in an adapter is this bug.
+The call that sees the restriction is `sched_getaffinity`. **`os.cpu_count()`,
+`nproc --all` and `/proc/cpuinfo` report the host and ignore the mask**, so any
+of them appearing in an adapter is this bug.
+
+Plain `nproc` is the exception and **does** respect affinity — verified, not
+assumed: under `taskset -c 0-11` on a 16-CPU box, `nproc`=12 while
+`nproc --all`=16 and `/proc/cpuinfo`=16. An earlier version of this section
+said `nproc` ignored cpuset, copied from queue64's own interpretation line,
+which is wrong. Corrected here because a fairness document asserting a false
+fact about the measuring tool is worse than saying nothing.
 
 Fitting the pool is the first of the four enumerated fairness overrides
 (resource fitting) in the config policy, the same one that sets JVM heap per
@@ -66,12 +73,31 @@ tier, so it is applied rather than merely disclosed.
 
 *Measured 2026-08-01 (queue64 on mini, and confirmed locally under `taskset`):*
 
-| runtime | sizes from | status |
+| runtime | evidence | verdict |
 |---|---|---|
-| DuckDB | **host** (default ignores the mask; `taskset -c 0-11` on a 16-CPU box still yields 16) | FIXED: `l1_tabular.py` now sets `PRAGMA threads` from `sched_getaffinity` |
-| Qdrant | reports **both 12 and 20** | UNRESOLVED, see "Not yet verified" |
-| Chroma, LanceDB, sqlite-vec, Elasticsearch, Milvus, Neo4j | read the cpuset correctly | ok |
-| ArcadeDB (JVM) | `availableProcessors()` honours the mask | ok |
+| **DuckDB** | default `threads`=20 under a 12-CPU cpuset, in the real bench image; `taskset -c 0-11` on a 16-CPU box still yields 16 | **HOST-DERIVED.** Fixed: `l1_tabular.py` sets `PRAGMA threads` from `sched_getaffinity` |
+| Qdrant | `actix-rt` runtime 11 threads, update pool ~11, from `/proc/<pid>/task` | cpuset |
+| Elasticsearch | `_nodes/os` reports `available_processors: 12`, `allocated_processors: 12` | cpuset |
+| Neo4j | 10 `GC Thread#N`; G1 derives `8 + (N-8)*5/8` above 8, so 12 CPUs gives 10 and 20 would give 15 | cpuset |
+| ArcadeDB (JVM) | `availableProcessors()` reads the cgroup on Java 11+ | cpuset |
+| Chroma, LanceDB, sqlite-vec | embedded in the driver, no separate server pool | n/a |
+| Milvus | probe could not match its process name | **still unread** |
+
+**Measured 2026-08-01. DuckDB is the only offender found.**
+
+Two corrections worth keeping, because the wrong answers were nearly recorded:
+
+*Total OS threads is not pool sizing.* A first sweep counted threads per server
+and flagged anything above `cpuset+4`. Elasticsearch came back 88 and Neo4j 83,
+both reported as host-derived. Both are wrong: a JVM server runs dozens of
+threads (GC, JIT, JMX, acceptors, per-index pools) irrespective of cpuset. The
+question for a JVM is `availableProcessors()` and the named pool settings, and
+by that measure both fit the cpuset exactly.
+
+*"What qdrant sees" saw the container.* The original queue64 line ran `nproc`
+and `/proc/cpuinfo` inside the container and labelled both `qdrant sees:`. They
+disagree because `nproc` respects affinity and `/proc/cpuinfo` does not, and
+neither asks Qdrant anything. Its real pools are cpuset-shaped.
 
 Consequence for published numbers: every DuckDB cell measured before this fix
 ran oversubscribed. The bias runs **against** DuckDB, which wins that lane
@@ -137,12 +163,10 @@ the wrong engine: Milvus and Qdrant's clients read the cpuset correctly, and
 the runtime that ignored it was **DuckDB**, which we had not suspected because
 it is embedded rather than a Go/Rust server.
 
-Still open from that run: **Qdrant's server reports both 12 and 20** in the
-same probe, so its pool sizing is the one we cannot currently state. Resolve
-before the freeze. The rest of the "not yet verified" list:
+Qdrant and Elasticsearch are now answered in F6 (both cpuset). Still open:
 
-- whether Elasticsearch's `processors` setting follows the cpuset or the host,
-  as distinct from what its Python client observes;
+- **Milvus**: the thread probe could not match its process name, so it is the
+  one comparator whose pool sizing we cannot state. Resolve before the freeze.
 - whether any engine's *disk* IO scheduling differs under the same cap.
 
 ## Corrected here, because this file asserted it wrongly for an hour
