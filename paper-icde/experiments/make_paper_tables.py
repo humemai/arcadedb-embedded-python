@@ -166,7 +166,19 @@ def mmm(rs, field, scale=1.0):
 
 def write(name, body):
     os.makedirs(OUT, exist_ok=True)
-    with open(os.path.join(OUT, name), "w") as f:
+    path = os.path.join(OUT, name)
+    # Do not rewrite an unchanged table. claims_check's figure-freshness guard
+    # compares figure mtimes against the newest table mtime, so a regeneration
+    # that rewrote byte-identical content marked all five figures stale and
+    # told us to redraw them for nothing. A guard that cries wolf on every
+    # no-op run is a guard that gets ignored, which is the failure mode this
+    # whole file has been finding all day.
+    if os.path.exists(path):
+        with open(path) as f:
+            if f.read() == body:
+                print("unchanged", name)
+                return
+    with open(path, "w") as f:
         f.write(body)
     print("wrote", name)
 
