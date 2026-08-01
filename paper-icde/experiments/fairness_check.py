@@ -101,6 +101,77 @@ def check_envelope(rows):
     return bad
 
 
+def _base_degree(r):
+    """Effective BASE-LAYER graph degree, in one unit, or None.
+
+    The dense lane's engines do not agree on what "M" means. ArcadeDB's
+    maxConnections is a per-layer bound, so it IS the base-layer degree.
+    hnswlib-style engines (Chroma, Qdrant, Milvus, DuckDB-VSS, LanceDB) take an
+    upper-layer M and double it at layer 0. Comparing the raw numbers compares
+    two different quantities, which is how a shared constant of 32 could look
+    matched while giving the comparators twice the degree.
+
+    Rows written from 2026-08-01 carry degree_param/degree_family and answer
+    directly. Older rows carry only `m`, so the family is inferred from the
+    backend name -- inference is acceptable for a check whose failure mode is
+    a warning, and it is why the newer fields exist.
+    """
+    fam, val = r.get("degree_family"), r.get("degree_param")
+    if fam is None:
+        val = r.get("m")
+        be = str(r.get("backend", ""))
+        if be.startswith("arcadedb"):
+            fam = "arcadedb_maxconnections_per_layer"
+        elif be.startswith("sqlite_vec"):
+            fam = "exact_scan_no_ann"
+        else:
+            fam = "hnswlib_m_doubled_at_base"
+    if fam == "exact_scan_no_ann" or val is None:
+        return None
+    return val * 2 if fam == "hnswlib_m_doubled_at_base" else val
+
+
+def check_degree(rows):
+    """F7: same effective base-layer degree across dense backends per scale.
+
+    Added 2026-08-01 after finding that l3d_dense.py handed ONE constant to
+    both unit systems. It was harmless while the default was 16 (every
+    published comparator row records m=16, and the T5 dense block as printed
+    IS matched), but the default became 32 to fix ArcadeDB and nothing had
+    re-run since. The October freeze re-measures this lane, and would have
+    built five comparators at twice their intended degree with ArcadeDB
+    correct -- a fourth "all three favoured us" entry for the list above, found
+    before it produced a number rather than after.
+    """
+    print("\n=== F7: same effective base-layer degree per (lane, scale) ===")
+    g = collections.defaultdict(dict)
+    for r in rows:
+        if r.get("lane") != "l3d":
+            continue
+        d = _base_degree(r)
+        if d is not None:
+            g[r["scale"]].setdefault(r["backend"], set()).add(d)
+    if not g:
+        print("  (no dense rows)")
+        return 0
+    bad = 0
+    for scale in sorted(g, key=str):
+        per_be = g[scale]
+        degrees = {d for s in per_be.values() for d in s}
+        if len(degrees) == 1:
+            print(f"  ok   l3d    {scale:8} base-layer degree "
+                  f"{next(iter(degrees))} ({len(per_be)} backends)")
+            continue
+        bad += 1
+        print(f"  FAIL l3d    {scale:8} backends did NOT get the same "
+              f"base-layer degree:")
+        for be, s in sorted(per_be.items()):
+            print(f"         {be:32} degree={sorted(s)}")
+        print("         Degree decides recall and latency together, so an")
+        print("         unmatched degree makes the whole row incomparable.")
+    return bad
+
+
 def check_protocol_overlays():
     """F4: overlays that feed tables, and whether their protocol is stated.
 
@@ -162,7 +233,7 @@ def main():
     except Exception as e:
         print(f"cannot load canonical rows: {e}")
         return 2
-    bad = check_cpuset(rows) + check_envelope(rows)
+    bad = check_cpuset(rows) + check_envelope(rows) + check_degree(rows)
     check_protocol_overlays()
     print(f"\n{bad} fairness invariant failure(s)")
     if bad:

@@ -4,8 +4,14 @@
 Data: /data/dense/sift_{train,test,neighbors}.npy (host-prepped by
 gen_dense_npy.py; containers need only numpy).
 
-Fairness: matched HNSW operating point M=16, ef_construction=100, ef_search=100,
-L2 metric, FP32 vectors everywhere. Disclosed deviations: LanceDB's HNSW variant
+Fairness: matched HNSW operating point, ef_construction=100, ef_search=100,
+L2 metric, FP32 vectors everywhere. "Matched" is expressed in TWO constants
+because the engines do not share units: ArcadeDB's maxConnections is a
+per-layer bound (M, default 32) while hnswlib-style engines double M at the
+base layer (COMPARATOR_M, default 16). Equal base-layer degree is the match;
+a single shared number would not be one. Every row records the value its own
+backend received, under degree_param/degree_family, so a reader never has to
+know which units a given row is in. Disclosed deviations: LanceDB's HNSW variant
 is IVF_HNSW_SQ (int8 scalar-quantized, its only HNSW offering; nprobes=20
 default); sqlite-vec is an exact scan (no ANN index exists), so it is the
 recall=1.0 embedded baseline. Recall@10 is reported next to latency so every
@@ -42,6 +48,27 @@ K = 10
 # regression, or worse been folded into the paper at the October freeze re-measure.
 # Set BENCH_DENSE_M=16 explicitly to run the half-degree ablation on purpose.
 M = int(os.environ.get("BENCH_DENSE_M", "32"))
+
+# The comment above says maxConnections=32 is the equivalent of M=16 for the
+# hnswlib-style engines, and until 2026-08-01 the code did not implement that:
+# ONE constant was handed to both a per-layer bound (ArcadeDB) and to hnswlib's
+# M (Chroma, Qdrant, Milvus, DuckDB-VSS, LanceDB), which are different units.
+#
+# It was harmless while the default was 16, which is why every published
+# comparator row records m=16 and the T5 dense block as printed today IS
+# degree-matched. Raising the default to 32 fixed ArcadeDB and silently
+# mis-set all five comparators, so the code stopped being able to reproduce
+# the configuration the paper describes. Nothing had run since, so no
+# published number is affected -- but the October freeze re-measures this lane,
+# and would have built every comparator at twice its intended degree while
+# ArcadeDB stayed correct. That is the same hazard the comment above was
+# written to prevent, aimed the other way, and it lands in our favour.
+#
+# Verified against the artifacts before changing anything: at deep10m every
+# comparator row carries m=16 dated 2026-07-19, and the ArcadeDB rows that T5
+# prints carry m=32 dated 2026-07-20.
+COMPARATOR_M = int(os.environ.get("BENCH_DENSE_COMPARATOR_M", str(M // 2)))
+
 EF_CONSTRUCTION = 100
 EF_SEARCH = 100
 SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000,
@@ -244,7 +271,7 @@ class Chroma(Base):
         self.version = chromadb.__version__
         client = chromadb.PersistentClient(path="/tmp/l3d_chroma")
         self.col = client.create_collection("articles", metadata={
-            "hnsw:space": "l2", "hnsw:M": M,
+            "hnsw:space": "l2", "hnsw:M": COMPARATOR_M,
             "hnsw:construction_ef": EF_CONSTRUCTION, "hnsw:search_ef": EF_SEARCH})
 
     def build(self, vecs):
@@ -274,7 +301,7 @@ class LanceDB(Base):
         self.tbl = self.db.create_table("articles", tbl)
         # IVF_HNSW_SQ is LanceDB's HNSW offering (int8 SQ; disclosed above)
         self.tbl.create_index(metric="l2", index_type="IVF_HNSW_SQ",
-                              m=M, ef_construction=EF_CONSTRUCTION)
+                              m=COMPARATOR_M, ef_construction=EF_CONSTRUCTION)
 
     def search(self, qvec, k):
         rs = self.tbl.search(qvec).limit(k).to_list()
@@ -335,7 +362,8 @@ class DuckVSS(Base):
         self.cx.unregister("src")
         self.cx.execute(
             f"CREATE INDEX hn ON t USING HNSW (vec) "
-            f"WITH (metric = 'l2sq', M = {M}, ef_construction = {EF_CONSTRUCTION})")
+            f"WITH (metric = 'l2sq', M = {COMPARATOR_M}, "
+            f"ef_construction = {EF_CONSTRUCTION})")
         self.cx.execute(f"SET hnsw_ef_search = {EF_SEARCH}")
 
     def search(self, qvec, k):
@@ -361,7 +389,8 @@ class Qdrant(Base):
             "articles",
             vectors_config=qm.VectorParams(
                 size=DIM, distance=qm.Distance.EUCLID,
-                hnsw_config=qm.HnswConfigDiff(m=M, ef_construct=EF_CONSTRUCTION)))
+                hnsw_config=qm.HnswConfigDiff(m=COMPARATOR_M,
+                                              ef_construct=EF_CONSTRUCTION)))
         for i in range(0, len(vecs), BATCH):
             self.cl.upsert("articles", points=qm.Batch(
                 ids=list(range(i, i + len(vecs[i:i + BATCH]))),
@@ -399,7 +428,7 @@ class Milvus(Base):
         sch.add_field("vec", DataType.FLOAT_VECTOR, dim=DIM)
         idx = self.cl.prepare_index_params()
         idx.add_index("vec", index_type="HNSW", metric_type="L2",
-                      params={"M": M, "efConstruction": EF_CONSTRUCTION})
+                      params={"M": COMPARATOR_M, "efConstruction": EF_CONSTRUCTION})
         self.cl.create_collection("articles", schema=sch, index_params=idx)
         for i in range(0, len(vecs), BATCH):
             self.cl.insert("articles", [
@@ -442,6 +471,21 @@ def main():
 
     b = BACKENDS[args.backend]()
     out["hnsw_M"] = M  # recorded so degree-matched ablation rows are self-describing
+
+    # What THIS backend actually received, and in which units. Recording one
+    # shared M was how the mismatch above stayed invisible: every row quoted
+    # the same number whether or not the backend was given it, so no artifact
+    # could contradict the claim that the lane was degree-matched. A row that
+    # names its own value and its own unit can be checked without reading the
+    # adapter.
+    _HNSWLIB_STYLE = {"chroma_dense", "lancedb_dense", "qdrant_dense",
+                      "milvus_dense", "duckdb_vss_dense"}
+    if args.backend.startswith("arcadedb"):
+        out["degree_param"], out["degree_family"] = M, "arcadedb_maxconnections_per_layer"
+    elif args.backend in _HNSWLIB_STYLE:
+        out["degree_param"], out["degree_family"] = COMPARATOR_M, "hnswlib_m_doubled_at_base"
+    else:  # sqlite_vec is an exact scan: there is no graph and no degree
+        out["degree_param"], out["degree_family"] = None, "exact_scan_no_ann"
     out["quantization"] = os.environ.get("BENCH_DENSE_QUANT", "none")
     t0 = time.perf_counter()
     b.connect()
