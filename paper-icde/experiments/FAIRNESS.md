@@ -81,9 +81,9 @@ tier, so it is applied rather than merely disclosed.
 | Neo4j | 10 `GC Thread#N`; G1 derives `8 + (N-8)*5/8` above 8, so 12 CPUs gives 10 and 20 would give 15 | cpuset |
 | ArcadeDB (JVM) | `availableProcessors()` reads the cgroup on Java 11+ | cpuset |
 | Chroma, LanceDB, sqlite-vec | embedded in the driver, no separate server pool | n/a |
-| Milvus | probe could not match its process name | **still unread** |
+| Milvus | its own metrics report `go_sched_gomaxprocs_threads 12`; Go sizes from `sched_getaffinity` | cpuset |
 
-**Measured 2026-08-01. DuckDB is the only offender found.**
+**Measured 2026-08-01. Audit complete across all seven comparator runtimes: DuckDB is the only offender.**
 
 Two corrections worth keeping, because the wrong answers were nearly recorded:
 
@@ -165,8 +165,6 @@ it is embedded rather than a Go/Rust server.
 
 Qdrant and Elasticsearch are now answered in F6 (both cpuset). Still open:
 
-- **Milvus**: the thread probe could not match its process name, so it is the
-  one comparator whose pool sizing we cannot state. Resolve before the freeze.
 - whether any engine's *disk* IO scheduling differs under the same cap.
 
 ## Corrected here, because this file asserted it wrongly for an hour
