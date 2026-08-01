@@ -365,11 +365,30 @@ CLAIMS = [
     # So the sentence needs a source decision, not a nudge: either it
     # describes the LANE (31.3k, and the 9x-behind-columnar claim moves) or
     # the PROBE (177k, and it moves the other way). Deliberately left failing.
-    ("l1.ingest.batched_UNSOURCED", 36700, 200,
+    # Was l1.ingest.batched_UNSOURCED and failed for months. The paper said the
+    # "batched path" reached 36.7k [36.5-39.5k]; the canonical lane says 31.3k
+    # [30.3-31.6k], a disjoint range, and no selection reproduced 36.7k. Three
+    # errors in one sentence: an unsourced number, "batched" applied to a lane
+    # that only ever ran per-row SQL, and "27.4k per-record" that is in fact the
+    # SERVER row's ingest rate (27,424). Corrected 2026-08-01 to the canonical
+    # figures, with the bulk-API gap named from the #82 probe rather than left
+    # for a reader to mistake for an engine limit.
+    ("l1.ingest.perrow", 31300, 400,
      lambda r: median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
                          backend="arcadedb_embedded", workload="oltp"),
-     "batched ingest: paper says 36.7k, canonical L1 says 31.3k, no selection "
-     "reproduces it"),
+     "per-row SQL ingest over the 20M-row corpus, the number the lane measures"),
+    ("l1.ingest.server", 27400, 300,
+     lambda r: median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
+                         backend="arcadedb_server", workload="oltp"),
+     "same per-row path through the server; the paper used to call this "
+     "'per-record'"),
+    ("l1.ingest.columnar_lead", 10.4, 0.3,
+     lambda r: median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
+                         backend="duckdb", workload="oltp")
+               / median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
+                           backend="arcadedb_embedded", workload="oltp"),
+     "how far the columnar loaders lead the per-row path (was stated as 9x, "
+     "which followed from the unsourced 36.7k)"),
     ("l1.arcadedb.insert_p99", 0.54, 0.01,
      lambda r: median_of(r, "insert_p99_ms", lane="l1", scale="medium",
                          workload="oltp", backend="arcadedb_embedded"),
