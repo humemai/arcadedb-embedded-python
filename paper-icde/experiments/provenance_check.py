@@ -45,7 +45,13 @@ RESULTS = os.path.join(HERE, "results")
 # The keys the harness has used for "which engine produced this row". Kept as a
 # list rather than normalised away, because old result files are immutable and
 # an audit that only knows the current key silently reports NONE for the rest.
-VERSION_KEYS = ("engine_version", "engine", "server_version", "version", "wheel")
+VERSION_KEYS = ("engine_version", "engine", "server_version", "version", "wheel",
+                # Comparator rows: the version of the engine that row MEASURED,
+                # as opposed to the arcadedb wheel the harness happened to
+                # import. l4_tsbs.py records this and deliberately renames its
+                # own engine_version to harness_arcadedb_version, so that a
+                # duckdb row cannot pass this audit by quoting our wheel.
+                "backend_version")
 
 # Which overlay directories feed which table. Mirrors make_paper_tables.py; if
 # that file grows a new overlay and this map does not, the unmapped-dir check
@@ -62,6 +68,36 @@ FEEDS = {
     # same reason verify5413 does: it remains the fallback in
     # make_paper_tables, and its record is why the row was superseded.
     "T5": ["verify5412b", "srv109", "verify5413", "ts59", "dev21_ts"],
+}
+
+# Top-level result FILES that feed published tables, as opposed to the overlay
+# DIRECTORIES above. This map exists because the audit had a blind spot exactly
+# where the discipline was weakest: every check below globs RESULTS/<dir>/*.json
+# and the unmapped-input check filters on os.path.isdir, so a result file
+# sitting at the top of results/ was invisible to the whole script.
+#
+# l4_tsbs.jsonl is the case that exposed it. It supplies THREE of the four rows
+# in T5's time-series block (DuckDB, QuestDB, and ArcadeDB's document path) and
+# records none of CONDITION_KEYS and no engine version, while the fourth row
+# beside them (ts59, the native path) records all of them. The lane was never
+# wired into runner.py -- see the "l4 timeseries: added as adapters land"
+# placeholder there -- so it produces no manifest either, and nothing else in
+# the harness was covering for that.
+#
+# The rule this encodes: what makes a row auditable is being READ by
+# make_paper_tables, not living in a directory.
+#
+# Both entries below are the complete set of top-level files make_paper_tables
+# opens (runs.jsonl at its line 51, l4_tsbs.jsonl at its line 431). Mapping the
+# base campaign too is not ceremony: run_conditions()'s docstring ASSERTS that
+# "runs.jsonl carries all five" as the contrast that makes the overlays look
+# bad, and an assertion in a docstring is the same species of unchecked claim
+# this script exists to catch. Now it is checked. It passes, and its lane list
+# is also the cleanest evidence for the l4 gap: e2, l1, l1tpc, l2, l3d, l3s,
+# and no l4 at all.
+FEEDS_FILES = {
+    "T2/T3/T5": ["runs.jsonl"],
+    "T5": ["l4_tsbs.jsonl"],
 }
 
 # Engine changes big enough that measuring on the wrong side of one produces a
@@ -228,6 +264,85 @@ def run_conditions():
     if bad:
         print("  These cells cannot be reproduced or extended from their own\n"
               "  artifacts. Stamp conditions in the drivers before the freeze.")
+    print()
+    return bad
+
+
+def _load_rows(path):
+    """Rows from a .json (one dict, or a list) or .jsonl (one dict per line)."""
+    rows = []
+    try:
+        if path.endswith(".jsonl"):
+            with open(path) as f:
+                for line in f:
+                    if line.strip():
+                        rows.append(json.loads(line))
+        else:
+            d = json.load(open(path))
+            rows = d if isinstance(d, list) else [d]
+    except Exception:
+        return []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def lane_files():
+    """Same audit as run_conditions(), for the lane files the tables also read.
+
+    A lane script that writes its own result file is not automatically safer
+    than a bespoke overlay driver. It is safer only if it records what it ran
+    under, and l4_tsbs.py does not: no cpuset, no heap, no memory cap, no
+    manifest, no engine version, no timestamp. Its rows are printed beside a
+    row that records all of them, in the same block of the same table.
+
+    Worth being precise about what is and is not wrong here. The two sides ARE
+    schema-matched: queue59.sh pins TS_TAGS=1 with the comment "Schema
+    fidelity: TS_TAGS=1 deliberately", which matches l4_tsbs.py's single host
+    tag. So this is not a known mismatch. It is the weaker but still
+    disqualifying thing: the artifact cannot demonstrate the match, cannot say
+    which host or engine version produced the comparator numbers, and cannot
+    be extended with more reps later. That is the same failure that froze T4's
+    8.84M cell at N=3.
+
+    Reports rather than repairs, for the same reason run_conditions() does:
+    the fix is a stamp in the lane script plus a re-run, not a backfill.
+    """
+    print("=== run conditions recorded by the lane FILES that feed the tables ===")
+    bad = 0
+    for table, names in sorted(FEEDS_FILES.items()):
+        for name in names:
+            path = os.path.join(RESULTS, name)
+            if not os.path.exists(path):
+                print(f"  {name:20} MISSING (mapped to {table} but not present)")
+                bad += 1
+                continue
+            rows = _load_rows(path)
+            if not rows:
+                print(f"  {name:20} BAD unreadable or empty")
+                bad += 1
+                continue
+            have = set()
+            vkeys = set()
+            for r in rows:
+                have |= {k for k in CONDITION_KEYS if r.get(k) not in (None, "")}
+                vkeys |= {k for k in VERSION_KEYS if r.get(k) not in (None, "")}
+            backends = sorted({str(r.get("backend", "?")) for r in rows})
+            where = f"{name} -> {table}, {len(rows)} rows, backends {', '.join(backends)}"
+            if have and vkeys:
+                print(f"  {where}\n"
+                      f"    records {', '.join(sorted(have))} "
+                      f"and version via {', '.join(sorted(vkeys))}")
+            else:
+                miss = []
+                if not have:
+                    miss.append(f"none of {CONDITION_KEYS}")
+                if not vkeys:
+                    miss.append(f"no version under any of {VERSION_KEYS}")
+                print(f"  {where}\n    BAD records " + "; ".join(miss))
+                bad += 1
+    if bad:
+        print("  A lane file is only safer than an overlay if it records more,\n"
+              "  and these record less. Stamp run_conditions() in the lane\n"
+              "  script and re-run before the freeze.")
     print()
     return bad
 
@@ -401,8 +516,9 @@ def main():
 
     bad_caption = 0 if args.table else caption_versions()
     bad_cond = 0 if args.table else run_conditions()
+    bad_lane = 0 if args.table else lane_files()
     bad_n = 0 if args.table else caption_n()
-    bad_captions = bad_caption + bad_cond + bad_n
+    bad_captions = bad_caption + bad_cond + bad_lane + bad_n
 
     asserted = _asserted_versions()
     if asserted:
@@ -476,6 +592,25 @@ def main():
             for u in unmapped:
                 print(f"  {u}")
             print("  (dead overlay, or an unaudited input: decide which)")
+            print()
+
+        # The same question for top-level result FILES. Without this, the only
+        # way a file gets audited is by someone remembering to add it to
+        # FEEDS_FILES, which is precisely the memory that failed for
+        # l4_tsbs.jsonl. Listing them makes an unaudited input visible even
+        # when nobody thought to map it.
+        mapped_files = {n for ns in FEEDS_FILES.values() for n in ns}
+        loose = sorted(
+            os.path.basename(p) for p in glob.glob(os.path.join(RESULTS, "*"))
+            if os.path.isfile(p) and p.endswith((".json", ".jsonl"))
+            and not os.path.basename(p).startswith("manifest-")
+            and os.path.basename(p) not in mapped_files)
+        if loose:
+            print("=== top-level result files not mapped to any table ===")
+            for u in loose:
+                print(f"  {u}")
+            print("  (mapped files are audited by lane_files(); these are not.\n"
+                  "   If make_paper_tables reads one, add it to FEEDS_FILES.)")
 
     print(f"\n{bad} BAD finding(s)"
           + (f": {bad_caption} caption, {bad_cond} missing run conditions, "

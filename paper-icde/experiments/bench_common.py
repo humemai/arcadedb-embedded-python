@@ -6,9 +6,33 @@ on-disk size, a raw-latency sidecar dump, and a small timing context manager.
 """
 import json
 import os
+import socket
 import statistics as st
 import sys
 import time
+
+
+def _host_identity():
+    """Which machine this is, read rather than assumed.
+
+    Order matters. BENCH_HOST first, because inside a container the kernel
+    hostname is a random ID and only the launcher knows it is mini. Then the
+    real hostname. A containerised run with BENCH_HOST unset returns
+    "container:<id> (host unknown)" rather than a machine name, so a reader
+    can see that the physical host was not recorded instead of reading a
+    plausible-looking name that nothing checked.
+    """
+    explicit = os.environ.get("BENCH_HOST")
+    if explicit:
+        return explicit
+    try:
+        name = socket.gethostname()
+    except Exception:
+        return "unknown"
+    containerised = os.path.exists("/.dockerenv")
+    if containerised:
+        return f"container:{name} (host unknown)"
+    return name or "unknown"
 
 
 def run_conditions(**extra):
@@ -80,7 +104,23 @@ def run_conditions(**extra):
         "role": os.environ.get("BENCH_ROLE",
                                "client" if os.environ.get("BENCH_SERVER_HOST")
                                else "engine"),
-        "host": os.environ.get("BENCH_HOST", "mini"),
+        # WHICH MACHINE. This used to be os.environ.get("BENCH_HOST", "mini"),
+        # which is the exact self-assertion this function was written to stop:
+        # a laptop run with BENCH_HOST unset stamped host="mini" and the
+        # artifact then said, in writing, that it came from the controlled
+        # bench host. "Every paper number is measured on mini" is a constraint
+        # this field is supposed to be the EVIDENCE for, so a default that
+        # always satisfies it makes the evidence worthless.
+        #
+        # Caught by running l4_tsbs.py on the laptop and reading the row back:
+        # cpuset 0-15 (the laptop's 16 threads, not mini's 0-11 cpuset) beside
+        # host "mini".
+        #
+        # BENCH_HOST still wins when set, because a container genuinely cannot
+        # discover its physical host and the queue scripts are the only thing
+        # that knows. But unset now reports what is actually readable, and
+        # says so when that is a container ID rather than a machine name.
+        "host": _host_identity(),
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
     }
     try:

@@ -50,9 +50,13 @@ class ArcadeTS:
 
     def connect(self):
         import arcadedb_embedded as arcadedb
+        self._arcadedb = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "6g")
         self.db = arcadedb.create_database("/tmp/l4_arcade",
                                            jvm_kwargs={"heap_size": heap})
+
+    def version(self):
+        return f"arcadedb {self._arcadedb.__version__}"
 
     def ingest(self, pts):
         db = self.db
@@ -93,7 +97,11 @@ class DuckTS:
 
     def connect(self):
         import duckdb
+        self._duckdb = duckdb
         self.cx = duckdb.connect("/tmp/l4_duck.db")
+
+    def version(self):
+        return f"duckdb {self._duckdb.__version__}"
 
     def ingest(self, pts):
         self.cx.execute("CREATE TABLE p (host VARCHAR, ts BIGINT, uu DOUBLE, "
@@ -136,6 +144,13 @@ class QuestTS:
         self.cx = psycopg.connect(
             f"host={host} port=8812 dbname=qdb user=admin password=quest",
             autocommit=True)
+
+    def version(self):
+        # The engine under test is in another container, so ASK it rather than
+        # reporting anything about this process.
+        with self.cx.cursor() as c:
+            c.execute("SELECT build()")
+            return f"questdb {c.fetchone()[0]}"
 
     def ingest(self, pts):
         import socket
@@ -215,7 +230,45 @@ def main():
             times.append((time.perf_counter() - t) * 1000)
         out[f"{qn}_ms"] = round(statistics.median(times), 2)
         out[f"{qn}_rows"] = len(ref) if ref is not None else 0
+    # Ask each backend for ITS OWN version, before closing it. run_conditions
+    # stamps engine_version from the arcadedb-embedded wheel, which is the
+    # right answer for the ArcadeDB row and the wrong one for duckdb and
+    # questdb: the wheel is present in the image but is not the engine those
+    # rows measured. Recording it unqualified would make the provenance audit
+    # report a version and pass, which is worse than reporting none.
+    try:
+        out["backend_version"] = b.version()
+    except Exception as e:
+        out["backend_version"] = f"unknown ({e.__class__.__name__})"
     b.close()
+
+    # Stamp what this actually ran under. Until now every row this lane wrote
+    # carried only the backend name and the metrics, so T5's time-series block
+    # printed three unprovenanced rows (duckdb, questdb, and ArcadeDB's
+    # document path) beside one fully stamped row from l4_native_probe.py.
+    # This lane is also the one never wired into runner.py, so no manifest was
+    # covering for it either -- runs.jsonl has lanes l1, l1tpc, l2, l3d, l3s,
+    # e2, and no l4.
+    #
+    # Read from the cgroup, not asserted: see bench_common.run_conditions.
+    # questdb is a client/server backend, so for that row the conditions
+    # describe THIS driver process and not the questdb container. Recorded
+    # under a role that says so rather than silently implying otherwise.
+    try:
+        import bench_common
+        role = "driver" if args.backend == "questdb" else "engine"
+        out.update(bench_common.run_conditions(lane="l4", backend=args.backend,
+                                               role=role))
+        # Same reasoning as backend_version above, from the other side: on a
+        # comparator row engine_version names the wheel this harness imported,
+        # not the engine measured. Move it to a name that says so, so the only
+        # version field a reader can mistake for the engine under test is the
+        # one that IS the engine under test.
+        if args.backend != "arcadedb":
+            out["harness_arcadedb_version"] = out.pop("engine_version", None)
+    except Exception as e:                     # never lose a measured result
+        out["conditions_error"] = f"{e.__class__.__name__}: {e}"
+
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out), flush=True)
