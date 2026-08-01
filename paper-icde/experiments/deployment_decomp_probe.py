@@ -111,6 +111,33 @@ def timeit(fn, n: int, reps: int, warmup: int) -> tuple[list[float], int]:
     return lat, got
 
 
+def timeit_paired(fns: dict, n: int, reps: int, warmup: int) -> dict:
+    """Interleave the arms at one size, after warming EVERY arm at that size.
+
+    Running arm-by-arm (all embedded sizes, then all HTTP sizes) biases the
+    comparison two ways, both measured: the arm that runs second inherits a JVM
+    the first arm already warmed, and early sizes in a sweep are colder than
+    late ones. At 1000 rows that read 6.830 ms when reached after 1/10/100 and
+    2.724 ms when reached after four larger sizes, a 2.5x artifact in the arm
+    that was supposed to be the baseline.
+
+    So: warm all arms at this size first, then alternate one timed rep per arm
+    per round. Any residual drift (JIT, thermal, page cache) then lands on both
+    arms in the same proportion instead of on whichever ran first.
+    """
+    for _ in range(warmup):
+        for fn in fns.values():
+            fn(n)
+    lat = {k: [] for k in fns}
+    got = {k: -1 for k in fns}
+    for _ in range(reps):
+        for k, fn in fns.items():          # one rep of each, round-robin
+            t0 = time.perf_counter()
+            got[k] = fn(n)
+            lat[k].append((time.perf_counter() - t0) * 1000.0)
+    return {k: (lat[k], got[k]) for k in fns}
+
+
 def http_runner(session, base_url: str, auth, db_name: str):
     """One HTTP query, returning the parsed row count.
 
@@ -223,16 +250,6 @@ def main() -> int:
         load_embedded(db, ROWS)
         print(f"loaded {ROWS:,} rows into the server-managed database", flush=True)
 
-        results["embedded"] = {}
-        for n in SIZES:
-            lat, got = timeit(
-                lambda k: len(db.query("sql", query(k)).to_json_list()),
-                n, REPS, WARMUP)
-            s = latstats("x", lat)
-            results["embedded"][n] = {"p50_ms": s["x_p50_ms"], "rows_returned": got,
-                                      **{k[2:]: v for k, v in s.items()}}
-            print(f"  embedded     {n:>7} rows  p50 {s['x_p50_ms']:.3f} ms", flush=True)
-
         port = server.get_http_port()
         base = f"http://127.0.0.1:{port}"
         sess = requests.Session()
@@ -243,13 +260,21 @@ def main() -> int:
         sess.get(f"{base}/api/v1/server", auth=auth, timeout=120)
 
         run_http = http_runner(sess, base, auth, DB_NAME)
+        arms = {
+            "embedded": lambda k: len(db.query("sql", query(k)).to_json_list()),
+            "inproc_http": run_http,
+        }
+        results["embedded"] = {}
         results["inproc_http"] = {}
         for n in SIZES:
-            lat, got = timeit(run_http, n, REPS, WARMUP)
-            s = latstats("x", lat)
-            results["inproc_http"][n] = {"p50_ms": s["x_p50_ms"], "rows_returned": got,
-                                         **{k[2:]: v for k, v in s.items()}}
-            print(f"  inproc_http  {n:>7} rows  p50 {s['x_p50_ms']:.3f} ms", flush=True)
+            paired = timeit_paired(arms, n, REPS, WARMUP)
+            line = f"  {n:>7} rows "
+            for arm, (lat, got) in paired.items():
+                st = latstats("x", lat)
+                results[arm][n] = {"p50_ms": st["x_p50_ms"], "rows_returned": got,
+                                   **{k[2:]: v for k, v in st.items()}}
+                line += f"  {arm} {st['x_p50_ms']:8.3f} ms"
+            print(line, flush=True)
 
         meta.update(run_conditions(lane="e4_decomp", role="embedded+inproc_server"))
 
