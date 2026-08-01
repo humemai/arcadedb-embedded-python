@@ -235,6 +235,7 @@ def main():
         return 2
     bad = check_cpuset(rows) + check_envelope(rows) + check_degree(rows)
     check_protocol_overlays()
+    bad += report_producers(rows)
     print(f"\n{bad} fairness invariant failure(s)")
     if bad:
         print("A comparison is only worth printing if both sides were given")
@@ -242,9 +243,6 @@ def main():
         print("standing list of known violations.")
     return 1 if bad else 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +260,7 @@ if __name__ == "__main__":
 # stamp, which is exactly the population that needs looking at.
 LANE_SCRIPT = {
     "l1": {"l1_tabular.py"},
-    "l1_tpc": {"l1_tpc.py"},
+    "l1tpc": {"l1_tpc.py"},
     "l2": {"l2_graph.py", "ldbc_snb.py"},
     "l3s": {"l3_sparse.py"},
     "l3d": {"l3d_dense.py"},
@@ -285,3 +283,36 @@ def check_producers(rows):
         elif prod not in LANE_SCRIPT[lane]:
             violations.append((lane, r.get("backend"), r.get("scale"), prod))
     return violations, unstamped
+
+
+def report_producers(rows):
+    """F6b: did published rows come from the lane script or a bespoke driver?
+
+    Was dead code until 2026-08-01. check_producers() and LANE_SCRIPT sat
+    BELOW `if __name__ == "__main__": sys.exit(main())`, so running the file
+    as a script exited at that line and never reached their definitions, let
+    alone called them. FAIRNESS.md calls this rule the structural cause of
+    both known protocol violations, and its enforcement had never executed
+    once. Its lane key was also "l1_tpc" where runs.jsonl says "l1tpc", so
+    every TPC-H row would have been skipped even had it run.
+    """
+    print("\n=== F6b: published rows come from lane scripts, not drivers ===")
+    violations, unstamped = check_producers(rows)
+    if violations:
+        print(f"  FAIL {len(violations)} row(s) produced by a bespoke driver:")
+        for lane, be, scale, prod in violations[:12]:
+            print(f"         {lane:6} {str(scale):8} {str(be):30} producer={prod}")
+        print("         Bespoke drivers investigate, lane scripts publish.")
+    if unstamped:
+        seen = collections.Counter(f"{l}/{s}" for l, _, s in unstamped)
+        print(f"  {len(unstamped)} row(s) carry no producer at all "
+              f"(predate the stamp): {dict(list(seen.items())[:6])}")
+        print("    Not passed and not failed: unstamped is the population that")
+        print("    needs looking at, which is why silence is not a pass here.")
+    if not violations and not unstamped:
+        print("  ok: every row names its lane script as producer")
+    return len(violations)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
