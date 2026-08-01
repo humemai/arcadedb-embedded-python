@@ -242,7 +242,10 @@ rows = db.query(
 ## SQL Helpers
 
 - Preferred path for embedded and server modes: `CREATE INDEX ON Doc (embedding)
-  LSM_VECTOR METADATA {"dimensions": 128, "distanceFunction": "COSINE"}`
+  LSM_VECTOR METADATA {"dimensions": 128, "similarity": "COSINE"}`
+  (the key is `similarity`; `distanceFunction` is rejected by the index, though
+  it remains the spelling `IMPORT DATABASE ... WITH distanceFunction = cosine`
+  uses on that separate surface)
 - Search via SQL:
     - `SELECT vectorNeighbors('Doc[embedding]', [0.1,0.2], 5) AS res`
 - Math/distance helpers: `vectorCosineSimilarity`, `vectorL2Distance`,
