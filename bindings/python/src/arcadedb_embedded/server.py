@@ -31,13 +31,38 @@ class ArcadeDBServer:
                 production)
             config: Optional configuration dictionary with keys like:
                 - http_port: HTTP API port (default: 2480)
-                - binary_port: Binary protocol port (default: 2424)
                 - host: Host to bind to (default: "localhost"). Pass "0.0.0.0"
                     explicitly to expose the server on all IPv4 interfaces, or
                     "::" for all IPv6 interfaces. Earlier versions defaulted to
                     "0.0.0.0"; the default was tightened to loopback in the
                     Python bindings v0.x security cleanup.
                 - mode: Server mode (default: development)
+
+                Any other key is forwarded to ArcadeDB as
+                ``arcadedb.<key with _ replaced by .>``, which is how the
+                bundled wire protocols are reached. The wheel ships the
+                Postgres, Redis and Bolt plugins but starts none of them
+                unless asked::
+
+                    create_server(config={
+                        "server_plugins":
+                            "Postgres:com.arcadedb.postgres.PostgresProtocolPlugin",
+                        "postgres_port": 5432,   # -> arcadedb.postgres.port
+                    })
+
+                Redis is ``com.arcadedb.redis.RedisProtocolPlugin`` with
+                ``redis_port``, Bolt is
+                ``com.arcadedb.bolt.BoltProtocolPlugin`` with ``bolt_port``.
+                Mongo, gRPC and Raft replication are NOT bundled: their jars
+                are excluded to keep the wheel installable, so this server is
+                single-node by construction.
+
+                There is deliberately no ``binary_port``. It was documented
+                here until 2026-08-01 and silently discarded, because
+                ArcadeDB has no such setting: its ports are
+                ``httpIncomingPort``, ``httpsIncomingPort`` and the
+                per-protocol ones above. 2424 is OrientDB's legacy binary
+                port and never applied to this engine.
             jvm_kwargs: Optional JVM args passed to start_jvm()
                 Example: {"heap_size": "8g"}
         """
@@ -75,7 +100,10 @@ class ArcadeDBServer:
 
         # Apply any additional configuration
         for key, value in self._config.items():
-            if key not in ["mode", "host", "http_port", "binary_port"]:
+            # "binary_port" used to be skipped here AND advertised in the
+            # docstring, so it was accepted and dropped without a word. It is
+            # gone from both: ArcadeDB has no binary port to set.
+            if key not in ["mode", "host", "http_port"]:
                 # Convert Python config keys to ArcadeDB config format
                 config_key = f"arcadedb.{key.replace('_', '.')}"
                 context_config.setValue(config_key, value)

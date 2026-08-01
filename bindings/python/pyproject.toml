@@ -48,6 +48,12 @@ test = [
     "pytest-cov",
     "numpy>=1.20.0",
     "requests>=2.0.0",  # HTTP API / docs-example tests
+    # Real clients for the bundled wire protocols. Test-only: none of these
+    # reaches an end user's install, and without them three shipped protocols
+    # are covered by nothing but the jars being present in the archive.
+    "psycopg[binary]>=3.1",  # Postgres wire
+    "redis>=5.0",            # Redis wire
+    "neo4j>=5.0",            # Bolt
 ]
 dev = [
     "black",
@@ -92,6 +98,7 @@ python_functions = ["test_*"]
 addopts = "-v --tb=short"
 markers = [
     "server: tests that require server/studio support",
+    "server_wire: speaks a bundled wire protocol with its real client",
     "integration: tests that require external components",
 ]
 

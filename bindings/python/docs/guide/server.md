@@ -147,6 +147,68 @@ server = arcadedb.create_server(
 | `host` | "localhost" | Host to bind to |
 | `mode` | "development" | Server mode (`development` or `production`) |
 
+Any other key is forwarded to ArcadeDB as `arcadedb.<key with _ replaced by
+.>`. That is how the wire protocols below are configured.
+
+There is no `binary_port`. It was listed here and in the docstring until
+2026-08-01 and was silently discarded: ArcadeDB has no such setting. Its ports
+are `httpIncomingPort`, `httpsIncomingPort` and the per-protocol ones below.
+2424 is OrientDB's legacy binary port and never applied to this engine.
+
+## Wire Protocols
+
+The wheel bundles three protocol plugins besides HTTP. They are **opt-in**: a
+default server starts HTTP and Studio only, and 5432/6379/7687 stay closed.
+
+```python
+server = arcadedb.create_server(
+    root_path="./databases",
+    root_password="my_secure_password",
+    config={
+        "http_port": 2480,
+        "server_plugins": (
+            "Postgres:com.arcadedb.postgres.PostgresProtocolPlugin,"
+            "Redis:com.arcadedb.redis.RedisProtocolPlugin,"
+            "Bolt:com.arcadedb.bolt.BoltProtocolPlugin"
+        ),
+        "postgres_port": 5432,   # -> arcadedb.postgres.port
+        "bolt_port": 7687,       # -> arcadedb.bolt.port
+    },
+)
+```
+
+| Protocol | Plugin class | Port setting | Verified |
+|---|---|---|---|
+| Postgres wire | `com.arcadedb.postgres.PostgresProtocolPlugin` | `postgres_port` | yes, connect + query |
+| Bolt (Neo4j drivers) | `com.arcadedb.bolt.BoltProtocolPlugin` | `bolt_port` | yes, connect + Cypher |
+| Redis | `com.arcadedb.redis.RedisProtocolPlugin` | `redis_port` (**ignored**) | port setting broken |
+
+`tests/test_server_wire_protocols.py` speaks each protocol with its real
+client (`psycopg`, `neo4j`, `redis`), so these rows are measured rather than
+inferred from the jars being present.
+
+### Two things to know before exposing these
+
+**`redis_port` is accepted and ignored.** Measured on 26.8.1.dev24: with a
+distinct port passed to each plugin, Postgres and Bolt bind what they were
+given and the Redis listener binds the hardcoded 6379 anyway. Plan for 6379 or
+do not enable Redis.
+
+**The wire listeners bind all interfaces.** `host` tightens the HTTP listener
+to loopback by default, but the protocol plugins log
+`Listening ... on 0.0.0.0:<port>` regardless, and ArcadeDB exposes no
+per-protocol host setting. Enabling a plugin on a multi-homed or
+internet-facing machine exposes it beyond localhost. Use a firewall or a
+container network namespace; do not rely on the `host` default to contain them.
+
+### Not bundled
+
+Mongo wire, gRPC, and Raft replication are excluded from the wheel to keep it
+installable: the shaded gRPC jar alone is 38 MB against 39 MB for the entire
+engine payload, and the Raft jar is 80 MB. **This server is single-node by
+construction** — it cannot replicate or fail over. Use the Docker distribution
+for HA, gRPC, or Mongo-protocol access.
+
 ## Server Info Endpoint
 
 The server exposes `/api/v1/server` for metadata such as version, server name,
