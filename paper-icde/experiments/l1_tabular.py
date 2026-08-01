@@ -186,7 +186,11 @@ class DuckDB(Base):
         # DuckDB context switching rather than giving it an advantage. Reading
         # os.cpu_count() here would reproduce the bug: it returns the host count
         # too. sched_getaffinity is the only call that sees the cpuset.
-        self.threads = len(os.sched_getaffinity(0))
+        # BENCH_DUCKDB_THREADS exists only to measure what the default cost:
+        # it reproduces the pre-F6 behaviour (the host count) so the two arms
+        # differ in exactly one variable. Not for use in a published cell.
+        self.threads = int(os.environ.get("BENCH_DUCKDB_THREADS",
+                                          len(os.sched_getaffinity(0))))
         self.con.execute(f"PRAGMA threads={self.threads}")
 
     def exec(self, sql, params=None):
@@ -400,6 +404,12 @@ def main():
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = getattr(b, "version", "?")
+    # F6 provenance: what the engine's pool was actually sized to, and what the
+    # cpuset allowed. A cell where these differ is oversubscribed; recording it
+    # means a later reader does not have to reconstruct it from the run script.
+    if getattr(b, "threads", None) is not None:
+        out["engine_threads"] = b.threads
+    out["cpuset_cpus"] = len(os.sched_getaffinity(0))
 
     t0 = time.perf_counter()
     b.schema()
