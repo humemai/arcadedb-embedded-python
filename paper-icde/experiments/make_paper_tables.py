@@ -11,6 +11,7 @@ Outputs: ../latex/tables/t{2,3,4,5}_*.tex + tables_summary.md (prose crib).
 """
 import json
 import os
+import sys
 import statistics as st
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -507,7 +508,67 @@ def e2_summary(rows):
     write("tables_summary.md", "\n".join(out) + "\n")
 
 
+def run_gates():
+    """Run the audit scripts and record their verdict beside the tables.
+
+    FAIRNESS.md line 8 says "Run python3 fairness_check.py before regenerating
+    tables and at the freeze". Nothing enforced that: this file imported none
+    of the three audit scripts, so every table could be regenerated with a live
+    fairness violation and leave no trace that it had been. The instruction
+    lived in prose, which is the same "act of memory" the producer stamp was
+    added to eliminate one level down.
+
+    Deliberately NOT a hard block. Two invariants fail today by known and
+    documented causes (F3's dense envelope, F7's unpublished SIFT-1M degree),
+    and a gate that refuses to run until they are fixed is a gate people learn
+    to bypass. Instead: print the verdict, and write it next to the .tex so
+    "these tables were generated while F3 was failing" is a fact on disk
+    rather than something to remember. --strict makes it fatal, for the freeze.
+    """
+    import subprocess
+    lines, failed = [], []
+    for script in ("fairness_check.py", "provenance_check.py"):
+        try:
+            p = subprocess.run([sys.executable, os.path.join(HERE, script)],
+                               capture_output=True, text=True, timeout=600)
+            tail = [l for l in p.stdout.splitlines()
+                    if "FAIL" in l or "BAD" in l or "failure(s)" in l
+                    or "finding(s)" in l]
+            lines.append(f"--- {script} (exit {p.returncode}) ---")
+            lines.extend("    " + l.strip() for l in tail[:40])
+            if p.returncode != 0:
+                failed.append(script)
+        except Exception as e:
+            lines.append(f"--- {script}: COULD NOT RUN: "
+                         f"{e.__class__.__name__}: {e} ---")
+            failed.append(script)
+
+    banner = ("GATES CLEAN" if not failed
+              else "GATES REPORTED FAILURES: " + ", ".join(failed))
+    print("\n" + "=" * 62)
+    print(banner)
+    for l in lines:
+        print(l)
+    print("=" * 62 + "\n")
+
+    os.makedirs(OUT, exist_ok=True)
+    with open(os.path.join(OUT, "GATE_STATUS.txt"), "w") as f:
+        f.write(f"{banner}\n\nTables in this directory were generated with the\n"
+                f"audit scripts in the state below. A failure here does not\n"
+                f"mean a table is wrong; it means an invariant those tables\n"
+                f"depend on was not holding when they were written.\n\n")
+        f.write("\n".join(lines) + "\n")
+    print("wrote GATE_STATUS.txt")
+    return failed
+
+
 def main():
+    strict = "--strict" in sys.argv
+    failed = run_gates()
+    if failed and strict:
+        print("--strict: refusing to regenerate tables while gates fail")
+        return 1
+
     rows = load_canonical()
     print(f"{len(rows)} canonical rows")
     tabular_table(rows)
@@ -515,6 +576,7 @@ def main():
     sparse_table(rows)
     dense_ts_table(rows)
     e2_summary(rows)
+    return 0
 
 
 if __name__ == "__main__":
