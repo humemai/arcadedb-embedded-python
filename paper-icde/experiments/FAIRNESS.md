@@ -49,6 +49,35 @@ a post-ingest settle, all of them do.
 release than the row beside it compares versions while appearing to compare
 configurations. This is what made T5's server build cell wrong.
 
+**F6. Thread pools are fitted to the cpuset, not to the host.** F1 pins the
+cpuset, which bounds which CPUs a process may run on. It does not bound how
+many threads the process decides to start, and several runtimes size their
+pools from the host core count regardless of the mask they were given. That
+is not equal treatment: an engine running 20 threads on 12 CPUs pays context
+switching its 12-thread neighbour does not.
+
+The only call that sees the restriction is `sched_getaffinity`.
+**`os.cpu_count()`, `nproc` and `/proc/cpuinfo` all ignore cpuset by design**
+and report the host, so any of them appearing in an adapter is this bug.
+
+Fitting the pool is the first of the four enumerated fairness overrides
+(resource fitting) in the config policy, the same one that sets JVM heap per
+tier, so it is applied rather than merely disclosed.
+
+*Measured 2026-08-01 (queue64 on mini, and confirmed locally under `taskset`):*
+
+| runtime | sizes from | status |
+|---|---|---|
+| DuckDB | **host** (default ignores the mask; `taskset -c 0-11` on a 16-CPU box still yields 16) | FIXED: `l1_tabular.py` now sets `PRAGMA threads` from `sched_getaffinity` |
+| Qdrant | reports **both 12 and 20** | UNRESOLVED, see "Not yet verified" |
+| Chroma, LanceDB, sqlite-vec, Elasticsearch, Milvus, Neo4j | read the cpuset correctly | ok |
+| ArcadeDB (JVM) | `availableProcessors()` honours the mask | ok |
+
+Consequence for published numbers: every DuckDB cell measured before this fix
+ran oversubscribed. The bias runs **against** DuckDB, which wins that lane
+regardless, so nothing self-serving rests on it — but the tabular rows must be
+re-measured at the freeze rather than carried over.
+
 ## Allowed to differ (must be DISCLOSED, per the config policy)
 
 - **Vendor settle steps** that have no equivalent elsewhere (Elasticsearch
@@ -102,12 +131,19 @@ output must become a cell, diff its protocol against the lane's first.
 
 ## Not yet verified
 
-Equal *allocation* is not equal *honouring*. A JVM on Java 11+ reads the
-cpuset for `availableProcessors()`, so ArcadeDB sizes its pools to 12. Go and
-Rust runtimes have historically read the host's full core count (20 here). If
-Milvus or Qdrant sizes pools to 20 while pinned to 12, they oversubscribe and
-pay scheduling we do not. Tracked as task #120; the check is seconds per
-image but must wait for the box to be free.
+Equal *allocation* is not equal *honouring*. **Ran 2026-08-01 as queue64; see
+F6 for the results and the fix.** The suspicion was half right and pointed at
+the wrong engine: Milvus and Qdrant's clients read the cpuset correctly, and
+the runtime that ignored it was **DuckDB**, which we had not suspected because
+it is embedded rather than a Go/Rust server.
+
+Still open from that run: **Qdrant's server reports both 12 and 20** in the
+same probe, so its pool sizing is the one we cannot currently state. Resolve
+before the freeze. The rest of the "not yet verified" list:
+
+- whether Elasticsearch's `processors` setting follows the cpuset or the host,
+  as distinct from what its Python client observes;
+- whether any engine's *disk* IO scheduling differs under the same cap.
 
 ## Corrected here, because this file asserted it wrongly for an hour
 

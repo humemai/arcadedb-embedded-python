@@ -177,6 +177,17 @@ class DuckDB(Base):
         import duckdb
         self.con = duckdb.connect("/tmp/l1.duckdb")
         self.version = duckdb.__version__
+        # Fit the pool to the cpuset, which is the first of the four enumerated
+        # fairness overrides (resource fitting), the same one that sets JVM heap
+        # per tier. DuckDB's default IGNORES the affinity mask and sizes from the
+        # host core count: verified with taskset -c 0-11 on a 16-CPU box, where
+        # affinity reads 12 and DuckDB still defaults to 16. On mini that is 20
+        # threads inside a 12-CPU cpuset, ~1.7x oversubscribed, which costs
+        # DuckDB context switching rather than giving it an advantage. Reading
+        # os.cpu_count() here would reproduce the bug: it returns the host count
+        # too. sched_getaffinity is the only call that sees the cpuset.
+        self.threads = len(os.sched_getaffinity(0))
+        self.con.execute(f"PRAGMA threads={self.threads}")
 
     def exec(self, sql, params=None):
         self.con.execute(sql, params or [])

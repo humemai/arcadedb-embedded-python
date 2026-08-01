@@ -84,7 +84,13 @@ def be_duckdb(df, workload):
     path = tempfile.mkdtemp(prefix="tb_duckdb_") + "/db.duckdb"
     with bc.timed() as t_open:
         con = duckdb.connect(path)
-        con.execute(f"PRAGMA threads={os.cpu_count()}")
+        # NOT os.cpu_count(): it returns the HOST core count and ignores the
+        # cpuset, so under --cpuset-cpus 0-11 on a 20-CPU host this asked for 20
+        # threads on 12 CPUs. sched_getaffinity is the only call that sees the
+        # restriction. (This file feeds no paper number -- nothing references
+        # it -- but the same line in l1_tabular.py would have, so it is fixed
+        # here too rather than left as a copy-paste source.)
+        con.execute(f"PRAGMA threads={len(os.sched_getaffinity(0))}")
     with bc.timed() as t_schema:
         con.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, post_type INT, "
                     "owner_user_id INT, score INT, view_count INT, title VARCHAR)")
