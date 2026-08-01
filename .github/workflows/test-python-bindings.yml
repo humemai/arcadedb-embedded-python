@@ -327,7 +327,7 @@ jobs:
         shell: bash
         run: |
           cd bindings/python
-          uv pip install --system test-install/*.whl pytest pytest-cov requests numpy
+          uv pip install --system test-install/*.whl pytest pytest-cov requests numpy "psycopg[binary]" redis neo4j
 
       - name: Run pytest on host
         id: pytest
