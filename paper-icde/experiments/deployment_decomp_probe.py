@@ -122,7 +122,13 @@ def http_runner(session, base_url: str, auth, db_name: str):
         r = session.post(
             f"{base_url}/api/v1/query/{db_name}",
             auth=auth,
-            json={"language": "sql", "command": query(n)},
+            # "limit": -1 is REQUIRED, not tuning. The serializer caps at
+            # AbstractQueryHandler.DEFAULT_LIMIT (20,000) and truncates silently:
+            # HTTP 200, no flag, no count, and the SQL LIMIT the query asked for
+            # is overridden. Without this the 100k cell returned 20k rows and
+            # looked 4.7x FASTER than embedded, which is the row-count guard's
+            # whole reason for existing. Filed upstream as #5711.
+            json={"language": "sql", "command": query(n), "limit": -1},
             timeout=300,
         )
         r.raise_for_status()
