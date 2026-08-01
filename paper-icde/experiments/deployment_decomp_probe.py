@@ -264,6 +264,23 @@ def main() -> int:
             "embedded": lambda k: len(db.query("sql", query(k)).to_json_list()),
             "inproc_http": run_http,
         }
+        # The Docker arm joins the SAME interleave. Running it in its own loop
+        # afterwards would repeat the bias just removed, and worse here: the
+        # container's JVM would be cold for its whole arm while the in-process
+        # server's JVM was warmed by the embedded arm, so the "boundary" number
+        # would be measuring JIT state across two different JVMs.
+        if args.docker:
+            dsess = requests.Session()
+            dauth = ("root", args.docker_password)
+            arms["docker_http"] = http_runner(dsess, args.docker.rstrip("/"),
+                                              dauth, DB_NAME)
+            results["docker_http"] = {}
+            # run_conditions reads THIS process's cgroup, which is the client,
+            # not the server container. Recorded as client_* so no reader takes
+            # it for the engine's envelope (the #109 lesson).
+            meta["docker_client_conditions"] = run_conditions(lane="e4_decomp",
+                                                              role="docker_client")
+            meta["docker_url"] = args.docker
         results["embedded"] = {}
         results["inproc_http"] = {}
         for n in SIZES:
@@ -277,23 +294,6 @@ def main() -> int:
             print(line, flush=True)
 
         meta.update(run_conditions(lane="e4_decomp", role="embedded+inproc_server"))
-
-    if args.docker:
-        sess = requests.Session()
-        auth = ("root", args.docker_password)
-        run_http = http_runner(sess, args.docker.rstrip("/"), auth, DB_NAME)
-        results["docker_http"] = {}
-        for n in SIZES:
-            lat, got = timeit(run_http, n, REPS, WARMUP)
-            s = latstats("x", lat)
-            results["docker_http"][n] = {"p50_ms": s["x_p50_ms"], "rows_returned": got,
-                                         **{k[2:]: v for k, v in s.items()}}
-            print(f"  docker_http  {n:>7} rows  p50 {s['x_p50_ms']:.3f} ms", flush=True)
-        # run_conditions reads THIS process's cgroup, which is the client, not
-        # the server container. Recorded as client_* so no reader mistakes it
-        # for the engine's envelope (the #109 lesson).
-        meta["docker_client_conditions"] = run_conditions(lane="e4_decomp", role="docker_client")
-        meta["docker_url"] = args.docker
 
     # Every arm must have returned the same rows, or the comparison is void.
     mismatch = []
