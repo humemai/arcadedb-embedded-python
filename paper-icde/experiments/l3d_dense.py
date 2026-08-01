@@ -515,6 +515,22 @@ def main():
     out["recall_at_10"] = round(statistics.mean(recalls), 4)
 
     b.close()
+
+    # Stamp the conditions. runner.py wraps this script and adds cpuset, heap,
+    # mem_cap and a manifest to runs.jsonl, so a full campaign row is already
+    # provenanced -- but only when the runner is the caller. Run standalone
+    # (which is how every targeted re-measure is done, because the runner
+    # cannot select a single backend at a single envelope without also
+    # rewriting its per-scale maps) the row carried nothing. Stamping here
+    # means a standalone row is as auditable as a campaign row instead of
+    # being a second class of artifact nobody thought to check.
+    try:
+        import bench_common
+        out.update(bench_common.run_conditions(lane="l3d", scale=args.scale,
+                                               backend=args.backend))
+    except Exception as e:                     # never lose a measured result
+        out["conditions_error"] = f"{e.__class__.__name__}: {e}"
+
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT", json.dumps(out))
