@@ -176,8 +176,17 @@ def build_examples(examples_dir: Path) -> list[ExampleRun]:
                 "1",
                 "--batch-size",
                 "500",
+                # Relative to examples/, NOT the absolute host path. Example 11
+                # can relaunch itself inside a container that mounts the repo
+                # at /workspace, where an absolute host path neither exists nor
+                # can be created, and it fails there with a FileNotFoundError
+                # from mkdir long after the embedded arm has succeeded. The
+                # runner keeps its own absolute `vector_db_root` for globbing
+                # the output below, which is why that path exists at all (see
+                # the comment where it is defined); only what we hand the
+                # example has to resolve on both sides of the mount.
                 "--db-root",
-                str(vector_db_root),
+                str(vector_db_root.relative_to(examples_dir)),
                 "--run-label",
                 example11_run_label,
             ],

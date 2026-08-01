@@ -27,7 +27,10 @@ PG_PLUGIN = "Postgres:com.arcadedb.postgres.PostgresProtocolPlugin"
 REDIS_PLUGIN = "Redis:com.arcadedb.redis.RedisProtocolPlugin"
 BOLT_PLUGIN = "Bolt:com.arcadedb.bolt.BoltProtocolPlugin"
 
-ROOT_PASSWORD = "TestPassword123!"
+# The shared fixture password, not a second hardcoded one. Defining our own
+# tripped bandit B105 and, worse, diverged from what every other server test
+# already imports.
+from tests.conftest import TEST_PASSWORD as ROOT_PASSWORD  # noqa: E402
 
 
 def _free_port():
