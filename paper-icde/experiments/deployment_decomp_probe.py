@@ -199,13 +199,19 @@ def main() -> int:
     import shutil
     shutil.rmtree(args.root, ignore_errors=True)
 
+    # create_server() takes no jvm_kwargs (create_database() does), so the heap
+    # has to be pinned on the JVM before the server exists. Same -Xms=-Xmx
+    # policy as every other lane: fixed heap for latency parity, with the
+    # working set reported separately from cgroup anon.
+    from arcadedb_embedded.jvm import start_jvm
+    start_jvm(heap_size=args.heap, jvm_args=[f"-Xms{args.heap}"])
+
     # Arms 1 and 2 share this process, so they share the JVM, heap, GC, engine
     # instance and page cache. That sharing IS the control.
     with arcadedb.create_server(
         args.root,
         root_password=PASSWORD,
         config={"host": "127.0.0.1", "http_port": 2489, "mode": "development"},
-        jvm_kwargs={"heap_size": args.heap, "jvm_args": f"-Xms{args.heap}"},
     ) as server:
         db = server.create_database(DB_NAME)
         load_embedded(db, ROWS)
