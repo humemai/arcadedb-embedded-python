@@ -221,6 +221,22 @@ def main():
     dt = time.perf_counter() - t0
     out["ingest_s"] = round(dt, 2)
     out["ingest_pts_per_s"] = round(len(pts) / dt, 1)
+
+    # Optional settle between ingest and query, OUTSIDE the ingest timer.
+    # Default 0 keeps every arm exactly as it was, because a settle given to
+    # one engine and not the others is the asymmetry this lane already has to
+    # answer for elsewhere. It exists because the provenanced questdb re-run
+    # came out roughly 3x slower on every query than the unprovenanced row it
+    # replaced, while duckdb reproduced within 4%, and the obvious suspect is
+    # that a fresh container queried the instant pg-wire accepts has not
+    # finished absorbing 2.6M rows. Setting this lets that be tested rather
+    # than argued, and the value lands in the artifact so a settled row can
+    # never be mistaken for an unsettled one.
+    settle = float(os.environ.get("TSBS_SETTLE_S", "0"))
+    out["settle_s"] = settle
+    if settle > 0:
+        time.sleep(settle)
+
     for qn in ("q_last", "q_range", "q_global"):
         times = []
         ref = None
