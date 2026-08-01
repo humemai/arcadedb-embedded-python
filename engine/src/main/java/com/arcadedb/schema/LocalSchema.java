@@ -432,6 +432,13 @@ public class LocalSchema implements Schema {
     return bucketMap.containsKey(bucketName);
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * @throws SchemaException if no bucket is registered under that name. Callers that want to handle the missing case
+   *                         must use {@link #getBucketByNameIfExists(String)}; a {@code null} check after this call is
+   *                         unreachable.
+   */
   @Override
   public Bucket getBucketByName(final String name) {
     final Bucket p = bucketMap.get(name);
@@ -441,8 +448,25 @@ public class LocalSchema implements Schema {
   }
 
   @Override
+  public Bucket getBucketByNameIfExists(final String name) {
+    return bucketMap.get(name);
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * @throws SchemaException if the id is out of range or the component it maps to is not a bucket. Callers that want to
+   *                         handle the missing case must use {@link #getBucketByIdIfExists(int)}; a {@code null} check
+   *                         after this call is unreachable.
+   */
+  @Override
   public LocalBucket getBucketById(final int id) {
     return getBucketById(id, true);
+  }
+
+  @Override
+  public LocalBucket getBucketByIdIfExists(final int id) {
+    return getBucketById(id, false);
   }
 
   public LocalBucket getBucketById(final int id, final boolean throwExceptionIfNotFound) {
@@ -634,6 +658,31 @@ public class LocalSchema implements Schema {
   public void dropIndex(final String indexName) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
 
+    checkIndexIsNotBackingAConstraint(indexName);
+
+    dropIndexInternal(indexName);
+  }
+
+  /**
+   * Refuses to drop the index that materialises an edge type's {@code UNIQUE} declaration.
+   * <p>
+   * The type flag is the source of truth for the constraint, so dropping its index directly would leave the schema
+   * advertising a guarantee that nothing enforces. Withdraw the declaration instead - {@code ALTER TYPE <name> WITH
+   * unique = false} - which drops the flag and this index together.
+   */
+  private void checkIndexIsNotBackingAConstraint(final String indexName) {
+    final IndexInternal index = indexMap.get(indexName);
+    if (index == null || index.getTypeName() == null || !existsType(index.getTypeName()))
+      return;
+
+    if (getType(index.getTypeName()) instanceof LocalEdgeType edgeType && edgeType.isUnique()
+        && indexName.equals(LocalEdgeType.uniqueIndexName(edgeType.getName())))
+      throw new SchemaException("Cannot drop index '" + indexName + "' because it enforces the UNIQUE declaration of "
+          + "edge type '" + edgeType.getName() + "'. Use ALTER TYPE " + edgeType.getName()
+          + " WITH unique = false to withdraw the constraint and drop this index");
+  }
+
+  private void dropIndexInternal(final String indexName) {
     recordFileChanges(() -> {
       boolean setMultipleUpdate = !multipleUpdate;
       if (!multipleUpdate)
@@ -1305,7 +1354,7 @@ public class LocalSchema implements Schema {
 
         // DELETE ALL ASSOCIATED INDEXES
         for (final Index m : new ArrayList<>(type.getAllIndexes(true)))
-          dropIndex(m.getName());
+          dropIndexInternal(m.getName());
 
         if (type instanceof LocalVertexType vertexType)
           // DELETE IN/OUT EDGE FILES
@@ -1361,7 +1410,7 @@ public class LocalSchema implements Schema {
         // plain REBUILD/CREATE INDEX. Both directions still need schema.json saved (finally) to be complete.
         for (final Index idx : new ArrayList<>(indexMap.values())) {
           if (idx.getAssociatedBucketId() == bucket.getFileId())
-            dropIndex(idx.getName());
+            dropIndexInternal(idx.getName());
         }
 
         database.getPageManager().deleteFile(database, bucket.getFileId());
@@ -1606,7 +1655,9 @@ public class LocalSchema implements Schema {
         final String kind = (String) schemaType.get("type");
         type = switch (kind) {
           case "v" -> new LocalVertexType(this, typeName);
-          case "e" -> new LocalEdgeType(this, typeName, !schemaType.has("bidirectional") || schemaType.getBoolean("bidirectional"));
+          case "e" -> new LocalEdgeType(this, typeName,
+              !schemaType.has("bidirectional") || schemaType.getBoolean("bidirectional"),
+              schemaType.getBoolean("lightweight", false), schemaType.getBoolean("unique", false));
           case "d" -> new LocalDocumentType(this, typeName);
           case "t" -> {
             final LocalTimeSeriesType tsType = new LocalTimeSeriesType(this, typeName);
@@ -1886,7 +1937,36 @@ public class LocalSchema implements Schema {
               new Object[0];
 
           final DocumentType type = getType(typeName);
-          type.setBucketSelectionStrategy(bucketSelectionStrategy.getString("name"), properties);
+          try {
+            type.setBucketSelectionStrategy(bucketSelectionStrategy.getString("name"), properties);
+          } catch (final Exception e) {
+            // One type's strategy must not take the rest of the load down with it (issue #5637). This block sits
+            // near the end of readConfiguration, so an exception escaping here aborts every remaining type's
+            // strategy AND everything the loader has not reached yet - triggers, function libraries, extensions,
+            // and the compaction file-migration map WAL recovery redirects through - while the outer catch reports
+            // the whole schema as "reset". The type stays on its default round-robin strategy, which loses the
+            // partition pruning but leaves a database that opens and says why.
+            //
+            // The catch has to be broad to give that guarantee, so the LEVEL carries what the type cannot: a
+            // SchemaException or IllegalArgumentException is the strategy declining to be restored - an
+            // unresolvable implementation class, a configuration the suitability check refuses - which is a
+            // property of this database and worth a WARNING. Anything else reaching here is a fault in the bind
+            // path itself, and would otherwise be indistinguishable from an expected refusal in the log of a
+            // database that opens successfully.
+            // IllegalArgumentException is listed alongside SchemaException for the strategies this engine does not
+            // ship: a custom BucketSelectionStrategy named by class in schema.json runs its own setType() here, and
+            // rejecting the type it is handed is what that exception is for. The engine's own strategies no longer
+            // raise it from the bind path - that is the change this issue made - so on a stock database only the
+            // SchemaException arm fires.
+            final boolean expected = e instanceof SchemaException || e instanceof IllegalArgumentException;
+            LogManager.instance().log(this, expected ? Level.WARNING : Level.SEVERE,
+                "Cannot restore the '%s' bucket selection strategy on type '%s': %s. The type falls back to `%s`",
+                // Falling back to toString() because the failures this catch is broad enough to reach include the
+                // ones that carry no message - an NPE most of all - and "...: null" names neither what went wrong
+                // nor where, on the one line an operator is likely to read.
+                e, bucketSelectionStrategy.getString("name"), typeName,
+                e.getMessage() != null ? e.getMessage() : e.toString(), RoundRobinBucketSelectionStrategy.NAME);
+          }
         }
         // Restore the persisted needsRepartition flag AFTER the strategy is set. We always force
         // the flag to the persisted value (true OR false), because {@link
@@ -2379,10 +2459,10 @@ public class LocalSchema implements Schema {
       return index;
 
     } catch (final NeedRetryException e) {
-      dropIndex(indexName);
+      dropIndexInternal(indexName);
       throw e;
     } catch (final Exception e) {
-      dropIndex(indexName);
+      dropIndexInternal(indexName);
       throw new IndexException("Error on creating index '" + indexName + "'", e);
     }
   }

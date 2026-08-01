@@ -146,6 +146,25 @@ public enum GlobalConfiguration {
   TEST("arcadedb.test", SCOPE.JVM,
       "Tells if it is running in test mode. This enables the calling of callbacks for testing purpose", Boolean.class, false),
 
+  // UNUSUAL AMONG THE SETTINGS IN THAT IT INSTALLS SOMETHING. reset() RUNS NO CALLBACK, SO IT RESTORES THE VALUE BUT
+  // LEAVES THE LAST INSTALLED LOGGER IN PLACE: A CALLER THAT WANTS THE PREVIOUS ONE BACK KEEPS LogManager.getLogger()
+  LOG_IMPL("arcadedb.log.impl", SCOPE.JVM,
+      "Logger implementation: 'default' uses java.util.logging, 'slf4j' routes the logs through the SLF4J facade so an embedding application receives them in its own backend. An unrecognized value is reported and falls back to 'default'",
+      String.class, "default", value -> {
+    // STORE THE SPELLING createLogger() MATCHES ON, SO dumpConfiguration() AND toJSON() DO NOT REPORT 'SLF4J' OR
+    // ' slf4j '. AN UNRECOGNIZED VALUE IS KEPT VERBATIM: IT FALLS BACK TO 'default', BUT REWRITING IT WOULD HIDE THE TYPO
+    final String impl = value == null || value.toString().isBlank() ?
+        "default" :
+        value.toString().trim().toLowerCase(Locale.ROOT); // SAME LOCALE createLogger() NORMALIZES WITH
+
+    final LogManager logManager = LogManager.instance();
+    // NULL ONLY IF THIS RUNS RE-ENTRANTLY FROM THE LOG MANAGER'S STATIC INITIALIZER, WHICH READS THE SYSTEM PROPERTY ON ITS OWN
+    if (logManager != null)
+      logManager.setLogger(LogManager.createLogger(impl));
+
+    return impl;
+  }),
+
   MAX_PAGE_RAM("arcadedb.maxPageRAM", SCOPE.DATABASE, "Maximum amount of pages (in MB) to keep in RAM", Long.class, 4 * 1024, // 4GB
       new Callable<>() {
         @Override
@@ -457,6 +476,10 @@ public enum GlobalConfiguration {
   GRAPH_SUPERNODE_THRESHOLD("arcadedb.graph.supernodeThreshold", SCOPE.DATABASE,
       "Approximate number of edges (per vertex, per direction) after which the vertex's edge list is promoted to the striped super-node layout, spreading further appends over multiple files so concurrent insertions on the same hot vertex do not contend. FORWARD-INCOMPATIBLE ON FIRST USE: promotion writes a new record type (the stripe directory), so once any vertex promotes, the database can no longer be opened by releases older than 26.8.1; promotion is one-way. Iteration order on promoted vertices is approximate (newest-generation-first) instead of strict reverse-insertion. 0 disables promotion entirely (databases stay fully readable by older versions)",
       Integer.class, 4096),
+
+  GRAPH_EDGE_LIST_INITIAL_CHUNK_SIZE("arcadedb.graph.edgeListInitialChunkSize", SCOPE.DATABASE,
+      "Size in bytes of the FIRST chunk of a vertex's edge list. Each further chunk doubles the previous one up to 8192 bytes, so the total a vertex allocates is the sum of the series - which means a SMALLER first chunk does not necessarily use less space, it just takes more chunks to reach the same capacity and adds a record header per chunk. Tune with a measured degree distribution: a value close to the bytes a typical vertex's edges occupy avoids both the slack of an oversized first chunk and the extra chunks of an undersized one",
+      Integer.class, 64),
 
   GRAPH_SUPERNODE_STRIPES("arcadedb.graph.supernodeStripes", SCOPE.DATABASE,
       "Number of stripes (separate edge-list files) a super-node's edge list is spread over at promotion. The stripes are hosted in a per-type bucket pool of this many files, created once per type at its first promotion (types without super-nodes cost no files). Write parallelism saturates at the number of concurrent writers, so values beyond the CPU cores rarely help. Values below 2 disable promotion entirely. Recorded per vertex at promotion time",
@@ -917,6 +940,16 @@ public enum GlobalConfiguration {
   SERVER_HTTP_BODY_CONTENT_MAX_SIZE("arcadedb.server.httpBodyContentMaxSize", SCOPE.SERVER,
       "Maximum size in bytes for HTTP request body content. Set to -1 for unlimited size (WARNING: removes DoS protection). Default is 100MB",
       Long.class, 100L * 1024 * 1024), // 100MB DEFAULT
+
+  SERVER_HTTP_QUERY_DEFAULT_LIMIT("arcadedb.server.httpQueryDefaultLimit", SCOPE.SERVER,
+      """
+      Default maximum number of rows the HTTP query/command endpoints serialize into a single response when \
+      the caller states no limit of its own. A request that carries a `limit` field, and a query that carries \
+      its own LIMIT clause, are both honored as written and are never capped by this value. When this default \
+      does cut a result short the response reports `"truncated": true` next to `returned` and `limit`, and the \
+      server logs a warning: the truncation is never silent (issue #5711). Set to -1 or 0 for unlimited \
+      (WARNING: removes the protection against materializing an unbounded result set in memory). Default is 20000""",
+      Integer.class, 20_000),
 
   SERVER_HTTP_STREAMING_READ_TIMEOUT("arcadedb.server.httpStreamingReadTimeout", SCOPE.SERVER,
       """

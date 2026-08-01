@@ -28,6 +28,7 @@ import com.arcadedb.database.TransactionContext;
 import com.arcadedb.engine.LocalBucket;
 import com.arcadedb.exception.ConcurrentModificationException;
 import com.arcadedb.exception.DatabaseOperationException;
+import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.Schema;
 import com.arcadedb.serializer.json.JSONArray;
@@ -69,6 +70,39 @@ public class EdgeLinkedList {
     return new EdgeIteratorFilter((DatabaseInternal) vertex.getDatabase(), vertex, direction, lastSegment, edgeTypes);
   }
 
+  /**
+   * #5680: {@link #edgeIterator} for a caller that is about to REMOVE every edge it yields (today,
+   * {@code GraphEngine.deleteVertex}), so a part of the list that cannot be read must surface rather than be
+   * skipped - the caller deletes the vertex record on top of whatever this walk returned, and an entry silently
+   * dropped here outlives its endpoint.
+   * <p>
+   * On the classic layout the walk is a single chain and the two are the same iterator: an unreadable hop already
+   * escapes, and the caller maps it to a retryable conflict. The distinction exists for the striped layout, where
+   * {@link StripedEdgeList} composes one iterator per stripe chain and a chain whose head cannot be read is
+   * legitimately skipped on a READ - see {@code StripedEdgeList.addChain}.
+   */
+  public Iterator<Edge> edgeIteratorForRemoval() {
+    return edgeIterator();
+  }
+
+  /**
+   * Same as {@link #edgeIterator(String...)} but yielding only the edges that reach the given
+   * neighbour vertex.
+   * <p>
+   * The filter is applied to the neighbour pointer stored beside each edge pointer in the segment,
+   * so a non-matching edge is discarded without its record being loaded. Use this instead of
+   * iterating every edge and comparing endpoints whenever the far end is already known.
+   */
+  public Iterator<Edge> edgeIteratorConnectedTo(final RID neighbor, final String... edgeTypes) {
+    final ResettableIteratorBase<Edge> iterator;
+    if (edgeTypes == null || edgeTypes.length == 0)
+      iterator = new EdgeIterator(lastSegment, vertex.getIdentity(), direction);
+    else
+      iterator = new EdgeIteratorFilter((DatabaseInternal) vertex.getDatabase(), vertex, direction, lastSegment, edgeTypes);
+    iterator.setNeighborVertexFilter(neighbor);
+    return iterator;
+  }
+
   public Iterator<Vertex> vertexIterator(final String... edgeTypes) {
     if (edgeTypes == null || edgeTypes.length == 0)
       return new VertexIterator((DatabaseInternal) vertex.getDatabase(), lastSegment);
@@ -79,6 +113,28 @@ public class EdgeLinkedList {
     if (edgeTypes == null || edgeTypes.length == 0)
       return new RIDIterator(lastSegment);
     return new RIDIteratorFilter((DatabaseInternal) vertex.getDatabase(), lastSegment, edgeTypes);
+  }
+
+  /**
+   * True if the list already holds a lightweight edge of the given type reaching the given vertex. Backs the
+   * {@link com.arcadedb.schema.EdgeType#isUnique()} check, which has no index to consult and therefore walks the
+   * whole chain: O(degree).
+   */
+  public boolean containsLightEdge(final int edgeTypeBucketId, final RID vertexRID) {
+    EdgeSegment current = lastSegment;
+    while (current != null) {
+      if (current.containsLightEdge(edgeTypeBucketId, vertexRID))
+        return true;
+
+      final EdgeSegment prev = current.getPrevious();
+      if (prev != null && prev.getIdentity().equals(current.getIdentity()))
+        // CURRENT POINT TO ITSELF, AVOID LOOPS
+        break;
+
+      current = prev;
+    }
+
+    return false;
   }
 
   public boolean containsEdge(final RID rid) {
@@ -293,7 +349,10 @@ public class EdgeLinkedList {
   public void removeEdge(final Edge edge) {
     final RID rid = edge.getIdentity();
     final boolean byEdgeRID = rid.getPosition() > -1;
-    // DELETE BY VERTEX RID: resolve the target vertex once, outside the walk.
+    // A lightweight edge has no record to point at, so it is located by (edge type bucket, far endpoint) instead -
+    // never by the far endpoint alone, which would unlink whichever other edge happens to reach the same neighbour
+    // first, of any type, regular ones included.
+    final int edgeTypeBucketId = rid.getBucketId();
     final RID targetVertexRID = byEdgeRID ? null : (direction == Vertex.DIRECTION.OUT ? edge.getIn() : edge.getOut());
 
     RID prevBrowsedRID = null;
@@ -303,14 +362,16 @@ public class EdgeLinkedList {
       // anchoring it (loadChunkForWrite -> fetchPageInTransaction -> page.modify()) would copy its whole page
       // buffer into the tx for nothing (churn/GC on wide super-nodes; the copy is dropped again at commit
       // because an unwritten page is pruned before the version check). Anchor a chunk ONLY once a read-only
-      // probe proves it holds the target, right before the mutating removeEdge/removeVertex.
+      // probe proves it holds the target, right before the mutating removeEdge/removeLightEdge.
       final boolean present = byEdgeRID ?
           current.containsEdge(rid) :
-          current.getFirstEdgeConnectedToVertex(targetVertexRID, null) != null;
+          current.containsLightEdge(edgeTypeBucketId, targetVertexRID);
 
       if (present) {
         final EdgeSegment modifiable = loadChunkForWrite(current.getIdentity());
-        final int deleted = byEdgeRID ? modifiable.removeEdge(rid) : modifiable.removeVertex(targetVertexRID);
+        final int deleted = byEdgeRID ?
+            modifiable.removeEdge(rid) :
+            modifiable.removeLightEdge(edgeTypeBucketId, targetVertexRID);
         if (deleted > 0) {
           updateSegment(modifiable, prevBrowsedRID);
           break;
@@ -373,6 +434,13 @@ public class EdgeLinkedList {
    * updateRecord captures the page only later, at the newer version if a concurrent transaction modified the
    * same chunk in between. The commit-time MVCC check would then compare matching versions, miss the conflict,
    * and let the stale chunk buffer silently overwrite the concurrent change (a lost update / dropped edge).
+   * <p>
+   * A chunk that is not readable at all maps to a retryable {@link ConcurrentModificationException}: the directory
+   * page and the chunk page of a concurrent commit are published one page at a time (readers take no commit lock),
+   * so a freshly-read head RID can momentarily point to a record whose page is not visible yet. That is transient
+   * by construction - surfacing it as a conflict lets the transaction retry loop re-read a consistent view instead
+   * of raising a "record not found" that reads like a fact about the graph, and that a caller further up was
+   * entitled to take for "there was nothing here to remove" (#5670).
    */
   protected EdgeSegment loadChunkForWrite(final RID chunkRID) {
     final DatabaseInternal database = (DatabaseInternal) vertex.getDatabase();
@@ -384,13 +452,17 @@ public class EdgeLinkedList {
     final LocalBucket bucket = (LocalBucket) database.getSchema().getBucketById(chunkRID.getBucketId());
     try {
       bucket.fetchPageInTransaction(chunkRID);
+      // Read THROUGH the anchored page, bypassing the record cache: a cached copy read before the anchor can be
+      // one version older than the page just anchored - writing that stale buffer back at commit would pass the
+      // MVCC check (the version matches) and silently erase a concurrent append.
+      return new MutableEdgeSegment(database, chunkRID, bucket.getRecord(chunkRID).copyOfContent());
     } catch (final IOException e) {
       throw new DatabaseOperationException("Error on loading edge chunk page " + chunkRID, e);
+    } catch (final RecordNotFoundException e) {
+      throw new ConcurrentModificationException(
+          "Edge list " + direction + " chunk " + chunkRID + " of vertex " + vertex.getIdentity()
+              + " not visible yet (concurrent commit in flight)");
     }
-    // Read THROUGH the anchored page, bypassing the record cache: a cached copy read before the anchor can be
-    // one version older than the page just anchored - writing that stale buffer back at commit would pass the
-    // MVCC check (the version matches) and silently erase a concurrent append.
-    return new MutableEdgeSegment(database, chunkRID, bucket.getRecord(chunkRID).copyOfContent());
   }
 
   /**
@@ -486,9 +558,22 @@ public class EdgeLinkedList {
    * #5155: reads an edge-list chunk for a read-only walk hop, WITHOUT anchoring its page in the transaction.
    * Used while scanning the chain for the chunk to modify; the modified chunk (and, on an empty-chunk relink,
    * the previous-browsed chunk) is re-loaded through {@link #loadChunkForWrite} before being mutated.
+   * <p>
+   * #5670: called ONLY from the three removal walks, so a chunk that cannot be read is a retryable conflict, never
+   * a reason to stop walking. The hop pointer this transaction is following was read before the walk reached it,
+   * and a concurrent commit can have relinked that chunk out of the chain (an emptied chunk is deleted, see
+   * {@link #updateSegment}) or not published its page yet. Abandoning the walk there would end the removal without
+   * having removed anything, while the caller goes on to delete the edge record - leaving a back-reference to a
+   * record that no longer exists. Retrying re-reads the chain from the vertex's current head instead.
    */
   private EdgeSegment readChunk(final RID chunkRID) {
-    return (EdgeSegment) ((DatabaseInternal) vertex.getDatabase()).lookupByRID(chunkRID, true);
+    try {
+      return (EdgeSegment) ((DatabaseInternal) vertex.getDatabase()).lookupByRID(chunkRID, true);
+    } catch (final RecordNotFoundException e) {
+      throw new ConcurrentModificationException(
+          "Edge list " + direction + " chunk " + chunkRID + " of vertex " + vertex.getIdentity()
+              + " is no longer readable (concurrent commit in flight)");
+    }
   }
 
   private int computeBestSize() {

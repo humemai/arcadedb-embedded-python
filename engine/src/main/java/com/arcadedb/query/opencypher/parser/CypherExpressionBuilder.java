@@ -21,6 +21,7 @@ package com.arcadedb.query.opencypher.parser;
 import com.arcadedb.database.Document;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.CommandParsingException;
+import com.arcadedb.log.LogManager;
 import com.arcadedb.query.opencypher.ast.*;
 import com.arcadedb.query.opencypher.grammar.Cypher25Parser;
 import com.arcadedb.query.opencypher.temporal.CypherDate;
@@ -40,6 +41,7 @@ import org.antlr.v4.runtime.tree.TerminalNode;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.logging.Level;
 
 /**
  * Handles expression parsing for the Cypher AST builder.
@@ -1825,8 +1827,11 @@ class CypherExpressionBuilder {
     else
       subquery = originalText.substring(7, originalText.length() - 1).trim(); // fallback
 
+    final CypherStatement parsedBody = parseSubqueryBody(ctx.queryWithLocalDefinitions(), ctx.patternList(),
+        ctx.whereClause());
+
     // Check for update clauses inside EXISTS (not allowed)
-    if (CorrelatedSubqueryRewriter.containsUpdateClause(subquery))
+    if (containsUpdateClause(parsedBody, subquery))
       throw new CommandParsingException(
           "InvalidClauseComposition: Existential subquery cannot contain update clauses");
 
@@ -1838,7 +1843,90 @@ class CypherExpressionBuilder {
       subquery = subquery + " RETURN true";
     }
 
-    return new ExistsExpression(subquery, text);
+    return new ExistsExpression(subquery, text, parsedBody);
+  }
+
+  /**
+   * Tells whether a subquery body writes, which the three read-only subquery expressions must reject.
+   * <p>
+   * Answered from the parse tree when there is one: a clause is a clause because of where it sits, which is what the
+   * statement already recorded in {@link CypherStatement#isReadOnly()}. The text scan it replaces had to guess from
+   * spelling alone and got two cases wrong by construction - an update keyword inside a comment was read as a clause,
+   * and {@code WITH 1 AS set RETURN set} is lexically indistinguishable from {@code SET n.x = 1} (issue #5541 fixed
+   * the third, {@code WHERE n.name = 'SET x'}, by teaching the scan about string literals). It stays as the fallback
+   * for a body the statement builder declined, where there is nothing else to answer from.
+   */
+  private static boolean containsUpdateClause(final CypherStatement parsedBody, final String bodyText) {
+    if (parsedBody != null)
+      return !parsedBody.isReadOnly();
+    return CorrelatedSubqueryRewriter.containsUpdateClause(bodyText);
+  }
+
+  /**
+   * Builds the AST of a subquery body from the parse tree ANTLR already produced for it, so that the parse-time
+   * checks of {@link CypherSemanticValidator} can walk inside it (issue #5626).
+   * <p>
+   * The three subquery expressions keep their body as text and re-parse it once per outer row - what runs is the
+   * text after {@link CorrelatedSubqueryRewriter} has correlated it to that row, so the text has to stay. This
+   * builds the body <i>as written</i> alongside it, off the existing sub-tree rather than by re-lexing the text.
+   * <p>
+   * What that costs is a full statement build over an existing sub-tree, not a bare tree walk: the visit goes through
+   * the same {@link CypherASTBuilder} pipeline any statement does, rewriters included. A reader sizing it should read
+   * it as "one more statement built", not "one traversal".
+   * <p>
+   * Two things bound it. It is paid once per distinct query text, because {@code CypherStatementCache} keys the whole
+   * parse - this AST included, since it hangs off the statement - on the query string itself. And nesting adds rather
+   * than multiplies: a body reached from here is built by its own visit, and the enclosing statement holds the
+   * subquery only as an expression, so a subquery inside a subquery is built once as part of its parent's body, not
+   * again for every level above it. The total is linear in the text.
+   * <p>
+   * A body written as a bare pattern - {@code EXISTS { (n)-[:KNOWS]->(m) }} - has no {@code queryWithLocalDefinitions}
+   * of its own and is wrapped into the {@code MATCH} the executor synthesizes for it anyway.
+   * <p>
+   * <b>A body this cannot build is not a query this rejects.</b> Building the AST here puts the statement builder on
+   * the parse path of a body that used to be carried as text and only re-parsed at execution, so a construct ANTLR
+   * accepts but the builder cannot assemble would turn a query that used to run into a parse failure - a regression,
+   * and one this issue has no business causing. The build is therefore best-effort: on failure the body stays text
+   * only, the walk treats the expression as a leaf exactly as it did before #5626, and execution re-parses the text
+   * as it always has. Logged at {@code FINE} so the gap is still discoverable rather than permanent, since a body
+   * with no AST is a body the parse-time checks do not see.
+   *
+   * @param queryCtx   the body when it is a full query, or null when it is a bare pattern
+   * @param patternCtx the pattern list of a bare-pattern body, or null
+   * @param whereCtx   the trailing WHERE of a bare-pattern body, or null
+   */
+  private static CypherStatement parseSubqueryBody(final Cypher25Parser.QueryWithLocalDefinitionsContext queryCtx,
+      final Cypher25Parser.PatternListContext patternCtx, final Cypher25Parser.WhereClauseContext whereCtx) {
+    if (queryCtx == null && patternCtx == null)
+      return null;
+
+    try {
+      // A fresh builder: CypherASTBuilder holds no state across a visit, and the expression builder it owns is the one
+      // running right now, so it cannot be reused re-entrantly.
+      final CypherASTBuilder astBuilder = new CypherASTBuilder();
+
+      if (queryCtx != null)
+        return astBuilder.visitQueryWithLocalDefinitions(queryCtx);
+
+      final StatementBuilder builder = new StatementBuilder();
+      builder.addMatch(CypherASTBuilder.newMatchClause(astBuilder.visitPatternList(patternCtx), false,
+          whereCtx != null ? astBuilder.visitWhereClause(whereCtx) : null));
+      return builder.build();
+    } catch (final CommandParsingException e) {
+      // The builder refusing a body it does not support is the case this fallback is for, and it is not news.
+      LogManager.instance().log(CypherExpressionBuilder.class, Level.FINE,
+          "Cannot build the AST of subquery body '%s': it keeps its text and escapes the parse-time checks", e,
+          CypherASTBuilder.getOriginalText(queryCtx != null ? queryCtx : patternCtx));
+      return null;
+    } catch (final RuntimeException e) {
+      // Anything else is a defect in the builder rather than a body it declines, and the cost of it is invisible -
+      // the query still runs, the checks just stop seeing inside that body. WARNING so a degraded body shows up in
+      // an ordinary log instead of only under FINE, which is the difference between discoverable and theoretical.
+      LogManager.instance().log(CypherExpressionBuilder.class, Level.WARNING,
+          "Unexpected failure building the AST of subquery body '%s': it keeps its text and escapes the parse-time "
+              + "checks", e, CypherASTBuilder.getOriginalText(queryCtx != null ? queryCtx : patternCtx));
+      return null;
+    }
   }
 
   /**
@@ -1857,12 +1945,19 @@ class CypherExpressionBuilder {
     else
       subquery = originalText.substring(8, originalText.length() - 1).trim(); // fallback "COLLECT{" prefix
 
+    final CypherStatement parsedBody = parseSubqueryBody(ctx.queryWithLocalDefinitions(), null, null);
+
     // Update clauses are not allowed inside a COLLECT subquery
-    if (CorrelatedSubqueryRewriter.containsUpdateClause(subquery))
+    if (containsUpdateClause(parsedBody, subquery))
       throw new CommandParsingException(
           "InvalidClauseComposition: COLLECT subquery cannot contain update clauses");
 
-    return new CollectExpression(subquery, text);
+    // No pattern/where context to pass, and none to miss: the grammar gives COLLECT one alternative where EXISTS and
+    // COUNT have two - "collectExpression: COLLECT LCURLY queryWithLocalDefinitions RCURLY" against
+    // "... (queryWithLocalDefinitions | matchMode? patternList whereClause?) ..." - because a COLLECT body has to
+    // RETURN the value being collected. So queryWithLocalDefinitions() is never null here, and a COLLECT body can
+    // never end up without an AST and quietly skip the checks this issue exists to reach it with.
+    return new CollectExpression(subquery, text, parsedBody);
   }
 
   /**
@@ -1883,7 +1978,10 @@ class CypherExpressionBuilder {
     else
       subquery = originalText.substring(6, originalText.length() - 1).trim(); // fallback "COUNT{" prefix
 
-    if (CorrelatedSubqueryRewriter.containsUpdateClause(subquery))
+    final CypherStatement parsedBody = parseSubqueryBody(ctx.queryWithLocalDefinitions(), ctx.patternList(),
+        ctx.whereClause());
+
+    if (containsUpdateClause(parsedBody, subquery))
       throw new CommandParsingException(
           "InvalidClauseComposition: COUNT subquery cannot contain update clauses");
 
@@ -1894,7 +1992,7 @@ class CypherExpressionBuilder {
       subquery = subquery + " RETURN 1";
     }
 
-    return new CountExpression(subquery, text);
+    return new CountExpression(subquery, text, parsedBody);
   }
 
   /**

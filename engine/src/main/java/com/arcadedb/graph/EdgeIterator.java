@@ -56,6 +56,13 @@ public class EdgeIterator extends ResettableIteratorBase<Edge> {
         nextEdgeRID = currentContainer.getRID(currentPosition);
         nextVertexRID = currentContainer.getRID(currentPosition);
 
+        if (!matchesNeighborFilter(nextVertexRID)) {
+          // FILTER IT OUT ON THE POINTER READ FROM THE SEGMENT, BEFORE ANY RECORD IS TOUCHED
+          nextEdgeRID = null;
+          nextVertexRID = null;
+          continue;
+        }
+
         // VALIDATE A NON-LIGHTWEIGHT EDGE HERE SO A DANGLING POINTER (edge record removed but the link still in
         // the segment) IS SKIPPED WHILE PEEKING, KEEPING hasNext()/next() CONSISTENT WITH THE Iterator CONTRACT.
         // OTHERWISE next() WOULD SKIP THE RECORD AND THROW NoSuchElementException WHEN THE SEGMENT ENDS - WHICH
@@ -97,9 +104,9 @@ public class EdgeIterator extends ResettableIteratorBase<Edge> {
       final DocumentType edgeType = currentContainer.getDatabase().getSchema().getTypeByBucketId(nextEdgeRID.getBucketId());
 
       if (direction == Vertex.DIRECTION.OUT)
-        return new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdgeRID, vertex, nextVertexRID);
+        return new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdgeRID.getBucketId(), vertex, nextVertexRID);
       else
-        return new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdgeRID, nextVertexRID, vertex);
+        return new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdgeRID.getBucketId(), nextVertexRID, vertex);
     }
 
     ++browsed;
@@ -128,9 +135,9 @@ public class EdgeIterator extends ResettableIteratorBase<Edge> {
         final DocumentType edgeType = currentContainer.getDatabase().getSchema().getTypeByBucketId(nextEdgeRID.getBucketId());
 
         if (direction == Vertex.DIRECTION.OUT)
-          new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdgeRID, vertex, nextVertexRID).delete();
+          new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdgeRID.getBucketId(), vertex, nextVertexRID).delete();
         else
-          new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdgeRID, nextVertexRID, vertex).delete();
+          new ImmutableLightEdge(currentContainer.getDatabase(), edgeType, nextEdgeRID.getBucketId(), nextVertexRID, vertex).delete();
       } else
         ((Edge) currentContainer.getDatabase().lookupByRID(nextEdgeRID, false)).delete();
     } catch (final RecordNotFoundException e) {

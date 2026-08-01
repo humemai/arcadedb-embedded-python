@@ -23,6 +23,7 @@ import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.MutableDocument;
 import com.arcadedb.database.MutableEmbeddedDocument;
 import com.arcadedb.database.RID;
+import com.arcadedb.graph.LightEdge;
 import com.arcadedb.graph.MutableEdge;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
@@ -37,6 +38,7 @@ import com.arcadedb.integration.importer.Parser;
 import com.arcadedb.integration.importer.SourceSchema;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.DocumentType;
+import com.arcadedb.schema.LocalEdgeType;
 import com.arcadedb.schema.LocalVertexType;
 import com.arcadedb.schema.Schema;
 import com.arcadedb.schema.TypeLSMVectorIndexBuilder;
@@ -129,7 +131,14 @@ public class JsonlImporterFormat extends AbstractImporterFormat {
 
           var docType = switch (typeType) {
             case "v" -> databaseSchema.createVertexType(typeName);
-            case "e" -> databaseSchema.createEdgeType(typeName);
+            // An edge type's declarations are part of the schema, not decoration: recreating it with
+            // createEdgeType() alone silently turned a unidirectional type bidirectional, and would turn a
+            // LIGHTWEIGHT type into a record-backed one, changing the storage shape of every imported edge.
+            // UNIQUE is deliberately NOT set here - see the pass after the indexes below.
+            case "e" -> databaseSchema.buildEdgeType().withName(typeName)
+                .withBidirectional(!type.has("bidirectional") || type.getBoolean("bidirectional"))
+                .withLightweight(type.getBoolean("lightweight", false))
+                .create();
             case "d" -> databaseSchema.createDocumentType(typeName);
             default -> throw new IllegalStateException("Unexpected value: " + typeType);
           };
@@ -192,6 +201,20 @@ public class JsonlImporterFormat extends AbstractImporterFormat {
 
         });
 
+    // Restore the UNIQUE declaration on edge types, last.
+    //
+    // On a regular edge type the constraint is materialised as the (@out, @in) index, which the export already
+    // carries and the loop above has just recreated. Declaring UNIQUE at type-creation time would have built a
+    // second one and collided with it - and would also have created the two endpoint properties before the
+    // property loop tried to. On a LIGHTWEIGHT type there is no index at all and the flag is the whole constraint.
+    types.keySet()
+        .forEach(typeName -> {
+          final JSONObject type = types.getJSONObject(typeName);
+          if ("e".equals(type.getString("type")) && type.getBoolean("unique", false)
+              && databaseSchema.getType(typeName) instanceof LocalEdgeType edgeType)
+            edgeType.setUnique(true);
+        });
+
     // final report
     databaseSchema.getTypes()
         .forEach(type -> logger.logLine(2, " - Created type %s: %s", type.getName(), type.toJSON()));
@@ -204,16 +227,13 @@ public class JsonlImporterFormat extends AbstractImporterFormat {
    * populate the graph incrementally through the index {@code put} hook.
    */
   private void loadVectorIndex(final Schema databaseSchema, final String typeName, final String[] fields, final JSONObject idx) {
-    // The exporter (LSMVectorIndex.toJSON) writes the similarity function under "similarityFunction", while the
-    // builder reads "similarity"; bridge the two so the configured metric survives the round-trip.
-    final JSONObject metadata = new JSONObject(idx.toMap());
-    if (metadata.has("similarityFunction") && !metadata.has("similarity"))
-      metadata.put("similarity", metadata.getString("similarityFunction"));
-
+    // withPersistedMetadata, not withMetadata: the exported definition is what LSMVectorIndex.toJSON() wrote, so it
+    // carries structural keys (type, bucket, indexName, version, ...) that the METADATA-clause reader rejects as typos,
+    // and it names the metric "similarityFunction" rather than the clause's "similarity" (issue #5639).
     final TypeLSMVectorIndexBuilder builder = databaseSchema.buildTypeIndex(typeName, fields)
         .withType(Schema.INDEX_TYPE.LSM_VECTOR)
         .withLSMVectorType();
-    builder.withMetadata(metadata);
+    builder.withPersistedMetadata(idx);
     builder.withIgnoreIfExists(true);
     builder.create();
   }
@@ -279,8 +299,12 @@ public class JsonlImporterFormat extends AbstractImporterFormat {
       var sourceVertex = (Vertex) database.lookupByRID(newOut, false);
 
       MutableEdge imported = sourceVertex.newEdge(edgeType, newIn);
-      loadProperties(database, imported, properties);
-      imported.save();
+      if (!(imported instanceof LightEdge)) {
+        // A lightweight edge has no record: it is already connected by newEdge, carries no properties, and
+        // rejects fromMap()/save() by design.
+        loadProperties(database, imported, properties);
+        imported.save();
+      }
 
       context.createdEdges.incrementAndGet();
     } catch (Exception e) {

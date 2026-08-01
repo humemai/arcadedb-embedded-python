@@ -594,6 +594,13 @@ public class RemoteSchema implements Schema {
 
   @Deprecated
   @Override
+  public RemoteBucket getBucketByNameIfExists(final String name) {
+    checkSchemaIsLoaded();
+    return buckets.get(name);
+  }
+
+  @Deprecated
+  @Override
   public Component getFileByIdIfExists(final int id) {
     throw new UnsupportedOperationException();
   }
@@ -608,6 +615,18 @@ public class RemoteSchema implements Schema {
   @Deprecated
   @Override
   public LocalBucket getBucketById(final int id) {
+    throw new UnsupportedOperationException();
+  }
+
+  /**
+   * Throws rather than returning {@code null}, matching {@link #getBucketById(int)} and
+   * {@link #getFileByIdIfExists(int)} on this class: a remote schema carries buckets by name only, so it cannot
+   * resolve an id at all. Returning {@code null} would claim "no such bucket", which is a different and wrong
+   * answer to "I cannot tell".
+   */
+  @Deprecated
+  @Override
+  public LocalBucket getBucketByIdIfExists(final int id) {
     throw new UnsupportedOperationException();
   }
 
@@ -766,7 +785,9 @@ public class RemoteSchema implements Schema {
           break;
         case "edge":
           type = new RemoteEdgeType(remoteDatabase, record,
-              record.hasProperty("bidirectional") ? (Boolean) record.getProperty("bidirectional") : true);
+              record.hasProperty("bidirectional") ? (Boolean) record.getProperty("bidirectional") : true,
+              record.hasProperty("lightweight") && (Boolean) record.getProperty("lightweight"),
+              record.hasProperty("unique") && (Boolean) record.getProperty("unique"));
           break;
         case LocalTimeSeriesType.KIND_CODE: // timeseries: represented as document type for remote schema navigation
           type = new RemoteDocumentType(remoteDatabase, record);

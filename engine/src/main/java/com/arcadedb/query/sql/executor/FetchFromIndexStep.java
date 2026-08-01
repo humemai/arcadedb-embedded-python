@@ -37,7 +37,6 @@ import com.arcadedb.query.sql.parser.GtOperator;
 import com.arcadedb.query.sql.parser.InCondition;
 import com.arcadedb.query.sql.parser.IsNullCondition;
 import com.arcadedb.query.sql.parser.LeOperator;
-import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.query.sql.parser.LtOperator;
 import com.arcadedb.query.sql.parser.PCollection;
 import com.arcadedb.query.sql.parser.ValueExpression;
@@ -51,16 +50,24 @@ import java.util.*;
  */
 public class FetchFromIndexStep extends AbstractExecutionStep {
   protected final String                                         indexName;
-  private final   List<IndexCursor>                              nextCursors = new ArrayList<>();
+  /** Package-private so a test can observe that a restart released them instead of only dropping the references. */
+  final           List<IndexCursor>                              nextCursors = new ArrayList<>();
+  /**
+   * The per-value cursors an {@code IN} condition opens ({@link #processInCondition()} hands each to
+   * {@code customIterator} rather than to {@code nextCursors}). Held here only so {@link #releaseCursors()} can close
+   * them: nothing else ever would, so an {@code IN} list left the same retired-file guard behind that {@code close()}
+   * exists to release.
+   */
+  final           List<IndexCursor>                              customCursors = new ArrayList<>();
   protected       RangeIndex                                     index;
   protected       BooleanExpression                              condition;
   private       BinaryCondition additionalRangeCondition;
   private final boolean         orderAsc;
   private       long            count       = 0;
   private         boolean                                        inited      = false;
-  private         IndexCursor                                    cursor;
+  /** Package-private for the same reason as {@link #nextCursors}. */
+  IndexCursor                                                    cursor;
   private         MultiIterator<Map.Entry<Object, Identifiable>> customIterator;
-  private         Iterator<?>                                    nullKeyIterator;
   private         Pair<Object, Identifiable>                     nextEntry   = null;
   // Float so full-text BM25 scores below 1.0 are not truncated to 0 (which the `> 0` guard would then suppress). For
   // integer-scored indexes getFloatScore() returns the int value unchanged.
@@ -155,11 +162,6 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
             nextEntry = new Pair<>(entry.getKey(), entry.getValue().getIdentity());
             nextEntryScore = 0;
           }
-          if (nextEntry == null && nullKeyIterator != null && nullKeyIterator.hasNext()) {
-            Identifiable nextValue = (Identifiable) nullKeyIterator.next();
-            nextEntry = new Pair<>(null, nextValue.getIdentity());
-            nextEntryScore = 0;
-          }
 
           if (nextEntry == null)
             updateIndexStats();
@@ -184,10 +186,17 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
 
   @Override
   public void close() {
-    // Release the index cursors even when the scan did not run to exhaustion (e.g. a LIMIT was
-    // reached or the result set was closed early): compacted-series cursors register with their
-    // file so a full compaction defers dropping it, and an unclosed cursor would keep the retired
-    // file alive until the next database restart.
+    releaseCursors();
+    super.close();
+  }
+
+  /**
+   * Releases the index cursors even when the scan did not run to exhaustion (e.g. a LIMIT was reached, the result set
+   * was closed early, or the step is being restarted): compacted-series cursors register with their file so a full
+   * compaction defers dropping it, and an unclosed cursor would keep the retired file alive until the next database
+   * restart.
+   */
+  private void releaseCursors() {
     if (cursor != null) {
       cursor.close();
       cursor = null;
@@ -195,8 +204,9 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     for (final IndexCursor c : nextCursors)
       c.close();
     nextCursors.clear();
-
-    super.close();
+    for (final IndexCursor c : customCursors)
+      c.close();
+    customCursors.clear();
   }
 
   private void updateIndexStats() {
@@ -278,6 +288,7 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
       customIterator = new MultiIterator<>();
       for (final Object item : MultiValue.getMultiValueIterable(rightValue)) {
         final IndexCursor localCursor = createCursor(equals, unwrapSubQueryResult(item), context);
+        customCursors.add(localCursor);
 
         customIterator.addIterator(new Iterator<Map.Entry>() {
           @Override
@@ -336,42 +347,20 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     fetchNextEntry();
   }
 
+  /**
+   * A flat scan needs NO separate pass over the NULL-keyed entries, under any {@code NULL_STRATEGY}: with
+   * {@code INDEX} they are already in the B-tree and the cursor returns them at their sorted position (first
+   * ascending, last descending); with {@code SKIP} they were never indexed; with {@code ERROR} they could not be
+   * inserted. A second iterator over {@code index.get(new Object[keyCount])} would therefore either duplicate rows
+   * or return nothing - which is why the {@code fetchNullKeys()} that built one was never called and has been
+   * removed (#5662).
+   */
   private void processFlatIteration() {
     cursor = index.iterator(isOrderAsc());
-
-    // NOTE: Do NOT call fetchNullKeys() here.
-    // When NULL_STRATEGY is INDEX, NULL-keyed entries are already stored in the B-tree
-    // and will be returned by the cursor iterator. Calling fetchNullKeys() would cause
-    // duplicate entries to be returned since it creates a separate iterator for NULL keys.
-    // The cursor will naturally return NULL entries at their sorted position:
-    // - For ASC order: NULL entries appear first (NULL < all non-null values)
-    // - For DESC order: NULL entries appear last
-    nullKeyIterator = Collections.emptyIterator();
 
     if (cursor != null) {
       fetchNextEntry();
     }
-  }
-
-  private void fetchNullKeys() {
-    if (index.getNullStrategy() != LSMTreeIndexAbstract.NULL_STRATEGY.INDEX) {
-      nullKeyIterator = Collections.emptyIterator();
-      return;
-    }
-    final int keyCount = index.getPropertyNames().size();
-    final Object[] nullKeys = new Object[keyCount];
-    final IndexCursor nullCursor = index.get(nullKeys);
-    nullKeyIterator = new Iterator<>() {
-      @Override
-      public boolean hasNext() {
-        return nullCursor.hasNext();
-      }
-
-      @Override
-      public Identifiable next() {
-        return nullCursor.next();
-      }
-    };
   }
 
   private void init(final PCollection fromKey, final boolean fromKeyIncluded, final PCollection toKey,
@@ -661,8 +650,25 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     return result;
   }
 
+  /**
+   * Restarts the step: {@code inited} goes back to false and {@code init()} rebuilds the whole cursor set from scratch
+   * (that is what {@code UpdateExecutionPlan.reset()} relies on - it re-runs the plan straight after). So the cursors of
+   * the previous run must be RELEASED here, not just dropped (#5635):
+   * <ul>
+   *   <li>a {@code LSMTreeIndexUnderlyingCompactedSeriesCursor} stays registered with its file, and
+   *       {@code LSMTreeIndex.dropRetiredCompactedIndexes} skips a retired file that still has one - for the lifetime of
+   *       the database, since nothing else will ever close it;</li>
+   *   <li>{@code nextCursors} was not even cleared, so the pending cursors of the previous run survived into the new one
+   *       and {@code init()} appended to them: the restarted scan replayed the OLD, partly consumed cursors before
+   *       reaching the ones it had just opened.</li>
+   * </ul>
+   * Not propagated to {@code prev}: {@code SelectExecutionPlan.reset()} walks every step itself, so a step that reset
+   * its predecessor would reset it twice.
+   */
   @Override
   public void reset() {
+    releaseCursors();
+
     index = null;
     condition = condition == null ? null : condition.copy();
     additionalRangeCondition = additionalRangeCondition == null ? null : additionalRangeCondition.copy();
@@ -671,10 +677,9 @@ public class FetchFromIndexStep extends AbstractExecutionStep {
     count = 0;
 
     inited = false;
-    cursor = null;
     customIterator = null;
-    nullKeyIterator = null;
     nextEntry = null;
+    nextEntryScore = 0f;
   }
 
   @Override

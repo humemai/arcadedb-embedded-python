@@ -34,6 +34,7 @@ import com.arcadedb.query.opencypher.ast.ClauseEntry;
 import com.arcadedb.query.opencypher.ast.ComparisonExpression;
 import com.arcadedb.query.opencypher.ast.ComparisonExpressionWrapper;
 import com.arcadedb.query.opencypher.ast.CreateClause;
+import com.arcadedb.query.opencypher.ast.CypherReferencedVariables;
 import com.arcadedb.query.opencypher.ast.CypherStatement;
 import com.arcadedb.query.opencypher.ast.DeleteClause;
 import com.arcadedb.query.opencypher.ast.Direction;
@@ -404,7 +405,7 @@ public class CypherExecutionPlan {
     final List<ClauseEntry> clausesInOrder = statement.getClausesInOrder();
     final AbstractExecutionStep rootStep;
     if (clausesInOrder != null && !clausesInOrder.isEmpty())
-      rootStep = buildExecutionStepsWithOrder(context, clausesInOrder, seedStep);
+      rootStep = buildExecutionStepsWithOrder(context, clausesInOrder, seedStep, seedIsRead(seedRow));
     else
       rootStep = seedStep; // Fallback: just return the seed
 
@@ -412,6 +413,35 @@ public class CypherExecutionPlan {
       return new IteratorResultSet(new ArrayList<ResultInternal>().iterator());
 
     return rootStep.syncPull(context, 100);
+  }
+
+  /**
+   * Whether this statement could read anything the seed row carries, i.e. whether it is correlated to the enclosing
+   * query at all.
+   * <p>
+   * The question is asked because of the two count push-downs in {@link #buildExecutionStepsWithOrder}: they answer
+   * from the schema and the CSR arrays and never look at the incoming rows, so they are only valid for a body that
+   * does not read one. Asking whether the seed row <b>carries</b> a variable, rather than whether the body
+   * <b>reads</b> one, was correct but coarse - an uncorrelated body written inside a correlated query lost an O(1)
+   * count for a name it never mentions, once per outer row (issue #5686).
+   * <p>
+   * {@link CypherReferencedVariables} is deliberately unsure by default, so a shape it does not model answers "read"
+   * and the push-down is skipped exactly as before.
+   * <p>
+   * The {@code statement} read here is <b>this plan's own</b>, and this plan is only ever built around the body -
+   * {@link #executeWithSeedRow} is what a {@code CALL { }} clause and the three subquery expressions call, each on a
+   * plan constructed over the body they hold. Asking the enclosing query instead would compare the seed against the
+   * names of whoever produced it, which every seeded row would match: the question has to be put to the statement
+   * that is about to ignore the seed.
+   */
+  private boolean seedIsRead(final Result seedRow) {
+    final Set<String> seedNames = seedRow.getPropertyNames();
+    // referencesAny() answers this case too. Answering it here is what keeps a body seeded with nothing - the common
+    // one, a CALL { } importing nothing - from forcing the collection over the statement at all.
+    if (seedNames.isEmpty())
+      return false;
+
+    return statement.getReferencedVariables().referencesAny(seedNames);
   }
 
   private static String buildResultKey(final Result result) {
@@ -884,17 +914,21 @@ public class CypherExecutionPlan {
    */
   private AbstractExecutionStep buildExecutionStepsWithOrder(final CommandContext context,
       final List<ClauseEntry> clausesInOrder) {
-    return buildExecutionStepsWithOrder(context, clausesInOrder, null);
+    return buildExecutionStepsWithOrder(context, clausesInOrder, null, false);
   }
 
   /**
    * Builds execution steps respecting clause order, optionally seeded with an initial step.
    * When initialStep is provided (e.g., for CALL subqueries), it serves as the starting point
    * of the step chain, providing input rows to the first clause.
+   *
+   * @param seedIsRead whether this body reads anything the seed row carries, i.e. whether it is correlated to the
+   *                   enclosing query at all. A body that reads none of the seeded names is answered the same way
+   *                   with the seed as without it, which is what lets the count push-downs below still apply.
    */
   private AbstractExecutionStep buildExecutionStepsWithOrder(final CommandContext context,
       final List<ClauseEntry> clausesInOrder,
-      final AbstractExecutionStep initialStep) {
+      final AbstractExecutionStep initialStep, final boolean seedIsRead) {
     AbstractExecutionStep currentStep = initialStep;
 
     // Get function factory from evaluator for steps that need it
@@ -905,18 +939,31 @@ public class CypherExecutionPlan {
     // can detect already-bound variables and avoid Cartesian products
     final Set<String> boundVariables = new HashSet<>();
 
-    // OPTIMIZATION: Check for simple COUNT(*) pattern that can use Type.count() O(1) operation
-    // Pattern: MATCH (a:TypeName) RETURN COUNT(a) as alias
-    final AbstractExecutionStep typeCountStep = tryCreateTypeCountOptimization(context);
-    if (typeCountStep != null)
-      return typeCountStep;
+    // Both count push-downs answer from the schema and the CSR arrays alone: they read the statement's patterns and
+    // never look at the incoming rows. That makes them wrong the moment the seed row binds one of those pattern
+    // variables - a seeded body counting `MATCH (n)-[:KNOWS]->(m)` with `n` already bound to one vertex would be
+    // answered with the count over every `n` in the graph. So neither is attempted then; the ordinary pipeline, which
+    // consumes the seed, is used instead.
+    //
+    // A body that READS none of the seeded names is a different case and keeps the push-downs: an uncorrelated body -
+    // `MATCH (n:P) RETURN COLLECT { MATCH (m:Big) RETURN count(m) }`, or a `CALL { }` that imports nothing - has
+    // taken no name from the enclosing query, so ignoring the seed cannot change its answer and a large type keeps
+    // its O(1) count. What is read is decided by CypherReferencedVariables, which answers "read" for every shape it
+    // does not model, so being unsure costs the optimization rather than the correctness (issue #5686).
+    if (initialStep == null || !seedIsRead) {
+      // OPTIMIZATION: Check for simple COUNT(*) pattern that can use Type.count() O(1) operation
+      // Pattern: MATCH (a:TypeName) RETURN COUNT(a) as alias
+      final AbstractExecutionStep typeCountStep = tryCreateTypeCountOptimization(context);
+      if (typeCountStep != null)
+        return typeCountStep;
 
-    // OPTIMIZATION: Count-push-down for chain/star/triangle/pair-join patterns with RETURN count(*)
-    // Instead of materializing all paths (O(paths) memory), propagates counts through
-    // CSR arrays level-by-level (O(nodes) memory). Critical for large-fanout chains.
-    final AbstractExecutionStep countStep = tryOptimizeCountStar(context);
-    if (countStep != null)
-      return countStep;
+      // OPTIMIZATION: Count-push-down for chain/star/triangle/pair-join patterns with RETURN count(*)
+      // Instead of materializing all paths (O(paths) memory), propagates counts through
+      // CSR arrays level-by-level (O(nodes) memory). Critical for large-fanout chains.
+      final AbstractExecutionStep countStep = tryOptimizeCountStar(context);
+      if (countStep != null)
+        return countStep;
+    }
 
     // Special case: no MATCH as first clause (standalone expressions, WITH before MATCH, etc.)
     // E.g., RETURN abs(-42), WITH collect([0, 0.0]) AS numbers UNWIND ...

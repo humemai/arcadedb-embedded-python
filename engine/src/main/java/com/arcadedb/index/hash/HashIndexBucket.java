@@ -58,9 +58,41 @@ public class HashIndexBucket extends PaginatedComponent {
   public static final String UNIQUE_INDEX_EXT    = "uhashidx";
   public static final String NOTUNIQUE_INDEX_EXT = "nhashidx";
 
+  // Page size used when the caller does not ask for one. It currently coincides with MAX_PAGE_SIZE, but the two are
+  // independent: this one is a tuning choice, MAX_PAGE_SIZE is a hard limit of the on-page addressing.
   public static final int DEF_PAGE_SIZE     = 65_536;
   public static final int CURRENT_VERSION   = 1;
   public static final int NO_OVERFLOW_PAGE  = -1;
+
+  /**
+   * Largest page size a bucket page can address (issue #5713).
+   * <p>
+   * Everything inside a bucket page is addressed with 16-bit fields: the slot directory entries ({@link #SLOT_SIZE}),
+   * {@link #BUCKET_DATA_END} and {@link #BUCKET_ENTRY_COUNT} are all written as a {@code short} and read back through
+   * {@code & 0xFFFF}, so the largest offset representable is 65535. With the 8-byte {@link BasePage#PAGE_HEADER_SIZE},
+   * a 65536-byte page tops out at content offset 65528 and always fits.
+   * <p>
+   * Above this, the data offsets truncate: {@code dataEnd} wraps back to a low value, {@link #freeSpace} reports the
+   * page as almost empty, and the next entry is written over the bucket header - including the overflow pointer at
+   * {@link #BUCKET_OVERFLOW_PAGE}, which is how the failure used to surface, as the cycle detector reporting a
+   * "corrupted" chain at a wrapped page number rather than as the invalid configuration it is.
+   */
+  public static final int MAX_PAGE_SIZE = 65_536;
+
+  /**
+   * Smallest page size a hash index can be created with.
+   * <p>
+   * What this floor guarantees is that the index is DESCRIBABLE: the metadata page needs {@code PAGE_HEADER_SIZE +
+   * META_KEY_TYPES_START + numberOfKeys + 2 + 3 * INT_SERIALIZED_SIZE} bytes - 95 at the {@link #MAX_SANE_KEY_COUNT}
+   * ceiling - so a page size that cannot even hold page 0 is refused up front instead of writing metadata past the end
+   * of it.
+   * <p>
+   * It does NOT guarantee that any given key fits a bucket page. Key width is not known at creation for
+   * {@code STRING}/{@code BINARY}/{@code DECIMAL} columns, so no static floor could promise that; an entry too large
+   * for an empty page is reported at insert by {@link #entryTooLarge}, which names the usable space per page. That is
+   * a property of small pages with wide keys generally, not of this bound.
+   */
+  public static final int MIN_PAGE_SIZE = 256;
 
   // Metadata page (page 0) layout offsets (relative to PAGE_HEADER_SIZE)
   static final int META_GLOBAL_DEPTH      = 0;                      // int (4)
@@ -81,6 +113,9 @@ public class HashIndexBucket extends PaginatedComponent {
   // huge list (the first problems are enough to know it must be rebuilt).
   static final int MAX_REPORTED_PROBLEMS = 20;
 
+  // The schema types usable as a hash index key, listed in the creation-time refusal. Fixed for the life of the JVM.
+  private static final String SUPPORTED_KEY_TYPE_NAMES = supportedKeyTypeNames();
+
   // Bucket page header offsets (relative to PAGE_HEADER_SIZE)
   static final int BUCKET_LOCAL_DEPTH     = 0;                       // short (2)
   static final int BUCKET_ENTRY_COUNT     = 2;                       // short (2)
@@ -99,6 +134,11 @@ public class HashIndexBucket extends PaginatedComponent {
   final boolean unique;
 
   Type[]  keyTypes;
+  // Binary type declared by the schema for each key column: this is what is persisted on the metadata page and
+  // what diagnostics report. Use binaryKeyTypes (below) for anything that touches the on-page encoding.
+  byte[]  declaredKeyTypes;
+  // Binary type actually used to encode each key column on the page. It only differs from the declared one for
+  // LINK keys: see storageKeyType().
   byte[]  binaryKeyTypes;
   LSMTreeIndexAbstract.NULL_STRATEGY nullStrategy;
 
@@ -120,16 +160,23 @@ public class HashIndexBucket extends PaginatedComponent {
   HashIndexBucket(final HashIndex mainIndex, final DatabaseInternal database, final String name, final boolean unique,
       final String filePath, final ComponentFile.MODE mode, final Type[] keyTypes, final int pageSize,
       final LSMTreeIndexAbstract.NULL_STRATEGY nullStrategy) throws IOException {
-    super(database, name, filePath, unique ? UNIQUE_INDEX_EXT : NOTUNIQUE_INDEX_EXT, mode, pageSize, CURRENT_VERSION);
+    // The page size is validated inside the super() argument list on purpose: this constructor is the ONLY path that
+    // creates the file, and super() creates it, so checking here - before super() runs - is what guarantees no hash
+    // index file can exist with a page size the bucket cannot address (#5713).
+    super(database, name, filePath, unique ? UNIQUE_INDEX_EXT : NOTUNIQUE_INDEX_EXT, mode,
+        checkSupportedPageSize(name, pageSize), CURRENT_VERSION);
 
     this.mainIndex = mainIndex;
     this.serializer = database.getSerializer();
     this.comparator = serializer.getComparator();
     this.unique = unique;
     this.keyTypes = keyTypes;
+    this.declaredKeyTypes = new byte[keyTypes.length];
     this.binaryKeyTypes = new byte[keyTypes.length];
-    for (int i = 0; i < keyTypes.length; i++)
-      this.binaryKeyTypes[i] = keyTypes[i].getBinaryType();
+    for (int i = 0; i < keyTypes.length; i++) {
+      this.declaredKeyTypes[i] = keyTypes[i].getBinaryType();
+      this.binaryKeyTypes[i] = storageKeyType(this.declaredKeyTypes[i]);
+    }
     this.nullStrategy = nullStrategy;
 
     // Initialize the file: metadata page + 1 directory page + 1 initial bucket
@@ -728,7 +775,7 @@ public class HashIndexBucket extends PaginatedComponent {
   // ─── INITIALIZATION ──────────────────────────────────────
 
   private void initializeNewIndex() throws IOException {
-    this.metaTailOffset = META_KEY_TYPES_START + binaryKeyTypes.length + 2 * Binary.BYTE_SERIALIZED_SIZE;
+    this.metaTailOffset = META_KEY_TYPES_START + declaredKeyTypes.length + 2 * Binary.BYTE_SERIALIZED_SIZE;
 
     // Page 0: metadata
     final MutablePage metaPage = database.getTransaction().addPage(new PageId(database, fileId, 0), pageSize);
@@ -739,10 +786,12 @@ public class HashIndexBucket extends PaginatedComponent {
     pos += Binary.INT_SERIALIZED_SIZE;
     metaPage.writeInt(pos, 0);                           // totalEntries = 0
     pos += Binary.INT_SERIALIZED_SIZE;
-    metaPage.writeByte(pos, (byte) binaryKeyTypes.length); // numberOfKeys
+    metaPage.writeByte(pos, (byte) declaredKeyTypes.length); // numberOfKeys
     pos += Binary.BYTE_SERIALIZED_SIZE;
-    for (final byte binaryKeyType : binaryKeyTypes) {
-      metaPage.writeByte(pos, binaryKeyType);
+    // Persist the SCHEMA type, not the storage type, so the metadata page keeps describing the index the same way
+    // the schema does and the storage encoding stays an internal detail of this class.
+    for (final byte declaredKeyType : declaredKeyTypes) {
+      metaPage.writeByte(pos, declaredKeyType);
       pos += Binary.BYTE_SERIALIZED_SIZE;
     }
     metaPage.writeByte(pos, (byte) nullStrategy.ordinal());
@@ -796,12 +845,14 @@ public class HashIndexBucket extends PaginatedComponent {
     boolean metadataCorrupt = numKeysCorrupt;
 
     int pos = META_KEY_TYPES_START;
+    declaredKeyTypes = new byte[numKeys];
     binaryKeyTypes = new byte[numKeys];
     keyTypes = new Type[numKeys];
     for (int i = 0; i < numKeys; i++) {
-      binaryKeyTypes[i] = metaPage.readByte(pos);
-      keyTypes[i] = Type.getByBinaryType(binaryKeyTypes[i]);
-      if (!isSupportedKeyType(binaryKeyTypes[i]))
+      declaredKeyTypes[i] = metaPage.readByte(pos);
+      binaryKeyTypes[i] = storageKeyType(declaredKeyTypes[i]);
+      keyTypes[i] = Type.getByBinaryType(declaredKeyTypes[i]);
+      if (!isSupportedKeyType(declaredKeyTypes[i]))
         metadataCorrupt = true;
       pos += Binary.BYTE_SERIALIZED_SIZE;
     }
@@ -827,12 +878,69 @@ public class HashIndexBucket extends PaginatedComponent {
           "Corrupted metadata detected on hash index '%s' (fileId=%d): %s. The index must be rebuilt (DROP and "
               + "recreate it). Raw metadata page 0 dump (content bytes):%n%s",
           null, getName(), fileId, describeMetadata(metaPage, rawNumKeys), dumpMetadataPage(metaPage));
+
+    // An index created before the creation-time check of #5713 can carry a page size outside the supported range on
+    // disk. Report it rather than throw: throwing here would make the whole database unopenable, while the index is
+    // still droppable and rebuildable - and CHECK DATABASE surfaces the same problem through checkMetadataIntegrity().
+    //
+    // WHY WRITES ARE STILL ACCEPTED afterwards, rather than the component being marked read-only: an OVERSIZED index is
+    // already unusable in practice, not quietly degrading. Every offset on its bucket pages has wrapped, so the first
+    // lookup - including the unique-constraint probe an insert performs - walks the overwritten overflow pointer and
+    // raises corruptedOverflowChain(). The failure is loud on the read side, which is where it would matter, so a
+    // write-side block would mostly convert one loud error into a different loud error while removing the operator's
+    // ability to keep the type usable until the rebuild window. The rebuild itself is unaffected either way: it scans
+    // the records and populates a NEW file, never writing through this bucket. An UNDERSIZED index is not damaged at
+    // all (see describeUnsupportedPageSize), so there is nothing to protect it from.
+    if (!isSupportedPageSize(pageSize))
+      // Severity follows the finding, not the fact that something was found: only the oversized case has actually
+      // damaged data. Logging SEVERE for a page size we simultaneously describe as probably still working would
+      // contradict the message on every open.
+      LogManager.instance().log(this, isPageSizeDamaging(pageSize) ? Level.SEVERE : Level.WARNING,
+          "Hash index '%s' (fileId=%d) has an unsupported page size of %d bytes (allowed: %d..%d): %s. It should be "
+              + "rebuilt (DROP and recreate it, or REBUILD INDEX) with a supported page size.",
+          null, getName(), fileId, pageSize, MIN_PAGE_SIZE, MAX_PAGE_SIZE, describeUnsupportedPageSize(pageSize));
   }
 
   /**
-   * Returns true if the given binary type is one this hash index can serialize/deserialize as a key
-   * component. Mirrors the supported cases in {@link #getSerializedValueSize}; used to validate the key
-   * types loaded from the metadata page so corruption is detected up front instead of deep in a search.
+   * Whether an out-of-range page size means the index has ALREADY been damaged, as opposed to merely being outside the
+   * range this index type now accepts. Only the oversized direction wraps the 16-bit on-page offsets; see
+   * {@link #describeUnsupportedPageSize}.
+   */
+  private static boolean isPageSizeDamaging(final int pageSize) {
+    return pageSize > MAX_PAGE_SIZE;
+  }
+
+  /**
+   * Explains what an out-of-range page size means for THIS index, because the two directions are not the same problem
+   * and must not be reported as if they were.
+   * <p>
+   * Above {@link #MAX_PAGE_SIZE} the 16-bit on-page offsets have wrapped, so the index really is damaged. Below
+   * {@link #MIN_PAGE_SIZE} nothing has wrapped: the old creation path accepted any {@code pageSize > 0}, so such an
+   * index may well have been working, and telling its operator it is "corrupted" would send them hunting for damage
+   * that is not there. What is true in that case is only that the page is below the floor the index now requires to
+   * guarantee its metadata page fits.
+   * <p>
+   * This is the ONE place that wording lives: the load-time log and {@link #checkMetadataIntegrity} both report through
+   * it, so the two cannot drift into describing the same file differently.
+   */
+  private static String describeUnsupportedPageSize(final int pageSize) {
+    return isPageSizeDamaging(pageSize) ?
+        "bucket pages address entries with 16-bit offsets, so this index is damaged" :
+        "below the minimum required for the metadata page, though the index may still be working";
+  }
+
+  /**
+   * Returns true if the given SCHEMA binary type is one this hash index can serialize/deserialize as a key
+   * component. Used to refuse an unsupported type at creation ({@link #checkSupportedKeyTypes}) and to validate the
+   * key types loaded from the metadata page, so corruption is detected up front instead of deep in a search.
+   * <p>
+   * The cases mirror those of {@link #getSerializedValueSize} after {@link #storageKeyType} has been applied, which
+   * is why {@code TYPE_RID} is accepted here but absent there: it is stored as {@code TYPE_COMPRESSED_RID}.
+   * <p>
+   * Two of the accepted types have no {@link Type} constant that maps to them, so they cannot be declared through the
+   * schema and never appear in {@link #supportedKeyTypeNames}: {@code TYPE_COMPRESSED_RID}, which only reaches this
+   * method as a storage type, and {@code TYPE_UUID}. They stay accepted so a metadata page carrying one is not
+   * mistaken for corruption.
    */
   static boolean isSupportedKeyType(final byte type) {
     switch (type) {
@@ -851,12 +959,91 @@ public class HashIndexBucket extends PaginatedComponent {
     case BinaryTypes.TYPE_STRING:
     case BinaryTypes.TYPE_BINARY:
     case BinaryTypes.TYPE_COMPRESSED_RID:
+    case BinaryTypes.TYPE_RID:
     case BinaryTypes.TYPE_DECIMAL:
     case BinaryTypes.TYPE_UUID:
       return true;
     default:
       return false;
     }
+  }
+
+  /**
+   * Maps a schema binary type to the binary type this index actually writes on the page.
+   * <p>
+   * The only remapping is {@link BinaryTypes#TYPE_RID} (the encoding of {@link Type#LINK}, and therefore of an edge
+   * type's {@code @out}/{@code @in} endpoints) to {@link BinaryTypes#TYPE_COMPRESSED_RID}: both encodings are
+   * deterministic and injective, so hashing and byte comparison are unaffected, but the fixed 4+8 byte form costs 12
+   * bytes per column against the 2-7 of the varint form the bucket already uses for entry values. On the composite
+   * {@code (@out,@in)} key that is the point of an endpoint-keyed unique index, that is roughly half the key bytes -
+   * and hence half the pages - for free. See issue #5677.
+   */
+  static byte storageKeyType(final byte declaredBinaryType) {
+    return declaredBinaryType == BinaryTypes.TYPE_RID ? BinaryTypes.TYPE_COMPRESSED_RID : declaredBinaryType;
+  }
+
+  /**
+   * Validates the key types a hash index is about to be created with, so an unsupported one is refused up front with
+   * a message naming it, instead of surfacing as an "unsupported key type" deep inside the first insert (#5677).
+   * <p>
+   * This is called from {@code HashIndexFactoryHandler.create()}, which is the only path that reaches the creation
+   * constructor of {@link HashIndex} (and through it the creation constructor of this class) - every hash index is
+   * built by {@code IndexFactory.createIndex()}. A new construction path must call this too, or it can write a file
+   * whose declared key type the bucket cannot encode; the {@link #loadMetadata} check would then only catch it on the
+   * next open.
+   */
+  static void checkSupportedKeyTypes(final String indexName, final Type[] keyTypes) {
+    if (keyTypes == null)
+      return;
+    for (final Type keyType : keyTypes)
+      if (keyType == null || !isSupportedKeyType(keyType.getBinaryType()))
+        throw new IndexException(
+            "Cannot create index '" + indexName + "' of type HASH because "
+                // name(), not toString(): the supported set below is built from name(), and an implicit dependency on
+                // Type not overriding toString() would silently report the two in different spellings.
+                + (keyType == null ? "a key column has no type" : "the key type " + keyType.name() + " cannot be used")
+                + " as a HASH index key. Supported key types are: " + SUPPORTED_KEY_TYPE_NAMES
+                + ". Create the index as LSM_TREE instead");
+  }
+
+  /**
+   * Returns true if a bucket page of the given size can be addressed by the 16-bit on-page fields (and is large enough
+   * to hold the metadata page). See {@link #MAX_PAGE_SIZE} and {@link #MIN_PAGE_SIZE}.
+   */
+  static boolean isSupportedPageSize(final int pageSize) {
+    return pageSize >= MIN_PAGE_SIZE && pageSize <= MAX_PAGE_SIZE;
+  }
+
+  /**
+   * Validates the page size a hash index is about to be created with and returns it unchanged, so it can be used
+   * directly as a {@code super()} argument (issue #5713).
+   * <p>
+   * Refusing here rather than letting the insert path wrap makes the failure name the configuration instead of
+   * reporting the index as corrupted after the fact: an oversized page silently truncates every data offset to 16
+   * bits, and the first symptom is an overflow chain that has been overwritten into a cycle.
+   */
+  static int checkSupportedPageSize(final String indexName, final int pageSize) {
+    if (!isSupportedPageSize(pageSize))
+      throw new IndexException(
+          "Cannot create index '" + indexName + "' of type HASH with a page size of " + pageSize
+              + " bytes: a hash bucket page addresses its entries with 16-bit offsets, so the page size must be between "
+              + MIN_PAGE_SIZE + " and " + MAX_PAGE_SIZE + " bytes. Use LSM_TREE if a bigger page is required");
+    return pageSize;
+  }
+
+  /**
+   * Comma-separated list of the schema types usable as a hash index key, for the creation-time error message. The set
+   * is fixed at class-load time, so it is built once rather than on every refusal.
+   */
+  private static String supportedKeyTypeNames() {
+    final StringBuilder buffer = new StringBuilder(128);
+    for (final Type type : Type.values())
+      if (isSupportedKeyType(type.getBinaryType())) {
+        if (!buffer.isEmpty())
+          buffer.append(", ");
+        buffer.append(type.name());
+      }
+    return buffer.toString();
   }
 
   /**
@@ -874,12 +1061,12 @@ public class HashIndexBucket extends PaginatedComponent {
    * Formats the loaded key types as signed value + hex, flagging any that are not valid hash index key types.
    */
   private String formatKeyTypes() {
-    final StringBuilder buffer = new StringBuilder(2 + binaryKeyTypes.length * 12);
+    final StringBuilder buffer = new StringBuilder(2 + declaredKeyTypes.length * 12);
     buffer.append('[');
-    for (int i = 0; i < binaryKeyTypes.length; i++) {
+    for (int i = 0; i < declaredKeyTypes.length; i++) {
       if (i > 0)
         buffer.append(", ");
-      final byte type = binaryKeyTypes[i];
+      final byte type = declaredKeyTypes[i];
       buffer.append(type).append("(0x").append(String.format("%02X", type & 0xFF)).append(')');
       if (!isSupportedKeyType(type))
         buffer.append("=INVALID");
@@ -903,16 +1090,23 @@ public class HashIndexBucket extends PaginatedComponent {
   }
 
   /**
-   * Builds a rich, actionable exception for an unrecognized key type encountered while parsing an entry.
-   * The bare type value (e.g. -108) is meaningless on its own; this adds the index identity, the loaded
-   * key types, the page/offset being parsed, and the remediation step.
+   * Builds a rich, actionable exception for a key column whose type this index cannot encode.
+   * <p>
+   * The offending type is the one loaded from the metadata page for that column, NOT a byte read out of the entry
+   * being walked, so this is never evidence that entry's bytes are damaged. Since {@link #checkSupportedKeyTypes}
+   * refuses an unsupported type at creation, reaching this point means the metadata page itself no longer describes
+   * a valid index - either it is corrupted, or the index predates that check. Both are fixed by recreating the index,
+   * so the message says so without claiming the stored records are damaged. The bare type value (e.g. -108) is
+   * meaningless on its own; the index identity, the column, the loaded types and the parse position are added.
    */
-  private IndexException unsupportedKeyType(final byte type, final int offset) {
+  private IndexException unsupportedKeyType(final byte type, final int column, final int offset) {
     return new IndexException(
-        "Unsupported key type for hash index '" + getName() + "' (fileId=" + fileId + "): " + type + " (0x"
-            + String.format("%02X", type & 0xFF) + ") while parsing entry at content offset " + offset
-            + ". Loaded key types=" + formatKeyTypes()
-            + ". This means the index metadata or a bucket page is corrupted; rebuild the index (DROP and recreate it).");
+        "Key column " + column + " of hash index '" + getName() + "' (fileId=" + fileId + ") has type " + type + " (0x"
+            + String.format("%02X", type & 0xFF) + "), which a hash index cannot encode (hit while parsing an entry at "
+            + "content offset " + offset + "). Declared key types=" + formatKeyTypes()
+            + ". No record data is lost: either the index metadata page is damaged, or the index was created on a "
+            + "property type HASH does not support. Drop it and recreate it, as LSM_TREE if the key type is not in: "
+            + SUPPORTED_KEY_TYPE_NAMES);
   }
 
   /**
@@ -1016,13 +1210,20 @@ public class HashIndexBucket extends PaginatedComponent {
   public List<String> checkMetadataIntegrity() {
     final List<String> problems = new ArrayList<>();
 
-    if (binaryKeyTypes == null || binaryKeyTypes.length == 0)
+    // A page size outside the addressable range is a property of the file, not of page 0, but it belongs here: it makes
+    // every offset on every bucket page unreliable, so reporting it first stops the structural walk below from
+    // attributing the resulting garbage to a cyclic chain (#5713).
+    if (!isSupportedPageSize(pageSize))
+      problems.add("unsupported page size=" + pageSize + " (allowed: " + MIN_PAGE_SIZE + ".." + MAX_PAGE_SIZE + "): "
+          + describeUnsupportedPageSize(pageSize));
+
+    if (declaredKeyTypes == null || declaredKeyTypes.length == 0)
       problems.add("no key types loaded (the metadata page reports an invalid key count)");
     else
-      for (int i = 0; i < binaryKeyTypes.length; i++)
-        if (!isSupportedKeyType(binaryKeyTypes[i]))
-          problems.add("invalid key type at column " + i + ": " + binaryKeyTypes[i] + " (0x"
-              + String.format("%02X", binaryKeyTypes[i] & 0xFF) + ")");
+      for (int i = 0; i < declaredKeyTypes.length; i++)
+        if (!isSupportedKeyType(declaredKeyTypes[i]))
+          problems.add("invalid key type at column " + i + ": " + declaredKeyTypes[i] + " (0x"
+              + String.format("%02X", declaredKeyTypes[i] & 0xFF) + ")");
 
     try {
       final int globalDepth = readGlobalDepth();
@@ -1043,9 +1244,19 @@ public class HashIndexBucket extends PaginatedComponent {
     }
 
     if (!problems.isEmpty()) {
-      LogManager.instance().log(this, Level.SEVERE,
-          "CHECK DATABASE found corrupted metadata on hash index '%s' (fileId=%d): %s. The index must be rebuilt "
-              + "(DROP and recreate it).", null, getName(), fileId, problems);
+      // An undersized page size is the one finding here that does NOT mean the metadata is damaged, so when it is the
+      // only thing found this must not announce corruption - the surrounding sentence would then contradict the very
+      // problem it is wrapping, which reads as "may still be working" (#5713).
+      final boolean corrupted = problems.size() > 1 || isSupportedPageSize(pageSize) || isPageSizeDamaging(pageSize);
+      if (corrupted)
+        LogManager.instance().log(this, Level.SEVERE,
+            "CHECK DATABASE found corrupted metadata on hash index '%s' (fileId=%d): %s. The index must be rebuilt "
+                + "(DROP and recreate it).", null, getName(), fileId, problems);
+      else
+        LogManager.instance().log(this, Level.WARNING,
+            "CHECK DATABASE found an unsupported configuration on hash index '%s' (fileId=%d): %s. The index should be "
+                + "rebuilt (DROP and recreate it, or REBUILD INDEX).", null, getName(), fileId, problems);
+
       // the structural walk relies on the metadata being sane: no point in running it on a corrupted page 0
       return problems;
     }
@@ -1678,7 +1889,7 @@ public class HashIndexBucket extends PaginatedComponent {
       final byte nullMarker = page.readByte(offset);
       offset += Binary.BYTE_SERIALIZED_SIZE;
       if (nullMarker != 0)
-        offset += getSerializedValueSize(page, offset, binaryKeyTypes[i]);
+        offset += getSerializedValueSize(page, offset, i);
     }
     return offset - startOffset;
   }
@@ -1689,7 +1900,7 @@ public class HashIndexBucket extends PaginatedComponent {
       final byte nullMarker = data[offset];
       offset += 1;
       if (nullMarker != 0)
-        offset += getSerializedValueSizeFromBytes(data, offset, binaryKeyTypes[i]);
+        offset += getSerializedValueSizeFromBytes(data, offset, i);
     }
     return offset - startOffset;
   }
@@ -1699,9 +1910,12 @@ public class HashIndexBucket extends PaginatedComponent {
   }
 
   /**
-   * Computes how many bytes a serialized value occupies in the page.
+   * Computes how many bytes the value of the given key column occupies in the page. The column is passed rather than
+   * its type so the storage encoding is read from {@link #binaryKeyTypes} while a failure can still report the
+   * schema type from {@link #declaredKeyTypes}.
    */
-  private int getSerializedValueSize(final BasePage page, final int offset, final byte type) {
+  private int getSerializedValueSize(final BasePage page, final int offset, final int column) {
+    final byte type = binaryKeyTypes[column];
     switch (type) {
     case BinaryTypes.TYPE_BOOLEAN:
     case BinaryTypes.TYPE_BYTE:
@@ -1734,11 +1948,12 @@ public class HashIndexBucket extends PaginatedComponent {
     case BinaryTypes.TYPE_UUID:
       return 16; // Two longs
     default:
-      throw unsupportedKeyType(type, offset);
+      throw unsupportedKeyType(declaredKeyTypes[column], column, offset);
     }
   }
 
-  private int getSerializedValueSizeFromBytes(final byte[] data, final int offset, final byte type) {
+  private int getSerializedValueSizeFromBytes(final byte[] data, final int offset, final int column) {
+    final byte type = binaryKeyTypes[column];
     switch (type) {
     case BinaryTypes.TYPE_BOOLEAN:
     case BinaryTypes.TYPE_BYTE:
@@ -1769,7 +1984,7 @@ public class HashIndexBucket extends PaginatedComponent {
     case BinaryTypes.TYPE_UUID:
       return 16;
     default:
-      throw unsupportedKeyType(type, offset);
+      throw unsupportedKeyType(declaredKeyTypes[column], column, offset);
     }
   }
 
