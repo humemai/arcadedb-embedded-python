@@ -53,6 +53,32 @@ VERSION_KEYS = ("engine_version", "engine", "server_version", "version", "wheel"
                 # duckdb row cannot pass this audit by quoting our wheel.
                 "backend_version")
 
+
+
+def _is_real_version(v):
+    """A version key that is present but says nothing is not provenance.
+
+    The dense lane stamped `engine_version` twice: the adapter wrote the real
+    one, then run_conditions overwrote it with an arcadedb wheel lookup that
+    raises inside a comparator container, leaving the literal string
+    "unknown (PackageNotFoundError)". Twenty DEEP-10M rows carried that, and
+    this auditor passed every one of them, because the old test was `not in
+    (None, "")` and a placeholder is a perfectly non-empty string.
+
+    Checking that a field is populated is not the same as checking that it
+    answers the question. This is the fifth guard in this harness found present
+    and inert, so the test is now what the field is FOR.
+    """
+    if v is None:
+        return False
+    t = str(v).strip()
+    if not t:
+        return False
+    low = t.lower()
+    if low.startswith("unknown") or low in ("?", "none", "null", "n/a", "-"):
+        return False
+    # A version has to contain a digit somewhere. "server:?" does not.
+    return any(c.isdigit() for c in t)
 # Which overlay directories feed which table. Mirrors make_paper_tables.py; if
 # that file grows a new overlay and this map does not, the unmapped-dir check
 # at the bottom says so rather than quietly ignoring it.
@@ -324,7 +350,7 @@ def lane_files():
             vkeys = set()
             for r in rows:
                 have |= {k for k in CONDITION_KEYS if r.get(k) not in (None, "")}
-                vkeys |= {k for k in VERSION_KEYS if r.get(k) not in (None, "")}
+                vkeys |= {k for k in VERSION_KEYS if _is_real_version(r.get(k))}
             backends = sorted({str(r.get("backend", "?")) for r in rows})
             where = f"{name} -> {table}, {len(rows)} rows, backends {', '.join(backends)}"
             if have and vkeys:

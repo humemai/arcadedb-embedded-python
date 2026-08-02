@@ -526,8 +526,22 @@ def main():
     # being a second class of artifact nobody thought to check.
     try:
         import bench_common
+        # The adapter already recorded the version of the engine actually under
+        # test (chromadb.__version__, duckdb.__version__, ...). run_conditions
+        # stamps engine_version from the arcadedb wheel, which is the right
+        # answer for the ArcadeDB rows and the WRONG one for every comparator:
+        # inside a comparator container the wheel is not installed, the lookup
+        # raises, and the adapter's correct version is overwritten with
+        # "unknown (PackageNotFoundError)". That is what happened to all 20 rows
+        # of the DEEP-10M envelope run. Keep the adapter's answer, and move the
+        # wheel's to a key that says what it is.
+        backend_version = out.get("engine_version")
         out.update(bench_common.run_conditions(lane="l3d", scale=args.scale,
                                                backend=args.backend))
+        out["backend_version"] = backend_version
+        if args.backend != "arcadedb" and not str(args.backend).startswith("arcadedb"):
+            out["harness_arcadedb_version"] = out.pop("engine_version", None)
+            out["engine_version"] = backend_version
     except Exception as e:                     # never lose a measured result
         out["conditions_error"] = f"{e.__class__.__name__}: {e}"
 
