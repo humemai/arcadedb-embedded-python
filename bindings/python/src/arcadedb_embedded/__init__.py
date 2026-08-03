@@ -48,6 +48,10 @@ from .server import ArcadeDBServer, create_server
 # Import graph classes
 from .graph import Document, Edge, Vertex
 
+# Which engine this install actually carries. __version__ is the PACKAGE
+# version and can disagree with the bundled JARs without any error.
+from .jvm import jar_fingerprint
+
 # Import graph batch helper
 from .graph_batch import GraphBatch
 
@@ -87,6 +91,8 @@ __all__ = [
     "Edge",
     # Citation
     "cite",
+    # Build provenance
+    "jar_fingerprint",
     "create_database",
     "open_database",
     "database_exists",

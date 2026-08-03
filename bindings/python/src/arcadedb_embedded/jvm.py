@@ -61,6 +61,110 @@ def get_jar_path() -> str:
     return str(jar_dir)
 
 
+_JAR_FINGERPRINT_CACHE = None
+
+# JARs this project compiles, as opposed to the ArcadeDB engine JARs staged
+# from the image. Excluded from engine_sha256 because they are built here and
+# are not byte-reproducible: the PyPI 26.8.1 wheel and a local build of the
+# same version differ in this JAR alone, at identical size.
+_OUR_JARS = frozenset({"arcadedb-python-bridge.jar"})
+
+
+def jar_fingerprint(per_jar: bool = False) -> dict:
+    """Identify the engine this install actually carries.
+
+    ``__version__`` is a *package* version. It says nothing about which JARs
+    are in the wheel, and the two can disagree without any error: a wheel built
+    from a locally patched Java tree still reports the released version number
+    while carrying a different engine.
+
+    That is not hypothetical. A local build of 26.8.1.dev-something shipped 59
+    JARs instead of 64 and a bt-server-patched engine, and it was caught only
+    because one packaging test happened to count JAR names. Benchmarks run
+    against it would have recorded the released version string beside numbers
+    the release cannot reproduce, which is how a fix gets credited to the wrong
+    commit (see the false null on ArcadeDB #5388).
+
+    So: hash what is actually on disk. Two installs agree iff this agrees.
+
+        >>> import arcadedb_embedded as adb
+        >>> adb.jar_fingerprint()["sha256"][:12]
+        'a3f1c0d8b214'
+
+    Benchmark harnesses should record ``sha256`` next to the engine version, so
+    a results row proves which engine produced it rather than asserting it.
+
+    Args:
+        per_jar: also return the sorted (name, size, sha256) of every JAR, for
+            diffing two installs that disagree.
+
+    Two hashes, because they answer different questions.
+
+    ``sha256`` covers every JAR: "is this the same build?" ``engine_sha256``
+    excludes our own compiled shim: "is this the same ArcadeDB?"
+
+    The distinction is measured, not defensive. Comparing the released 26.8.1
+    wheel from PyPI against a local build of the same version: identical file
+    size, identical JAR count, identical total JAR bytes, and a different
+    ``sha256``. Diffing found 63 of 64 JARs byte-identical, with the only
+    difference in ``arcadedb-python-bridge.jar`` at the *same* 10907 bytes.
+    That JAR is compiled during the build, so it carries timestamps and is not
+    reproducible; the 63 engine JARs come from the ArcadeDB image and are.
+
+    So a bare ``sha256`` comparison would report "different engine" for two
+    builds of the same engine, and anyone using it that way would stop
+    believing it. Use ``engine_sha256`` to ask whether two installs are running
+    the same ArcadeDB.
+
+    Returns:
+        ``{"count", "bytes", "sha256", "engine_sha256", "engine_count",
+        "jar_dir"}``, plus ``"jars"`` when ``per_jar`` is set. Each hash covers
+        the JAR names and contents it spans, so a renamed, added, removed or
+        modified JAR all change it.
+    """
+    global _JAR_FINGERPRINT_CACHE
+    if _JAR_FINGERPRINT_CACHE is not None and not per_jar:
+        return dict(_JAR_FINGERPRINT_CACHE)
+
+    import hashlib
+    import os
+
+    jar_dir = get_jar_path()
+    names = sorted(n for n in os.listdir(jar_dir) if n.endswith(".jar"))
+    combined = hashlib.sha256()
+    engine = hashlib.sha256()
+    total = 0
+    engine_count = 0
+    entries = []
+    for name in names:
+        path = os.path.join(jar_dir, name)
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        size = os.path.getsize(path)
+        total += size
+        # Name AND digest, so swapping two JARs' contents is not a collision.
+        combined.update(name.encode())
+        combined.update(h.digest())
+        if name not in _OUR_JARS:
+            engine.update(name.encode())
+            engine.update(h.digest())
+            engine_count += 1
+        if per_jar:
+            entries.append({"name": name, "bytes": size, "sha256": h.hexdigest(),
+                            "engine": name not in _OUR_JARS})
+
+    out = {"count": len(names), "bytes": total,
+           "sha256": combined.hexdigest(),
+           "engine_sha256": engine.hexdigest(), "engine_count": engine_count,
+           "jar_dir": jar_dir}
+    _JAR_FINGERPRINT_CACHE = dict(out)
+    if per_jar:
+        out["jars"] = entries
+    return out
+
+
 def get_bundled_jre_lib_path() -> str:
     """
     Get the path to bundled JRE's JVM library.
