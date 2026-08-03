@@ -468,14 +468,13 @@ class Database:
                 Use "INT8" when the document property stores pre-quantized bytes in a
                 `BINARY` property. When using INT8 encoding, set quantization to "NONE"
                 to avoid double quantization.
-            location_cache_size: Per-index override for vector location cache size
-                (maps to Java metadata key "locationCacheSize"; uses
-                GlobalConfiguration default if None). Typical ranges by corpus size
-                (vectors):
-                - ~100K: 50k–100k
-                - ~1M: 100k–200k
-                - ~10M: 300k–500k
-                - ~100M: 500k–800k (scale with heap)
+            location_cache_size: REMOVED by the engine (issues #5559, #5568).
+                Passing anything other than None raises ValueError. A vector
+                location is the only mapping from a vector id to its record, so
+                capping it does not spill to disk, it drops vectors from searches
+                and from countEntries(). Size the heap instead. The parameter is
+                kept only so that upgrading callers get this explanation rather
+                than an unexplained TypeError.
             graph_build_cache_size: Per-index override for graph build cache size
                 (maps to Java metadata key "graphBuildCacheSize"; uses
                 GlobalConfiguration default if None). Typical ranges (higher = faster
@@ -512,6 +511,22 @@ class Database:
             VectorIndex object
         """
         self._check_not_closed()
+
+        # The engine removed this in #5559/#5568 and now rejects it in
+        # withMetadata(), so a wheel that still forwards it cannot create an
+        # index at all. Refuse here instead, with the reason: a vector location
+        # is the only mapping from a vector id to its record, so a bound on it
+        # is not a cache eviction, it silently drops vectors from searches and
+        # from countEntries().
+        if location_cache_size is not None:
+            raise ValueError(
+                "location_cache_size is no longer supported (ArcadeDB issues "
+                "#5559 and #5568): a vector location is the only mapping from a "
+                "vector id to its record, so capping the location index drops "
+                "vectors from searches and from countEntries() instead of "
+                "spilling them to disk. Remove the argument and size the heap "
+                "for the live vector set instead."
+            )
 
         # Create the index using the Java Builder API directly to pass configuration
         try:
@@ -588,8 +603,6 @@ class Database:
                 metadata_cfg["storeVectorsInGraph"] = True
             if add_hierarchy is not None:
                 metadata_cfg["addHierarchy"] = bool(add_hierarchy)
-            if location_cache_size is not None:
-                metadata_cfg["locationCacheSize"] = int(location_cache_size)
             if graph_build_cache_size is not None:
                 metadata_cfg["graphBuildCacheSize"] = int(graph_build_cache_size)
             if mutations_before_rebuild is not None:

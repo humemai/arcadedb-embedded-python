@@ -316,7 +316,6 @@ class TestLSMVectorIndex:
             quantization="INT8",
             store_vectors_in_graph=True,
             add_hierarchy=True,
-            location_cache_size=123,
             graph_build_cache_size=456,
             mutations_before_rebuild=789,
         )
@@ -331,7 +330,10 @@ class TestLSMVectorIndex:
         assert metadata["similarity_function"] == "EUCLIDEAN"
         assert metadata["id_property"] == "slug"
         assert metadata["quantization"] == "INT8"
-        assert metadata["location_cache_size"] == 123
+        # The engine removed locationCacheSize in #5559/#5568, so the key must
+        # no longer be reported. Asserting its absence keeps a silent
+        # reintroduction (which would raise on every metadata read) visible.
+        assert "location_cache_size" not in metadata
         assert metadata["graph_build_cache_size"] == 456
         assert metadata["mutations_before_rebuild"] == 789
         assert metadata["store_vectors_in_graph"] is True

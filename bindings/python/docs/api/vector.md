@@ -156,7 +156,6 @@ db.create_vector_index(
     beam_width: int = 100,
     quantization: str = "INT8",
     encoding: str | None = None,
-    location_cache_size: int | None = None,
     graph_build_cache_size: int | None = None,
     mutations_before_rebuild: int | None = None,
     store_vectors_in_graph: bool = False,

@@ -178,7 +178,6 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g")
 | `-Xmx<size>` | Maximum heap memory | `-Xmx8g` (8 gigabytes) |
 | `-Xms<size>` | Initial heap size (recommended: same as `-Xmx`) | `-Xms8g` |
 | `-XX:MaxDirectMemorySize=<size>` | Limit off-heap direct buffers | `-XX:MaxDirectMemorySize=8g` |
-| `-Darcadedb.vectorIndex.locationCacheSize=<count>` | Max vector locations to cache (default: -1 = unlimited) | `-Darcadedb.vectorIndex.locationCacheSize=100000` |
 | `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>` | Max vectors cached during HNSW build (default: 10000) | `-Darcadedb.vectorIndex.graphBuildCacheSize=3000` |
 | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>` | Mutations before graph rebuild (default: 100) | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=200` |
 
@@ -194,7 +193,6 @@ start_jvm(
     heap_size="8g",
     jvm_args=(
         "-Xms8g -XX:MaxDirectMemorySize=8g "
-        "-Darcadedb.vectorIndex.locationCacheSize=100000 "
         "-Darcadedb.vectorIndex.graphBuildCacheSize=3000 "
         "-Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
     ),
@@ -203,10 +201,11 @@ start_jvm(
 
 **Cache Size Guidelines:**
 
-- `locationCacheSize`: Number of vector locations (each ~56 bytes)
-    - 100000 entries ≈ 5.6 MB
-    - -1 = unlimited (backward compatible, may consume unbounded memory)
-    - Recommended: 100000 for datasets with 1M+ vectors
+- `locationCacheSize`: **removed** (ArcadeDB issues #5559, #5568). It was never
+  a cache: a vector location is the only mapping from a vector id to its record,
+  so a bound on it did not spill to disk, it dropped vectors from searches and
+  from `countEntries()`. The engine now rejects both the JVM property and the
+  per-index metadata key. Size the heap for the live vector set instead.
 
 - `graphBuildCacheSize`: Number of vectors during HNSW build
     - Memory ≈ cacheSize × (dimensions × 4 + 64) bytes
@@ -246,7 +245,6 @@ start_jvm(
     heap_size="16g",
     jvm_args=(
         "-Xms16g -XX:MaxDirectMemorySize=16g "
-        "-Darcadedb.vectorIndex.locationCacheSize=100000 "
         "-Darcadedb.vectorIndex.graphBuildCacheSize=5000 "
         "-Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
     ),
@@ -257,7 +255,6 @@ start_jvm(
     heap_size="8g",
     jvm_args=(
         "-Xms8g -XX:MaxDirectMemorySize=8g "
-        "-Darcadedb.vectorIndex.locationCacheSize=50000 "
         "-Darcadedb.vectorIndex.graphBuildCacheSize=2000 "
         "-Darcadedb.vectorIndex.mutationsBeforeRebuild=150"
     ),
@@ -297,8 +294,7 @@ start_jvm(
         heap_size="8g",
         jvm_args=(
             "-Xms8g "
-            "-Darcadedb.vectorIndex.locationCacheSize=100000 "
-            "-Darcadedb.vectorIndex.graphBuildCacheSize=3000"
+                "-Darcadedb.vectorIndex.graphBuildCacheSize=3000"
         ),
     )
     ```

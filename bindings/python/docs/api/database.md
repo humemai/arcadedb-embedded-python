@@ -790,7 +790,6 @@ db.create_vector_index(
     beam_width: int = 100,
     quantization: str = "INT8",
     encoding: str | None = None,
-    location_cache_size: int | None = None,
     graph_build_cache_size: int | None = None,
     mutations_before_rebuild: int | None = None,
     store_vectors_in_graph: bool = False,
@@ -833,7 +832,9 @@ specifically need that surface.
     Use `"INT8"` when the underlying property is `BINARY` and stores pre-quantized
     bytes. Do not combine `encoding="INT8"` with `quantization="INT8"`; use
     `quantization="NONE"` for native INT8 storage.
-- `location_cache_size` (int | None): Override location cache size (default: `None`, uses engine default).
+- `location_cache_size` (int | None): **removed** (ArcadeDB #5559, #5568). Passing a
+  value raises `ValueError`; the engine no longer accepts the setting because bounding
+  the vector-location index drops vectors from searches rather than spilling to disk.
 - `graph_build_cache_size` (int | None): Override graph build cache size (default: `None`, uses engine default).
 - `mutations_before_rebuild` (int | None): Override rebuild threshold (default: `None`, uses engine default).
 - `store_vectors_in_graph` (bool): Persist vectors inline in graph file (faster reopen/search, larger graph).

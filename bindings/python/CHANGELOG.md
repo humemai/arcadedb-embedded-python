@@ -9,6 +9,29 @@ Java behaviour reaches Python users through `pip install` without passing
 through anything they would think to read. Breaking changes are listed first
 for each version.
 
+## Unreleased
+
+### Breaking
+
+- **`location_cache_size` is gone**, following its removal from the engine in
+  [#5559](https://github.com/ArcadeData/arcadedb/issues/5559) and
+  [#5568](https://github.com/ArcadeData/arcadedb/issues/5568). The engine
+  dropped both the `arcadedb.vectorIndex.locationCacheSize` JVM property and
+  the per-index `locationCacheSize` metadata key, and now rejects the key
+  outright, so any wheel that still forwarded it could not create a vector
+  index at all.
+
+  It was never really a cache. A vector location is the only mapping from a
+  vector id to its record, so bounding it did not spill to disk: it dropped
+  vectors from searches and from `countEntries()`. Size the heap for the live
+  vector set instead.
+
+  `create_vector_index(..., location_cache_size=N)` now raises `ValueError`
+  with that explanation rather than failing inside the Java builder, and
+  `VectorIndex.get_metadata()` no longer reports a `location_cache_size` key.
+  SQL `METADATA` blocks carrying `locationCacheSize` are rejected by the
+  engine.
+
 ## 26.8.1.dev24
 
 ### Restored

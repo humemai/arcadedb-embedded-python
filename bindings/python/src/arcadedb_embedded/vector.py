@@ -511,7 +511,9 @@ class VectorIndex:
                 "max_connections": int(meta.maxConnections),
                 "beam_width": int(meta.beamWidth),
                 "ef_search": int(meta.efSearch),
-                "location_cache_size": int(meta.locationCacheSize),
+                # location_cache_size is absent on purpose: the engine dropped
+                # the field in #5559/#5568, so reading it here would raise on
+                # every get_metadata() call.
                 "graph_build_cache_size": int(meta.graphBuildCacheSize),
                 "mutations_before_rebuild": int(meta.mutationsBeforeRebuild),
                 "store_vectors_in_graph": bool(meta.storeVectorsInGraph),

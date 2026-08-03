@@ -58,7 +58,7 @@ Tests validate:
 ### Index Creation & Metadata
 
 - **test_sql_create_index_builds_vector_graph_immediately_by_default**: A `LSM_VECTOR` index created via SQL is queryable immediately with `vectorNeighbors`.
-- **test_create_index_with_rich_metadata_sql**: `LSM_VECTOR` creation supports `dimensions`, `similarity`, `quantization`, `idPropertyName`, `storeVectorsInGraph`, `addHierarchy`, `locationCacheSize`, `graphBuildCacheSize`, and `mutationsBeforeRebuild`; verifies the resulting Java metadata.
+- **test_create_index_with_rich_metadata_sql**: `LSM_VECTOR` creation supports `dimensions`, `similarity`, `quantization`, `idPropertyName`, `storeVectorsInGraph`, `addHierarchy`, `graphBuildCacheSize`, and `mutationsBeforeRebuild`; verifies the resulting Java metadata, and that a METADATA block still carrying the removed `locationCacheSize` is rejected.
 
 ### Neighbor Search
 
