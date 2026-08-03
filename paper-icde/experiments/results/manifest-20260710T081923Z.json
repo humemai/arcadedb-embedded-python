@@ -1,0 +1,18 @@
+{
+  "ts": "20260710T081923Z",
+  "tier": "paper",
+  "scale": "micro",
+  "cpuset": "0-11",
+  "workers": 1,
+  "shards": [
+    "0-11"
+  ],
+  "reps": 1,
+  "seed": 42,
+  "mem": "8g",
+  "heap": "4g",
+  "server_mem_fraction": 0.75,
+  "images": {
+    "icde-bench:client": "sha256:f451c58b150e2cabdc1a2156bbdc60c056f67a251490de648765ae595db0ca53"
+  }
+}

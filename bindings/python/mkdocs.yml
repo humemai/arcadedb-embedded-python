@@ -71,7 +71,8 @@ plugins:
 - git-revision-date-localized:
     enable_creation_date: true
     type: timeago
-- macros
+- macros:
+    include_dir: .
 
 markdown_extensions:
   # Python Markdown
@@ -237,3 +238,5 @@ nav:
   - Release Workflow: development/release.md
   - Troubleshooting: development/troubleshooting.md
 - Java API Coverage: java-api-coverage.md
+
+- Changelog: changelog.md

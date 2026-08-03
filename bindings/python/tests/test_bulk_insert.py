@@ -174,6 +174,46 @@ class TestAppendSamplesNumpy:
         ]
         assert counts == [n, n]
 
+    def test_repeated_tag_values_are_stored_distinctly(self, temp_db):
+        """Memoised string conversion must not conflate or alias tag values.
+
+        append_samples reuses one converted Java object per distinct str,
+        because tag columns are low cardinality by design and converting each
+        of 2.59M elements separately dominated ten-tag TSBS ingest. Sharing an
+        immutable String across rows is safe, but only if the cache is keyed
+        correctly, so this checks the two ways it could go wrong: a value must
+        not leak into rows that had a different one, and a column mixing
+        strings with non-strings must still round-trip.
+        """
+        temp_db.command(
+            "sql",
+            "CREATE TIMESERIES TYPE TagMemo TIMESTAMP ts "
+            "TAGS (host STRING, region STRING) FIELDS (val DOUBLE) SHARDS 2")
+        n = 600
+        base = 1_700_000_000_000
+        ts = [base + i * 1000 for i in range(n)]
+        # Heavy repetition with interleaving, so an off-by-one in the cache
+        # would show up as a wrong pairing rather than a wrong count.
+        hosts = [f"h{i % 3}" for i in range(n)]
+        regions = [f"r{(i // 7) % 5}" for i in range(n)]
+        vals = [float(i) for i in range(n)]
+
+        ex = temp_db.async_executor()
+        ex.append_samples("TagMemo", ts, hosts, regions, vals)
+        ex.wait_completion()
+
+        rows = temp_db.query(
+            "sql", "SELECT ts, host, region, val FROM TagMemo ORDER BY ts"
+        ).to_list()
+        assert len(rows) == n
+        for i, row in enumerate(rows):
+            assert row["host"] == hosts[i], f"host mismatch at {i}"
+            assert row["region"] == regions[i], f"region mismatch at {i}"
+            assert float(row["val"]) == vals[i], f"val mismatch at {i}"
+        # Every distinct value survived, so the cache did not collapse them.
+        assert {r["host"] for r in rows} == set(hosts)
+        assert {r["region"] for r in rows} == set(regions)
+
     def test_primitive_batch_accepts_plain_sequences(self, temp_db):
         """Lists, not just ndarrays: the batch path types each column itself."""
         temp_db.command(

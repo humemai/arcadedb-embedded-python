@@ -1,0 +1,1 @@
+{"n_points": 2592000, "backend": "arcadedb_ts_native", "shards": 4, "primitive": false, "numpy_cols": true, "ingest_s": 2.14, "ingest_pts_per_s": 1208542.8, "q_last_ms": 3.35, "q_last_rows": 1, "q_range_ms": 7.54, "q_range_rows": 60, "q_global_ms": 35.35, "q_global_rows": 12}

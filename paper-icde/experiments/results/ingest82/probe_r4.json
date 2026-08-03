@@ -1,0 +1,31 @@
+{
+ "async_parallel": {
+  "count_ok": true,
+  "rows_per_s": 120159.1,
+  "s": 4.16
+ },
+ "cpuset": "0-11",
+ "engine_version": "26.8.1.dev23",
+ "heap": "8g",
+ "host": "mini",
+ "insert_many": {
+  "count_ok": true,
+  "rows_per_s": 199982.3,
+  "s": 2.5
+ },
+ "insert_many_parallel": {
+  "count_ok": true,
+  "rows_per_s": 185689.2,
+  "s": 2.69
+ },
+ "lane": "l1ingest",
+ "mem_cap": "24g",
+ "n_rows": 500000,
+ "rep": 4,
+ "serial_sql": {
+  "count_ok": true,
+  "rows_per_s": 67280.2,
+  "s": 7.43
+ },
+ "tier": "paper"
+}

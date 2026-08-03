@@ -1,0 +1,19 @@
+{
+  "ts": "20260708T100414Z",
+  "tier": "paper",
+  "scale": "tiny",
+  "cpuset": "0-11",
+  "workers": 1,
+  "shards": [
+    "0-11"
+  ],
+  "reps": 1,
+  "seed": 42,
+  "mem": "8g",
+  "heap": "4g",
+  "server_mem_fraction": 0.75,
+  "images": {
+    "icde-bench:client": "sha256:2a45894533978db7d93526e86c8a8d8fa16a98faba6402ad5d8a235e14a16fb3",
+    "postgres:17": "sha256:5c855ad7b85e68e48a62f34662853f38b57c1c1d80f3a927ab58034fd6d31c5e"
+  }
+}

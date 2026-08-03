@@ -1,0 +1,26 @@
+{
+  "ts": "20260711T035309Z",
+  "tier": "paper",
+  "scale": "medium",
+  "cpuset": "0-11",
+  "workers": 1,
+  "shards": [
+    "0-11"
+  ],
+  "reps": 5,
+  "seed": 42,
+  "mem": "32g",
+  "heap": "16g",
+  "server_mem_fraction": 0.75,
+  "images": {
+    "icde-bench:arcadedb": "sha256:c6b0f54c34c7bd38ded208c888c1a344be323d4734bf79c75d4a021694aaf1b8",
+    "icde-bench:client": "sha256:52ddd9c47f216a36dd3e6eda3331b9e6356f0c4a45daf7be1bd5d4fef0fcd3d7",
+    "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:7aa633c5387a8508e1cc064dbca6faab4641e7124724f5d511fc72759370972a": "sha256:7aa633c5387a8508e1cc064dbca6faab4641e7124724f5d511fc72759370972a",
+    "icde-bench:duckdb": "sha256:2c1533ccc7931a4586664ddca75b3ed8ea9b364caaa256b31e8e59f1b00bf6b7",
+    "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397": "sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
+    "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca": "sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
+    "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+    "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56": "sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+    "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050": "sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050"
+  }
+}

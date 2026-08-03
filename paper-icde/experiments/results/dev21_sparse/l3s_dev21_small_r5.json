@@ -1,0 +1,18 @@
+{
+ "lane": "l3s",
+ "n_docs": 1000000,
+ "dims": 30109,
+ "k": 10,
+ "n_queries": 1000,
+ "connect_s": 0.524,
+ "engine_version": "26.8.1.dev21",
+ "build_s": 92.46,
+ "build_docs_per_s": 10815.5,
+ "query_mean_ms": 49.318,
+ "query_p50_ms": 38.358,
+ "query_p95_ms": 126.089,
+ "query_p99_ms": 163.439,
+ "query_n": 995,
+ "qps": 20.3,
+ "recall_at_10": 0.9935
+}

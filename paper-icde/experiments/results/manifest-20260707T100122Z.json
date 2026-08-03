@@ -1,0 +1,19 @@
+{
+  "ts": "20260707T100122Z",
+  "tier": "paper",
+  "scale": "medium",
+  "cpuset": "0-11",
+  "reps": 1,
+  "seed": 42,
+  "mem": "32g",
+  "heap": "16g",
+  "server_mem_fraction": 0.75,
+  "images": {
+    "icde-bench:arcadedb": "sha256:1be41110e1a62192e06111598839f381950cb8959f2ffb6721697c9af561277a",
+    "icde-bench:client": "sha256:c7047fcc3c366881c145c20ff7a37260e008a4e153bde500b6fc2d1ee69003fe",
+    "arcadedata/arcadedb:latest": "sha256:4af592f6688411ff2744fb707eff8ea2d2110d81f63ba72eb422a3f2e7998cbd",
+    "qdrant/qdrant:latest": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+    "milvusdb/milvus:latest": "sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+    "docker.elastic.co/elasticsearch/elasticsearch:9.0.0": "sha256:5856b2c77263336792b80fc0e03df42922b2f86a816a4daf23397fb02ef7b138"
+  }
+}

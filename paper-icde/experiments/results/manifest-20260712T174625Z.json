@@ -1,0 +1,20 @@
+{
+  "ts": "20260712T174625Z",
+  "tier": "paper",
+  "scale": "micro",
+  "cpuset": "0-11",
+  "workers": 1,
+  "shards": [
+    "0-11"
+  ],
+  "reps": 1,
+  "seed": 42,
+  "mem": "8g",
+  "heap": "4g",
+  "server_mem_fraction": 0.75,
+  "images": {
+    "icde-bench:client": "sha256:37386fbe631e191f124bafb214646dd953a24465bbacae394a9527a7afadc4e6",
+    "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+    "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56": "sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56"
+  }
+}

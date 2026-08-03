@@ -1,0 +1,21 @@
+{
+  "ts": "20260721T001118Z",
+  "tier": "paper",
+  "scale": "sf10",
+  "cpuset": "0-11",
+  "workers": 1,
+  "shards": [
+    "0-11"
+  ],
+  "reps": 5,
+  "seed": 42,
+  "mem": "24g",
+  "heap": "12g",
+  "server_mem_fraction": 0.75,
+  "images": {
+    "icde-bench:arcadedb": "sha256:9a3c79cecbb3a12cad029b63f206c63dfd42ff7f83136fc544a20e9a3b8677e4",
+    "icde-bench:client": "sha256:8ab1d4fd056e9641f2a217626339edf2fa824be19410ba13fd13aa4b8b6b5056",
+    "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98": "sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",
+    "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca": "sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca"
+  }
+}
