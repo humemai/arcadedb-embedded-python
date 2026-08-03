@@ -125,6 +125,23 @@ public interface IndexInternal extends Index {
     return getPageSize();
   }
 
+  /**
+   * Configuration to replay when this index's definition is carried over into a NEW index file - a rebuild, a truncate,
+   * a propagation to a freshly added bucket or sub type, a {@code copyType()}. The companion of
+   * {@link #getPageSizeForNewFile()} for everything that is not the page size, and the value to feed
+   * {@link IndexMetadata#copy(String, String[], int)} before handing it to a builder.
+   * <p>
+   * Distinct from {@link #getMetadata()} because that one answers whatever the index stores internally, which for the
+   * wrapper index types is the UNDERLYING LSM-Tree's plain {@link IndexMetadata}: a full-text index keeps its analyzers
+   * and BM25 configuration in its own {@code FullTextIndexMetadata}, a geospatial one keeps its resolution and layout
+   * in its own fields, and neither is reachable through the underlying index. A carry-over site reading
+   * {@code getMetadata()} therefore silently recreates the index with the default configuration (issue #5723) - which
+   * for a full-text index means a different analyzer and a different ranking.
+   */
+  default IndexMetadata getMetadataForNewFile() {
+    return getMetadata();
+  }
+
   boolean isCompacting();
 
   boolean isValid();
@@ -201,11 +218,14 @@ public interface IndexInternal extends Index {
   /**
    * Returns a human-readable reason why this index should be rebuilt, or {@code null} when there is none.
    * <p>
-   * An index whose on-disk layout predates a change the engine cannot apply in place keeps working with the old
-   * layout - correctness first - but does not get whatever the new one buys. This is how it says so: the schema
-   * load logs it once per database open, and it is exposed as {@code upgradeWarning} on {@code schema:indexes} and
-   * {@code schema:index:<name>}, which is what Studio renders. The remedy is always
-   * {@code REBUILD INDEX &lt;name&gt;}, so say what is lost and why, not what to type.
+   * Two shapes reach this. Most often an index whose on-disk layout predates a change the engine cannot apply in
+   * place keeps working with the old layout - correctness first - but does not get whatever the new one buys. The
+   * other is an index the current build can no longer read correctly at all, such as one whose physical key order
+   * predates the string comparison fix of #5321 and whose lookups therefore return fewer records than a scan
+   * (#5802). Either way this is how it says so: the schema load logs it once per database open, and it is exposed as
+   * {@code upgradeWarning} on {@code schema:indexes} and {@code schema:index:<name>}, which is what Studio renders.
+   * The remedy is always {@code REBUILD INDEX &lt;name&gt;}, so say what is lost and why, not what to type - and,
+   * since the two shapes cost the reader very different things, say which one this is.
    * <p>
    * Implementations must keep this cheap and side-effect free: it is called per index on every listing.
    */

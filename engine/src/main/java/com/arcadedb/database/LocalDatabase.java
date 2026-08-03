@@ -202,6 +202,8 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   private            long                                      lastUpdatedOn;
   private            long                                      lastUsedOn;
   private            int                                       cachedHashCode            = 0;
+  /** Guards against concurrent GraphBatch instances on this database. Never routed through a wrapper. */
+  private final      AtomicBoolean                             batchInProgress           = new AtomicBoolean(false);
 
   protected LocalDatabase(final String path, final ComponentFile.MODE mode, final ContextConfiguration configuration,
       final SecurityManager security, final Map<CALLBACK_EVENT, List<Callable<Void>>> callbacks) {
@@ -1217,7 +1219,25 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   }
 
   @Override
+  public void deleteEdgeSkippingEndpoint(final Edge edge, final RID skipEndpoint) {
+    executeInReadLock(() -> {
+      deleteRecordNoLock(edge, skipEndpoint);
+      return null;
+    });
+  }
+
+  @Override
   public void deleteRecordNoLock(final Record record) {
+    deleteRecordNoLock(record, null);
+  }
+
+  /**
+   * @param skipEdgeEndpoint when {@code record} is an edge, the endpoint vertex whose edge list must NOT be
+   *                         touched by the disconnection (#5760, see
+   *                         {@link #deleteEdgeSkippingEndpoint(Edge, RID)}). Ignored for any other record type,
+   *                         and always {@code null} on the ordinary delete path.
+   */
+  private void deleteRecordNoLock(final Record record, final RID skipEdgeEndpoint) {
     if (record.getIdentity() == null)
       throw new IllegalArgumentException("Cannot delete a non persistent record");
 
@@ -1277,7 +1297,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       }
 
       if (record instanceof Edge edge) {
-        graphEngine.deleteEdge(edge);
+        graphEngine.deleteEdge(edge, skipEdgeEndpoint);
       } else if (record instanceof Vertex) {
         try {
           graphEngine.deleteVertex((VertexInternal) record, forceBrokenChainDelete);
@@ -1393,7 +1413,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     if (attempts < 1)
       attempts = 1;
 
-    final int retryDelay = GlobalConfiguration.TX_RETRY_DELAY.getValueAsInteger();
+    final int retryDelay = configuration.getValueAsInteger(GlobalConfiguration.TX_RETRY_DELAY);
 
     boolean duplicatedKeyRetried = false;
 
@@ -1822,7 +1842,34 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     // Use the outermost wrapper so that commits flow through any HA/replication layer.
     // Without this, GraphBatch.commit() would short-circuit the Raft replication wrapper
     // installed by the HA plugin and writes would never reach followers (issue #4076).
-    return GraphBatch.builder(wrappedDatabaseInstance);
+    //
+    // The guard owner is this instance and NOT the wrapper: the wrapper only delegates batch(),
+    // so a release routed through it would never reach the flag below and the first batch would
+    // lock out every later one on a replicated database (issue #5666).
+    return GraphBatch.builder(wrappedDatabaseInstance, this);
+  }
+
+  /**
+   * Reserves the single-batch slot of this database. Two concurrent {@link GraphBatch} instances on the same
+   * database silently lose edges: the head pointer is deferred to close(), so the last writer wins and the
+   * loser's segment chain is orphaned. Called by {@code GraphBatch.Builder.build()}, released by
+   * {@link #batchFinished()}.
+   *
+   * @throws DatabaseOperationException if a batch is already open on this database
+   */
+  public void batchStarted() {
+    if (!batchInProgress.compareAndSet(false, true))
+      throw new DatabaseOperationException(
+          "A GraphBatch is already in progress on this database. Concurrent batches silently lose edges. "
+              + "Use a single GraphBatch (parallelFlush for parallel fan-out).");
+  }
+
+  /**
+   * Releases the single-batch slot reserved by {@link #batchStarted()}. Idempotent, and safe to call on a
+   * database that never opened a batch.
+   */
+  public void batchFinished() {
+    batchInProgress.set(false);
   }
 
   @Override

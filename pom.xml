@@ -25,7 +25,7 @@
     <groupId>com.arcadedb</groupId>
     <artifactId>arcadedb-parent</artifactId>
     <packaging>pom</packaging>
-    <version>26.8.1-SNAPSHOT</version>
+    <version>26.8.1</version>
 
     <name>ArcadeDB</name>
     <url>https://arcadedata.com/</url>
@@ -137,6 +137,7 @@
         <module>network</module>
         <module>grpc</module>
         <module>server</module>
+        <module>mcp</module>
         <module>ha-raft</module>
         <module>metrics</module>
         <module>tracing</module>
