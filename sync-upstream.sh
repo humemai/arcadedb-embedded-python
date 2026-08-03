@@ -32,19 +32,41 @@ FORK_OWNED_PATHS=(
 
 FORK_EXCLUDED_PATHS=(
     "CLAUDE.md"
-    ".github/workflows/benchmark-tests.yml"
-    ".github/workflows/bolt-conformance-spec.yml"
-    ".github/workflows/bolt-nightly.yml"
-    ".github/workflows/claude-code-review.yml"
-    ".github/workflows/claude.yml"
-    ".github/workflows/ha-resilience-tests.yml"
-    ".github/workflows/load-tests.yml"
-    ".github/workflows/license-compliance.yml"
-    ".github/workflows/meterian.yml"
-    ".github/workflows/mvn-deploy.yml"
-    ".github/workflows/mvn-release.yml"
-    ".github/workflows/mvn-test.yml"
-    ".github/workflows/studio-security-audit.yml"
+)
+
+# .github/ is an ALLOWLIST, not a denylist.
+#
+# This used to name fourteen upstream workflows to delete. A denylist can only
+# ever describe files that existed when it was written, so anything upstream
+# adds afterwards lands in this fork silently and starts acting on a repository
+# it was not written for.
+#
+# It did. Audited 2026-08-04, all byte-identical to upstream's:
+#
+#   workflows/sponsor-priority.yml      labels OUR issues from ArcadeDB's
+#                                       sponsor list
+#   workflows/native-image.yml          GraalVM native image of the Java engine
+#   workflows/e2e-dependency-audit.yml  npm audit of Studio's JS E2E harnesses
+#   FUNDING.yml                         github: [ArcadeData] -- puts a Sponsor
+#                                       button on OUR repo soliciting for them
+#   dependabot.yml                      maven ecosystem, 20 PRs/week, against
+#                                       the Java tree we do not maintain
+#   ISSUE_TEMPLATE.md,                  ArcadeDB's templates shown to people
+#   pull_request_template.md            opening issues and PRs on this fork
+#   dependency-review-config.yml,       config and helpers for the upstream
+#   scripts/*                           workflows pruned above; orphaned here
+#
+# Two of the workflows had already spent Actions minutes here, and FUNDING.yml
+# is live: the fork currently advertises someone else's sponsorship.
+#
+# So: name what we own, delete every other TRACKED file under .github/ after
+# the merge. Upstream can add fifty and none arrive. Adding one here is now a
+# deliberate act, which is the point.
+FORK_GITHUB_ALLOWLIST=(
+    ".github/workflows/deploy-python-docs.yml"       # ours; not upstream
+    ".github/workflows/release-python-packages.yml"  # ours; not upstream
+    ".github/workflows/test-python-bindings.yml"     # ours; upstream has a copy, we diverge
+    ".github/workflows/test-python-examples.yml"     # ours; upstream has a copy, we diverge
 )
 
 PROTECTED_SOURCE_REV=""
@@ -119,6 +141,45 @@ restore_path_to_fork_state() {
     return 1
 }
 
+prune_foreign_github_files() {
+    # Delete every TRACKED file under .github/ that is not on the allowlist.
+    #
+    # Only tracked files. Untracked working-tree content under .github/ is the
+    # developer's own (this repo carries a self-ignored .github/modernize/ from
+    # a local tool run), and a sync script has no business deleting it.
+    #
+    # Reports what it removed rather than doing it quietly: a file appearing
+    # here is news about what upstream is doing, and if one of OURS is ever
+    # listed it means the allowlist is stale and CI is about to vanish.
+    local path keep removed=0 allowed
+
+    for path in $(git ls-files -- .github/ 2>/dev/null); do
+        keep=0
+        for allowed in "${FORK_GITHUB_ALLOWLIST[@]}"; do
+            [[ "$path" == "$allowed" ]] && { keep=1; break; }
+        done
+        if [ "$keep" -eq 0 ]; then
+            git rm -r --cached --ignore-unmatch --quiet -- "$path" >/dev/null 2>&1 || true
+            rm -f -- "$path"
+            echo -e "   ${YELLOW}pruned upstream file:${NC} $path"
+            removed=$((removed + 1))
+        fi
+    done
+
+    if [ "$removed" -gt 0 ]; then
+        echo -e "${CYAN}🧹 Pruned ${removed} upstream .github file(s) not on the fork allowlist${NC}"
+    fi
+
+    # The allowlist naming a file that no longer exists is a real problem: one
+    # of ours was renamed or deleted upstream-side, and nothing else here would
+    # notice until CI silently stopped running.
+    for allowed in "${FORK_GITHUB_ALLOWLIST[@]}"; do
+        if [ ! -e "$allowed" ]; then
+            echo -e "   ${RED}⚠️  allowlisted .github file is MISSING:${NC} $allowed"
+        fi
+    done
+}
+
 restore_protected_paths() {
     local path tracked_entry
 
@@ -159,24 +220,23 @@ ${YELLOW}Fork-Owned Files (restored after merge):${NC}
 
 ${YELLOW}Fork-Excluded Files (kept out of the fork):${NC}
     • CLAUDE.md
-    • .github/workflows/benchmark-tests.yml
-    • .github/workflows/claude-code-review.yml
-    • .github/workflows/claude.yml
-    • .github/workflows/bolt-conformance-spec.yml
-    • .github/workflows/ha-resilience-tests.yml
-    • .github/workflows/load-tests.yml
-    • .github/workflows/license-compliance.yml
-    • .github/workflows/meterian.yml
-    • .github/workflows/mvn-deploy.yml
-    • .github/workflows/mvn-release.yml
-    • .github/workflows/mvn-test.yml
-    • .github/workflows/studio-security-audit.yml
 
-${YELLOW}Normal Merge Paths:${NC}
-    • .github/workflows/release-python-packages.yml
+${YELLOW}.github/ (ALLOWLIST — every other TRACKED file is pruned after the merge):${NC}
     • .github/workflows/deploy-python-docs.yml
+    • .github/workflows/release-python-packages.yml
     • .github/workflows/test-python-bindings.yml
     • .github/workflows/test-python-examples.yml
+
+    Any other tracked file under .github/ is DELETED after each sync, and the
+    prune names what it removed. This used to be a denylist of upstream
+    workflows, which by construction could not cover anything upstream added
+    later: three workflows had leaked in (two already spending Actions minutes
+    here), plus FUNDING.yml advertising ArcadeData's sponsors on this fork and
+    a maven dependabot config for a Java tree we do not maintain.
+
+    Untracked files under .github/ are left alone: they are the developer's.
+
+${YELLOW}Normal Merge Paths:${NC}
     • bindings/python/      - Merges normally from upstream-main into main
 
 ${YELLOW}After Sync:${NC}
@@ -388,6 +448,11 @@ fi
 
 # 9b. Restore fork-protected files exactly as they were before the merge
 restore_protected_paths
+
+# 9c. Drop every tracked .github file that is not ours. Runs AFTER the restore so it sees
+# the final tree, and catches files upstream added since the last sync,
+# which a fixed exclusion list structurally cannot.
+prune_foreign_github_files
 
 # Commit fork-specific preservation changes only when needed
 if ! git diff --cached --quiet; then
