@@ -122,7 +122,7 @@ jobs:
           for v in $versions; do
             echo "::group::Resolve floors for Python $v"
             uv pip compile pyproject.toml \
-              --extra test --extra vector --extra examples \
+              --extra test --extra vector --extra examples --extra arrow \
               --resolution lowest-direct \
               --python-version "$v" \
               -o "$RUNNER_TEMP/floors-$v.txt"

@@ -54,7 +54,7 @@ test = [
     "psycopg[binary]>=3.1",  # Postgres wire
     "redis>=5.0",            # Redis wire
     "neo4j>=5.0",            # Bolt
-    "pyarrow>=14.0.0",       # ResultSet.to_arrow()
+    "pyarrow>=23.0.1",       # ResultSet.to_arrow(); <23.0.1 has PYSEC-2026-113
 ]
 dev = [
     "black",
@@ -74,7 +74,7 @@ vector = [
 # pyarrow is only needed to wrap those buffers. Without it to_arrow() returns
 # None and callers fall back to to_columns().
 arrow = [
-    "pyarrow>=14.0.0",
+    "pyarrow>=23.0.1",
     "numpy>=1.26.4",
 ]
 examples = [
