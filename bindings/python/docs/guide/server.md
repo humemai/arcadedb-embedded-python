@@ -204,10 +204,24 @@ inferred from the jars being present.
 
 ### Two things to know before exposing these
 
-**`redis_port` is accepted and ignored.** Measured on 26.8.1.dev24: with a
-distinct port passed to each plugin, Postgres and Bolt bind what they were
-given and the Redis listener binds the hardcoded 6379 anyway. Plan for 6379 or
-do not enable Redis.
+**`redis_port` is accepted and ignored.** Measured on 26.8.1.dev24 and still
+true on 26.8.1: with a distinct port passed to each plugin, Postgres and Bolt
+bind what they were given and the Redis listener binds the hardcoded 6379
+anyway. Plan for 6379 or do not enable Redis.
+
+Root-caused and filed as [ArcadeDB #5796][5796]. `ServerPlugin.configure()`
+receives the server's `ContextConfiguration`; Postgres and Bolt read the port
+from it, while Redis drops the argument and reads the static
+`GlobalConfiguration` default at `startService()`. Bolt carried the identical
+bug until #3809 fixed it.
+
+[5796]: https://github.com/ArcadeData/arcadedb/issues/5796
+
+**Redis now requires authentication, as of 26.8.1.** Earlier versions accepted
+unauthenticated connections on the Redis port. A client that used to connect
+anonymously must now present credentials, so enabling this plugin is a
+breaking change for anything already talking to it. `arcadedb.redis.tls` is
+new in the same release if you want the transport encrypted.
 
 **The wire listeners bind all interfaces.** `host` tightens the HTTP listener
 to loopback by default, but the protocol plugins log
