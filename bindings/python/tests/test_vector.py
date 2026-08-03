@@ -744,9 +744,6 @@ class TestLSMVectorIndex:
         assert rid_conversion_calls[: len(allowed_rids)] == allowed_rids
         assert len(rid_conversion_calls) >= len(allowed_rids)
 
-    @pytest.mark.skip(
-        reason="Known upstream bug: Vector deletions cause index corruption"
-    )
     def test_lsm_vector_delete_and_search_others(self, test_db):
         """Test deleting vertices in a larger dataset and ensuring others are still found."""
         import random  # nosec B311
@@ -766,7 +763,6 @@ class TestLSMVectorIndex:
         # Generate 100 random vectors
         num_vectors = 100
         vectors = []
-        rids = []
 
         # Use fixed seed for reproducibility
         random.seed(42)
@@ -783,7 +779,6 @@ class TestLSMVectorIndex:
                     arcadedb.to_java_float_array(vec),
                     i,
                 )
-                rids.append(str(i))
 
         # Create index now (Bulk load)
         # We disable store_vectors_in_graph to avoid "Invalid position" errors when checking mutable pages
@@ -800,39 +795,34 @@ class TestLSMVectorIndex:
             for idx in sorted(list(deleted_indices)):
                 test_db.command("sql", "DELETE FROM Doc WHERE id = ?", idx)
 
-        # Verify deletions and existence
+        # Verify deletions and existence.
+        #
+        # Compare the `id` PROPERTY, not the record identity. An earlier version
+        # of this test compared str(get_identity()), a RID like "#1:1", against
+        # the integer i. "#1:1" != 1 is always true, so the deleted-vector check
+        # could never fail, and "#1:1" == 1 is always false, so the surviving-
+        # vector check could never pass. That made the test fail unconditionally
+        # and it was skipped as "Known upstream bug: Vector deletions cause index
+        # corruption". The engine was never at fault: it reports
+        # "110 total entries, 10 deleted, 90 active" and validates 90/90, and the
+        # query for a surviving vector returns it ranked first.
         for i in range(num_vectors):
             vec = vectors[i]
-            rid = i
 
-            # Search for the vector
-            # Increase k to 10 to handle slight variations in ANN recall or score normalization
-            # especially on Windows/CI environments where the graph structure might be slightly different
+            # k=10 absorbs small variations in ANN recall across platforms.
             results = index.find_nearest(vec, k=10)
+            found_ids = [int(vertex.get("id")) for vertex, _ in results]
 
             if i in deleted_indices:
-                # If deleted, we should NOT find this specific RID
-                if len(results) > 0:
-                    for found_vertex, _ in results:
-                        found_rid = str(found_vertex.get_identity())
-                        assert (
-                            found_rid != rid
-                        ), f"Deleted vector at index {i} (RID {rid}) was found!"
+                assert i not in found_ids, (
+                    f"Deleted vector id={i} was still returned.\n"
+                    f"Found ids: {found_ids}"
+                )
             else:
-                # If not deleted, we SHOULD find this specific RID among top matches
-                found = False
-                found_rids = []
-                for found_vertex, _ in results:
-                    found_rid = str(found_vertex.get_identity())
-                    found_rids.append(found_rid)
-                    if found_rid == rid:
-                        found = True
-                        break
-
-                assert found, (
-                    f"Existing vector at index {i} (RID {rid}) not found in top 10 results.\n"
-                    f"Found RIDs: {found_rids}\n"
-                    f"Deleted indices: {sorted(list(deleted_indices))}"
+                assert i in found_ids, (
+                    f"Surviving vector id={i} not in the top 10.\n"
+                    f"Found ids: {found_ids}\n"
+                    f"Deleted ids: {sorted(deleted_indices)}"
                 )
 
     def test_lsm_vector_search_ef_search(self, test_db):
