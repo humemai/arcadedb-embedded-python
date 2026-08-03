@@ -112,6 +112,41 @@ one nominal `M` compares an accident of naming. Recorded per row as
 `degree_param` plus `degree_family` so the check reads the number in the unit
 its own engine meant.
 
+**F8. The cpuset must equalise USE, not only the resource.** F1 gives every
+engine the same 12 threads. That is not the same as every engine *taking* the
+same amount: one that spreads a single query over 12 threads and one that
+answers on a single thread are both "given 12 CPUs", and comparing their p50s
+compares scheduling policy as much as engine speed. Measured 2026-08-03 on
+mini, dense `tiny` (100k vectors), the same cell run at cpuset `0` and at
+`0-11`, three reps each, median [min-max]:
+
+| backend | p50 @ 1 CPU | p50 @ 12 CPU | speedup |
+|---|---|---|---|
+| arcadedb_dense_embedded | 0.727 [0.69-0.73] | 0.677 [0.67-0.69] | 1.07x |
+| chroma_dense | 0.508 [0.51-0.52] | 0.511 [0.51-0.53] | 0.99x |
+| duckdb_vss_dense | 1.379 [1.38-1.38] | 1.374 [1.37-1.38] | 1.00x |
+| lancedb_dense | 1.166 [1.17-1.17] | 1.396 [1.39-1.44] | **0.84x** |
+| sqlite_vec_dense | 13.061 [12.81-13.23] | 13.266 [13.07-13.30] | 0.98x |
+
+**No embedded engine parallelises a single query.** Four of five sit within
+2% of 1.0, so the twelve threads are idle during a k=10 search and the p50
+comparison in T5 is a comparison of engines, not of thread counts. That is
+what F1 needed to be true and had never been checked.
+
+**LanceDB is reproducibly slower with more CPUs.** 0.84x is not noise: the
+three-rep ranges are disjoint (1.17-1.17 against 1.39-1.44). Giving it the
+full cpuset costs it roughly 20% on this workload, most likely pool
+coordination it cannot amortise over a query this small. The bias therefore
+runs **against a comparator, not for us**, and it is disclosed rather than
+quietly enjoyed: LanceDB's published dense latency is a slight overstatement
+of what the engine can do on one core.
+
+Scope, and it is narrow. One tier, k=10, one query in flight at a time,
+embedded backends only. It says nothing about concurrent query load, where
+an engine that idles 11 threads per query may well use them across queries,
+and nothing about qdrant or milvus, which run as servers and are the ones
+most likely to hold per-query pools. Re-measure before extending the claim.
+
 ## Parallelism policy: maximise it, but never inside a published absolute
 
 The standing direction is to use the machine, and it is the right one: mini
@@ -158,12 +193,11 @@ every arm of a comparison. Three 4-thread shards over `0-11`, not "whatever is
 free". An arm given a wider shard than its neighbour is F1 violated with extra
 steps.
 
-**The open question.** F1 equalises the *resource*. It does not establish that
-each engine *uses* the same amount of it: an engine that spreads one query over
-12 threads and one that answers on a single thread are both "given 12 CPUs".
-Nothing here checks that yet, which makes it the one axis where we cannot say
-which way the bias runs. Being measured now (`~/f8_probe.sh`); when it lands it
-becomes F8 with a number attached.
+**The axis that was open is now F8.** Whether the cpuset equalises *use* and
+not just the resource has been measured: no embedded engine parallelises a
+single query, so the shared cpuset is not silently advantaging anyone at query
+time. LanceDB is the one asymmetry, and it runs against a comparator rather
+than for us. See F8 above for the numbers and the scope.
 
 ## Allowed to differ (must be DISCLOSED, per the config policy)
 
