@@ -55,6 +55,13 @@ test = [
     "redis>=5.0",            # Redis wire
     "neo4j>=5.0",            # Bolt
     "pyarrow>=23.0.1",       # ResultSet.to_arrow(); <23.0.1 has PYSEC-2026-113
+    # ResultSet.to_dataframe(). Absent until 2026-08-04, which meant its two
+    # tests called importorskip("pandas") and skipped in every CI run this
+    # package has ever had: a public, documented method with no executed
+    # coverage. Same shape as the arrow gap, but in the extras DEFINITION
+    # rather than an install command, so no amount of care at install time
+    # would have caught it.
+    "pandas>=2.2.0",
 ]
 dev = [
     "black",
@@ -75,6 +82,20 @@ vector = [
 # None and callers fall back to to_columns().
 arrow = [
     "pyarrow>=23.0.1",
+    "numpy>=1.26.4",
+]
+# Optional: ResultSet.to_dataframe(). Shipped and documented long before this
+# extra existed, so the only way to discover the dependency was to call the
+# method and read the ImportError. `arrow` had an extra and `pandas` did not,
+# for two methods on the same class doing the same kind of thing.
+#
+# Note the two differ in how they FAIL, and that is deliberate on to_arrow's
+# side rather than an oversight here: to_arrow() returns None so callers can
+# fall back to to_columns(), while to_dataframe() raises ImportError. Changing
+# to_dataframe to match would break callers relying on the exception, so it
+# stays as it is and is documented rather than quietly aligned.
+pandas = [
+    "pandas>=2.2.0",
     "numpy>=1.26.4",
 ]
 examples = [
