@@ -20,6 +20,11 @@ It covers:
 - columnar export with `to_columns()`: scalar columns come back as 1-D numpy
   arrays and embedding columns as one contiguous 2-D `float32` array, ready
   for scikit-learn or faiss without per-row conversion
+- the same export through `to_arrow()`, which reads the same bridge buffer but
+  keeps the validity bitmap. A nullable `INTEGER` stays `int64` instead of
+  widening to `float64` with NaN holes, and a nullable `BOOLEAN` stays
+  `bool` instead of degrading to a Python list. That section needs pyarrow
+  (`pip install 'arcadedb-embedded[arrow]'`) and skips itself without it.
 
 Run it:
 

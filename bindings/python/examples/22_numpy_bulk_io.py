@@ -16,9 +16,13 @@ Workflow covered:
 - columnar export with to_columns(): scalar columns as 1-D numpy arrays and
   embedding columns as a contiguous 2-D array, ready for scikit-learn or
   faiss without per-row conversion
+- the same export via to_arrow(), which keeps NULLs typed instead of
+  widening a nullable INTEGER to float64/NaN the way numpy must
 
 Requirements:
 - numpy (pip install numpy)
+- pyarrow, optional, only for the to_arrow section
+  (pip install 'arcadedb-embedded[arrow]')
 """
 
 from __future__ import annotations
@@ -119,6 +123,52 @@ def embeddings_to_numpy(db, n_vectors: int, dim: int) -> None:
     assert np.allclose(emb[:3], vecs[:3], atol=1e-6)
 
 
+def nulls_to_arrow(db, n_rows: int) -> None:
+    print(f"\n=== to_arrow vs to_columns: {n_rows:,} rows with NULLs ===")
+    db.command("sql", "CREATE DOCUMENT TYPE Reading")
+    db.command("sql", "CREATE PROPERTY Reading.rid INTEGER")
+    db.command("sql", "CREATE PROPERTY Reading.count INTEGER")
+    db.command("sql", "CREATE PROPERTY Reading.ok BOOLEAN")
+    # Every third row leaves count and ok unset, which is the case that
+    # separates the two export paths.
+    rows = [
+        {"rid": i, "count": i * 2, "ok": i % 2 == 0}
+        if i % 3
+        else {"rid": i}
+        for i in range(n_rows)
+    ]
+    db.insert_many("Reading", rows)
+
+    q = "SELECT rid, count, ok FROM Reading ORDER BY rid"
+
+    # to_columns() has no way to say "missing" inside a plain numpy array, so a
+    # nullable INTEGER widens to float64 with NaN holes and a nullable BOOLEAN
+    # falls back to a Python list. That is a property of numpy, not a defect.
+    cols = db.query("sql", q).to_columns()
+    print(f"to_columns : count -> {cols['count'].dtype}, "
+          f"ok -> {type(cols['ok']).__name__}")
+
+    table = db.query("sql", q).to_arrow()
+    if table is None:
+        print("to_arrow   : pyarrow not installed, skipping "
+              "(pip install 'arcadedb-embedded[arrow]')")
+        return
+
+    print(f"to_arrow   : count -> {table['count'].type}, "
+          f"ok -> {table['ok'].type}, {table.num_rows:,} rows")
+
+    # The integers stay integers and the nulls stay null, so downstream
+    # arithmetic is not silently done in floating point.
+    assert table["count"].type == "int64"
+    assert table["ok"].type == "bool"
+    expected_nulls = len(range(0, n_rows, 3))
+    assert table["count"].null_count == expected_nulls
+    assert table["ok"].null_count == expected_nulls
+    assert np.isnan(cols["count"]).sum() == expected_nulls
+    print(f"both agree on {expected_nulls:,} missing values; "
+          f"only to_arrow keeps them typed")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", default="./my_test_databases/numpy_bulk_io")
@@ -136,6 +186,7 @@ def main() -> None:
         bulk_documents(db, args.rows)
         timeseries_from_numpy(db, args.points)
         embeddings_to_numpy(db, args.vectors, args.dim)
+        nulls_to_arrow(db, args.rows // 20)
     finally:
         db.close()
     print("\nDone.")
