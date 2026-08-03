@@ -61,9 +61,22 @@ bulk APIs when you're taking everything from a large result.**
 
   **Strings are wrapped, not decoded.** The buffer already holds int32 offsets
   plus a UTF-8 blob, which is exactly Arrow's string layout, so no per-row
-  `str` is built. Measured to a `pandas.DataFrame`, 100k rows, median of 5:
-  string-heavy **1.58×**, mixed **1.40×**, numeric-only **1.01×**. On purely
-  numeric results there is no speed benefit and `to_columns()` is fine.
+  `str` is built.
+
+  Time to a `pandas.DataFrame`, which is what a caller actually pays. 100k
+  rows, median of 5 after 2 warmups, one idle Linux host pinned to 12 CPUs,
+  `scripts/arrow_transport_probe.py`:
+
+  | result shape | `to_columns()` → df | `to_arrow()` → df | speedup |
+  |---|---|---|---|
+  | numeric only | 55.9 ms | 56.8 ms | **0.98×** |
+  | strings | 117.8 ms | 67.4 ms | **1.75×** |
+  | mixed, with nulls | 74.8 ms | 52.7 ms | **1.42×** |
+
+  So on purely numeric results `to_arrow()` is a wash and `to_columns()` is
+  fine. The speedup is not Arrow being faster in general, it is the string
+  decode and the null promotion not happening. Pick it for what your columns
+  are, not by default.
 - `to_json_list()` / `iter_json_batches()` — bulk plain dicts (temporals as
   ISO strings).
 - `to_list()` — full Python-type fidelity (`datetime`, `Decimal`) when the

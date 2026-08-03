@@ -79,10 +79,20 @@ def main():
         print("pyarrow not installed; nothing to compare", file=sys.stderr)
         return 1
 
+    # The engine logs to stdout and does not always terminate its last line, so
+    # a result row printed straight after one gets concatenated onto it and any
+    # log-filtering grep upstream of this script eats the row silently. That
+    # cost a re-run: the numeric row, the one shape where Arrow does NOT win,
+    # was the row that disappeared. Lead every row with a newline and tag it,
+    # so a row can be recovered with `grep -o 'ROW .*'` no matter what shares
+    # the line.
+    def row(*cells):
+        print("\nROW " + "".join(cells), flush=True)
+
     print(f"\n  rows={args.rows} reps={args.reps} (warmup {args.warmup})")
     print(f"  arcadedb_embedded {arcadedb.__version__}\n")
-    print(f"  {'shape':<10}{'to_columns':>12}{'to_arrow':>11}"
-          f"{'cols->df':>11}{'arrow->df':>11}{'df speedup':>12}")
+    row(f"{'shape':<10}{'to_columns':>12}{'to_arrow':>11}",
+        f"{'cols->df':>11}{'arrow->df':>11}{'df speedup':>12}")
 
     for shape in args.shapes.split(","):
         with tempfile.TemporaryDirectory() as d:
@@ -110,8 +120,8 @@ def main():
                     f"{len(next(iter(c.values())))}")
 
                 sp = t_cols_df / t_arrow_df if t_arrow_df else float("nan")
-                print(f"  {shape:<10}{t_cols:>12.2f}{t_arrow:>11.2f}"
-                      f"{t_cols_df:>11.2f}{t_arrow_df:>11.2f}{sp:>11.2f}x")
+                row(f"  {shape:<10}{t_cols:>12.2f}{t_arrow:>11.2f}",
+                    f"{t_cols_df:>11.2f}{t_arrow_df:>11.2f}{sp:>11.2f}x")
 
     print("\n  cols->df and arrow->df are the numbers that matter: they are what")
     print("  a caller pays to get a DataFrame. A win on strings with a loss on")
