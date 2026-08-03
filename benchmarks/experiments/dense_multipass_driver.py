@@ -28,7 +28,7 @@ import os
 import statistics
 import time
 
-from l3d_dense import BACKENDS, load_dataset, K
+from l3d_dense import BACKENDS, load_dataset, K, canonical_quant_label
 from bench_common import run_conditions
 
 # Read with .get, not [], so the module can be IMPORTED without the run
@@ -78,7 +78,13 @@ def main():
                # string literals regardless of what BENCH_DENSE_QUANT actually
                # said, which is the same self-assertion that let one of them
                # stamp a version it was not running.
-               "quantization": os.environ.get("BENCH_DENSE_QUANT") or "fp32",
+               #
+               # Through the lane's own normaliser, so this label and the DDL
+               # the lane builds cannot disagree. It reported "fp32" for the
+               # unset case while l3d_dense reported "none", and that split is
+               # what made BENCH_DENSE_QUANT=fp32 look like a legal input.
+               "quantization": canonical_quant_label(
+                   os.environ.get("BENCH_DENSE_QUANT")),
                "heap_asked": os.environ.get("ARCADEDB_HEAP"),
                # The BACKEND's own version. run_conditions() reports the
                # arcadedb wheel, which is absent from dbbench:dense, so a

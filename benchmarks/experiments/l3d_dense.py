@@ -76,6 +76,50 @@ SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000,
 N_QUERIES = 1_000
 BATCH = 10_000
 
+# The DDL's vocabulary and the results' vocabulary disagreed, and a recorded
+# label could not be fed back in as an input.
+#
+# LSM_VECTOR accepts NONE/INT8/BINARY/PRODUCT, and unquantized is spelled by
+# OMITTING the key entirely. But dense_multipass_driver.py records that same
+# state as "fp32", and every T5 fp32 row, task and paper cell calls it fp32
+# too. So the one name everyone uses for the arm was the one name the DDL
+# rejects, and BENCH_DENSE_QUANT=fp32 dies inside CREATE INDEX with
+# "Invalid quantization type: fp32".
+#
+# That cost three full DEEP-10M builds on 2026-08-03 (q3_fp32_b1..b3, ~2.5 min
+# each before the throw). The F5 version gate above them passed, because the
+# wheel WAS the right version; nothing validated the value. Published fp32
+# numbers are unaffected: the lane scripts reach this path with the variable
+# unset, which was always correct.
+#
+# So accept the reported label as input and normalise it, rather than only
+# rejecting it. Anything outside the engine's set now fails here, in the first
+# second, naming the valid values, instead of after the corpus is ingested.
+_QUANT_ALIASES = {"": "", "fp32": "", "float32": "", "f32": "", "none": ""}
+_QUANT_DDL = {"INT8", "BINARY", "PRODUCT"}
+
+
+def resolve_quant(raw):
+    """Map BENCH_DENSE_QUANT to what LSM_VECTOR's METADATA accepts.
+
+    Returns "" when the quantization key must be omitted (unquantized fp32).
+    """
+    v = (raw or "").strip()
+    if v.lower() in _QUANT_ALIASES:
+        return _QUANT_ALIASES[v.lower()]
+    if v.upper() in _QUANT_DDL:
+        return v.upper()
+    raise SystemExit(
+        f"BENCH_DENSE_QUANT={raw!r} is not a quantization LSM_VECTOR accepts.\n"
+        f"  unquantized (reported as 'fp32'): leave unset, or fp32/none\n"
+        f"  quantized: {'/'.join(sorted(_QUANT_DDL))}"
+    )
+
+
+def canonical_quant_label(raw):
+    """The one name for this arm in results, whatever the input spelled."""
+    return resolve_quant(raw) or "fp32"
+
 
 def load_dataset(scale):
     global DIM
@@ -181,7 +225,7 @@ class ArcadeEmbedded(Base):
                 db.commit()
                 db.begin()
         db.commit()
-        quant = os.environ.get("BENCH_DENSE_QUANT", "")  # e.g. INT8 (#3144)
+        quant = resolve_quant(os.environ.get("BENCH_DENSE_QUANT", ""))
         qline = f'"quantization": "{quant}", ' if quant else ""
         db.command("sql", f'''CREATE INDEX ON Article (embedding) LSM_VECTOR
                    METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
@@ -499,7 +543,15 @@ def main():
         out["degree_param"], out["degree_family"] = COMPARATOR_M, "hnswlib_m_doubled_at_base"
     else:  # sqlite_vec is an exact scan: there is no graph and no degree
         out["degree_param"], out["degree_family"] = None, "exact_scan_no_ann"
-    out["quantization"] = os.environ.get("BENCH_DENSE_QUANT", "none")
+    # Canonical label, so one state has one name. This recorder called
+    # unquantized "none" while dense_multipass_driver.py called it "fp32", and
+    # results/ carries both (36 "fp32", 30 "none") for runs that built the
+    # identical index. Neither was wrong, they just never agreed, which is the
+    # same split that made BENCH_DENSE_QUANT=fp32 look like a legal input.
+    # Nothing consumes this field programmatically (it is provenance), so
+    # normalising costs nothing and old artifacts stay readable.
+    out["quantization"] = canonical_quant_label(
+        os.environ.get("BENCH_DENSE_QUANT", ""))
     t0 = time.perf_counter()
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
