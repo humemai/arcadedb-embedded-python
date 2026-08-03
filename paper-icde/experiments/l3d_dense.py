@@ -304,7 +304,20 @@ class LanceDB(Base):
                               m=COMPARATOR_M, ef_construction=EF_CONSTRUCTION)
 
     def search(self, qvec, k):
-        rs = self.tbl.search(qvec).limit(k).to_list()
+        # Apply the search-time knobs. Without .ef() LanceDB used its own
+        # default while every other engine ran at the lane's EF_SEARCH, which
+        # is the operating-point matching F3 requires, and it showed up as
+        # recall 0.711 against ~0.93 for everyone else. That was us measuring
+        # it at defaults, not LanceDB being weak.
+        #
+        # nprobes is set because IVF_HNSW_SQ is IVF-partitioned where the other
+        # HNSW engines are not, so it has a knob they do not have; a sweep
+        # (out_lance_sweep.json) shows recall is flat across nprobes 10/20/50
+        # at 0.9303, so 10 is chosen as the cheapest value that matches.
+        rs = (self.tbl.search(qvec).limit(k)
+              .ef(EF_SEARCH)
+              .nprobes(10)
+              .to_list())
         return [int(r["id"]) for r in rs]
 
 
