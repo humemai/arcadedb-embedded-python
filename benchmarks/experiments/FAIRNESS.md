@@ -147,6 +147,14 @@ an engine that idles 11 threads per query may well use them across queries,
 and nothing about qdrant or milvus, which run as servers and are the ones
 most likely to hold per-query pools. Re-measure before extending the claim.
 
+**F9. A kept row needs a control, because the host is not an invariant.**
+F1-F8 constrain a cell's *configuration* and none of them constrains *when* it
+ran, so a fresh row printed beside one carried forward from weeks earlier is
+fully compliant and can still be wrong. When a campaign re-measures one engine
+and keeps the others, re-run one untouched comparator as a control and show it
+reproduces. Stated in full under "Known violations" below, with the rule it
+does not extend (a version bump is not a resource change).
+
 ## Parallelism policy: maximise it, but never inside a published absolute
 
 The standing direction is to use the machine, and it is the right one: mini
@@ -225,6 +233,35 @@ Violation 2 is the sharpest lesson. The envelope was raised for a good reason
 fixed. Nobody re-ran the six comparators, so a legitimate fix became an
 advantage. **Raising a resource for one engine creates an obligation to
 re-measure every engine at that tier.**
+
+Note what that rule does NOT say. It is scoped to *resources*. Upgrading one
+engine's version is not a resource change: the comparators keep the same
+cpuset, envelope, protocol and degree, so F1-F8 still hold and their rows may
+be carried forward. Re-measuring every engine on every version bump would mean
+no table could ever mix a fresh row with a kept one, which is not the standard
+and would make the October freeze unaffordable.
+
+**F9. A kept row needs a control, because the host is not an invariant.**
+F1-F8 all describe the *configuration* of a cell. None of them constrains
+*when* it ran. So a table that prints a row measured tonight beside one
+measured five weeks ago is fully F1-F8 compliant and still potentially wrong,
+because the kernel, the docker version and the machine's thermal history all
+moved in between and none of that is recorded as a run condition.
+
+This is not hypothetical in the way the other axes were: it is the one
+remaining way a comparison can drift without any invariant noticing.
+
+So when a campaign re-measures one engine and carries the others forward,
+**re-run one untouched comparator as a control and show it reproduces its kept
+numbers within run-to-run spread.** One extra cell buys evidence for every row
+that was not re-run. If the control does not reproduce, the carried-forward
+rows are not usable and the whole tier is re-measured. Record the control's
+old-vs-new delta next to the table it licenses, so a reader can see the
+carry-forward was checked rather than assumed.
+
+First applied 2026-08-04: the stable-26.8.1 SciPy re-run moves only the
+ArcadeDB rows (dev20 and earlier -> 26.8.1) and keeps chroma, duckdb, sqlite
+and ladybug, with chroma re-run across all three tiers as the control.
 
 ## The structural cause
 
