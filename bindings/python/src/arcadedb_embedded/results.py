@@ -349,6 +349,133 @@ class ResultSet:
             out[name] = column
         return out
 
+    def to_arrow(self, batch_size: int = 25_000):
+        """
+        Bulk-materialize all rows as a ``pyarrow.Table``.
+
+        Reads the same columnar buffer as :meth:`to_columns` (one JSON header
+        plus packed little-endian columns and a null bitmap each), so there is
+        no extra work on the Java side. What differs is what happens to nulls
+        and to strings.
+
+        ``to_columns`` follows pandas conventions, which are lossy in two
+        places: a nullable int64 column is promoted to float64 with NaN, which
+        silently loses precision above 2**53 and loses the type; and a nullable
+        boolean column falls back to a Python list. Arrow carries a validity
+        bitmap alongside the values, so both keep their type here.
+
+        Strings are also cheaper: the buffer already holds int32 offsets
+        followed by a UTF-8 blob, which is exactly Arrow's string layout, so
+        the column is wrapped rather than decoded one Python str at a time.
+
+        Returns None when pyarrow, numpy, or the bridge jar is unavailable, so
+        callers can fall back to :meth:`to_columns` the same way that method
+        falls back to the row-based paths.
+        """
+        try:
+            import numpy as np
+            import pyarrow as pa
+        except ImportError:
+            return None
+
+        import json
+
+        column_batcher = _bridge_class("ColumnBatcher")
+        if column_batcher is None:
+            return None
+
+        first_names: Optional[List[str]] = None
+        chunks: Dict[str, list] = {}
+
+        def validity(null_bits, count, has_nulls):
+            """Arrow validity is 1=valid; the bridge writes 1=null, so invert.
+            Bits past `count` are padding and Arrow ignores them."""
+            if not has_nulls:
+                return None
+            return pa.py_buffer(bytes(np.invert(null_bits).tobytes()))
+
+        def decode_batch(buf):
+            nonlocal first_names
+            hlen = int.from_bytes(buf[:4], "little")
+            header = json.loads(bytes(buf[4 : 4 + hlen]))
+            count = header["count"]
+            if count == 0:
+                return 0
+            pos = 4 + hlen
+            for col in header["cols"]:
+                name, ctype = col["name"], col["type"]
+                nulls_len = col["nulls"]
+                null_bits = np.frombuffer(buf[pos : pos + nulls_len], dtype=np.uint8)
+                has_nulls = bool(null_bits.any())
+                mask = None
+                if has_nulls:
+                    mask = np.unpackbits(null_bits, bitorder="little")[:count].astype(
+                        bool
+                    )
+                pos += nulls_len
+                data = buf[pos : pos + col["bytes"]]
+                pos += col["bytes"]
+
+                if ctype == "i8":
+                    # kept as int64 WITH validity, where to_columns would have
+                    # promoted the whole column to float64/NaN
+                    arr = pa.array(np.frombuffer(data, dtype="<i8"), mask=mask)
+                elif ctype == "f8":
+                    arr = pa.array(np.frombuffer(data, dtype="<f8"), mask=mask)
+                elif ctype == "dt":
+                    ts = np.frombuffer(data, dtype="<i8").astype("datetime64[ms]")
+                    arr = pa.array(ts, type=pa.timestamp("ms"), mask=mask)
+                elif ctype == "b1":
+                    # stays a bool column; to_columns degrades this to a list
+                    vals = np.frombuffer(data, dtype=np.uint8).astype(bool)
+                    arr = pa.array(vals, mask=mask)
+                elif ctype in ("f4v", "f8v"):
+                    dim = col["dim"]
+                    dt = "<f4" if ctype == "f4v" else "<f8"
+                    flat = np.frombuffer(data, dtype=dt)
+                    child = pa.array(flat)
+                    arr = pa.FixedSizeListArray.from_arrays(child, dim)
+                    if mask is not None:
+                        arr = pa.array(arr.to_pylist(), type=arr.type, mask=mask)
+                elif ctype == "json":
+                    arr = pa.array(json.loads(bytes(data)))
+                else:  # str: int32 offsets + utf8 blob IS Arrow's layout
+                    off_bytes = bytes(data[: (count + 1) * 4])
+                    chars = bytes(data[(count + 1) * 4 :])
+                    arr = pa.StringArray.from_buffers(
+                        count,
+                        pa.py_buffer(off_bytes),
+                        pa.py_buffer(chars),
+                        validity(null_bits, count, has_nulls),
+                    )
+                chunks.setdefault(name, []).append(arr)
+            if first_names is None:
+                first_names = [c["name"] for c in header["cols"]]
+            return count
+
+        joined = ""
+        total = 0
+        while True:
+            buf = memoryview(
+                bytes(
+                    column_batcher.nextColumnBatch(
+                        self._java_result_set, int(batch_size), joined
+                    )
+                )
+            )
+            count = decode_batch(buf)
+            if count == 0:
+                break
+            total += count
+            if first_names is not None and not joined:
+                joined = ";".join(first_names)
+
+        if total == 0 or not first_names:
+            return pa.table({})
+        return pa.table(
+            {n: pa.chunked_array(chunks[n]) for n in first_names}
+        )
+
     def iter_chunks(
         self, size: int = 1000, convert_types: bool = True
     ) -> Iterator[List[Dict[str, Any]]]:

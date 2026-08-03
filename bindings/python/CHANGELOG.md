@@ -32,6 +32,15 @@ for each version.
   SQL `METADATA` blocks carrying `locationCacheSize` are rejected by the
   engine.
 
+### Added
+
+- **`ResultSet.to_arrow()`** returns a `pyarrow.Table` built from the same
+  columnar bridge buffer `to_columns()` already uses, so it adds no Java and no
+  jars to the wheel. It preserves validity bitmaps instead of widening nullable
+  integers to float64/NaN the way `to_columns()` must. Requires the new
+  optional `arrow` extra (`pip install arcadedb-embedded[arrow]`); without
+  pyarrow installed it returns `None` so callers can fall back.
+
 ## 26.8.1.dev24
 
 ### Restored

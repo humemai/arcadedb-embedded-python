@@ -48,6 +48,22 @@ bulk APIs when you're taking everything from a large result.**
   exit; ideal for small/medium results.
 - `to_columns()` / `to_dataframe()` — fastest bulk path into numpy/pandas,
   fully typed including `datetime64`.
+- `to_arrow()` — the same columnar buffer as `to_columns()`, read into a
+  `pyarrow.Table` instead of numpy. Requires the `arrow` extra
+  (`pip install "arcadedb-embedded[arrow]"`); returns `None` if pyarrow is
+  absent, so callers can fall back. Two reasons to prefer it, only one of
+  which is speed:
+
+  **Types survive nulls.** `to_columns()` follows pandas conventions, so a
+  nullable `int64` column is promoted to `float64`/NaN, which loses the type
+  and loses precision above 2^53, and a nullable boolean degrades to a Python
+  list. Arrow carries a validity bitmap, so both keep their type.
+
+  **Strings are wrapped, not decoded.** The buffer already holds int32 offsets
+  plus a UTF-8 blob, which is exactly Arrow's string layout, so no per-row
+  `str` is built. Measured to a `pandas.DataFrame`, 100k rows, median of 5:
+  string-heavy **1.58×**, mixed **1.40×**, numeric-only **1.01×**. On purely
+  numeric results there is no speed benefit and `to_columns()` is fine.
 - `to_json_list()` / `iter_json_batches()` — bulk plain dicts (temporals as
   ISO strings).
 - `to_list()` — full Python-type fidelity (`datetime`, `Decimal`) when the
