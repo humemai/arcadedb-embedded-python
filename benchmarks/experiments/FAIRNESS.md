@@ -104,6 +104,67 @@ ran oversubscribed. The bias runs **against** DuckDB, which wins that lane
 regardless, so nothing self-serving rests on it — but the tabular rows must be
 re-measured at the freeze rather than carried over.
 
+**F7. Same effective base-layer degree across dense backends per scale.**
+Enforced by `fairness_check.py`. Engines spell graph degree differently: one
+takes the per-layer `maxConnections`, another takes the base-layer degree,
+and the same integer therefore builds two different graphs. Comparing them at
+one nominal `M` compares an accident of naming. Recorded per row as
+`degree_param` plus `degree_family` so the check reads the number in the unit
+its own engine meant.
+
+## Parallelism policy: maximise it, but never inside a published absolute
+
+The standing direction is to use the machine, and it is the right one: mini
+sits idle far more than it runs, and serialising work that does not need to be
+serial buys nothing. But "run more at once" and "report this latency" are not
+compatible everywhere, so the rule has to say exactly where the line falls.
+
+**What parallelism does and does not fix.** Randomly permuting run order is
+worth doing and we do it, but it buys one specific thing: it stops co-run noise
+from landing preferentially on one configuration, so an A-vs-B **ratio** stays
+honest. It does not remove the noise. Two jobs sharing an L3 and a memory
+controller both run slower and both show fatter tails, and permutation cannot
+restore an absolute level or a p95 that never happened. Our headline claims are
+single-node absolutes and percentiles, which is exactly the quantity permutation
+cannot repair.
+
+So the split is by **what the number is**, not by how long the job takes:
+
+| may run in parallel, freely | must be serial on the full cpuset |
+|---|---|
+| dataset download, decompression, ground-truth generation | every latency cell whose number reaches a table |
+| docker image builds, wheel builds | every throughput/QPS cell |
+| exploration sweeps and parameter scans | anything reporting p95/p99 |
+| A/B probes whose answer is a **ratio** measured in the same run | memory working-set cells |
+| any run whose output is a decision, not a table cell | scale-ceiling and RAM-bound cells (serial anyway) |
+
+Two consequences worth stating plainly, because both have bitten:
+
+1. **A parallel run cannot be promoted later.** If a cell was measured
+   two-at-once, it is exploration forever; wanting the number afterwards does
+   not make it eligible. `runner.py` forces `workers=1` on the paper tier and a
+   sweep row is detectable after the fact by its partial cpuset (`0-5` rather
+   than `0-11`), which is the audit trail that makes this enforceable rather
+   than aspirational.
+2. **Disclose the shape, not a co-run penalty per engine.** The paper says
+   which classes of work were parallel and that every reported number was
+   re-measured serially. It does not owe a per-engine perturbation table; that
+   is detail nobody can check and it invites the reader to treat the
+   exploration tier as if it were data.
+
+**Sharding, when parallel is allowed.** Disjoint cpuset shards, never
+overlapping, never crossing an SMT sibling pair, and the same shard width for
+every arm of a comparison. Three 4-thread shards over `0-11`, not "whatever is
+free". An arm given a wider shard than its neighbour is F1 violated with extra
+steps.
+
+**The open question.** F1 equalises the *resource*. It does not establish that
+each engine *uses* the same amount of it: an engine that spreads one query over
+12 threads and one that answers on a single thread are both "given 12 CPUs".
+Nothing here checks that yet, which makes it the one axis where we cannot say
+which way the bias runs. Being measured now (`~/f8_probe.sh`); when it lands it
+becomes F8 with a number attached.
+
 ## Allowed to differ (must be DISCLOSED, per the config policy)
 
 - **Vendor settle steps** that have no equivalent elsewhere (Elasticsearch

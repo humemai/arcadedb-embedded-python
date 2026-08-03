@@ -165,6 +165,13 @@ server 15% p50 and 35% build time at 10M — parity is load-bearing.
 
 ## Runtime budget & co-scheduling decision (2026-07-06)
 
+> The standing parallelism policy now lives in **FAIRNESS.md, "Parallelism
+> policy: maximise it, but never inside a published absolute"**. Read that
+> first: it states which classes of work may run concurrently, why permutation
+> fixes ratios but not absolutes or tails, and the sharding rule. What follows
+> is the original per-cell budget reasoning it was derived from.
+
+
 1. BUILD ONCE, QUERY MANY: ingest/index-build happens once per (backend, scale)
    and is timed with its own N=3; the N=5 query repeats run against the
    persisted store with an engine restart between reps. This removes the
