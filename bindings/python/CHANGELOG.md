@@ -9,7 +9,30 @@ Java behaviour reaches Python users through `pip install` without passing
 through anything they would think to read. Breaking changes are listed first
 for each version.
 
-## Unreleased
+## 26.8.1
+
+First stable release on the 26.8.1 line, synced to upstream's release commit
+`87bdc67f1f` and nothing after it. The two commits that follow it upstream
+bump the tree to 26.9.1-SNAPSHOT and are deliberately excluded.
+
+### Security
+
+This release carries upstream's 26.8.1 security work, which matters here
+because the wheel bundles the server and every wire protocol it fixes:
+
+- **Authentication is now enforced on the MongoDB and Redis wire protocols**,
+  which previously accepted unauthenticated connections. Redis also gains TLS
+  and a HELLO handshake. If you start a server with those plugins enabled,
+  clients that used to connect anonymously now need credentials.
+- **Authenticated principal is bound on more execution paths** so per-type
+  ACLs are actually enforced: the async command worker, the gRPC transaction
+  thread, and the batch/time-series HTTP handlers each previously ran without
+  it.
+- `GHSA-qwgr-2c45-63xx`: database-name validation prevents path traversal on
+  create/drop.
+- `GHSA-xmjm-8q85-g778`: a Cypher `range()` can no longer exhaust the heap.
+- MCP server-administration tools enforce per-caller authorization.
+
 
 ### Breaking
 
