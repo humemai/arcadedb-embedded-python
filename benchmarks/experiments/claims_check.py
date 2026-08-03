@@ -64,9 +64,16 @@ def min_of(rows, field, **kw):
     return min(g) if g else None
 
 
-TABLES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
-                      ".notes", "papers", "icde-2027", "latex", "tables")
-PAPER = os.path.join(TABLES, "..", "paper.tex")
+# The paper source is deliberately not in this repository. Point
+# BENCH_PAPER_DIR at the directory holding paper.tex and its generated
+# tables/ and figures/ subdirectories. Resolved at import but never opened
+# here, so make_paper_figures can import this module for its result-loading
+# helpers without the paper being present.
+_PAPER_DIR = os.environ.get(
+    "BENCH_PAPER_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "paper"))
+TABLES = os.path.join(_PAPER_DIR, "tables")
+PAPER = os.path.join(_PAPER_DIR, "paper.tex")
 
 
 def cell(table, row_label, col):

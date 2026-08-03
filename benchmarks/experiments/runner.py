@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ICDE-paper benchmark runner — implements experiments/PROTOCOL.md.
+"""Benchmark runner — implements experiments/PROTOCOL.md.
 
 Descended from the SciPy-paper orchestrator (scipy_proceedings@arcadedb-2026
 experiments/run.py) with the protocol extensions:
@@ -69,11 +69,11 @@ SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
 BACKENDS = {
     "arcadedb_embedded": {
         "topology": "embedded",
-        "image": "icde-bench:arcadedb",
+        "image": "dbbench:arcadedb",
     },
     "arcadedb_server": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
@@ -82,7 +82,7 @@ BACKENDS = {
         # default GC (G1) so the embedded-vs-server axis isolates transport,
         # not GC choice.
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
-                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
+                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
         "server_port": 2480,
@@ -90,13 +90,13 @@ BACKENDS = {
     },
     "duckdb": {
         "topology": "embedded",
-        "image": "icde-bench:duckdb",
+        "image": "dbbench:duckdb",
     },
     "postgres": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",  # 17.10
-        "server_env": ["-e", "POSTGRES_PASSWORD=icdebench", "-e", "POSTGRES_DB=bench"],
+        "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_port": 5432,
         # the image prints "ready to accept connections" TWICE (initdb's
         # temporary server, then the real one); anchor on the init-complete
@@ -108,14 +108,14 @@ BACKENDS = {
     # ---- L3 sparse lane ----
     "arcadedb_graph_embedded": {
         "topology": "embedded",
-        "image": "icde-bench:arcadedb",
+        "image": "dbbench:arcadedb",
     },
     "arcadedb_graph_server": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
-                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
+                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
         "server_port": 2480,
@@ -123,10 +123,10 @@ BACKENDS = {
     },
     "neo4j_graph": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",  # 5-community
         # heap parity with the ArcadeDB deployments (same per-scale heap)
-        "server_env": ["-e", "NEO4J_AUTH=neo4j/icdebench",
+        "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}"],
         "server_port": 7687,
@@ -135,22 +135,22 @@ BACKENDS = {
     "ladybug_graph": {
         # embedded engine, runs in-process in the client image
         "topology": "embedded",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
     },
     # ---- E2 hybrid-ACID lane ----
     "arcadedb_e2": {
         "topology": "embedded",
-        "image": "icde-bench:arcadedb",
+        "image": "dbbench:arcadedb",
     },
     "surrealdb_e2": {
         "topology": "embedded",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
     },
     "composed_qdrant_neo4j": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-        "server_env": ["-e", "NEO4J_AUTH=neo4j/icdebench",
+        "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}"],
         "server_port": 7687,
@@ -158,19 +158,19 @@ BACKENDS = {
     },
     "arcadedb_sparse_embedded": {
         "topology": "embedded",
-        "image": "icde-bench:arcadedb",
+        "image": "dbbench:arcadedb",
     },
     "arcadedb_sparse_embedded_fp32": {
         "topology": "embedded",
-        "image": "icde-bench:arcadedb",
+        "image": "dbbench:arcadedb",
     },
     "arcadedb_sparse_embedded_nocompact": {
         "topology": "embedded",
-        "image": "icde-bench:arcadedb",
+        "image": "dbbench:arcadedb",
     },
     "arcadedb_sparse_server": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
@@ -179,7 +179,7 @@ BACKENDS = {
         # default GC (G1) so the embedded-vs-server axis isolates transport,
         # not GC choice.
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
-                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
+                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
         "server_port": 2480,
@@ -187,14 +187,14 @@ BACKENDS = {
     },
     "qdrant_sparse": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
     "milvus_sparse": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
         "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
                        "-e", "ETCD_USE_EMBED=true",
@@ -208,7 +208,7 @@ BACKENDS = {
     },
     "elasticsearch_sparse": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",  # 9.4.1, matches the 9.4.1 client
         "server_env": ["-e", "discovery.type=single-node",
                        "-e", "xpack.security.enabled=false",
@@ -218,32 +218,32 @@ BACKENDS = {
     },
     # --- l3d dense (SIFT1M) ---
     "arcadedb_dense_embedded": {"topology": "embedded",
-                                "image": "icde-bench:arcadedb"},
+                                "image": "dbbench:arcadedb"},
     "arcadedb_dense_server": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
-                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=icdebench "
+                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
-    "chroma_dense": {"topology": "embedded", "image": "icde-bench:dense"},
-    "lancedb_dense": {"topology": "embedded", "image": "icde-bench:dense"},
-    "sqlite_vec_dense": {"topology": "embedded", "image": "icde-bench:dense"},
-    "duckdb_vss_dense": {"topology": "embedded", "image": "icde-bench:dense"},
+    "chroma_dense": {"topology": "embedded", "image": "dbbench:dense"},
+    "lancedb_dense": {"topology": "embedded", "image": "dbbench:dense"},
+    "sqlite_vec_dense": {"topology": "embedded", "image": "dbbench:dense"},
+    "duckdb_vss_dense": {"topology": "embedded", "image": "dbbench:dense"},
     "qdrant_dense": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
     "milvus_dense": {
         "topology": "client_server",
-        "image": "icde-bench:client",
+        "image": "dbbench:client",
         "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
         "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
                        "-e", "ETCD_USE_EMBED=true",
@@ -427,7 +427,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             client_mem = total_mem - server_mem
             row["mem_split"] = f"{SERVER_MEM_FRACTION:.2f}"
             server_cid = sh(["docker", "run", "-d", "--network", net_name,
-                             "--label", "icde-bench=1",
+                             "--label", "dbbench=1",
                              "--name", f"srv-{run_id}",
                              "--cpuset-cpus", cpuset,
                              "--memory", str(server_mem), "--memory-swap", str(server_mem)]
@@ -457,7 +457,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
         cmd = (["docker", "run", "-d", "--network", net_name,
-                "--label", "icde-bench=1",
+                "--label", "dbbench=1",
                 "--name", f"cli-{run_id}", "--cpuset-cpus", cpuset]
                + client_caps + bench_env
                + ["-e", f"ARCADEDB_HEAP={heap}", "-e", f"RUN_LABEL={run_id}",
@@ -527,7 +527,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
 def acquire_host_lock():
     """Enforce one-runner-per-host. Returns the held lock file object.
 
-    sweep_orphans() force-removes every icde-bench container, so a second
+    sweep_orphans() force-removes every dbbench container, so a second
     runner would destroy a live campaign's in-flight cells (this happened
     2026-07-10: a micro smoke wiped an L1 medium cell mid-run). The lock is
     advisory but process-wide; it dies with the process, so a crashed runner
@@ -552,10 +552,10 @@ def acquire_host_lock():
 def sweep_orphans():
     """Reap containers left by a previous crashed/killed runner. Only safe to
     call while holding the host lock (see acquire_host_lock)."""
-    ids = sh(["docker", "ps", "-aq", "--filter", "label=icde-bench=1"]).split()
+    ids = sh(["docker", "ps", "-aq", "--filter", "label=dbbench=1"]).split()
     if ids:
         print(f"sweeping {len(ids)} orphaned bench container(s): "
-              + sh(["docker", "ps", "-a", "--filter", "label=icde-bench=1",
+              + sh(["docker", "ps", "-a", "--filter", "label=dbbench=1",
                     "--format", "{{.Names}}"]).replace("\n", " "))
         subprocess.run(["docker", "rm", "-f"] + ids, capture_output=True)
 
@@ -629,7 +629,7 @@ def main():
     # one runner per bench host; must hold before sweeping containers
     _host_lock = acquire_host_lock()  # noqa: F841 (held for process lifetime)
 
-    net_name = "icde-bench"
+    net_name = "dbbench"
     subprocess.run(["docker", "network", "create", net_name], capture_output=True)
     sweep_orphans()
 

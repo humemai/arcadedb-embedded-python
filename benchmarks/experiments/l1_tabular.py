@@ -229,7 +229,7 @@ class Postgres(Base):
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "5432")
         dsn = (f"host={host} port={port} dbname=bench "
-               "user=postgres password=icdebench")
+               "user=postgres password=dbbenchpass")
         # retry across the initdb restart window (belt to the runner's
         # ready_regex suspenders); untimed — connect_s covers it
         deadline = _time.time() + 60
@@ -328,7 +328,7 @@ class ArcadeServer(Base):
     def connect(self):
         import requests
         self.rq = requests.Session()
-        self.rq.auth = ("root", "icdebench")
+        self.rq.auth = ("root", "dbbenchpass")
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"

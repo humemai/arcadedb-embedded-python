@@ -16,7 +16,12 @@ import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
-FIGS = os.path.join(HERE, "..", "..", ".notes", "papers", "icde-2027", "latex", "figures")
+# The paper source is deliberately not in this repository. Point
+# BENCH_PAPER_DIR at the directory holding paper.tex and its generated
+# tables/ and figures/ subdirectories.
+_PAPER_DIR = os.environ.get(
+    "BENCH_PAPER_DIR", os.path.join(HERE, "..", "..", "paper"))
+FIGS = os.path.join(_PAPER_DIR, "figures")
 
 plt.rcParams.update({"font.size": 8, "axes.grid": True, "grid.alpha": 0.3,
                      "figure.dpi": 150})

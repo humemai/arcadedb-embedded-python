@@ -26,10 +26,10 @@ die() { say "ABORT: $*"; exit 1; }
 guard() { while [ "$(docker ps -q | wc -l)" -gt 0 ]; do sleep 30; done; }
 
 guard
-cd ~/repos/humemai/arcadedb-icde/paper-icde/experiments || die "no experiments dir"
+cd ~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments || die "no experiments dir"
 [ -d "$PROF" ] || die "async-profiler not staged at $PROF"
 
-VER=$(docker run --rm icde-bench:arcadedb python -m pip show arcadedb-embedded 2>/dev/null | awk '/^Version:/{print $2}')
+VER=$(docker run --rm dbbench:arcadedb python -m pip show arcadedb-embedded 2>/dev/null | awk '/^Version:/{print $2}')
 [ -n "${VER:-}" ] || die "no engine version"
 say "engine $VER"
 
@@ -54,10 +54,10 @@ say "contract ok: --backend --scale --out present"
 N=lock55
 docker rm -f $N >/dev/null 2>&1
 docker run -d --name $N --cpuset-cpus 0-11 --memory 36g --memory-swap 36g \
-  -v "$PWD:/work" -w /work -v "$HOME/icde-data:/data:ro" \
+  -v "$PWD:/work" -w /work -v "$HOME/bench-data:/data:ro" \
   -v "$PROF:/prof:ro" -v "$OUT:/pout" \
   -e BENCH_DENSE_DATA=/data/dense -e BENCH_DENSE_M=32 -e ARCADEDB_HEAP=24g \
-  icde-bench:arcadedb python -u l3d_dense.py --backend arcadedb_dense_embedded \
+  dbbench:arcadedb python -u l3d_dense.py --backend arcadedb_dense_embedded \
   --scale deep10m --out /pout/5577_build.json >/dev/null \
   || die "build container failed to start"
 say "build started"

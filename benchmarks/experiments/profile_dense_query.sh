@@ -5,14 +5,14 @@
 set -u
 OUT=$HOME/profiling/flame
 until grep -qa "TS5414-DONE" ~/profiling/ts5414_outer.log 2>/dev/null; do sleep 60; done
-cd ~/repos/humemai/arcadedb-icde/paper-icde/experiments
+cd ~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments
 docker rm -f prof_dense10m >/dev/null 2>&1
 docker run -d --name prof_dense10m --cpuset-cpus 0-11 --memory 37g --memory-swap 37g \
-  -v "$PWD:/work" -w /work -v "$HOME/icde-data:/data:ro" \
+  -v "$PWD:/work" -w /work -v "$HOME/bench-data:/data:ro" \
   -v "$HOME/profiling/async-profiler-4.0-linux-x64:/prof:ro" -v "$OUT:/pout" \
   -e MODE=dense -e PROFILE_SECS=300 -e BENCH_DENSE_DATA=/data/dense -e BENCH_DENSE_M=32 \
   -e ARCADEDB_HEAP=24g \
-  icde-bench:arcadedb python -u profile_query_driver.py >/dev/null
+  dbbench:arcadedb python -u profile_query_driver.py >/dev/null
 found=0
 for i in $(seq 1 480); do  # up to 2h for the ~85min build
   docker logs prof_dense10m 2>&1 | grep -qa "QUERY-PHASE-START" && { found=1; break; }

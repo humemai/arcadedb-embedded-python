@@ -109,7 +109,7 @@ class PostgresTPC:
         import psycopg
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
         self.cx = psycopg.connect(
-            f"host={host} dbname=bench user=postgres password=icdebench",
+            f"host={host} dbname=bench user=postgres password=dbbenchpass",
             autocommit=False)
         self.version = "postgres"
 
@@ -233,7 +233,7 @@ class ArcadeServerTPC(ArcadeTPC):
         self.rq = requests.Session()
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
         self.base = f"http://{host}:2480/api/v1"
-        self.rq.auth = ("root", "icdebench")
+        self.rq.auth = ("root", "dbbenchpass")
         self.version = "server"
 
     def _cmd(self, command, timeout=1800, language="sql"):

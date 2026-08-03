@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the per-backend bench images. ARCADEDB_WHEEL=<path> bakes a local wheel
-# into icde-bench:arcadedb instead of the PyPI pin.
+# into dbbench:arcadedb instead of the PyPI pin.
 set -eu
 cd "$(dirname "$0")"
 
@@ -20,7 +20,7 @@ declare -A PKGS=(
 )
 targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense)
 for be in "${targets[@]}"; do
-  echo "=== icde-bench:$be (${PKGS[$be]})"
-  docker build -q -t "icde-bench:$be" --build-arg PIP_PACKAGES="${PKGS[$be]}" \
+  echo "=== dbbench:$be (${PKGS[$be]})"
+  docker build -q -t "dbbench:$be" --build-arg PIP_PACKAGES="${PKGS[$be]}" \
     -f Dockerfile.bench . >/dev/null && echo "  ok"
 done

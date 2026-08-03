@@ -199,8 +199,10 @@ def caption_versions():
     a provenance claim, and until something compares it to the data it is
     exactly as trustworthy as a driver that hardcodes its own version.
     """
-    paper = os.path.join(HERE, "..", "..", ".notes", "papers", "icde-2027",
-                         "latex", "paper.tex")
+    paper = os.path.join(
+        os.environ.get("BENCH_PAPER_DIR",
+                       os.path.join(HERE, "..", "..", "paper")),
+        "paper.tex")
     paper = os.path.normpath(paper)
     try:
         body = open(paper).read()

@@ -32,7 +32,7 @@ reachable FROM THE SEEDS. A graph can be fully built and still be useless here
 if the seeds do not address it.
 
 Env: BENCH_GRAPH_SCALE (sf1|sf10), BENCH_GRAPH_DATA, PROBE_OUT, PROBE_BACKENDS.
-Neo4j additionally needs BENCH_SERVER_HOST (and runs from icde-bench:client).
+Neo4j additionally needs BENCH_SERVER_HOST (and runs from dbbench:client).
 """
 import json
 import os

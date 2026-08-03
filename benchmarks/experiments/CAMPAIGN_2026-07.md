@@ -1,9 +1,9 @@
-# ICDE 2027 experimental campaign — July 2026 (COMPLETE)
+# Experimental campaign — July 2026 (COMPLETE)
 
 Status: **all seven lanes data-complete on mini** as of 2026-07-22.
-Raw data: mini `~/repos/humemai/arcadedb-icde/paper-icde/experiments/results/`
+Raw data: mini, under this directory's `experiments/results/`
 (runs.jsonl + l4_tsbs.jsonl), archived on mini at
-`~/archives/icde-campaign-2026-07-22-{results,queue-logs}.tar.gz`; laptop
+`~/archives/campaign-2026-07-22-{results,queue-logs}.tar.gz`; laptop
 working copies pulled into `results/` here (gitignored). Queue-runner
 infrastructure torn down 2026-07-22 (campaign-scoped; reinstall for the
 October freeze week).

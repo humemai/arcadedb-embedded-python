@@ -1,6 +1,6 @@
 # The fairness contract
 
-Every number in the ICDE paper compares systems. A comparison is only worth
+Every number in the paper compares systems. A comparison is only worth
 printing if both sides were given the same thing. This file says what "the
 same thing" means, what is allowed to differ, and what is checked
 mechanically rather than remembered.

@@ -188,7 +188,7 @@ class ComposedE2:
         self.qc = QdrantClient(location=":memory:")
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
         self.neo = GraphDatabase.driver(f"bolt://{host}:7687",
-                                        auth=("neo4j", "icdebench"))
+                                        auth=("neo4j", "dbbenchpass"))
         self.version = "qdrant-local+neo4j"
 
     def build(self, vecs, edges):

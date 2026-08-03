@@ -81,7 +81,7 @@ def main():
                "quantization": os.environ.get("BENCH_DENSE_QUANT") or "fp32",
                "heap_asked": os.environ.get("ARCADEDB_HEAP"),
                # The BACKEND's own version. run_conditions() reports the
-               # arcadedb wheel, which is absent from icde-bench:dense, so a
+               # arcadedb wheel, which is absent from dbbench:dense, so a
                # comparator row otherwise records "unknown" and nothing at all
                # about the engine it actually measured. l3d_dense sets
                # self.version in connect() for every backend.

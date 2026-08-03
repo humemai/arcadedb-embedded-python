@@ -194,7 +194,7 @@ server 15% p50 and 35% build time at 10M — parity is load-bearing.
 
 ## One runner per bench host (enforced 2026-07-10)
 
-`sweep_orphans()` force-removes every container labeled `icde-bench=1` at
+`sweep_orphans()` force-removes every container labeled `dbbench=1` at
 runner startup. A second runner therefore DESTROYS a live campaign's in-flight
 cells. This actually happened: a micro smoke launched while the L1 N=5 medium
 tier was running wiped an in-flight cell (`can not get logs from container`)
