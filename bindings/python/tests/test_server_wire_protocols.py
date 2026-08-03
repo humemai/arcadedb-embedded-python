@@ -131,8 +131,9 @@ def test_postgres_wire_answers_a_query(wire_server):
     assert any("alpha" in str(r) for r in rows), rows
 
 
-@pytest.mark.xfail(reason="engine ignores arcadedb.redis.port; binds 6379",
-                   strict=True)
+@pytest.mark.xfail(
+    reason="engine ignores arcadedb.redis.port; binds 6379 (ArcadeDB #5796)",
+    strict=True)
 def test_redis_port_setting_is_honored(wire_server):
     """arcadedb.redis.port is accepted and ignored.
 
@@ -147,6 +148,14 @@ def test_redis_port_setting_is_honored(wire_server):
     same passthrough) and the Redis listener does not read it. xfail(strict)
     so this turns into a failure the day it is fixed, rather than sitting here
     as a permanently green skip.
+
+    Root-caused and filed as ArcadeDB #5796 on 2026-08-03. ServerPlugin
+    .configure() is handed the server's ContextConfiguration; Postgres and
+    Bolt read the port from it, while Redis drops the argument and reads the
+    static GlobalConfiguration default at startService(). MongoDB has the same
+    shape (untested here, that jar is excluded from the wheel). Bolt carried
+    the identical bug until #3809 fixed it, so two plugins were converted and
+    two were left behind.
     """
     _, ports = wire_server
     assert _wait(ports["redis"], timeout=20), (
