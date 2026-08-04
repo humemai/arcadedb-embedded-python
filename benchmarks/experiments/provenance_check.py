@@ -51,7 +51,16 @@ VERSION_KEYS = ("engine_version", "engine", "server_version", "version", "wheel"
                 # import. l4_tsbs.py records this and deliberately renames its
                 # own engine_version to harness_arcadedb_version, so that a
                 # duckdb row cannot pass this audit by quoting our wheel.
-                "backend_version")
+                "backend_version",
+                # The dense multipass driver records the COMPARATOR's own
+                # library version here (chroma 1.5.9, lancedb 0.34.0, ...),
+                # while engine_version legitimately reads "unknown
+                # (PackageNotFoundError)" because arcadedb-embedded is not
+                # installed in a comparator container. Without this key the
+                # audit calls the entire 26.8.1 dense block version-less,
+                # which is a false alarm of exactly the kind that trains
+                # people to ignore the gate.
+                "lib_version")
 
 
 
@@ -83,8 +92,10 @@ def _is_real_version(v):
 # that file grows a new overlay and this map does not, the unmapped-dir check
 # at the bottom says so rather than quietly ignoring it.
 FEEDS = {
-    "T4": ["dev22_sparse", "dev21_sparse", "dev21_sparse_full", "sparse_full",
-           "verify5411"],
+    # Kept in step with what make_paper_tables ACTUALLY opens, which is the
+    # only definition of "feeds a table" that cannot drift. dev22_sparse was
+    # listed here but is no longer read by anything.
+    "T4": ["sparse_2681"],
     # srv109 is the post-#109 server dense re-measure and now feeds T5's
     # server row; verify5413 stays listed because it remains the fallback in
     # make_paper_tables and its landmark warning is the record of WHY it was
@@ -93,7 +104,13 @@ FEEDS = {
     # stamped) and now feeds T5's native row. dev21_ts stays listed for the
     # same reason verify5413 does: it remains the fallback in
     # make_paper_tables, and its record is why the row was superseded.
-    "T5": ["verify5412b", "srv109", "verify5413", "ts59", "dev21_ts"],
+    # T5's dense half now comes from the one-build/five-pass artifacts, not
+    # from runs.jsonl overlays: dense_ts_table() reads dense_mp_2681 and
+    # refuses to emit the table without it. verify5412b / srv109 / verify5413
+    # fed the superseded dev-era dense rows and are deliberately NOT listed,
+    # so the unmapped-input check reports them as the dead overlays they are.
+    # batch1 was read by the time-series half and never mapped: a blind spot.
+    "T5": ["dense_mp_2681", "ts59", "dev21_ts", "batch1"],
 }
 
 # Top-level result FILES that feed published tables, as opposed to the overlay

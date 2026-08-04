@@ -333,26 +333,53 @@ def _dev21_sparse_full_rows():
                                    "l3s_dev21_full_r*.json"))]
 
 
+def _sparse_2681_rows(arm="arcadedb_sparse_embedded"):
+    """T4's ArcadeDB rows, from ONE released engine.
+
+    Replaces a six-deep cascade of dev overlays (verify5411=dev0, sparse_full=
+    dev20, dev21_sparse, dev21_sparse_full, dev22_sparse, t4dev23) whose whole
+    purpose was to prefer the newest dev line per tier and "fall back rather
+    than mix". Every tier is now measured on the release at N=5, so there is
+    nothing to prefer and nothing to fall back to. The cascade was also the
+    mechanism by which T4 kept quoting dev-era numbers after the release was
+    re-measured, which is the same defect the dense block had.
+
+    Refuses to return anything unless all three tiers are complete and on one
+    version, because a partial return here would silently reinstate exactly
+    the mixed-version row this replaced.
+    """
+    import glob
+    out = {}
+    for fp in glob.glob(os.path.join(RESULTS, "sparse_2681", "*.json")):
+        try:
+            r = json.load(open(fp))
+        except Exception:
+            continue
+        if r.get("backend") != arm:
+            continue
+        out.setdefault(r["scale"], []).append(r)
+    tiers = ("tiny", "small", "medium")
+    missing = [t for t in tiers if len(out.get(t, [])) < 5]
+    if missing:
+        raise SystemExit(
+            "REFUSING to write t4: sparse_2681 has fewer than 5 reps at %s. "
+            "The dev-overlay cascade this replaced is gone on purpose; "
+            "falling back to it would reinstate mixed-version rows."
+            % ", ".join(missing))
+    versions = {str(r.get("engine_version")) for t in tiers for r in out[t]}
+    if versions != {"26.8.1"}:
+        raise SystemExit("REFUSING to write t4: sparse_2681 is not one "
+                         "released version: %s" % sorted(versions))
+    return out
+
+
 def sparse_table(rows):
     l3s = [r for r in rows if r["lane"] == "l3s"]
-    # Prefer the newest released line per tier; fall back rather than mix.
-    # Newest released line wins per tier, falling back rather than mixing.
-    # dev22 is the first RELEASED artifact carrying #5518 (sparse parallel
-    # top-K), so wherever it is present it supersedes dev21.
-    dev22 = _released_sparse_rows("dev22_sparse", "26.8.1.dev22")
-    dev15 = _dev15_sparse_rows()
-    dev15.update(_dev21_sparse_rows())
-    dev15.update({t: v for t, v in dev22.items() if t in ("tiny", "small") and v})
-    full = dev22.get("medium") or _dev21_sparse_full_rows() or _sparse_full_rows()
-    # queue60's dev23 re-measure supersedes all of the above when it is
-    # complete: one line for every tier, N=5 including the 8.84M cell that
-    # T4's caption has to except today, and cpuset/heap/mem_cap recorded.
-    # Returns {} until all three tiers have five reps, so a partial run cannot
-    # put dev23 tiny beside dev22 medium inside a single row.
-    dev23 = _t4dev23_rows("int8")
-    if dev23:
-        dev15.update({t: dev23[t] for t in ("tiny", "small")})
-        full = dev23["medium"]
+    # ArcadeDB: one released engine, every tier, N=5. Comparators stay in
+    # runs.jsonl and are untouched: they are not ArcadeDB runs, their own
+    # versions did not change, and the F9 control re-runs one of them to
+    # license keeping the other two.
+    arc = _sparse_2681_rows()
     order = ["arcadedb_sparse_embedded", "qdrant_sparse", "milvus_sparse",
              "elasticsearch_sparse"]
     tiers = (("tiny", "100k"), ("small", "1M"), ("medium", "8.84M"))
@@ -374,10 +401,8 @@ def sparse_table(rows):
                 # medium holds two corpora: the retired synthetic 10M and
                 # Big-ANN's 8.84M. Mixing them is the #5411 error in table form.
                 g = [r for r in g if r.get("n_docs") == 8_841_823]
-            if be == "arcadedb_sparse_embedded" and sc in ("tiny", "small") and dev15.get(sc):
-                g = dev15[sc]
-            elif be == "arcadedb_sparse_embedded" and sc == "medium":
-                g = full
+            if be == "arcadedb_sparse_embedded":
+                g = arc[sc]
             if not g:
                 cells += ["--", "--", "--"]
                 continue
@@ -385,28 +410,6 @@ def sparse_table(rows):
         lines.append(" & ".join(cells) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
     write("t4_sparse.tex", "\n".join(lines) + "\n")
-
-
-def _dev16_dense_rows(prefix="fp32_dev20", subdir="verify5412b"):
-    """Rolling-update overlay for the dense rows: N=4 warm-cache query
-    passes over one current-line build each. Current line is 26.8.1.dev20
-    (verify5412b), which carries both #5412 fixes: the shared warm search
-    cache and the auto-sized graph-build cache. The server row still comes
-    from the matched re-run in verify5413. Pass 1 (cold, cache filling) is
-    disclosed in prose, not averaged in. INT8 row is the 16 GiB-heap cell,
-    its operating point; the matched-24 GiB ablation is prose only.
-    Field names mapped to the campaign schema."""
-    import glob
-    out = []
-    for fp in glob.glob(os.path.join(RESULTS, subdir,
-                                     f"{prefix}_rep*.json")):
-        r = json.load(open(fp))
-        if r.get("rep", 0) < 2:
-            continue
-        out.append({"build_s": r["build_s"], "query_p50_ms": r["p50"],
-                    "query_p99_ms": r["p99"],
-                    "recall_at_10": r["recall_at_10"]})
-    return out
 
 
 def _dense_multipass():
