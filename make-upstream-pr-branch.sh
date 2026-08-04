@@ -54,7 +54,29 @@ INCLUDE_PATHS=(
     # so the skips upstream legitimately expects (docs absent, GraphML absent)
     # do not trip it.
     ".github/workflows/test-python-bindings.yml"
+    # Same reasoning, same origin: upstream has this file because we sent it,
+    # and it has been frozen at whatever we sent last while our copy kept
+    # gaining fixes. Ours differs by +53/-10, all of it portable:
+    #
+    #   HF_HOME + actions/cache   their 20-job matrix currently does 20
+    #                             independent sentence-transformers downloads
+    #                             per release
+    #   pre-warm, 3 retries       a transient huggingface outage currently
+    #                             fails their release; retried here so it
+    #                             cannot surface mid-example as an OSError
+    #                             that reads like a bindings bug
+    #   drop the example-21 skip  that file is now 23_server_mode_http_access
+    #                             and the instability it was skipped for is
+    #                             fixed, so their exclusion targets a name
+    #                             that no longer exists
+    ".github/workflows/test-python-examples.yml"
 )
+
+# NOT shipped, and each for a reason: CHANGELOG.md and the AUDIT/REFACTOR plans
+# are fork release history and internal notes; benchmarks/, dist/, exports/,
+# local-jars/, log/, site/, my_test_databases/ are artifacts; docs/ and
+# mkdocs.yml are the fork's documentation site. Audited 2026-08-04: upstream
+# holds nothing under bindings/python that we withhold.
 
 # Fork-only content living INSIDE the include paths — pruned after checkout.
 EXCLUDE_PATHS=(
