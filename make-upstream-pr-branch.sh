@@ -32,6 +32,28 @@ INCLUDE_PATHS=(
     "bindings/python/scripts"
     "bindings/python/src"
     "bindings/python/tests"
+    # The workflow that RUNS those tests upstream. Added 2026-08-04.
+    #
+    # Shipping tests without it ships tests that do not execute. Measured on
+    # PR #5807, linux/amd64 + Python 3.12, the same cell that gives 423 passed
+    # / 2 skipped here:
+    #
+    #   upstream: 405 passed, 15 skipped
+    #
+    # Their install step is `pytest pytest-cov requests numpy` and nothing
+    # else, so every test that importorskips psycopg, neo4j, redis, pyarrow or
+    # pandas skips there. That included BOTH wire-protocol tests, which are the
+    # headline of that PR: the bundled Postgres and Bolt plugins got their
+    # first real client-level coverage, and upstream skipped both.
+    #
+    # Our copy is upstream's copy plus exactly three things: the missing
+    # packages, --extra arrow/pandas on the floor audit, and a guard that fails
+    # the build when a test skips for a missing import. Verified byte for byte
+    # that nothing fork-specific rides along: no repo names, no secrets, no
+    # fork paths. Verified too that the guard only matches "could not import",
+    # so the skips upstream legitimately expects (docs absent, GraphML absent)
+    # do not trip it.
+    ".github/workflows/test-python-bindings.yml"
 )
 
 # Fork-only content living INSIDE the include paths — pruned after checkout.
