@@ -47,13 +47,17 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 # DEEP-10M dense tier (l3d); 36g since the degree-matched
                 # ablation (maxConnections=32, #5352) peaks ~19GB build heap
                 "deep10m": "36g",
-                "e2": "12g", "tpch1": "16g"}
+                "e2": "12g", "tpch1": "16g",
+                # TPC-H SF10 (~10 GB). SF1 is 1 GB, which reads as a toy
+                # scale at a DB venue where comparable papers run 700 GB+.
+                "tpch10": "32g"}
 # Per-cell watchdog: a cell exceeding this is killed and recorded as a timeout.
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "medium": 6 * 3600, "large": 24 * 3600,
                     "sf1": 3600, "sf10": 6 * 3600, "deep10m": 6 * 3600,
-                    "e2": 3600, "tpch1": 3 * 3600}
+                    "e2": 3600, "tpch1": 3 * 3600,
+                    "tpch10": 8 * 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  "large": "24g",
                  # heap must fit inside the 75% server-container share of
@@ -74,7 +78,7 @@ BACKENDS = {
     "arcadedb_server": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
+        "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
@@ -113,7 +117,7 @@ BACKENDS = {
     "arcadedb_graph_server": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
+        "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
@@ -171,7 +175,7 @@ BACKENDS = {
     "arcadedb_sparse_server": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
+        "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
         # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
@@ -222,7 +226,7 @@ BACKENDS = {
     "arcadedb_dense_server": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "arcadedata/arcadedb:26.8.1-SNAPSHOT@sha256:5b98135239b008ed83af67a16f96c1ddcbd3a832b51e64c5197decbaa770aa98",  # post-#5306/#5307, matches dev2 wheel
+        "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "

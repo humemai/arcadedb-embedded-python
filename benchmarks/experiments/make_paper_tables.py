@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import statistics as st
+from decimal import Decimal, ROUND_HALF_UP
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
@@ -408,51 +409,97 @@ def _dev16_dense_rows(prefix="fp32_dev20", subdir="verify5412b"):
     return out
 
 
-def dense_ts_table(rows):
-    l3d = [r for r in rows if r["lane"] == "l3d" and r["scale"] == "deep10m"]
-    dev16 = _dev16_dense_rows()
-    order = ["arcadedb_dense_embedded", "arcadedb_dense_server", "qdrant_dense",
-             "milvus_dense", "chroma_dense", "lancedb_dense",
-             "sqlite_vec_dense", "duckdb_vss_dense"]
-    lines = [r"\begin{tabular}{lrrrr}", r"\toprule",
-             r"\multicolumn{5}{l}{\textit{Dense ANN, DEEP-10M "
-             r"(10M$\times$96d), degree-matched}} \\",
-             r"System & Build (s) & p50 (ms) & p99 (ms) & Recall@10 \\",
-             r"\midrule"]
-    int8 = _dev16_dense_rows("int8_dev20")
-    # Post-fix server re-measure (#109). verify5413's image (build 8bd63ccc8,
-    # 2026-07-25 19:58) sat between the commit that bounded the HNSW build
-    # cache and the one that auto-sized it, so its 13,349 s build was a
-    # version artifact reported as a deployment cost. srv109 is the same cell
-    # on build bd0ba0d233 (2026-07-31), past the fix: 3,825 s, with p50 and
-    # recall unchanged, which is what a BUILD-cache regression predicts.
-    # Falls back rather than mixing if the new overlay is absent.
-    srv = _dev16_dense_rows("srv109", "srv109") or \
-        _dev16_dense_rows("srv5413", "verify5413")
-    for be in order:
-        g = [r for r in l3d if r["backend"] == be]
-        if be == "arcadedb_dense_embedded" and dev16:
-            g = dev16  # dev16 overlay (shared warm cache), caption discloses
-        if be == "arcadedb_dense_server" and srv:
-            g = srv  # matched-config re-run (#5413), caption discloses
-        if not g:
+def _dense_multipass():
+    """T5's dense block, read from the one-build/five-pass artifacts.
+
+    WHY THIS REPLACED THE runs.jsonl PATH. The dense block used to be built
+    from per-rep rows in runs.jsonl, which cannot express the cold/warm split
+    at all: each rep is one number. The 26.8.1 re-measurement is a MULTIPASS
+    protocol (one build, then five passes over it), so pass 0 is the cold
+    query and passes 1-4 are steady state. Those artifacts never entered
+    runs.jsonl, so the generator kept emitting dev3-era rows while the paper
+    carried a hand-built table. Re-running the generator would have silently
+    reverted the paper's headline table to a superseded engine.
+
+    Returns [(label, build_s, cold_p50, warm_cell, cold_p99, recall)].
+    """
+    import glob
+    out = []
+    for fp in sorted(glob.glob(os.path.join(RESULTS, "dense_mp_2681", "mp_*.json"))):
+        base = os.path.basename(fp)
+        # build2/build3 are build-reproducibility checks, not table rows.
+        if "_build" in base:
             continue
+        try:
+            passes = json.load(open(fp))
+        except Exception:
+            continue
+        if not isinstance(passes, list) or len(passes) < 2:
+            continue
+        p0 = passes[0]
+        be = p0.get("backend")
+        label = NAMES.get(be, be)
+        if be == "arcadedb_dense_embedded":
+            q = str(p0.get("quantization", "")).lower()
+            label = "ArcadeDB (emb, int8)" if "int8" in q else "ArcadeDB (emb, fp32)"
+        elif be == "arcadedb_dense_server":
+            label = "ArcadeDB (srv)"
+        warm = [x["p50"] for x in passes[1:] if x.get("p50") is not None]
+        if not warm:
+            continue
+        warm_cell = "%s [%s--%s]" % (
+            _sig3(st.median(warm)), _sig3(min(warm)), _sig3(max(warm)))
+        out.append((label, p0.get("build_s"), p0.get("p50"), warm_cell,
+                    p0.get("p99"), p0.get("recall_at_10")))
+    # Ordered by cold p50: the lifecycle axis is what this block is for.
+    return sorted(out, key=lambda r: (r[2] is None, r[2]))
+
+
+def _sig3(v):
+    """Three significant figures, thousands-separated above 1000.
+
+    The table is read by eye, not by a machine: 522.26 s of index build is
+    false precision when the run-to-run spread is seconds. This is the
+    formatting the hand-built table used, reproduced so the generator emits
+    it rather than a wall of raw floats.
+    """
+    if v is None:
+        return "--"
+    if v >= 1000:
+        return "{:,}".format(int(round(v))).replace(",", "{,}")
+    places = 0 if v >= 100 else (1 if v >= 10 else 2)
+    return str(Decimal(repr(v)).quantize(Decimal(1).scaleb(-places),
+                                         rounding=ROUND_HALF_UP))
+
+
+def dense_ts_table(rows):
+    dense = _dense_multipass()
+    if not dense:
+        raise SystemExit(
+            "REFUSING to write t5: no dense multipass artifacts under "
+            "results/dense_mp_2681/. The old runs.jsonl path emitted dev3-era "
+            "rows and would silently revert the paper's headline table.")
+    lines = [r"\begin{tabular}{lrrrrr}", r"\toprule",
+             r"\multicolumn{6}{l}{\textit{Dense ANN, DEEP-10M "
+             r"(10M$\times$96d), degree-matched; latencies in ms}} \\",
+             r"System & Build (s) & Cold p50 & Warm p50 & Cold p99 & Recall \\",
+             r"\midrule"]
+    for label, build, cold50, warm_cell, cold99, recall in dense:
+        # sqlite-vec is exact brute force, so its recall of 1.000 is a property
+        # of the method rather than a result. The dagger points at the caption.
+        if label.startswith("sqlite-vec"):
+            label = r"sqlite-vec$^{\dagger}$"
         lines.append(" & ".join([
-            NAMES[be], mmm(g, "build_s"), mmm(g, "query_p50_ms"),
-            mmm(g, "query_p99_ms"), mmm(g, "recall_at_10")]) + r" \\")
-        if be == "arcadedb_dense_embedded" and int8:
-            # INT8 sibling row: same line, 16 GiB heap (vs 24), see prose
-            lines.append(" & ".join([
-                r"ArcadeDB (emb, int8, 16\,GiB)", mmm(int8, "build_s"),
-                mmm(int8, "query_p50_ms"), mmm(int8, "query_p99_ms"),
-                mmm(int8, "recall_at_10")]) + r" \\")
+            label, _sig3(build), _sig3(cold50), warm_cell, _sig3(cold99),
+            "--" if recall is None else str(Decimal(repr(recall)).quantize(
+                Decimal("0.001"), rounding=ROUND_HALF_UP))]) + r" \\")
     ts = [json.loads(l) for l in open(os.path.join(RESULTS, "l4_tsbs.jsonl"))
           if l.strip()]
     lines += [r"\midrule",
-              r"\multicolumn{5}{l}{\textit{Time series, TSBS cpu-only "
+              r"\multicolumn{6}{l}{\textit{Time series, TSBS cpu-only "
               r"(2.59M points)}} \\",
               r"System & Ingest (pts/s) & Last point (ms) & 1h bucket (ms) & "
-              r"12h global (ms) \\", r"\midrule"]
+              r"12h global (ms) & \\", r"\midrule"]
     import glob
     # Native TimeSeries on released dev21 via the IDIOMATIC ingest path, which
     # supersedes the batch1 rows. Those were measured through the adapter's
@@ -500,14 +547,14 @@ def dense_ts_table(rows):
         lines.append(" & ".join([
             r"ArcadeDB (native TS)", mmm(native, "ingest_pts_per_s"),
             mmm(native, last_key), mmm(native, "q_range_ms"),
-            mmm(native, "q_global_ms")]) + " " + chr(92)*2)
+            mmm(native, "q_global_ms")]) + " & " + chr(92)*2)
     for be in ("arcadedb", "duckdb", "questdb"):
         g = [r for r in ts if r["backend"] == be]
         label = ("ArcadeDB (document path)" if be == "arcadedb"
                  else NAMES[be])
         lines.append(" & ".join([
             label, mmm(g, "ingest_pts_per_s"), mmm(g, "q_last_ms"),
-            mmm(g, "q_range_ms"), mmm(g, "q_global_ms")]) + " " + chr(92)*2)
+            mmm(g, "q_range_ms"), mmm(g, "q_global_ms")]) + " & " + chr(92)*2)
     lines += [r"\bottomrule", r"\end{tabular}"]
     write("t5_dense_ts.tex", "\n".join(lines) + "\n")
 
