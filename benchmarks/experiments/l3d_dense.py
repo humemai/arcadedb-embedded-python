@@ -99,6 +99,29 @@ _QUANT_ALIASES = {"": "", "fp32": "", "float32": "", "f32": "", "none": ""}
 _QUANT_DDL = {"INT8", "BINARY", "PRODUCT"}
 
 
+def lib_version(module, dist):
+    """Report a library's version from its installed distribution metadata.
+
+    `getattr(mod, "__version__", "?")` is not a version check, it is a coin
+    toss: a package that simply does not define the attribute records "?" and
+    the row looks like a lookup failure rather than a package that never
+    exposed it. qdrant-client is exactly that case, and provenance_check
+    rejected the whole Qdrant row on 2026-08-04 for a field that could never
+    have been populated. importlib.metadata reads what pip installed, so it
+    answers for every distribution whether or not the module cooperates.
+
+    Falls back to the attribute, then to a marker that says which lookup
+    failed, because "unknown" with no cause is what made the original problem
+    hard to see.
+    """
+    try:
+        from importlib.metadata import version
+        return version(dist)
+    except Exception:
+        v = getattr(module, "__version__", None)
+        return v if v else f"unknown (no metadata for {dist!r}, no __version__)"
+
+
 def resolve_quant(raw):
     """Map BENCH_DENSE_QUANT to what LSM_VECTOR's METADATA accepts.
 
@@ -312,7 +335,7 @@ class Chroma(Base):
 
     def connect(self):
         import chromadb
-        self.version = chromadb.__version__
+        self.version = lib_version(chromadb, "chromadb")
         client = chromadb.PersistentClient(path="/tmp/l3d_chroma")
         self.col = client.create_collection("articles", metadata={
             "hnsw:space": "l2", "hnsw:M": COMPARATOR_M,
@@ -334,7 +357,7 @@ class LanceDB(Base):
 
     def connect(self):
         import lancedb
-        self.version = getattr(lancedb, "__version__", "?")
+        self.version = lib_version(lancedb, "lancedb")
         self.db = lancedb.connect("/tmp/l3d_lance")
 
     def build(self, vecs):
@@ -371,7 +394,7 @@ class SqliteVec(Base):
     def connect(self):
         import sqlite3
         import sqlite_vec
-        self.version = sqlite_vec.__version__
+        self.version = lib_version(sqlite_vec, "sqlite-vec")
         self.cx = sqlite3.connect("/tmp/l3d_sqlitevec.db")
         self.cx.enable_load_extension(True)
         sqlite_vec.load(self.cx)
@@ -399,7 +422,7 @@ class DuckVSS(Base):
 
     def connect(self):
         import duckdb
-        self.version = duckdb.__version__
+        self.version = lib_version(duckdb, "duckdb")
         self.cx = duckdb.connect("/tmp/l3d_duck.db")
         self.cx.execute("INSTALL vss; LOAD vss;")
         self.cx.execute("SET hnsw_enable_experimental_persistence=true;")
@@ -436,7 +459,7 @@ class Qdrant(Base):
     def connect(self):
         from qdrant_client import QdrantClient
         import qdrant_client
-        self.version = getattr(qdrant_client, "__version__", "?")
+        self.version = lib_version(qdrant_client, "qdrant-client")
         self.cl = QdrantClient(host=os.environ["BENCH_SERVER_HOST"], port=6333,
                                timeout=600)
 
@@ -474,7 +497,7 @@ class Milvus(Base):
     def connect(self):
         from pymilvus import MilvusClient
         import pymilvus
-        self.version = getattr(pymilvus, "__version__", "?")
+        self.version = lib_version(pymilvus, "pymilvus")
         self.cl = MilvusClient(
             uri=f"http://{os.environ['BENCH_SERVER_HOST']}:19530", timeout=600)
 
