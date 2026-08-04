@@ -42,15 +42,8 @@ from .exceptions import ArcadeDBError
 # Import exporter classes
 from .exporter import export_database, export_to_csv
 
-# Import server classes
-from .server import ArcadeDBServer, create_server
-
 # Import graph classes
 from .graph import Document, Edge, Vertex
-
-# Which engine this install actually carries. __version__ is the PACKAGE
-# version and can disagree with the bundled JARs without any error.
-from .jvm import jar_fingerprint
 
 # Import graph batch helper
 from .graph_batch import GraphBatch
@@ -58,11 +51,18 @@ from .graph_batch import GraphBatch
 # Import importer helpers
 from .importer import ImportResult
 
+# Which engine this install actually carries. __version__ is the PACKAGE
+# version and can disagree with the bundled JARs without any error.
+from .jvm import jar_fingerprint
+
 # Import result classes
 from .results import Result, ResultSet
 
 # Import schema classes
 from .schema import IndexType, PropertyType, Schema
+
+# Import server classes
+from .server import ArcadeDBServer, create_server
 
 # Import transaction management
 from .transactions import TransactionContext

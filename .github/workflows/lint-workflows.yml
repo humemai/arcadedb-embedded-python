@@ -20,11 +20,7 @@ name: Lint Workflows
 
 on:
   push:
-    paths:
-      - ".github/workflows/**"
   pull_request:
-    paths:
-      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
@@ -40,3 +36,22 @@ jobs:
       # "pinned" means rather than drifting into two dialects of the rule.
       - name: Ensure SHA pinned actions
         uses: zgosalvez/github-actions-ensure-sha-pinned-actions@3db98c0363e2fa5df3e1c4c471777a7c10b24cc9 # v5.0.5
+
+  # Second half of the same lesson, found the same way. Upstream's setup job
+  # also runs pre-commit, and we do not, so our formatting drifts here and is
+  # only discovered when a bindings PR reaches them. On 2026-08-04 that PR
+  # failed their gate twice in a row: first on an unpinned action, then on
+  # isort and black. Both were ours, neither was visible from this repo.
+  #
+  # It also showed the drift is not only in new code. isort moved the `server`
+  # import too, which has been misordered here since server mode was restored,
+  # because nothing local ever checked.
+  pre-commit:
+    name: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1

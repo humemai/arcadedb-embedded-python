@@ -152,13 +152,23 @@ def jar_fingerprint(per_jar: bool = False) -> dict:
             engine.update(h.digest())
             engine_count += 1
         if per_jar:
-            entries.append({"name": name, "bytes": size, "sha256": h.hexdigest(),
-                            "engine": name not in _OUR_JARS})
+            entries.append(
+                {
+                    "name": name,
+                    "bytes": size,
+                    "sha256": h.hexdigest(),
+                    "engine": name not in _OUR_JARS,
+                }
+            )
 
-    out = {"count": len(names), "bytes": total,
-           "sha256": combined.hexdigest(),
-           "engine_sha256": engine.hexdigest(), "engine_count": engine_count,
-           "jar_dir": jar_dir}
+    out = {
+        "count": len(names),
+        "bytes": total,
+        "sha256": combined.hexdigest(),
+        "engine_sha256": engine.hexdigest(),
+        "engine_count": engine_count,
+        "jar_dir": jar_dir,
+    }
     _JAR_FINGERPRINT_CACHE = dict(out)
     if per_jar:
         out["jars"] = entries
@@ -367,6 +377,7 @@ def _close_active_databases():
                 pass
     except Exception:  # nosec B110 - best-effort cleanup at exit
         pass
+
 
 def _normalize_jvm_args(jvm_args: Optional[Union[Iterable[str], str]]) -> list[str]:
     if not jvm_args:

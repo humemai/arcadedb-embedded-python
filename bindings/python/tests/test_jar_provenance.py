@@ -33,8 +33,9 @@ def test_fingerprint_matches_what_is_on_disk():
     """count and bytes are read from the filesystem, not asserted."""
     fp = adb.jar_fingerprint()
     names = [n for n in os.listdir(fp["jar_dir"]) if n.endswith(".jar")]
-    assert fp["count"] == len(names), (
-        f"fingerprint claims {fp['count']} JARs, directory has {len(names)}")
+    assert fp["count"] == len(
+        names
+    ), f"fingerprint claims {fp['count']} JARs, directory has {len(names)}"
     total = sum(os.path.getsize(os.path.join(fp["jar_dir"], n)) for n in names)
     assert fp["bytes"] == total
     assert fp["count"] > 0, "a wheel with no JARs is not a working install"
@@ -54,7 +55,8 @@ def test_hash_actually_covers_every_jar_name_and_content():
         combined.update(bytes.fromhex(entry["sha256"]))
     assert combined.hexdigest() == fp["sha256"], (
         "combined hash is not the hash of the per-JAR (name, digest) pairs, so "
-        "it does not mean what the docstring says it means")
+        "it does not mean what the docstring says it means"
+    )
 
 
 def test_per_jar_digests_are_the_real_file_digests():
@@ -89,8 +91,9 @@ def test_renaming_a_jar_would_change_the_fingerprint():
     for name_entry, digest_entry in zip(jars, order):
         swapped.update(name_entry["name"].encode())
         swapped.update(bytes.fromhex(digest_entry["sha256"]))
-    assert swapped.hexdigest() != fp["sha256"], (
-        "swapping two JARs' contents does not change the fingerprint")
+    assert (
+        swapped.hexdigest() != fp["sha256"]
+    ), "swapping two JARs' contents does not change the fingerprint"
 
 
 def test_engine_hash_excludes_our_own_jar():
@@ -109,16 +112,18 @@ def test_engine_hash_excludes_our_own_jar():
     ours = [j for j in fp["jars"] if not j["engine"]]
     assert ours, "no JAR is marked as ours; _OUR_JARS is stale against the wheel"
     assert fp["engine_count"] == fp["count"] - len(ours)
-    assert fp["engine_sha256"] != fp["sha256"], (
-        "engine hash equals the full hash, so it is not excluding anything")
+    assert (
+        fp["engine_sha256"] != fp["sha256"]
+    ), "engine hash equals the full hash, so it is not excluding anything"
 
     combined = hashlib.sha256()
     for entry in fp["jars"]:
         if entry["engine"]:
             combined.update(entry["name"].encode())
             combined.update(bytes.fromhex(entry["sha256"]))
-    assert combined.hexdigest() == fp["engine_sha256"], (
-        "engine_sha256 is not the hash of exactly the engine JARs")
+    assert (
+        combined.hexdigest() == fp["engine_sha256"]
+    ), "engine_sha256 is not the hash of exactly the engine JARs"
 
 
 def test_our_jar_list_still_matches_the_wheel():
@@ -133,7 +138,8 @@ def test_our_jar_list_still_matches_the_wheel():
     missing = _OUR_JARS - names
     assert not missing, (
         f"_OUR_JARS lists {sorted(missing)}, absent from the wheel. Renamed? "
-        f"engine_sha256 is now hashing a JAR we build.")
+        f"engine_sha256 is now hashing a JAR we build."
+    )
 
 
 def test_exported_from_the_package_root():
