@@ -147,11 +147,22 @@ class ArcadeEmbedded(Base):
         return self._last_rids  # RIDs; resolved to ordinals untimed
 
     def resolve(self, rids):
+        # RID list as the query TARGET, not as a WHERE predicate. Engine #5824:
+        # `WHERE @rid IN [list]` is planned as FetchFromTypeWithFilterStep, a
+        # full bucket scan whose cost is linear in the TYPE and independent of
+        # k, while `FROM [list]` plans as FETCH FROM RIDs and is flat. Measured
+        # 1143x at 400k docs; at this lane 8.84M it was ~4.7s per resolve call,
+        # 82% of a cell wall clock.
+        #
+        # THIS CHANGES NO RECORDED NUMBER. resolve() runs in the UNTIMED recall
+        # pass; only search() is timed. Both forms verified to return identical
+        # rows, identical projection shape, and identical -1 handling for a
+        # dangling RID.
         if not rids:
             return []
         in_list = ",".join(rids)
         rows = self.db.query(
-            "sql", f"SELECT id, @rid AS r FROM Doc WHERE @rid IN [{in_list}]"
+            "sql", f"SELECT id, @rid AS r FROM [{in_list}]"
         ).to_json_list()
         by_rid = {r["r"]: r["id"] for r in rows}
         return [by_rid.get(x, -1) for x in rids]
@@ -254,7 +265,7 @@ class ArcadeServer(ArcadeEmbedded):
             return []
         in_list = ",".join(rids)
         rows = self._query(
-            f"SELECT id, @rid AS r FROM Doc WHERE @rid IN [{in_list}]")
+            f"SELECT id, @rid AS r FROM [{in_list}]")
         by_rid = {r["r"]: r["id"] for r in rows}
         return [by_rid.get(x, -1) for x in rids]
 
