@@ -19,6 +19,7 @@ and still win on strings; reporting a single figure would hide which.
 Reports p50 of N reps after warmup, and a correctness check that the two paths
 agree, so a fast wrong answer cannot pass as a win.
 """
+
 import argparse
 import os
 import statistics
@@ -34,7 +35,9 @@ def build(db, n, shape):
             rows = []
             for j in range(i, min(i + 1000, n)):
                 if shape == "numeric":
-                    rows.append(f"INSERT INTO Rec SET a = {j}, b = {j * 1.5}, c = {j % 7}")
+                    rows.append(
+                        f"INSERT INTO Rec SET a = {j}, b = {j * 1.5}, c = {j % 7}"
+                    )
                 elif shape == "strings":
                     rows.append(
                         f"INSERT INTO Rec SET s1 = 'value-{j}', "
@@ -91,8 +94,10 @@ def main():
 
     print(f"\n  rows={args.rows} reps={args.reps} (warmup {args.warmup})")
     print(f"  arcadedb_embedded {arcadedb.__version__}\n")
-    row(f"{'shape':<10}{'to_columns':>12}{'to_arrow':>11}",
-        f"{'cols->df':>11}{'arrow->df':>11}{'df speedup':>12}")
+    row(
+        f"{'shape':<10}{'to_columns':>12}{'to_arrow':>11}",
+        f"{'cols->df':>11}{'arrow->df':>11}{'df speedup':>12}",
+    )
 
     for shape in args.shapes.split(","):
         with tempfile.TemporaryDirectory() as d:
@@ -101,27 +106,36 @@ def main():
                 build(db, args.rows, shape)
 
                 q = "SELECT FROM Rec"
-                t_cols = timeit(lambda: db.query("sql", q).to_columns(),
-                                args.reps, args.warmup)
-                t_arrow = timeit(lambda: db.query("sql", q).to_arrow(),
-                                 args.reps, args.warmup)
+                t_cols = timeit(
+                    lambda: db.query("sql", q).to_columns(), args.reps, args.warmup
+                )
+                t_arrow = timeit(
+                    lambda: db.query("sql", q).to_arrow(), args.reps, args.warmup
+                )
                 t_cols_df = timeit(
                     lambda: pd.DataFrame(db.query("sql", q).to_columns()),
-                    args.reps, args.warmup)
+                    args.reps,
+                    args.warmup,
+                )
                 t_arrow_df = timeit(
                     lambda: db.query("sql", q).to_arrow().to_pandas(),
-                    args.reps, args.warmup)
+                    args.reps,
+                    args.warmup,
+                )
 
                 # a fast wrong answer is not a win
                 a = db.query("sql", q).to_arrow()
                 c = db.query("sql", q).to_columns()
                 assert a.num_rows == len(next(iter(c.values()))), (
                     f"{shape}: row count differs, {a.num_rows} vs "
-                    f"{len(next(iter(c.values())))}")
+                    f"{len(next(iter(c.values())))}"
+                )
 
                 sp = t_cols_df / t_arrow_df if t_arrow_df else float("nan")
-                row(f"  {shape:<10}{t_cols:>12.2f}{t_arrow:>11.2f}",
-                    f"{t_cols_df:>11.2f}{t_arrow_df:>11.2f}{sp:>11.2f}x")
+                row(
+                    f"  {shape:<10}{t_cols:>12.2f}{t_arrow:>11.2f}",
+                    f"{t_cols_df:>11.2f}{t_arrow_df:>11.2f}{sp:>11.2f}x",
+                )
 
     print("\n  cols->df and arrow->df are the numbers that matter: they are what")
     print("  a caller pays to get a DataFrame. A win on strings with a loss on")

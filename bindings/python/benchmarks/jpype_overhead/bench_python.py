@@ -284,7 +284,11 @@ def bench_write(db_dir: str):
         with db.transaction():  # warmup 1k
             for j in range(1_000):
                 db.command(
-                    "sql", "INSERT INTO W SET id = ?, name = ?, score = ?", j, f"n{j}", j * 0.5
+                    "sql",
+                    "INSERT INTO W SET id = ?, name = ?, score = ?",
+                    j,
+                    f"n{j}",
+                    j * 0.5,
                 )
 
         lat = []
@@ -321,7 +325,11 @@ def bench_cypher(db_dir: str):
             return checksum
 
         for layer, cypher, reps in (
-            ("P-traverse", "MATCH (a:Person {id: 1})-[:KNOWS*1..2]->(b) RETURN count(b) AS c", MEASURED),
+            (
+                "P-traverse",
+                "MATCH (a:Person {id: 1})-[:KNOWS*1..2]->(b) RETURN count(b) AS c",
+                MEASURED,
+            ),
             ("P-project", "MATCH (p:Person) RETURN p.name AS name, p.age AS age", 12),
         ):
             warm = max(3, reps // 10)
@@ -418,7 +426,10 @@ def bench_micro(doc_db_dir: str):
         t("convert_localdatetime", lambda: convert_java_to_python(JLdt), 20000)
         t("convert_list384float", lambda: convert_java_to_python(JList), 500)
 
-        rids = [str(r.get("rid")) for r in db.query("sql", "SELECT @rid as rid FROM Doc LIMIT 1000")]
+        rids = [
+            str(r.get("rid"))
+            for r in db.query("sql", "SELECT @rid as rid FROM Doc LIMIT 1000")
+        ]
 
         def lookup_all():
             for rid in rids:
@@ -441,7 +452,9 @@ def bench_async(db_dir: str):
 
         # warmup
         for i in range(1_000):
-            executor.command("sql", "INSERT INTO A SET id = ?, name = ?", args=[i, f"w{i}"])
+            executor.command(
+                "sql", "INSERT INTO A SET id = ?, name = ?", args=[i, f"w{i}"]
+            )
         executor.wait_completion()
 
         # no-callback throughput: 10k async inserts, one wall-clock number
@@ -470,7 +483,12 @@ def bench_async(db_dir: str):
             )
         executor.wait_completion()
         total_cb = time.perf_counter_ns() - s
-        report("async", "P-async-insert-callback", [total_cb // 10_000] * 1, f"cb={done['n']}")
+        report(
+            "async",
+            "P-async-insert-callback",
+            [total_cb // 10_000] * 1,
+            f"cb={done['n']}",
+        )
 
 
 if __name__ == "__main__":

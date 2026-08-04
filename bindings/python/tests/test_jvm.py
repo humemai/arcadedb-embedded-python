@@ -1,9 +1,8 @@
 """Tests for start_jvm() re-entry behavior once the JVM is running."""
 
+import arcadedb_embedded as arcadedb
 import jpype
 import pytest
-
-import arcadedb_embedded as arcadedb
 from arcadedb_embedded import jvm
 from arcadedb_embedded.exceptions import ArcadeDBError
 
@@ -76,7 +75,9 @@ def test_interpreter_exits_with_unclosed_database(tmp_path):
     )
     proc = subprocess.run(  # nosec B603 - fixed argv, no shell, test-owned
         [_sys.executable, "-c", script],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     assert "OK" in proc.stdout
     assert proc.returncode == 0

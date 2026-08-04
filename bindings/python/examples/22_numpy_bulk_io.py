@@ -32,9 +32,8 @@ import shutil
 import time
 from pathlib import Path
 
-import numpy as np
-
 import arcadedb_embedded as arcadedb
+import numpy as np
 
 
 def bulk_documents(db, n_rows: int) -> None:
@@ -52,15 +51,19 @@ def bulk_documents(db, n_rows: int) -> None:
     t0 = time.perf_counter()
     inserted = db.insert_many("BulkOrder", rows, commit_every=10_000)
     dt = time.perf_counter() - t0
-    print(f"synchronous batches: {inserted:,} rows in {dt:.2f}s "
-          f"({inserted / dt:,.0f} rows/s)")
+    print(
+        f"synchronous batches: {inserted:,} rows in {dt:.2f}s "
+        f"({inserted / dt:,.0f} rows/s)"
+    )
 
     db.command("sql", "CREATE DOCUMENT TYPE BulkOrderP")
     t0 = time.perf_counter()
     inserted = db.insert_many("BulkOrderP", rows, parallel=True)
     dt = time.perf_counter() - t0
-    print(f"async parallel writers: {inserted:,} rows in {dt:.2f}s "
-          f"({inserted / dt:,.0f} rows/s)")
+    print(
+        f"async parallel writers: {inserted:,} rows in {dt:.2f}s "
+        f"({inserted / dt:,.0f} rows/s)"
+    )
 
 
 def timeseries_from_numpy(db, n_points: int) -> None:
@@ -81,8 +84,7 @@ def timeseries_from_numpy(db, n_points: int) -> None:
     ex.append_samples("Sensor", ts, hosts, cpu, mem)
     ex.wait_completion()
     dt = time.perf_counter() - t0
-    print(f"ingested {n_points:,} points in {dt:.2f}s "
-          f"({n_points / dt:,.0f} pts/s)")
+    print(f"ingested {n_points:,} points in {dt:.2f}s " f"({n_points / dt:,.0f} pts/s)")
 
     buckets = db.query(
         "sql",
@@ -90,8 +92,10 @@ def timeseries_from_numpy(db, n_points: int) -> None:
         f"FROM Sensor WHERE host = 'host_3' AND ts BETWEEN {base_ms} AND "
         f"{base_ms + 600_000 - 1} GROUP BY minute ORDER BY minute",
     ).to_list()
-    print(f"first 10 minutes of host_3, per-minute avg cpu: "
-          f"{[round(float(b['cpu']), 1) for b in buckets]}")
+    print(
+        f"first 10 minutes of host_3, per-minute avg cpu: "
+        f"{[round(float(b['cpu']), 1) for b in buckets]}"
+    )
 
 
 def embeddings_to_numpy(db, n_vectors: int, dim: int) -> None:
@@ -110,12 +114,13 @@ def embeddings_to_numpy(db, n_vectors: int, dim: int) -> None:
             )
 
     t0 = time.perf_counter()
-    cols = db.query("sql", "SELECT cid, embedding FROM Chunk ORDER BY cid"
-                    ).to_columns()
+    cols = db.query("sql", "SELECT cid, embedding FROM Chunk ORDER BY cid").to_columns()
     dt = time.perf_counter() - t0
     emb = cols["embedding"]
-    print(f"exported in {dt:.3f}s: cid -> {cols['cid'].dtype} "
-          f"{cols['cid'].shape}, embedding -> {emb.dtype} {emb.shape}")
+    print(
+        f"exported in {dt:.3f}s: cid -> {cols['cid'].dtype} "
+        f"{cols['cid'].shape}, embedding -> {emb.dtype} {emb.shape}"
+    )
     # the array is contiguous and immediately usable, e.g. cosine vs a query
     q = vecs[0]
     sims = emb @ q / (np.linalg.norm(emb, axis=1) * np.linalg.norm(q))
@@ -132,9 +137,7 @@ def nulls_to_arrow(db, n_rows: int) -> None:
     # Every third row leaves count and ok unset, which is the case that
     # separates the two export paths.
     rows = [
-        {"rid": i, "count": i * 2, "ok": i % 2 == 0}
-        if i % 3
-        else {"rid": i}
+        {"rid": i, "count": i * 2, "ok": i % 2 == 0} if i % 3 else {"rid": i}
         for i in range(n_rows)
     ]
     db.insert_many("Reading", rows)
@@ -145,17 +148,23 @@ def nulls_to_arrow(db, n_rows: int) -> None:
     # nullable INTEGER widens to float64 with NaN holes and a nullable BOOLEAN
     # falls back to a Python list. That is a property of numpy, not a defect.
     cols = db.query("sql", q).to_columns()
-    print(f"to_columns : count -> {cols['count'].dtype}, "
-          f"ok -> {type(cols['ok']).__name__}")
+    print(
+        f"to_columns : count -> {cols['count'].dtype}, "
+        f"ok -> {type(cols['ok']).__name__}"
+    )
 
     table = db.query("sql", q).to_arrow()
     if table is None:
-        print("to_arrow   : pyarrow not installed, skipping "
-              "(pip install 'arcadedb-embedded[arrow]')")
+        print(
+            "to_arrow   : pyarrow not installed, skipping "
+            "(pip install 'arcadedb-embedded[arrow]')"
+        )
         return
 
-    print(f"to_arrow   : count -> {table['count'].type}, "
-          f"ok -> {table['ok'].type}, {table.num_rows:,} rows")
+    print(
+        f"to_arrow   : count -> {table['count'].type}, "
+        f"ok -> {table['ok'].type}, {table.num_rows:,} rows"
+    )
 
     # The integers stay integers and the nulls stay null, so downstream
     # arithmetic is not silently done in floating point.
@@ -165,8 +174,10 @@ def nulls_to_arrow(db, n_rows: int) -> None:
     assert table["count"].null_count == expected_nulls
     assert table["ok"].null_count == expected_nulls
     assert np.isnan(cols["count"]).sum() == expected_nulls
-    print(f"both agree on {expected_nulls:,} missing values; "
-          f"only to_arrow keeps them typed")
+    print(
+        f"both agree on {expected_nulls:,} missing values; "
+        f"only to_arrow keeps them typed"
+    )
 
 
 def main() -> None:

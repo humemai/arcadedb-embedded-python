@@ -13,14 +13,21 @@ def _count(db, type_name):
 class TestInsertMany:
     def test_basic_roundtrip(self, temp_db):
         temp_db.command("sql", "CREATE DOCUMENT TYPE Item")
-        rows = [{"k": i, "name": f"item_{i}", "price": i * 1.5,
-                 "active": i % 2 == 0, "tags": ["a", "b"], "meta": {"x": i}}
-                for i in range(500)]
+        rows = [
+            {
+                "k": i,
+                "name": f"item_{i}",
+                "price": i * 1.5,
+                "active": i % 2 == 0,
+                "tags": ["a", "b"],
+                "meta": {"x": i},
+            }
+            for i in range(500)
+        ]
         n = temp_db.insert_many("Item", rows, commit_every=100)
         assert n == 500
         assert _count(temp_db, "Item") == 500
-        got = temp_db.query(
-            "sql", "SELECT FROM Item WHERE k = 7").to_list()[0]
+        got = temp_db.query("sql", "SELECT FROM Item WHERE k = 7").to_list()[0]
         assert got["name"] == "item_7"
         assert got["price"] == pytest.approx(10.5)
         assert got["active"] is False
@@ -45,8 +52,9 @@ class TestInsertMany:
 
     def test_non_json_fallback(self, temp_db):
         temp_db.command("sql", "CREATE DOCUMENT TYPE Dated")
-        rows = [{"k": i, "when": datetime.datetime(2026, 7, 25, 12, 0, i)}
-                for i in range(3)]
+        rows = [
+            {"k": i, "when": datetime.datetime(2026, 7, 25, 12, 0, i)} for i in range(3)
+        ]
         n = temp_db.insert_many("Dated", rows)
         assert n == 3
         assert _count(temp_db, "Dated") == 3
@@ -86,8 +94,8 @@ class TestVectorColumns:
     """f4v/f8v columnar export: embedding columns as 2-D numpy arrays."""
 
     def test_float_array_column_to_columns(self, temp_db):
-        import numpy as np
         import arcadedb_embedded as arcadedb
+        import numpy as np
 
         temp_db.command("sql", "CREATE DOCUMENT TYPE Emb")
         temp_db.command("sql", "CREATE PROPERTY Emb.vid INTEGER")
@@ -95,11 +103,11 @@ class TestVectorColumns:
         with temp_db.transaction():
             for i in range(50):
                 temp_db.command(
-                    "sql", "INSERT INTO Emb SET vid = :i, v = :v",
-                    {"i": i,
-                     "v": arcadedb.to_java_float_array([i, i + 0.5, i + 0.25])})
-        cols = temp_db.query("sql", "SELECT vid, v FROM Emb ORDER BY vid"
-                             ).to_columns()
+                    "sql",
+                    "INSERT INTO Emb SET vid = :i, v = :v",
+                    {"i": i, "v": arcadedb.to_java_float_array([i, i + 0.5, i + 0.25])},
+                )
+        cols = temp_db.query("sql", "SELECT vid, v FROM Emb ORDER BY vid").to_columns()
         assert cols is not None
         arr = cols["v"]
         assert isinstance(arr, np.ndarray) and arr.shape == (50, 3)
@@ -113,7 +121,8 @@ class TestAppendSamplesNumpy:
         temp_db.command(
             "sql",
             "CREATE TIMESERIES TYPE NpTs TIMESTAMP ts "
-            "TAGS (host STRING) FIELDS (val DOUBLE) SHARDS 2")
+            "TAGS (host STRING) FIELDS (val DOUBLE) SHARDS 2",
+        )
         n = 10_000
         ts = np.arange(n, dtype=np.int64) * 1000
         vals = np.linspace(0.0, 1.0, n)
@@ -121,8 +130,7 @@ class TestAppendSamplesNumpy:
         ex = temp_db.async_executor()
         ex.append_samples("NpTs", ts, hosts, vals)
         ex.wait_completion()
-        got = temp_db.query(
-            "sql", "SELECT count(*) AS n FROM NpTs").to_list()[0]["n"]
+        got = temp_db.query("sql", "SELECT count(*) AS n FROM NpTs").to_list()[0]["n"]
         assert int(got) == n
 
     def test_primitive_batch_matches_object_path(self, temp_db):
@@ -138,7 +146,8 @@ class TestAppendSamplesNumpy:
             temp_db.command(
                 "sql",
                 f"CREATE TIMESERIES TYPE {type_name} TIMESTAMP ts "
-                "TAGS (host STRING) FIELDS (val DOUBLE, cnt LONG) SHARDS 2")
+                "TAGS (host STRING) FIELDS (val DOUBLE, cnt LONG) SHARDS 2",
+            )
 
         n = 5_000
         ts = np.arange(n, dtype=np.int64) * 1000 + 1_700_000_000_000
@@ -166,10 +175,12 @@ class TestAppendSamplesNumpy:
                 assert row_boxed.get(key) == row_primitive.get(key), key
 
         counts = [
-            int(temp_db.query(
-                "sql",
-                f"SELECT count(*) AS n FROM {t}",  # nosec B608 - test-owned type name
-            ).to_list()[0]["n"])
+            int(
+                temp_db.query(
+                    "sql",
+                    f"SELECT count(*) AS n FROM {t}",  # nosec B608 - test-owned type name
+                ).to_list()[0]["n"]
+            )
             for t in ("PrimA", "PrimB")
         ]
         assert counts == [n, n]
@@ -188,7 +199,8 @@ class TestAppendSamplesNumpy:
         temp_db.command(
             "sql",
             "CREATE TIMESERIES TYPE TagMemo TIMESTAMP ts "
-            "TAGS (host STRING, region STRING) FIELDS (val DOUBLE) SHARDS 2")
+            "TAGS (host STRING, region STRING) FIELDS (val DOUBLE) SHARDS 2",
+        )
         n = 600
         base = 1_700_000_000_000
         ts = [base + i * 1000 for i in range(n)]
@@ -219,7 +231,8 @@ class TestAppendSamplesNumpy:
         temp_db.command(
             "sql",
             "CREATE TIMESERIES TYPE PrimList TIMESTAMP ts "
-            "TAGS (host STRING) FIELDS (val DOUBLE) SHARDS 1")
+            "TAGS (host STRING) FIELDS (val DOUBLE) SHARDS 1",
+        )
         n = 500
         ex = temp_db.async_executor()
         ex.append_samples(
@@ -230,8 +243,9 @@ class TestAppendSamplesNumpy:
             primitive=True,
         )
         ex.wait_completion()
-        got = temp_db.query(
-            "sql", "SELECT count(*) AS n FROM PrimList").to_list()[0]["n"]
+        got = temp_db.query("sql", "SELECT count(*) AS n FROM PrimList").to_list()[0][
+            "n"
+        ]
         assert int(got) == n
 
 
@@ -245,8 +259,10 @@ class TestVectorColumnsDataFrame:
         with temp_db.transaction():
             for i in range(10):
                 temp_db.command(
-                    "sql", "INSERT INTO EmbDf SET v = :v",
-                    {"v": arcadedb.to_java_float_array([i, i + 1.0])})
+                    "sql",
+                    "INSERT INTO EmbDf SET v = :v",
+                    {"v": arcadedb.to_java_float_array([i, i + 1.0])},
+                )
         df = temp_db.query("sql", "SELECT v FROM EmbDf").to_dataframe()
         assert len(df) == 10
         assert len(df["v"].iloc[3]) == 2

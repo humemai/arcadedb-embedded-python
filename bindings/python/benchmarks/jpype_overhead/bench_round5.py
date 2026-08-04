@@ -20,7 +20,10 @@ def report(phase, layer, lat_ns, extra=""):
     p50 = s[len(s) // 2] / 1e3
     p95 = s[int(len(s) * 0.95)] / 1e3
     p99 = s[min(len(s) - 1, int(len(s) * 0.99))] / 1e3
-    print(f"RESULT,{phase},{layer},{len(s)},{mean:.1f},{p50:.1f},{p95:.1f},{p99:.1f},{extra}", flush=True)
+    print(
+        f"RESULT,{phase},{layer},{len(s)},{mean:.1f},{p50:.1f},{p95:.1f},{p99:.1f},{extra}",
+        flush=True,
+    )
 
 
 def bench_update(db_dir):
@@ -87,7 +90,9 @@ def bench_graphbatch(db_dir):
                 s_v = time.perf_counter_ns()
                 rids = []
                 for b in range(4):
-                    props = [{"id": b * 5_000 + i, "name": f"p{i}"} for i in range(5_000)]
+                    props = [
+                        {"id": b * 5_000 + i, "name": f"p{i}"} for i in range(5_000)
+                    ]
                     rids.extend(batch.create_vertices("P", props))
                 per_vertex = (time.perf_counter_ns() - s_v) / 1e3 / 20_000
                 pairs = [
@@ -107,10 +112,19 @@ def bench_graphbatch(db_dir):
         batch.new_edges([a for a, _ in pairs], "E", [c for _, c in pairs])
 
     pv, pe = seeded_batch(db_dir, per_edge_loop)
-    print(f"RESULT,graphbatch,P-create-vertices,20000,{pv:.1f},{pv:.1f},{pv:.1f},{pv:.1f},per-vertex", flush=True)
-    print(f"RESULT,graphbatch,P-new-edge,60000,{pe:.2f},{pe:.2f},{pe:.2f},{pe:.2f},per-edge-buffered", flush=True)
+    print(
+        f"RESULT,graphbatch,P-create-vertices,20000,{pv:.1f},{pv:.1f},{pv:.1f},{pv:.1f},per-vertex",
+        flush=True,
+    )
+    print(
+        f"RESULT,graphbatch,P-new-edge,60000,{pe:.2f},{pe:.2f},{pe:.2f},{pe:.2f},per-edge-buffered",
+        flush=True,
+    )
     _, pb = seeded_batch(db_dir + "_bulk", bulk)
-    print(f"RESULT,graphbatch,P-new-edges-bulk,60000,{pb:.2f},{pb:.2f},{pb:.2f},{pb:.2f},per-edge-buffered", flush=True)
+    print(
+        f"RESULT,graphbatch,P-new-edges-bulk,60000,{pb:.2f},{pb:.2f},{pb:.2f},{pb:.2f},per-edge-buffered",
+        flush=True,
+    )
 
 
 def bench_threads(db_dir):
@@ -129,7 +143,9 @@ def bench_threads(db_dir):
             for _op in range(ops_per_worker):
                 doc_id = r.randrange(100_000)
                 if r.random() < 0.9:
-                    for _row in db.query("sql", "SELECT score FROM Doc WHERE id = ?", doc_id):
+                    for _row in db.query(
+                        "sql", "SELECT score FROM Doc WHERE id = ?", doc_id
+                    ):
                         pass
                 else:
                     db.run_in_transaction(
@@ -143,7 +159,10 @@ def bench_threads(db_dir):
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 list(pool.map(worker, range(42, 42 + workers)))
             qps = workers * ops_per_worker / (time.perf_counter() - s)
-            print(f"RESULT,threads,P-oltp-{workers}t,{workers * ops_per_worker},{qps:.0f},{qps:.0f},{qps:.0f},{qps:.0f},qps", flush=True)
+            print(
+                f"RESULT,threads,P-oltp-{workers}t,{workers * ops_per_worker},{qps:.0f},{qps:.0f},{qps:.0f},{qps:.0f},qps",
+                flush=True,
+            )
 
 
 def bench_values(db_dir):
@@ -157,7 +176,11 @@ def bench_values(db_dir):
         big_list = [float(i) for i in range(10_000)]
         with db.transaction():
             db.command(
-                "sql", "INSERT INTO V SET s = ?, nested = ?, biglist = ?", big_str, nested, big_list
+                "sql",
+                "INSERT INTO V SET s = ?, nested = ?, biglist = ?",
+                big_str,
+                nested,
+                big_list,
             )
 
         row = db.query("sql", "SELECT s, nested, biglist FROM V").first()
@@ -181,7 +204,10 @@ def bench_importexport(db_dir):
         s = time.perf_counter_ns()
         db.export_database(out, format="jsonl", overwrite=True)
         total_ms = (time.perf_counter_ns() - s) / 1e6
-        print(f"RESULT,importexport,P-export-jsonl,1,{total_ms:.0f},0,0,0,ms-total", flush=True)
+        print(
+            f"RESULT,importexport,P-export-jsonl,1,{total_ms:.0f},0,0,0,ms-total",
+            flush=True,
+        )
 
         # export_to_csv: the pure-Python row loop (inherits per-row conversion tax)
         csv_out = db_dir + "_pyexport.csv"
@@ -192,7 +218,10 @@ def bench_importexport(db_dir):
             "SELECT id, score, name, category FROM Doc LIMIT 100000", csv_out
         )
         total_ms = (time.perf_counter_ns() - s) / 1e6
-        print(f"RESULT,importexport,P-export-csv-100k,1,{total_ms:.0f},0,0,0,ms-total", flush=True)
+        print(
+            f"RESULT,importexport,P-export-csv-100k,1,{total_ms:.0f},0,0,0,ms-total",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

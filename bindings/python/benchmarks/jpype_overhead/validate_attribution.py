@@ -13,9 +13,8 @@ import time
 import timeit
 from pathlib import Path
 
-import numpy as np
-
 import arcadedb_embedded as arcadedb
+import numpy as np
 from arcadedb_embedded.type_conversion import convert_java_to_python
 
 data_dir, db_dir = Path(sys.argv[1]), sys.argv[2]
@@ -72,7 +71,9 @@ with arcadedb.open_database(db_dir) as db:
 
     mq, mq50, mq95 = stats_ms(lat_q)
     mc, mc50, mc95 = stats_ms(lat_c)
-    print(f"VALIDATE,sql_query_first_only_ms,mean={mq:.2f},p50={mq50:.2f},p95={mq95:.2f}")
+    print(
+        f"VALIDATE,sql_query_first_only_ms,mean={mq:.2f},p50={mq50:.2f},p95={mq95:.2f}"
+    )
     print(f"VALIDATE,get_res_conversion_ms,mean={mc:.2f},p50={mc50:.2f},p95={mc95:.2f}")
 
     # ---- Fix-1 feasibility: bulk float[] conversion ----
@@ -85,7 +86,10 @@ with arcadedb.open_database(db_dir) as db:
         print(f"VALIDATE,{name},{per:.2f}us")
 
     t("convert_java_to_python_float384", lambda: convert_java_to_python(jarr), 500)
-    t("np_frombuffer_float384", lambda: np.frombuffer(memoryview(jarr), dtype=np.float32))
+    t(
+        "np_frombuffer_float384",
+        lambda: np.frombuffer(memoryview(jarr), dtype=np.float32),
+    )
     t("jarray_to_list_float384", lambda: list(jarr))
     t(
         "np_asarray_float384",

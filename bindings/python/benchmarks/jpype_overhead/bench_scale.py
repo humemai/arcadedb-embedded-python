@@ -34,7 +34,10 @@ def scan_1m(db_dir):
     with arcadedb.open_database(db_dir) as db:
         sql = "SELECT FROM Doc LIMIT 1000000"
         for layer, fn in (
-            ("P-columns-1m", lambda: len(next(iter(db.query("sql", sql).to_columns().values())))),
+            (
+                "P-columns-1m",
+                lambda: len(next(iter(db.query("sql", sql).to_columns().values()))),
+            ),
             ("P-jsonbatch-1m", lambda: len(db.query("sql", sql).to_json_list())),
         ):
             lat = []
@@ -71,7 +74,10 @@ def wide(db_dir):
             return n
 
         for layer, fn in (
-            ("P-columns-wide50", lambda: len(next(iter(db.query("sql", sql).to_columns().values())))),
+            (
+                "P-columns-wide50",
+                lambda: len(next(iter(db.query("sql", sql).to_columns().values()))),
+            ),
             ("P-jsonbatch-wide50", lambda: len(db.query("sql", sql).to_json_list())),
             ("P-get-wide50", run_get),
         ):
@@ -116,7 +122,9 @@ def tail(db_dir):
         mgmt = jpype.JClass("java.lang.management.ManagementFactory")
 
         def gc_count():
-            return sum(int(b.getCollectionCount()) for b in mgmt.getGarbageCollectorMXBeans())
+            return sum(
+                int(b.getCollectionCount()) for b in mgmt.getGarbageCollectorMXBeans()
+            )
 
         sql = "SELECT id, name, category FROM Doc LIMIT 2000"
         for _ in range(50):

@@ -268,8 +268,7 @@ class Database:
                     doc.set(k, v)
                 doc.save()
                 n += 1
-                if (not was_active and commit_every > 0
-                        and n % commit_every == 0):
+                if not was_active and commit_every > 0 and n % commit_every == 0:
                     self.commit()
                     self.begin()
             if not was_active:
@@ -277,16 +276,16 @@ class Database:
             return n
         try:
             batcher = _java_class("com.arcadedb.python.DocumentBatcher")
-            count = int(batcher.insertManyJson(
-                self._java_db, type_name, payload, int(commit_every),
-                bool(parallel)))
+            count = int(
+                batcher.insertManyJson(
+                    self._java_db, type_name, payload, int(commit_every), bool(parallel)
+                )
+            )
             if parallel:
                 self._java_db.async_().waitCompletion()
             return count
         except Exception as e:
-            raise ArcadeDBError(
-                f"Failed to bulk-insert into '{type_name}': {e}"
-            ) from e
+            raise ArcadeDBError(f"Failed to bulk-insert into '{type_name}': {e}") from e
 
     def close(self):
         """Close the database."""

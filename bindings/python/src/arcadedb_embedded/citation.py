@@ -23,7 +23,9 @@ def _zenodo_get(url: str):
     import json
     import urllib.request
 
-    with urllib.request.urlopen(url, timeout=10) as resp:  # nosec B310 - fixed https host
+    with urllib.request.urlopen(
+        url, timeout=10
+    ) as resp:  # nosec B310 - fixed https host
         return json.load(resp)
 
 
@@ -32,14 +34,13 @@ def _zenodo_lookup(version: str) -> Optional[str]:
     # The concept record resolves to its latest version; that record's
     # /versions endpoint lists every archived release (25 per page for
     # unauthenticated requests).
-    latest = _zenodo_get(
-        f"https://zenodo.org/api/records/{_ZENODO_CONCEPT_RECID}")
+    latest = _zenodo_get(f"https://zenodo.org/api/records/{_ZENODO_CONCEPT_RECID}")
     recid = latest.get("id", _ZENODO_CONCEPT_RECID)
     page = 1
     while True:
         data = _zenodo_get(
-            f"https://zenodo.org/api/records/{recid}/versions"
-            f"?size=25&page={page}")
+            f"https://zenodo.org/api/records/{recid}/versions" f"?size=25&page={page}"
+        )
         hits = data.get("hits", {}).get("hits", [])
         if not hits:
             return None

@@ -19,15 +19,14 @@ with arcadedb.open_database(sys.argv[1]) as db:
 
     # --- (a) row materialization strategies on a real 7-scalar-col row ---
     java_row = db.query(
-        "sql", "SELECT id, score, name, category, active, created, counts FROM Doc LIMIT 1"
+        "sql",
+        "SELECT id, score, name, category, active, created, counts FROM Doc LIMIT 1",
     )._java_result_set.next()
     names = [str(n) for n in java_row.getPropertyNames()]
 
     t(
         "row_current_getProperty_per_col",
-        lambda: {
-            n: convert_java_to_python(java_row.getProperty(n)) for n in names
-        },
+        lambda: {n: convert_java_to_python(java_row.getProperty(n)) for n in names},
         5000,
     )
     t(
@@ -61,7 +60,9 @@ with arcadedb.open_database(sys.argv[1]) as db:
 
     # --- (c) map conversion (dominates toMap strategy) ---
     JMap = jpype.JClass("java.util.LinkedHashMap")()
-    for i, n in enumerate(["id", "score", "name", "category", "active", "created", "counts"]):
+    for i, n in enumerate(
+        ["id", "score", "name", "category", "active", "created", "counts"]
+    ):
         JMap.put(n, JFloat(i * 1.5))
     t("map_current_convert_7keys", lambda: convert_java_to_python(JMap), 5000)
     t(
@@ -77,7 +78,9 @@ with arcadedb.open_database(sys.argv[1]) as db:
     JInt = jpype.JClass("java.lang.Integer")(42)
     JDouble = jpype.JClass("java.lang.Double")(1.5)
     JStr = jpype.JClass("java.lang.String")("hello")
-    print(f"PROBE_INFO,type_stability,{type(JInt) is type(jpype.JClass('java.lang.Integer')(7))}")
+    print(
+        f"PROBE_INFO,type_stability,{type(JInt) is type(jpype.JClass('java.lang.Integer')(7))}"
+    )
     _DISPATCH = {type(JInt): int, type(JDouble): float, type(JStr): str}
 
     def dict_dispatch(v):

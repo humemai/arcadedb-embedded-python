@@ -1,7 +1,6 @@
 """Tests for the citation helper (offline: Zenodo access is mocked)."""
 
 import pytest
-
 from arcadedb_embedded import citation
 from arcadedb_embedded.exceptions import ArcadeDBError
 
@@ -20,10 +19,7 @@ def test_cached_version_no_network(monkeypatch):
     monkeypatch.setitem(
         citation._VERSION_DOI_MAP, "26.1.1.post3", "10.5281/zenodo.18399749"
     )
-    assert (
-        citation.cite("26.1.1.post3")
-        == "https://doi.org/10.5281/zenodo.18399749"
-    )
+    assert citation.cite("26.1.1.post3") == "https://doi.org/10.5281/zenodo.18399749"
 
 
 def test_dev_version_rejected_without_network():
@@ -33,9 +29,16 @@ def test_dev_version_rejected_without_network():
 
 def test_live_lookup_mocked(monkeypatch):
     pages = {
-        1: {"hits": {"hits": [
-            {"metadata": {"version": "26.6.1"},
-             "doi": "10.5281/zenodo.20708871"}]}},
+        1: {
+            "hits": {
+                "hits": [
+                    {
+                        "metadata": {"version": "26.6.1"},
+                        "doi": "10.5281/zenodo.20708871",
+                    }
+                ]
+            }
+        },
         2: {"hits": {"hits": []}},
     }
 

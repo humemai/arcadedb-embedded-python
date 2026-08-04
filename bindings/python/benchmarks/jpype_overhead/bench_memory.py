@@ -230,7 +230,8 @@ def exp_cache_growth(db_dir: str):
         db.query("sql", "SELECT FROM Doc LIMIT 5000").to_json_list()
         db.query("sql", "SELECT id, embedding FROM Doc LIMIT 2000").to_list()
         db.query(
-            "sql", "SELECT category, count(*) as c, avg(score) as a FROM Doc GROUP BY category"
+            "sql",
+            "SELECT category, count(*) as c, avg(score) as a FROM Doc GROUP BY category",
         ).to_list()
         for row in db.query("sql", "SELECT FROM Doc LIMIT 1000"):
             row.get("created"), row.get("counts"), row.get("active")

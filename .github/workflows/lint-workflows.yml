@@ -54,4 +54,15 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      # Scoped to bindings/python, NOT --all-files, and the difference matters.
+      # Repo-wide, end-of-file-fixer rewrites 400+ raw result JSONs under
+      # benchmarks/experiments/results/ to add trailing newlines. Those are
+      # measurement artifacts, not source: churning them buys nothing, and a
+      # formatter that edits recorded data is a bad idea on principle.
+      #
+      # bindings/python is also exactly the surface upstream receives, so this
+      # job answers the question that actually bites us: would our next PR pass
+      # their pre-commit gate?
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+        with:
+          extra_args: --files $(git ls-files 'bindings/python/**')

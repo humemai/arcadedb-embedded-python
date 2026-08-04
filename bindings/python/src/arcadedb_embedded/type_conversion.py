@@ -290,8 +290,11 @@ def _conv_primitive_array(value):
     # Bulk copy through the buffer protocol: ~200x faster than per-element
     # recursion for a 384-float vector.
     mv = memoryview(value)
-    if mv.format.startswith("=") or mv.format.startswith("<") or \
-            mv.format.startswith(">"):
+    if (
+        mv.format.startswith("=")
+        or mv.format.startswith("<")
+        or mv.format.startswith(">")
+    ):
         # CPython's memoryview.tolist() rejects standard-size-prefixed
         # formats ('=i' for int[], '=q' for long[]) with NotImplementedError
         # (issue #4). Recast through bytes to the native format char.

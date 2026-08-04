@@ -5,9 +5,8 @@ import json
 import sys
 import time
 
-import numpy as np
-
 import arcadedb_embedded as arcadedb
+import numpy as np
 
 COLS = ["id", "score", "name", "category", "active", "created"]
 SQL = "SELECT id, score, name, category, active, created FROM Doc LIMIT 100000"
@@ -48,7 +47,9 @@ with arcadedb.open_database(sys.argv[1]) as db:
         rs = db.query("sql", SQL)
         total = 0
         while True:
-            buf = memoryview(ColumnProbe.nextColumnBatch(rs._java_result_set, 25_000, jcols))
+            buf = memoryview(
+                ColumnProbe.nextColumnBatch(rs._java_result_set, 25_000, jcols)
+            )
             count, cols = decode(buf)
             if count == 0:
                 break
@@ -67,15 +68,15 @@ with arcadedb.open_database(sys.argv[1]) as db:
     rs = db.query("sql", SQL)
     total = 0
     while True:
-        buf = memoryview(ColumnProbe.nextColumnBatch(rs._java_result_set, 25_000, jcols))
+        buf = memoryview(
+            ColumnProbe.nextColumnBatch(rs._java_result_set, 25_000, jcols)
+        )
         count, cols = decode(buf)
         if count == 0:
             break
         for name in ("name", "category"):
             offs, chars = cols[name]
-            cols[name] = [
-                chars[offs[i] : offs[i + 1]].decode() for i in range(count)
-            ]
+            cols[name] = [chars[offs[i] : offs[i + 1]].decode() for i in range(count)]
         total += count
     t_col_str = time.perf_counter() - s
     print(f"PROBE,columnar_strings_decoded_100k_ms,{t_col_str*1e3:.0f},rows={total}")

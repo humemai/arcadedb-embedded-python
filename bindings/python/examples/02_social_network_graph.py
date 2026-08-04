@@ -847,11 +847,15 @@ def demonstrate_gremlin_queries(db):
         # small (see scripts/jar_exclusions.txt). Reading the old message, a
         # user would reasonably conclude Cypher was unavailable.
         if "gremlin" in str(e).lower():
-            print("    ⏭️  Gremlin is not bundled in this package, so this "
-                  "section is skipped.")
-            print("    💡 arcadedb-gremlin is excluded from the wheel on "
-                  "purpose. SQL, Cypher and OpenCypher all work; the Cypher "
-                  "section above ran against the same data.")
+            print(
+                "    ⏭️  Gremlin is not bundled in this package, so this "
+                "section is skipped."
+            )
+            print(
+                "    💡 arcadedb-gremlin is excluded from the wheel on "
+                "purpose. SQL, Cypher and OpenCypher all work; the Cypher "
+                "section above ran against the same data."
+            )
         else:
             print(f"    ❌ Error in Gremlin queries: {e}")
             import traceback

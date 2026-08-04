@@ -29,7 +29,9 @@ def _bridge_class(name):
         cls = None
         _logger.warning(
             "bridge class %s unavailable; falling back to the slow per-row "
-            "path (is the bridge jar missing from this build?)", name)
+            "path (is the bridge jar missing from this build?)",
+            name,
+        )
     _BRIDGE_CLASSES[name] = cls
     return cls
 
@@ -472,9 +474,7 @@ class ResultSet:
 
         if total == 0 or not first_names:
             return pa.table({})
-        return pa.table(
-            {n: pa.chunked_array(chunks[n]) for n in first_names}
-        )
+        return pa.table({n: pa.chunked_array(chunks[n]) for n in first_names})
 
     def iter_chunks(
         self, size: int = 1000, convert_types: bool = True

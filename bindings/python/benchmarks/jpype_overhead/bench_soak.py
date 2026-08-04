@@ -73,13 +73,19 @@ with arcadedb.open_database(db_dir) as db, open(out_csv, "w") as out:
                 ):
                     pass
             elif roll < 0.75:
-                db.query("sql", "SELECT id, name, category, created FROM Doc LIMIT 2000").to_columns()
+                db.query(
+                    "sql", "SELECT id, name, category, created FROM Doc LIMIT 2000"
+                ).to_columns()
             elif roll < 0.85:
-                db.query("sql", "SELECT id, name, category FROM Doc LIMIT 2000").to_json_list()
+                db.query(
+                    "sql", "SELECT id, name, category FROM Doc LIMIT 2000"
+                ).to_json_list()
             elif roll < 0.95:
                 db.run_in_transaction(
                     lambda: db.command(
-                        "sql", "UPDATE Doc SET score = score + 1 WHERE id = ?", rnd.randrange(100_000)
+                        "sql",
+                        "UPDATE Doc SET score = score + 1 WHERE id = ?",
+                        rnd.randrange(100_000),
                     )
                 )
             else:
@@ -100,22 +106,30 @@ with arcadedb.open_database(db_dir) as db, open(out_csv, "w") as out:
                     system.gc()
                     time.sleep(0.1)
                     postgc = float(bean.getHeapMemoryUsage().getUsed()) / 1048576
-                out.write(f"{now - start:.0f},{ops},{raw:.0f},{postgc:.0f},{rss_mb():.0f}\n")
+                out.write(
+                    f"{now - start:.0f},{ops},{raw:.0f},{postgc:.0f},{rss_mb():.0f}\n"
+                )
                 out.flush()
                 sample_i += 1
                 next_sample = now + 15
             continue
         if roll < 0.6:
-            for _r in db.query("sql", "SELECT score FROM Doc WHERE id = ?", rnd.randrange(100_000)):
+            for _r in db.query(
+                "sql", "SELECT score FROM Doc WHERE id = ?", rnd.randrange(100_000)
+            ):
                 pass
         elif roll < 0.8:
-            db.query("sql", "SELECT id, name, category FROM Doc LIMIT 2000").to_json_list()
+            db.query(
+                "sql", "SELECT id, name, category FROM Doc LIMIT 2000"
+            ).to_json_list()
         elif roll < 0.9:
             db.query("sql", "SELECT embedding FROM Doc LIMIT 500").to_list()
         else:
             with db.transaction():
                 db.command(
-                    "sql", "UPDATE Doc SET score = score + 1 WHERE id = ?", rnd.randrange(100_000)
+                    "sql",
+                    "UPDATE Doc SET score = score + 1 WHERE id = ?",
+                    rnd.randrange(100_000),
                 )
         ops += 1
 
@@ -128,7 +142,9 @@ with arcadedb.open_database(db_dir) as db, open(out_csv, "w") as out:
                 system.gc()
                 time.sleep(0.1)
                 postgc = float(bean.getHeapMemoryUsage().getUsed()) / 1048576
-            out.write(f"{now - start:.0f},{ops},{raw:.0f},{postgc:.0f},{rss_mb():.0f}\n")
+            out.write(
+                f"{now - start:.0f},{ops},{raw:.0f},{postgc:.0f},{rss_mb():.0f}\n"
+            )
             out.flush()
             sample_i += 1
             next_sample = now + 15

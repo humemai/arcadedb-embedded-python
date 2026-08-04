@@ -417,8 +417,10 @@ class TestPrimitiveArrayFormats:
         from arcadedb_embedded.type_conversion import convert_java_to_python
 
         big = 2**40
-        assert convert_java_to_python(
-            jpype.JArray(jpype.JLong)([big, -big])) == [big, -big]
+        assert convert_java_to_python(jpype.JArray(jpype.JLong)([big, -big])) == [
+            big,
+            -big,
+        ]
 
     def test_cache_not_poisoned_by_failure(self):
         from arcadedb_embedded import type_conversion as tc

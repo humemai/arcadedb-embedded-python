@@ -25,15 +25,15 @@ import pytest
 # 26.8.1-SNAPSHOT image (uncompressed, MB) are in docs/guide/server.md; the
 # whole set is ~7.65 MB uncompressed and ~7.3 MB on the wheel.
 REQUIRED_JAR_PREFIXES = [
-    "arcadedb-server",   # the server itself, 0.66 MB
-    "arcadedb-studio",   # web UI assets, 2.60 MB, contains zero .class files
-    "undertow-core",     # HTTP server, 2.21 MB
-    "xnio-api",          # undertow's IO layer
+    "arcadedb-server",  # the server itself, 0.66 MB
+    "arcadedb-studio",  # web UI assets, 2.60 MB, contains zero .class files
+    "undertow-core",  # HTTP server, 2.21 MB
+    "xnio-api",  # undertow's IO layer
     "xnio-nio",
     "wildfly-common",
     "jboss-logging",
     "jboss-threads",
-    "micrometer-core",   # required at server startup, not optional
+    "micrometer-core",  # required at server startup, not optional
 ]
 
 
@@ -49,8 +49,7 @@ def test_server_jars_are_bundled():
     """Every JAR server mode needs is present. Fails, never skips."""
     names = _jar_names()
     missing = [
-        p for p in REQUIRED_JAR_PREFIXES
-        if not any(n.startswith(p) for n in names)
+        p for p in REQUIRED_JAR_PREFIXES if not any(n.startswith(p) for n in names)
     ]
     assert not missing, (
         f"server JARs missing from the wheel: {missing}\n"

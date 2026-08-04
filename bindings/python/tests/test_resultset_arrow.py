@@ -10,9 +10,8 @@ The lossiness tests below are therefore the reason this method exists, and they
 assert against `to_columns` directly so the difference cannot quietly go away.
 """
 
-import pytest
-
 import arcadedb_embedded as arcadedb
+import pytest
 
 pa = pytest.importorskip("pyarrow", reason="to_arrow() requires pyarrow")
 
@@ -29,7 +28,9 @@ def test_to_arrow_basic_types(temp_db_path):
                 "sql", "INSERT INTO Rec SET name = 'b', n = 2, x = 2.5, ok = false"
             )
 
-        table = db.query("sql", "SELECT name, n, x, ok FROM Rec ORDER BY name").to_arrow()
+        table = db.query(
+            "sql", "SELECT name, n, x, ok FROM Rec ORDER BY name"
+        ).to_arrow()
 
         assert table is not None, "pyarrow present, so to_arrow must not return None"
         assert isinstance(table, pa.Table)

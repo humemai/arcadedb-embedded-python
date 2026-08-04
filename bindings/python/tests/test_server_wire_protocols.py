@@ -122,8 +122,12 @@ def test_postgres_wire_answers_a_query(wire_server):
     assert _wait(ports["postgres"]), "postgres plugin never bound its port"
 
     with psycopg.connect(
-        host="127.0.0.1", port=ports["postgres"], dbname="wiretest",
-        user="root", password=ROOT_PASSWORD, connect_timeout=15,
+        host="127.0.0.1",
+        port=ports["postgres"],
+        dbname="wiretest",
+        user="root",
+        password=ROOT_PASSWORD,
+        connect_timeout=15,
     ) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT name FROM Item")
@@ -133,7 +137,8 @@ def test_postgres_wire_answers_a_query(wire_server):
 
 @pytest.mark.xfail(
     reason="engine ignores arcadedb.redis.port; binds 6379 (ArcadeDB #5796)",
-    strict=True)
+    strict=True,
+)
 def test_redis_port_setting_is_honored(wire_server):
     """arcadedb.redis.port is accepted and ignored.
 
@@ -158,8 +163,9 @@ def test_redis_port_setting_is_honored(wire_server):
     two were left behind.
     """
     _, ports = wire_server
-    assert _wait(ports["redis"], timeout=20), (
-        f"redis did not bind the requested port {ports['redis']}")
+    assert _wait(
+        ports["redis"], timeout=20
+    ), f"redis did not bind the requested port {ports['redis']}"
 
 
 def test_bolt_wire_answers_a_cypher_query(wire_server):

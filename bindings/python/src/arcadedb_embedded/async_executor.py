@@ -36,7 +36,6 @@ if TYPE_CHECKING:
 _LOGGER = get_logger(__name__)
 
 
-
 def _convert_column(values):
     """Convert one non-numeric column, reusing the Java object per distinct str.
 
@@ -66,6 +65,7 @@ def _convert_column(values):
         else:
             out.append(convert_python_to_java(value))
     return out
+
 
 class AsyncExecutor:
     """
@@ -303,8 +303,9 @@ class AsyncExecutor:
                 ``Database.new_document``/``new_vertex`` (not yet saved).
             callback: Optional callable invoked with the created record.
         """
-        java_cb = (self._create_new_record_callback(callback)
-                   if callback is not None else None)
+        java_cb = (
+            self._create_new_record_callback(callback) if callback is not None else None
+        )
         self._java_async.createRecord(document._java_document, java_cb)
 
     def _create_new_record_callback(self, python_callback):
@@ -441,8 +442,7 @@ class AsyncExecutor:
         API; the default stays on the Object[] path.
         """
         if primitive:
-            return self._append_samples_primitive(
-                type_name, timestamps, *column_values)
+            return self._append_samples_primitive(type_name, timestamps, *column_values)
         try:
             import numpy as _np
         except ImportError:
@@ -451,27 +451,36 @@ class AsyncExecutor:
         if _np is not None and isinstance(timestamps, _np.ndarray):
             # buffer-protocol bulk copy: one FFI crossing for the column
             timestamps_java = JLongArray(
-                _np.ascontiguousarray(timestamps, dtype=_np.int64))
+                _np.ascontiguousarray(timestamps, dtype=_np.int64)
+            )
         else:
             timestamps_java = JLongArray([int(value) for value in timestamps])
         JObjectArray = jpype.JArray(jpype.JObject)
         boxer = None
         columns_java = []
         for values in column_values:
-            if _np is not None and isinstance(values, _np.ndarray) \
-                    and values.dtype.kind in "fiu":
+            if (
+                _np is not None
+                and isinstance(values, _np.ndarray)
+                and values.dtype.kind in "fiu"
+            ):
                 if boxer is None:
                     boxer = jpype.JClass("com.arcadedb.python.DocumentBatcher")
                 if values.dtype.kind == "f":
-                    col = boxer.boxDoubles(jpype.JArray(jpype.JDouble)(
-                        _np.ascontiguousarray(values, dtype=_np.float64)))
+                    col = boxer.boxDoubles(
+                        jpype.JArray(jpype.JDouble)(
+                            _np.ascontiguousarray(values, dtype=_np.float64)
+                        )
+                    )
                 else:
-                    col = boxer.boxLongs(jpype.JArray(jpype.JLong)(
-                        _np.ascontiguousarray(values, dtype=_np.int64)))
+                    col = boxer.boxLongs(
+                        jpype.JArray(jpype.JLong)(
+                            _np.ascontiguousarray(values, dtype=_np.int64)
+                        )
+                    )
                 columns_java.append(col)
             else:
-                columns_java.append(JObjectArray(
-                    _convert_column(values)))
+                columns_java.append(JObjectArray(_convert_column(values)))
         self._java_async.appendSamples(type_name, timestamps_java, *columns_java)
 
     def _append_samples_primitive(
@@ -495,41 +504,69 @@ class AsyncExecutor:
         if self._owner is None:
             raise RuntimeError(
                 "primitive append_samples needs the owning Database; "
-                "obtain the executor via Database.async_executor()")
+                "obtain the executor via Database.async_executor()"
+            )
 
         batcher = jpype.JClass("com.arcadedb.python.TimeSeriesBatcher")
         JLongArray = jpype.JArray(jpype.JLong)
         if _np is not None and isinstance(timestamps, _np.ndarray):
             timestamps_java = JLongArray(
-                _np.ascontiguousarray(timestamps, dtype=_np.int64))
+                _np.ascontiguousarray(timestamps, dtype=_np.int64)
+            )
         else:
             timestamps_java = JLongArray([int(value) for value in timestamps])
 
-        batch = batcher.newBatch(
-            self._owner._java_db, type_name, timestamps_java)
+        batch = batcher.newBatch(self._owner._java_db, type_name, timestamps_java)
 
         for index, values in enumerate(column_values):
-            if _np is not None and isinstance(values, _np.ndarray) \
-                    and values.dtype.kind == "f":
-                batcher.setDoubleColumn(batch, index, jpype.JArray(jpype.JDouble)(
-                    _np.ascontiguousarray(values, dtype=_np.float64)))
-            elif _np is not None and isinstance(values, _np.ndarray) \
-                    and values.dtype.kind in "iu":
-                batcher.setLongColumn(batch, index, jpype.JArray(jpype.JLong)(
-                    _np.ascontiguousarray(values, dtype=_np.int64)))
+            if (
+                _np is not None
+                and isinstance(values, _np.ndarray)
+                and values.dtype.kind == "f"
+            ):
+                batcher.setDoubleColumn(
+                    batch,
+                    index,
+                    jpype.JArray(jpype.JDouble)(
+                        _np.ascontiguousarray(values, dtype=_np.float64)
+                    ),
+                )
+            elif (
+                _np is not None
+                and isinstance(values, _np.ndarray)
+                and values.dtype.kind in "iu"
+            ):
+                batcher.setLongColumn(
+                    batch,
+                    index,
+                    jpype.JArray(jpype.JLong)(
+                        _np.ascontiguousarray(values, dtype=_np.int64)
+                    ),
+                )
             elif values and all(isinstance(v, str) for v in values):
-                batcher.setStringColumn(batch, index, jpype.JArray(jpype.JString)(
-                    list(values)))
+                batcher.setStringColumn(
+                    batch, index, jpype.JArray(jpype.JString)(list(values))
+                )
             elif values and all(isinstance(v, float) for v in values):
-                batcher.setDoubleColumn(batch, index, jpype.JArray(jpype.JDouble)(
-                    [float(v) for v in values]))
-            elif values and all(isinstance(v, int) and not isinstance(v, bool)
-                                for v in values):
-                batcher.setLongColumn(batch, index, jpype.JArray(jpype.JLong)(
-                    [int(v) for v in values]))
+                batcher.setDoubleColumn(
+                    batch,
+                    index,
+                    jpype.JArray(jpype.JDouble)([float(v) for v in values]),
+                )
+            elif values and all(
+                isinstance(v, int) and not isinstance(v, bool) for v in values
+            ):
+                batcher.setLongColumn(
+                    batch, index, jpype.JArray(jpype.JLong)([int(v) for v in values])
+                )
             else:
-                batcher.setObjectColumn(batch, index, jpype.JArray(jpype.JObject)(
-                    [convert_python_to_java(v) for v in values]))
+                batcher.setObjectColumn(
+                    batch,
+                    index,
+                    jpype.JArray(jpype.JObject)(
+                        [convert_python_to_java(v) for v in values]
+                    ),
+                )
 
         self._java_async.appendSamples(type_name, batch)
 

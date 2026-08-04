@@ -15,40 +15,41 @@ DBS="$BENCH_DIR/dbs"
 mkdir -p "$RESULTS" "$DBS"
 
 JFLAGS=(
-  --add-modules=jdk.incubator.vector
-  -Djava.awt.headless=true
-  --enable-native-access=ALL-UNNAMED
-  -Dfile.encoding=UTF8
-  --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
-  --add-opens=java.base/java.nio.channels.spi=ALL-UNNAMED
-  --add-opens=java.base/java.lang=ALL-UNNAMED
-  -Dpolyglot.engine.WarnInterpreterOnly=false
-  -XX:+UseCompactObjectHeaders
-  -Xmx4g
+    --add-modules=jdk.incubator.vector
+    -Djava.awt.headless=true
+    --enable-native-access=ALL-UNNAMED
+    -Dfile.encoding=UTF8
+    --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
+    --add-opens=java.base/java.nio.channels.spi=ALL-UNNAMED
+    --add-opens=java.base/java.lang=ALL-UNNAMED
+    -Dpolyglot.engine.WarnInterpreterOnly=false
+    -XX:+UseCompactObjectHeaders
+    -Xmx4g
 )
 
 step() { # step <name> <cmd...>
-  local name="$1"; shift
-  echo "=== [$(date +%H:%M:%S)] $name" | tee -a "$RESULTS/run.log"
-  if "$@" >"$RESULTS/$name.log" 2>&1; then
-    echo "OK  $name" >>"$RESULTS/run.log"
-  else
-    echo "FAIL $name (exit $?)" | tee -a "$RESULTS/run.log"
-  fi
-  # -o extraction (not ^-anchored): the engine logger omits trailing newlines,
-  # so protocol lines can start mid-line
-  grep -ohE '(RESULT|PARITY|INFO|MICRO),[^\r\n]*' "$RESULTS/$name.log" >>"$RESULTS/all_results.csv" || true
+    local name="$1"
+    shift
+    echo "=== [$(date +%H:%M:%S)] $name" | tee -a "$RESULTS/run.log"
+    if "$@" > "$RESULTS/$name.log" 2>&1; then
+        echo "OK  $name" >> "$RESULTS/run.log"
+    else
+        echo "FAIL $name (exit $?)" | tee -a "$RESULTS/run.log"
+    fi
+    # -o extraction (not ^-anchored): the engine logger omits trailing newlines,
+    # so protocol lines can start mid-line
+    grep -ohE '(RESULT|PARITY|INFO|MICRO),[^\r\n]*' "$RESULTS/$name.log" >> "$RESULTS/all_results.csv" || true
 }
 
 jrun() { # jrun <phase> <dataDir> <dbDir>
-  "$JAVA" "${JFLAGS[@]}" -cp "$JARS:$BENCH_DIR" OverheadBench "$@"
+    "$JAVA" "${JFLAGS[@]}" -cp "$JARS:$BENCH_DIR" OverheadBench "$@"
 }
 
 prun() { # prun <phase> <dataDir> <dbDir>
-  (cd "$REPO_ROOT" && uv run python "$BENCH_DIR/bench_python.py" "$@")
+    (cd "$REPO_ROOT" && uv run python "$BENCH_DIR/bench_python.py" "$@")
 }
 
-: >"$RESULTS/all_results.csv"
+: > "$RESULTS/all_results.csv"
 
 # ---------- lifecycle first (fast sanity for both harnesses) ----------
 rm -rf "$DBS/lc_java" "$DBS/lc_py" && mkdir -p "$DBS/lc_java" "$DBS/lc_py"
@@ -89,10 +90,10 @@ step p-vector-bench-100k-run2 prun vector-bench "$BENCH_DIR/data_100k" "$DBS/vec
 
 # ---------- phase G: headline 500k ----------
 if [ "${SKIP_500K:-0}" != "1" ]; then
-  step gen-dataset-500k bash -c "cd '$REPO_ROOT' && uv run python '$BENCH_DIR/gen_dataset.py' '$BENCH_DIR/data_500k' 500000 384"
-  step j-vector-build-500k jrun vector-build "$BENCH_DIR/data_500k" "$DBS/vector_500k"
-  step j-vector-bench-500k jrun vector-bench "$BENCH_DIR/data_500k" "$DBS/vector_500k"
-  step p-vector-bench-500k prun vector-bench "$BENCH_DIR/data_500k" "$DBS/vector_500k"
+    step gen-dataset-500k bash -c "cd '$REPO_ROOT' && uv run python '$BENCH_DIR/gen_dataset.py' '$BENCH_DIR/data_500k' 500000 384"
+    step j-vector-build-500k jrun vector-build "$BENCH_DIR/data_500k" "$DBS/vector_500k"
+    step j-vector-bench-500k jrun vector-bench "$BENCH_DIR/data_500k" "$DBS/vector_500k"
+    step p-vector-bench-500k prun vector-bench "$BENCH_DIR/data_500k" "$DBS/vector_500k"
 fi
 
 echo "=== [$(date +%H:%M:%S)] ALL DONE" | tee -a "$RESULTS/run.log"
