@@ -1,0 +1,42 @@
+# Workflow hygiene checks that upstream runs and we did not.
+#
+# Fork-only on purpose. Upstream already runs the SHA-pin check in mvn-test.yml,
+# so shipping this file to them via the bindings PR would just duplicate it.
+# It is therefore absent from make-upstream-pr-branch.sh's INCLUDE_PATHS, and
+# present in sync-upstream.sh's FORK_GITHUB_ALLOWLIST so the post-merge prune
+# does not delete it.
+#
+# Why it exists: on 2026-08-04 the bindings PR added `actions/cache@v4` to a
+# workflow. Every one of our 34 action references was SHA-pinned, so nothing
+# here objected, and it went out. Upstream's setup job caught it immediately:
+#
+#   ##[error]actions/cache@v4 is not pinned to a full length commit SHA.
+#
+# It failed their gate and cascaded to 14 dependent jobs. We authored the file,
+# so we should have been the ones to catch it. A floating tag is a supply-chain
+# hole regardless of which repo the workflow runs in: the owner of that tag can
+# repoint it at any commit, and CI has credentials.
+name: Lint Workflows
+
+on:
+  push:
+    paths:
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sha-pinned-actions:
+    name: Ensure SHA pinned actions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Same action and same pin upstream uses, so the two repos agree on what
+      # "pinned" means rather than drifting into two dialects of the rule.
+      - name: Ensure SHA pinned actions
+        uses: zgosalvez/github-actions-ensure-sha-pinned-actions@3db98c0363e2fa5df3e1c4c471777a7c10b24cc9 # v5.0.5
