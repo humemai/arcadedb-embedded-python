@@ -164,7 +164,14 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
-        self.version = "server:latest"
+        # Ask the server, as l3_sparse and l3d_dense already do. See the same
+        # fix in l1_tabular.py: a hardcoded "server:latest" is a tag nobody
+        # ran, and it makes every F5 version check on this lane vacuous.
+        try:
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            self.version = "server:" + (info.json().get("version") or "?")
+        except Exception:
+            self.version = "server:unknown"
         for ddl in ["CREATE VERTEX TYPE Person",
                     "CREATE PROPERTY Person.id LONG",
                     "CREATE PROPERTY Person.name STRING",

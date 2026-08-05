@@ -303,11 +303,52 @@ def _sparse_overlay_p50(tier):
 
 def f8_deployment(rows):
     """Server/embedded ratio per metric: the transport fee, same engine."""
+    def _sel(lane, scale, wl, be):
+        return [r for r in rows if r["lane"] == lane and r["scale"] == scale
+                and r.get("workload") == wl and r["backend"] == be]
+
+    def _line(rs):
+        """The engine LINE a set of rows was measured on, e.g. '26.8.1'.
+
+        Server rows stamp themselves 'server:26.8.1 (build ...)' and embedded
+        rows stamp '26.8.1', so the strings never compare equal even when the
+        release does. Reduce both to the release they name.
+        """
+        out = set()
+        for r in rs:
+            v = str(r.get("engine_version") or r.get("wheel_version") or "?")
+            v = v.split("(")[0].replace("server:", "").strip()
+            out.add(v)
+        return out
+
     def med(lane, scale, wl, be, field):
-        g = [r[field] for r in rows if r["lane"] == lane and r["scale"] == scale
-             and r.get("workload") == wl and r["backend"] == be
-             and isinstance(r.get(field), (int, float))]
+        rs = _sel(lane, scale, wl, be)
+        g = [r[field] for r in rs if isinstance(r.get(field), (int, float))]
         return st.median(g) if g else None
+
+    def line_of(lane, scale, wl, be):
+        return _line(_sel(lane, scale, wl, be))
+
+    # EVERY BAR IS AN F5 CLAIM. Each one divides a server measurement by an
+    # embedded one and calls the quotient a transport cost, which is only true
+    # if both halves ran the same engine. Nothing checked that, and the sparse
+    # bar was wrong because of it: runs.jsonl still held the PRE-FIX embedded
+    # cliff (165 ms, the number the paper's own sparse subsection says was
+    # fixed to 11.3) beside a re-measured 26.8.1 server at 13.3, so the bar
+    # showed the server twelve times FASTER than embedded. A reader would have
+    # taken that as a finding. It was two engine lines in one division.
+    #
+    # Sparse embedded now comes from the same released artifacts T4 reads;
+    # the server half is already on the release in runs.jsonl.
+    _sparse_emb = None
+    try:
+        import make_paper_tables as _T
+        _g = _T._sparse_2681_rows().get("small") or []
+        _v = [r["query_p50_ms"] for r in _g
+              if isinstance(r.get("query_p50_ms"), (int, float))]
+        _sparse_emb = st.median(_v) if _v else None
+    except SystemExit:
+        _sparse_emb = None
 
     pairs = [
         ("OLTP\nthroughput", med("l1", "medium", "oltp", "arcadedb_embedded", "oltp_ops_per_s"),
@@ -316,7 +357,7 @@ def f8_deployment(rows):
          med("l1", "medium", "oltp", "arcadedb_server", "insert_p99_ms"), False),
         ("Graph\n1-hop p50", med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "hop1_p50_ms"),
          med("l2", "sf10", "oltp", "arcadedb_graph_server", "hop1_p50_ms"), False),
-        ("Sparse\np50", med("l3s", "small", "search", "arcadedb_sparse_embedded", "query_p50_ms"),
+        ("Sparse\np50", _sparse_emb,
          med("l3s", "small", "search", "arcadedb_sparse_server", "query_p50_ms"), False),
         # Dense comes from the same overlays T5 uses, NOT from runs.jsonl.
         # runs.jsonl still holds the pre-#5412 dense numbers (embedded 5.45 ms,
@@ -329,6 +370,40 @@ def f8_deployment(rows):
         ("TPC-H Q1", med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "q1_ms"),
          med("l1tpc", "tpch1", "olap", "arcadedb_server", "q1_ms"), False),
     ]
+    # F5, mechanised. Both halves of a bar must name the same release, and the
+    # bars must agree with each other, or this refuses to draw rather than
+    # drawing a version comparison labelled as a deployment cost. Bars whose
+    # source is an artifact directory rather than runs.jsonl are checked by the
+    # directory being single-version, which _sparse_2681_rows and
+    # _dense_multipass already enforce at their own boundary.
+    checked = {
+        "OLTP\nthroughput": (line_of("l1", "medium", "oltp", "arcadedb_embedded"),
+                             line_of("l1", "medium", "oltp", "arcadedb_server")),
+        "Insert\np99": (line_of("l1", "medium", "oltp", "arcadedb_embedded"),
+                        line_of("l1", "medium", "oltp", "arcadedb_server")),
+        "Graph\n1-hop p50": (line_of("l2", "sf10", "oltp", "arcadedb_graph_embedded"),
+                             line_of("l2", "sf10", "oltp", "arcadedb_graph_server")),
+        "Sparse\np50": ({"26.8.1"},
+                        line_of("l3s", "small", "search", "arcadedb_sparse_server")),
+        "TPC-H Q1": (line_of("l1tpc", "tpch1", "olap", "arcadedb_embedded"),
+                     line_of("l1tpc", "tpch1", "olap", "arcadedb_server")),
+    }
+    bad, seen = [], set()
+    for label, (a, b) in checked.items():
+        both = (a | b) - {"?", "server", ""}
+        seen |= both
+        if len(both) > 1:
+            bad.append(f"  {label.replace(chr(10), ' ')}: embedded={sorted(a)} server={sorted(b)}")
+    if bad:
+        raise SystemExit("f8 would divide across engine lines (F5):\n"
+                         + "\n".join(bad)
+                         + "\nEvery bar must be one release on both sides.")
+    if len(seen) > 1:
+        raise SystemExit(f"f8 bars span more than one release: {sorted(seen)}. "
+                         "The figure compares deployments, so the release must "
+                         "be constant across it.")
+    print(f"  f8: all bars on one engine line ({sorted(seen)[0] if seen else '?'})")
+
     labels, ratios = [], []
     for label, emb, srv, higher_better in pairs:
         if emb is None or srv is None:

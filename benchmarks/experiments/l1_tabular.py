@@ -332,7 +332,17 @@ class ArcadeServer(Base):
         host = os.environ["BENCH_SERVER_HOST"]
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
-        self.version = "server:latest"
+        # Ask the server what it is. The literal "server:latest" this replaced
+        # was not a version at all: runner.py pins the image by digest, so the
+        # row named a tag nobody had used while the container really ran the
+        # pinned release. F5 checks compare these strings, so a constant here
+        # makes every version check on this lane vacuous, and f8 silently
+        # divided a 26.8.1 embedded row by a "latest" server row for weeks.
+        try:
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            self.version = "server:" + (info.json().get("version") or "?")
+        except Exception:
+            self.version = "server:unknown"
 
     def _post(self, kind, sql, params=None):
         payload = {"language": "sql", "command": sql}

@@ -228,110 +228,18 @@ def graph_table(rows):
     write("t3_graph.tex", "\n".join(lines) + "\n")
 
 
-def _sparse_full_rows():
-    """8.84M Big-ANN tier for the embedded arcade row (N=5, dev20 line).
-    Comparators at this tier come from the canonical runner rows."""
-    import glob
-    out = []
-    for fp in glob.glob(os.path.join(RESULTS, "sparse_full", "l3s_full_r*.json")):
-        out.append(json.load(open(fp)))
-    return out
-
-
-def _dev15_sparse_rows():
-    """Rolling-update overlay: N=5 dev15 cells for the embedded int8 config
-    (verify5411 re-runs after the append-only txn-lane fix; supersedes the
-    dev6/verify6 overlay). Same harness, same data."""
-    import glob
-    out = {"tiny": [], "small": []}
-    for sc in out:
-        for fp in glob.glob(os.path.join(RESULTS, "verify5411",
-                                         f"l3s_dev15_bigann_{sc}_r*.json")):
-            out[sc].append(json.load(open(fp)))
-    return out
-
-
-# n_docs -> tier, so a released overlay can be read without parsing filenames.
-_SPARSE_TIER_BY_DOCS = {100_000: "tiny", 1_000_000: "small", 8_841_823: "medium"}
-
-
-def _released_sparse_rows(subdir, tag):
-    """Overlay for a released wheel whose run wrote every tier into ONE
-    directory (queue30 onward), returning {tier: [rows]} for all three.
-
-    The tier is taken from ``n_docs`` in the JSON rather than from the
-    filename. This file had grown one bespoke reader per release, each
-    encoding that release's naming, which makes the next release's layout a
-    guess; ``n_docs`` is written by the lane itself and cannot drift from the
-    data it describes. A file whose n_docs matches no known tier is skipped
-    rather than mislabelled, because a silently misfiled row would land in the
-    wrong table column.
-    """
-    return _sparse_rows_by_docs(subdir, f"l3s_{tag}_*_r*.json")
-
-
-def _sparse_rows_by_docs(subdir, pattern):
-    """{tier: [rows]} for any sparse overlay, keyed by n_docs not by filename.
-
-    Split out of _released_sparse_rows because a second layout arrived
-    (queue60 writes ``<arm>_<scale>_r<rep>.json``) and the alternative was the
-    bespoke-reader-per-release habit the docstring above already objects to.
-    Only the glob differs; the tier still comes from the lane's own n_docs.
-    """
-    import glob
-    out = {}
-    for fp in glob.glob(os.path.join(RESULTS, subdir, pattern)):
-        d = json.load(open(fp))
-        tier = _SPARSE_TIER_BY_DOCS.get(d.get("n_docs"))
-        if tier is None:
-            continue
-        out.setdefault(tier, []).append(d)
-    return out
-
-
-def _t4dev23_rows(arm="int8"):
-    """queue60's dev23 re-measure, but only once ALL THREE tiers are present.
-
-    The point of that run is to put T4's ArcadeDB row on one line at N=5 with
-    conditions recorded. Taking it tier by tier as the cells arrive would do
-    the opposite: dev23 tiny and small beside a dev22 medium is a version mix
-    inside one row, which is the defect this file falls back rather than
-    commits everywhere else. All or nothing.
-    """
-    got = _sparse_rows_by_docs("t4dev23", f"{arm}_*_r*.json")
-    if all(len(got.get(t, [])) >= 5 for t in ("tiny", "small", "medium")):
-        return got
-    return {}
-
-
-def _dev21_sparse_rows():
-    """Released-wheel overlay for the embedded int8 config on 26.8.1.dev21,
-    which carries all three merged sparse rounds (#5388 copy bound,
-    #5467 r1 primitive cursors, #5467 r2 memoised block bounds) plus #5473's
-    parallel-array top-K heap.
-
-    This supersedes the dev15 overlay wherever it is present. It exists so the
-    table can report the current engine from a RELEASED artifact: the same
-    numbers were first measured on a locally compiled wheel for the upstream
-    verification, and those belong in prose, not here.
-    Empty until the dev21 re-run lands, in which case the dev15 overlay stands.
-    """
-    import glob
-    out = {"tiny": [], "small": []}
-    for sc in out:
-        for fp in glob.glob(os.path.join(RESULTS, "dev21_sparse",
-                                         f"l3s_dev21_{sc}_r*.json")):
-            out[sc].append(json.load(open(fp)))
-    return {sc: v for sc, v in out.items() if v}
-
-
-def _dev21_sparse_full_rows():
-    """8.84M Big-ANN tier on dev21. Supersedes _sparse_full_rows (dev20)."""
-    import glob
-    return [json.load(open(fp)) for fp in
-            glob.glob(os.path.join(RESULTS, "dev21_sparse_full",
-                                   "l3s_dev21_full_r*.json"))]
-
+# THE DEV OVERLAY CASCADE LIVED HERE and is deleted, not deprecated.
+# _sparse_full_rows, _released_sparse_rows, _sparse_rows_by_docs,
+# _t4dev23_rows, _dev15_sparse_rows, _dev21_sparse_rows and
+# _dev21_sparse_full_rows each preferred a newer pre-release line per tier
+# and fell back to an older one when a directory was missing. That is how a
+# table keeps printing pre-release numbers after the release is measured:
+# nothing fails, an older branch of the cascade just wins quietly.
+#
+# Every tier is now measured on one released engine, so there is nothing to
+# prefer and nothing to fall back to. Keeping the helpers 'just in case'
+# would keep the failure mode alive, since the next missing directory would
+# re-arm it. _sparse_2681_rows below refuses instead of falling back.
 
 def _sparse_2681_rows(arm="arcadedb_sparse_embedded"):
     """T4's ArcadeDB rows, from ONE released engine.
@@ -534,18 +442,25 @@ def dense_ts_table(rows):
     # tag's whole series; on this line the unbounded form is not merely
     # affordable but FASTER than the window it replaced (0.69 vs 0.94 ms),
     # so the workaround is retired rather than carried with a footnote.
+    # ONE SOURCE, NO FALLBACK. This used to cascade ts59 -> dev21_ts -> batch1,
+    # each with its own last-point key, so a missing directory silently changed
+    # both the engine line and the quantity being reported. The cascade is
+    # gone: the release artifacts or nothing.
     native = [json.load(open(fp)) for fp in
               glob.glob(os.path.join(RESULTS, "ts59", "nosettle_r*.json"))]
     last_key = "q_last_unbounded_ms"
-    if not native:  # fall back rather than mix lines
-        native = [json.load(open(fp)) for fp in
-                  glob.glob(os.path.join(RESULTS, "dev21_ts",
-                                         "ts_dev21_prim_r*.json"))]
-        last_key = "q_last_ms"
-    if not native:
-        native = [json.load(open(fp)) for fp in
-                  glob.glob(os.path.join(RESULTS, "batch1", "l4n_r*.json"))]
-        last_key = "q_last_ms"
+    # AND THE VERSION IS PART OF THE ROW. ts59 was measured on a dev wheel, so
+    # this is the one published cell in the paper still off the release line.
+    # It prints under protest rather than silently: the paper cannot ship this
+    # row, and a warning that scrolls past is how it survived unnoticed until
+    # a version sweep went looking.
+    _v = {str(r.get("engine_version") or "?") for r in native}
+    _dev = sorted(v for v in _v if ".dev" in v)
+    if _dev:
+        print("  !! T5 time-series ArcadeDB row is NOT on the release: %s.\n"
+              "     Re-run the native TS probe on 26.8.1 before submission; "
+              "this row is not publishable as measured." % ", ".join(_dev),
+              file=sys.stderr)
     if native:
         lines.append(" & ".join([
             r"ArcadeDB (native TS)", mmm(native, "ingest_pts_per_s"),
