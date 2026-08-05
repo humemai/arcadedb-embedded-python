@@ -61,10 +61,24 @@ TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "tpch10": 8 * 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  "large": "24g",
-                 # heap must fit inside the 75% server-container share of
-                 # MEM_BY_SCALE with headroom (JVMs pin -Xms): 8g*0.75=6g -> 4g
-                 # deep10m: 16g fits the 18g (75% of 24g) server share and
-                 # clears the embedded 10M JVector build (12g OOMed)
+                 # THE HEAP LIVES INSIDE THE CAP. cgroup v2 bounds the whole
+                 # container (anon + page cache), so a heap that approaches
+                 # MEM_BY_SCALE does not raise OutOfMemoryError -- the kernel
+                 # OOM-kills the container, silently, which is how thirty SF10
+                 # cells exited 137 with no output. Heap must therefore fit the
+                 # 75% SERVER-CONTAINER share with room left for metaspace,
+                 # code cache, thread stacks, GC structures, direct buffers and
+                 # the page cache of the engine's own files. JVMs here pin
+                 # -Xms=-Xmx, so the heap is committed up front and the
+                 # headroom is real, not notional.
+                 #
+                 # Every tier is heap = 50% of cap. deep10m is the exception at
+                 # 67% (24g in 36g): the degree-matched build peaks near 19 GB,
+                 # and 16g OOMed. Its server share is 27g against a 24g heap,
+                 # i.e. 3g of headroom -- the tightest on the board, and the
+                 # one place this policy could bite. arcadedb_dense_server's
+                 # artifact records no heap, so that margin is currently
+                 # unverifiable; fairness_check names it rather than assuming.
                  "sf1": "4g", "sf10": "12g", "deep10m": "24g", "e2": "6g", "tpch1": "8g",
                     "tpch10": "16g"}
 SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))

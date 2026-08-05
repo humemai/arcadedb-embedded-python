@@ -38,13 +38,14 @@ FULL_CPUSET = "0-11"
 # Envelope deliberately not matched, with the reason. An entry here is a
 # disclosed override; anything else that differs is a defect. Keyed by
 # (lane, scale) -> {backend_substring: why}.
-DISCLOSED = {
-    ("l3d", "deep10m"): {
-        # int8 is reported at its own operating point and the row label says
-        # "16 GiB" so a reader sees it. fp32/server sit at 24g.
-        "__note__": "int8 row is the 16 GiB cell; the row label names the heap",
-    },
-}
+# EMPTY ON PURPOSE, and that is the finding. The one entry here recorded that
+# DEEP-10M's int8 arm ran a 16 GiB heap against 24 GiB elsewhere, "and the row
+# label names the heap". Both halves stopped being true: int8 was re-measured
+# at 24 GiB like every other arm, and T5's label is "ArcadeDB (emb, int8)"
+# with no heap in it. A disclosure that outlives the thing it discloses is
+# worse than none, because it tells a reviewer to expect an asymmetry that is
+# not there and invites them to distrust the rest.
+DISCLOSED = {}
 
 
 def _canonical():
