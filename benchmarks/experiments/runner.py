@@ -28,6 +28,7 @@ import os
 import random
 import re
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -495,10 +496,31 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                     if l.strip()][-3:]
             row["timeout_phase_hint"] = " | ".join(last)[-400:]
         logs = subprocess.run(["docker", "logs", cli_cid], capture_output=True, text=True)
+        # Interrogate the container BEFORE removing it. A cgroup OOM kill leaves
+        # NO stdout and NO stderr, so the log is empty and docker's own State is
+        # the only witness. On 2026-08-05 thirty consecutive TPC-H SF10 cells
+        # were OOM-killed, each got error="" from the empty log, an empty string
+        # printed as a blank status, and the lane exited 0. A green run with
+        # zero results is the worst failure mode this harness has.
+        insp = subprocess.run(
+            ["docker", "inspect", "-f",
+             "{{.State.OOMKilled}} {{.State.ExitCode}}", cli_cid],
+            capture_output=True, text=True)
+        oom, exit_code = "false", str(rc)
+        _parts = insp.stdout.split()
+        if len(_parts) == 2:
+            oom, exit_code = _parts
         docker_rm(cli_cid)
         row["rc"] = rc
+        row["oom_killed"] = (oom == "true")
         if rc != 0 and "error" not in row:
-            row["error"] = (logs.stderr or logs.stdout)[-800:]
+            detail = (logs.stderr or logs.stdout)[-800:].strip()
+            if not detail:
+                detail = f"container exited {exit_code} with no output"
+                detail += (" (cgroup OOM kill: raise the envelope or bound the "
+                           "harness's peak memory)" if oom == "true"
+                           else " (killed, or died before writing anything)")
+            row["error"] = detail
 
         out_path = os.path.join(RAW, f"{run_id}.json")
         # merge bench output ONLY on clean exit: a stale or partial out file
@@ -691,7 +713,10 @@ def main():
                     active_backends.discard(job["backend"])
                     cv.notify_all()
             row["manifest"] = ts
-            status = row.get("error", "ok")[:60]
+            # `or` rather than a dict default: an EMPTY error string is what
+            # made thirty OOM kills look like blank successes.
+            status = (row.get("error")
+                      or ("ok" if row.get("rc") == 0 else "FAILED (no detail)"))[:60]
             with cv:
                 rows.append(row)
                 jsonl.write(json.dumps(row) + "\n")
@@ -714,6 +739,18 @@ def main():
             w.writeheader()
             w.writerows(rows)
         print(f"wrote {len(rows)} rows -> {path}")
+
+    # A queue script reads the exit code, so a lane that produced no usable
+    # cells must not report success. "wrote 30 rows" was true and meaningless
+    # when all thirty were OOM-killed shells.
+    failed = [r for r in rows if r.get("error")]
+    if failed:
+        print(f"\n{len(failed)} of {len(rows)} cell-runs FAILED:")
+        for r in failed[:10]:
+            print(f"  {r.get('run_id')}: {str(r.get('error'))[:120]}")
+        if len(failed) > 10:
+            print(f"  ... and {len(failed) - 10} more")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
