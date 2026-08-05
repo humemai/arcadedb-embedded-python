@@ -53,6 +53,38 @@ def _canonical():
     return M.load_canonical()
 
 
+def _dense_rows():
+    """The dense cells T5 actually prints, from the multipass artifacts.
+
+    Each file is one build followed by five passes, so pass 0 carries the run
+    conditions for the whole cell. Only pass 0 is taken: five passes over one
+    build are one cell's worth of envelope, not five.
+    """
+    out = []
+    for fp in sorted(glob.glob(os.path.join(RESULTS, "dense_mp_2681",
+                                            "mp_*.json"))):
+        if "_build" in os.path.basename(fp):   # build-reproducibility checks
+            continue
+        try:
+            d = json.load(open(fp))
+        except Exception:
+            continue
+        p0 = d[0] if isinstance(d, list) and d else d
+        if not isinstance(p0, dict) or not p0.get("backend"):
+            continue
+        r = dict(p0)
+        r["lane"] = "l3d"        # the artifacts say l3d_mp; the LANE is l3d
+        r["scale"] = "deep10m"
+        # Served arms record the client container's cap; the split is the
+        # lane's, not the row's, so name it here rather than guess later.
+        if r.get("backend") in ("arcadedb_dense_server", "qdrant_dense",
+                                "milvus_dense"):
+            r.setdefault("role", "client")
+            r.setdefault("mem_split", "0.75")
+        out.append(r)
+    return out
+
+
 def check_cpuset(rows):
     """F1/F2: every published cell on the full cpuset, i.e. serial."""
     print("=== F1/F2: full cpuset, serial tier ===")
@@ -71,25 +103,115 @@ def check_cpuset(rows):
     return 0
 
 
+def _gib(s):
+    """'36g' -> 36.0. None/unparseable -> None."""
+    if s is None:
+        return None
+    t = str(s).strip().lower().rstrip("b")
+    try:
+        if t.endswith("g"):
+            return float(t[:-1])
+        if t.endswith("m"):
+            return float(t[:-1]) / 1024.0
+        return float(t)
+    except ValueError:
+        return None
+
+
+def _total_envelope(r):
+    """The envelope the CELL got, normalised across topologies.
+
+    F3 says a served backend gets the envelope SPLIT, not doubled:
+    server = 0.75 * total, client = total - server. So a client container
+    legitimately shows a quarter of what an embedded container shows, and
+    comparing the two raw numbers reports a violation that is really the rule
+    being followed.
+
+    That is what this check did. It called five tiers FAIL because
+    arcadedb_sparse_server recorded mem_cap=4g against an embedded 16g, which
+    is 16 * 0.25 exactly. A fairness gate that fails on compliance is worse
+    than no gate: it trains you to skim past its output, and a real violation
+    then sits in the same list as the noise.
+
+    Rows are not uniform about which number they store. A row with
+    role='client' recorded ITS OWN container's cap; others recorded the total.
+    mem_split says what fraction the server side took, so the total is
+    recoverable either way.
+    """
+    cap = _gib(r.get("mem_cap"))
+    if cap is None:
+        return (str(r.get("heap")), str(r.get("mem_cap")))
+    split = r.get("mem_split")
+    if str(r.get("role")) == "client" and split is not None:
+        try:
+            frac = 1.0 - float(split)
+            if 0 < frac < 1:
+                cap = cap / frac
+        except (TypeError, ValueError):
+            pass
+    return (str(r.get("heap")), f"{cap:g}g")
+
+
 def check_envelope(rows):
     """F3: same memory/heap envelope across backends within a (lane, scale)."""
     print("\n=== F3: same memory envelope per (lane, scale) ===")
+    # The dense lane's published rows are NOT in runs.jsonl. T5 reads
+    # results/dense_mp_2681/, and runs.jsonl still holds the pre-re-measure
+    # dense rows at 28g/16g. Checking those reported the deep10m envelope as
+    # unmatched long after it had been matched: the comparators were re-run at
+    # 36g, into artifacts this check never opened. Same defect as claims_check
+    # and the figure generator had -- a consumer left pointing at the old
+    # store -- so it is fixed the same way, by reading what the table reads.
+    # Only deep10m moves; l3d small still lives in runs.jsonl and must keep
+    # being checked. Swapping the whole lane silently dropped it.
+    rows = [r for r in rows
+            if not (r.get("lane") == "l3d" and r.get("scale") == "deep10m")]
+    rows = rows + _dense_rows()
     g = collections.defaultdict(lambda: collections.defaultdict(set))
+    noheap = collections.defaultdict(set)
     for r in rows:
-        g[(r["lane"], r["scale"])][r["backend"]].add(
-            (str(r.get("heap")), str(r.get("mem_cap"))))
+        h, m = _total_envelope(r)
+        # A JVM heap is only comparable between engines that HAVE one. Qdrant,
+        # Milvus, LanceDB and sqlite-vec are Rust/Go/C and report heap=None;
+        # calling that a mismatched envelope against ArcadeDB's 24g compares a
+        # setting to its own absence. The MEMORY CAP is the cross-engine
+        # quantity and is compared for everyone.
+        if h in ("None", "", None):
+            if "arcade" in str(r.get("backend")):
+                # ArcadeDB is a JVM engine, so a missing heap here is a
+                # RECORDING gap, not an engine property. Reported separately
+                # rather than excused, because an unrecorded heap is exactly
+                # how an unmatched one would hide.
+                noheap[(r["lane"], r["scale"])].add(r["backend"])
+            h = "n/a"
+        g[(r["lane"], r["scale"])][r["backend"]].add((h, m))
     bad = 0
     for key in sorted(g, key=str):
         per_be = g[key]
         envs = {e for s in per_be.values() for e in s}
-        if len(envs) == 1:
-            h, m = next(iter(envs))
+        # The two axes are judged separately: the memory cap must match across
+        # EVERY engine, the heap only across the engines that have one.
+        caps = {m for _, m in envs}
+        heaps = {h for h, _ in envs if h != "n/a"}
+        if len(caps) == 1 and len(heaps) <= 1:
+            m = next(iter(caps))
+            h = next(iter(heaps)) if heaps else "n/a"
+            jvm = sum(1 for s in per_be.values()
+                      for hh, _ in s if hh != "n/a")
             print(f"  ok   {key[0]:6} {key[1]:8} heap={h} mem={m} "
-                  f"({len(per_be)} backends)")
+                  f"({len(per_be)} backends, {jvm} on a JVM)")
+            if key in noheap:
+                print(f"         note: {', '.join(sorted(noheap[key]))} is a JVM "
+                      "engine but recorded no heap. The cap matches; the heap "
+                      "is unverifiable from the artifact.")
             continue
         bad += 1
         print(f"  FAIL {key[0]:6} {key[1]:8} backends did NOT get the same "
               f"envelope:")
+        if len(caps) > 1:
+            print(f"         memory caps differ: {sorted(caps)}")
+        if len(heaps) > 1:
+            print(f"         JVM heaps differ: {sorted(heaps)}")
         for be, s in sorted(per_be.items()):
             for h, m in sorted(s):
                 print(f"         {be:32} heap={h} mem={m}")
