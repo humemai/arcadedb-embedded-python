@@ -171,31 +171,37 @@ def f7_e2(rows):
 
 
 def _dense_overlay_p50(srv=False):
-    """Dense p50 from the SAME overlay the tables read.
+    """Dense WARM p50 from the SAME artifacts the tables read.
 
     The dense lane's published numbers do not live in runs.jsonl. They live in
-    verify5412b (embedded, post-#5412 shared warm cache) and verify5413
-    (server), as N=4 warm passes with the cold first pass excluded. Reading
+    results/dense_mp_2681/, as one build followed by five passes: pass 0 is
+    cold (a page-cache fill) and passes 1-4 are steady state. Reading
     runs.jsonl here plotted the pre-#5412 measurement, so the figures and the
     table disagreed by an order of magnitude on the same quantity.
 
-    Imported from make_paper_tables rather than reimplemented: this file
-    already carries a second copy of the canonical rule, and one duplicated
-    selector per repository is enough.
+    THIS FUNCTION BROKE WHEN THE TABLE WAS REBUILT and nothing noticed until
+    the figures were regenerated: it called _dev16_dense_rows(), a helper
+    deleted along with the dev-era dense path, so make_paper_figures.py raised
+    AttributeError on every run. The figure freshness gate caught the
+    consequence (five stale PDFs) but not the cause, because a generator that
+    cannot start also cannot disagree with a table.
+
+    WARM IS THE CHOICE, and it is a claim rather than a convenience: f4 and f8
+    plot a steady-state comparison, and the cold pass is reported separately
+    in its own column precisely because the two are different quantities.
+    Averaging across the boundary would plot neither.
     """
+    import glob as _glob
+    import json as _json
     import make_paper_tables as _T
-    if srv:
-        # Post-fix server overlay (#109); falls back rather than mixing. f8's
-        # dense bar is the embedded/server pair, so reading the pre-fix
-        # verify5413 here would plot a transport ratio the table no longer
-        # prints, which is the exact drift f4's guard was added to catch.
-        rs = (_T._dev16_dense_rows("srv109", "srv109")
-              or _T._dev16_dense_rows("srv5413", "verify5413"))
-    else:
-        rs = _T._dev16_dense_rows()
-    v = [r["query_p50_ms"] for r in rs
-         if isinstance(r.get("query_p50_ms"), (int, float))]
-    return st.median(v) if v else None
+    name = "mp_arcsrv_2681.json" if srv else "mp_arcade_fp32_2681.json"
+    hits = _glob.glob(os.path.join(_T.RESULTS, "dense_mp_2681", name))
+    if not hits:
+        return None
+    passes = _json.load(open(hits[0]))
+    warm = [p["p50"] for p in passes[1:]
+            if isinstance(p.get("p50"), (int, float))]
+    return st.median(warm) if warm else None
 
 
 # f4 entry label -> the table cell that must agree with it. Only ArcadeDB's
@@ -207,7 +213,10 @@ F4_VS_TABLE = {
     "Graph 1-hop p50": ("t3_graph.tex", "ArcadeDB (emb) & SF10", 1),
     "Sparse 100k p50": ("t4_sparse.tex", "ArcadeDB (emb, int8)", 0),
     "Sparse 1M p50":   ("t4_sparse.tex", "ArcadeDB (emb, int8)", 3),
-    "Dense 10M p50":   ("t5_dense_ts.tex", "ArcadeDB (emb)", 1),
+    # Column 2 is Warm p50 and the label carries its arm: T5's dense half is
+    # now System & Build & Cold p50 & Warm p50 & Cold p99 & Recall, and the
+    # embedded row split into fp32/int8. Both halves of this entry were stale.
+    "Dense 10M p50":   ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 2),
     "TS 12h agg p50":  ("t5_dense_ts.tex", "ArcadeDB (native TS)", 3),
 }
 
@@ -274,16 +283,19 @@ def _sparse_overlay_p50(tier):
     without recomputing the figure.
 
     Mirrors the table's precedence exactly by calling into it.
+
+    THE PRECEDENCE IT MIRRORED IS GONE. T4 now reads results/sparse_2681/
+    through _sparse_2681_rows(), one released engine at N=5 across all three
+    tiers, which replaced the six-deep dev cascade this function reproduced.
+    Left pointing at dev22, the figure plotted 3.98 ms at 100k against the
+    table's 4.19 on the same cell: not an order of magnitude, which is
+    precisely why it needed the guard rather than an eye. The lesson is the
+    one this docstring already recorded and then repeated: mirroring a
+    selection rule by COPYING it means the copy has to be updated too, so
+    call the table's own function instead of restating what it does.
     """
     import make_paper_tables as _T
-    dev22 = _T._released_sparse_rows("dev22_sparse", "26.8.1.dev22")
-    if tier == "medium":
-        g = dev22.get("medium") or _T._dev21_sparse_full_rows() or _T._sparse_full_rows()
-    else:
-        g = _T._dev15_sparse_rows()
-        g.update(_T._dev21_sparse_rows())
-        g.update({t: v for t, v in dev22.items() if t in ("tiny", "small") and v})
-        g = g.get(tier)
+    g = _T._sparse_2681_rows().get(tier)
     v = [r["query_p50_ms"] for r in (g or [])
          if isinstance(r.get("query_p50_ms"), (int, float))]
     return st.median(v) if v else None

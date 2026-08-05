@@ -170,10 +170,27 @@ def torn_count(backend):
     return sum(1 for r in rows if r.get("torn_state"))
 
 
-# The eight rows the dense prose ranks against: T5's dense half minus the
-# server row, which is a deployment axis rather than a competitor.
-DENSE_ROWS = ["ArcadeDB (emb)", "ArcadeDB (emb, int8, 16", "Qdrant", "Milvus",
-              "Chroma", "LanceDB", "sqlite-vec", "DuckDB-VSS"]
+# The NINE rows the dense prose ranks against, which is every row of T5's
+# dense half including the server. An earlier version listed eight and
+# excluded the server as "a deployment axis rather than a competitor". The
+# prose now says "sixth of nine", so the universe it ranks in is all of them
+# and the checker has to agree with the sentence rather than with an
+# argument about what deserves to compete.
+#
+# LABELS ARE PART OF THE CLAIM. cell() matches by startswith, so when the
+# table split ArcadeDB's embedded row into fp32 and int8 arms, the old
+# "ArcadeDB (emb)" stopped matching "ArcadeDB (emb, fp32)" -- the next
+# character is a comma, not a paren -- and every dense claim went NODATA.
+# That was the lucky outcome. Had the labels still matched, the column
+# reindexing below would have compared warm p50 against cold p50 and recall
+# against p99, and reported all-green.
+DENSE_ROWS = ["ArcadeDB (emb, fp32)", "ArcadeDB (emb, int8)", "ArcadeDB (srv)",
+              "Qdrant", "Milvus", "Chroma", "LanceDB", "sqlite-vec",
+              "DuckDB-VSS"]
+
+# 0-based column offsets into T5's dense half, after the label.
+# System & Build (s) & Cold p50 & Warm p50 & Cold p99 & Recall
+D_BUILD, D_COLD, D_WARM, D_COLDP99, D_RECALL = 0, 1, 2, 3, 4
 
 
 def _sparse_reps(n_docs, subdir="dev22_sparse"):
@@ -201,8 +218,8 @@ def _sparse_reps(n_docs, subdir="dev22_sparse"):
     return float(n)
 
 
-def _dense_rank(col):
-    """1-based rank of ArcadeDB (emb) in `col` among DENSE_ROWS, lower better.
+def _dense_rank(col, row="ArcadeDB (emb, fp32)"):
+    """1-based rank of `row` in column `col` among DENSE_ROWS, lower better.
 
     Rank claims rot in a way no ratio claim can catch, because the drift is in
     the ORDERING and every individual cell stays correct. Two such claims were
@@ -212,12 +229,17 @@ def _dense_rank(col):
     ArcadeDB second of eight. Both survived a checker that verified only the
     numbers it had been told about. A rank is the claim actually being made,
     so pin the rank.
+
+    Takes a row now because the cold/warm split made "our rank" four claims
+    rather than one, and they disagree: the same engine is sixth cold and
+    third warm. A helper that could only ask about one row was structurally
+    unable to express what the paper says.
     """
-    mine = cell("t5_dense_ts.tex", "ArcadeDB (emb)", col)
+    mine = cell("t5_dense_ts.tex", row, col)
     if mine is None:
         return None
     return 1.0 + sum(1 for s in DENSE_ROWS
-                     if s != "ArcadeDB (emb)"
+                     if s != row
                      and (cell("t5_dense_ts.tex", s, col) or float("inf")) < mine)
 
 
@@ -343,18 +365,18 @@ CLAIMS = [
      lambda r: _paper_specialist_count(),
      "every 'N specialist' in paper.tex agrees, and agrees with the data "
      "(-1 means the sites disagree; abstract vs Section I did until 08-01)"),
-    ("l1.arcadedb.oltp", 5929, 1,
+    ("l1.arcadedb.oltp", 8435, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="arcadedb_embedded"),
      "OLTP ops/s embedded"),
-    ("l1.server.oltp", 1288, 1,
+    ("l1.server.oltp", 1428, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="arcadedb_server"),
      "OLTP ops/s server (deployment axis)"),
     ("l1.postgres.oltp", 525, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="postgres"), "PostgreSQL ops/s"),
-    ("l1.duckdb.oltp", 268, 1,
+    ("l1.duckdb.oltp", 273, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="duckdb"), "DuckDB ops/s"),
     # UNSOURCED, pinned so it cannot ship quietly. The prose reads "the
@@ -380,39 +402,39 @@ CLAIMS = [
     # SERVER row's ingest rate (27,424). Corrected 2026-08-01 to the canonical
     # figures, with the bulk-API gap named from the #82 probe rather than left
     # for a reader to mistake for an engine limit.
-    ("l1.ingest.perrow", 31300, 400,
+    ("l1.ingest.perrow", 29390, 400,
      lambda r: median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
                          backend="arcadedb_embedded", workload="oltp"),
      "per-row SQL ingest over the 20M-row corpus, the number the lane measures"),
-    ("l1.ingest.server", 27400, 300,
+    ("l1.ingest.server", 26460, 300,
      lambda r: median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
                          backend="arcadedb_server", workload="oltp"),
      "same per-row path through the server; the paper used to call this "
      "'per-record'"),
-    ("l1.ingest.columnar_lead", 10.4, 0.3,
+    ("l1.ingest.columnar_lead", 10.7, 0.3,
      lambda r: median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
                          backend="duckdb", workload="oltp")
                / median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
                            backend="arcadedb_embedded", workload="oltp"),
      "how far the columnar loaders lead the per-row path (was stated as 9x, "
      "which followed from the unsourced 36.7k)"),
-    ("l1.arcadedb.insert_p99", 0.54, 0.01,
+    ("l1.arcadedb.insert_p99", 0.30, 0.01,
      lambda r: median_of(r, "insert_p99_ms", lane="l1", scale="medium",
                          workload="oltp", backend="arcadedb_embedded"),
      "insert p99 ms"),
 
     # --- L2 graph ---------------------------------------------------------
-    ("l2.arcadedb.hop2_p50", 1.57, 0.01,
+    ("l2.arcadedb.hop2_p50", 1.62, 0.01,
      lambda r: median_of(r, "hop2_p50_ms", lane="l2", scale="sf10",
                          workload="oltp", backend="arcadedb_graph_embedded"),
      "2-hop median SF10"),
     ("l2.neo4j.hop2_p50", 4.72, 0.02,
      lambda r: median_of(r, "hop2_p50_ms", lane="l2", scale="sf10",
                          workload="oltp", backend="neo4j_graph"), "Neo4j 2-hop"),
-    ("l2.ladybug.hop2_p50", 5.59, 0.02,
+    ("l2.ladybug.hop2_p50", 5.52, 0.02,
      lambda r: median_of(r, "hop2_p50_ms", lane="l2", scale="sf10",
                          workload="oltp", backend="ladybug_graph"), "LadybugDB 2-hop"),
-    ("l2.arcadedb.olap_friendage", 519, 1,
+    ("l2.arcadedb.olap_friendage", 495, 1,
      lambda r: median_of(r, "friend_age_by_city_mean_ms", lane="l2", scale="sf10",
                          workload="olap", backend="arcadedb_graph_embedded"),
      "OLAP friend-age (WITH GAV)"),
@@ -428,7 +450,7 @@ CLAIMS = [
     # pair and 22% on the other; "wins all three by roughly 10x" ran 8.2x to
     # 20.9x. A spread stated as a single number hides its own worst case, so
     # pin the endpoints.
-    ("l2.gap.samecity_pct", 22.0, 0.6,
+    ("l2.gap.samecity_pct", 24.5, 0.6,
      lambda r: 100.0 * (median_of(r, "same_city_edges_mean_ms", lane="l2",
                                   scale="sf10", workload="olap",
                                   backend="neo4j_graph")
@@ -447,18 +469,18 @@ CLAIMS = [
     # "competitive on every index-build axis". Pin the ratio to the comparator
     # we LOSE to: a claim of the form "beats both" is only ever falsified by
     # the one that is not beaten, so that is the one worth checking.
-    ("l2.load.sf10", 26.2, 0.3,
+    ("l2.load.sf10", 22.8, 0.3,
      lambda r: median_of(r, "build_s", lane="l2", scale="sf10",
                          workload="oltp", backend="arcadedb_graph_embedded"),
      "SF10 graph load (prose: 26 s)"),
-    ("l2.ratio.ladybug_load", 7.4, 0.2,
+    ("l2.ratio.ladybug_load", 6.3, 0.2,
      lambda r: median_of(r, "build_s", lane="l2", scale="sf10",
                          workload="oltp", backend="arcadedb_graph_embedded")
                / median_of(r, "build_s", lane="l2", scale="sf10",
                            workload="oltp", backend="ladybug_graph"),
      "how far LadybugDB's loader beats ours at SF10"),
     # The unit defect this file exists to stop recurring.
-    ("l2.arcadedb.mem_gib", 9.4, 0.05,
+    ("l2.arcadedb.mem_gib", 8.07, 0.05,
      lambda r: gib(r, "peak_anon_mib_sum", lane="l2", scale="sf10",
                    workload="oltp", backend="arcadedb_graph_embedded"),
      "SF10 OLTP peak anon GiB (MiB/1024, NOT /1000)"),
@@ -469,13 +491,13 @@ CLAIMS = [
     # --- E2 hybrid --------------------------------------------------------
     # These are the ones a hand-rolled median got wrong. load_canonical drops
     # the two single-rep pilots, so the N=5 measurement stands alone.
-    ("e2.arcadedb.p50", 3.36, 0.01,
+    ("e2.arcadedb.p50", 1.93, 0.01,
      lambda r: median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                          backend="arcadedb_e2"), "hybrid p50"),
-    ("e2.arcadedb.max", 3.49, 0.01,
+    ("e2.arcadedb.max", 2.11, 0.01,
      lambda r: max_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                       backend="arcadedb_e2"), "hybrid range max"),
-    ("e2.arcadedb.min", 3.20, 0.01,
+    ("e2.arcadedb.min", 1.87, 0.01,
      lambda r: min_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                       backend="arcadedb_e2"), "hybrid range min"),
     ("e2.surrealdb.p50", 7.02, 0.01,
@@ -497,11 +519,11 @@ CLAIMS = [
     # Pinned to T4's cells: prose -> table -> data. Column layout is
     # 100k(p50,p99,R) 1M(p50,p99,R) 8.84M(p50,p99,R), so 1M p50 is index 3 and
     # 8.84M p50 is index 6.
-    ("l3s.arcadedb.1m_p50", 11.4, 0.05,
+    ("l3s.arcadedb.1m_p50", 11.3, 0.05,
      lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3), "1M p50"),
     ("l3s.arcadedb.full_p50", 83.7, 0.05,
      lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 6), "8.84M p50"),
-    ("l3s.qdrant.full_p50", 16.4, 0.05,
+    ("l3s.qdrant.full_p50", 16.6, 0.05,
      lambda r: cell("t4_sparse.tex", "Qdrant", 6), "Qdrant 8.84M p50"),
     ("l3s.milvus.full_p50", 40.5, 0.05,
      lambda r: cell("t4_sparse.tex", "Milvus", 6), "Milvus 8.84M p50"),
@@ -510,7 +532,7 @@ CLAIMS = [
     ("l3s.ratio.qdrant_1m", 3.9, 0.05,
      lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3)
                / cell("t4_sparse.tex", "Qdrant", 3), "Qdrant ratio at 1M"),
-    ("l3s.ratio.qdrant_full", 5.1, 0.05,
+    ("l3s.ratio.qdrant_full", 5.0, 0.05,
      lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 6)
                / cell("t4_sparse.tex", "Qdrant", 6), "Qdrant ratio at 8.84M"),
     ("l3s.improvement", 14.5, 0.1,
@@ -531,24 +553,54 @@ CLAIMS = [
      "reps behind the 1M cell (caption says N=5)"),
 
     # --- T5 dense ---------------------------------------------------------
-    ("l3d.arcadedb.p50", 0.723, 0.005,
-     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb)", 1), "dense p50 warm"),
-    ("l3d.arcadedb.recall", 0.949, 0.001,
-     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb)", 3), "dense recall@10"),
-    # Both places the dense prose ranks itself. See _dense_rank for why a rank
-    # needs its own claim and cannot be inferred from the cells.
-    ("l3d.rank.p50", 2.0, 0.0, lambda r: _dense_rank(1),
-     "dense p50 rank of 8 (prose: second, behind Chroma)"),
-    ("l3d.rank.p99", 2.0, 0.0, lambda r: _dense_rank(2),
-     "dense p99 rank of 8 (prose: second, behind Chroma)"),
+    # Cold and warm are both claims now, so both are pinned. Pinning only the
+    # warm one is how the withdrawn "second of eight" survived as long as it
+    # did: it was true of the column being checked.
+    ("l3d.arcadedb.p50", 0.92, 0.01,
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_WARM),
+     "dense fp32 p50 warm"),
+    ("l3d.arcadedb.cold", 7.89, 0.02,
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_COLD),
+     "dense fp32 p50 cold (first pass after build)"),
+    ("l3d.arcadedb.recall", 0.953, 0.001,
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_RECALL),
+     "dense fp32 recall@10"),
+    # The four ranks the dense prose states: "Cold, ArcadeDB fp32 is sixth of
+    # nine and int8 fourth. Warm, int8 is second and fp32 third, both behind
+    # Chroma." The previous pair pinned 2.0 against a sentence the paper had
+    # ALREADY withdrawn in the same subsection ("we withdraw it"), so the
+    # checker was defending a claim its own paper disowned. See _dense_rank.
+    ("l3d.rank.cold.fp32", 6.0, 0.0,
+     lambda r: _dense_rank(D_COLD, "ArcadeDB (emb, fp32)"),
+     "dense cold p50 rank of 9, fp32 (prose: sixth)"),
+    ("l3d.rank.cold.int8", 4.0, 0.0,
+     lambda r: _dense_rank(D_COLD, "ArcadeDB (emb, int8)"),
+     "dense cold p50 rank of 9, int8 (prose: fourth)"),
+    ("l3d.rank.warm.int8", 2.0, 0.0,
+     lambda r: _dense_rank(D_WARM, "ArcadeDB (emb, int8)"),
+     "dense warm p50 rank of 9, int8 (prose: second, behind Chroma)"),
+    ("l3d.rank.warm.fp32", 3.0, 0.0,
+     lambda r: _dense_rank(D_WARM, "ArcadeDB (emb, fp32)"),
+     "dense warm p50 rank of 9, fp32 (prose: third)"),
     # The deployment prose quoted 0.81 (the #5412 close-out figure) while T5
     # and f8 both said 0.723. Three places, two numbers, same quantity.
-    # 1.82 -> 1.80 after the post-fix server re-measure (#109). The build fell
-    # 13,349 -> 3,825 s while p50 and recall did not move, which is what a
-    # BUILD-cache regression predicts and is the evidence that the old number
-    # was a version artifact rather than a deployment cost.
-    ("l3d.srv.p50", 1.80, 0.015,
-     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1), "dense server p50"),
+    #
+    # THE SAME THING HAPPENED AGAIN, one layer up, and this claim is where it
+    # surfaces. The prose still reports the post-fix server re-measure as
+    # "1.82 to 1.80 ms, 0.952 both times" with the build falling
+    # "13,349 to 3,825 s". Those are the #109 BESPOKE A/B driver's numbers.
+    # T5's published row comes from the multipass lane artifact and says
+    # 2.01 ms [1.94--2.29], recall 0.950, build 3,785 s.
+    #
+    # Pinned to the PUBLISHED row, not the prose, because FAIRNESS.md's rule
+    # is that bespoke drivers investigate and lane scripts publish. The prose
+    # keeps the bespoke pair -- its "before" half exists nowhere else, and
+    # splicing 2.01 into one side of an A/B whose other side came from a
+    # different run would be a worse error than the mismatch it fixed -- but
+    # it must SAY that is what it is.
+    ("l3d.srv.p50", 2.01, 0.015,
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", D_WARM),
+     "dense server p50 warm (published multipass row, not the #109 A/B)"),
     # --- E2 atomicity, the thesis experiment -------------------------------
     # The tear is deterministic, not a race we caught once: all five trials
     # report the same pair. The prose said "a representative trial", which is
@@ -621,9 +673,13 @@ CLAIMS = [
     # 2.52 -> 2.49 with the post-fix server p50 (1.80 vs 1.82). The ratio is
     # not stated literally in the prose; it is pinned so prose, T5 and f8
     # cannot drift apart on the same quantity.
-    ("l3d.deployment_ratio", 2.49, 0.03,
-     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", 1)
-               / cell("t5_dense_ts.tex", "ArcadeDB (emb)", 1),
+    # Now 2.01/0.92 = 2.18 on the published warm column. Both halves moved to
+    # D_WARM together: taking the ratio across the cold/warm boundary would
+    # divide a page-cache fill by a warm search and call the quotient
+    # transport.
+    ("l3d.deployment_ratio", 2.18, 0.03,
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", D_WARM)
+               / cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_WARM),
      "dense transport ratio (prose, table and f8 must agree)"),
     ("e4.protocol_share_min", 85.6, 0.3,
      lambda r: e4_protocol_share("min"),
