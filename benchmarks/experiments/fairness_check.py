@@ -267,19 +267,52 @@ def check_degree(rows):
     before it produced a number rather than after.
     """
     print("\n=== F7: same effective base-layer degree per (lane, scale) ===")
+    # Same store defect F3 had, one check down: deep10m's PUBLISHED rows live
+    # in results/dense_mp_2681/, and this was reading runs.jsonl's superseded
+    # ones. It reported "ok, degree 32, 7 backends" for a tier whose actual
+    # artifacts record degree_param=None on every arm. A check that passes on
+    # rows the table does not print is not checking the table.
+    rows = [r for r in rows
+            if not (r.get("lane") == "l3d" and r.get("scale") == "deep10m")]
+    rows = rows + _dense_rows()
     g = collections.defaultdict(dict)
+    unstamped = collections.defaultdict(set)
     for r in rows:
         if r.get("lane") != "l3d":
             continue
         d = _base_degree(r)
         if d is not None:
             g[r["scale"]].setdefault(r["backend"], set()).add(d)
-    if not g:
+        elif r.get("backend") == "sqlite_vec_dense":
+            # An exact scan has no graph, so it has no degree to match. That is
+            # a property of the engine, like a Rust engine having no JVM heap,
+            # not a recording gap. It is the recall=1.0 baseline precisely
+            # because it builds no approximate structure at all.
+            pass
+        else:
+            unstamped[r["scale"]].add(r["backend"])
+    if not g and not unstamped:
         print("  (no dense rows)")
         return 0
     bad = 0
-    for scale in sorted(g, key=str):
-        per_be = g[scale]
+    for scale in sorted(set(g) | set(unstamped), key=str):
+        per_be = g.get(scale, {})
+        if scale in unstamped:
+            # NOT a pass and NOT a silent skip. Degree decides recall and
+            # latency together, so a row that does not record the degree it was
+            # built at cannot be shown to be matched -- and F7 exists because
+            # one shared constant once meant two different graphs.
+            bad += 1
+            print(f"  FAIL l3d    {scale:8} {len(unstamped[scale])} backend(s) "
+                  "record NO degree, so the match is unverifiable:")
+            for be in sorted(unstamped[scale]):
+                print(f"         {be}")
+            print("         The lane stamps degree_param/degree_family; the "
+                  "multipass driver does not carry them through.")
+            if per_be:
+                print(f"         (the {len(per_be)} that do: "
+                      f"{sorted({d for s in per_be.values() for d in s})})")
+            continue
         degrees = {d for s in per_be.values() for d in s}
         if len(degrees) == 1:
             print(f"  ok   l3d    {scale:8} base-layer degree "
