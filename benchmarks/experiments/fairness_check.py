@@ -139,6 +139,16 @@ def _total_envelope(r):
     mem_split says what fraction the server side took, so the total is
     recoverable either way.
     """
+    # PREFER WHAT WAS OBSERVED. runner.py now reads the server container's real
+    # cpuset, cap and -Xmx from the daemon and stores them as server_*, so a
+    # served cell no longer has to be reconstructed from the split at all: the
+    # envelope is server + client, both measured. Rows written before that
+    # still fall back to the arithmetic below.
+    srv_cap, srv_heap = _gib(r.get("server_mem_cap")), r.get("server_heap")
+    if srv_cap is not None:
+        cli = _gib(r.get("mem_cap")) or 0.0
+        return (str(srv_heap or r.get("heap")), f"{srv_cap + cli:g}g")
+
     cap = _gib(r.get("mem_cap"))
     if cap is None:
         return (str(r.get("heap")), str(r.get("mem_cap")))

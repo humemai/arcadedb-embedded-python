@@ -422,6 +422,41 @@ def docker_rm(cid):
     subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
 
 
+def observe_server(cid):
+    """The server container's real cpuset, cap, heap and image, from docker.
+
+    Returns server_-prefixed keys so a row carries both what the cell asked
+    for and what the engine got, and the two can be compared afterwards
+    instead of assumed equal. Anything unreadable comes back absent rather
+    than guessed.
+
+    The heap is parsed out of the container's Env because that is where it was
+    actually set (ARCADEDB_OPTS_MEMORY, or JAVA_OPTS for images configured that
+    way); the LAST -Xmx wins, which is what the JVM itself does. Non-JVM
+    servers have none and simply omit the key.
+    """
+    out = {}
+    for key, fmt in (("server_cpuset", "{{.HostConfig.CpusetCpus}}"),
+                     ("server_image", "{{.Image}}"),
+                     ("server_image_ref", "{{.Config.Image}}")):
+        v = sh(["docker", "inspect", "-f", fmt, cid])
+        if v and v != "<no value>":
+            out[key] = v
+    mem = sh(["docker", "inspect", "-f", "{{.HostConfig.Memory}}", cid])
+    if mem.isdigit() and int(mem):
+        out["server_mem_cap"] = f"{int(mem) // (1 << 30)}g"
+    env = sh(["docker", "inspect", "-f", "{{json .Config.Env}}", cid])
+    try:
+        hits = re.findall(r"-Xmx(\d+)([gGmM])", " ".join(json.loads(env)))
+    except Exception:
+        hits = []
+    if hits:
+        val, unit = hits[-1]
+        out["server_heap"] = (f"{val}g" if unit in "gG"
+                              else f"{int(val) // 1024}g")
+    return out
+
+
 def run_cell(job, rep, scale, cpuset, tier, net_name):
     """Run one cell (backend x workload x scale, one repeat). Returns row dict."""
     be = BACKENDS[job["backend"]]
@@ -457,6 +492,23 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                             + be.get("server_cmd", []))
             if len(server_cid) < 12 or not wait_ready(server_cid, be["ready_regex"]):
                 row["error"] = "server_not_ready"
+                return row
+            # WHAT THE ENGINE ACTUALLY GOT, not what this row asked for.
+            # `heap` and `mem_cap` above describe the CELL's budget, and
+            # bench_common.run_conditions inside the driver reads the CLIENT
+            # container's cgroup, so for a served cell neither describes the
+            # engine. That is why the dense server row records heap=None and
+            # mem_cap=9g (the client's quarter of 36g), and why F3 could not
+            # verify its envelope and F7 could not verify its degree.
+            #
+            # Read from the daemon rather than restated from our own
+            # variables: a value we assert cannot catch the case where the
+            # container was created with something else, which is the failure
+            # mode behind "server:latest" and the dev22-stamped dev20 run.
+            row.update(observe_server(server_cid))
+            if row.get("server_heap") and row["server_heap"] != heap:
+                row["error"] = (f"server heap {row['server_heap']} != requested "
+                                f"{heap}; the cell is not the one we specified")
                 return row
             s_srv = CgroupSampler(server_cid)
             s_srv.start()
