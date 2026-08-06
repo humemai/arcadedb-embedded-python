@@ -615,15 +615,40 @@ def split_cpuset(cpuset, n):
     return shards
 
 
-def build_jobs(lanes, _workloads_arg):
+def build_jobs(lanes, workloads_arg):
+    """Jobs for these lanes, optionally narrowed to some workloads.
+
+    THE ARGUMENT USED TO BE IGNORED. The parameter was spelled
+    `_workloads_arg` and the loop iterated the LANE's workload list instead, so
+    `--workloads olap` silently ran oltp as well. A flag that parses, is passed
+    down, and does nothing is worse than no flag: the caller reads the command
+    line back and believes it.
+
+    The reason it was ignored is real, though, and the fix has to respect it.
+    The default was "oltp,olap", which are l1/l1tpc's workloads; l3s uses
+    "search", e2 uses "hybrid"/"atomicity". Filtering on that default would
+    have emptied every vector and cross-model lane. So the default is now
+    EMPTY, meaning "whatever the lane defines", and filtering happens only
+    when the caller names workloads explicitly. Every existing invocation
+    keeps its exact behaviour.
+    """
+    want = {w.strip() for w in workloads_arg if w and w.strip()}
     jobs = []
     for lane in lanes:
         script, backends, workloads = LANES[lane]
         for be in backends:
             for wl in workloads:
+                if want and wl not in want:
+                    continue
                 jobs.append({"lane": lane, "backend": be, "workload": wl,
                              "script": script,
                              "run_id": f"{lane}_{be}_{wl}"})
+    if want:
+        missing = want - {j["workload"] for j in jobs}
+        if missing:
+            sys.exit(f"--workloads named {sorted(missing)}, which no selected "
+                     f"lane defines. Lanes {lanes} offer "
+                     f"{sorted({w for l in lanes for w in LANES[l][2]})}.")
     return jobs
 
 
@@ -632,7 +657,10 @@ def main():
     ap.add_argument("--lanes", default="l1")
     ap.add_argument("--backends", default="",
                     help="comma list to restrict backends (default: all in lane)")
-    ap.add_argument("--workloads", default="oltp,olap")
+    ap.add_argument("--workloads", default="",
+                    help="comma list; empty (default) runs every workload the "
+                         "lane defines, which is the only safe default since "
+                         "lanes disagree on workload names")
     ap.add_argument("--scale", default="tiny", choices=list(MEM_BY_SCALE))
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--only-reps", default="",
