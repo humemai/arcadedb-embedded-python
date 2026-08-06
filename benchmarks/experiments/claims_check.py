@@ -197,16 +197,22 @@ DENSE_ROWS = ["ArcadeDB (emb, fp32)", "ArcadeDB (emb, int8)", "ArcadeDB (srv)",
 D_BUILD, D_COLD, D_WARM, D_COLDP99, D_RECALL = 0, 1, 2, 3, 4
 
 
-def _sparse_reps(n_docs, subdir="dev22_sparse"):
+def _sparse_reps(n_docs, subdir="sparse_2681", arm="arcadedb_sparse_embedded"):
     """How many reps actually stand behind a published sparse cell.
 
     T4's caption said N=5 for every cell while its 8.84M ArcadeDB row had
     three reps, the comparators in the same column having five. A rep count
     is a claim the caption makes, and nothing was checking it.
 
-    Pinned at 3 deliberately: when the two missing reps land this fails, which
-    is the point. The failure is the reminder to drop the caption's exception
-    rather than leave a stale disclosure claiming a limitation we fixed.
+    It was pinned at 3 while that shortfall stood, so that completing it would
+    fail this check and force the caption's exception to be retired rather than
+    left as a stale disclosure. The released re-measure supplies all five, so
+    the pin is 5 and the exception goes.
+
+    COUNTS ONE ARM. The released directory holds int8 AND fp32 for every tier,
+    so an unfiltered count returns 10 and reads as "twice the reps we claim"
+    rather than "two arms of five". T4's ArcadeDB row is the int8 arm; fp32 is
+    a separate labelled row with its own rep count.
     """
     import glob as _glob
     import json as _json
@@ -217,6 +223,7 @@ def _sparse_reps(n_docs, subdir="dev22_sparse"):
         except Exception:
             continue
         if isinstance(d, dict) and d.get("n_docs") == n_docs \
+           and d.get("backend") == arm \
            and d.get("query_p50_ms") is not None:
             n += 1
     return float(n)
@@ -549,10 +556,13 @@ CLAIMS = [
     ("l3s.ratio.qdrant_1m_orig", 57.0, 0.5,
      lambda r: 165.0 / cell("t4_sparse.tex", "Qdrant", 3),
      "1M Qdrant ratio this work started from"),
-    # Rep counts are caption claims too. See _sparse_reps: this is pinned to
-    # the CURRENT shortfall so completing it forces the caption to be updated.
-    ("l3s.reps.8m84", 3.0, 0.0, lambda r: _sparse_reps(8841823),
-     "reps behind the 8.84M cell (caption discloses N=3)"),
+    # Rep counts are caption claims too. The 8.84M cell was stuck at N=3 for
+    # weeks because the two missing reps could not be matched to the first
+    # three, nothing having recorded what those ran under; the released
+    # re-measure supplies all five under recorded conditions, so the pin moves
+    # to 5 and the caption's N=3 exception is retired rather than carried.
+    ("l3s.reps.8m84", 5.0, 0.0, lambda r: _sparse_reps(8841823),
+     "reps behind the 8.84M cell (caption says N=5)"),
     ("l3s.reps.1m", 5.0, 0.0, lambda r: _sparse_reps(1000000),
      "reps behind the 1M cell (caption says N=5)"),
 
