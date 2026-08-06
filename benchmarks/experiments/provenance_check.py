@@ -64,6 +64,29 @@ VERSION_KEYS = ("engine_version", "engine", "server_version", "version", "wheel"
 
 
 
+def _nested_version_keys(obj, _depth=0):
+    """VERSION_KEYS found anywhere in a record, not only at the top level.
+
+    Probes that write one document per run rather than one per rep tend to put
+    the run's metadata in a sub-object (`meta`, `docker_client_conditions`),
+    and a top-level scan calls those version-less. That is not a cosmetic
+    miss: it is how a pre-release engine hides from an audit whose whole
+    purpose is to find one.
+    """
+    found = set()
+    if _depth > 4:
+        return found
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in VERSION_KEYS and _is_real_version(v):
+                found.add(k)
+            found |= _nested_version_keys(v, _depth + 1)
+    elif isinstance(obj, list):
+        for v in obj[:50]:
+            found |= _nested_version_keys(v, _depth + 1)
+    return found
+
+
 def _is_real_version(v):
     """A version key that is present but says nothing is not provenance.
 
@@ -370,6 +393,14 @@ def lane_files():
             for r in rows:
                 have |= {k for k in CONDITION_KEYS if r.get(k) not in (None, "")}
                 vkeys |= {k for k in VERSION_KEYS if _is_real_version(r.get(k))}
+                # AND NESTED, because a version one level down is still a
+                # version and this audit was reading only the top level.
+                # e4decomp keeps its engine_version inside `meta`, so the
+                # auditor reported it as recording none -- and a sweep that
+                # trusted this auditor therefore concluded the paper was
+                # entirely on the release while E4's numbers sat on a
+                # pre-release wheel. Absence of evidence was read as evidence.
+                vkeys |= _nested_version_keys(r)
             backends = sorted({str(r.get("backend", "?")) for r in rows})
             where = f"{name} -> {table}, {len(rows)} rows, backends {', '.join(backends)}"
             if have and vkeys:
