@@ -448,21 +448,17 @@ def f4_one_vs_n(rows):
     # to the dev21 primitive-batch arm; this figure did not, and so plotted
     # 411k pts/s against the table's 1.73M and a 12h aggregation of 14.9 ms
     # against the table's 29.6. Both bars wrong, in opposite directions.
-    # IT HAPPENED AGAIN, which is why the precedence is now written once and
-    # shared. The table moved to ts59 (dev23, N=5, unsettled to match the
-    # comparators, conditions stamped) and this figure was still reading
-    # dev21_ts, so the bar would have plotted a 1.73M ingest and a 29.56 ms
-    # aggregation against a table printing 1.92M and 29.86. Smaller than the
-    # last desync and in the same direction, but the same defect.
+    # IT HAPPENED AGAIN, twice more. The table moved to ts59 while this figure
+    # still read dev21_ts, and then the table moved to ts_2681 (the released
+    # re-measure) while the fallback chain below still listed the two
+    # pre-release rungs.
+    #
+    # THE FALLBACKS ARE GONE, not reordered. Every one of these desyncs had the
+    # same shape: a cascade whose job was to find SOMETHING to plot, which is
+    # exactly the behaviour that lets a figure disagree with its own table
+    # without failing. One released source, or nothing.
     _native = [json.load(open(fp)) for fp in
-               _glob.glob(os.path.join(RESULTS, "ts59", "nosettle_r*.json"))]
-    if not _native:
-        _native = [json.load(open(fp)) for fp in
-                   _glob.glob(os.path.join(RESULTS, "dev21_ts",
-                                           "ts_dev21_prim_r*.json"))]
-    if not _native:  # fall back rather than mix, exactly as the table does
-        _native = [json.load(open(fp)) for fp in
-                   _glob.glob(os.path.join(RESULTS, "batch1", "l4n_r*.json"))]
+               _glob.glob(os.path.join(RESULTS, "ts_2681", "nosettle_r*.json"))]
 
     def _ts_native_med(f):
         v = [r[f] for r in _native if isinstance(r.get(f), (int, float))]

@@ -131,8 +131,12 @@ def ts_arm(field, primitive=True, numpy_cols=True):
     """
     import glob as _glob
     import json as _json
-    for sub, pat in (("ts59", "nosettle_r*.json"),
-                     ("dev21_ts", "*.json")):
+    # ONE SOURCE. ts_2681 is the released re-measure; ts59 (dev23) and
+    # dev21_ts were the pre-release rungs of a cascade whose only function was
+    # to keep printing whichever dev line existed. Both are gone: a fallback
+    # here silently changes the engine AND, because the arms use different
+    # last-point keys, the quantity being reported.
+    for sub, pat in (("ts_2681", "nosettle_r*.json"),):
         out = []
         for fp in _glob.glob(os.path.join(M.RESULTS, sub, pat)):
             d = _json.load(open(fp))
@@ -618,9 +622,9 @@ CLAIMS = [
      lambda r: torn_count("surrealdb_e2"), "SurrealDB torn 0/5"),
 
     # --- L4 time series ---------------------------------------------------
-    ("l4.native.ingest", 1.92e6, 5e3,
+    ("l4.native.ingest", 1.861e6, 5e3,
      lambda r: ts_arm("ingest_pts_per_s"), "native ingest pts/s (prim arm)"),
-    ("l4.native.q_global", 29.9, 0.1,
+    ("l4.native.q_global", 25.0, 0.1,
      lambda r: ts_arm("q_global_ms"), "12h aggregation on the native path"),
     ("l4.questdb.ingest", 431305, 500,
      lambda r: l4_median("ingest_pts_per_s", "questdb"), "QuestDB line protocol"),
@@ -628,10 +632,10 @@ CLAIMS = [
      lambda r: l4_median("ingest_pts_per_s", "duckdb"), "DuckDB bulk ingest"),
     ("l4.doc.q_global", 1791.65, 1.0,
      lambda r: l4_median("q_global_ms", "arcadedb"), "12h aggregation, document path (1.8 s)"),
-    ("l4.ratio.questdb", 4.4, 0.05,
+    ("l4.ratio.questdb", 4.32, 0.05,
      lambda r: ts_arm("ingest_pts_per_s") / l4_median("ingest_pts_per_s", "questdb"),
      "native vs QuestDB"),
-    ("l4.ratio.docpath", 61.0, 0.5,
+    ("l4.ratio.docpath", 59.5, 0.5,
      lambda r: ts_arm("ingest_pts_per_s") / l4_median("ingest_pts_per_s", "arcadedb"),
      "native vs our own document path"),
     ("l4.tentag.ingest_cost", 2.0, 0.05,
@@ -640,7 +644,7 @@ CLAIMS = [
     ("l4.tentag.lastpoint_gain", 2.6, 0.05,
      lambda r: _tentag("q_last_ms", 1) / _tentag("q_last_ms", 10),
      "ten-tag last-point speedup, matched A/B"),
-    ("l4.ratio.duckdb", 1.01, 0.01,
+    ("l4.ratio.duckdb", 1.04, 0.01,
      lambda r: l4_median("ingest_pts_per_s", "duckdb") / ts_arm("ingest_pts_per_s"),
      "DuckDB's remaining lead"),
     # Last-point had the paper claiming a win it did not have. The prose read
@@ -658,7 +662,7 @@ CLAIMS = [
     ("l4.native.q_last", 0.690, 0.05,
      lambda r: ts_arm("q_last_unbounded_ms"),
      "last point, NATIVE arm, unbounded (now beats both specialists)"),
-    ("l4.native.q_last_windowed", 0.940, 0.05,
+    ("l4.native.q_last_windowed", 0.860, 0.05,
      lambda r: ts_arm("q_last_ms"),
      "the retired recency window, kept as a claim so its loss stays visible"),
     ("l4.doc.q_last", 0.520, 0.01,

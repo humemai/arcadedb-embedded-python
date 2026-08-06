@@ -110,7 +110,7 @@ FEEDS = {
     # fed the superseded dev-era dense rows and are deliberately NOT listed,
     # so the unmapped-input check reports them as the dead overlays they are.
     # batch1 was read by the time-series half and never mapped: a blind spot.
-    "T5": ["dense_mp_2681", "ts59", "dev21_ts", "batch1"],
+    "T5": ["dense_mp_2681", "ts_2681"],
 }
 
 # Top-level result FILES that feed published tables, as opposed to the overlay

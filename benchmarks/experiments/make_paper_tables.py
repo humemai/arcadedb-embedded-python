@@ -447,19 +447,28 @@ def dense_ts_table(rows):
     # both the engine line and the quantity being reported. The cascade is
     # gone: the release artifacts or nothing.
     native = [json.load(open(fp)) for fp in
-              glob.glob(os.path.join(RESULTS, "ts59", "nosettle_r*.json"))]
+              glob.glob(os.path.join(RESULTS, "ts_2681", "nosettle_r*.json"))]
     last_key = "q_last_unbounded_ms"
-    # AND THE VERSION IS PART OF THE ROW. ts59 was measured on a dev wheel, so
-    # this is the one published cell in the paper still off the release line.
-    # It prints under protest rather than silently: the paper cannot ship this
-    # row, and a warning that scrolls past is how it survived unnoticed until
-    # a version sweep went looking.
+    # ts_2681 REPLACED ts59, which was the last published cell measured on a
+    # pre-release wheel (26.8.1.dev23). A version sweep found it; this row is
+    # the re-measure. It also records cpuset/heap/mem_cap/producer/role/host,
+    # which ts59 did not, so the cell is now traceable as well as correctly
+    # versioned.
+    #
+    # The engine barely moved across that gap, which is the useful part: ingest
+    # 1.92M -> 1.86M pts/s, last point 0.690 -> 0.72 ms, 1h bucket 4.31 -> 4.41,
+    # and the 12h aggregation IMPROVED 29.86 -> 24.98 ms. Nothing here changes
+    # a conclusion, so the re-measure buys provenance rather than a new result,
+    # which is exactly what a version freeze is supposed to buy.
     _v = {str(r.get("engine_version") or "?") for r in native}
     _dev = sorted(v for v in _v if ".dev" in v)
     if _dev:
         print("  !! T5 time-series ArcadeDB row is NOT on the release: %s.\n"
               "     Re-run the native TS probe on 26.8.1 before submission; "
               "this row is not publishable as measured." % ", ".join(_dev),
+              file=sys.stderr)
+    elif len(native) < 5:
+        print("  !! T5 time-series ArcadeDB row has %d reps, not 5." % len(native),
               file=sys.stderr)
     if native:
         lines.append(" & ".join([
