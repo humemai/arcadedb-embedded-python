@@ -28,7 +28,8 @@ import os
 import statistics
 import time
 
-from l3d_dense import BACKENDS, load_dataset, K, canonical_quant_label
+from l3d_dense import (BACKENDS, load_dataset, K, canonical_quant_label,
+                        degree_stamp)
 from bench_common import run_conditions
 
 # Read with .get, not [], so the module can be IMPORTED without the run
@@ -86,6 +87,13 @@ def main():
                "quantization": canonical_quant_label(
                    os.environ.get("BENCH_DENSE_QUANT")),
                "heap_asked": os.environ.get("ARCADEDB_HEAP"),
+               # THE DEGREE, in this backend's own unit. Its absence is why F7
+               # could not verify the published DEEP-10M cells and fell back to
+               # passing on superseded rows: the lane stamps this and the
+               # driver never did. Same function as the lane, so the two cannot
+               # drift apart again.
+               "degree_param": degree_stamp(BACKEND)[0],
+               "degree_family": degree_stamp(BACKEND)[1],
                # The BACKEND's own version. run_conditions() reports the
                # arcadedb wheel, which is absent from dbbench:dense, so a
                # comparator row otherwise records "unknown" and nothing at all

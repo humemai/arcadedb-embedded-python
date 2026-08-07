@@ -1,0 +1,263 @@
+{
+  "meta": {
+    "engine_version": "26.8.1",
+    "rows": 200000,
+    "sizes": [
+      1,
+      10,
+      100,
+      1000,
+      10000,
+      100000
+    ],
+    "reps": 15,
+    "warmup": 3,
+    "heap": "2g",
+    "embedded_materialisation": "to_json_list",
+    "note": "embedded arm uses to_json_list so all three arms return list-of-dicts",
+    "docker_client_conditions": {
+      "cpuset": "0-11",
+      "mem_cap": "3g",
+      "heap": "2g",
+      "producer": "deployment_decomp_probe.py",
+      "role": "docker_client",
+      "host": "container:5d890cf0a090 (host unknown)",
+      "ts_utc": "2026-08-07T05:33:28+00:00",
+      "engine_version": "26.8.1",
+      "lane": "e4_decomp"
+    },
+    "docker_url": "http://e4srv:2480",
+    "cpuset": "0-11",
+    "mem_cap": "3g",
+    "producer": "deployment_decomp_probe.py",
+    "role": "embedded+inproc_server",
+    "host": "container:5d890cf0a090 (host unknown)",
+    "ts_utc": "2026-08-07T05:33:44+00:00",
+    "lane": "e4_decomp",
+    "row_count_agreement": "ok"
+  },
+  "results": {
+    "docker_http": {
+      "1": {
+        "p50_ms": 2.7518,
+        "rows_returned": 1,
+        "n": 15,
+        "mean_ms": 2.6635,
+        "std_ms": 0.664,
+        "min_ms": 1.6981,
+        "p90_ms": 3.4873,
+        "p95_ms": 3.5719,
+        "p99_ms": 3.5955,
+        "max_ms": 3.6014
+      },
+      "10": {
+        "p50_ms": 1.9875,
+        "rows_returned": 10,
+        "n": 15,
+        "mean_ms": 2.0514,
+        "std_ms": 0.1577,
+        "min_ms": 1.8884,
+        "p90_ms": 2.1984,
+        "p95_ms": 2.3112,
+        "p99_ms": 2.4717,
+        "max_ms": 2.5118
+      },
+      "100": {
+        "p50_ms": 3.9135,
+        "rows_returned": 100,
+        "n": 15,
+        "mean_ms": 3.8824,
+        "std_ms": 0.2513,
+        "min_ms": 3.3529,
+        "p90_ms": 4.0056,
+        "p95_ms": 4.1563,
+        "p99_ms": 4.4374,
+        "max_ms": 4.5076
+      },
+      "1000": {
+        "p50_ms": 5.95,
+        "rows_returned": 1000,
+        "n": 15,
+        "mean_ms": 6.2667,
+        "std_ms": 1.0445,
+        "min_ms": 5.3876,
+        "p90_ms": 7.5858,
+        "p95_ms": 8.3924,
+        "p99_ms": 9.0963,
+        "max_ms": 9.2723
+      },
+      "10000": {
+        "p50_ms": 40.947,
+        "rows_returned": 10000,
+        "n": 15,
+        "mean_ms": 41.0953,
+        "std_ms": 0.9164,
+        "min_ms": 40.1213,
+        "p90_ms": 42.1842,
+        "p95_ms": 42.6788,
+        "p99_ms": 43.1789,
+        "max_ms": 43.3039
+      },
+      "100000": {
+        "p50_ms": 283.5434,
+        "rows_returned": 100000,
+        "n": 15,
+        "mean_ms": 285.9605,
+        "std_ms": 6.954,
+        "min_ms": 277.4708,
+        "p90_ms": 296.777,
+        "p95_ms": 297.8766,
+        "p99_ms": 298.0827,
+        "max_ms": 298.1342
+      }
+    },
+    "embedded": {
+      "1": {
+        "p50_ms": 1.2576,
+        "rows_returned": 1,
+        "n": 15,
+        "mean_ms": 1.302,
+        "std_ms": 0.4089,
+        "min_ms": 0.6645,
+        "p90_ms": 1.7899,
+        "p95_ms": 1.85,
+        "p99_ms": 1.8831,
+        "max_ms": 1.8913
+      },
+      "10": {
+        "p50_ms": 0.9092,
+        "rows_returned": 10,
+        "n": 15,
+        "mean_ms": 0.9027,
+        "std_ms": 0.1237,
+        "min_ms": 0.7287,
+        "p90_ms": 1.0444,
+        "p95_ms": 1.0822,
+        "p99_ms": 1.1518,
+        "max_ms": 1.1691
+      },
+      "100": {
+        "p50_ms": 1.6008,
+        "rows_returned": 100,
+        "n": 15,
+        "mean_ms": 1.7006,
+        "std_ms": 0.3784,
+        "min_ms": 1.196,
+        "p90_ms": 2.1163,
+        "p95_ms": 2.1777,
+        "p99_ms": 2.2815,
+        "max_ms": 2.3075
+      },
+      "1000": {
+        "p50_ms": 3.2153,
+        "rows_returned": 1000,
+        "n": 15,
+        "mean_ms": 3.5788,
+        "std_ms": 1.5952,
+        "min_ms": 2.2172,
+        "p90_ms": 3.9566,
+        "p95_ms": 5.535,
+        "p99_ms": 8.4386,
+        "max_ms": 9.1645
+      },
+      "10000": {
+        "p50_ms": 26.0006,
+        "rows_returned": 10000,
+        "n": 15,
+        "mean_ms": 24.4374,
+        "std_ms": 2.366,
+        "min_ms": 20.1692,
+        "p90_ms": 26.1954,
+        "p95_ms": 26.2093,
+        "p99_ms": 26.2119,
+        "max_ms": 26.2126
+      },
+      "100000": {
+        "p50_ms": 198.1988,
+        "rows_returned": 100000,
+        "n": 15,
+        "mean_ms": 198.1361,
+        "std_ms": 3.7024,
+        "min_ms": 194.0401,
+        "p90_ms": 201.8647,
+        "p95_ms": 204.3616,
+        "p99_ms": 207.5735,
+        "max_ms": 208.3764
+      }
+    },
+    "inproc_http": {
+      "1": {
+        "p50_ms": 2.7455,
+        "rows_returned": 1,
+        "n": 15,
+        "mean_ms": 2.9546,
+        "std_ms": 1.3989,
+        "min_ms": 1.8152,
+        "p90_ms": 3.5569,
+        "p95_ms": 4.9165,
+        "p99_ms": 7.1795,
+        "max_ms": 7.7453
+      },
+      "10": {
+        "p50_ms": 2.1583,
+        "rows_returned": 10,
+        "n": 15,
+        "mean_ms": 2.1548,
+        "std_ms": 0.1877,
+        "min_ms": 1.8567,
+        "p90_ms": 2.3637,
+        "p95_ms": 2.4808,
+        "p99_ms": 2.5954,
+        "max_ms": 2.624
+      },
+      "100": {
+        "p50_ms": 3.4205,
+        "rows_returned": 100,
+        "n": 15,
+        "mean_ms": 3.4616,
+        "std_ms": 0.3917,
+        "min_ms": 2.9242,
+        "p90_ms": 3.8999,
+        "p95_ms": 4.066,
+        "p99_ms": 4.2914,
+        "max_ms": 4.3478
+      },
+      "1000": {
+        "p50_ms": 5.6195,
+        "rows_returned": 1000,
+        "n": 15,
+        "mean_ms": 5.7153,
+        "std_ms": 0.8747,
+        "min_ms": 4.198,
+        "p90_ms": 6.8174,
+        "p95_ms": 6.8873,
+        "p99_ms": 6.9352,
+        "max_ms": 6.9472
+      },
+      "10000": {
+        "p50_ms": 36.8155,
+        "rows_returned": 10000,
+        "n": 15,
+        "mean_ms": 35.1214,
+        "std_ms": 3.3924,
+        "min_ms": 29.4905,
+        "p90_ms": 38.1335,
+        "p95_ms": 38.3657,
+        "p99_ms": 38.5278,
+        "max_ms": 38.5683
+      },
+      "100000": {
+        "p50_ms": 264.8988,
+        "rows_returned": 100000,
+        "n": 15,
+        "mean_ms": 265.6932,
+        "std_ms": 2.9028,
+        "min_ms": 261.7689,
+        "p90_ms": 270.3126,
+        "p95_ms": 270.6804,
+        "p99_ms": 270.7222,
+        "max_ms": 270.7327
+      }
+    }
+  }
+}

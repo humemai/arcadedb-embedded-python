@@ -1,1 +1,0 @@
-{"rep": 1, "build_s": 2692.79, "quantization": "fp32", "engine": "26.8.1.dev20", "n_queries": 1000, "p50": 4.424, "p95": 11.132, "p99": 20.063, "recall_at_10": 0.9491}

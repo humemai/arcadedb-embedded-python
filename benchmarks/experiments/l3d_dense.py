@@ -139,6 +139,25 @@ def resolve_quant(raw):
     )
 
 
+def degree_stamp(backend):
+    """The degree this backend was given, and the unit it is in.
+
+    Shared so the lane script and dense_multipass_driver cannot disagree. They
+    did: the driver stamped no degree at all, so the DEEP-10M cells the paper
+    prints could not be shown to be degree-matched, while the lane's own small
+    tier could. F7 reported the tier as passing by reading superseded rows.
+    One function, called from both, is the only version of this that stays
+    true.
+    """
+    hnswlib_style = {"chroma_dense", "lancedb_dense", "qdrant_dense",
+                     "milvus_dense", "duckdb_vss_dense"}
+    if str(backend).startswith("arcadedb"):
+        return M, "arcadedb_maxconnections_per_layer"
+    if backend in hnswlib_style:
+        return COMPARATOR_M, "hnswlib_m_doubled_at_base"
+    return None, "exact_scan_no_ann"
+
+
 def canonical_quant_label(raw):
     """The one name for this arm in results, whatever the input spelled."""
     return resolve_quant(raw) or "fp32"
@@ -558,14 +577,7 @@ def main():
     # could contradict the claim that the lane was degree-matched. A row that
     # names its own value and its own unit can be checked without reading the
     # adapter.
-    _HNSWLIB_STYLE = {"chroma_dense", "lancedb_dense", "qdrant_dense",
-                      "milvus_dense", "duckdb_vss_dense"}
-    if args.backend.startswith("arcadedb"):
-        out["degree_param"], out["degree_family"] = M, "arcadedb_maxconnections_per_layer"
-    elif args.backend in _HNSWLIB_STYLE:
-        out["degree_param"], out["degree_family"] = COMPARATOR_M, "hnswlib_m_doubled_at_base"
-    else:  # sqlite_vec is an exact scan: there is no graph and no degree
-        out["degree_param"], out["degree_family"] = None, "exact_scan_no_ann"
+    out["degree_param"], out["degree_family"] = degree_stamp(args.backend)
     # Canonical label, so one state has one name. This recorder called
     # unquantized "none" while dense_multipass_driver.py called it "fp32", and
     # results/ carries both (36 "fp32", 30 "none") for runs that built the

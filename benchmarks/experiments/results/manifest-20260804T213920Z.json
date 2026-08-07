@@ -1,0 +1,19 @@
+{
+  "ts": "20260804T213920Z",
+  "tier": "paper",
+  "scale": "medium",
+  "cpuset": "0-11",
+  "workers": 1,
+  "shards": [
+    "0-11"
+  ],
+  "reps": 5,
+  "seed": 42,
+  "mem": "32g",
+  "heap": "16g",
+  "server_mem_fraction": 0.75,
+  "images": {
+    "dbbench:client": "sha256:eb37e84aa863ded23c54d0ee08d7ca3b8d80ce0b7dd8de2523bc502be3a59ec5",
+    "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c"
+  }
+}

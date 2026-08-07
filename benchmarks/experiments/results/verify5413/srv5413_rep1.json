@@ -1,1 +1,0 @@
-{"rep": 1, "build_s": 13349.05, "deployment": "server_http", "server_version": "server:26.8.1-SNAPSHOT (build 8bd63ccc8838cde20718207e48ed8c076ea49edd/1785024073520/main)", "n_queries": 1000, "p50": 5.783, "p95": 64.218, "p99": 110.679, "recall_at_10": 0.9522}

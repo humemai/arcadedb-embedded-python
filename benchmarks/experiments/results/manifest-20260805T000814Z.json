@@ -1,0 +1,21 @@
+{
+  "ts": "20260805T000814Z",
+  "tier": "paper",
+  "scale": "medium",
+  "cpuset": "0-11",
+  "workers": 1,
+  "shards": [
+    "0-11"
+  ],
+  "reps": 5,
+  "seed": 42,
+  "mem": "32g",
+  "heap": "16g",
+  "server_mem_fraction": 0.75,
+  "images": {
+    "dbbench:arcadedb": "sha256:302088efd354e99c12368a20c63cd4617b9fc99ec226a8876e8280e54b572623",
+    "dbbench:client": "sha256:eb37e84aa863ded23c54d0ee08d7ca3b8d80ce0b7dd8de2523bc502be3a59ec5",
+    "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a": "sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+    "dbbench:duckdb": "sha256:88391020a81608846d70c95ee196e6c82159a84722724d355879f0627a767cbd"
+  }
+}
