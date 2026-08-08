@@ -371,8 +371,34 @@ class Elastic(Base):
         host = os.environ["BENCH_SERVER_HOST"]
         self.es = Elasticsearch(f"http://{host}:9200", request_timeout=600)
         self.version = self.es.info()["version"]["number"]
+        # INDEX-TIME PRUNING IS OFF HERE, DELIBERATELY, AND THAT IS AN OVERRIDE.
+        #
+        # Elasticsearch 9.1 turned token pruning on by default for every new
+        # sparse_vector field ("With any new indices created, token pruning
+        # will be turned on by default"), with thresholds Elastic states were
+        # "chosen based on tests using ELSERv2" -- their own sparse model. This
+        # corpus is SPLADE-cocondenser, a different weight distribution, and
+        # the cost of applying one model's thresholds to another's vectors is
+        # measurable in our own history:
+        #
+        #     ES 9.0.0 (no such default)   recall@10  0.991 - 0.9985
+        #     ES 9.4.1 (pruning on)        recall@10  0.725 - 0.929
+        #
+        # Same corpus, same harness, same adapter. Qdrant and Milvus retrieve
+        # exactly and score ~0.99 on the same queries, so leaving this on would
+        # compare an approximate Elasticsearch against exact competitors and
+        # print 0.75 beside their 0.99 -- which reads as "Elasticsearch is bad
+        # at sparse retrieval" and is not what the number means.
+        #
+        # This is the same class of override as ES's forcemerge, Milvus's
+        # flush, Qdrant's green-wait and the matched HNSW degree: equalise the
+        # operating point, then disclose it. BENCH_ES_PRUNE=1 restores the
+        # stock default, and the choice is recorded on every row either way so
+        # no reader has to infer which one produced a given number.
+        self.prune = os.environ.get("BENCH_ES_PRUNE", "0") == "1"
         self.es.indices.create(index=self.IDX, mappings={
-            "properties": {"emb": {"type": "sparse_vector"}}},
+            "properties": {"emb": {"type": "sparse_vector",
+                                   "index_options": {"prune": self.prune}}}},
             settings={"number_of_shards": 1, "number_of_replicas": 0})
 
     @staticmethod
@@ -434,6 +460,12 @@ def main():
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = getattr(b, "version", "?")
+    # Only Elasticsearch sets this. A row must say which operating point it
+    # measured; the 9.0.0-vs-9.4.1 recall gap was only diagnosable because the
+    # engine version happened to be recorded, and pruning is not visible from
+    # the version alone once it is configurable.
+    if hasattr(b, "prune"):
+        out["es_prune"] = b.prune
 
     t0 = time.perf_counter()
     b.build(n_docs)

@@ -113,6 +113,27 @@ def load_canonical():
         if r["backend"] == "elasticsearch_sparse":
             if not r.get("server_heap") or r.get("server_heap") != r.get("heap"):
                 continue
+            # And it must have retrieved without index-time pruning. ES 9.1
+            # turned that on by default for every new sparse_vector field,
+            # using thresholds Elastic tuned on ELSERv2; this corpus is
+            # SPLADE-cocondenser, and the cost is measured in our own rows:
+            #
+            #     ES 9.0.0 (predates the default)  recall  0.991 - 0.9985
+            #     ES 9.4.1 (pruning on)            recall  0.725 - 0.929
+            #
+            # Qdrant and Milvus retrieve exactly and score ~1.0 on the same
+            # queries, so a pruned row prints 0.75 beside their 1.0 and reads
+            # as "Elasticsearch is bad at sparse retrieval". It is not: it is
+            # one model's thresholds applied to another model's vectors.
+            #
+            # es_prune is recorded by l3_sparse.py, so False is a POSITIVE
+            # statement that pruning was off. Absent means the row predates
+            # the field and cannot make that statement -- including the rows
+            # from the heap re-run, which fixed the heap while still pruning.
+            # Those are exactly the rows that would otherwise slip through the
+            # check above, having finally got their heap right.
+            if r.get("es_prune") is not False:
+                continue
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
              r["backend"], r["rep"])
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
