@@ -40,6 +40,27 @@ A client/server backend gets the envelope **split**, not doubled:
 `server = 0.75 * total`, `client = total - server`, so the pair sums to what
 an embedded cell gets in one container.
 
+"Same heap" means the heap the engine RAN, not the heap the cell asked for,
+and those were different for a year. `runner.py` templated `{heap}` into every
+served backend's environment except one: Elasticsearch was hardcoded to
+`ES_JAVA_OPTS=-Xms2g -Xmx4g`, so it ran 4g at tiny, small AND medium while its
+comparators scaled 4g → 8g → 16g. At medium that is a quarter of the memory,
+against the engine we compare ourselves to, in the direction that flatters us.
+It also broke the `-Xms=-Xmx` pinning the rest of the lane relies on, so
+Elasticsearch alone grew its heap under load.
+
+Nothing in the artifact could reveal this, because a row stamps `heap` from
+the REQUEST: those rows say `heap=16g`. `observe_server()` closed it by
+reading the container's real `-Xmx` back out of `docker inspect` into
+`server_heap`, and failing any cell where the two disagree. Rows without that
+witness are dropped from published tables (`load_canonical`), so a tier shows
+a gap rather than an unfair number.
+
+The check is honest about its own limit: it reads the container's ENV, which
+is what we passed in, not the JVM's live heap. It proves the plumbing, not the
+obedience. The stronger form is to ask the engine — Elasticsearch reports
+`jvm.mem.heap_max_in_bytes` from `/_nodes/jvm` — and that is still owed.
+
 **F4. Same protocol.** Reps per build, warmup count, settle step and query
 set are properties of the LANE, not of whoever wrote the driver. If ArcadeDB
 gets five passes over one build, so does every comparator. If one engine gets
@@ -324,3 +345,44 @@ where a client pays one. Sparse build time is not a published column, and
 The general rule this yields: **a CPU percentage is a fact about a container,
 not about an engine.** Attributing one requires knowing who was asking for
 the work.
+
+## An exit code is not evidence
+
+Two defects found on 2026-08-08 have the same shape, and it is the shape worth
+guarding against: the harness reported success while measuring something other
+than what was specified.
+
+**The corpus.** `l3_sparse.py` falls back to a synthetic generator unless
+`BENCH_SPARSE_SOURCE=bigann` is exported. A queue script that set only
+`BENCH_DATA` produced 94 sparse rows across three tiers, every one `rc=0`,
+under stages that logged OK. They were not Big-ANN SPLADE at all. At `medium`
+the doc count gave it away (10,000,000 against Big-ANN's 8,841,823) but at
+`tiny` and `small` BOTH corpora hold 100k and 1M documents, so nothing in the
+row distinguished them except the absent ground truth: `gt_missing`, and
+`recall_at_10=None`. Being newer, they outranked the real rows on `ts_utc` and
+would have walked into T4 carrying no recall at all.
+
+The same script crashed the graph lane outright — without
+`BENCH_GRAPH_SOURCE=ldbc`, `SCALE_PERSONS` is the synthetic table and argparse
+rejects `--scale sf1`. That failure cost 80 cells and was worth far less than
+it looked: it was LOUD. The sparse one was quiet, and quiet is what costs a
+paper.
+
+**The heap.** See F3. Same shape: cells produced rows, stages reported OK, and
+the artifact asserted a heap the engine never had.
+
+What changed:
+
+- A **container-side preflight** asserts, from inside the container, that the
+  lane sees the corpus it was told to use and accepts the scales it will be
+  passed. Checking the host path is a different check: q21 lost 20 cells to a
+  directory that existed on the host and not at the mount point.
+- Every sparse stage is **verified against the data it produced** — recall
+  present, and `n_docs == 8_841_823` at medium — not against its return code.
+- `load_canonical` drops any sparse row without a recall number, before the
+  dedupe, so an unpublishable row cannot shadow a publishable one.
+
+**The rule: `rc == 0` means a process finished, not that it measured what you
+asked for.** Acceptance has to compare the DATA against the specification —
+corpus identity, observed heap, row counts — because every one of these
+defects produced output that looked exactly like success.
