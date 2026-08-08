@@ -232,7 +232,21 @@ BACKENDS = {
         "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",  # 9.4.1, matches the 9.4.1 client
         "server_env": ["-e", "discovery.type=single-node",
                        "-e", "xpack.security.enabled=false",
-                       "-e", "ES_JAVA_OPTS=-Xms2g -Xmx4g"],
+                       # F3. This was hardcoded "-Xms2g -Xmx4g", the only
+                       # served backend not templated on {heap}, so
+                       # Elasticsearch ran a 4g heap at EVERY tier while its
+                       # comparators scaled 4g -> 8g -> 16g. At medium that is
+                       # a quarter of the memory, and the rows still recorded
+                       # heap=16g because the row stamps what was REQUESTED.
+                       # An artifact claiming a heap the engine never had is
+                       # worse than one that admits it does not know.
+                       # It also broke the -Xms=-Xmx pinning the rest of this
+                       # lane relies on (see l3_sparse.py:82), so ES alone grew
+                       # its heap under load while everyone else committed up
+                       # front. observe_server() is what surfaced it: it
+                       # compares the container's real -Xmx against the request
+                       # and now fails the cell instead of publishing it.
+                       "-e", "ES_JAVA_OPTS=-Xms{heap} -Xmx{heap}"],
         "server_port": 9200,
         "ready_regex": r'"message":"started|current.health=\"GREEN\"',
     },
