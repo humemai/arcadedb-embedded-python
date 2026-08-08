@@ -552,7 +552,24 @@ SIDECAR_SUFFIXES = ("_buildstats.json", "_gc.json", "_manifest.json")
 
 
 def _versions_in(subdir):
-    """(Counter of version strings, key names seen, n files, n without version)"""
+    """(Counter of version strings, key names seen, n files, n without version)
+
+    A DRIVER MAY WRITE EITHER SHAPE. The multipass dense drivers write a JSON
+    ARRAY of per-pass records; most others write a single object. This used to
+    `continue` on anything that was not a dict, so dense_mp_2681 -- eleven
+    files, every one stamping cpuset, heap, mem_cap, quantization, recall and
+    engine_version -- audited as "no result files", and the T5 dense block
+    looked unprovenanced when it is in fact the best-stamped feed in the paper.
+
+    The reporting was the worse half: a silent skip is indistinguishable from
+    an empty directory, so the audit read CLEAN over a feed it had never
+    opened. That is the e4decomp failure again, where a top-level-only scan
+    reported green over a pre-release hidden one level down.
+
+    So: unwrap lists, and count anything still unreadable as a file WITHOUT a
+    version rather than dropping it. An auditor may report "I could not read
+    this". It may not report nothing.
+    """
     vals, keys, missing, n = Counter(), Counter(), 0, 0
     for fp in sorted(glob.glob(os.path.join(RESULTS, subdir, "*.json"))):
         if fp.endswith(SIDECAR_SUFFIXES):
@@ -560,17 +577,22 @@ def _versions_in(subdir):
         try:
             d = json.load(open(fp))
         except Exception:
+            n += 1
+            missing += 1          # unreadable is a finding, not a skip
             continue
-        if not isinstance(d, dict):
-            continue
+        recs = [r for r in (d if isinstance(d, list) else [d])
+                if isinstance(r, dict)]
         n += 1
         found = False
-        for k in VERSION_KEYS:
-            v = d.get(k)
-            if isinstance(v, str) and v:
-                vals[v] += 1
-                keys[k] += 1
-                found = True
+        for r in recs:
+            for k in VERSION_KEYS:
+                v = r.get(k)
+                if isinstance(v, str) and v:
+                    vals[v] += 1
+                    keys[k] += 1
+                    found = True
+                    break
+            if found:
                 break
         if not found:
             missing += 1
