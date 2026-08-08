@@ -141,7 +141,20 @@ import glob, json, os, shutil
 OUT = os.path.expanduser("~/qfix3")
 EXP = os.path.expanduser("~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments")
 DEST = os.path.join(EXP, "results", "l4_tsbs.jsonl")
-NEED = ("cpuset", "heap", "mem_cap")
+# ASK EACH ROW FOR WHAT IT CAN HONESTLY SUPPLY. The first version of this
+# check demanded cpuset+heap+mem_cap from every arm and rejected a run that had
+# succeeded completely: DuckDB is a C++ engine with no JVM heap at all, and
+# QuestDB's row is the CLIENT (role=driver) whose heap is not the engine's --
+# exactly the caveat bench_common.run_conditions documents. It also read the
+# version from engine_version, which l4_tsbs.py DELIBERATELY renames to
+# harness_arcadedb_version for non-ArcadeDB arms so the only version a reader
+# can mistake for the engine under test is the one that IS it. The engine's own
+# version is backend_version.
+#
+# The guard's purpose was never a specific key. It was to refuse rows that
+# cannot say what produced them. The rows this replaces could not; these can.
+UNIVERSAL = ("cpuset", "mem_cap", "host", "role", "backend_version")
+NEEDS_HEAP = {"arcadedb"}          # the only JVM engine measured in-process here
 
 rows = []
 for fp in sorted(glob.glob(os.path.join(OUT, "*_r*.json"))):
@@ -157,10 +170,14 @@ print("  produced %d rows: %s" % (len(rows), {k: len(v) for k, v in sorted(by_be
 
 bad = False
 for be, rs in sorted(by_be.items()):
-    miss = [f for f in NEED if all(r.get(f) is None for r in rs)]
-    ver = {str(r.get("engine_version") or r.get("harness_arcadedb_version")) for r in rs}
-    print("    %-10s n=%d  versions=%s  %s"
-          % (be, len(rs), sorted(ver), ("MISSING " + ",".join(miss)) if miss else "conditions stamped"))
+    miss = sorted({f for r in rs for f in UNIVERSAL if not r.get(f)})
+    if be in NEEDS_HEAP and any(not r.get("heap") for r in rs):
+        miss.append("heap")
+    ver = sorted({str(r.get("backend_version")) for r in rs})
+    role = sorted({str(r.get("role")) for r in rs})
+    print("    %-10s n=%d  role=%s  %s  %s"
+          % (be, len(rs), ",".join(role), ver[0][:40],
+             ("MISSING " + ",".join(miss)) if miss else "conditions complete"))
     if miss:
         bad = True
     if len(rs) < 5:

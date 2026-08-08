@@ -317,15 +317,30 @@ def run_conditions():
         if not files:
             continue
         have = set()
+        unreadable = 0
         for fp in files:
             try:
                 d = json.load(open(fp))
             except Exception:
+                unreadable += 1
                 continue
-            if isinstance(d, dict):
-                have |= {k for k in CONDITION_KEYS if d.get(k) not in (None, "")}
+            # SECOND INSTANCE of the same blindness _versions_in had: a driver
+            # that writes a JSON ARRAY of per-pass records was skipped by an
+            # `isinstance(d, dict)` guard, so dense_mp_2681 -- which stamps
+            # cpuset=0-11, heap=24g and mem_cap=36g on every record -- reported
+            # as recording NONE of them. Fixing the version scan alone left
+            # this one lying in exactly the same way, about the same directory.
+            # Anything that opens result files has to handle both shapes.
+            for r in (d if isinstance(d, list) else [d]):
+                if isinstance(r, dict):
+                    have |= {k for k in CONDITION_KEYS if r.get(k) not in (None, "")}
         if have:
-            print(f"  {sub:20} records {', '.join(sorted(have))}")
+            note = f"  ({unreadable} unreadable)" if unreadable else ""
+            print(f"  {sub:20} records {', '.join(sorted(have))}{note}")
+        elif unreadable:
+            # Not the same as "records nothing", and must not print as if it were.
+            print(f"  {sub:20} BAD {unreadable}/{len(files)} files unreadable")
+            bad += 1
         else:
             print(f"  {sub:20} BAD records none of {CONDITION_KEYS}")
             bad += 1

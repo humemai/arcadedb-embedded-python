@@ -577,7 +577,10 @@ notes.txt
 config/ai.json
 benchmarks/experiments/results/runs.jsonl
 benchmarks/experiments/results/runs-*.csv
-# Backups of the row log. These are exact-path rules, so a copy taken before a
-# risky operation (runs.jsonl.pre-merge-20260807T2215Z, 1.3 MB) matched none of
-# them and one `git add -A` would have committed raw results into the repo.
+# Backups taken before a risky operation. The rules above are exact paths, so
+# runs.jsonl.pre-merge-20260807T2215Z (1.3 MB) matched none of them and one
+# `git add -A` would have committed raw results. Naming the runs.jsonl case
+# alone was not enough either: l4_tsbs.jsonl.pre-qfix3 staged itself the very
+# next time a feed was replaced. Ignore the CONVENTION, not each instance.
+benchmarks/experiments/results/*.pre-*
 benchmarks/experiments/results/runs.jsonl.*
