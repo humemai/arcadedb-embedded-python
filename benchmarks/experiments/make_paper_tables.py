@@ -75,6 +75,44 @@ def load_canonical():
         cpuset = str(r.get("cpuset"))
         if cpuset not in ("0-11", "None"):
             continue
+        # A sparse cell with no recall number cannot be published -- the paper
+        # reports recall beside every latency -- and the reason one is missing
+        # is not benign. l3_sparse.py:22 falls back to the SYNTHETIC generator
+        # unless BENCH_SPARSE_SOURCE=bigann is exported, and the synthetic path
+        # ships no ground truth, so its rows carry gt_missing and
+        # recall_at_10=None. On 2026-08-07 a queue script that omitted that
+        # export wrote 94 such rows. At medium they were distinguishable
+        # (n_docs 10,000,000 against Big-ANN's 8,841,823, and n_docs is in the
+        # key below); at tiny and small BOTH corpora hold 100k and 1M docs, so
+        # the synthetic rows outranked the real ones on ts_utc and would have
+        # walked into T4 carrying no recall at all. Exactly the sweep-tier
+        # shape above: a later run under a different protocol shadowing a good
+        # one. Dropped at the same point, before the dedupe, for the same
+        # reason -- a row that cannot be published must not be able to shadow.
+        if r["lane"] == "l3s" and r.get("recall_at_10") is None:
+            continue
+        # Elasticsearch must prove the heap it ran, not assert it. Until
+        # 2026-08-08 runner.py hardcoded "ES_JAVA_OPTS=-Xms2g -Xmx4g" for this
+        # backend alone, so ES ran 4g at tiny, small AND medium while its
+        # comparators scaled 4g -> 8g -> 16g: a quarter of the memory at medium,
+        # in the direction that flatters ArcadeDB, in this paper's centrepiece
+        # table.
+        #
+        # Those rows are INDISTINGUISHABLE from correct ones by any other
+        # field, because `heap` stamps what the cell REQUESTED -- they say
+        # heap=16g. The only witness is server_heap, which observe_server()
+        # reads out of the container's own Env, and which did not exist when
+        # they were written. So absence of that witness is the signal.
+        #
+        # A missing cell in T4 is honest; a 4g cell wearing a 16g label is not.
+        # If the re-measure fails at a tier, that tier shows a gap.
+        #
+        # Both keys must be PRESENT as well as equal: three rows carried
+        # heap=None and server_heap=None, which an equality test alone passes
+        # by matching nothing against nothing. Absent is not agreement.
+        if r["backend"] == "elasticsearch_sparse":
+            if not r.get("server_heap") or r.get("server_heap") != r.get("heap"):
+                continue
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
              r["backend"], r["rep"])
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
