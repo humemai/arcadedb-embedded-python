@@ -35,8 +35,23 @@ import make_paper_tables as M
 
 
 def _sel(rows, lane=None, scale=None, backend=None, workload=None):
+    """Rows matching the given axes, EXCLUDING the analytical-view ablation.
+
+    Separating the two OLAP arms onto different canonical keys stopped the
+    ablation from SHADOWING the published cell, but it left them both in the
+    row set under one backend name, so an unfiltered median pooled them: the
+    with-view friend-age claim read 841.6 ms, which is the midpoint of 492.9
+    (with view) and 1213.3 (without) and describes neither arm.
+
+    Every claim written against this helper means the published, with-view
+    configuration, so that is the default. The ablation has its own reader
+    (gav_ablation) that asks for `gav is False` explicitly. A row predating
+    the stamp carries no `gav` and is with-view by construction.
+    """
     out = []
     for r in rows:
+        if r.get("gav") is False:
+            continue
         if lane is not None and r.get("lane") != lane:
             continue
         if scale is not None and r.get("scale") != scale:
@@ -197,6 +212,53 @@ DENSE_ROWS = ["ArcadeDB (emb, fp32)", "ArcadeDB (emb, int8)", "ArcadeDB (srv)",
 D_BUILD, D_COLD, D_WARM, D_COLDP99, D_RECALL = 0, 1, 2, 3, 4
 
 
+def gav_ablation(field):
+    """Median of one OLAP query with the Graph Analytical View DISABLED.
+
+    Until 2026-08-10 the ablation the paper reports ("gives 1257, 1272 and
+    381 ms") had no artifact anywhere under results/. It was measured on some
+    dev line and transcribed, which is the same defect the E4 decomposition
+    had and the same one this file exists to prevent.
+
+    Three harness bugs had to be fixed before it could be re-measured
+    honestly: runner.py dropped BENCH_GAV at the container boundary, so the
+    ablation would have built the view anyway; l2_graph.py stamped nothing, so
+    the ablation shared a canonical key with the published cell and would have
+    REPLACED it; and neither failure was visible in an exit code.
+
+    Reads the gav=False rows, which exist only because the lane now stamps the
+    condition it ran under.
+    """
+    rows = [r for r in M.load_canonical()
+            if r.get("lane") == "l2" and r.get("scale") == "sf10"
+            and r.get("workload") == "olap" and r.get("gav") is False
+            and isinstance(r.get(field), (int, float))]
+    return st.median([r[field] for r in rows]) if rows else None
+
+
+def ingest_ab(arm):
+    """Median rows/s of one arm of the 500k-row bulk-vs-per-row A/B.
+
+    async_ingest_probe.py printed this to stdout and wrote no file, so the
+    paper's "177.1k rows/s against 67.3k for per-row SQL" lived only in a
+    queue log. Now written under results/ingest_ab/ with the run conditions,
+    so it is checkable and re-derivable like every other cell.
+    """
+    import glob as _glob
+    import json as _json
+    out = []
+    for fp in _glob.glob(os.path.join(M.RESULTS, "ingest_ab", "ab_r*.json")):
+        d = _json.load(open(fp))
+        if M._DEV_RE.search(str(d.get("engine_version", ""))):
+            continue
+        if arm in d and isinstance(d[arm].get("rows_per_s"), (int, float)):
+            # A throughput from a run that wrote the wrong number of rows is
+            # not a throughput. The probe checks its own count; honour it.
+            if d[arm].get("count_ok"):
+                out.append(d[arm]["rows_per_s"])
+    return st.median(out) if out else None
+
+
 def _sparse_reps(n_docs, subdir="sparse_2681", arm="arcadedb_sparse_embedded"):
     """How many reps actually stand behind a published sparse cell.
 
@@ -331,38 +393,75 @@ def _tentag(field, tags, arm="prim"):
     return None
 
 
-def e4_protocol_share(which):
-    """Protocol's share of the embedded->containerised-server gap, as a percent.
+def _e4_decomp():
+    """Decompose the embedded->containerised-server gap, per result size.
 
-    Backs the paper's "86--99.8% of the gap to the wire format at every result
-    size". Three arms in one run: embedded, an in-process server over loopback
-    HTTP, and a server in a separate container. protocol = inproc - embedded,
-    boundary = docker - inproc. Reads the artifact rather than a transcribed
-    number, because a prose figure with no artifact is exactly what the
-    UNSOURCED L1 ingest claim is still failing on.
+    Three arms per run: embedded, an in-process server over loopback HTTP, and
+    a server in a separate container. protocol = inproc - embedded (the wire
+    format), boundary = docker - inproc (containerisation and loopback).
 
-    which="min" or "max" over the measured sizes.
+    Aggregates the FOUR matched runs on the released 26.8.1 rather than the
+    single dev24 run this used to read. That matters: the dev24 run gave a
+    tidy-looking 85.6--99.8% protocol share, and repeating it shows the share
+    is not a measurable quantity. The protocol term reproduces to ~1%, but the
+    boundary term is smaller than the docker arm's own run-to-run spread, so
+    the ratio between them is noise. A prose figure with no artifact is what
+    the UNSOURCED L1 ingest claim still fails on; a prose figure backed by one
+    sample of an unstable quantity is the same failure with a file attached.
+
+    Only decomp3m_* qualifies: decomp3_2681 ran a 2g heap (different envelope)
+    and decomp_2681 has no docker arm.
+
+    Returns {size: {"total": [...], "protocol": [...], "boundary": [...]}}
+    with one entry per run, or None if the artifacts are missing.
     """
+    import glob
     import json as _json
-    fp = os.path.join(M.RESULTS, "e4decomp", "decomp_full.json")
-    if not os.path.exists(fp):
+    fps = sorted(glob.glob(os.path.join(M.RESULTS, "e4decomp_2681",
+                                        "decomp3m_2681*.json")))
+    if not fps:
         return None
-    d = _json.load(open(fp))
-    r = d["results"]
-    shares = []
-    for size in (str(x) for x in d["meta"]["sizes"]):
-        try:
-            e = r["embedded"][size]["p50_ms"]
-            i = r["inproc_http"][size]["p50_ms"]
-            k = r["docker_http"][size]["p50_ms"]
-        except KeyError:
+    out = {}
+    for fp in fps:
+        d = _json.load(open(fp))
+        if M._DEV_RE.search(str(d["meta"].get("engine_version", ""))):
             continue
-        tot = k - e
-        if tot > 0:
-            shares.append(100.0 * (i - e) / tot)
-    if not shares:
+        r = d["results"]
+        for size in (str(x) for x in d["meta"]["sizes"]):
+            try:
+                e = r["embedded"][size]["p50_ms"]
+                i = r["inproc_http"][size]["p50_ms"]
+                k = r["docker_http"][size]["p50_ms"]
+            except KeyError:
+                continue
+            s = out.setdefault(size, {"total": [], "protocol": [], "boundary": []})
+            s["total"].append(k - e)
+            s["protocol"].append(i - e)
+            s["boundary"].append(k - i)
+    return out or None
+
+
+def e4_term_ms(term, size):
+    """Median of one decomposition term at one result size, in ms."""
+    d = _e4_decomp()
+    if not d or str(size) not in d:
         return None
-    return min(shares) if which == "min" else max(shares)
+    return st.median(d[str(size)][term])
+
+
+def e4_boundary_negative_sizes():
+    """How many result sizes have a median container/loopback term below zero.
+
+    A negative boundary says the containerised arm measured FASTER than the
+    in-process one, which is impossible as a decomposition and is the cleanest
+    statement that this term is below the design's resolution. Pinned as a
+    claim so that if a future re-run ever resolves it, the paper's hedge is
+    forced to be revisited rather than quietly left in place.
+    """
+    d = _e4_decomp()
+    if not d:
+        return None
+    return float(sum(1 for s in d if st.median(d[s]["boundary"]) < 0))
 
 
 # (id, prose value, tolerance, how to compute it, note)
@@ -376,18 +475,18 @@ CLAIMS = [
      lambda r: _paper_specialist_count(),
      "every 'N specialist' in paper.tex agrees, and agrees with the data "
      "(-1 means the sites disagree; abstract vs Section I did until 08-01)"),
-    ("l1.arcadedb.oltp", 8435, 1,
+    ("l1.arcadedb.oltp", 8362, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="arcadedb_embedded"),
      "OLTP ops/s embedded"),
-    ("l1.server.oltp", 1428, 1,
+    ("l1.server.oltp", 1466, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="arcadedb_server"),
      "OLTP ops/s server (deployment axis)"),
-    ("l1.postgres.oltp", 525, 1,
+    ("l1.postgres.oltp", 523, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="postgres"), "PostgreSQL ops/s"),
-    ("l1.duckdb.oltp", 273, 1,
+    ("l1.duckdb.oltp", 275, 1,
      lambda r: median_of(r, "oltp_ops_per_s", lane="l1", scale="medium",
                          workload="oltp", backend="duckdb"), "DuckDB ops/s"),
     # UNSOURCED, pinned so it cannot ship quietly. The prose reads "the
@@ -413,11 +512,11 @@ CLAIMS = [
     # SERVER row's ingest rate (27,424). Corrected 2026-08-01 to the canonical
     # figures, with the bulk-API gap named from the #82 probe rather than left
     # for a reader to mistake for an engine limit.
-    ("l1.ingest.perrow", 29390, 400,
+    ("l1.ingest.perrow", 29860, 400,
      lambda r: median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
                          backend="arcadedb_embedded", workload="oltp"),
      "per-row SQL ingest over the 20M-row corpus, the number the lane measures"),
-    ("l1.ingest.server", 26460, 300,
+    ("l1.ingest.server", 27090, 300,
      lambda r: median_of(r, "ingest_rows_per_s", lane="l1", scale="medium",
                          backend="arcadedb_server", workload="oltp"),
      "same per-row path through the server; the paper used to call this "
@@ -429,31 +528,31 @@ CLAIMS = [
                            backend="arcadedb_embedded", workload="oltp"),
      "how far the columnar loaders lead the per-row path (was stated as 9x, "
      "which followed from the unsourced 36.7k)"),
-    ("l1.arcadedb.insert_p99", 0.30, 0.01,
+    ("l1.arcadedb.insert_p99", 0.32, 0.01,
      lambda r: median_of(r, "insert_p99_ms", lane="l1", scale="medium",
                          workload="oltp", backend="arcadedb_embedded"),
      "insert p99 ms"),
 
     # --- L2 graph ---------------------------------------------------------
-    ("l2.arcadedb.hop2_p50", 1.62, 0.01,
+    ("l2.arcadedb.hop2_p50", 1.63, 0.01,
      lambda r: median_of(r, "hop2_p50_ms", lane="l2", scale="sf10",
                          workload="oltp", backend="arcadedb_graph_embedded"),
      "2-hop median SF10"),
-    ("l2.neo4j.hop2_p50", 4.72, 0.02,
+    ("l2.neo4j.hop2_p50", 4.90, 0.02,
      lambda r: median_of(r, "hop2_p50_ms", lane="l2", scale="sf10",
                          workload="oltp", backend="neo4j_graph"), "Neo4j 2-hop"),
-    ("l2.ladybug.hop2_p50", 5.52, 0.02,
+    ("l2.ladybug.hop2_p50", 5.61, 0.02,
      lambda r: median_of(r, "hop2_p50_ms", lane="l2", scale="sf10",
                          workload="oltp", backend="ladybug_graph"), "LadybugDB 2-hop"),
-    ("l2.arcadedb.olap_friendage", 495, 1,
+    ("l2.arcadedb.olap_friendage", 493, 1,
      lambda r: median_of(r, "friend_age_by_city_mean_ms", lane="l2", scale="sf10",
                          workload="olap", backend="arcadedb_graph_embedded"),
      "OLAP friend-age (WITH GAV)"),
-    ("l2.arcadedb.olap_topdeg", 58, 1,
+    ("l2.arcadedb.olap_topdeg", 57, 1,
      lambda r: median_of(r, "top_degree_mean_ms", lane="l2", scale="sf10",
                          workload="olap", backend="arcadedb_graph_embedded"),
      "OLAP top-degree (WITH GAV)"),
-    ("l2.neo4j.olap_topdeg", 305, 1,
+    ("l2.neo4j.olap_topdeg", 320, 1,
      lambda r: median_of(r, "top_degree_mean_ms", lane="l2", scale="sf10",
                          workload="olap", backend="neo4j_graph"), "Neo4j top-degree"),
     # The two summary figures in the same sentence, both of which were wrong
@@ -461,7 +560,7 @@ CLAIMS = [
     # pair and 22% on the other; "wins all three by roughly 10x" ran 8.2x to
     # 20.9x. A spread stated as a single number hides its own worst case, so
     # pin the endpoints.
-    ("l2.gap.samecity_pct", 24.5, 0.6,
+    ("l2.gap.samecity_pct", 23.1, 0.6,
      lambda r: 100.0 * (median_of(r, "same_city_edges_mean_ms", lane="l2",
                                   scale="sf10", workload="olap",
                                   backend="neo4j_graph")
@@ -469,7 +568,7 @@ CLAIMS = [
                                     scale="sf10", workload="olap",
                                     backend="arcadedb_graph_embedded") - 1.0),
      "how far Neo4j trails us on same-city (prose: 22%)"),
-    ("l2.ratio.ladybug_topdeg", 20.9, 0.3,
+    ("l2.ratio.ladybug_topdeg", 20.6, 0.3,
      lambda r: median_of(r, "top_degree_mean_ms", lane="l2", scale="sf10",
                          workload="olap", backend="arcadedb_graph_embedded")
                / median_of(r, "top_degree_mean_ms", lane="l2", scale="sf10",
@@ -502,19 +601,19 @@ CLAIMS = [
     # --- E2 hybrid --------------------------------------------------------
     # These are the ones a hand-rolled median got wrong. load_canonical drops
     # the two single-rep pilots, so the N=5 measurement stands alone.
-    ("e2.arcadedb.p50", 1.93, 0.01,
+    ("e2.arcadedb.p50", 1.88, 0.01,
      lambda r: median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                          backend="arcadedb_e2"), "hybrid p50"),
-    ("e2.arcadedb.max", 2.11, 0.01,
+    ("e2.arcadedb.max", 2.00, 0.01,
      lambda r: max_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                       backend="arcadedb_e2"), "hybrid range max"),
-    ("e2.arcadedb.min", 1.87, 0.01,
+    ("e2.arcadedb.min", 1.83, 0.01,
      lambda r: min_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                       backend="arcadedb_e2"), "hybrid range min"),
-    ("e2.surrealdb.p50", 7.02, 0.01,
+    ("e2.surrealdb.p50", 7.06, 0.01,
      lambda r: median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                          backend="surrealdb_e2"), "SurrealDB hybrid"),
-    ("e2.composed.p50", 22.35, 0.01,
+    ("e2.composed.p50", 19.43, 0.01,
      lambda r: median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                          backend="composed_qdrant_neo4j"), "composed stack hybrid"),
 
@@ -534,16 +633,16 @@ CLAIMS = [
      lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3), "1M p50"),
     ("l3s.arcadedb.full_p50", 83.7, 0.05,
      lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 6), "8.84M p50"),
-    ("l3s.qdrant.full_p50", 16.6, 0.05,
+    ("l3s.qdrant.full_p50", 16.1, 0.05,
      lambda r: cell("t4_sparse.tex", "Qdrant", 6), "Qdrant 8.84M p50"),
-    ("l3s.milvus.full_p50", 40.5, 0.05,
+    ("l3s.milvus.full_p50", 39.0, 0.05,
      lambda r: cell("t4_sparse.tex", "Milvus", 6), "Milvus 8.84M p50"),
     # The two ratios the sparse argument turns on, recomputed rather than
     # restated: a ratio that drifts from its operands is the classic stale claim.
     ("l3s.ratio.qdrant_1m", 3.9, 0.05,
      lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3)
                / cell("t4_sparse.tex", "Qdrant", 3), "Qdrant ratio at 1M"),
-    ("l3s.ratio.qdrant_full", 5.0, 0.05,
+    ("l3s.ratio.qdrant_full", 5.2, 0.05,
      lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 6)
                / cell("t4_sparse.tex", "Qdrant", 6), "Qdrant ratio at 8.84M"),
     ("l3s.improvement", 14.5, 0.1,
@@ -570,13 +669,13 @@ CLAIMS = [
     # Cold and warm are both claims now, so both are pinned. Pinning only the
     # warm one is how the withdrawn "second of eight" survived as long as it
     # did: it was true of the column being checked.
-    ("l3d.arcadedb.p50", 0.92, 0.01,
+    ("l3d.arcadedb.p50", 0.96, 0.01,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_WARM),
      "dense fp32 p50 warm"),
-    ("l3d.arcadedb.cold", 7.89, 0.02,
+    ("l3d.arcadedb.cold", 8.87, 0.02,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_COLD),
      "dense fp32 p50 cold (first pass after build)"),
-    ("l3d.arcadedb.recall", 0.953, 0.001,
+    ("l3d.arcadedb.recall", 0.951, 0.001,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_RECALL),
      "dense fp32 recall@10"),
     # The four ranks the dense prose states: "Cold, ArcadeDB fp32 is sixth of
@@ -612,7 +711,7 @@ CLAIMS = [
     # splicing 2.01 into one side of an A/B whose other side came from a
     # different run would be a worse error than the mismatch it fixed -- but
     # it must SAY that is what it is.
-    ("l3d.srv.p50", 2.01, 0.015,
+    ("l3d.srv.p50", 2.10, 0.015,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", D_WARM),
      "dense server p50 warm (published multipass row, not the #109 A/B)"),
     # --- E2 atomicity, the thesis experiment -------------------------------
@@ -636,16 +735,16 @@ CLAIMS = [
      lambda r: ts_arm("ingest_pts_per_s"), "native ingest pts/s (prim arm)"),
     ("l4.native.q_global", 25.0, 0.1,
      lambda r: ts_arm("q_global_ms"), "12h aggregation on the native path"),
-    ("l4.questdb.ingest", 431305, 500,
+    ("l4.questdb.ingest", 432400, 500,
      lambda r: l4_median("ingest_pts_per_s", "questdb"), "QuestDB line protocol"),
-    ("l4.duckdb.ingest", 1.94e6, 5e3,
+    ("l4.duckdb.ingest", 1862000, 5e3,
      lambda r: l4_median("ingest_pts_per_s", "duckdb"), "DuckDB bulk ingest"),
-    ("l4.doc.q_global", 1791.65, 1.0,
+    ("l4.doc.q_global", 1696, 1.0,
      lambda r: l4_median("q_global_ms", "arcadedb"), "12h aggregation, document path (1.8 s)"),
     ("l4.ratio.questdb", 4.32, 0.05,
      lambda r: ts_arm("ingest_pts_per_s") / l4_median("ingest_pts_per_s", "questdb"),
      "native vs QuestDB"),
-    ("l4.ratio.docpath", 59.5, 0.5,
+    ("l4.ratio.docpath", 46.4, 0.5,
      lambda r: ts_arm("ingest_pts_per_s") / l4_median("ingest_pts_per_s", "arcadedb"),
      "native vs our own document path"),
     ("l4.tentag.ingest_cost", 2.0, 0.05,
@@ -654,7 +753,7 @@ CLAIMS = [
     ("l4.tentag.lastpoint_gain", 2.6, 0.05,
      lambda r: _tentag("q_last_ms", 1) / _tentag("q_last_ms", 10),
      "ten-tag last-point speedup, matched A/B"),
-    ("l4.ratio.duckdb", 1.04, 0.01,
+    ("l4.ratio.duckdb", 1.00, 0.01,
      lambda r: l4_median("ingest_pts_per_s", "duckdb") / ts_arm("ingest_pts_per_s"),
      "DuckDB's remaining lead"),
     # Last-point had the paper claiming a win it did not have. The prose read
@@ -675,7 +774,7 @@ CLAIMS = [
     ("l4.native.q_last_windowed", 0.860, 0.05,
      lambda r: ts_arm("q_last_ms"),
      "the retired recency window, kept as a claim so its loss stays visible"),
-    ("l4.doc.q_last", 0.520, 0.01,
+    ("l4.doc.q_last", 0.43, 0.01,
      lambda r: l4_median("q_last_ms", "arcadedb"),
      "last point, document path (the row that beats both)"),
     ("l4.rank.q_last_native", 1.0, 0.0,
@@ -695,13 +794,42 @@ CLAIMS = [
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", D_WARM)
                / cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_WARM),
      "dense transport ratio (prose, table and f8 must agree)"),
-    ("e4.protocol_share_min", 85.6, 0.3,
-     lambda r: e4_protocol_share("min"),
-     "protocol's SMALLEST share of the deployment gap across sizes; the "
-     "paper's '86--99.8%' lower bound"),
-    ("e4.protocol_share_max", 99.8, 0.1,
-     lambda r: e4_protocol_share("max"),
-     "protocol's LARGEST share; the paper's upper bound"),
+    # The deployment decomposition, N=4 matched runs on the released engine.
+    # These three replace a "85.6--99.8% protocol" pair that was computed from
+    # ONE dev24 run. Repeating that run showed the share is not a measurable
+    # quantity here: the protocol term reproduces to 1% but the boundary term
+    # is smaller than the docker arm's own spread, so their ratio ranged
+    # 46--326%. Shares above 100% mean the containerised arm measured FASTER
+    # than the in-process one. The two terms are pinned separately instead,
+    # because each is defensible on its own and the quotient is not.
+    ("e4.protocol_ms_100k", 70.2, 0.05,
+     lambda r: e4_term_ms("protocol", 100000),
+     "wire-format cost at 100k rows, ms; reproduces to 1% across 4 runs"),
+    ("e4.total_ms_100k", 78.2, 0.05,
+     lambda r: e4_term_ms("total", 100000),
+     "full embedded->containerised gap at 100k rows, ms"),
+    # --- the two prose numbers that had no artifact until 2026-08-10 -------
+    ("l2.gav_ablated.friendage", 1213, 1,
+     lambda r: gav_ablation("friend_age_by_city_mean_ms"),
+     "friend-age WITHOUT the analytical view"),
+    ("l2.gav_ablated.samecity", 1196, 1,
+     lambda r: gav_ablation("same_city_edges_mean_ms"),
+     "same-city WITHOUT the analytical view"),
+    ("l2.gav_ablated.topdeg", 368, 1,
+     lambda r: gav_ablation("top_degree_mean_ms"),
+     "top-degree WITHOUT the analytical view; the 6.5x arm"),
+    ("l1.ingest.perrow_500k", 67147, 1,
+     lambda r: ingest_ab("serial_sql"),
+     "per-row SQL at the matched 500k scale; reproduced the pre-release 67.3k"),
+    ("l1.ingest.bulk_500k", 201647, 1,
+     lambda r: ingest_ab("insert_many"),
+     "bindings' bulk insert API at 500k; was 177.1k before the re-measure"),
+    ("e4.boundary_negative_sizes", 4.0, 0.0,
+     lambda r: e4_boundary_negative_sizes(),
+     "result sizes whose median container/loopback term is BELOW ZERO, which "
+     "is the evidence that this term is under the design's resolution; if a "
+     "re-run ever resolves it this claim fails and forces the hedge to be "
+     "revisited rather than left standing out of habit"),
 ]
 
 

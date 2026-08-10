@@ -68,10 +68,13 @@ def _dense_rows():
     build are one cell's worth of envelope, not five.
     """
     out = []
-    for fp in sorted(glob.glob(os.path.join(RESULTS, "dense_mp_2681",
-                                            "mp_*.json"))):
-        if "_build" in os.path.basename(fp):   # build-reproducibility checks
-            continue
+    # dense_mp5_2681: five INDEPENDENT builds per arm, so pass 0 of each file
+    # is one cell's conditions and there are five cells per arm, not one. The
+    # old directory held a single build per arm and needed a "_build" filter to
+    # skip the two ad-hoc reproducibility extras; here every file is a first
+    # class build and nothing is skipped.
+    for fp in sorted(glob.glob(os.path.join(RESULTS, "dense_mp5_2681",
+                                            "mp_*_b*.json"))):
         try:
             d = json.load(open(fp))
         except Exception:

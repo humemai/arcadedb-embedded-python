@@ -11,9 +11,16 @@ Outputs: ../latex/tables/t{2,3,4,5}_*.tex + tables_summary.md (prose crib).
 """
 import json
 import os
+import re
 import sys
 import statistics as st
 from decimal import Decimal, ROUND_HALF_UP
+
+# A pre-release engine, in any of the spellings the harness has produced:
+# "26.8.1.dev0", "26.8.1.dev24", "server:26.8.1-SNAPSHOT". Matched rather than
+# equality-tested against a release list, because the failure to guard against
+# is a version nobody thought to enumerate.
+_DEV_RE = re.compile(r"dev\d|SNAPSHOT", re.I)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
@@ -75,6 +82,19 @@ def load_canonical():
         cpuset = str(r.get("cpuset"))
         if cpuset not in ("0-11", "None"):
             continue
+        # NO PRE-RELEASE ENGINE REACHES A TABLE. DECISIONS #42: every ICDE
+        # number comes from a monthly stable release. That was policy enforced
+        # by remembering, and remembering failed: 20 canonical rows were still
+        # on 26.8.1.dev0 and .dev3 after the whole re-measure campaign.
+        #
+        # They survived because the canonical key includes n_docs and they sit
+        # at the RETIRED 10M synthetic sparse tier, so the 8.84M Big-ANN rows
+        # that replaced them are a different key and never superseded them.
+        # T4's explicit n_docs == 8_841_823 filter kept them off the page, but
+        # that is one hard-coded line standing between a dev number and a
+        # table, and it only covers the tier someone thought to hard-code.
+        if _DEV_RE.search(str(r.get("engine_version", ""))):
+            continue
         # A sparse cell with no recall number cannot be published -- the paper
         # reports recall beside every latency -- and the reason one is missing
         # is not benign. l3_sparse.py:22 falls back to the SYNTHETIC generator
@@ -134,8 +154,45 @@ def load_canonical():
             # check above, having finally got their heap right.
             if r.get("es_prune") is not False:
                 continue
+        # A SERVER row must be able to say which engine served it. The dev
+        # guard above reads engine_version, and for served backends that field
+        # is whatever the adapter managed to scrape: l2 and l3s query the
+        # server and get "server:26.8.1 (build 727aa45...)", while l1 records
+        # "server:latest", l1tpc records "server", and l3d records "unknown
+        # (PackageNotFoundError)". None of those three is a version, so the
+        # pre-release guard cannot see through them and a row from any engine
+        # line passes.
+        #
+        # The witness that does exist is server_image_ref, the pinned
+        # image@sha256 the runner actually started. Every server row from the
+        # released campaign carries the same digest on arcadedata/arcadedb:
+        # 26.8.1, which is proof independent of the label. Five rows carry
+        # NEITHER: l3s medium from 2026-07-07, "server:latest" with no digest
+        # at the retired 10M synthetic corpus, which is the same stale-tier
+        # leak the dev guard was written for wearing a label that guard cannot
+        # read. They hold recall 0.993 and would answer a recall selector.
+        #
+        # So: an uninformative label is tolerated when a digest backs it, and
+        # refused when nothing does.
+        if "server" in str(r.get("backend", "")):
+            ver = str(r.get("engine_version") or "")
+            named = bool(re.search(r"\d+\.\d+\.\d+", ver))
+            if not named and "@sha256:" not in str(r.get("server_image_ref") or ""):
+                continue
+        # `gav` separates the graph lane's two OLAP arms. BENCH_GAV=0 runs the
+        # analytical queries WITHOUT the Graph Analytical View, which is the
+        # ablation the paper reports, and the runner stamps the same backend
+        # for both. Without this term the ablation and the published cell share
+        # a key and the newer one wins on ts_utc, so re-running the ablation
+        # would overwrite T3 with numbers 2-7x worse and report them as the
+        # engine's OLAP performance.
+        #
+        # `is not False` and not `get("gav", True)`: every OLAP run before the
+        # stamp existed built the view, so a missing field means with-view and
+        # must land in the SAME bucket as an explicit True. Defaulting the other
+        # way would split one N=5 cell into two N=5 cells wearing one label.
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
-             r["backend"], r["rep"])
+             r["backend"], r.get("gav") is not False, r["rep"])
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
             best[k] = r
     return list(best.values())
@@ -258,10 +315,27 @@ def tabular_table(rows):
     for be in order:
         oltp = [r for r in l1 if r["backend"] == be and r["workload"] == "oltp"]
         tq = [r for r in tpc if r["backend"] == be and r["workload"] == "olap"]
+        # MEDIAN ONLY for Q1/Q6, ranges kept for OLTP and insert p99.
+        #
+        # Not a space-saving dodge: it puts dispersion where dispersion is
+        # informative. Measured spreads across the five reps are
+        #   Q1  1.6-4.3%    Q6  2.3-6.5%
+        #   OLTP 5.4-17.5%  insert p99 13.6-101.6%  (PostgreSQL's tail)
+        # so the analytical columns were spending the width that forced this
+        # table under a \resizebox -- rendering it visibly smaller than every
+        # other table on its page -- to report that a scan takes about as long
+        # as it took last time. The caption states the bound they now carry
+        # implicitly, and the artifact has every repetition.
         lines.append(" & ".join([
             NAMES[be],
             mmm(oltp, "oltp_ops_per_s"), mmm(oltp, "insert_p99_ms"),
-            mmm(tq, "q1_ms"), mmm(tq, "q6_ms")]) + r" \\")
+            fmt(st.median([r["q1_ms"] for r in tq
+                           if isinstance(r.get("q1_ms"), (int, float))]))
+            if any(isinstance(r.get("q1_ms"), (int, float)) for r in tq) else "--",
+            fmt(st.median([r["q6_ms"] for r in tq
+                           if isinstance(r.get("q6_ms"), (int, float))]))
+            if any(isinstance(r.get("q6_ms"), (int, float)) for r in tq) else "--",
+        ]) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
     write("t2_tabular.tex", "\n".join(lines) + "\n")
 
@@ -394,12 +468,23 @@ def _dense_multipass():
     Returns [(label, build_s, cold_p50, warm_cell, cold_p99, recall)].
     """
     import glob
-    out = []
-    for fp in sorted(glob.glob(os.path.join(RESULTS, "dense_mp_2681", "mp_*.json"))):
-        base = os.path.basename(fp)
-        # build2/build3 are build-reproducibility checks, not table rows.
-        if "_build" in base:
-            continue
+    # FIVE INDEPENDENT BUILDS PER ARM, not one build read five times.
+    #
+    # dense_mp_2681 held ONE file per arm: one build followed by five query
+    # passes. Every record in it repeated that build's build_s and recall, so a
+    # median over the file was a median over one number, and only the warm
+    # column carried a real range. The 2026-08-08 re-run (dense_mp5_2681, nine
+    # arms x five builds, 45 files) replaces it, and the change is not cosmetic:
+    # four of the nine single-build recalls fall OUTSIDE the five-build range,
+    # and they lean one way -- both ArcadeDB arms read high, DuckDB-VSS and
+    # LanceDB read low, so the old gap between us and them was overstated.
+    #
+    # Cold p50 gains the most. It was ONE sample per arm, which is why #124
+    # could not decide whether an 85% cold-latency move between two engine
+    # builds was a regression or noise. It is now five, one per build.
+    stats = {}
+    for fp in sorted(glob.glob(os.path.join(RESULTS, "dense_mp5_2681",
+                                            "mp_*_b*.json"))):
         try:
             passes = json.load(open(fp))
         except Exception:
@@ -414,15 +499,26 @@ def _dense_multipass():
             label = "ArcadeDB (emb, int8)" if "int8" in q else "ArcadeDB (emb, fp32)"
         elif be == "arcadedb_dense_server":
             label = "ArcadeDB (srv)"
-        warm = [x["p50"] for x in passes[1:] if x.get("p50") is not None]
-        if not warm:
-            continue
-        warm_cell = "%s [%s--%s]" % (
-            _sig3(st.median(warm)), _sig3(min(warm)), _sig3(max(warm)))
-        out.append((label, p0.get("build_s"), p0.get("p50"), warm_cell,
-                    p0.get("p99"), p0.get("recall_at_10")))
-    # Ordered by cold p50: the lifecycle axis is what this block is for.
-    return sorted(out, key=lambda r: (r[2] is None, r[2]))
+        s = stats.setdefault(label, {"build": [], "cold": [], "warm": [],
+                                     "cold99": [], "recall": []})
+        # One value per BUILD for anything that is a property of the build.
+        for k, key in (("build", "build_s"), ("cold", "p50"),
+                       ("cold99", "p99"), ("recall", "recall_at_10")):
+            v = p0.get(key)
+            if isinstance(v, (int, float)):
+                s[k].append(v)
+        # Warm pools every warm pass of every build: pass 0 is the cold one, so
+        # this is 5 builds x 4 warm passes = 20 samples, not 4.
+        s["warm"] += [x["p50"] for x in passes[1:] if x.get("p50") is not None]
+
+    def cell(v):
+        return None if not v else (st.median(v), min(v), max(v), len(v))
+
+    out = [(label, cell(s["build"]), cell(s["cold"]), cell(s["warm"]),
+            cell(s["cold99"]), cell(s["recall"]))
+           for label, s in stats.items()]
+    # Ordered by cold p50 median: the lifecycle axis is what this block is for.
+    return sorted(out, key=lambda r: (r[2] is None, r[2] and r[2][0]))
 
 
 def _sig3(v):
@@ -454,15 +550,35 @@ def dense_ts_table(rows):
              r"(10M$\times$96d), degree-matched; latencies in ms}} \\",
              r"System & Build (s) & Cold p50 & Warm p50 & Cold p99 & Recall \\",
              r"\midrule"]
-    for label, build, cold50, warm_cell, cold99, recall in dense:
+    # WHICH COLUMNS SHOW THEIR RANGE. Every column now has one -- five builds
+    # give five values for build, cold and recall, and twenty for warm. Showing
+    # all five ranges is the most informative table and also the widest, and
+    # this paper is over its page limit (#118). So the range is printed where
+    # the spread is load-bearing and the caption carries the rest:
+    #   cold p50  the column the run existed to put error bars on (#124)
+    #   warm p50  unchanged from before, a range readers already expect
+    #   recall    the quality axis every latency is read against
+    # build_s and cold p99 print the median; their spread goes in the caption,
+    # which is honest because it IS small -- under 1% on seven of nine arms.
+    RANGED = {"cold", "warm", "recall"}
+
+    def fmt(c, kind, digits=None):
+        if c is None:
+            return "--"
+        med, lo, hi, _n = c
+        f = ((lambda v: str(Decimal(repr(v)).quantize(
+                 Decimal("0.001"), rounding=ROUND_HALF_UP)))
+             if digits else _sig3)
+        return ("%s [%s--%s]" % (f(med), f(lo), f(hi))) if kind in RANGED else f(med)
+
+    for label, build, cold50, warm, cold99, recall in dense:
         # sqlite-vec is exact brute force, so its recall of 1.000 is a property
         # of the method rather than a result. The dagger points at the caption.
         if label.startswith("sqlite-vec"):
             label = r"sqlite-vec$^{\dagger}$"
         lines.append(" & ".join([
-            label, _sig3(build), _sig3(cold50), warm_cell, _sig3(cold99),
-            "--" if recall is None else str(Decimal(repr(recall)).quantize(
-                Decimal("0.001"), rounding=ROUND_HALF_UP))]) + r" \\")
+            label, fmt(build, "build"), fmt(cold50, "cold"), fmt(warm, "warm"),
+            fmt(cold99, "cold99"), fmt(recall, "recall", digits=3)]) + r" \\")
     ts = [json.loads(l) for l in open(os.path.join(RESULTS, "l4_tsbs.jsonl"))
           if l.strip()]
     lines += [r"\midrule",
