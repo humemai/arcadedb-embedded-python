@@ -568,10 +568,17 @@ def dense_ts_table(rows):
     # the spread is load-bearing and the caption carries the rest:
     #   cold p50  the column the run existed to put error bars on (#124)
     #   warm p50  unchanged from before, a range readers already expect
-    #   recall    the quality axis every latency is read against
-    # build_s and cold p99 print the median; their spread goes in the caption,
-    # which is honest because it IS small -- under 1% on seven of nine arms.
-    RANGED = {"cold", "warm", "recall"}
+    # build_s, cold p99 and recall print the median; their spread goes in the
+    # caption, which is honest because it IS small.
+    #
+    # Recall lost its interval on the measurement, not to save space. Across
+    # the nine arms it spreads 0.00-1.03% build to build, against 23-30% for
+    # the cold p50 beside it: the range was spending the widest column of the
+    # widest table to say "recall reproduces", which one caption clause says
+    # better. Same call as T2's Q1/Q6. The recall MEDIAN stays next to every
+    # latency, because reporting quality beside speed is the commitment; only
+    # the interval goes.
+    RANGED = {"cold", "warm"}
 
     def fmt(c, kind, digits=None):
         if c is None:
