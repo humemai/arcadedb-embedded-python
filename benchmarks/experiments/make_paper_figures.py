@@ -259,8 +259,13 @@ F4_VS_TABLE = {
     "OLTP ops/s":      ("t2_tabular.tex", "ArcadeDB (emb)", 0),
     # col 0 of this row is the SCALE column ("SF10"), so p50 is col 1.
     "Graph 1-hop p50": ("t3_graph.tex", "ArcadeDB (emb) & SF10", 1),
-    "Sparse 100k p50": ("t4_sparse.tex", "ArcadeDB (emb, int8)", 0),
-    "Sparse 1M p50":   ("t4_sparse.tex", "ArcadeDB (emb, int8)", 3),
+    # T4 is three rows per system now, so a column index addresses whatever
+    # happens to sit there: these two read the literal tier label "100k" as
+    # 1e5, and the R@10 column as a latency. The check caught it, which is
+    # what it is for, but a second column-index map is a second thing to
+    # break. Both go through the tier-aware reader instead.
+    "Sparse 100k p50": ("sparse", "ArcadeDB (emb, int8)", "100k"),
+    "Sparse 1M p50":   ("sparse", "ArcadeDB (emb, int8)", "1M"),
     # Column 2 is Warm p50 and the label carries its arm: T5's dense half is
     # now System & Build & Cold p50 & Warm p50 & Cold p99 & Recall, and the
     # embedded row split into fp32/int8. Both halves of this entry were stale.
@@ -298,7 +303,8 @@ def _check_f4_against_tables(entries):
             print(f"    {label:20} (no table cell to compare)")
             continue
         tab, row, col = F4_VS_TABLE[label]
-        cell = _C.cell(tab, row, col)
+        cell = (_C.sparse_cell(row, col, "p50") if tab == "sparse"
+                else _C.cell(tab, row, col))
         if cell is None or arcade is None:
             bad.append(f"{label}: figure={arcade} table={cell}")
             continue

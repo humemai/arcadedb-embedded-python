@@ -212,6 +212,41 @@ DENSE_ROWS = ["ArcadeDB (emb, fp32)", "ArcadeDB (emb, int8)", "ArcadeDB (srv)",
 D_BUILD, D_COLD, D_WARM, D_COLDP99, D_RECALL = 0, 1, 2, 3, 4
 
 
+def sparse_cell(system, tier, metric):
+    """One cell of T4, addressed by what it MEANS rather than where it sits.
+
+    T4 used to be one row per system with the three tiers as column groups, so
+    a claim could say "column 3 is 1M p50". Making it three rows per system
+    invalidated every one of those indices at once, and silently: two claims
+    started reading a recall out of the p50 slot and still parsed as numbers.
+    Column-index addressing is only correct until the table is edited, and a
+    table that can never be edited is not one anyone will keep honest.
+
+    So address by (system, tier, metric). Continuation rows carry an empty
+    first cell, which is right for a reader and unusable for a lookup, so
+    carry the system name down as the file is walked.
+    """
+    path = os.path.join(TABLES, "t4_sparse.tex")
+    col = {"p50": 2, "p99": 3, "recall": 4}[metric]
+    cur = None
+    for line in open(path):
+        line = line.strip()
+        if not line.endswith(r"\\") or line.startswith(r"\multicolumn"):
+            continue
+        cells = [c.strip() for c in line.rstrip("\\").split("&")]
+        if len(cells) <= col:
+            continue
+        if cells[0]:
+            cur = cells[0]
+        if cur != system or cells[1] != tier:
+            continue
+        m = re.match(r"([0-9]*\.?[0-9]+)\s*([kM])?", cells[col])
+        if not m:
+            return None
+        return float(m.group(1)) * {"k": 1e3, "M": 1e6}.get(m.group(2) or "", 1)
+    return None
+
+
 def gav_ablation(field):
     """Median of one OLAP query with the Graph Analytical View DISABLED.
 
@@ -627,33 +662,33 @@ CLAIMS = [
 
     # --- L3s sparse, the paper's centrepiece ------------------------------
     # Pinned to T4's cells: prose -> table -> data. Column layout is
-    # 100k(p50,p99,R) 1M(p50,p99,R) 8.84M(p50,p99,R), so 1M p50 is index 3 and
-    # 8.84M p50 is index 6.
+    # Addressed by (system, tier, metric): T4 is three rows per system now,
+    # and column indices did not survive that change.
     ("l3s.arcadedb.1m_p50", 11.3, 0.05,
-     lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3), "1M p50"),
+     lambda r: sparse_cell("ArcadeDB (emb, int8)", "1M", "p50"), "1M p50"),
     ("l3s.arcadedb.full_p50", 83.7, 0.05,
-     lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 6), "8.84M p50"),
+     lambda r: sparse_cell("ArcadeDB (emb, int8)", "8.84M", "p50"), "8.84M p50"),
     ("l3s.qdrant.full_p50", 16.1, 0.05,
-     lambda r: cell("t4_sparse.tex", "Qdrant", 6), "Qdrant 8.84M p50"),
+     lambda r: sparse_cell("Qdrant", "8.84M", "p50"), "Qdrant 8.84M p50"),
     ("l3s.milvus.full_p50", 39.0, 0.05,
-     lambda r: cell("t4_sparse.tex", "Milvus", 6), "Milvus 8.84M p50"),
+     lambda r: sparse_cell("Milvus", "8.84M", "p50"), "Milvus 8.84M p50"),
     # The two ratios the sparse argument turns on, recomputed rather than
     # restated: a ratio that drifts from its operands is the classic stale claim.
     ("l3s.ratio.qdrant_1m", 3.9, 0.05,
-     lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3)
-               / cell("t4_sparse.tex", "Qdrant", 3), "Qdrant ratio at 1M"),
+     lambda r: sparse_cell("ArcadeDB (emb, int8)", "1M", "p50")
+               / sparse_cell("Qdrant", "1M", "p50"), "Qdrant ratio at 1M"),
     ("l3s.ratio.qdrant_full", 5.2, 0.05,
-     lambda r: cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 6)
-               / cell("t4_sparse.tex", "Qdrant", 6), "Qdrant ratio at 8.84M"),
+     lambda r: sparse_cell("ArcadeDB (emb, int8)", "8.84M", "p50")
+               / sparse_cell("Qdrant", "8.84M", "p50"), "Qdrant ratio at 8.84M"),
     ("l3s.improvement", 14.5, 0.1,
-     lambda r: 165.0 / cell("t4_sparse.tex", "ArcadeDB (emb, int8)", 3),
+     lambda r: 165.0 / sparse_cell("ArcadeDB (emb, int8)", "1M", "p50"),
      "1M improvement vs the 165 ms originally filed"),
     # The starting point of the same trajectory, stated as a ratio because the
     # integration-cost prose quotes it that way ("closed from 57x"). That
     # sentence carried 18x -> 13x for weeks after the dev22 refresh made it
     # 57x -> 3.9x: the operands were re-measured and the summary was not.
     ("l3s.ratio.qdrant_1m_orig", 57.0, 0.5,
-     lambda r: 165.0 / cell("t4_sparse.tex", "Qdrant", 3),
+     lambda r: 165.0 / sparse_cell("Qdrant", "1M", "p50"),
      "1M Qdrant ratio this work started from"),
     # Rep counts are caption claims too. The 8.84M cell was stuck at N=3 for
     # weeks because the two missing reps could not be matched to the first

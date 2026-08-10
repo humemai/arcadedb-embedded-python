@@ -424,19 +424,26 @@ def sparse_table(rows):
     order = ["arcadedb_sparse_embedded", "qdrant_sparse", "milvus_sparse",
              "elasticsearch_sparse"]
     tiers = (("tiny", "100k"), ("small", "1M"), ("medium", "8.84M"))
-    # Tiers as column groups: one row per system keeps the table to four
-    # data rows instead of twelve and puts the scaling trend on one line.
-    lines = [r"\begin{tabular}{l" + "rrr" * len(tiers) + "}", r"\toprule",
-             "System & " + " & ".join(
-                 r"\multicolumn{3}{c}{%s}" % lab for _, lab in tiers) + r" \\"]
-    cols = "".join(r"\cmidrule(lr){%d-%d}" % (2 + 3 * i, 4 + 3 * i)
-                   for i in range(len(tiers)))
-    lines.append(cols)
-    lines.append(" & " + " & ".join(["p50 & p99 & R@10"] * len(tiers)) + r" \\")
-    lines.append(r"\midrule")
-    for be in order:
-        cells = [NAMES[be]]
-        for sc, _lab in tiers:
+    # TIERS AS ROWS, three per system, systems kept together.
+    #
+    # They were column groups, which put each system's scaling trend on one
+    # line at a cost of nine data columns. That is 548pt at scriptsize: fine
+    # across an IEEEtran table* at 7.16in, and 57pt past the measure of any
+    # single-column layout, where the only escapes are shrinking the type below
+    # scriptsize or letting it run off the page. Neither is worth one line.
+    #
+    # Grouping by SYSTEM rather than by tier keeps what the column layout was
+    # for: ArcadeDB's 100k/1M/8.84M sit on consecutive rows, so the scaling
+    # trend still reads down three rows instead of across one, and the prose's
+    # claims about it (the Qdrant ratio widening from 3.9x to 5.2x) stay
+    # legible. Cross-system comparison at a fixed tier costs a short jump,
+    # which is the side of the trade the sparse narrative uses less.
+    lines = [r"\begin{tabular}{llrrr}", r"\toprule",
+             r"System & Tier & p50 (ms) & p99 (ms) & R@10 \\", r"\midrule"]
+    for i, be in enumerate(order):
+        if i:
+            lines.append(r"\addlinespace")
+        for j, (sc, lab) in enumerate(tiers):
             g = [r for r in l3s if r["backend"] == be and r["scale"] == sc]
             if sc == "medium":
                 # medium holds two corpora: the retired synthetic 10M and
@@ -444,11 +451,15 @@ def sparse_table(rows):
                 g = [r for r in g if r.get("n_docs") == 8_841_823]
             if be == "arcadedb_sparse_embedded":
                 g = arc[sc]
+            # The system name labels its block once; repeating it down three
+            # rows is noise the eye has to subtract.
+            head = NAMES[be] if j == 0 else ""
             if not g:
-                cells += ["--", "--", "--"]
+                lines.append(" & ".join([head, lab, "--", "--", "--"]) + r" \\")
                 continue
-            cells += [mmm(g, "query_p50_ms"), mmm(g, "query_p99_ms"), mmm_rec(g)]
-        lines.append(" & ".join(cells) + r" \\")
+            lines.append(" & ".join([
+                head, lab, mmm(g, "query_p50_ms"), mmm(g, "query_p99_ms"),
+                mmm_rec(g)]) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
     write("t4_sparse.tex", "\n".join(lines) + "\n")
 
