@@ -535,10 +535,20 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             bench_env = []
 
         # forward data-source selection into the container (sparse + graph + dense)
+        # This list is an ALLOWLIST, so a BENCH_* the host exports and this
+        # tuple omits is silently dropped at the container boundary and the
+        # lane runs its default. BENCH_GAV was missing: exporting BENCH_GAV=0
+        # to ablate the Graph Analytical View would have built the view anyway
+        # and written rows labelled as the ablation, rc=0, indistinguishable
+        # from a real one. Same shape as the BENCH_SPARSE_SOURCE omission that
+        # cost this campaign 94 rows on the wrong corpus.
+        #
+        # "0" is a non-empty string and therefore truthy below, so the value
+        # that turns the view OFF does survive the `if`.
         for _k in ("BENCH_SPARSE_SOURCE", "BENCH_SPARSE_DATA",
                    "BENCH_GRAPH_SOURCE", "BENCH_GRAPH_DATA",
                    "BENCH_DENSE_DATA", "BENCH_DENSE_M",
-                   "BENCH_TPC_DATA", "BENCH_TPC_SF"):
+                   "BENCH_TPC_DATA", "BENCH_TPC_SF", "BENCH_GAV"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 

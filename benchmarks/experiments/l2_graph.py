@@ -428,6 +428,22 @@ def main():
             out[f"{qname}_mean_ms"] = round(statistics.mean(lat), 2)
             out[f"{qname}_min_ms"] = round(min(lat), 2)
             out[f"{qname}_rows"] = rows0
+        # STAMP THE ARM. BENCH_GAV=0 changes what was measured and, until this
+        # line, changed nothing that was recorded: an ablation run wrote the
+        # same lane/scale/n_persons/workload/backend/rep as the published cell
+        # with a newer ts_utc, so load_canonical would have kept the ABLATED
+        # number and dropped the real one. T3 and the OLAP prose would have
+        # silently become the without-view figures, which are 2-7x worse, and
+        # nothing in the pipeline would have said so. That is the same shape as
+        # the synthetic-corpus sparse rows: a later run under a different
+        # protocol shadowing a good one.
+        #
+        # gav records the condition; the backend suffix keeps the two arms on
+        # separate canonical keys so neither can shadow the other, matching how
+        # the sparse lane separates its nocompact arm.
+        out["gav"] = os.environ.get("BENCH_GAV", "1") != "0"
+        if not out["gav"]:
+            out["backend_arm"] = "nogav"
 
     ad.close()
     with open(args.out, "w") as f:

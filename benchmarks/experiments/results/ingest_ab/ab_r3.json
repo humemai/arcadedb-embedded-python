@@ -1,0 +1,32 @@
+{
+ "n_rows": 500000,
+ "serial_sql": {
+  "s": 7.4,
+  "rows_per_s": 67576.5,
+  "count_ok": true
+ },
+ "async_parallel": {
+  "s": 3.99,
+  "rows_per_s": 125468.5,
+  "count_ok": true
+ },
+ "insert_many": {
+  "s": 2.44,
+  "rows_per_s": 204721.4,
+  "count_ok": true
+ },
+ "insert_many_parallel": {
+  "s": 2.62,
+  "rows_per_s": 190803.2,
+  "count_ok": true
+ },
+ "producer": "async_ingest_probe.py",
+ "role": "engine",
+ "lane": "l1_ingest_ab",
+ "engine_version": "26.8.1",
+ "heap": "3g",
+ "cpuset": "0-11",
+ "mem_cap": "8g",
+ "host": "mini",
+ "ts_utc": "2026-08-10T13:27:46.620794+00:00"
+}
