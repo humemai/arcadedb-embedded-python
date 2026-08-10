@@ -7,6 +7,7 @@ pdfinfo; a silent crop failure must not pass).
 """
 import json
 import os
+import re
 import statistics as st
 import subprocess
 
@@ -63,6 +64,47 @@ def gs_crop(path, margin=4):
     info = subprocess.run(["pdfinfo", path], capture_output=True, text=True)
     size = [l for l in info.stdout.splitlines() if l.startswith("Page size")]
     print(f"cropped {os.path.basename(path)}: {size[0].split(':')[1].strip()}")
+    _check_labels_intact(path)
+
+
+def _check_labels_intact(path, expect=None):
+    """Fail if a label in the saved PDF is not the label we asked for.
+
+    f4 shipped with its x-axis reading "...log sca". matplotlib clips a text
+    object at the canvas edge when it is wider than the figure, and everything
+    downstream then behaved correctly on the truncated input: tight_layout had
+    no room to give, the gs bbox measured the ink present, and the crop
+    reported a clean size. Every check passed and the figure was wrong.
+
+    So check the OUTPUT against the intent. EXPECT_IN_PDF lists strings whose
+    presence in a figure is part of that figure's correctness; a truncation
+    removes the tail, which is exactly what a substring test catches.
+    """
+    want = expect if expect is not None else EXPECT_IN_PDF.get(
+        os.path.basename(path))
+    if not want:
+        return
+    txt = subprocess.run(["pdftotext", path, "-"],
+                         capture_output=True, text=True).stdout
+    flat = " ".join(txt.split())
+    missing = [s for s in want if " ".join(s.split()) not in flat]
+    if missing:
+        raise SystemExit(
+            f"{os.path.basename(path)}: label(s) missing or truncated in the "
+            f"saved PDF: {missing}\n"
+            "  A label wider than the figure is clipped at save time. Shrink "
+            "the fontsize or shorten the text; cropping cannot recover it.")
+
+
+# Strings that must survive into the saved PDF. Keep these to labels that
+# have actually been at risk or that carry meaning a reader needs.
+EXPECT_IN_PDF = {
+    "f4_one_vs_n.pdf": ["log scale", "best specialist"],
+    "f6_memory_ceiling.pdf": ["(#3144)", "raw vectors"],
+    "f8_deployment.pdf": ["server cost / embedded"],
+    "f7_e2_hybrid.pdf": ["hybrid op p50 (ms)"],
+    "f3_sparse_perquery.pdf": ["decile median"],
+}
 
 
 def f5_sparse_scaling(rows):
@@ -194,13 +236,19 @@ def _dense_overlay_p50(srv=False):
     import glob as _glob
     import json as _json
     import make_paper_tables as _T
-    name = "mp_arcsrv_2681.json" if srv else "mp_arcade_fp32_2681.json"
-    hits = _glob.glob(os.path.join(_T.RESULTS, "dense_mp_2681", name))
+    # Five independent builds now, so this pools every warm pass of every
+    # build (5 x 4 = 20) instead of the four passes of a single build. Same
+    # quantity, twenty times the support; the cold pass is still excluded
+    # because it is a different quantity, as above.
+    name = "mp_arcsrv_b*.json" if srv else "mp_fp32_b*.json"
+    hits = sorted(_glob.glob(os.path.join(_T.RESULTS, "dense_mp5_2681", name)))
     if not hits:
         return None
-    passes = _json.load(open(hits[0]))
-    warm = [p["p50"] for p in passes[1:]
-            if isinstance(p.get("p50"), (int, float))]
+    warm = []
+    for h in hits:
+        passes = _json.load(open(h))
+        warm += [p["p50"] for p in passes[1:]
+                 if isinstance(p.get("p50"), (int, float))]
     return st.median(warm) if warm else None
 
 
@@ -313,11 +361,27 @@ def f8_deployment(rows):
         Server rows stamp themselves 'server:26.8.1 (build ...)' and embedded
         rows stamp '26.8.1', so the strings never compare equal even when the
         release does. Reduce both to the release they name.
+
+        Not every adapter scrapes a version. l1 records 'server:latest',
+        l1tpc 'server', l3d 'unknown (PackageNotFoundError)'. Comparing those
+        against the embedded '26.8.1' failed F5 and refused to draw f8, on
+        rows that had in fact run the pinned released image: the runner
+        records it as server_image_ref, 'arcadedata/arcadedb:26.8.1@sha256:...'
+        for every server row in the campaign. So when the label names no
+        version, take the release from the image reference, which is the
+        stronger witness anyway. If neither names one this still returns the
+        uninformative string and F5 still refuses, which is the correct
+        outcome for a row that cannot say what served it.
         """
         out = set()
         for r in rs:
             v = str(r.get("engine_version") or r.get("wheel_version") or "?")
             v = v.split("(")[0].replace("server:", "").strip()
+            if not re.search(r"\d+\.\d+\.\d+", v):
+                ref = str(r.get("server_image_ref") or "")
+                m = re.search(r":(\d+\.\d+\.\d+[^@\s]*)@sha256:", ref)
+                if m:
+                    v = m.group(1)
             out.add(v)
         return out
 
@@ -506,7 +570,14 @@ def f4_one_vs_n(rows):
     ax.set_yticklabels(labels, fontsize=6.5)
     ax.set_xscale("log")
     ax.set_xlim(5e-4, 50)
-    ax.set_xlabel("ArcadeDB (embedded) vs best specialist, log scale")
+    # fontsize=7 is load-bearing, not taste. At the default size this label is
+    # WIDER THAN THE 3.45in FIGURE, so matplotlib clipped it at the canvas edge
+    # and the saved PDF carried the truncated string "...log sca". tight_layout
+    # cannot rescue it: that shrinks the axes to fit decorations inside the
+    # figure, and nothing can fit a label longer than the figure itself. The
+    # gs crop then measured the ink it was given and reported success.
+    ax.set_xlabel("ArcadeDB (embedded) vs best specialist, log scale",
+                  fontsize=7)
     fig.tight_layout()
     path = os.path.join(FIGS, "f4_one_vs_n.pdf")
     fig.savefig(path)
@@ -542,11 +613,19 @@ def f6_memory_ceiling(rows):
             vals.append(st.median(g))
     fig, ax = plt.subplots(figsize=(3.45, 1.9))
     ax.bar(range(len(vals)), vals, width=0.6, color="C0", alpha=0.85)
-    ax.axhline(3.84, color="C2", lw=1, ls=":")
-    ax.annotate("raw vectors 3.8 GiB", (len(vals) - 3.6, 4.1), fontsize=6.5,
-                color="C2")
-    ax.annotate("build OOMs at 16 GiB heap;\nneeds 19+ (\\#3144)",
-                (0.4, 22), fontsize=6.5, color="C3")
+    # A LEGEND, not an annotation. Every bar here exceeds the 3.84 GiB line,
+    # so there is no clear space adjacent to it: at y=4.1 the dotted rule ran
+    # through the glyphs, and lifting it to y=5.0 moved it inside the
+    # sqlite-vec bar. Hand-placed coordinates cannot be right for a series
+    # whose heights come from data. Let matplotlib find the empty corner.
+    ax.axhline(3.84, color="C2", lw=1, ls=":", label="raw vectors 3.8 GiB")
+    ax.legend(fontsize=6, loc="upper right", framealpha=0.9,
+              handlelength=1.6, borderpad=0.3)
+    # "#" not "\\#": these are matplotlib strings, not LaTeX. The escape a
+    # .tex file needs renders here as a literal backslash, and the figure
+    # shipped reading "(\#3144)".
+    ax.annotate("build OOMs at 16 GiB heap;\nneeds 19+ (#3144)",
+                (0.4, 17.5), fontsize=6.5, color="C3")
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, fontsize=6, rotation=20, ha="right")
     ax.set_ylabel("peak anon (GiB)")
