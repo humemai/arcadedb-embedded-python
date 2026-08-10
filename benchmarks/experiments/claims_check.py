@@ -502,6 +502,45 @@ def e4_boundary_negative_sizes():
 # (id, prose value, tolerance, how to compute it, note)
 # Tolerance is what the prose's own rounding allows, not a fudge factor: a
 # claim printed as "525 ops/s" is satisfied by anything rounding to 525.
+def _sparse_arm(arm, scale, field):
+    """One field from T4's own released-engine source, for an arm T4 does not
+    print.
+
+    The fp32 ablation is discussed only in prose (T4 publishes the int8
+    default), so no cell existed for anything to compare it against, and it
+    drifted: the prose read 0.9999 recall for 2.9% on p50 against a measured
+    0.9998 for 2.2%. A number that appears in no table needs its own claim or
+    it has no auditor at all.
+    """
+    import glob
+    import json
+    vals = []
+    for fp in glob.glob(os.path.join(M.RESULTS, "sparse_2681", "*.json")):
+        try:
+            r = json.load(open(fp))
+        except Exception:
+            continue
+        if r.get("backend") == arm and r.get("scale") == scale:
+            if isinstance(r.get(field), (int, float)):
+                vals.append(r[field])
+    return st.median(vals) if vals else None
+
+
+def _sparse_build(rows, backend, n_docs=8841823):
+    """Median build seconds at the 8.84M tier.
+
+    Filtering on n_docs is the point: scale 'medium' holds BOTH the 8.84M
+    Big-ANN corpus and a 10M synthetic one, so a selector keyed on scale alone
+    pools two corpora and returns a median belonging to neither. The prose
+    quoted four build numbers and three were wrong, one of them by that
+    pooling and one by quoting a min as a median.
+    """
+    g = [r for r in rows if r.get("lane") == "l3s"
+         and r.get("n_docs") == n_docs and r.get("backend") == backend
+         and isinstance(r.get("build_s"), (int, float))]
+    return st.median([r["build_s"] for r in g]) if g else None
+
+
 CLAIMS = [
     # --- L1 tabular -------------------------------------------------------
     ("abstract.n_specialists", 11.0, 0.0, lambda r: _comparator_engines(),
@@ -672,6 +711,41 @@ CLAIMS = [
      lambda r: sparse_cell("Qdrant", "8.84M", "p50"), "Qdrant 8.84M p50"),
     ("l3s.milvus.full_p50", 39.0, 0.05,
      lambda r: sparse_cell("Milvus", "8.84M", "p50"), "Milvus 8.84M p50"),
+    # Elasticsearch had NO claim at all, and its prose went stale the day
+    # 0ff787925c disabled index-time pruning: the paragraph kept quoting the
+    # pruned 10.8 ms / 0.781 recall after T4 refilled with unpruned rows. That
+    # published a comparator at an operating point we had ourselves rejected as
+    # unfair, in our favor, which is the exact failure the commit prevented in
+    # the table and nothing prevented in the sentence.
+    ("l3s.es.full_p50", 55.8, 0.05,
+     lambda r: sparse_cell("Elasticsearch", "8.84M", "p50"),
+     "Elasticsearch 8.84M p50, pruning disabled"),
+    ("l3s.es.full_recall", 0.997, 0.01,
+     lambda r: sparse_cell("Elasticsearch", "8.84M", "recall"),
+     "Elasticsearch 8.84M recall@10, pruning disabled (was 0.781 pruned)"),
+    # The fp32 ablation, which lives only in prose.
+    ("l3s.fp32.full_recall", 0.9998, 0.001,
+     lambda r: _sparse_arm("arcadedb_sparse_embedded_fp32", "medium",
+                           "recall_at_10"),
+     "fp32 8.84M recall@10 (prose said 0.9999)"),
+    ("l3s.fp32.p50_penalty_pct", 2.2, 0.15,
+     lambda r: 100.0 * (_sparse_arm("arcadedb_sparse_embedded_fp32", "medium",
+                                    "query_p50_ms")
+                        / _sparse_arm("arcadedb_sparse_embedded", "medium",
+                                      "query_p50_ms") - 1.0),
+     "what exactness costs on p50 at 8.84M (prose said 2.9%)"),
+    # The four build seconds the 8.84M paragraph quotes. Three were wrong.
+    ("l3s.build.arcadedb", 906.0, 1.0,
+     lambda r: _sparse_arm("arcadedb_sparse_embedded", "medium", "build_s"),
+     "ArcadeDB 8.84M build s (prose said 951)"),
+    ("l3s.build.milvus", 1003.0, 1.0,
+     lambda r: _sparse_build(r, "milvus_sparse"), "Milvus 8.84M build s"),
+    ("l3s.build.qdrant", 1760.0, 1.0,
+     lambda r: _sparse_build(r, "qdrant_sparse"),
+     "Qdrant 8.84M build s (prose said 1,741, which is the min)"),
+    ("l3s.build.es", 3111.0, 1.0,
+     lambda r: _sparse_build(r, "elasticsearch_sparse"),
+     "Elasticsearch 8.84M build s (prose said 3,077)"),
     # The two ratios the sparse argument turns on, recomputed rather than
     # restated: a ratio that drifts from its operands is the classic stale claim.
     ("l3s.ratio.qdrant_1m", 3.9, 0.05,
@@ -680,16 +754,11 @@ CLAIMS = [
     ("l3s.ratio.qdrant_full", 5.2, 0.05,
      lambda r: sparse_cell("ArcadeDB (emb, int8)", "8.84M", "p50")
                / sparse_cell("Qdrant", "8.84M", "p50"), "Qdrant ratio at 8.84M"),
-    ("l3s.improvement", 14.5, 0.1,
-     lambda r: 165.0 / sparse_cell("ArcadeDB (emb, int8)", "1M", "p50"),
-     "1M improvement vs the 165 ms originally filed"),
-    # The starting point of the same trajectory, stated as a ratio because the
-    # integration-cost prose quotes it that way ("closed from 57x"). That
-    # sentence carried 18x -> 13x for weeks after the dev22 refresh made it
-    # 57x -> 3.9x: the operands were re-measured and the summary was not.
-    ("l3s.ratio.qdrant_1m_orig", 57.0, 0.5,
-     lambda r: 165.0 / sparse_cell("Qdrant", "1M", "p50"),
-     "1M Qdrant ratio this work started from"),
+    # l3s.improvement and l3s.ratio.qdrant_1m_orig were removed with the prose
+    # they pinned. Both hardcoded 165.0, a pre-release measurement, as the
+    # numerator of a "how far we have come" ratio. The paper reports one
+    # released version and no trajectory, so a claim whose constant cannot be
+    # reproduced from any published row has nothing left to check.
     # Rep counts are caption claims too. The 8.84M cell was stuck at N=3 for
     # weeks because the two missing reps could not be matched to the first
     # three, nothing having recorded what those ran under; the released
@@ -1029,6 +1098,40 @@ def sweep():
     for v, ctx in out:
         print(f"  {v}x  ...{ctx[-108:]}")
     print(f"\n{len(seen)} ratio mentions scanned, {len(seen) - len(out)} covered")
+
+    # Second pass: UNIT-BEARING MEASUREMENTS, not ratios.
+    #
+    # Ratios were swept because they are the summary-shaped numbers. That was
+    # the wrong half. Every number that went stale in the 08-10 audit was a
+    # plain measurement restating a table cell: warm p50 "0.96 [0.95--0.96]"
+    # against a table saying [0.90--1.24], int8 warm 0.80 against 0.82, builds
+    # 5{,}639/2{,}685 against 5{,}585/2{,}673, and Elasticsearch's 10.8 ms at
+    # 0.781 recall months after the row was re-measured at 55.8 and 0.997.
+    # A ratio sweep cannot see any of those: none of them carries $\times$.
+    #
+    # This matters more every month than it did once, because the paper
+    # re-pins to each stable release (DECISIONS #42): the operands move on a
+    # schedule, and a sentence quoting one does not.
+    seen2, out2 = set(), []
+    unit = r"(?:\\,)?(?:ms|s|GiB|MiB|\\%|%)"
+    for m in re.finditer(rf"({num})\s*{unit}\b", body):
+        v = float(m.group(1).replace("{,}", ""))
+        if v == 0:
+            continue
+        ctx = " ".join(body[max(0, m.start() - 95):m.end() + 8].split())
+        key = (v, ctx[-55:])
+        if key in seen2:
+            continue
+        seen2.add(key)
+        if not covered(v):
+            out2.append((v, ctx))
+    print(f"\n=== unit-bearing measurements with no CLAIM pinning them "
+          f"({len(out2)}) ===")
+    print("(same standard: not errors, but the set a re-pin must re-read)\n")
+    for v, ctx in out2:
+        print(f"  {v:<10} ...{ctx[-104:]}")
+    print(f"\n{len(seen2)} measurement mentions scanned, "
+          f"{len(seen2) - len(out2)} covered")
     return 0
 
 

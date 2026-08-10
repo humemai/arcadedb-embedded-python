@@ -224,6 +224,10 @@ def _asserted_versions():
 # can be compared against the versions actually in that table's overlays.
 LABEL_TO_TABLE = {"tab:sparse": "T4", "tab:denses": "T5"}
 
+# Did caption_versions() actually read a paper? A count of zero findings from a
+# check that never ran must not print like a count of zero findings.
+_CAPTION_CHECK_RAN = True
+
 
 def caption_versions():
     """Compare each table caption's ASSERTED engine version against its data.
@@ -247,7 +251,15 @@ def caption_versions():
     try:
         body = open(paper).read()
     except OSError:
-        print("=== caption vs data ===\n  (paper.tex not readable; skipped)\n")
+        # Returning 0 here USED TO BE INDISTINGUISHABLE from a clean pass: the
+        # summary printed "0 BAD: 0 caption" and exited 0 while this check had
+        # not run at all. That is the failure this script exists to catch,
+        # committed by the script itself, so the skip is now carried to the
+        # summary instead of being absorbed by the count.
+        global _CAPTION_CHECK_RAN
+        _CAPTION_CHECK_RAN = False
+        print("=== caption vs data ===\n  (paper.tex not readable; SKIPPED, "
+              f"looked in {paper})\n")
         return 0
     bad = 0
     print("=== caption vs data: versions a caption asserts ===")
@@ -726,9 +738,13 @@ def main():
                   "   If make_paper_tables reads one, add it to FEEDS_FILES.)")
 
     print(f"\n{bad} BAD finding(s)"
-          + (f": {bad_caption} caption, {bad_cond} missing run conditions, "
+          + (f": {'0 (NOT CHECKED)' if not _CAPTION_CHECK_RAN else bad_caption}"
+             f" caption, {bad_cond} missing run conditions, "
              f"{bad - bad_caption - bad_cond} version/landmark"
              if not args.table else ""))
+    if not _CAPTION_CHECK_RAN and not args.table:
+        print("  WARNING: the caption-vs-data check did not run (paper.tex "
+              "not found). Set BENCH_PAPER_DIR; this is not a pass.")
     return 1 if bad else 0
 
 

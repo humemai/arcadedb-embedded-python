@@ -286,7 +286,26 @@ def mmm(rs, field, scale=1.0):
     return f"{med} [{lo}--{hi}]"
 
 
+def _require_paper_dir():
+    """Refuse to write tables into a paper directory that does not exist.
+
+    BENCH_PAPER_DIR defaults to <repo>/paper, a placeholder: the paper source
+    is deliberately not in this repository. A generator run without the
+    variable used to CREATE that placeholder and fill it with a second,
+    divergent set of tables, which happened once and went unnoticed because
+    nothing builds from there. The reverse is worse: claims_check resolves the
+    same default, so once the placeholder exists it verifies the paper's prose
+    against those stale copies and reports agreement. Neither failure is
+    visible in any output, so refuse the write instead.
+    """
+    if not os.path.isdir(_PAPER_DIR):
+        sys.exit(
+            f"BENCH_PAPER_DIR unset or wrong: {os.path.normpath(_PAPER_DIR)} "
+            "does not exist.\nSet it to the directory holding paper.tex.")
+
+
 def write(name, body):
+    _require_paper_dir()
     os.makedirs(OUT, exist_ok=True)
     path = os.path.join(OUT, name)
     # Do not rewrite an unchanged table. claims_check's figure-freshness guard
@@ -735,6 +754,7 @@ def run_gates():
         print(l)
     print("=" * 62 + "\n")
 
+    _require_paper_dir()
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, "GATE_STATUS.txt"), "w") as f:
         f.write(f"{banner}\n\nTables in this directory were generated with the\n"

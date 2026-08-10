@@ -152,9 +152,24 @@ def f5_sparse_scaling(rows):
 
 def f3_sparse_perquery():
     """Per-query latency vs summed posting length (bigann 1M, 1000 dev
-    queries): the evidence that pruning is not cutting head terms."""
+    queries): the evidence that pruning is not cutting head terms.
+
+    NOT DRAWN, and refuses to be. sparse_cliff.jsonl holds a median of 228 ms
+    against a released engine that answers the same tier at 11.3 ms, so it
+    depicts a version the paper does not report. Worse, not one row in it
+    carries an engine version, which is why no gate caught the figure sitting
+    in the paper long after the tier was re-measured (DECISIONS #43).
+
+    Left in place rather than deleted so the capability survives a re-measure:
+    stamp every row with the engine version and drop this guard.
+    """
     path = os.path.join(RESULTS, "sparse_cliff.jsonl")
     recs = [json.loads(l) for l in open(path) if l.strip()]
+    unstamped = [r for r in recs if not r.get("engine_version")]
+    if unstamped:
+        print("  f3_sparse_perquery: SKIPPED, %d/%d rows carry no "
+              "engine_version (see docstring)" % (len(unstamped), len(recs)))
+        return
     x = [r["sum_df"] / 1e6 for r in recs]
     y = [r["ms"] for r in recs]
     fig, ax = plt.subplots(figsize=(3.45, 2.1))
@@ -643,6 +658,12 @@ def f6_memory_ceiling(rows):
 
 
 def main():
+    # See make_paper_tables._require_paper_dir: writing into the unset-variable
+    # default creates a phantom paper directory that later reads treat as real.
+    if not os.path.isdir(_PAPER_DIR):
+        raise SystemExit(
+            f"BENCH_PAPER_DIR unset or wrong: {os.path.normpath(_PAPER_DIR)} "
+            "does not exist.\nSet it to the directory holding paper.tex.")
     os.makedirs(FIGS, exist_ok=True)
     rows = canonical()
     f3_sparse_perquery()
