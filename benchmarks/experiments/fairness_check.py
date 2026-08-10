@@ -34,6 +34,12 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
 FULL_CPUSET = "0-11"
+# Fallback only. Every served row records its own mem_split; this is for the
+# handful written before that field existed. Must match runner.py's
+# SERVER_MEM_FRACTION, which is the value the containers were actually built
+# with -- a mismatch here would silently misreport the envelope rather than
+# fail, which is the failure mode this whole module exists to prevent.
+SERVER_MEM_FRACTION_DEFAULT = 0.75
 
 # Envelope deliberately not matched, with the reason. An entry here is a
 # disclosed override; anything else that differs is a defect. Keyed by
@@ -146,8 +152,32 @@ def _total_envelope(r):
     # still fall back to the arithmetic below.
     srv_cap, srv_heap = _gib(r.get("server_mem_cap")), r.get("server_heap")
     if srv_cap is not None:
-        cli = _gib(r.get("mem_cap")) or 0.0
-        return (str(srv_heap or r.get("heap")), f"{srv_cap + cli:g}g")
+        # DERIVE THE TOTAL FROM THE SERVER SIDE ALONE, never by addition.
+        # Adding mem_cap was wrong and failed five compliant tiers: runner.py
+        # sets mem_cap = MEM_BY_SCALE[scale], the TOTAL, on every row, so
+        # server + total reported 1.75x the envelope and l1/medium read 56g
+        # against an embedded 32g. The rows were correct; this was not.
+        #
+        # It hid because the bug and its trigger arrived separately: preferring
+        # the observed fields landed before any row carried server_mem_cap, so
+        # the branch was dead until the repair chain produced the first ones.
+        #
+        # Addition cannot work anyway, because BOTH row shapes are in the data
+        # and neither is detectable from mem_cap by itself:
+        #     medium  mem_cap 32g, srv 24g   total-shaped   (runner.py:489)
+        #     medium  mem_cap  8g, srv 24g   client-shaped  (run_conditions,
+        #                                    reading the client's own cgroup)
+        # The server's share is a known fraction of the envelope, so the total
+        # is srv_cap / split -- 32g from both shapes above, no classification
+        # required. This function's own docstring says a gate that fails on
+        # compliance is worse than no gate; that is what it had become.
+        try:
+            split = float(r.get("mem_split") or SERVER_MEM_FRACTION_DEFAULT)
+        except (TypeError, ValueError):
+            split = SERVER_MEM_FRACTION_DEFAULT
+        if not 0 < split < 1:
+            split = SERVER_MEM_FRACTION_DEFAULT
+        return (str(srv_heap or r.get("heap")), f"{srv_cap / split:g}g")
 
     cap = _gib(r.get("mem_cap"))
     if cap is None:
