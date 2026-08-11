@@ -195,9 +195,7 @@ def test_import_documents_rejects_unknown_on_row_error(temp_db_path, tmp_path):
     with arcadedb.create_database(temp_db_path) as db:
         for bad in ("ignore", "SKIPP", ""):
             with pytest.raises(ValueError, match="Invalid on_row_error mode"):
-                db.import_documents(
-                    csv_path, document_type="Person", on_row_error=bad
-                )
+                db.import_documents(csv_path, document_type="Person", on_row_error=bad)
 
         # Case-insensitive, matching the engine's equalsIgnoreCase.
         db.import_documents(csv_path, document_type="Person", on_row_error="SKIP")
