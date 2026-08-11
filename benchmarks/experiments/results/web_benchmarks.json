@@ -174,7 +174,7 @@
       "withheld_reason": null,
       "entries": [
         {
-          "backend": "arcadedb_sparse_embedded",
+          "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "scale": "medium",
           "workload": "search",
@@ -205,7 +205,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_embedded_fp32",
+          "backend": "ArcadeDB (embedded, fp32 weights)",
           "is_arcadedb": true,
           "scale": "medium",
           "workload": "search",
@@ -236,7 +236,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_embedded_nocompact",
+          "backend": "ArcadeDB (embedded, no settle step)",
           "is_arcadedb": true,
           "scale": "medium",
           "workload": "search",
@@ -267,7 +267,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_server",
+          "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "medium",
           "workload": "search",
@@ -298,7 +298,7 @@
           }
         },
         {
-          "backend": "elasticsearch_sparse",
+          "backend": "Elasticsearch",
           "is_arcadedb": false,
           "scale": "medium",
           "workload": "search",
@@ -329,7 +329,7 @@
           }
         },
         {
-          "backend": "milvus_sparse",
+          "backend": "Milvus",
           "is_arcadedb": false,
           "scale": "medium",
           "workload": "search",
@@ -360,7 +360,7 @@
           }
         },
         {
-          "backend": "qdrant_sparse",
+          "backend": "Qdrant",
           "is_arcadedb": false,
           "scale": "medium",
           "workload": "search",
@@ -391,7 +391,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_embedded",
+          "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "scale": "small",
           "workload": "search",
@@ -422,7 +422,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_embedded_fp32",
+          "backend": "ArcadeDB (embedded, fp32 weights)",
           "is_arcadedb": true,
           "scale": "small",
           "workload": "search",
@@ -453,7 +453,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_embedded_nocompact",
+          "backend": "ArcadeDB (embedded, no settle step)",
           "is_arcadedb": true,
           "scale": "small",
           "workload": "search",
@@ -484,7 +484,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_server",
+          "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "small",
           "workload": "search",
@@ -515,7 +515,7 @@
           }
         },
         {
-          "backend": "elasticsearch_sparse",
+          "backend": "Elasticsearch",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -546,7 +546,7 @@
           }
         },
         {
-          "backend": "milvus_sparse",
+          "backend": "Milvus",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -577,7 +577,7 @@
           }
         },
         {
-          "backend": "qdrant_sparse",
+          "backend": "Qdrant",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -608,7 +608,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_embedded",
+          "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "scale": "tiny",
           "workload": "search",
@@ -639,7 +639,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_embedded_fp32",
+          "backend": "ArcadeDB (embedded, fp32 weights)",
           "is_arcadedb": true,
           "scale": "tiny",
           "workload": "search",
@@ -670,7 +670,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_embedded_nocompact",
+          "backend": "ArcadeDB (embedded, no settle step)",
           "is_arcadedb": true,
           "scale": "tiny",
           "workload": "search",
@@ -701,7 +701,7 @@
           }
         },
         {
-          "backend": "arcadedb_sparse_server",
+          "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "tiny",
           "workload": "search",
@@ -732,7 +732,7 @@
           }
         },
         {
-          "backend": "elasticsearch_sparse",
+          "backend": "Elasticsearch",
           "is_arcadedb": false,
           "scale": "tiny",
           "workload": "search",
@@ -763,7 +763,7 @@
           }
         },
         {
-          "backend": "milvus_sparse",
+          "backend": "Milvus",
           "is_arcadedb": false,
           "scale": "tiny",
           "workload": "search",
@@ -794,7 +794,7 @@
           }
         },
         {
-          "backend": "qdrant_sparse",
+          "backend": "Qdrant",
           "is_arcadedb": false,
           "scale": "tiny",
           "workload": "search",
@@ -844,7 +844,7 @@
       "withheld_reason": "Comparator rows exist at these tiers but ArcadeDB's were measured on a pre-release build, which this project does not publish. They return at the next release re-pin.",
       "entries": [
         {
-          "backend": "arcadedb_dense_embedded",
+          "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "scale": "small",
           "workload": "search",
@@ -875,7 +875,7 @@
           }
         },
         {
-          "backend": "arcadedb_dense_server",
+          "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "small",
           "workload": "search",
@@ -906,7 +906,7 @@
           }
         },
         {
-          "backend": "chroma_dense",
+          "backend": "Chroma",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -937,7 +937,7 @@
           }
         },
         {
-          "backend": "duckdb_vss_dense",
+          "backend": "DuckDB VSS",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -968,7 +968,7 @@
           }
         },
         {
-          "backend": "lancedb_dense",
+          "backend": "LanceDB",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -999,7 +999,7 @@
           }
         },
         {
-          "backend": "milvus_dense",
+          "backend": "Milvus",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -1030,7 +1030,7 @@
           }
         },
         {
-          "backend": "qdrant_dense",
+          "backend": "Qdrant",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -1061,7 +1061,7 @@
           }
         },
         {
-          "backend": "sqlite_vec_dense",
+          "backend": "sqlite-vec",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -1111,7 +1111,7 @@
       "withheld_reason": null,
       "entries": [
         {
-          "backend": "arcadedb_graph_embedded",
+          "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "scale": "sf1",
           "workload": "oltp",
@@ -1148,7 +1148,7 @@
           }
         },
         {
-          "backend": "arcadedb_graph_server",
+          "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "sf1",
           "workload": "oltp",
@@ -1185,7 +1185,7 @@
           }
         },
         {
-          "backend": "ladybug_graph",
+          "backend": "LadybugDB",
           "is_arcadedb": false,
           "scale": "sf1",
           "workload": "oltp",
@@ -1222,7 +1222,7 @@
           }
         },
         {
-          "backend": "neo4j_graph",
+          "backend": "Neo4j",
           "is_arcadedb": false,
           "scale": "sf1",
           "workload": "oltp",
@@ -1259,7 +1259,7 @@
           }
         },
         {
-          "backend": "arcadedb_graph_embedded",
+          "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "scale": "sf10",
           "workload": "oltp",
@@ -1296,7 +1296,7 @@
           }
         },
         {
-          "backend": "arcadedb_graph_server",
+          "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "sf10",
           "workload": "oltp",
@@ -1333,7 +1333,7 @@
           }
         },
         {
-          "backend": "ladybug_graph",
+          "backend": "LadybugDB",
           "is_arcadedb": false,
           "scale": "sf10",
           "workload": "oltp",
@@ -1370,7 +1370,7 @@
           }
         },
         {
-          "backend": "neo4j_graph",
+          "backend": "Neo4j",
           "is_arcadedb": false,
           "scale": "sf10",
           "workload": "oltp",
@@ -1423,7 +1423,7 @@
       "withheld_reason": null,
       "entries": [
         {
-          "backend": "arcadedb_embedded",
+          "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "scale": "medium",
           "workload": "olap",
@@ -1442,7 +1442,7 @@
           }
         },
         {
-          "backend": "arcadedb_embedded",
+          "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "scale": "medium",
           "workload": "oltp",
@@ -1473,7 +1473,7 @@
           }
         },
         {
-          "backend": "arcadedb_server",
+          "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "medium",
           "workload": "olap",
@@ -1492,7 +1492,7 @@
           }
         },
         {
-          "backend": "arcadedb_server",
+          "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "medium",
           "workload": "oltp",
@@ -1523,7 +1523,7 @@
           }
         },
         {
-          "backend": "duckdb",
+          "backend": "DuckDB",
           "is_arcadedb": false,
           "scale": "medium",
           "workload": "olap",
@@ -1542,7 +1542,7 @@
           }
         },
         {
-          "backend": "duckdb",
+          "backend": "DuckDB",
           "is_arcadedb": false,
           "scale": "medium",
           "workload": "oltp",
@@ -1573,7 +1573,7 @@
           }
         },
         {
-          "backend": "postgres",
+          "backend": "PostgreSQL",
           "is_arcadedb": false,
           "scale": "medium",
           "workload": "olap",
@@ -1592,7 +1592,7 @@
           }
         },
         {
-          "backend": "postgres",
+          "backend": "PostgreSQL",
           "is_arcadedb": false,
           "scale": "medium",
           "workload": "oltp",
@@ -1639,7 +1639,7 @@
       "withheld_reason": null,
       "entries": [
         {
-          "backend": "arcadedb_embedded",
+          "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "scale": "tpch1",
           "workload": "olap",
@@ -1664,7 +1664,7 @@
           }
         },
         {
-          "backend": "arcadedb_embedded",
+          "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "scale": "tpch1",
           "workload": "oltp",
@@ -1689,7 +1689,7 @@
           }
         },
         {
-          "backend": "arcadedb_server",
+          "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "tpch1",
           "workload": "olap",
@@ -1714,7 +1714,7 @@
           }
         },
         {
-          "backend": "arcadedb_server",
+          "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "tpch1",
           "workload": "oltp",
@@ -1739,7 +1739,7 @@
           }
         },
         {
-          "backend": "duckdb",
+          "backend": "DuckDB",
           "is_arcadedb": false,
           "scale": "tpch1",
           "workload": "olap",
@@ -1764,7 +1764,7 @@
           }
         },
         {
-          "backend": "duckdb",
+          "backend": "DuckDB",
           "is_arcadedb": false,
           "scale": "tpch1",
           "workload": "oltp",
@@ -1789,7 +1789,7 @@
           }
         },
         {
-          "backend": "postgres",
+          "backend": "PostgreSQL",
           "is_arcadedb": false,
           "scale": "tpch1",
           "workload": "olap",
@@ -1814,7 +1814,7 @@
           }
         },
         {
-          "backend": "postgres",
+          "backend": "PostgreSQL",
           "is_arcadedb": false,
           "scale": "tpch1",
           "workload": "oltp",
@@ -1856,7 +1856,7 @@
       "withheld_reason": null,
       "entries": [
         {
-          "backend": "arcadedb_e2",
+          "backend": "ArcadeDB (one transaction)",
           "is_arcadedb": true,
           "scale": "e2",
           "workload": "hybrid",
@@ -1881,7 +1881,7 @@
           }
         },
         {
-          "backend": "composed_qdrant_neo4j",
+          "backend": "Qdrant + Neo4j (no shared transaction)",
           "is_arcadedb": false,
           "scale": "e2",
           "workload": "hybrid",
@@ -1906,7 +1906,7 @@
           }
         },
         {
-          "backend": "surrealdb_e2",
+          "backend": "SurrealDB",
           "is_arcadedb": false,
           "scale": "e2",
           "workload": "hybrid",
@@ -2014,7 +2014,7 @@
           }
         },
         {
-          "backend": "questdb",
+          "backend": "QuestDB",
           "is_arcadedb": false,
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",
@@ -2045,7 +2045,7 @@
           }
         },
         {
-          "backend": "duckdb",
+          "backend": "DuckDB",
           "is_arcadedb": false,
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",

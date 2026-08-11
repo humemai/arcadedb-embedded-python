@@ -63,6 +63,44 @@ def _image_version_names() -> dict[str, str]:
     return out
 
 
+# The harness names backends for the runner, not for a reader: arcadedb_e2,
+# composed_qdrant_neo4j, arcadedb_sparse_embedded_nocompact. Those belong in
+# the data; a page should say what the thing IS. Unmapped names fall back to
+# a tidied version of the raw key rather than being hidden, so a new backend
+# shows up looking slightly rough instead of silently vanishing.
+DISPLAY_NAMES = {
+    "arcadedb_embedded": "ArcadeDB (embedded)",
+    "arcadedb_server": "ArcadeDB (server)",
+    "arcadedb_graph_embedded": "ArcadeDB (embedded)",
+    "arcadedb_graph_server": "ArcadeDB (server)",
+    "arcadedb_dense_embedded": "ArcadeDB (embedded)",
+    "arcadedb_dense_server": "ArcadeDB (server)",
+    "arcadedb_sparse_embedded": "ArcadeDB (embedded)",
+    "arcadedb_sparse_server": "ArcadeDB (server)",
+    "arcadedb_sparse_embedded_fp32": "ArcadeDB (embedded, fp32 weights)",
+    "arcadedb_sparse_embedded_nocompact": "ArcadeDB (embedded, no settle step)",
+    "arcadedb_e2": "ArcadeDB (one transaction)",
+    "composed_qdrant_neo4j": "Qdrant + Neo4j (no shared transaction)",
+    "surrealdb_e2": "SurrealDB",
+    "qdrant_sparse": "Qdrant", "qdrant_dense": "Qdrant",
+    "milvus_sparse": "Milvus", "milvus_dense": "Milvus",
+    "elasticsearch_sparse": "Elasticsearch",
+    "chroma_dense": "Chroma", "lancedb_dense": "LanceDB",
+    "sqlite_vec_dense": "sqlite-vec", "duckdb_vss_dense": "DuckDB VSS",
+    "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
+    "postgres": "PostgreSQL", "duckdb": "DuckDB", "questdb": "QuestDB",
+    "arcadedb": "ArcadeDB",
+}
+
+
+def display_name(backend: str) -> str:
+    if backend in DISPLAY_NAMES:
+        return DISPLAY_NAMES[backend]
+    if backend.startswith("arcadedb"):
+        return "ArcadeDB"
+    return backend.replace("_", " ")
+
+
 def _num(value):
     try:
         return float(value)
@@ -316,7 +354,7 @@ def _l4_table():
     for label in sorted(grouped, key=lambda k: (order.index(k) if k in order else 99, k)):
         rs = grouped[label]
         entry = {
-            "backend": label,
+            "backend": display_name(label) if label in DISPLAY_NAMES else label,
             "is_arcadedb": "arcadedb" in label,
             "scale": L4_SHAPE["scale"],
             "workload": L4_SHAPE["workload"],
@@ -391,7 +429,7 @@ def main() -> int:
                 continue
             image = BACKENDS.get(backend, {}).get("server_image")
             entry = {
-                "backend": backend,
+                "backend": display_name(backend),
                 "is_arcadedb": "arcade" in backend,
                 "scale": scale,
                 "workload": workload,
