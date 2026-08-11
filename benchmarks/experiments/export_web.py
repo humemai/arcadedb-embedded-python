@@ -146,6 +146,104 @@ GLOBAL_CONDITIONS = [
 ]
 
 
+E4_DIR = HERE / "results" / "e4decomp_2681"
+
+# Named so the page can say what each step is rather than showing three opaque
+# arm names. embedded -> inproc_http isolates the wire format with the process
+# boundary held constant; inproc_http -> docker_http then adds the boundary
+# with the wire format held constant.
+E4_ARMS = [
+    ("embedded", "in-process, no protocol"),
+    ("inproc_http", "in-process server over HTTP"),
+    ("docker_http", "separate container over HTTP"),
+]
+
+
+def _e4_table():
+    """Deployment decomposition: what the client/server split actually costs.
+
+    Included where the other overlays are not, because this one records the
+    conditions that make it comparable: one released engine version on every
+    arm, identical cpuset, memory cap and heap, all three arms materializing
+    through `to_json_list` so the difference cannot be a serialization
+    artifact of our own choosing, and `row_count_agreement: ok` confirming the
+    arms returned the same rows. See the tracker note that bespoke overlay
+    drivers usually drift from their lane's protocol; this is the one that
+    did not.
+    """
+    reps = sorted(E4_DIR.glob("decomp3m_2681_rep*.json"))
+    if not reps:
+        return None
+
+    loaded = [json.loads(p.read_text(encoding="utf-8")) for p in reps]
+    meta = loaded[0]["meta"]
+    sizes = sorted(loaded[0]["results"]["embedded"], key=int)
+
+    entries = []
+    for size in sizes:
+        per_arm = {}
+        for arm, _ in E4_ARMS:
+            vals = [d["results"][arm][size]["p50_ms"] for d in loaded
+                    if arm in d["results"] and size in d["results"][arm]]
+            if vals:
+                per_arm[arm] = statistics.median(vals)
+        if len(per_arm) != len(E4_ARMS):
+            continue
+
+        metrics = {}
+        for arm, label in E4_ARMS:
+            metrics[label] = {"median": round(per_arm[arm], 4),
+                              "min": round(per_arm[arm], 4),
+                              "max": round(per_arm[arm], 4),
+                              "n": len(loaded)}
+        protocol = per_arm["inproc_http"] - per_arm["embedded"]
+        boundary = per_arm["docker_http"] - per_arm["inproc_http"]
+        for label, value in (("wire format", protocol), ("process boundary", boundary)):
+            metrics[label] = {"median": round(value, 4), "min": round(value, 4),
+                              "max": round(value, 4), "n": len(loaded)}
+
+        entries.append({
+            "backend": f"{int(size):,} rows",
+            "is_arcadedb": True,
+            "scale": f"{int(size):,}",
+            "workload": "projection",
+            "n_docs": str(meta.get("rows")),
+            "deployment": "all three",
+            "image": None,
+            "version_name": meta.get("engine_version"),
+            "host": meta.get("host"),
+            "metrics": metrics,
+        })
+
+    return {
+        "id": "e4",
+        "title": "What the client/server split costs",
+        "dataset": f"{meta.get('rows'):,}-row projection, one engine, three deployments",
+        "conditions": [
+            f"One released engine ({meta.get('engine_version')}) on all three arms, "
+            f"{meta.get('reps')} repetitions after {meta.get('warmup')} warmup, "
+            f"identical cpuset {meta.get('cpuset')}, memory cap {meta.get('mem_cap')} "
+            f"and heap {meta.get('heap')}.",
+            "All three arms materialize results the same way, so the difference "
+            "is the deployment and not our choice of result format.",
+            "The separate-container arm is loopback on one host. It says what "
+            "co-locating costs, and says nothing about a real network.",
+            "The process-boundary column goes slightly negative at the smaller "
+            "result sizes. That is not a container being faster than an "
+            "in-process server; it is the boundary term sitting below what this "
+            "design can resolve, so run-to-run noise swamps it and the sign "
+            "flips. Reported rather than clamped to zero, because the negative "
+            "values are the evidence for the claim: at these sizes co-locating "
+            "costs nothing measurable. The wire format, in the column beside "
+            "it, stays firmly positive at every size.",
+        ],
+        "columns": [label for _, label in E4_ARMS] + ["wire format", "process boundary"],
+        "withheld_scales": [],
+        "withheld_reason": None,
+        "entries": entries,
+    }
+
+
 def main() -> int:
     if not FROZEN.exists():
         print(f"missing {FROZEN}; run make_paper_tables.py first", file=sys.stderr)
@@ -184,14 +282,40 @@ def main() -> int:
             if entry["metrics"]:
                 entries.append(entry)
         if entries:
+            # A scale where the comparators have rows and ArcadeDB does not
+            # reads as "ArcadeDB could not do this tier", which is a claim the
+            # absence of a row must never be allowed to make on our behalf.
+            # It happens legitimately: the dense 10M rows exist but ran on
+            # 26.8.1.dev3, and releases-only (DECISIONS #42) keeps dev builds
+            # out of the frozen set, so the tier has no publishable ArcadeDB
+            # number until the next release re-pin.
+            #
+            # Only scales where our engine is also present are published. The
+            # withheld ones are recorded rather than dropped quietly, so the
+            # page can say why and so this file cannot silently start hiding
+            # a tier we did badly at.
+            ours = {e["scale"] for e in entries if e["is_arcadedb"]}
+            theirs = {e["scale"] for e in entries if not e["is_arcadedb"]}
+            withheld = sorted(theirs - ours)
+            shown = [e for e in entries if e["scale"] in ours] if ours else entries
             tables.append({
                 "id": lane,
                 "title": spec["title"],
                 "dataset": spec["dataset"],
                 "conditions": spec["conditions"],
                 "columns": [label for _, label in spec["metrics"]],
-                "entries": entries,
+                "withheld_scales": withheld,
+                "withheld_reason": (
+                    "Comparator rows exist at these tiers but ArcadeDB's were "
+                    "measured on a pre-release build, which this project does "
+                    "not publish. They return at the next release re-pin."
+                ) if withheld else None,
+                "entries": shown,
             })
+
+    e4 = _e4_table()
+    if e4 and e4["entries"]:
+        tables.append(e4)
 
     hosts = sorted({r["host"] for r in rows if r.get("host")})
     payload = {
@@ -214,6 +338,11 @@ def main() -> int:
     n_entries = sum(len(t["entries"]) for t in tables)
     print(f"wrote {OUT}")
     print(f"  tables: {len(tables)}   entries: {n_entries}")
+    for table in tables:
+        if table["withheld_scales"]:
+            print(f"  WITHHELD {table['id']}: scale(s) {table['withheld_scales']} "
+                  f"have comparator rows but no released ArcadeDB row, so the "
+                  f"tier is not published (it would read as a missing result)")
     missing = [e["backend"] for t in tables for e in t["entries"]
                if e["image"] is None and not e["backend"].endswith("_embedded")]
     if missing:

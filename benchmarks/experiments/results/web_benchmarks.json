@@ -170,6 +170,8 @@
         "recall@10",
         "build s"
       ],
+      "withheld_scales": [],
+      "withheld_reason": null,
       "entries": [
         {
           "backend": "arcadedb_sparse_embedded",
@@ -836,193 +838,11 @@
         "recall@10",
         "build s"
       ],
+      "withheld_scales": [
+        "deep10m"
+      ],
+      "withheld_reason": "Comparator rows exist at these tiers but ArcadeDB's were measured on a pre-release build, which this project does not publish. They return at the next release re-pin.",
       "entries": [
-        {
-          "backend": "chroma_dense",
-          "is_arcadedb": false,
-          "scale": "deep10m",
-          "workload": "search",
-          "n_docs": "9990000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "metrics": {
-            "p50 ms": {
-              "median": 0.686,
-              "min": 0.632,
-              "max": 0.726,
-              "n": 5
-            },
-            "recall@10": {
-              "median": 0.9337,
-              "min": 0.9331,
-              "max": 0.9343,
-              "n": 5
-            },
-            "build s": {
-              "median": 3678.54,
-              "min": 3672.54,
-              "max": 3695.51,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "duckdb_vss_dense",
-          "is_arcadedb": false,
-          "scale": "deep10m",
-          "workload": "search",
-          "n_docs": "9990000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "metrics": {
-            "p50 ms": {
-              "median": 2.533,
-              "min": 2.52,
-              "max": 2.541,
-              "n": 5
-            },
-            "recall@10": {
-              "median": 0.9363,
-              "min": 0.9323,
-              "max": 0.9382,
-              "n": 5
-            },
-            "build s": {
-              "median": 805.17,
-              "min": 804.54,
-              "max": 806.49,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "lancedb_dense",
-          "is_arcadedb": false,
-          "scale": "deep10m",
-          "workload": "search",
-          "n_docs": "9990000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "metrics": {
-            "p50 ms": {
-              "median": 2.724,
-              "min": 2.644,
-              "max": 2.749,
-              "n": 5
-            },
-            "recall@10": {
-              "median": 0.7067,
-              "min": 0.7023,
-              "max": 0.7114,
-              "n": 5
-            },
-            "build s": {
-              "median": 226.63,
-              "min": 226.07,
-              "max": 227.69,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "milvus_dense",
-          "is_arcadedb": false,
-          "scale": "deep10m",
-          "workload": "search",
-          "n_docs": "9990000",
-          "deployment": "embedded",
-          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": null,
-          "host": null,
-          "metrics": {
-            "p50 ms": {
-              "median": 17.944,
-              "min": 13.013,
-              "max": 18.841,
-              "n": 5
-            },
-            "recall@10": {
-              "median": 0.9945,
-              "min": 0.9938,
-              "max": 0.9947,
-              "n": 5
-            },
-            "build s": {
-              "median": 142.16,
-              "min": 136.91,
-              "max": 145.63,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "qdrant_dense",
-          "is_arcadedb": false,
-          "scale": "deep10m",
-          "workload": "search",
-          "n_docs": "9990000",
-          "deployment": "embedded",
-          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "v1.18.2",
-          "host": null,
-          "metrics": {
-            "p50 ms": {
-              "median": 1.295,
-              "min": 1.171,
-              "max": 1.38,
-              "n": 5
-            },
-            "recall@10": {
-              "median": 0.9803,
-              "min": 0.9786,
-              "max": 0.9828,
-              "n": 5
-            },
-            "build s": {
-              "median": 515.69,
-              "min": 512.92,
-              "max": 524.18,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "sqlite_vec_dense",
-          "is_arcadedb": false,
-          "scale": "deep10m",
-          "workload": "search",
-          "n_docs": "9990000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "metrics": {
-            "p50 ms": {
-              "median": 882.351,
-              "min": 879.342,
-              "max": 883.519,
-              "n": 5
-            },
-            "recall@10": {
-              "median": 1.0,
-              "min": 1.0,
-              "max": 1.0,
-              "n": 5
-            },
-            "build s": {
-              "median": 70.26,
-              "min": 69.95,
-              "max": 70.75,
-              "n": 5
-            }
-          }
-        },
         {
           "backend": "arcadedb_dense_embedded",
           "is_arcadedb": true,
@@ -1287,6 +1107,8 @@
         "2-hop p50 ms",
         "write p50 ms"
       ],
+      "withheld_scales": [],
+      "withheld_reason": null,
       "entries": [
         {
           "backend": "arcadedb_graph_embedded",
@@ -1597,6 +1419,8 @@
         "OLTP ops/s",
         "OLAP total ms"
       ],
+      "withheld_scales": [],
+      "withheld_reason": null,
       "entries": [
         {
           "backend": "arcadedb_embedded",
@@ -1811,6 +1635,8 @@
         "new-order p50 ms",
         "OLTP ops/s"
       ],
+      "withheld_scales": [],
+      "withheld_reason": null,
       "entries": [
         {
           "backend": "arcadedb_embedded",
@@ -2026,6 +1852,8 @@
         "p50 ms",
         "p99 ms"
       ],
+      "withheld_scales": [],
+      "withheld_reason": null,
       "entries": [
         {
           "backend": "arcadedb_e2",
@@ -2099,6 +1927,286 @@
               "min": 8.086,
               "max": 8.43,
               "n": 5
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "e4",
+      "title": "What the client/server split costs",
+      "dataset": "200,000-row projection, one engine, three deployments",
+      "conditions": [
+        "One released engine (26.8.1) on all three arms, 15 repetitions after 3 warmup, identical cpuset 0-11, memory cap 8g and heap 6g.",
+        "All three arms materialize results the same way, so the difference is the deployment and not our choice of result format.",
+        "The separate-container arm is loopback on one host. It says what co-locating costs, and says nothing about a real network.",
+        "The process-boundary column goes slightly negative at the smaller result sizes. That is not a container being faster than an in-process server; it is the boundary term sitting below what this design can resolve, so run-to-run noise swamps it and the sign flips. Reported rather than clamped to zero, because the negative values are the evidence for the claim: at these sizes co-locating costs nothing measurable. The wire format, in the column beside it, stays firmly positive at every size."
+      ],
+      "columns": [
+        "in-process, no protocol",
+        "in-process server over HTTP",
+        "separate container over HTTP",
+        "wire format",
+        "process boundary"
+      ],
+      "withheld_scales": [],
+      "withheld_reason": null,
+      "entries": [
+        {
+          "backend": "1 rows",
+          "is_arcadedb": true,
+          "scale": "1",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "26.8.1",
+          "host": "container:b6d721c693fd (host unknown)",
+          "metrics": {
+            "in-process, no protocol": {
+              "median": 1.0507,
+              "min": 1.0507,
+              "max": 1.0507,
+              "n": 3
+            },
+            "in-process server over HTTP": {
+              "median": 2.4745,
+              "min": 2.4745,
+              "max": 2.4745,
+              "n": 3
+            },
+            "separate container over HTTP": {
+              "median": 1.693,
+              "min": 1.693,
+              "max": 1.693,
+              "n": 3
+            },
+            "wire format": {
+              "median": 1.4238,
+              "min": 1.4238,
+              "max": 1.4238,
+              "n": 3
+            },
+            "process boundary": {
+              "median": -0.7815,
+              "min": -0.7815,
+              "max": -0.7815,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "10 rows",
+          "is_arcadedb": true,
+          "scale": "10",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "26.8.1",
+          "host": "container:b6d721c693fd (host unknown)",
+          "metrics": {
+            "in-process, no protocol": {
+              "median": 0.8581,
+              "min": 0.8581,
+              "max": 0.8581,
+              "n": 3
+            },
+            "in-process server over HTTP": {
+              "median": 1.8966,
+              "min": 1.8966,
+              "max": 1.8966,
+              "n": 3
+            },
+            "separate container over HTTP": {
+              "median": 1.3411,
+              "min": 1.3411,
+              "max": 1.3411,
+              "n": 3
+            },
+            "wire format": {
+              "median": 1.0385,
+              "min": 1.0385,
+              "max": 1.0385,
+              "n": 3
+            },
+            "process boundary": {
+              "median": -0.5555,
+              "min": -0.5555,
+              "max": -0.5555,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "100 rows",
+          "is_arcadedb": true,
+          "scale": "100",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "26.8.1",
+          "host": "container:b6d721c693fd (host unknown)",
+          "metrics": {
+            "in-process, no protocol": {
+              "median": 1.2321,
+              "min": 1.2321,
+              "max": 1.2321,
+              "n": 3
+            },
+            "in-process server over HTTP": {
+              "median": 2.8214,
+              "min": 2.8214,
+              "max": 2.8214,
+              "n": 3
+            },
+            "separate container over HTTP": {
+              "median": 2.0328,
+              "min": 2.0328,
+              "max": 2.0328,
+              "n": 3
+            },
+            "wire format": {
+              "median": 1.5893,
+              "min": 1.5893,
+              "max": 1.5893,
+              "n": 3
+            },
+            "process boundary": {
+              "median": -0.7886,
+              "min": -0.7886,
+              "max": -0.7886,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "1,000 rows",
+          "is_arcadedb": true,
+          "scale": "1,000",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "26.8.1",
+          "host": "container:b6d721c693fd (host unknown)",
+          "metrics": {
+            "in-process, no protocol": {
+              "median": 3.3215,
+              "min": 3.3215,
+              "max": 3.3215,
+              "n": 3
+            },
+            "in-process server over HTTP": {
+              "median": 5.9997,
+              "min": 5.9997,
+              "max": 5.9997,
+              "n": 3
+            },
+            "separate container over HTTP": {
+              "median": 4.5634,
+              "min": 4.5634,
+              "max": 4.5634,
+              "n": 3
+            },
+            "wire format": {
+              "median": 2.6782,
+              "min": 2.6782,
+              "max": 2.6782,
+              "n": 3
+            },
+            "process boundary": {
+              "median": -1.4363,
+              "min": -1.4363,
+              "max": -1.4363,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "10,000 rows",
+          "is_arcadedb": true,
+          "scale": "10,000",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "26.8.1",
+          "host": "container:b6d721c693fd (host unknown)",
+          "metrics": {
+            "in-process, no protocol": {
+              "median": 20.4386,
+              "min": 20.4386,
+              "max": 20.4386,
+              "n": 3
+            },
+            "in-process server over HTTP": {
+              "median": 29.595,
+              "min": 29.595,
+              "max": 29.595,
+              "n": 3
+            },
+            "separate container over HTTP": {
+              "median": 30.1154,
+              "min": 30.1154,
+              "max": 30.1154,
+              "n": 3
+            },
+            "wire format": {
+              "median": 9.1564,
+              "min": 9.1564,
+              "max": 9.1564,
+              "n": 3
+            },
+            "process boundary": {
+              "median": 0.5204,
+              "min": 0.5204,
+              "max": 0.5204,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "100,000 rows",
+          "is_arcadedb": true,
+          "scale": "100,000",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "26.8.1",
+          "host": "container:b6d721c693fd (host unknown)",
+          "metrics": {
+            "in-process, no protocol": {
+              "median": 201.0578,
+              "min": 201.0578,
+              "max": 201.0578,
+              "n": 3
+            },
+            "in-process server over HTTP": {
+              "median": 271.2813,
+              "min": 271.2813,
+              "max": 271.2813,
+              "n": 3
+            },
+            "separate container over HTTP": {
+              "median": 275.9864,
+              "min": 275.9864,
+              "max": 275.9864,
+              "n": 3
+            },
+            "wire format": {
+              "median": 70.2235,
+              "min": 70.2235,
+              "max": 70.2235,
+              "n": 3
+            },
+            "process boundary": {
+              "median": 4.7051,
+              "min": 4.7051,
+              "max": 4.7051,
+              "n": 3
             }
           }
         }
