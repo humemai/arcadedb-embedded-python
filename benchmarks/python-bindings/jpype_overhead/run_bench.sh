@@ -6,7 +6,10 @@
 set -u
 
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$BENCH_DIR/../../../.." && pwd)"
+# Was ../../../.. from bindings/python/benchmarks/jpype_overhead. The suite
+# now lives at benchmarks/python-bindings/jpype_overhead, one level nearer
+# the root, and this path is what locates the uv project and its venv.
+REPO_ROOT="$(cd "$BENCH_DIR/../../.." && pwd)"
 SITE="$REPO_ROOT/.venv/lib/python3.12/site-packages/arcadedb_embedded"
 JAVA="$SITE/jre/bin/java"
 JARS="$SITE/jars/*"

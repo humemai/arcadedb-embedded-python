@@ -766,6 +766,36 @@ def run_gates():
     return failed
 
 
+def freeze_paper_rows(rows):
+    """Write the canonical rows the tables were built from, as a tracked file.
+
+    runs.jsonl is the live append log and stays gitignored: it is written
+    during a campaign, and a `git checkout` once reverted it mid-run and lost
+    rows. But it is also the input to load_canonical(), so with it ignored the
+    tabular and graph tables had no public source while the sparse and dense
+    overlays did.
+
+    This is the frozen half of that split. It is written HERE, in the same
+    call that writes the tables, so the published rows and the published
+    tables cannot come from different states of the log. A reader can
+    recompute every T2/T3 cell from this file alone.
+    """
+    import csv as _csv
+    cols = []
+    for r in rows:
+        for k in r:
+            if k not in cols:
+                cols.append(k)
+    path = os.path.join(RESULTS, "runs_paper.csv")
+    with open(path, "w", newline="") as f:
+        w = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        for r in sorted(rows, key=lambda x: (str(x.get("lane")), str(x.get("scale")),
+                                             str(x.get("backend")), x.get("rep") or 0)):
+            w.writerow({k: r.get(k) for k in cols})
+    print(f"froze {len(rows)} canonical rows -> {os.path.relpath(path, HERE)}")
+
+
 def main():
     strict = "--strict" in sys.argv
     failed = run_gates()
@@ -775,6 +805,7 @@ def main():
 
     rows = load_canonical()
     print(f"{len(rows)} canonical rows")
+    freeze_paper_rows(rows)
     tabular_table(rows)
     graph_table(rows)
     sparse_table(rows)

@@ -584,3 +584,29 @@ benchmarks/experiments/results/runs-*.csv
 # next time a feed was replaced. Ignore the CONVENTION, not each instance.
 benchmarks/experiments/results/*.pre-*
 benchmarks/experiments/results/runs.jsonl.*
+
+# --- benchmarks/python-bindings ---------------------------------------------
+# The binding-level suite (graph/vector/tabular through the Python API, plus
+# the Java-vs-Python overhead harness). Same rule as the engine suite beside
+# it, stated once here rather than in per-directory .gitignore files: two
+# sibling suites with two ignore conventions is how a `results/` blanket in
+# one of them ends up silently governing the other.
+#
+# OUT: append logs, regenerable inputs, and anything a run can rebuild.
+# IN:  the frozen rows the paper's numbers are computed from, and the
+#      generated tables, so a reader can recompute every cell.
+benchmarks/python-bindings/results/runs.jsonl
+benchmarks/python-bindings/results/lat/
+benchmarks/python-bindings/results/mem/
+benchmarks/python-bindings/results/archive_*/
+benchmarks/python-bindings/results/*.log
+benchmarks/python-bindings/datasets/raw/
+benchmarks/python-bindings/datasets/prepared/
+# jpype_overhead regenerates its corpora and databases (2.6 GB) from
+# gen_dataset.py; only the harness and its result CSVs are tracked.
+benchmarks/python-bindings/jpype_overhead/dbs/
+benchmarks/python-bindings/jpype_overhead/dbs_*/
+benchmarks/python-bindings/jpype_overhead/data_*/
+benchmarks/python-bindings/jpype_overhead/results/*.log
+benchmarks/python-bindings/jpype_overhead/*.class
+
