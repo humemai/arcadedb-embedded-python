@@ -1,0 +1,2108 @@
+{
+  "source": "benchmarks/experiments/results/runs_paper.csv",
+  "generator": "benchmarks/experiments/export_web.py",
+  "arcadedb_version": "26.8.1",
+  "conditions": [
+    "Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.",
+    "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
+    "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
+    "Comparators are pinned by sha256 image digest, not by a floating tag."
+  ],
+  "provenance_note": "Host identity is recorded on the sparse and dense lanes only; the remaining lanes record the container but not the machine. Every lane ran on the same benchmark host, but this file reports only what the frozen rows can prove.",
+  "hosts_recorded": [
+    "container:0329a4118f5b (host unknown)",
+    "container:037cc8d17757 (host unknown)",
+    "container:06f3d75c95cc (host unknown)",
+    "container:08b4706b33f5 (host unknown)",
+    "container:0e07a89faea2 (host unknown)",
+    "container:0e64b5d3bb54 (host unknown)",
+    "container:0f03325832f1 (host unknown)",
+    "container:111508d1eb55 (host unknown)",
+    "container:1260990bea4d (host unknown)",
+    "container:12cbcdbc0fe0 (host unknown)",
+    "container:1704856e82e0 (host unknown)",
+    "container:1d679a9679a9 (host unknown)",
+    "container:20281f9ea94b (host unknown)",
+    "container:2174aa2e0d1d (host unknown)",
+    "container:22fd111cf1f7 (host unknown)",
+    "container:23773f0f3d48 (host unknown)",
+    "container:24289644770a (host unknown)",
+    "container:24b3874120a9 (host unknown)",
+    "container:29bfc3a02147 (host unknown)",
+    "container:2b06b5063b47 (host unknown)",
+    "container:2cff95369eec (host unknown)",
+    "container:2db7ecffce68 (host unknown)",
+    "container:2e9328cd993c (host unknown)",
+    "container:3556bf1b6132 (host unknown)",
+    "container:3783e91c69a0 (host unknown)",
+    "container:38c3aaa21dbb (host unknown)",
+    "container:3b8aebcdaff9 (host unknown)",
+    "container:3f7507af2e9e (host unknown)",
+    "container:406d1c1a989c (host unknown)",
+    "container:41b1cecc8ede (host unknown)",
+    "container:425a1a4f6226 (host unknown)",
+    "container:4b8e43d5daa1 (host unknown)",
+    "container:4bf166fb5093 (host unknown)",
+    "container:4d37dcfbc6b2 (host unknown)",
+    "container:4d64466ed2b6 (host unknown)",
+    "container:4fde39aa64b1 (host unknown)",
+    "container:5126b2423425 (host unknown)",
+    "container:5522a41a0d39 (host unknown)",
+    "container:5544de28f693 (host unknown)",
+    "container:57fbfbf339c2 (host unknown)",
+    "container:58221737d184 (host unknown)",
+    "container:5b55f042c789 (host unknown)",
+    "container:5baec3b2f545 (host unknown)",
+    "container:5ce296705313 (host unknown)",
+    "container:6053210debd9 (host unknown)",
+    "container:61aaf46bcf55 (host unknown)",
+    "container:6793970f7145 (host unknown)",
+    "container:69515ca061f2 (host unknown)",
+    "container:6a1af10b6ca8 (host unknown)",
+    "container:6b37fa7237ac (host unknown)",
+    "container:6c480816165c (host unknown)",
+    "container:6cb6814f48a6 (host unknown)",
+    "container:6d5e0a6d6f12 (host unknown)",
+    "container:6f0e9de6e671 (host unknown)",
+    "container:7139819b613e (host unknown)",
+    "container:71429689decc (host unknown)",
+    "container:74c022b63a29 (host unknown)",
+    "container:754fcd77f980 (host unknown)",
+    "container:75a33bd1b025 (host unknown)",
+    "container:76089ae82e0a (host unknown)",
+    "container:762da21d467e (host unknown)",
+    "container:7a0472ce673b (host unknown)",
+    "container:7a12d04ab069 (host unknown)",
+    "container:7ab098cd6959 (host unknown)",
+    "container:7c802307c7cb (host unknown)",
+    "container:7ecebfa7e200 (host unknown)",
+    "container:7ef36148a330 (host unknown)",
+    "container:7f13239dd54d (host unknown)",
+    "container:7f9ee66096df (host unknown)",
+    "container:82771faa8dc7 (host unknown)",
+    "container:84e03511b638 (host unknown)",
+    "container:84f3dec4ae9c (host unknown)",
+    "container:84fe5cba2699 (host unknown)",
+    "container:852f72652aa5 (host unknown)",
+    "container:85a8232f0789 (host unknown)",
+    "container:869878fabc7b (host unknown)",
+    "container:87ea0bb24c9f (host unknown)",
+    "container:89f867f55a2b (host unknown)",
+    "container:8b55c7c2c89e (host unknown)",
+    "container:8f4b817a2c5a (host unknown)",
+    "container:93837c0834b6 (host unknown)",
+    "container:9477ef2ae4fa (host unknown)",
+    "container:968ee50ec82c (host unknown)",
+    "container:985e483d5c68 (host unknown)",
+    "container:9a1b12dbf73b (host unknown)",
+    "container:9bf726705317 (host unknown)",
+    "container:9c1d6f2a09ab (host unknown)",
+    "container:9d5d2ade0776 (host unknown)",
+    "container:9dbc822625bd (host unknown)",
+    "container:a1ecdc090f88 (host unknown)",
+    "container:a52de3ac7cea (host unknown)",
+    "container:a8515aa8e7ba (host unknown)",
+    "container:a915329e63c5 (host unknown)",
+    "container:ab38fe54321d (host unknown)",
+    "container:aca11fb4b981 (host unknown)",
+    "container:ad70b78fb1de (host unknown)",
+    "container:adc947ad08c0 (host unknown)",
+    "container:ae4cd69f0c5f (host unknown)",
+    "container:af7205fa7474 (host unknown)",
+    "container:afa778f091fd (host unknown)",
+    "container:b0365c59e85f (host unknown)",
+    "container:b054ff867ab2 (host unknown)",
+    "container:b29b3a5d24e7 (host unknown)",
+    "container:b43d5b43ffdd (host unknown)",
+    "container:b4ebdea30988 (host unknown)",
+    "container:b9b284bbf5ec (host unknown)",
+    "container:ba3d1c85b0c8 (host unknown)",
+    "container:bbc9dfc8e6c6 (host unknown)",
+    "container:bd1871d95f55 (host unknown)",
+    "container:c3a75f9eae6f (host unknown)",
+    "container:c3ca7f7e387f (host unknown)",
+    "container:c7cbb707f362 (host unknown)",
+    "container:c86aee733d14 (host unknown)",
+    "container:cbbf4b184fb8 (host unknown)",
+    "container:ccff7eb02d00 (host unknown)",
+    "container:ceabec39c5bf (host unknown)",
+    "container:d09e202f6d0b (host unknown)",
+    "container:d0e77d58ede0 (host unknown)",
+    "container:d292d2fcb344 (host unknown)",
+    "container:d419cc379a33 (host unknown)",
+    "container:d4eb98589aaf (host unknown)",
+    "container:d6e32765c63b (host unknown)",
+    "container:d6ef88fedf76 (host unknown)",
+    "container:d8605889ddb1 (host unknown)",
+    "container:dd5dd20014a0 (host unknown)",
+    "container:dfeda1fa11a9 (host unknown)",
+    "container:e399801893a2 (host unknown)",
+    "container:e42b46eb4d9a (host unknown)",
+    "container:e5fdcaf54bf1 (host unknown)",
+    "container:e614688dfc7d (host unknown)",
+    "container:e77660850b17 (host unknown)",
+    "container:e83d972b35fd (host unknown)",
+    "container:eb2c53b17aff (host unknown)",
+    "container:ec60bbdd0e7e (host unknown)",
+    "container:eca8e7ab4697 (host unknown)",
+    "container:ee51d85a847b (host unknown)",
+    "container:f20bc77e75ad (host unknown)",
+    "container:f509fb99a284 (host unknown)",
+    "container:f51c57a29369 (host unknown)",
+    "container:f73a88d7d465 (host unknown)",
+    "container:f7f7bd3394bf (host unknown)",
+    "container:fa61ec097ab2 (host unknown)",
+    "container:fbff12fbcc78 (host unknown)",
+    "container:fce18cb13f80 (host unknown)",
+    "container:fee42ad5a313 (host unknown)"
+  ],
+  "tables": [
+    {
+      "id": "l3s",
+      "title": "Sparse vector search",
+      "dataset": "Big-ANN'23 Sparse (real SPLADE over MS MARCO)",
+      "conditions": [
+        "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
+        "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour."
+      ],
+      "columns": [
+        "p50 ms",
+        "recall@10",
+        "build s"
+      ],
+      "entries": [
+        {
+          "backend": "arcadedb_sparse_embedded",
+          "is_arcadedb": true,
+          "scale": "medium",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:38c3aaa21dbb (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 82.94,
+              "min": 82.684,
+              "max": 84.957,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9914,
+              "min": 0.9914,
+              "max": 0.9914,
+              "n": 5
+            },
+            "build s": {
+              "median": 922.72,
+              "min": 889.16,
+              "max": 940.9,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_embedded_fp32",
+          "is_arcadedb": true,
+          "scale": "medium",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:7c802307c7cb (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 86.231,
+              "min": 83.8,
+              "max": 86.613,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9998,
+              "min": 0.9998,
+              "max": 0.9998,
+              "n": 5
+            },
+            "build s": {
+              "median": 914.92,
+              "min": 893.07,
+              "max": 935.13,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_embedded_nocompact",
+          "is_arcadedb": true,
+          "scale": "medium",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:2cff95369eec (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 105.513,
+              "min": 104.445,
+              "max": 106.38,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9913,
+              "min": 0.9913,
+              "max": 0.9913,
+              "n": 5
+            },
+            "build s": {
+              "median": 848.68,
+              "min": 829.27,
+              "max": 867.34,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_server",
+          "is_arcadedb": true,
+          "scale": "medium",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": null,
+          "host": "container:5544de28f693 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 89.447,
+              "min": 88.183,
+              "max": 90.582,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9914,
+              "min": 0.9914,
+              "max": 0.9914,
+              "n": 5
+            },
+            "build s": {
+              "median": 2227.98,
+              "min": 2216.52,
+              "max": 2245.16,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "elasticsearch_sparse",
+          "is_arcadedb": false,
+          "scale": "medium",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "embedded",
+          "image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",
+          "version_name": "9.4.1, matches the 9.4.1 client",
+          "host": "container:f20bc77e75ad (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 55.766,
+              "min": 55.559,
+              "max": 56.672,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9967,
+              "min": 0.9967,
+              "max": 0.9968,
+              "n": 5
+            },
+            "build s": {
+              "median": 3111.13,
+              "min": 2820.42,
+              "max": 3113.38,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "milvus_sparse",
+          "is_arcadedb": false,
+          "scale": "medium",
+          "workload": "search",
+          "n_docs": "10000000",
+          "deployment": "embedded",
+          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 23.3555,
+              "min": 6.414,
+              "max": 40.442,
+              "n": 10
+            },
+            "recall@10": {
+              "median": 1.0,
+              "min": 0.9999,
+              "max": 1.0,
+              "n": 10
+            },
+            "build s": {
+              "median": 720.12,
+              "min": 438.88,
+              "max": 1008.21,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "qdrant_sparse",
+          "is_arcadedb": false,
+          "scale": "medium",
+          "workload": "search",
+          "n_docs": "10000000",
+          "deployment": "embedded",
+          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+          "version_name": "v1.18.2",
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 10.533,
+              "min": 5.068,
+              "max": 16.788,
+              "n": 10
+            },
+            "recall@10": {
+              "median": 1.0,
+              "min": 0.9998,
+              "max": 1.0,
+              "n": 10
+            },
+            "build s": {
+              "median": 1067.835,
+              "min": 377.98,
+              "max": 1779.01,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_embedded",
+          "is_arcadedb": true,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:b0365c59e85f (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 11.339,
+              "min": 11.287,
+              "max": 11.481,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9935,
+              "min": 0.9935,
+              "max": 0.9935,
+              "n": 5
+            },
+            "build s": {
+              "median": 95.27,
+              "min": 95.02,
+              "max": 96.1,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_embedded_fp32",
+          "is_arcadedb": true,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:0e07a89faea2 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 11.521,
+              "min": 11.185,
+              "max": 11.704,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "build s": {
+              "median": 95.98,
+              "min": 94.95,
+              "max": 96.52,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_embedded_nocompact",
+          "is_arcadedb": true,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:9c1d6f2a09ab (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 36.695,
+              "min": 35.954,
+              "max": 37.325,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9938,
+              "min": 0.9938,
+              "max": 0.9938,
+              "n": 5
+            },
+            "build s": {
+              "median": 87.12,
+              "min": 85.86,
+              "max": 88.07,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_server",
+          "is_arcadedb": true,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": null,
+          "host": "container:406d1c1a989c (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 13.608,
+              "min": 13.177,
+              "max": 13.633,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9935,
+              "min": 0.9935,
+              "max": 0.9935,
+              "n": 5
+            },
+            "build s": {
+              "median": 244.99,
+              "min": 243.53,
+              "max": 246.11,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "elasticsearch_sparse",
+          "is_arcadedb": false,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",
+          "version_name": "9.4.1, matches the 9.4.1 client",
+          "host": "container:ee51d85a847b (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 9.829,
+              "min": 9.673,
+              "max": 9.849,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9972,
+              "min": 0.9972,
+              "max": 0.9972,
+              "n": 5
+            },
+            "build s": {
+              "median": 320.86,
+              "min": 319.89,
+              "max": 322.88,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "milvus_sparse",
+          "is_arcadedb": false,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+          "version_name": null,
+          "host": "container:b4ebdea30988 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 9.041,
+              "min": 8.809,
+              "max": 9.134,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "build s": {
+              "median": 102.15,
+              "min": 100.83,
+              "max": 103.46,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "qdrant_sparse",
+          "is_arcadedb": false,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+          "version_name": "v1.18.2",
+          "host": "container:e77660850b17 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 2.867,
+              "min": 2.845,
+              "max": 2.95,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "build s": {
+              "median": 91.92,
+              "min": 90.9,
+              "max": 94.43,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_embedded",
+          "is_arcadedb": true,
+          "scale": "tiny",
+          "workload": "search",
+          "n_docs": "100000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:23773f0f3d48 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 4.165,
+              "min": 3.955,
+              "max": 4.199,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.995,
+              "min": 0.995,
+              "max": 0.995,
+              "n": 5
+            },
+            "build s": {
+              "median": 9.37,
+              "min": 9.17,
+              "max": 9.74,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_embedded_fp32",
+          "is_arcadedb": true,
+          "scale": "tiny",
+          "workload": "search",
+          "n_docs": "100000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:2e9328cd993c (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 4.155,
+              "min": 4.083,
+              "max": 4.17,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "build s": {
+              "median": 9.25,
+              "min": 9.08,
+              "max": 9.37,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_embedded_nocompact",
+          "is_arcadedb": true,
+          "scale": "tiny",
+          "workload": "search",
+          "n_docs": "100000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:3783e91c69a0 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 5.911,
+              "min": 5.851,
+              "max": 6.099,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9957,
+              "min": 0.9957,
+              "max": 0.9957,
+              "n": 5
+            },
+            "build s": {
+              "median": 8.69,
+              "min": 8.6,
+              "max": 8.78,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_sparse_server",
+          "is_arcadedb": true,
+          "scale": "tiny",
+          "workload": "search",
+          "n_docs": "100000",
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": null,
+          "host": "container:9477ef2ae4fa (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 5.29,
+              "min": 5.243,
+              "max": 5.362,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.995,
+              "min": 0.995,
+              "max": 0.995,
+              "n": 5
+            },
+            "build s": {
+              "median": 26.04,
+              "min": 25.99,
+              "max": 26.06,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "elasticsearch_sparse",
+          "is_arcadedb": false,
+          "scale": "tiny",
+          "workload": "search",
+          "n_docs": "100000",
+          "deployment": "embedded",
+          "image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",
+          "version_name": "9.4.1, matches the 9.4.1 client",
+          "host": "container:bbc9dfc8e6c6 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 3.457,
+              "min": 3.287,
+              "max": 3.565,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.997,
+              "min": 0.997,
+              "max": 0.997,
+              "n": 5
+            },
+            "build s": {
+              "median": 33.87,
+              "min": 33.23,
+              "max": 34.35,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "milvus_sparse",
+          "is_arcadedb": false,
+          "scale": "tiny",
+          "workload": "search",
+          "n_docs": "100000",
+          "deployment": "embedded",
+          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+          "version_name": null,
+          "host": "container:7a12d04ab069 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 2.959,
+              "min": 2.925,
+              "max": 3.037,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "build s": {
+              "median": 10.94,
+              "min": 10.85,
+              "max": 11.17,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "qdrant_sparse",
+          "is_arcadedb": false,
+          "scale": "tiny",
+          "workload": "search",
+          "n_docs": "100000",
+          "deployment": "embedded",
+          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+          "version_name": "v1.18.2",
+          "host": "container:d6ef88fedf76 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 0.892,
+              "min": 0.875,
+              "max": 0.917,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "build s": {
+              "median": 8.17,
+              "min": 8.01,
+              "max": 8.98,
+              "n": 5
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "l3d",
+      "title": "Dense vector search",
+      "dataset": "DEEP-10M (deep-image-96-angular) and SIFT-scale tiers",
+      "conditions": [
+        "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead."
+      ],
+      "columns": [
+        "p50 ms",
+        "recall@10",
+        "build s"
+      ],
+      "entries": [
+        {
+          "backend": "chroma_dense",
+          "is_arcadedb": false,
+          "scale": "deep10m",
+          "workload": "search",
+          "n_docs": "9990000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 0.686,
+              "min": 0.632,
+              "max": 0.726,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9337,
+              "min": 0.9331,
+              "max": 0.9343,
+              "n": 5
+            },
+            "build s": {
+              "median": 3678.54,
+              "min": 3672.54,
+              "max": 3695.51,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "duckdb_vss_dense",
+          "is_arcadedb": false,
+          "scale": "deep10m",
+          "workload": "search",
+          "n_docs": "9990000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 2.533,
+              "min": 2.52,
+              "max": 2.541,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9363,
+              "min": 0.9323,
+              "max": 0.9382,
+              "n": 5
+            },
+            "build s": {
+              "median": 805.17,
+              "min": 804.54,
+              "max": 806.49,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "lancedb_dense",
+          "is_arcadedb": false,
+          "scale": "deep10m",
+          "workload": "search",
+          "n_docs": "9990000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 2.724,
+              "min": 2.644,
+              "max": 2.749,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.7067,
+              "min": 0.7023,
+              "max": 0.7114,
+              "n": 5
+            },
+            "build s": {
+              "median": 226.63,
+              "min": 226.07,
+              "max": 227.69,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "milvus_dense",
+          "is_arcadedb": false,
+          "scale": "deep10m",
+          "workload": "search",
+          "n_docs": "9990000",
+          "deployment": "embedded",
+          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 17.944,
+              "min": 13.013,
+              "max": 18.841,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9945,
+              "min": 0.9938,
+              "max": 0.9947,
+              "n": 5
+            },
+            "build s": {
+              "median": 142.16,
+              "min": 136.91,
+              "max": 145.63,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "qdrant_dense",
+          "is_arcadedb": false,
+          "scale": "deep10m",
+          "workload": "search",
+          "n_docs": "9990000",
+          "deployment": "embedded",
+          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+          "version_name": "v1.18.2",
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 1.295,
+              "min": 1.171,
+              "max": 1.38,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9803,
+              "min": 0.9786,
+              "max": 0.9828,
+              "n": 5
+            },
+            "build s": {
+              "median": 515.69,
+              "min": 512.92,
+              "max": 524.18,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "sqlite_vec_dense",
+          "is_arcadedb": false,
+          "scale": "deep10m",
+          "workload": "search",
+          "n_docs": "9990000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 882.351,
+              "min": 879.342,
+              "max": 883.519,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "build s": {
+              "median": 70.26,
+              "min": 69.95,
+              "max": 70.75,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_dense_embedded",
+          "is_arcadedb": true,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:b29b3a5d24e7 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 2.043,
+              "min": 1.995,
+              "max": 2.118,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9877,
+              "min": 0.9863,
+              "max": 0.988,
+              "n": 5
+            },
+            "build s": {
+              "median": 185.48,
+              "min": 183.65,
+              "max": 193.25,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_dense_server",
+          "is_arcadedb": true,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": null,
+          "host": "container:6f0e9de6e671 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 2.975,
+              "min": 2.932,
+              "max": 3.113,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.988,
+              "min": 0.9876,
+              "max": 0.9901,
+              "n": 5
+            },
+            "build s": {
+              "median": 258.68,
+              "min": 255.41,
+              "max": 263.09,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "chroma_dense",
+          "is_arcadedb": false,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:aca11fb4b981 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 0.641,
+              "min": 0.571,
+              "max": 0.676,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.975,
+              "min": 0.9738,
+              "max": 0.9758,
+              "n": 5
+            },
+            "build s": {
+              "median": 146.0,
+              "min": 144.91,
+              "max": 146.63,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "duckdb_vss_dense",
+          "is_arcadedb": false,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:7ef36148a330 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 1.795,
+              "min": 1.777,
+              "max": 1.806,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9749,
+              "min": 0.9722,
+              "max": 0.9751,
+              "n": 5
+            },
+            "build s": {
+              "median": 59.67,
+              "min": 58.94,
+              "max": 59.75,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "lancedb_dense",
+          "is_arcadedb": false,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:4d64466ed2b6 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 1.458,
+              "min": 1.455,
+              "max": 1.482,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.96,
+              "min": 0.959,
+              "max": 0.9611,
+              "n": 5
+            },
+            "build s": {
+              "median": 20.97,
+              "min": 20.4,
+              "max": 21.49,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "milvus_dense",
+          "is_arcadedb": false,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+          "version_name": null,
+          "host": "container:6793970f7145 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 3.492,
+              "min": 3.029,
+              "max": 3.795,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9937,
+              "min": 0.9927,
+              "max": 0.9944,
+              "n": 5
+            },
+            "build s": {
+              "median": 17.37,
+              "min": 16.76,
+              "max": 19.22,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "qdrant_dense",
+          "is_arcadedb": false,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+          "version_name": "v1.18.2",
+          "host": "container:5522a41a0d39 (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 1.044,
+              "min": 1.042,
+              "max": 1.09,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9955,
+              "min": 0.9954,
+              "max": 0.9959,
+              "n": 5
+            },
+            "build s": {
+              "median": 43.98,
+              "min": 43.28,
+              "max": 44.3,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "sqlite_vec_dense",
+          "is_arcadedb": false,
+          "scale": "small",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": "container:7a0472ce673b (host unknown)",
+          "metrics": {
+            "p50 ms": {
+              "median": 141.06,
+              "min": 137.787,
+              "max": 141.547,
+              "n": 5
+            },
+            "recall@10": {
+              "median": 0.9991,
+              "min": 0.9991,
+              "max": 0.9991,
+              "n": 5
+            },
+            "build s": {
+              "median": 7.63,
+              "min": 7.43,
+              "max": 7.68,
+              "n": 5
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "l2",
+      "title": "Graph traversal",
+      "dataset": "LDBC-SNB Interactive (SF1, SF10)",
+      "conditions": [
+        "Edges are bidirectional in every arm. In ArcadeDB that is a pointer-storage choice rather than a semantic one, and the OLAP planner needs it.",
+        "2-hop latency tracks seed degree, so the spread across repetitions is a property of the seed sample rather than instability."
+      ],
+      "columns": [
+        "point p50 ms",
+        "1-hop p50 ms",
+        "2-hop p50 ms",
+        "write p50 ms"
+      ],
+      "entries": [
+        {
+          "backend": "arcadedb_graph_embedded",
+          "is_arcadedb": true,
+          "scale": "sf1",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.449,
+              "min": 0.398,
+              "max": 0.456,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.418,
+              "min": 0.413,
+              "max": 0.424,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.833,
+              "min": 0.743,
+              "max": 0.888,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 0.947,
+              "min": 0.927,
+              "max": 1.004,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_graph_server",
+          "is_arcadedb": true,
+          "scale": "sf1",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 1.241,
+              "min": 1.155,
+              "max": 1.298,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.184,
+              "min": 1.071,
+              "max": 1.209,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 1.633,
+              "min": 1.582,
+              "max": 1.694,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 1.47,
+              "min": 1.365,
+              "max": 1.549,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ladybug_graph",
+          "is_arcadedb": false,
+          "scale": "sf1",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.157,
+              "min": 0.153,
+              "max": 0.158,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.04,
+              "min": 1.03,
+              "max": 1.05,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 4.06,
+              "min": 4.022,
+              "max": 4.068,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 9.65,
+              "min": 9.539,
+              "max": 9.916,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "neo4j_graph",
+          "is_arcadedb": false,
+          "scale": "sf1",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
+          "version_name": "5-community",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 4.964,
+              "min": 4.788,
+              "max": 5.157,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 4.347,
+              "min": 4.291,
+              "max": 4.44,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 3.768,
+              "min": 3.613,
+              "max": 3.977,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 7.853,
+              "min": 7.581,
+              "max": 8.185,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_graph_embedded",
+          "is_arcadedb": true,
+          "scale": "sf10",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.476,
+              "min": 0.454,
+              "max": 0.527,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.58,
+              "min": 0.55,
+              "max": 0.58,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 1.634,
+              "min": 1.575,
+              "max": 1.637,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 0.707,
+              "min": 0.657,
+              "max": 0.724,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_graph_server",
+          "is_arcadedb": true,
+          "scale": "sf10",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 1.209,
+              "min": 1.168,
+              "max": 1.249,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.413,
+              "min": 1.38,
+              "max": 1.484,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 2.661,
+              "min": 2.608,
+              "max": 2.737,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 1.726,
+              "min": 1.687,
+              "max": 1.873,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ladybug_graph",
+          "is_arcadedb": false,
+          "scale": "sf10",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.158,
+              "min": 0.155,
+              "max": 0.161,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.681,
+              "min": 1.618,
+              "max": 1.786,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 5.61,
+              "min": 5.587,
+              "max": 5.772,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 9.722,
+              "min": 9.62,
+              "max": 9.754,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "neo4j_graph",
+          "is_arcadedb": false,
+          "scale": "sf10",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
+          "version_name": "5-community",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 5.757,
+              "min": 5.533,
+              "max": 6.171,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 5.517,
+              "min": 5.419,
+              "max": 5.604,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 4.9,
+              "min": 4.637,
+              "max": 5.115,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 8.225,
+              "min": 8.01,
+              "max": 8.33,
+              "n": 5
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "l1",
+      "title": "Tabular OLTP and OLAP",
+      "dataset": "Synthetic orders workload",
+      "conditions": [],
+      "columns": [
+        "read p50 ms",
+        "insert p50 ms",
+        "OLTP ops/s",
+        "OLAP total ms"
+      ],
+      "entries": [
+        {
+          "backend": "arcadedb_embedded",
+          "is_arcadedb": true,
+          "scale": "medium",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "OLAP total ms": {
+              "median": 70807.34,
+              "min": 68129.287,
+              "max": 71601.273,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_embedded",
+          "is_arcadedb": true,
+          "scale": "medium",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "read p50 ms": {
+              "median": 0.0574,
+              "min": 0.0568,
+              "max": 0.0604,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.2211,
+              "min": 0.2193,
+              "max": 0.2245,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 8361.5,
+              "min": 6989.1,
+              "max": 8452.8,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_server",
+          "is_arcadedb": true,
+          "scale": "medium",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "OLAP total ms": {
+              "median": 77852.811,
+              "min": 76348.694,
+              "max": 78922.548,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_server",
+          "is_arcadedb": true,
+          "scale": "medium",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "read p50 ms": {
+              "median": 0.6109,
+              "min": 0.582,
+              "max": 0.6491,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.7758,
+              "min": 0.7615,
+              "max": 0.8335,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 1466.4,
+              "min": 1405.5,
+              "max": 1555.1,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "duckdb",
+          "is_arcadedb": false,
+          "scale": "medium",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "OLAP total ms": {
+              "median": 108.154,
+              "min": 107.501,
+              "max": 109.398,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "duckdb",
+          "is_arcadedb": false,
+          "scale": "medium",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "read p50 ms": {
+              "median": 0.9705,
+              "min": 0.9641,
+              "max": 0.9939,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 8.5989,
+              "min": 8.5768,
+              "max": 8.7199,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 274.8,
+              "min": 268.6,
+              "max": 275.4,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "postgres",
+          "is_arcadedb": false,
+          "scale": "medium",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
+          "version_name": "17.10",
+          "host": null,
+          "metrics": {
+            "OLAP total ms": {
+              "median": 3246.89,
+              "min": 3226.31,
+              "max": 3255.636,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "postgres",
+          "is_arcadedb": false,
+          "scale": "medium",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
+          "version_name": "17.10",
+          "host": null,
+          "metrics": {
+            "read p50 ms": {
+              "median": 1.0245,
+              "min": 0.902,
+              "max": 1.0302,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 2.4821,
+              "min": 2.4089,
+              "max": 2.5073,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 523.3,
+              "min": 517.4,
+              "max": 545.8,
+              "n": 5
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "l1tpc",
+      "title": "Tabular (TPC-H and TPC-C shapes)",
+      "dataset": "TPC-H queries, TPC-C new-order",
+      "conditions": [],
+      "columns": [
+        "Q1 ms",
+        "Q6 ms",
+        "new-order p50 ms",
+        "OLTP ops/s"
+      ],
+      "entries": [
+        {
+          "backend": "arcadedb_embedded",
+          "is_arcadedb": true,
+          "scale": "tpch1",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "Q1 ms": {
+              "median": 11404.41,
+              "min": 11302.87,
+              "max": 11518.93,
+              "n": 5
+            },
+            "Q6 ms": {
+              "median": 852.8,
+              "min": 839.89,
+              "max": 859.34,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_embedded",
+          "is_arcadedb": true,
+          "scale": "tpch1",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "new-order p50 ms": {
+              "median": 0.345,
+              "min": 0.335,
+              "max": 0.364,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 2334.4,
+              "min": 2230.9,
+              "max": 2486.1,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_server",
+          "is_arcadedb": true,
+          "scale": "tpch1",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "Q1 ms": {
+              "median": 12050.89,
+              "min": 11981.4,
+              "max": 12171.68,
+              "n": 5
+            },
+            "Q6 ms": {
+              "median": 892.44,
+              "min": 882.04,
+              "max": 907.63,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "arcadedb_server",
+          "is_arcadedb": true,
+          "scale": "tpch1",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "new-order p50 ms": {
+              "median": 1.114,
+              "min": 1.068,
+              "max": 1.23,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 841.8,
+              "min": 805.0,
+              "max": 873.5,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "duckdb",
+          "is_arcadedb": false,
+          "scale": "tpch1",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "Q1 ms": {
+              "median": 15.5,
+              "min": 14.94,
+              "max": 15.6,
+              "n": 5
+            },
+            "Q6 ms": {
+              "median": 7.34,
+              "min": 7.16,
+              "max": 7.64,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "duckdb",
+          "is_arcadedb": false,
+          "scale": "tpch1",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "new-order p50 ms": {
+              "median": 9.255,
+              "min": 9.15,
+              "max": 9.671,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 106.4,
+              "min": 103.1,
+              "max": 106.9,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "postgres",
+          "is_arcadedb": false,
+          "scale": "tpch1",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
+          "version_name": "17.10",
+          "host": null,
+          "metrics": {
+            "Q1 ms": {
+              "median": 1010.93,
+              "min": 1000.12,
+              "max": 1021.65,
+              "n": 5
+            },
+            "Q6 ms": {
+              "median": 111.88,
+              "min": 110.74,
+              "max": 114.53,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "postgres",
+          "is_arcadedb": false,
+          "scale": "tpch1",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
+          "version_name": "17.10",
+          "host": null,
+          "metrics": {
+            "new-order p50 ms": {
+              "median": 2.346,
+              "min": 2.33,
+              "max": 2.853,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 375.2,
+              "min": 338.2,
+              "max": 426.1,
+              "n": 5
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "title": "Cross-model transaction",
+      "dataset": "Vector hit to graph traversal to document update, in one transaction",
+      "conditions": [
+        "The composed stack (Qdrant plus Neo4j) has no transaction spanning both engines. The comparison is of an atomic path against a non-atomic one, which is the point rather than a caveat.",
+        "The torn-state and post-crash columns in the raw data record whether a mid-write failure left the stores disagreeing; that is the result this lane exists for, not the latency."
+      ],
+      "columns": [
+        "p50 ms",
+        "p99 ms"
+      ],
+      "entries": [
+        {
+          "backend": "arcadedb_e2",
+          "is_arcadedb": true,
+          "scale": "e2",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 1.879,
+              "min": 1.83,
+              "max": 2.002,
+              "n": 5
+            },
+            "p99 ms": {
+              "median": 6.118,
+              "min": 4.876,
+              "max": 10.313,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "composed_qdrant_neo4j",
+          "is_arcadedb": false,
+          "scale": "e2",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
+          "version_name": "5-community",
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 19.427,
+              "min": 19.092,
+              "max": 20.117,
+              "n": 5
+            },
+            "p99 ms": {
+              "median": 26.368,
+              "min": 25.606,
+              "max": 27.311,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "surrealdb_e2",
+          "is_arcadedb": false,
+          "scale": "e2",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 7.061,
+              "min": 6.964,
+              "max": 7.12,
+              "n": 5
+            },
+            "p99 ms": {
+              "median": 8.276,
+              "min": 8.086,
+              "max": 8.43,
+              "n": 5
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
