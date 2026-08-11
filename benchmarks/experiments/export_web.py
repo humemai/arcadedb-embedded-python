@@ -244,6 +244,108 @@ def _e4_table():
     }
 
 
+L4_FILE = HERE / "results" / "l4_tsbs.jsonl"
+
+# The lane runs one configuration, so these are constants of the experiment
+# rather than per-row facts. Declared here instead of guessed per row, and
+# named in the table so a reader is not left to infer them.
+L4_SHAPE = {"scale": "2.59M points", "workload": "TSBS cpu-only"}
+
+
+def _l4_table():
+    """Time series against QuestDB and DuckDB.
+
+    Included after checking the rows rather than the tracker. Each row records
+    cpuset, memory cap, heap, host, lane, role, producer and timestamp, and
+    `settle_s` is 0.0 for **all three** engines, so the no-settle decision the
+    paper describes is visible in the data rather than asserted.
+
+    Comparator builds come from `backend_version`, not `engine_version`. The
+    lane sets `engine_version` to None for non-ArcadeDB rows on purpose:
+    `run_conditions()` stamps it from the installed wheel, which is the right
+    answer for the ArcadeDB row and the wrong one for DuckDB and QuestDB, and
+    a wrong version that passes a provenance audit is worse than none. The
+    per-backend `version()` call is the honest field, and QuestDB's even
+    carries its commit hash.
+
+    What the rows genuinely lack is scale/workload/rep/tier/topology, because
+    the probe predates routing through the shared runner. Those are constants
+    of a single-configuration lane, so they are declared above rather than
+    left blank.
+    """
+    if not L4_FILE.exists():
+        return None
+
+    rows = []
+    for line in L4_FILE.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    if not rows:
+        return None
+
+    metrics_spec = [
+        ("ingest_pts_per_s", "ingest pts/s"),
+        ("q_last_ms", "last-point ms"),
+        ("q_range_ms", "12h aggregate ms"),
+    ]
+
+    by_backend = defaultdict(list)
+    for r in rows:
+        by_backend[r.get("backend")].append(r)
+
+    entries = []
+    for backend, rs in sorted(by_backend.items()):
+        entry = {
+            "backend": backend,
+            "is_arcadedb": "arcade" in str(backend),
+            "scale": L4_SHAPE["scale"],
+            "workload": L4_SHAPE["workload"],
+            "n_docs": str(rs[0].get("n_points")),
+            "deployment": "embedded",
+            "image": None,
+            "version_name": rs[0].get("backend_version"),
+            "host": rs[0].get("host"),
+            "metrics": {},
+        }
+        for field, label in metrics_spec:
+            got = _agg(rs, field)
+            if got is not None:
+                entry["metrics"][label] = got
+        if entry["metrics"]:
+            entries.append(entry)
+
+    settles = {r.get("settle_s") for r in rows}
+    symmetric = settles == {0.0} or settles == {0}
+
+    return {
+        "id": "l4",
+        "title": "Time series",
+        "dataset": f"TSBS cpu-only, {rows[0].get('n_points'):,} points",
+        "conditions": [
+            "No engine takes a settle step, and that was measured rather than "
+            "assumed: sealing ArcadeDB's write buffer makes the aggregation "
+            "faster and the last-point query slower, since the unsealed tail a "
+            "scan walks is where the newest point lives. Settling only ours "
+            "would have been a one-sided advantage, so nobody settles."
+            + ("" if symmetric else " (Note: the rows disagree on this; treat with care.)"),
+            "One tag and three fields, not the ten and ten the TSBS cpu schema "
+            "defines. The reduction is applied identically to every engine, so "
+            "the comparison is internally fair, but it is not the full "
+            "benchmark. A matched one-tag/ten-tag run prices the schema at "
+            "2.0x on ingest and 2.6x faster on last-point.",
+            "Builds are each engine's own reported version rather than a "
+            "stamped constant, which is why QuestDB's carries its commit hash.",
+        ],
+        "columns": [label for _, label in metrics_spec],
+        "withheld_scales": [],
+        "withheld_reason": None,
+        "entries": entries,
+    }
+
+
 def main() -> int:
     if not FROZEN.exists():
         print(f"missing {FROZEN}; run make_paper_tables.py first", file=sys.stderr)
@@ -313,9 +415,24 @@ def main() -> int:
                 "entries": shown,
             })
 
-    e4 = _e4_table()
-    if e4 and e4["entries"]:
-        tables.append(e4)
+    # L4 is deliberately NOT exported yet. Two things must be settled first,
+    # and both were found by reading the artifacts rather than the tracker:
+    #
+    # 1. l4_tsbs.jsonl holds ArcadeDB's DOCUMENT path (40.1k pts/s), not the
+    #    native TIMESERIES path (1.86M, in ts_2681/nosettle_r*.json). Exporting
+    #    only the first would show us at 40k against DuckDB's 1.86M, i.e. our
+    #    slowest arm against everyone else's best, a 46x self-inflicted loss.
+    #    The paper reports BOTH ArcadeDB rows precisely so that ratio is read
+    #    as the cost of the general-purpose path, not as the engine losing.
+    # 2. The native rows median q_range_ms at 4.41 while the paper's 12-hour
+    #    aggregation is 25.0 ms. Until that is reconciled, one of the two is
+    #    describing a different query and neither should be published.
+    #
+    # _l4_table() is kept and tested; it is the join with the native rows and
+    # the reconciliation that are missing, not the plumbing.
+    for extra in (_e4_table(),):
+        if extra and extra["entries"]:
+            tables.append(extra)
 
     hosts = sorted({r["host"] for r in rows if r.get("host")})
     payload = {
