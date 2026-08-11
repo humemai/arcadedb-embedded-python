@@ -705,6 +705,11 @@ load many vertices and edges efficiently.
 - `commit_every`: commit cadence during flush
 - `use_wal`: enable WAL for higher durability
 - `parallel_flush`: parallelize flush/close work
+- `commit_retries` / `commit_retry_delay_ms`: retry budget and initial back-off
+  for a vertex commit that hits a transient `NeedRetryException`
+- `chunk_cache_capacity`: bound on each OUT/IN head-chunk RID cache
+- `max_deferred_incoming_edges`: run the incoming-edge pass early from `flush()`
+  rather than once at `close()`
 
 **Example:**
 

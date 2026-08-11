@@ -25,6 +25,15 @@ Create a configured batch helper tied to the current database.
 - `use_wal`: enable WAL for stronger durability
 - `wal_flush`: flush policy such as `no`, `yes_nometadata`, `yes_full`
 - `parallel_flush`: flush deferred work in parallel
+- `commit_retries`: retries for a vertex commit that hits a transient
+  `NeedRetryException` (default 10, `0` fails fast)
+- `commit_retry_delay_ms`: initial retry back-off, exponential thereafter and
+  capped at 10000 ms (default 1000)
+- `chunk_cache_capacity`: bound on each OUT/IN head-chunk RID cache, which keeps
+  memory flat on a long-lived stream (default 1,000,000)
+- `max_deferred_incoming_edges`: buffered deferred incoming edges before the
+  connection pass runs early from `flush()` instead of once at `close()`
+  (default 5,000,000, `0` defers everything to close)
 
 **Example:**
 
