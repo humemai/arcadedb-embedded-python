@@ -233,7 +233,7 @@ workloads; for growing ones the criterion is a plateau below the cache cap.
 ## Reproducing
 
 ```bash
-cd bindings/python/benchmarks/jpype_overhead
+cd benchmarks/python-bindings/jpype_overhead
 ./run_bench.sh              # full battery (SKIP_500K=1 to skip the big one)
 # individual phases: see headers of bench_python.py / bench_round5.py /
 # bench_memory.py / bench_soak.py / OverheadBench.java

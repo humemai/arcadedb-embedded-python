@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Benchmark runner — implements experiments/PROTOCOL.md.
 
-Descended from the SciPy-paper orchestrator (scipy_proceedings@arcadedb-2026
-experiments/run.py) with the protocol extensions:
+Descended from the binding-suite orchestrator
+(benchmarks/python-bindings/run.py) with the protocol extensions:
 
   * TOPOLOGIES: "embedded" (one container does engine+workload) and
     "client_server" (a long-lived server container + a client container).

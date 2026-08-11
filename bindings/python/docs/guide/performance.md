@@ -14,7 +14,7 @@ vectors — only the caller differs. Result parity is asserted across languages
 (both sides must return the same rows/neighbors before a timing is accepted).
 Headline numbers were re-measured across 5 independent processes and verified
 on two machines. Full evidence, raw data, and reproduction steps:
-[`benchmarks/jpype_overhead/REPORT.md`](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/benchmarks/jpype_overhead/REPORT.md).
+[`benchmarks/python-bindings/jpype_overhead/REPORT.md`](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/python-bindings/jpype_overhead/REPORT.md).
 
 ## Headline results
 
@@ -111,5 +111,5 @@ Measured limits that remain by design, and the recommended pattern for each:
 The complete evidence — before/after tables, layer-by-layer attribution,
 memory soak data, the completeness-verification sweep, and reproduction
 scripts — lives in
-[`benchmarks/jpype_overhead/REPORT.md`](https://github.com/humemai/arcadedb-embedded-python/blob/python-embedded/bindings/python/benchmarks/jpype_overhead/REPORT.md).
+[`benchmarks/python-bindings/jpype_overhead/REPORT.md`](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/python-bindings/jpype_overhead/REPORT.md).
 Numbers were verified on two machines; expect ±30% drift on a loaded desktop.

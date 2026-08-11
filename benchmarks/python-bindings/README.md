@@ -152,3 +152,13 @@ experiments/
 - Sync this repo to `tk@mini`, run the orchestrator in the background (tmux/nohup) over SSH.
 - Collect `results/*.csv`; copy the light plotting + CSVs into the PR as supplementary.
 - Record environment to `ENV.md` for the paper's reproducibility section.
+
+## What is and is not committed
+
+- `datasets/` raw and prepared payloads are not committed; `datasets/prepare.py`
+  rebuilds them from the sources listed below.
+- `results/` holds the runs behind the tables. The frozen rows the numbers are
+  computed from are tracked; append logs and per-run time-series are not. The
+  rules are in the repository-root `.gitignore`, shared with the engine suite.
+- Benchmarks run pinned inside Docker (`docker/`, `build_images.sh`); the
+  ArcadeDB backend uses the `arcadedb-embedded` wheel (see the Dockerfile ARG).
