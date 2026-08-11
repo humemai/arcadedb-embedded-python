@@ -90,6 +90,7 @@ DISPLAY_NAMES = {
     "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
     "postgres": "PostgreSQL", "duckdb": "DuckDB", "questdb": "QuestDB",
     "arcadedb": "ArcadeDB",
+    "sqlite": "SQLite", "chroma": "Chroma", "ladybug": "LadybugDB",
 }
 
 
@@ -409,6 +410,187 @@ def _l4_table():
     }
 
 
+# ---------------------------------------------------------------------------
+# The Python-binding suite. A DIFFERENT experiment from the lanes above:
+# different corpora (Stack Exchange), different comparators (SQLite, DuckDB,
+# Chroma, LadybugDB) and a different cpuset (0-7, not 0-11). It answers the
+# question a reader of the embedded distribution actually has, which is what
+# using this from Python costs, so it belongs on the page. It must NOT be read
+# as continuous with the engine lanes, which is why both tables carry their own
+# conditions saying so.
+PYB = HERE.parent / "python-bindings"
+OVERHEAD = PYB / "jpype_overhead" / "results" / "mini_results.csv"
+PYB_FROZEN = PYB / "results" / "runs_paper.csv"
+
+
+def _overhead_medians():
+    """(workload, arm) -> median microseconds, from the mini re-measure."""
+    if not OVERHEAD.exists():
+        return {}
+    out = defaultdict(list)
+    with OVERHEAD.open() as fh:
+        for row in csv.reader(fh):
+            if len(row) < 8:
+                continue
+            try:
+                out[(row[3], row[4])].append(float(row[6]))
+            except ValueError:
+                continue
+    return {k: statistics.median(v) for k, v in out.items()}
+
+
+def _python_cost_table():
+    """What using the engine from Python costs, and where that cost lives.
+
+    Two facts, in one table. Against an in-process Java baseline doing the
+    same work, Python costs 1.28x on vector search and 1.63x on a 100k-row
+    scan: the engine runs at engine speed and only handing results across the
+    boundary is charged for. But WITHIN Python the choice of materialization
+    path is worth far more than the language boundary is, which is the part a
+    reader can act on.
+
+    Arm pairing matters and is easy to get wrong: the vector ratio is
+    P-raw-call against J-direct, and the scan ratio is P-columns against
+    J-allcols, both sides reading the same columns. Pairing P-SQL with J-SQL
+    instead gives 1.12x, a real number answering a different question.
+    """
+    m = _overhead_medians()
+    if not m:
+        return None
+
+    def us(w, a):
+        return m.get((w, a))
+
+    rows_out = []
+
+    def add(label, workload, value_us, baseline_us, note):
+        if value_us is None or baseline_us is None:
+            return
+        rows_out.append({
+            "backend": label,
+            "is_arcadedb": True,
+            "scale": workload,
+            "workload": note,
+            "n_docs": None,
+            "deployment": "embedded",
+            "image": None,
+            "version_name": None,
+            "host": None,
+            "metrics": {
+                "time ms": {"median": round(value_us / 1000, 3), "min": round(value_us / 1000, 3),
+                            "max": round(value_us / 1000, 3), "n": 1},
+                "vs Java": {"median": round(value_us / baseline_us, 2),
+                            "min": round(value_us / baseline_us, 2),
+                            "max": round(value_us / baseline_us, 2), "n": 1},
+            },
+        })
+
+    jv, jq = us("vector", "J-direct"), us("query", "J-allcols-100000")
+    add("Java, in process", "vector search", jv, jv, "baseline")
+    add("Python", "vector search", us("vector", "P-raw-call"), jv, "same call")
+    add("Java, in process", "100k-row scan", jq, jq, "baseline")
+    add("Python, to_columns", "100k-row scan", us("query", "P-columns-100000"), jq, "columnar")
+    add("Python, to_json_list", "100k-row scan", us("query", "P-jsonbatch-100000"), jq, "batched JSON")
+    add("Python, to_list", "100k-row scan", us("query", "P-tolist-100000"), jq, "row objects")
+
+    if not rows_out:
+        return None
+    return {
+        "id": "pycost",
+        "title": "What Python costs",
+        "dataset": "Same engine, same query, called from Java and from Python",
+        "conditions": [
+            "The engine itself runs at the same speed either way. What Python "
+            "is charged for is moving results across the boundary, which is why "
+            "the vector search costs 1.28x and the scan 1.63x rather than "
+            "anything scaling with the work the engine did.",
+            "The path you choose inside Python matters far more than the "
+            "language boundary does. Asking for row objects is 13.8x slower "
+            "than asking for columns over the same query, so the practical "
+            "advice is to use the columnar or batched call for anything large.",
+            "A different setup from the engine tables above: Stack Exchange "
+            "corpora, eight cores rather than twelve. Read it on its own.",
+        ],
+        "columns": ["time ms", "vs Java"],
+        "withheld_scales": [],
+        "withheld_reason": None,
+        "entries": rows_out,
+    }
+
+
+PYB_LANES = {
+    "tabular": ("Tabular, embedded", [("oltp_ops_per_s", "OLTP ops/s"),
+                                      ("olap_total_ms", "OLAP ms")]),
+    "graph": ("Graph, embedded", [("oltp_ops_per_s", "OLTP ops/s"),
+                                  ("olap_total_ms", "OLAP ms")]),
+    "vector": ("Vector, embedded", [("q_mean_ms", "query ms"),
+                                    ("recall@10", "recall@10"),
+                                    ("build_s", "build s")]),
+}
+
+
+def _embedded_vs_tables():
+    """ArcadeDB embedded against the embeddable engines people reach for."""
+    if not PYB_FROZEN.exists():
+        return []
+    rows = list(csv.DictReader(PYB_FROZEN.open()))
+    tables = []
+    for lane, (title, metrics) in PYB_LANES.items():
+        grouped = defaultdict(list)
+        for r in rows:
+            if r.get("lane") == lane and r.get("dataset") == "medium":
+                grouped[r.get("backend")].append(r)
+        entries = []
+        for backend, rs in sorted(grouped.items()):
+            entry = {
+                "backend": display_name(backend),
+                "is_arcadedb": "arcade" in str(backend),
+                "scale": "medium",
+                "workload": lane,
+                "n_docs": None,
+                "deployment": "embedded",
+                "image": None,
+                "version_name": rs[0].get("lib_version"),
+                "host": None,
+                "metrics": {},
+            }
+            for field, label in metrics:
+                got = _agg(rs, field)
+                if got is not None:
+                    entry["metrics"][label] = got
+            if entry["metrics"]:
+                entries.append(entry)
+        if entries:
+            tables.append({
+                "id": f"pyb_{lane}",
+                "title": title,
+                "dataset": "Stack Exchange (Cross Validated), all engines in one Python process",
+                "conditions": [
+                    "Every engine here runs embedded, in the same process as the "
+                    "caller, which is the comparison someone choosing a local "
+                    "database actually faces.",
+                    "A different setup from the engine tables higher up the page: "
+                    "different corpora, different comparators, eight cores rather "
+                    "than twelve. The two sets are not continuous.",
+                    "The specialists win where they are specialized, and that is "
+                    "the expected result rather than a surprise. DuckDB is a "
+                    "columnar analytics engine and answers the analytical suite "
+                    "far faster; SQLite is an extremely fast single-file store "
+                    "for point operations; Chroma keeps its whole index in RAM "
+                    "and serves lower-latency vector queries. The case for one "
+                    "engine is not that it wins each column, it is that these "
+                    "numbers come from one process with one file and one "
+                    "transaction across all three models, where the alternative "
+                    "is three systems and the code between them.",
+                ],
+                "columns": [label for _, label in metrics],
+                "withheld_scales": [],
+                "withheld_reason": None,
+                "entries": entries,
+            })
+    return tables
+
+
 def main() -> int:
     if not FROZEN.exists():
         print(f"missing {FROZEN}; run make_paper_tables.py first", file=sys.stderr)
@@ -478,7 +660,7 @@ def main() -> int:
                 "entries": shown,
             })
 
-    for extra in (_l4_table(), _e4_table()):
+    for extra in (_l4_table(), _e4_table(), _python_cost_table(), *_embedded_vs_tables()):
         if extra and extra["entries"]:
             tables.append(extra)
 
