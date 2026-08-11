@@ -921,6 +921,7 @@ class Database:
         probe_only: Optional[bool] = None,
         force_database_create: Optional[bool] = None,
         trim_text: Optional[bool] = None,
+        on_row_error: Optional[str] = None,
         extra_settings: Optional[Mapping[str, Any]] = None,
     ) -> ImportResult:
         """
@@ -944,6 +945,14 @@ class Database:
             probe_only: Analyze only without writing records when True.
             force_database_create: Recreate database when importer opens its own DB.
             trim_text: Trim textual values during import when True.
+            on_row_error: `"abort"` (default) or `"skip"`. `"skip"` logs and
+                skips a malformed or out-of-range row instead of failing the whole
+                job, but it commits per row, so it needs exclusive control of the
+                transaction and raises if one is already active. It also drops the
+                async path for vertex imports, making them synchronous and
+                single-threaded regardless of `commit_every`/`parallel`. Any other
+                value raises `ValueError`, because the engine treats everything
+                that is not `"skip"` as `"abort"`.
             extra_settings: Additional raw importer settings.
 
         Returns:
@@ -966,6 +975,7 @@ class Database:
             probe_only=probe_only,
             force_database_create=force_database_create,
             trim_text=trim_text,
+            on_row_error=on_row_error,
             extra_settings=extra_settings,
         )
 

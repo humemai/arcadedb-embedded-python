@@ -43,7 +43,23 @@ The file covers:
 - RDF imports
 - Timeseries target imports
 - SQL `IMPORT DATABASE` usage where full-database restore semantics matter
+- `on_row_error` skip-vs-abort, and rejection of unknown modes
 ```
+
+### `on_row_error`
+
+Two tests. The first imports a three-row CSV whose middle row repeats a
+`UNIQUE`-indexed key, across three arms: the default, an explicit `"abort"`,
+and `"skip"`. Measured behaviour is `abort` leaving 0 rows and raising, against
+`skip` leaving `['A-1', 'B-2']` and not raising, with the engine logging
+`Error on importing document at line 2, skipping it`. The default and `"abort"`
+are asserted to match, so a change to the engine default cannot pass silently.
+
+The second checks that an unknown mode raises `ValueError`. That validation is
+Python-side on purpose: the engine tests `"skip".equalsIgnoreCase(value)`, so
+`"ignore"` or `"SKIPP"` would otherwise run the import in exactly the opposite
+mode from the one requested, with nothing logged. `"SKIP"` is accepted, mirroring
+the engine's case-insensitivity.
 
 ## Test Shape
 

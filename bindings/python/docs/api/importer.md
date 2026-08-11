@@ -147,6 +147,30 @@ bindings are:
 - `commitEvery`
 - `objectNestLevel`
 - `entityType`
+- `onRowError` (`db.import_documents(..., on_row_error=...)`)
+
+### `on_row_error`
+
+`"abort"` (the default) fails the whole job on the first malformed or
+out-of-range row. `"skip"` logs that row and keeps going, so a single bad
+record cannot discard the good ones.
+
+`"skip"` is not free, and the cost is not just the failing row:
+
+- It commits **per row** for the whole run, rather than one transaction for the
+  file (documents) or `commitEvery`-sized async batches (vertices). A duplicate
+  key only fails at index time, when a bucket write already exists, so undoing
+  just that row needs the row to own its transaction.
+- For vertex imports it also drops `database.async()` entirely, making the
+  import synchronous and single-threaded. `commit_every` and `parallel` are
+  silently inapplicable there while it is enabled.
+- It requires **exclusive control of the transaction** and raises if one is
+  already active, for example inside a caller-managed `with db.transaction():`
+  or a server HTTP command running with the default `autoCommit`.
+
+Any value other than `"abort"` or `"skip"` raises `ValueError`. The engine
+tests this setting with `"skip".equalsIgnoreCase(value)`, so an unvalidated
+typo would silently run the import in `abort` mode instead.
 
 ## Recommended Workflow
 
