@@ -47,7 +47,49 @@ class JsonSerializerTest extends TestHelper {
 
   @BeforeEach
   void setUp() {
-    jsonSerializer = JsonSerializer.createJsonSerializer();
+    // Issue #5812: the @props type hint is opt-in (see JsonSerializer#includeTypeHints). Most of the tests
+    // below exercise the type-fidelity logic itself, so the flag is turned on here; propsHintOffByDefault()
+    // below is what pins the off-by-default behavior a generic HTTP/JSON client relies on.
+    jsonSerializer = JsonSerializer.createJsonSerializer().setIncludeTypeHints(true);
+  }
+
+  @Test
+  void propsHintOffByDefault() {
+    database.transaction(() -> {
+      database.getSchema().createDocumentType("PropsHintOffByDefaultType");
+      database.newDocument("PropsHintOffByDefaultType").save();
+    });
+
+    final JsonSerializer defaultSerializer = JsonSerializer.createJsonSerializer();
+    try (final ResultSet rs = database.query("sql", "SELECT count(*) AS c FROM PropsHintOffByDefaultType")) {
+      assertThat(rs.hasNext()).isTrue();
+      final JSONObject json = defaultSerializer.serializeResult(database, rs.next());
+      // count(*) yields a Long (lossy through JSON), but a JsonSerializer created without
+      // setIncludeTypeHints(true) must never emit the @props hint - a generic HTTP/JSON caller never asked
+      // to rebuild the exact Java type of a projection column.
+      assertThat(json.has(Property.PROPERTY_TYPES_PROPERTY)).isFalse();
+      assertThat(json.getLong("c")).isEqualTo(1L);
+    }
+  }
+
+  /**
+   * Issue #5863: {@code map2json} used to gate {@code @props} emission on {@code includeMetadata}, so any
+   * {@code Document.toJSON(true)} caller - and, via {@code ChangeEvent}, every WebSocket subscriber - got the
+   * hint for free on a schemaless property with a lossy-through-JSON type. {@code MutableDocument#toJSON}
+   * always builds its own default {@link JsonSerializer}, so this pins the off-by-default behavior at the
+   * Document API level, mirroring {@link #propsHintOffByDefault()} for {@code serializeResult}.
+   */
+  @Test
+  void map2jsonPropsHintOffByDefaultForSchemalessLossyProperty() {
+    database.transaction(() -> {
+      database.getSchema().createDocumentType("Issue5863SchemalessType");
+      final MutableDocument doc = database.newDocument("Issue5863SchemalessType").set("dynamicLong", 42L).save();
+
+      final JSONObject json = doc.toJSON(true);
+      assertThat(json.has(Property.PROPERTY_TYPES_PROPERTY)).isFalse();
+      assertThat(json.getLong("dynamicLong")).isEqualTo(42L);
+      assertThat(json.getString("@type")).isEqualTo("Issue5863SchemalessType");
+    });
   }
 
   @Test

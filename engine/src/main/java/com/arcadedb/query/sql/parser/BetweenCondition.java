@@ -22,6 +22,7 @@ package com.arcadedb.query.sql.parser;
 
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.query.sql.executor.CommandContext;
+import com.arcadedb.query.sql.executor.IndexSearchInfo;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.schema.Type;
 
@@ -51,14 +52,23 @@ public class BetweenCondition extends BooleanExpression {
       return false;
     }
 
-    secondValue = Type.convert(context.getDatabase(), secondValue, firstValue.getClass());
+    // A bound with no defined ordering against firstValue (e.g. a non-numeric String bound on a numeric column)
+    // makes the comparison undefined, not an error: report "not between" rather than let the raw conversion
+    // failure (e.g. NumberFormatException) escape (#5900).
+    secondValue = Type.convertOrNull(context.getDatabase(), secondValue, firstValue.getClass());
+    if (secondValue == null) {
+      return false;
+    }
 
     Object thirdValue = third.execute(currentRecord, context);
     if (thirdValue == null) {
       return false;
     }
 
-    thirdValue = Type.convert(context.getDatabase(), thirdValue, firstValue.getClass());
+    thirdValue = Type.convertOrNull(context.getDatabase(), thirdValue, firstValue.getClass());
+    if (thirdValue == null) {
+      return false;
+    }
 
     final int leftResult = ((Comparable<Object>) firstValue).compareTo(secondValue);
     final int rightResult = ((Comparable<Object>) firstValue).compareTo(thirdValue);
@@ -78,13 +88,19 @@ public class BetweenCondition extends BooleanExpression {
       return false;
     }
 
-    secondValue = Type.convert(context.getDatabase(), secondValue, firstValue.getClass());
+    secondValue = Type.convertOrNull(context.getDatabase(), secondValue, firstValue.getClass());
+    if (secondValue == null) {
+      return false;
+    }
 
     Object thirdValue = third.execute(currentRecord, context);
     if (thirdValue == null) {
       return false;
     }
-    thirdValue = Type.convert(context.getDatabase(), thirdValue, firstValue.getClass());
+    thirdValue = Type.convertOrNull(context.getDatabase(), thirdValue, firstValue.getClass());
+    if (thirdValue == null) {
+      return false;
+    }
 
     final int leftResult = ((Comparable<Object>) firstValue).compareTo(secondValue);
     final int rightResult = ((Comparable<Object>) firstValue).compareTo(thirdValue);
@@ -158,6 +174,22 @@ public class BetweenCondition extends BooleanExpression {
   @Override
   protected Expression[] getCacheableElements() {
     return new Expression[] { first, second, third };
+  }
+
+  @Override
+  public boolean isIndexAware(final IndexSearchInfo info) {
+    if (!info.allowsRange())
+      return false;
+
+    final boolean matchesField = first.isBaseIdentifier() && info.getField().equals(first.getDefaultAlias().getStringValue());
+    // CI index optimization: match field.toLowerCase() BETWEEN a AND b against a CI index on field
+    final boolean matchesLowerCaseField = !matchesField
+        && info.isCaseInsensitive()
+        && BinaryCondition.isFieldWithLowerCaseMethod(first, info.getField());
+    if (!matchesField && !matchesLowerCaseField)
+      return false;
+
+    return second.isEarlyCalculated(info.getContext()) && third.isEarlyCalculated(info.getContext());
   }
 
   public Expression resolveKeyFrom(final BinaryCondition additional) {

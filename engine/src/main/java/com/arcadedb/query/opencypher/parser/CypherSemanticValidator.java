@@ -916,8 +916,36 @@ public class CypherSemanticValidator {
       innerScope.add(lpe.getVariable());
       if (lpe.getWhereExpression() != null)
         checkExpressionScope(lpe.getWhereExpression(), innerScope);
+    } else if (expr instanceof ExistsExpression exists) {
+      checkSubqueryExpressionScope(exists.getParsedSubquery(), scope);
+    } else if (expr instanceof CountExpression count) {
+      checkSubqueryExpressionScope(count.getParsedSubquery(), scope);
+    } else if (expr instanceof CollectExpression collect) {
+      checkSubqueryExpressionScope(collect.getParsedSubquery(), scope);
     }
     // LiteralExpression, ParameterExpression, StarExpression — no variables to check
+  }
+
+  /**
+   * Validates the body of an {@code EXISTS { }} / {@code COUNT { }} / {@code COLLECT { }} expression against
+   * {@code outerScope}, the scope live at the point the expression appears.
+   * <p>
+   * Unlike a {@code CALL { }} subquery, these bodies need no import gate: the runtime hands the whole outer row to
+   * the body as a seed ({@link CorrelatedSubqueryRunner#run}), so every variable live in {@code outerScope} is
+   * visible to it without an explicit or importing-{@code WITH} declaration. A variable {@code WITH} has already
+   * dropped from {@code outerScope} must therefore be rejected here exactly as it would be if referenced directly
+   * (issue #5825) — before this fix it silently resolved as missing/null instead, so the predicate just evaluated
+   * to false/empty rather than raising a client error.
+   */
+  private void checkSubqueryExpressionScope(final CypherStatement parsedSubquery, final Set<String> outerScope) {
+    if (parsedSubquery == null)
+      // Best-effort AST build declined the body (#5626 case): nothing to statically check, falls back to text execution.
+      return;
+    if (parsedSubquery instanceof UnionStatement union) {
+      for (final CypherStatement branch : union.getQueries())
+        validateVariableScope(branch, new HashSet<>(outerScope), Set.of());
+    } else
+      validateVariableScope(parsedSubquery, new HashSet<>(outerScope), Set.of());
   }
 
   private void checkBooleanExpressionScope(final BooleanExpression boolExpr, final Set<String> scope) {
@@ -2113,7 +2141,9 @@ public class CypherSemanticValidator {
    * outside the function's input domain. The functions repeat the check at runtime for values known only then; doing it here
    * as well matches Neo4j, which fails {@code MATCH (n:Nothing) RETURN size(42)} even though the query matches no row and the
    * function would never run. Same message and same exception as the runtime check, so the client sees one behaviour.
-   * See issues #5477 (size) and #5476 (head, last, tail). The numeric family is handled by
+   * See issues #5477 (size), #5476 (head, last, tail) and #5798 (toUpper, toLower, trim, lTrim, rTrim - their
+   * single-argument spelling; split() and replace() are never called with one argument, so they rely on the runtime
+   * check in {@link CypherFunctionHelper#requireStringArgument} alone). The numeric family is handled by
    * {@link #checkStaticallyKnownNumericArgs}, which covers every argument rather than only a single one.
    */
   private void checkStaticallyKnownArgType(final String functionName, final Expression arg) {
@@ -2138,9 +2168,41 @@ public class CypherSemanticValidator {
       case "tail":
         // LIST-only: even a string literal is a type error.
         throw CypherFunctionHelper.typeMismatch(functionName, "a LIST<ANY>", isMap ? Map.of() : literal);
+      case "toupper":
+      case "upper":
+      case "tolower":
+      case "lower":
+      case "trim":
+      case "btrim":
+      case "ltrim":
+      case "rtrim":
+        // STRING-only primary argument (issue #5798): neither a MAP nor any other non-STRING literal is in domain.
+        // Named after the executor's own getName() (e.g. "toUpper", not the parsed-and-lower-cased "toupper"), the
+        // same spelling the runtime check in CypherFunctionHelper#requireStringArgument uses, so the client sees one
+        // message whichever path caught the mistake.
+        if (isMap || !(literal instanceof CharSequence))
+          throw CypherFunctionHelper.typeMismatch(canonicalStringFunctionName(functionName), CypherFunctionHelper.STRING_DOMAIN,
+              isMap ? Map.of() : literal);
+        break;
       default:
         break;
     }
+  }
+
+  /**
+   * Maps the parsed-and-lower-cased name of a STRING-only function (and its aliases) to the spelling its executor's
+   * {@code getName()} reports, so {@link #checkStaticallyKnownArgType}'s message matches the runtime check in
+   * {@link CypherFunctionHelper#requireStringArgument} regardless of which one caught the mistake (issue #5798).
+   */
+  private static String canonicalStringFunctionName(final String functionName) {
+    return switch (functionName) {
+      case "toupper", "upper" -> "toUpper";
+      case "tolower", "lower" -> "toLower";
+      case "ltrim" -> "lTrim";
+      case "rtrim" -> "rTrim";
+      case "btrim" -> "trim";
+      default -> functionName;
+    };
   }
 
   /**

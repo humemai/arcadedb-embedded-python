@@ -56,6 +56,21 @@ class HostClassLookupFilterTest {
     assertThat(HostClassLookupFilter.matches("java.math.BigInteger", "java.math.BigDecimal")).isFalse();
   }
 
+  /**
+   * Issue #6045 code review: a {@code Type$*} nested-type entry ends with {@code *} like a package wildcard, but
+   * pins every nested type of one specific enclosing class rather than a package - it is precise, not a wildcard,
+   * and must not be classified as one (only a wildcard match can be defeated by
+   * {@link HostClassLookupFilter#SAFE_MARKER_ANCESTORS}).
+   */
+  @Test
+  void wildcardPatternExcludesNestedTypePatterns() {
+    assertThat(HostClassLookupFilter.isWildcardPattern("java.io.**")).isTrue();
+    assertThat(HostClassLookupFilter.isWildcardPattern("java.util.*")).isTrue();
+    assertThat(HostClassLookupFilter.isWildcardPattern("java.lang.ProcessBuilder$*")).isFalse();
+    assertThat(HostClassLookupFilter.isWildcardPattern("java.util.ServiceLoader$*")).isFalse();
+    assertThat(HostClassLookupFilter.isWildcardPattern("java.math.BigDecimal")).isFalse();
+  }
+
   @Test
   void dotsAreLiteralAndNotRegexWildcards() {
     // "java.util.*" as a regex matched java<any char>util<anything>; literally it must not.
@@ -143,5 +158,98 @@ class HostClassLookupFilterTest {
     assertThat(filter.test("java.util.ServiceLoader")).isFalse();
     assertThat(filter.test("java.lang.Runtime")).isFalse();
     assertThat(filter.test("java.io.File")).isFalse();
+  }
+
+  /**
+   * GHSA-j57p-qmrh-v7xv: {@code java.util.ResourceBundle} is a bare (non-wildcard) entry in {@link HostClassLookupFilter#DENIED},
+   * so name-equality matching alone does not cover its two public JDK subclasses, both of which live directly in the
+   * allow-listed {@code java.util} package and inherit the denied static {@code getBundle(String)} factory.
+   */
+  @Test
+  void subclassesOfADeniedTypeAreRejectedEvenWhenAdmittedByName() {
+    final HostClassLookupFilter filter = new HostClassLookupFilter(ScriptTriggerExecutor.ALLOWED_PACKAGES, null);
+
+    assertThat(filter.test("java.util.ResourceBundle")).isFalse();
+    assertThat(filter.test("java.util.PropertyResourceBundle")).isFalse();
+    assertThat(filter.test("java.util.ListResourceBundle")).isFalse();
+  }
+
+  @Test
+  void hierarchyCheckDoesNotFalsePositiveOnCommonMarkerInterfaces() {
+    // Serializable/Cloneable/Comparable live in denied-by-wildcard packages (java.io.**) or are otherwise ubiquitous;
+    // an over-broad hierarchy walk must not reject every collection/value class that happens to implement them.
+    final HostClassLookupFilter filter = new HostClassLookupFilter(ScriptTriggerExecutor.ALLOWED_PACKAGES, null);
+
+    assertThat(filter.test("java.util.ArrayList")).isTrue();
+    assertThat(filter.test("java.util.HashMap")).isTrue();
+    assertThat(filter.test("java.util.UUID")).isTrue();
+    assertThat(filter.test("java.math.BigDecimal")).isTrue();
+    assertThat(filter.test("java.time.LocalDate")).isTrue();
+  }
+
+  /** Marker type used only by {@link #hierarchyCheckDoesNotFalsePositiveOnCloseable()}. */
+  private static final class ResourceHandle implements java.io.Closeable {
+    @Override
+    public void close() {
+      // Nothing to release - this type exists only to be resolved through Class.forName() by the test below.
+    }
+  }
+
+  /**
+   * {@code java.io.Closeable} lives inside the now-fully-checked {@code java.io.**} wildcard family (issue #6045
+   * code review) and extends {@code AutoCloseable}, so it needs the same explicit safe-marker treatment: its one
+   * method just signals "release a resource", it does not itself grant one. Without that entry, any allow-listed
+   * class implementing it for ordinary resource-management reasons would be newly, incorrectly rejected.
+   */
+  @Test
+  void hierarchyCheckDoesNotFalsePositiveOnCloseable() {
+    final HostClassLookupFilter filter = new HostClassLookupFilter(List.of("com.arcadedb.query.polyglot.**"), null);
+
+    assertThat(filter.test(ResourceHandle.class.getName())).isTrue();
+  }
+
+  /**
+   * Issue #6045 code review: {@link HostClassLookupFilter#SAFE_MARKER_ANCESTORS} must only ever defeat a
+   * <i>wildcard</i> {@code DENIED} match - it exists to stop a package wildcard from catching a marker interface
+   * that merely happens to live in that package, not to make the interface immune to deny-listing altogether. A
+   * caller who deliberately, precisely denies {@code java.io.Serializable} itself (e.g. via
+   * {@code extraDeniedPatterns}) must still have every {@code Serializable}-implementing class rejected through
+   * the hierarchy walk, exactly like any other precisely-denied ancestor.
+   */
+  @Test
+  void safeMarkerExceptionDoesNotOverrideAPreciseDenyEntryNamingIt() {
+    final HostClassLookupFilter filter = new HostClassLookupFilter(ScriptTriggerExecutor.ALLOWED_PACKAGES, List.of("java.io.Serializable"));
+
+    assertThat(filter.test("java.util.UUID")).isFalse();
+    // A class NOT implementing Serializable must be unaffected by the caller's precise deny entry.
+    assertThat(filter.test("java.util.function.Function")).isTrue();
+  }
+
+  /**
+   * Issue #6045: a first version of the hierarchy walk excluded every package-wildcard {@code DENIED} entry (e.g.
+   * {@code java.security.**}), on the reasoning that it already matches every class in that namespace by name, so
+   * checking it during the walk would only add false positives from marker interfaces. That also let a
+   * capability-bearing wildcard-only-denied ancestor slip through undetected if reached via an allow-listed
+   * subclass. {@code java.util.PropertyPermission} - admitted by name under {@code java.util.*} - extends
+   * {@code java.security.BasicPermission} extends {@code java.security.Permission}, both wildcard-denied by
+   * {@code java.security.**} and not pinned by any precise entry, so it was the concrete instance of the audited
+   * gap in the JDK classpath reachable from {@link ScriptTriggerExecutor#ALLOWED_PACKAGES}.
+   */
+  @Test
+  void hierarchyCheckAlsoCatchesAWildcardOnlyDeniedAncestor() {
+    final HostClassLookupFilter filter = new HostClassLookupFilter(ScriptTriggerExecutor.ALLOWED_PACKAGES, null);
+
+    assertThat(filter.test("java.util.PropertyPermission")).isFalse();
+  }
+
+  @Test
+  void callerSuppliedRestrictionAlsoRejectsItsSubclasses() {
+    // A subclass of a caller-supplied (extra) denied type must be rejected too, not just the JDK built-in deny-list.
+    // java.util.Hashtable extends java.util.Dictionary; java.util.HashMap does not and must stay admitted.
+    final HostClassLookupFilter filter = new HostClassLookupFilter(List.of("java.util.*"), List.of("java.util.Dictionary"));
+
+    assertThat(filter.test("java.util.Dictionary")).isFalse();
+    assertThat(filter.test("java.util.Hashtable")).isFalse();
+    assertThat(filter.test("java.util.HashMap")).isTrue();
   }
 }

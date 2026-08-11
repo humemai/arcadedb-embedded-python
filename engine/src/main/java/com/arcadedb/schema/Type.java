@@ -305,6 +305,21 @@ public enum Type {
   }
 
   /**
+   * Same as {@link #convert(Database, Object, Class)}, but a failed conversion returns {@code null} instead of
+   * throwing: {@code convert()} only ever lets {@link IllegalArgumentException} escape (every other exception is
+   * already caught internally and treated as {@code null}), so this unifies both failure shapes into one contract
+   * for callers - typically a comparison across incompatible types - that need "no defined ordering" rather than a
+   * raw parse exception (#5900).
+   */
+  public static Object convertOrNull(final Database database, final Object value, final Class<?> targetClass) {
+    try {
+      return convert(database, value, targetClass);
+    } catch (final IllegalArgumentException e) {
+      return null;
+    }
+  }
+
+  /**
    * When a property is declared as a collection ({@code LIST}/{@code MAP}) with a scalar {@code ofType} (e.g. {@code LIST OF LONG}),
    * returns a copy of the collection with every plain scalar entry converted to the declared {@code ofType}. Returns {@code null}
    * when no coercion applies, so the caller falls through to the normal conversion path. Nested documents, collections and links are
@@ -435,61 +450,63 @@ public enum Type {
         final int[] array = new int[collection.size()];
         int i = 0;
         for (final Object item : collection)
-          array[i++] = ((Number) item).intValue();
+          array[i++] = narrowToIntegral((Number) item, Integer.MIN_VALUE, Integer.MAX_VALUE, "INTEGER", property).intValue();
         return array;
       } else if (targetClass.equals(int[].class) && value instanceof long[] src) {
         final int[] array = new int[src.length];
         for (int i = 0; i < src.length; i++)
-          array[i] = (int) src[i];
+          array[i] = (int) narrowToIntegral(src[i], Integer.MIN_VALUE, Integer.MAX_VALUE, "INTEGER", property);
         return array;
       } else if (targetClass.equals(int[].class) && value instanceof double[] src) {
         final int[] array = new int[src.length];
         for (int i = 0; i < src.length; i++)
-          array[i] = (int) src[i];
+          array[i] = (int) narrowToIntegral(src[i], Integer.MIN_VALUE, Integer.MAX_VALUE, "INTEGER", property);
         return array;
       } else if (targetClass.equals(int[].class) && value instanceof float[] src) {
         final int[] array = new int[src.length];
         for (int i = 0; i < src.length; i++)
-          array[i] = (int) src[i];
+          array[i] = (int) narrowToIntegral(src[i], Integer.MIN_VALUE, Integer.MAX_VALUE, "INTEGER", property);
         return array;
       } else if (targetClass.equals(long[].class) && value instanceof Collection<?> collection) {
-        // Convert Collection to long[]
+        // Convert Collection to long[]. LONG is the widest integral type, so only the NaN guard applies (no
+        // narrower range to check - see narrowToIntegral()).
         final long[] array = new long[collection.size()];
         int i = 0;
         for (final Object item : collection)
-          array[i++] = ((Number) item).longValue();
+          array[i++] = narrowToIntegral((Number) item, Long.MIN_VALUE, Long.MAX_VALUE, "LONG", property).longValue();
         return array;
       } else if (targetClass.equals(long[].class) && value instanceof double[] src) {
+        // LONG is the widest integral type, so only the NaN guard applies (no narrower range to check - see narrowToIntegral()).
         final long[] array = new long[src.length];
         for (int i = 0; i < src.length; i++)
-          array[i] = (long) src[i];
+          array[i] = narrowToIntegral(src[i], Long.MIN_VALUE, Long.MAX_VALUE, "LONG", property);
         return array;
       } else if (targetClass.equals(long[].class) && value instanceof float[] src) {
         final long[] array = new long[src.length];
         for (int i = 0; i < src.length; i++)
-          array[i] = (long) src[i];
+          array[i] = narrowToIntegral(src[i], Long.MIN_VALUE, Long.MAX_VALUE, "LONG", property);
         return array;
       } else if (targetClass.equals(short[].class) && value instanceof Collection<?> collection) {
         // Convert Collection to short[]
         final short[] array = new short[collection.size()];
         int i = 0;
         for (final Object item : collection)
-          array[i++] = ((Number) item).shortValue();
+          array[i++] = narrowToIntegral((Number) item, Short.MIN_VALUE, Short.MAX_VALUE, "SHORT", property).shortValue();
         return array;
       } else if (targetClass.equals(short[].class) && value instanceof long[] src) {
         final short[] array = new short[src.length];
         for (int i = 0; i < src.length; i++)
-          array[i] = (short) src[i];
+          array[i] = (short) narrowToIntegral(src[i], Short.MIN_VALUE, Short.MAX_VALUE, "SHORT", property);
         return array;
       } else if (targetClass.equals(short[].class) && value instanceof double[] src) {
         final short[] array = new short[src.length];
         for (int i = 0; i < src.length; i++)
-          array[i] = (short) src[i];
+          array[i] = (short) narrowToIntegral(src[i], Short.MIN_VALUE, Short.MAX_VALUE, "SHORT", property);
         return array;
       } else if (targetClass.equals(short[].class) && value instanceof float[] src) {
         final short[] array = new short[src.length];
         for (int i = 0; i < src.length; i++)
-          array[i] = (short) src[i];
+          array[i] = (short) narrowToIntegral(src[i], Short.MIN_VALUE, Short.MAX_VALUE, "SHORT", property);
         return array;
       } else if (targetClass.isEnum()) {
         if (value instanceof Number number)
@@ -501,7 +518,7 @@ public enum Type {
         else if (value instanceof String string)
           return Byte.parseByte(string);
         else
-          return ((Number) value).byteValue();
+          return narrowToIntegral((Number) value, Byte.MIN_VALUE, Byte.MAX_VALUE, "BYTE", property).byteValue();
 
       } else if (targetClass.equals(Short.TYPE) || targetClass.equals(Short.class)) {
         if (value instanceof Short)
@@ -509,7 +526,7 @@ public enum Type {
         else if (value instanceof String string)
           return string.isEmpty() ? 0 : Short.parseShort(string);
         else
-          return ((Number) value).shortValue();
+          return narrowToIntegral((Number) value, Short.MIN_VALUE, Short.MAX_VALUE, "SHORT", property).shortValue();
 
       } else if (targetClass.equals(Integer.TYPE) || targetClass.equals(Integer.class)) {
         if (value instanceof Integer)
@@ -517,7 +534,7 @@ public enum Type {
         else if (value instanceof String string)
           return string.isEmpty() ? 0 : Integer.parseInt(string);
         else
-          return ((Number) value).intValue();
+          return narrowToIntegral((Number) value, Integer.MIN_VALUE, Integer.MAX_VALUE, "INTEGER", property).intValue();
 
       } else if (targetClass.equals(Long.TYPE) || targetClass.equals(Long.class)) {
         if (value instanceof Long)
@@ -526,6 +543,12 @@ public enum Type {
           return string.isEmpty() ? 0L : Long.parseLong(string);
         else if (DateUtils.isDate(value))
           return DateUtils.dateTimeToTimestamp(value, ChronoUnit.MILLIS);
+        else if (isNaN((Number) value))
+          // LONG never goes through narrowToIntegral() - there is no narrower range to check, it IS the widest
+          // integral type - so it needs its own NaN guard (issue #5970).
+          throw new IllegalArgumentException(
+              "Value '" + value + "' is NaN and cannot be converted to type LONG" //
+                  + (property != null ? " for property '" + property.getName() + "'" : ""));
         else
           return ((Number) value).longValue();
 
@@ -769,6 +792,107 @@ public enum Type {
     return value;
   }
 
+  /**
+   * True when {@code value} is a {@link Double} or {@link Float} holding {@code NaN}. Per the JLS narrowing-
+   * conversion rules {@code Double.NaN.longValue()}/{@code Float.NaN.longValue()} return {@code 0}, which is
+   * in-range for every integral target type, so every narrowing path (not just {@link #narrowToIntegral}) must
+   * check this explicitly instead of trusting the range check to catch it (issue #5970).
+   */
+  private static boolean isNaN(final Number value) {
+    return (value instanceof Double doubleValue && doubleValue.isNaN()) || (value instanceof Float floatValue && floatValue.isNaN());
+  }
+
+  /**
+   * Range-checks {@code value} before narrowing it to a smaller integral type ({@code BYTE}, {@code SHORT} or
+   * {@code INTEGER}). Narrowing with a plain {@code .intValue()}/{@code .shortValue()}/{@code .byteValue()} wraps
+   * two's-complement on overflow instead of rejecting - {@code 3000000000L} silently became {@code -1294967296} -
+   * which corrupts the stored value without any error (issue #5905).
+   * <p>
+   * The comparison is done in {@code long}, so a {@link Double}/{@link Float} outside the long range (including
+   * {@code Infinity}) is caught via the saturating conversion {@link Number#longValue()} already performs. A
+   * {@link BigDecimal}/{@link BigInteger} can exceed even the long range, where {@code longValue()} truncates bits
+   * instead of saturating, so those two types are range-checked directly against {@code long} bounds first.
+   * <p>
+   * {@code NaN} needs its own guard: per the JLS narrowing-conversion rules {@code Double.NaN.longValue()}/
+   * {@code Float.NaN.longValue()} return {@code 0}, which is in-range for every target type and would otherwise
+   * slip through the range check as a silent {@code 0} (issue #5970).
+   */
+  private static Number narrowToIntegral(final Number value, final long min, final long max, final String targetType,
+      final Property property) {
+    if (isNaN(value))
+      throw new IllegalArgumentException(
+          "Value '" + value + "' is NaN and cannot be converted to type " + targetType //
+              + (property != null ? " for property '" + property.getName() + "'" : ""));
+
+    final long longValue;
+    if (value instanceof BigDecimal bigDecimal)
+      longValue = bigDecimal.compareTo(BigDecimal.valueOf(Long.MAX_VALUE)) > 0 ? Long.MAX_VALUE
+          : bigDecimal.compareTo(BigDecimal.valueOf(Long.MIN_VALUE)) < 0 ? Long.MIN_VALUE : bigDecimal.longValue();
+    else if (value instanceof BigInteger bigInteger)
+      longValue = bigInteger.compareTo(BigInteger.valueOf(Long.MAX_VALUE)) > 0 ? Long.MAX_VALUE
+          : bigInteger.compareTo(BigInteger.valueOf(Long.MIN_VALUE)) < 0 ? Long.MIN_VALUE : bigInteger.longValue();
+    else
+      longValue = value.longValue();
+
+    if (longValue < min || longValue > max)
+      throw new IllegalArgumentException(
+          "Value '" + value + "' is out of range for type " + targetType + " (" + min + " to " + max + ")" //
+              + (property != null ? " for property '" + property.getName() + "'" : ""));
+
+    return longValue;
+  }
+
+  /**
+   * Primitive-typed sibling of {@link #narrowToIntegral(Number, long, long, String, Property)}, used by the
+   * {@code double[]}/{@code float[]}/{@code long[]} array-narrowing branches of {@link #convert} so a large
+   * source array is range/NaN-checked without boxing every element into a {@link Double}/{@link Float}/{@link Long}
+   * just to unbox it back out again. {@code BigDecimal}/{@code BigInteger} cannot appear in a primitive array, so
+   * unlike the {@code Number} overload this needs no special-casing for either.
+   */
+  private static long narrowToIntegral(final double value, final long min, final long max, final String targetType, final Property property) {
+    if (Double.isNaN(value))
+      throw new IllegalArgumentException(
+          "Value '" + value + "' is NaN and cannot be converted to type " + targetType //
+              + (property != null ? " for property '" + property.getName() + "'" : ""));
+
+    final long longValue = (long) value;
+    if (longValue < min || longValue > max)
+      throw new IllegalArgumentException(
+          "Value '" + value + "' is out of range for type " + targetType + " (" + min + " to " + max + ")" //
+              + (property != null ? " for property '" + property.getName() + "'" : ""));
+
+    return longValue;
+  }
+
+  /** See {@link #narrowToIntegral(double, long, long, String, Property)}. */
+  private static long narrowToIntegral(final float value, final long min, final long max, final String targetType, final Property property) {
+    if (Float.isNaN(value))
+      throw new IllegalArgumentException(
+          "Value '" + value + "' is NaN and cannot be converted to type " + targetType //
+              + (property != null ? " for property '" + property.getName() + "'" : ""));
+
+    final long longValue = (long) value;
+    if (longValue < min || longValue > max)
+      throw new IllegalArgumentException(
+          "Value '" + value + "' is out of range for type " + targetType + " (" + min + " to " + max + ")" //
+              + (property != null ? " for property '" + property.getName() + "'" : ""));
+
+    return longValue;
+  }
+
+  /**
+   * See {@link #narrowToIntegral(double, long, long, String, Property)}. No NaN check: a {@code long} cannot hold
+   * one.
+   */
+  private static long narrowToIntegral(final long value, final long min, final long max, final String targetType, final Property property) {
+    if (value < min || value > max)
+      throw new IllegalArgumentException(
+          "Value '" + value + "' is out of range for type " + targetType + " (" + min + " to " + max + ")" //
+              + (property != null ? " for property '" + property.getName() + "'" : ""));
+
+    return value;
+  }
+
   public static Number increment(final Number a, final Number b) {
     if (a == null || b == null)
       throw new IllegalArgumentException("Cannot increment a null value");
@@ -777,21 +901,23 @@ public enum Type {
     case Integer i -> {
       switch (b) {
       case Integer integer -> {
-        final int sum = a.intValue() + b.intValue();
-        if (sum < 0 && a.intValue() > 0 && b.intValue() > 0)
+        try {
+          return Math.addExact(a.intValue(), b.intValue());
+        } catch (final ArithmeticException e) {
           // SPECIAL CASE: UPGRADE TO LONG
-          return (long) (a.intValue() + b.intValue());
-        return sum;
+          return (long) a.intValue() + (long) b.intValue();
+        }
       }
       case Long l -> {
         return a.intValue() + b.longValue();
       }
       case Short aShort -> {
-        final int sum = a.intValue() + b.shortValue();
-        if (sum < 0 && a.intValue() > 0 && b.shortValue() > 0)
+        try {
+          return Math.addExact(a.intValue(), b.shortValue());
+        } catch (final ArithmeticException e) {
           // SPECIAL CASE: UPGRADE TO LONG
-          return (long) (a.intValue() + b.shortValue());
-        return sum;
+          return (long) a.intValue() + (long) b.shortValue();
+        }
       }
       case Float v -> {
         return a.intValue() + b.floatValue();
@@ -833,21 +959,19 @@ public enum Type {
     case Short i -> {
       switch (b) {
       case Integer integer -> {
-        final int sum = a.shortValue() + b.intValue();
-        if (sum < 0 && a.shortValue() > 0 && b.intValue() > 0)
+        try {
+          return Math.addExact(a.shortValue(), b.intValue());
+        } catch (final ArithmeticException e) {
           // SPECIAL CASE: UPGRADE TO LONG
-          return Long.valueOf(a.shortValue() + b.intValue());
-        return sum;
+          return (long) a.shortValue() + (long) b.intValue();
+        }
       }
       case Long l -> {
         return Long.valueOf(a.shortValue() + b.longValue());
       }
       case Short aShort -> {
-        final int sum = a.shortValue() + b.shortValue();
-        if (sum < 0 && a.shortValue() > 0 && b.shortValue() > 0)
-          // SPECIAL CASE: UPGRADE TO INTEGER
-          return a.intValue() + b.intValue();
-        return sum;
+        // A SHORT + SHORT SUM CAN NEVER OVERFLOW int (MAGNITUDE <= 2 * 32768), SO int ARITHMETIC IS ALWAYS EXACT HERE
+        return a.shortValue() + b.shortValue();
       }
       case Float v -> {
         return a.shortValue() + b.floatValue();
@@ -950,21 +1074,23 @@ public enum Type {
     case Integer i -> {
       switch (b) {
       case Integer integer -> {
-        final int sum = a.intValue() - b.intValue();
-        if (sum < 0 && a.intValue() > 0 && b.intValue() > 0)
+        try {
+          return Math.subtractExact(a.intValue(), b.intValue());
+        } catch (final ArithmeticException e) {
           // SPECIAL CASE: UPGRADE TO LONG
-          return (long) (a.intValue() - b.intValue());
-        return sum;
+          return (long) a.intValue() - (long) b.intValue();
+        }
       }
       case Long l -> {
         return a.intValue() - b.longValue();
       }
       case Short aShort -> {
-        final int sum = a.intValue() - b.shortValue();
-        if (sum < 0 && a.intValue() > 0 && b.shortValue() > 0)
+        try {
+          return Math.subtractExact(a.intValue(), b.shortValue());
+        } catch (final ArithmeticException e) {
           // SPECIAL CASE: UPGRADE TO LONG
-          return (long) (a.intValue() - b.shortValue());
-        return sum;
+          return (long) a.intValue() - (long) b.shortValue();
+        }
       }
       case Float v -> {
         return a.intValue() - b.floatValue();
@@ -1006,21 +1132,19 @@ public enum Type {
     case Short i -> {
       switch (b) {
       case Integer integer -> {
-        final int sum = a.shortValue() - b.intValue();
-        if (sum < 0 && a.shortValue() > 0 && b.intValue() > 0)
+        try {
+          return Math.subtractExact(a.shortValue(), b.intValue());
+        } catch (final ArithmeticException e) {
           // SPECIAL CASE: UPGRADE TO LONG
-          return (long) (a.shortValue() - b.intValue());
-        return sum;
+          return (long) a.shortValue() - (long) b.intValue();
+        }
       }
       case Long l -> {
         return a.shortValue() - b.longValue();
       }
       case Short aShort -> {
-        final int sum = a.shortValue() - b.shortValue();
-        if (sum < 0 && a.shortValue() > 0 && b.shortValue() > 0)
-          // SPECIAL CASE: UPGRADE TO INTEGER
-          return a.intValue() - b.intValue();
-        return sum;
+        // A SHORT - SHORT DIFFERENCE CAN NEVER OVERFLOW int (MAGNITUDE <= 2 * 32768), SO int ARITHMETIC IS ALWAYS EXACT HERE
+        return a.shortValue() - b.shortValue();
       }
       case Float v -> {
         return a.shortValue() - b.floatValue();

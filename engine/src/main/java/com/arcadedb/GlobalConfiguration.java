@@ -18,6 +18,7 @@
  */
 package com.arcadedb;
 
+import com.arcadedb.database.Database;
 import com.arcadedb.engine.PageManager;
 import com.arcadedb.exception.ConfigurationException;
 import com.arcadedb.log.LogManager;
@@ -25,6 +26,7 @@ import com.arcadedb.serializer.BinaryComparator;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.utility.Callable;
 import com.arcadedb.utility.FileUtils;
+import com.arcadedb.utility.IPAddressBlocklist;
 import com.arcadedb.utility.SystemVariableResolver;
 
 import java.io.ByteArrayOutputStream;
@@ -461,6 +463,10 @@ public enum GlobalConfiguration {
       "Maximum amount of milliseconds to compute a random number to wait for the next retry. This setting is helpful in case of high concurrency on the same pages (multi-thread insertion over the same bucket)",
       Integer.class, 100),
 
+  DELETE_TOLERATE_BROKEN_CHAIN("arcadedb.deleteTolerateBrokenChain", SCOPE.DATABASE,
+      "When deleting a record whose own multi-page chunk chain is structurally broken, complete the deletion anyway instead of failing (for a vertex, this also disconnects its edges best-effort, which can leave dangling edges if some cannot be reached). Disabled by default: such a delete fails loudly instead, requiring an explicit CHECK DATABASE FIX to repair or remove the broken record deliberately - CHECK DATABASE FIX itself is unaffected by this setting either way, so the record is never permanently stuck (issues #4420/#4432). Enable only to restore the older behavior of a normal DELETE silently forcing through instead",
+      Boolean.class, false),
+
   GRAPH_EDGE_APPEND_MERGE("arcadedb.graph.edgeAppendMerge", SCOPE.DATABASE,
       "At commit, when the only conflict on an edge-list page is concurrent in-chunk edge appends (which commute), re-apply the appends on top of the newer page version instead of failing the whole transaction with a ConcurrentModificationException. Removes the retry storm on super-node (hot vertex) edge insertion",
       Boolean.class, true),
@@ -474,7 +480,7 @@ public enum GlobalConfiguration {
       Long.class, 16L * 1024 * 1024),
 
   GRAPH_SUPERNODE_THRESHOLD("arcadedb.graph.supernodeThreshold", SCOPE.DATABASE,
-      "Approximate number of edges (per vertex, per direction) after which the vertex's edge list is promoted to the striped super-node layout, spreading further appends over multiple files so concurrent insertions on the same hot vertex do not contend. FORWARD-INCOMPATIBLE ON FIRST USE: promotion writes a new record type (the stripe directory), so once any vertex promotes, the database can no longer be opened by releases older than 26.8.1; promotion is one-way. Iteration order on promoted vertices is approximate (newest-generation-first) instead of strict reverse-insertion. 0 disables promotion entirely (databases stay fully readable by older versions)",
+      "Approximate number of edges (per vertex, per direction) after which the vertex's edge list is promoted to the striped super-node layout, spreading further appends over multiple files so concurrent insertions on the same hot vertex do not contend. FORWARD-INCOMPATIBLE ON FIRST USE: promotion writes a new record type (the stripe directory), so once any vertex promotes, the database can no longer be opened by releases older than 26.8.1; promotion is one-way. This ordering guarantee applies only to the OLTP edge-list read walks (edgeIterator/vertexIterator/ridIterator): iteration order on promoted vertices is APPROXIMATELY newest-first instead of exactly newest-first, the stripe chains are interleaved so the newest edge is always within the first 'supernodeStripes' entries and an edge of recency rank r is returned at a position of order r, but only the order WITHIN a stripe is exact - an application needing an exact order must sort or use an index. It does NOT hold for a query the planner routes through a GraphAnalyticalView (e.g. GAVExpandAll): a view returns neighbours ordered by internal dense node ID, which carries no relationship to recency. 0 disables promotion entirely (databases stay fully readable by older versions)",
       Integer.class, 4096),
 
   GRAPH_EDGE_LIST_INITIAL_CHUNK_SIZE("arcadedb.graph.edgeListInitialChunkSize", SCOPE.DATABASE,
@@ -493,9 +499,19 @@ public enum GlobalConfiguration {
   SQL_STATEMENT_CACHE("arcadedb.sqlStatementCache", SCOPE.DATABASE, "Maximum number of parsed statements to keep in cache",
       Integer.class, 300),
 
-  SQL_PARSER_IMPLEMENTATION("arcadedb.sql.parserImplementation", SCOPE.DATABASE,
-      "Deprecated, has no effect. The ANTLR4-based SQL parser is always used.",
-      String.class, "antlr"),
+  SQL_MAX_EXPRESSION_DEPTH("arcadedb.sql.maxExpressionDepth", SCOPE.DATABASE,
+      """
+      Maximum nesting depth allowed for parentheses in a single SQL statement (WHERE conditions, sub-expressions, \
+      nested function/statement calls, ...). The ANTLR-generated SQL parser resolves ambiguity between several \
+      grammar rules that all start with '(' (a parenthesized expression, condition, or sub-statement) by first \
+      trying a fast SLL prediction and falling back to full ALL(*) prediction on failure; for a query with enough \
+      nested parentheses that fallback's cost grows so steeply that a query of only a few KB can tie up a worker \
+      thread for minutes without ever crashing, which is worse than a fast failure since it is not distinguishable \
+      from a slow legitimate query. This is checked on the token stream before any parse is attempted, so a query \
+      past the limit is rejected in O(n) time with a normal parse error. Real-world queries rarely nest more than a \
+      handful of parentheses, so the default is deliberately generous. Raise it only if a legitimate, deeply-nested \
+      or generated query needs it.""",
+      Integer.class, 200),
 
   // OPENCYPHER
   OPENCYPHER_STATEMENT_CACHE("arcadedb.opencypher.statementCache", SCOPE.DATABASE,
@@ -537,9 +553,7 @@ public enum GlobalConfiguration {
       resolved IP address of the target host and re-checked on every redirect hop to prevent Server-Side Request Forgery (SSRF). \
       Defaults to loopback, private (RFC 1918), link-local (including the cloud metadata address 169.254.169.254), carrier-grade \
       NAT, multicast and reserved ranges. Set to an empty string to disable IP filtering (not recommended).""",
-      String.class,
-      "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,0.0.0.0/8,100.64.0.0/10,192.0.0.0/24,198.18.0.0/15,"
-          + "224.0.0.0/4,240.0.0.0/4,255.255.255.255/32,::1/128,::/128,fe80::/10,fc00::/7,ff00::/8"),
+      String.class, IPAddressBlocklist.DEFAULT_RESERVED_RANGES),
 
   OPENCYPHER_ID_BUCKET_BITS("arcadedb.opencypher.idBucketBits", SCOPE.JVM,
       """
@@ -552,6 +566,19 @@ public enum GlobalConfiguration {
 
   // COMMAND
   COMMAND_TIMEOUT("arcadedb.command.timeout", SCOPE.DATABASE, "Default timeout for commands (in ms)", Long.class, 0),
+
+  COMMAND_REGEX_TIMEOUT("arcadedb.command.regexTimeout", SCOPE.DATABASE, """
+      Maximum time in ms a single regular expression evaluation may run before being aborted (an entire scan, for a \
+      MATCHES/=~/LIKE/ILIKE/full-text/PromQL query - see below). Covers SQL MATCHES, openCypher =~, SQL LIKE/ILIKE, the \
+      text.regexReplace() and .normalize() functions, full-text search's RegexpQuery/WildcardQuery, PromQL's =~/!~ label \
+      matchers, and schema-level REGEXP property validation. java.util.regex backtracking does not poll interrupts or \
+      deadlines, so a pathological pattern (catastrophic backtracking) keeps its worker thread busy regardless of \
+      arcadedb.command.timeout; this dedicated bound protects against that even when arcadedb.command.timeout is disabled \
+      (0), which is the default. MATCHES/=~ share one deadline across an entire query execution (not per row), and \
+      full-text/PromQL/REGEXP-validation share one deadline across an entire scan (not per item) - a large, legitimately \
+      slow (non-catastrophic) operation can hit this bound too, so raise it for workloads that need more than 1s. Set to \
+      0 to disable (not recommended).""",
+      Long.class, 1000),
 
   COMMAND_WARNINGS_EVERY("arcadedb.command.warningsEvery", SCOPE.JVM,
       "Reduce warnings in commands to print in console only every X occurrences. Use 0 to disable warnings with commands",
@@ -635,6 +662,32 @@ public enum GlobalConfiguration {
       "Max number of entries in the cypher statement cache. Use 0 to disable. Caching statements speeds up execution of the same cypher queries",
       Integer.class, 1000),
 
+  CYPHER_MAX_EXPRESSION_DEPTH("arcadedb.cypher.maxExpressionDepth", SCOPE.DATABASE,
+      """
+      Maximum nesting depth allowed for a single Cypher expression, for example parentheses, list/map literals \
+      or function arguments nested inside one another, and the depth of a chain of AND/OR/string-concatenation \
+      terms in the resulting expression tree. The ANTLR-generated parser re-enters its expression grammar rule \
+      roughly ten Java stack frames per nesting level, so a few thousand levels is enough to exhaust the default \
+      JVM thread stack with a payload of only a few KB; a query past this limit is rejected as a normal parse \
+      error instead of crashing the worker thread with a StackOverflowError. Real-world queries rarely nest \
+      more than a handful of levels, so the default is deliberately generous while staying far below the point \
+      where the stack is at risk. Raise it only if a legitimate, deeply-nested or very long generated query needs it.""",
+      Integer.class, 200),
+
+  // GRAPHQL
+  GRAPHQL_MAX_NESTING_DEPTH("arcadedb.graphql.maxNestingDepth", SCOPE.DATABASE,
+      """
+      Maximum nesting depth allowed for '{' ... '}' or '[' ... ']' in a single GraphQL document - selection \
+      sets (fields nested inside one another), object/interface/input type bodies, and list values/types all \
+      use one of these two delimiter pairs and count toward the same limit. The JavaCC-generated parser \
+      re-enters its SelectionSet/Field grammar rules, or the mutually-recursive Value/ListValue rules, once per \
+      nesting level, so a few thousand levels is enough to exhaust the default JVM thread stack with a payload \
+      of only a few KB; a document past this limit is rejected as a normal parse error instead of crashing the \
+      worker thread with a StackOverflowError. Real-world documents rarely nest more than a handful of levels, \
+      so the default is deliberately generous while staying far below the point where the stack is at risk. \
+      Raise it only if a legitimate, deeply-nested or very long generated document needs it.""",
+      Integer.class, 200),
+
   // INDEXES
   INDEX_BUILD_CHUNK_SIZE_MB("arcadedb.index.buildChunkSizeMB", SCOPE.DATABASE,
       """
@@ -697,8 +750,8 @@ public enum GlobalConfiguration {
       evicting one destroyed that mapping rather than spilling it to a slower tier: the index under-reported its \
       size, and any reader resolving an evicted id read it as deleted. The limit existed when the index held one \
       location per write; issue #5516 made a tombstoned id release \
-      its location, so residency is now proportional to the live vectors (~90 bytes each) instead of to the write \
-      history. Issue #5559 removed the bounded backend altogether, so nothing can evict a location any more, and \
+      its location, so residency is now proportional to the live vectors (~32 bytes each since issue #5588 laid \
+      them out in primitive arrays) instead of to the write history. Issue #5559 removed the bounded backend altogether, so nothing can evict a location any more, and \
       the per-index 'locationCacheSize' METADATA key is now REFUSED rather than ignored - this global setting stays \
       tolerated only so that an existing startup line does not stop a server booting.""",
       Integer.class, -1),
@@ -760,6 +813,19 @@ public enum GlobalConfiguration {
       searcher per query.""",
       Integer.class, 0),
 
+  VECTOR_INDEX_GRAPH_BUILD_PARALLELISM("arcadedb.vectorIndex.graphBuildParallelism", SCOPE.DATABASE,
+      """
+      Number of threads in the dedicated pool that builds the HNSW graph of a vector index. Graph construction \
+      is by far the most expensive part of building a dense index - on a 10M-vector corpus it is over 90% of the \
+      total - and it parallelizes well, so this setting is the main lever on build time. \
+      0 (default) sizes the pool automatically as the available cores minus one, which leaves a core for request, \
+      I/O and GC threads so a rebuild triggered on a live index cannot starve concurrent query traffic. \
+      Raise it to the full core count when build time matters more than query headroom, for example during a bulk \
+      import; lower it to protect a latency-sensitive workload from an online rebuild. A value above the core count \
+      only oversubscribes a CPU-bound phase and is logged as a warning; anything above what ForkJoinPool accepts is \
+      clamped rather than failing the build.""",
+      Integer.class, 0),
+
   VECTOR_INDEX_MUTATIONS_BEFORE_REBUILD("arcadedb.vectorIndex.mutationsBeforeRebuild", SCOPE.DATABASE,
       """
       Number of mutations (inserts/updates/deletes) before rebuilding the HNSW graph index. \
@@ -807,6 +873,15 @@ public enum GlobalConfiguration {
       Concurrent rebuilds are memory-intensive; running too many in parallel can cause OOM kills. \
       Set to 1 to serialize all rebuilds (safest for memory). Higher values trade memory for throughput.""",
       Integer.class, 1),
+
+  VECTOR_INDEX_REBUILD_PERMIT_TIMEOUT_MS("arcadedb.vectorIndex.rebuildPermitTimeoutMs", SCOPE.JVM,
+      """
+      Maximum time in milliseconds an async vector index rebuild waits to acquire a JVM-wide rebuild permit \
+      (see arcadedb.vectorIndex.maxConcurrentRebuilds) before giving up on that rebuild cycle. Without this \
+      bound, a single rebuild that never returns its permit (e.g. one whose worker threads do not respond to \
+      interruption) would starve every other vector index's rebuild across the whole process indefinitely. \
+      A skipped cycle is not lost: the next mutation-threshold or inactivity trigger retries it.""",
+      Integer.class, 600_000),
 
   // NETWORK
   NETWORK_SAME_SERVER_ERROR_RETRIES("arcadedb.network.sameServerErrorRetry", SCOPE.SERVER,
@@ -1571,6 +1646,10 @@ public enum GlobalConfiguration {
       PostgreSQL and the SQL standard mandate, instead of as string literals. Set to false to restore the legacy \
       behaviour where a double-quoted token is a string literal. Default is true""", Boolean.class, true),
 
+  POSTGRES_MAX_PARAM_SIZE("arcadedb.postgres.maxParamSize", SCOPE.SERVER,
+      "Maximum size in bytes accepted for a single bind-message parameter value on the Postgres wire protocol. Values declaring a larger size are rejected before allocation. Default is 16MB",
+      Integer.class, 16 * 1024 * 1024),
+
   // BOLT (Neo4j)
   BOLT_PORT("arcadedb.bolt.port", SCOPE.SERVER,
       "TCP/IP port number used for incoming connections for BOLT plugin. Default is 7687", Integer.class, 7687),
@@ -1594,6 +1673,44 @@ public enum GlobalConfiguration {
       "TLS mode for BOLT connections: DISABLED (no TLS, default), OPTIONAL (auto-detect TLS or plaintext), REQUIRED (TLS only)",
       String.class, "DISABLED"),
 
+  BOLT_WEBSOCKET_MAX_FRAME_SIZE("arcadedb.bolt.websocket.maxFrameSize", SCOPE.SERVER,
+      "Maximum payload size in bytes accepted for a single BOLT WebSocket frame. Frames declaring a larger size are rejected before allocation, "
+          + "since the length is read off the wire before authentication. Default is 16MB",
+      Integer.class, 16 * 1024 * 1024),
+
+  // The three *_SIZE/*_LENGTH settings below are defense in depth at different layers of the same BOLT ingest
+  // path, not redundant: BOLT_MAX_MESSAGE_SIZE bounds the whole reassembled message before it is even handed to
+  // the PackStream decoder, while BOLT_PACKSTREAM_MAX_VALUE_LENGTH bounds one BYTES_32/STRING_32 value within an
+  // already-accepted message. They share the same 16MB default because a single field legitimately consuming
+  // the entire message budget is a real (if unusual) case, not because the two checks are meant to be identical.
+
+  BOLT_MAX_MESSAGE_SIZE("arcadedb.bolt.maxMessageSize", SCOPE.SERVER, """
+      Maximum total size in bytes accepted for a single BOLT protocol message after chunk reassembly. BOLT frames \
+      a message as a sequence of chunks terminated by a zero-length chunk; without a bound on the reassembled \
+      total, a client that never sends the terminator grows the reassembly buffer unbounded, before the BOLT \
+      handshake or authentication. Default is 16MB""",
+      Integer.class, 16 * 1024 * 1024),
+
+  BOLT_PACKSTREAM_MAX_VALUE_LENGTH("arcadedb.bolt.packstream.maxValueLength", SCOPE.SERVER, """
+      Maximum length in bytes accepted for a single PackStream BYTES_32/STRING_32 value on the BOLT wire protocol. \
+      A declared length above this bound, or larger than the bytes actually remaining in the message, is rejected \
+      before allocation, since the length is read off the wire before authentication. Default is 16MB""",
+      Integer.class, 16 * 1024 * 1024),
+
+  BOLT_PACKSTREAM_MAX_ELEMENTS("arcadedb.bolt.packstream.maxElements", SCOPE.SERVER, """
+      Maximum element/entry count accepted for a single PackStream LIST_32/MAP_32 declared size on the BOLT wire \
+      protocol. Guards against a client-declared count (e.g. a handful of bytes claiming billions of items) \
+      sizing the backing collection before any element is actually read. Default is 1048576""",
+      Integer.class, 1_048_576),
+
+  BOLT_PACKSTREAM_MAX_DEPTH("arcadedb.bolt.packstream.maxDepth", SCOPE.SERVER, """
+      Maximum nesting depth accepted when decoding a PackStream value (list/map/structure) on the BOLT wire \
+      protocol. The decoder builds nested containers on an explicit heap-allocated stack rather than JVM \
+      recursion, so this bounds nesting complexity/memory rather than guarding against a stack overflow; \
+      without it, an unauthenticated client could grow that stack unboundedly with a stream of nesting markers. \
+      Default is 1000, generous for any real BOLT message.""",
+      Integer.class, 1000),
+
   // REDIS
   REDIS_PORT("arcadedb.redis.port", SCOPE.SERVER,
       "TCP/IP port number used for incoming connections for Redis plugin. Default is 6379", Integer.class, 6379),
@@ -1608,6 +1725,26 @@ public enum GlobalConfiguration {
       "When true, the Redis wire-protocol listener accepts only TLS connections, using the shared SSL key/trust store settings (arcadedb.ssl.*). The AUTH credentials are then encrypted in transit. Default is false",
       Boolean.class, false),
 
+  REDIS_MAX_MULTIBULK_DEPTH("arcadedb.redis.maxMultiBulkDepth", SCOPE.SERVER, """
+      Maximum nesting depth of a RESP array accepted by the Redis wire-protocol listener. A RESP array element can \
+      itself be an array, and the parser recurses once per nesting level, so an unbounded value lets an \
+      unauthenticated client overflow the connection thread's JVM stack with a few tens of KB of input. Default is \
+      32, generous for any real command.""",
+      Integer.class, 32),
+
+  REDIS_MAX_MULTIBULK_LENGTH("arcadedb.redis.maxMultiBulkLength", SCOPE.SERVER, """
+      Maximum number of elements accepted in a single RESP array by the Redis wire-protocol listener, matching \
+      Redis' own hard limit on multibulk requests. Guards against a client-declared array length (e.g. \
+      *2000000000\\r\\n) starting a parse loop with billions of iterations. Default is 1048576.""",
+      Integer.class, 1_048_576),
+
+  REDIS_MAX_BULK_LENGTH("arcadedb.redis.maxBulkLength", SCOPE.SERVER, """
+      Maximum length in bytes accepted for a single RESP bulk string ($) by the Redis wire-protocol listener, \
+      matching Redis' own proto-max-bulk-len. Without a bound, a client-declared length (e.g. $2000000000\\r\\n) \
+      can tie up a connection thread indefinitely by trickling bytes, or grow the parse buffer unbounded if the \
+      declared bytes are actually sent. Default is 536870912 (512MB).""",
+      Integer.class, 536_870_912),
+
   // MONGO
   MONGO_PORT("arcadedb.mongo.port", SCOPE.SERVER,
       "TCP/IP port number used for incoming connections for Mongo plugin. Default is 27017", Integer.class, 27017),
@@ -1619,6 +1756,14 @@ public enum GlobalConfiguration {
       """
       When true, the query planner uses stale Graph Analytical Views (GAV/CSR) for traversals instead of falling back to OLTP. \
       Stale data is faster but may not reflect the latest committed changes""", Boolean.class, false),
+
+  GAV_RESTORE_AWAIT_TIMEOUT("arcadedb.gavRestoreAwaitTimeout", SCOPE.DATABASE,
+      """
+      Milliseconds database open() blocks waiting for Graph Analytical Views (GAV/CSR) restored from persisted \
+      definitions to reach READY before returning. 0 (default) does not wait: the async rebuild is still triggered, \
+      but open() returns immediately and queries issued right after it run unaccelerated until the rebuild completes. \
+      A positive value trades a slower open() for the restored view being usable by the query that triggered the reopen""",
+      Long.class, 0L),
   ;
 
   /**
@@ -1841,6 +1986,22 @@ public enum GlobalConfiguration {
   public <T> T getValue() {
     //noinspection unchecked
     return (T) (value != nullValue && value != null ? value : defValue);
+  }
+
+  /**
+   * Resolves this {@code SCOPE.DATABASE} setting's value against {@code database}'s per-database overrides,
+   * falling back to the compiled-in default when {@code database} is {@code null}. Several call sites read a
+   * {@code SCOPE.DATABASE} setting (e.g. {@code arcadedb.command.regexTimeout}) from code that isn't guaranteed
+   * a bound database - a standalone SQL function or operator that tests, or a future caller, may invoke directly
+   * with a {@code null}/disconnected database - and repeating the same null-safe fallback at each of those call
+   * sites risks drifting out of sync; this centralizes it.
+   *
+   * @param database the database to resolve a per-database override from, or {@code null} to use the default
+   *
+   * @return the resolved value as a {@code long}
+   */
+  public long getValueAsLong(final Database database) {
+    return (database != null ? database.getConfiguration() : new ContextConfiguration()).getValueAsLong(this);
   }
 
   /**

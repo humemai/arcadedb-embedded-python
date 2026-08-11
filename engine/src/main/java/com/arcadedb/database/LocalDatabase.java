@@ -77,6 +77,7 @@ import com.arcadedb.index.vector.LSMVectorIndexGraphFile;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.query.QueryEngine;
 import com.arcadedb.query.QueryEngineManager;
+import com.arcadedb.query.opencypher.optimizer.statistics.GraphStatisticsCache;
 import com.arcadedb.query.opencypher.query.CypherPlanCache;
 import com.arcadedb.query.opencypher.query.CypherStatementCache;
 import com.arcadedb.query.select.Select;
@@ -186,6 +187,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   private final      ExecutionPlanCache                        executionPlanCache;
   private final      CypherStatementCache                      cypherStatementCache;
   private final      CypherPlanCache                           cypherPlanCache;
+  private final      GraphStatisticsCache                      graphStatisticsCache      = new GraphStatisticsCache();
   private final      File                                      configurationFile;
   private            DatabaseInternal                          wrappedDatabaseInstance   = this;
   private final      SecurityManager                           security;
@@ -1261,6 +1263,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       // removal must then also use the force path, otherwise deleteRecordInternal would re-hit the broken link and throw
       // the #4932 retry signal, leaving the record undeletable. Scoped to the exact record the caller asked to delete.
       boolean forceBrokenChainDelete = false;
+      final boolean tolerateBrokenChain = configuration.getValueAsBoolean(GlobalConfiguration.DELETE_TOLERATE_BROKEN_CHAIN);
 
       if (record instanceof Document document) {
         try {
@@ -1289,7 +1292,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           // chain: only a genuinely broken chain (a bad continuation pointer - the case that would otherwise make the
           // record undeletable forever) takes the tolerant path below; transient contention rethrows, preserving the
           // NeedRetryException semantics so the retry machinery re-runs the DELETE with intact index cleanup.
-          if (!bucket.isChunkChainBroken(record.getIdentity()))
+          if (!tolerateBrokenChain || !bucket.isChunkChainBroken(record.getIdentity()))
             throw e;
           forceBrokenChainDelete = true;
           logBrokenChainForceDelete(record.getIdentity(), e);
@@ -1305,7 +1308,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           // The physical removal can raise the #4932 retry signal even when index cleanup did not (e.g. the type has no
           // index left to read, so the broken chain is only discovered here). Fall back to force ONLY when the chain is
           // confirmed structurally broken; a genuine transient conflict (or an already-forced delete) rethrows to retry.
-          if (forceBrokenChainDelete || !bucket.isChunkChainBroken(record.getIdentity()))
+          if (!tolerateBrokenChain || forceBrokenChainDelete || !bucket.isChunkChainBroken(record.getIdentity()))
             throw e;
           logBrokenChainForceDelete(record.getIdentity(), e);
           graphEngine.deleteVertex((VertexInternal) record, true);
@@ -1314,7 +1317,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         try {
           bucket.deleteRecord(record.getIdentity(), forceBrokenChainDelete);
         } catch (final ConcurrentModificationException e) {
-          if (forceBrokenChainDelete || !bucket.isChunkChainBroken(record.getIdentity()))
+          if (!tolerateBrokenChain || forceBrokenChainDelete || !bucket.isChunkChainBroken(record.getIdentity()))
             throw e;
           logBrokenChainForceDelete(record.getIdentity(), e);
           bucket.deleteRecord(record.getIdentity(), true);
@@ -1438,6 +1441,15 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
         return createdNewTx;
 
       } catch (final NeedRetryException | DuplicatedKeyException e) {
+        // #661: when we joined a transaction owned by the caller (createdNewTx == false) we must NOT retry
+        // here. Retrying would roll back the caller's outer transaction - discarding work the caller did
+        // before this call and resetting the RID of any records it created to null (surfacing later as
+        // "Target vertex is not persistent" when a stale, now-unsaved record reference is reused) - and
+        // re-running the block against the same conflicted state cannot succeed anyway. Propagate the
+        // exception so the real transaction owner retries the whole logical unit with fresh bindings.
+        if (!createdNewTx)
+          throw e;
+
         // RETRY
         lastException = e;
         if (wrappedDatabaseInstance.isTransactionActive())
@@ -2001,6 +2013,11 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
   public CypherPlanCache getCypherPlanCache() {
     return cypherPlanCache;
+  }
+
+  @Override
+  public GraphStatisticsCache getGraphStatisticsCache() {
+    return graphStatisticsCache;
   }
 
   @Override

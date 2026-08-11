@@ -18,6 +18,7 @@
  */
 package com.arcadedb.graph.olap;
 
+import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.TestHelper;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseFactory;
@@ -1166,6 +1167,64 @@ class GraphAnalyticalViewTest extends TestHelper {
     gav.drop();
   }
 
+  @Test
+  void cypherGAVPreservesNodeInequalityBetweenChainVariables() {
+    database.getSchema().createVertexType("Hub");
+    database.getSchema().createVertexType("Leaf");
+    database.getSchema().createEdgeType("LINKS");
+    database.getSchema().createEdgeType("BOND");
+
+    database.begin();
+    final MutableVertex h1 = database.newVertex("Hub").set("k", "h1").save();
+    final MutableVertex h2 = database.newVertex("Hub").set("k", "h2").save();
+    final MutableVertex l1 = database.newVertex("Leaf").set("k", "l1").save();
+    final MutableVertex l2 = database.newVertex("Leaf").set("k", "l2").save();
+    final MutableVertex l3 = database.newVertex("Leaf").set("k", "l3").save();
+
+    h1.newEdge("LINKS", l1).save();
+    h1.newEdge("LINKS", l2).save();
+    h2.newEdge("LINKS", l1).save();
+    l1.newEdge("LINKS", h2).save();
+    l3.newEdge("LINKS", h1).save();
+
+    l1.newEdge("BOND", h1).save();
+    l2.newEdge("BOND", h2).save();
+    h2.newEdge("BOND", l3).save();
+    database.commit();
+
+    final String query =
+        "MATCH (a:Hub)-[:LINKS]->(b)-[:BOND]->(c) WHERE a <> c " +
+            "RETURN a.k AS x, c.k AS y ORDER BY x, y";
+
+    final List<String> baseline = new ArrayList<>();
+    try (ResultSet resultSet = database.command("cypher", query)) {
+      while (resultSet.hasNext()) {
+        final var result = resultSet.next();
+        baseline.add(result.getProperty("x") + "->" + result.getProperty("y"));
+      }
+    }
+    assertThat(baseline).containsExactly("h1->h2", "h2->h1");
+
+    final GraphAnalyticalView gav = GraphAnalyticalView.builder(database)
+        .withName("nodeInequality")
+        .withVertexTypes("Hub", "Leaf")
+        .withEdgeTypes("LINKS", "BOND")
+        .build();
+
+    final List<String> accelerated = new ArrayList<>();
+    try (ResultSet resultSet = database.command("cypher", "PROFILE " + query)) {
+      while (resultSet.hasNext()) {
+        final var result = resultSet.next();
+        accelerated.add(result.getProperty("x") + "->" + result.getProperty("y"));
+      }
+      assertThat(resultSet.getExecutionPlan()).isPresent();
+      assertThat(resultSet.getExecutionPlan().orElseThrow().prettyPrint(0, 2)).contains("provider=nodeInequality");
+    }
+    assertThat(accelerated).containsExactlyElementsOf(baseline);
+
+    gav.drop();
+  }
+
   // --- Columnar storage tests ---
 
   @Test
@@ -2147,6 +2206,58 @@ class GraphAnalyticalViewTest extends TestHelper {
     }
 
     // Reopen database with the original factory for TestHelper cleanup
+    database = new DatabaseFactory(dbPath).open();
+  }
+
+  /**
+   * Regression for issue #5788: by default, {@code restoreAll()} triggers the async rebuild of a
+   * persisted GAV and returns immediately - the query that reopened the database races the
+   * background rebuild and always loses, so it never benefits from the view it paid to restore.
+   * <p>
+   * Setting {@link GlobalConfiguration#GAV_RESTORE_AWAIT_TIMEOUT} makes {@code open()} block,
+   * bounded by the configured budget, until every restored GAV reaches {@code READY} - so the
+   * session that pays for the rebuild is the session that benefits from it.
+   */
+  @Test
+  void gavRestoreAwaitTimeoutBlocksOpenUntilViewsAreReady() {
+    database.getSchema().createVertexType("City");
+    database.getSchema().createEdgeType("ROAD");
+    database.begin();
+    final List<RID> ids = new ArrayList<>();
+    for (int i = 0; i < 300; i++)
+      ids.add(database.newVertex("City").set("name", "C" + i).save().getIdentity());
+    for (int i = 0; i < ids.size() - 1; i++)
+      ids.get(i).asVertex().modify().newEdge("ROAD", ids.get(i + 1).asVertex());
+    database.commit();
+
+    database.command("sql", "CREATE GRAPH ANALYTICAL VIEW cityRoadsAwait VERTEX TYPES (City) EDGE TYPES (ROAD)");
+
+    final String dbPath = database.getDatabasePath();
+    database.close();
+
+    final Object defaultTimeout = GlobalConfiguration.GAV_RESTORE_AWAIT_TIMEOUT.getValue();
+    GlobalConfiguration.GAV_RESTORE_AWAIT_TIMEOUT.setValue(10_000L);
+    try {
+      final DatabaseFactory factory2 = new DatabaseFactory(dbPath);
+      final Database db2 = factory2.open();
+      try {
+        // No awaitReady() call here: open() must already have blocked until the restore finished.
+        final GraphAnalyticalView restored = GraphAnalyticalViewRegistry.get(db2, "cityRoadsAwait");
+        assertThat(restored).isNotNull();
+        assertThat(restored.isReady())
+            .as("open() should block until the restored GAV is READY when GAV_RESTORE_AWAIT_TIMEOUT > 0")
+            .isTrue();
+        assertThat(restored.getNodeCount()).isEqualTo(300);
+        assertThat(restored.getEdgeCount()).isEqualTo(299);
+
+        db2.command("sql", "DROP GRAPH ANALYTICAL VIEW cityRoadsAwait");
+      } finally {
+        db2.close();
+      }
+    } finally {
+      GlobalConfiguration.GAV_RESTORE_AWAIT_TIMEOUT.setValue(defaultTimeout);
+    }
+
     database = new DatabaseFactory(dbPath).open();
   }
 
@@ -4540,6 +4651,104 @@ class GraphAnalyticalViewTest extends TestHelper {
     gav.getDegrees(degrees, Vertex.DIRECTION.OUT, "NONEXISTENT");
     for (int i = 0; i < degrees.length; i++)
       assertThat(degrees[i]).as("missing-CSR index %d must be zeroed", i).isEqualTo(0);
+
+    gav.drop();
+  }
+
+  // --- getMeanEdgesPerConnectedPair (issue #5834): exact multiplicity from the CSR, so the Cypher
+  // optimizer can skip StatisticsProvider's sampled estimate when a view covers the edge type ---
+
+  @Test
+  void meanEdgesPerConnectedPairComputesTheExactValueFromTheCSR() {
+    // pair (a,b) joined by 3 parallel edges, pair (c,d) joined by 1: exact mean = 4 edges / 2 pairs = 2.0.
+    database.getSchema().createVertexType("Person");
+    database.getSchema().createEdgeType("FOLLOWS");
+
+    database.begin();
+    final MutableVertex a = database.newVertex("Person").save();
+    final MutableVertex b = database.newVertex("Person").save();
+    for (int i = 0; i < 3; i++)
+      a.newEdge("FOLLOWS", b);
+    final MutableVertex c = database.newVertex("Person").save();
+    final MutableVertex d = database.newVertex("Person").save();
+    c.newEdge("FOLLOWS", d);
+    database.commit();
+
+    final GraphAnalyticalView gav = new GraphAnalyticalView(database);
+    gav.build(new String[] { "Person" }, new String[] { "FOLLOWS" });
+
+    assertThat(gav.getMeanEdgesPerConnectedPair("FOLLOWS")).isEqualTo(2.0);
+
+    gav.drop();
+  }
+
+  @Test
+  void meanEdgesPerConnectedPairOnASimpleGraphIsOne() {
+    database.getSchema().createVertexType("Person");
+    database.getSchema().createEdgeType("FOLLOWS");
+
+    database.begin();
+    final MutableVertex a = database.newVertex("Person").save();
+    final MutableVertex b = database.newVertex("Person").save();
+    a.newEdge("FOLLOWS", b);
+    database.commit();
+
+    final GraphAnalyticalView gav = new GraphAnalyticalView(database);
+    gav.build(new String[] { "Person" }, new String[] { "FOLLOWS" });
+
+    assertThat(gav.getMeanEdgesPerConnectedPair("FOLLOWS")).isEqualTo(1.0);
+
+    gav.drop();
+  }
+
+  @Test
+  void meanEdgesPerConnectedPairIsUnknownWhenTheViewHasNoCSRForTheType() {
+    database.getSchema().createVertexType("Person");
+    database.getSchema().createEdgeType("FOLLOWS");
+    database.getSchema().createEdgeType("BLOCKS"); // present in schema, but excluded from the view below
+
+    database.begin();
+    final MutableVertex a = database.newVertex("Person").save();
+    final MutableVertex b = database.newVertex("Person").save();
+    a.newEdge("FOLLOWS", b);
+    database.commit();
+
+    // View built covering only BLOCKS - no CSR entry for FOLLOWS, caller must fall back to sampling.
+    final GraphAnalyticalView gav = new GraphAnalyticalView(database);
+    gav.build(new String[] { "Person" }, new String[] { "BLOCKS" });
+
+    assertThat(gav.getMeanEdgesPerConnectedPair("FOLLOWS")).isNegative();
+
+    gav.drop();
+  }
+
+  @Test
+  void meanEdgesPerConnectedPairIsUnknownWhileADeltaOverlayIsActive() {
+    // A SYNCHRONOUS view applies post-commit changes to an in-memory overlay rather than rebuilding the
+    // CSR immediately. The overlay is not scanned by the multiplicity computation, so answering from the
+    // CSR alone would silently ignore the just-added edges - the honest answer is "unknown".
+    database.getSchema().createVertexType("Person");
+    database.getSchema().createEdgeType("FOLLOWS");
+
+    database.begin();
+    final MutableVertex a = database.newVertex("Person").save();
+    final MutableVertex b = database.newVertex("Person").save();
+    a.newEdge("FOLLOWS", b);
+    database.commit();
+
+    final GraphAnalyticalView gav = GraphAnalyticalView.builder(database)
+        .withVertexTypes("Person")
+        .withEdgeTypes("FOLLOWS")
+        .withUpdateMode(GraphAnalyticalView.UpdateMode.SYNCHRONOUS)
+        .build();
+
+    assertThat(gav.getMeanEdgesPerConnectedPair("FOLLOWS")).isEqualTo(1.0);
+
+    database.begin();
+    a.asVertex().modify().newEdge("FOLLOWS", b);
+    database.commit();
+
+    assertThat(gav.getMeanEdgesPerConnectedPair("FOLLOWS")).isNegative();
 
     gav.drop();
   }

@@ -51,6 +51,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -144,11 +145,31 @@ public class RemoteHttpComponent extends RWLockContext {
   }
 
   private HttpResponse<String> sendWithWatchdog(final HttpRequest request) throws IOException, InterruptedException {
-    final long watchdogMs = Math.max(timeout * 1000L, 30_000L);
+    return sendWithWatchdog(request, computeWatchdogMs(timeout));
+  }
+
+  /**
+   * Computes the watchdog budget, in milliseconds, for a single HTTP exchange. {@code timeoutMs} is
+   * already expressed in milliseconds (see {@link GlobalConfiguration#NETWORK_SOCKET_TIMEOUT}) and
+   * must not be re-scaled here; a 30 second floor keeps the watchdog usable even when the configured
+   * timeout is unset or unreasonably small (see issue #5847).
+   */
+  static long computeWatchdogMs(final int timeoutMs) {
+    return Math.max(timeoutMs, 30_000L);
+  }
+
+  /**
+   * Package-private overload that accepts an explicit watchdog budget, used by tests to exercise the
+   * watchdog without waiting on the 30 second floor computed by {@link #computeWatchdogMs(int)}.
+   */
+  HttpResponse<String> sendWithWatchdog(final HttpRequest request, final long watchdogMs) throws IOException, InterruptedException {
+    final CompletableFuture<HttpResponse<String>> future = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString());
     try {
-      return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-          .get(watchdogMs, TimeUnit.MILLISECONDS);
+      return future.get(watchdogMs, TimeUnit.MILLISECONDS);
     } catch (final java.util.concurrent.TimeoutException e) {
+      // The exchange is not just abandoned: cancel it so the connection and its buffers are released
+      // instead of draining unbounded in the background (see issue #5847).
+      future.cancel(true);
       throw new IOException("HTTP request watchdog timeout after " + watchdogMs + "ms: " + request.uri(), e);
     } catch (final ExecutionException e) {
       final Throwable cause = e.getCause();
@@ -320,6 +341,10 @@ public class RemoteHttpComponent extends RWLockContext {
             jsonRequest.put("language", language);
           jsonRequest.put("command", payloadCommand);
           jsonRequest.put("serializer", "record");
+          // Issue #5812: the @props per-column type hint is off by default on the HTTP surface - a generic
+          // client never asked for it - so this driver, which needs it to rebuild the exact Java type of a
+          // non-element (projection/aggregate) column, opts in explicitly.
+          jsonRequest.put("typeHints", true);
           jsonRequest.put("retries", txRetries);
           if (maxResultRows != null)
             jsonRequest.put("limit", maxResultRows);
@@ -345,15 +370,8 @@ public class RemoteHttpComponent extends RWLockContext {
         HttpResponse<String> response = sendWithWatchdog(request);
 
         // Capture commit-index from response for read-your-writes consistency.
-        if (this instanceof RemoteDatabase remoteDb) {
-          response.headers().firstValue("X-ArcadeDB-Commit-Index").ifPresent(val -> {
-            try {
-              remoteDb.updateLastCommitIndex(Long.parseLong(val));
-            } catch (final NumberFormatException ignored) {
-              // server sent an invalid header; ignore
-            }
-          });
-        }
+        if (this instanceof RemoteDatabase remoteDb)
+          remoteDb.captureCommitIndexHeader(response);
 
         if (response.statusCode() != 200) {
           lastException = manageException(response, payloadCommand != null ? payloadCommand : operation);

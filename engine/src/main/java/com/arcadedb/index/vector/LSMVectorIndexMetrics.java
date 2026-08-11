@@ -25,7 +25,6 @@ import java.util.concurrent.atomic.AtomicLong;
  * Holds all metrics and counters for LSMVectorIndex operations.
  * Provides thread-safe tracking of:
  * - Operation counts (search, insert, rebuild, compaction)
- * - Cache statistics (hits, misses)
  * - Vector fetch sources (quantized, documents, graph)
  * - Latency tracking (search, insert)
  *
@@ -42,10 +41,11 @@ class LSMVectorIndexMetrics {
   // expensive thing this index does, and until now it was only a log line (issue #5558). Counts the plain k-NN path
   // only, which is the only one with a fallback to count: the grouped and PQ paths deliberately have none.
   private final AtomicLong bruteForceScans = new AtomicLong(0);
-
-  // Cache statistics
-  private final AtomicLong vectorCacheHits = new AtomicLong(0);
-  private final AtomicLong vectorCacheMisses = new AtomicLong(0);
+  // Grouped searches (vector.neighbors with groupBy) that ran out of candidate budget before they could open `limit`
+  // distinct groups, so the caller got a correct but short answer. Finding the limit-th nearest group costs however
+  // many candidates the data puts between it and the query, which no fixed budget can guarantee (issue #5761), so
+  // this is the signal to raise efSearch on the index or the query.
+  private final AtomicLong groupedSearchesShortOfLimit = new AtomicLong(0);
 
   // Vector fetch source tracking
   private final AtomicLong vectorFetchFromQuantized = new AtomicLong(0);
@@ -82,14 +82,8 @@ class LSMVectorIndexMetrics {
     bruteForceScans.incrementAndGet();
   }
 
-  // Cache tracking methods
-
-  void incrementVectorCacheHits() {
-    vectorCacheHits.incrementAndGet();
-  }
-
-  void incrementVectorCacheMisses() {
-    vectorCacheMisses.incrementAndGet();
+  void incrementGroupedSearchesShortOfLimit() {
+    groupedSearchesShortOfLimit.incrementAndGet();
   }
 
   // Vector fetch source tracking methods
@@ -138,12 +132,8 @@ class LSMVectorIndexMetrics {
     return bruteForceScans.get();
   }
 
-  long getVectorCacheHits() {
-    return vectorCacheHits.get();
-  }
-
-  long getVectorCacheMisses() {
-    return vectorCacheMisses.get();
+  long getGroupedSearchesShortOfLimit() {
+    return groupedSearchesShortOfLimit.get();
   }
 
   long getVectorFetchFromQuantized() {
@@ -190,10 +180,8 @@ class LSMVectorIndexMetrics {
     stats.put("insertOperations", insertOperations.get());
     stats.put("graphRebuildCount", graphRebuildCount.get());
     stats.put("bruteForceScans", bruteForceScans.get());
+    stats.put("groupedSearchesShortOfLimit", groupedSearchesShortOfLimit.get());
     stats.put("compactionCount", compactionCount.get());
-
-    stats.put("vectorCacheHits", vectorCacheHits.get());
-    stats.put("vectorCacheMisses", vectorCacheMisses.get());
 
     stats.put("vectorFetchFromQuantized", vectorFetchFromQuantized.get());
     stats.put("vectorFetchFromDocuments", vectorFetchFromDocuments.get());
@@ -211,9 +199,8 @@ class LSMVectorIndexMetrics {
     insertOperations.set(0);
     graphRebuildCount.set(0);
     bruteForceScans.set(0);
+    groupedSearchesShortOfLimit.set(0);
     compactionCount.set(0);
-    vectorCacheHits.set(0);
-    vectorCacheMisses.set(0);
     vectorFetchFromQuantized.set(0);
     vectorFetchFromDocuments.set(0);
     vectorFetchFromGraph.set(0);

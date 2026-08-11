@@ -42,8 +42,6 @@ import com.arcadedb.query.sql.executor.InternalResultSet;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.schema.DocumentType;
-import com.arcadedb.schema.FullTextIndexMetadata;
-import com.arcadedb.schema.GeoIndexMetadata;
 import com.arcadedb.schema.IndexBuilder;
 import com.arcadedb.schema.IndexMetadata;
 import com.arcadedb.schema.LocalDocumentType;
@@ -56,7 +54,14 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 
 public class RebuildIndexStatement extends DDLStatement {
-  private static final int                         MAX_ATTEMPTS = 5;
+  private static final int                         MAX_ATTEMPTS                    = 5;
+  // Once an attempt's dropIndex() has actually committed, giving up leaves the index missing rather than merely
+  // unrebuilt (#6040): a NeedRetryException raised deep inside create()'s bucket scan on THAT attempt (as opposed
+  // to one raised by executeLockingFiles's own tryLockFiles, before anything was touched) means every subsequent
+  // attempt is retrying to recover from a self-inflicted "index currently gone" state, not merely waiting out lock
+  // contention. That state deserves a larger retry budget than the lock-acquisition case, where nothing was lost
+  // and giving up simply leaves the index exactly as it was.
+  private static final int                         POST_DROP_ATTEMPT_MULTIPLIER    = 4;
   public               boolean                     all          = false;
   public               Identifier                  name;
   public               Expression                  key;
@@ -147,6 +152,12 @@ public class RebuildIndexStatement extends DDLStatement {
 
       final List<Index> targetIndexes = new ArrayList<>();
       if (all) {
+        // `*` deliberately excludes TypeIndex: it walks bucket sub-indexes one at a time through buildBucketIndex()
+        // below, which rebuilds each sub-index in place. This still loses the logical index's own name (issue #5791):
+        // dropping the LAST remaining sub-index under a TypeIndex also drops the wrapper (LocalSchema.dropIndex), so
+        // a single-bucket type - the common default - loses its TypeIndex on every rebuild and mints a fresh one.
+        // BucketIndexBuilder.create() and the withIndexName(...) call further down carry the owning TypeIndex's name
+        // through that recreation, the same fix applied below to the direct typeIndexRebuild path.
         for (final Index idx : database.getSchema().getIndexes())
           if (idx.isAutomatic() && !(idx instanceof TypeIndex))
             targetIndexes.add(idx);
@@ -296,7 +307,14 @@ public class RebuildIndexStatement extends DDLStatement {
           "Use synchronous execution (awaitResponse=true) or run the command directly.");
     }
 
-    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Sticky once true (#6040): sees whether ANY attempt so far got past its own dropIndex() call, so exhaustion
+    // is judged against the right budget below - extended once the index has actually been dropped, not just the
+    // lock-acquisition budget that applies while it is still safely untouched.
+    boolean indexDropped = false;
+
+    for (int attempt = 1; ; attempt++) {
+      // Effectively-final per iteration: set to true by the callback below the instant its dropIndex() commits.
+      final boolean[] droppedThisAttempt = new boolean[1];
       try {
         // Check if index is INVALID (e.g., interrupted build with WAL disabled)
         if (!((IndexInternal) idx).isValid()) {
@@ -318,31 +336,21 @@ public class RebuildIndexStatement extends DDLStatement {
         // answers the current page size unless it is not legal to create with, in which case it repairs it.
         final int pageSize = ((IndexInternal) idx).getPageSizeForNewFile();
         final LSMTreeIndexAbstract.NULL_STRATEGY nullStrategy = idx.getNullStrategy();
-        // Get index metadata (includes vector-specific settings like dimensions, similarity, etc.)
-        IndexMetadata indexMetadata = ((IndexInternal) idx).getMetadata();
-
-        // FULL_TEXT indexes carry their configuration (analyzers, similarity, BM25 parameters) in a FullTextIndexMetadata
-        // subtype, but getMetadata() returns the generic base IndexMetadata. Reconstruct the full-text metadata from the index's
-        // persisted JSON so the rebuilt index preserves its settings; the builder rejects a plain IndexMetadata for FULL_TEXT
-        // (issue #4732, which otherwise crashed AFTER the old index had already been dropped, leaving it gone). Reset the BM25
-        // corpus counters to zero so the re-index pass recomputes them from scratch instead of doubling the persisted totals.
-        if (type == Schema.INDEX_TYPE.FULL_TEXT) {
-          final FullTextIndexMetadata ftMeta = new FullTextIndexMetadata(typeName, propertyNames.toArray(new String[0]), -1);
-          ftMeta.fromJSON(((IndexInternal) idx).toJSON());
-          ftMeta.setCounters(0L, 0L);
-          indexMetadata = ftMeta;
-        } else if (type == Schema.INDEX_TYPE.GEOSPATIAL) {
-          // Same defect as #4732 for FULL_TEXT: the generic IndexMetadata carries no `precision`, so a rebuild silently
-          // reset a non-default GeoHash resolution. Rebuilding also re-reads every record, which is the one safe moment
-          // to publish the compact FRONTIER layout on an index created before 26.8.1 (#5478).
-          final GeoIndexMetadata geoMeta = new GeoIndexMetadata(typeName, propertyNames.toArray(new String[0]), -1);
-          geoMeta.fromJSON(((IndexInternal) idx).toJSON());
-          geoMeta.setTokenization(GeoIndexMetadata.DEFAULT_TOKENIZATION);
-          indexMetadata = geoMeta;
-        }
-        final IndexMetadata rebuildMetadata = indexMetadata;
+        // Get index metadata (includes vector-specific settings like dimensions, similarity, etc.), reconstructing
+        // FULL_TEXT/GEOSPATIAL from the index's persisted JSON so the rebuild preserves their type-specific
+        // settings (issue #4732/#5478) instead of the generic IndexMetadata getMetadata() would otherwise return.
+        // Shared with DatabaseChecker's auto-fix rebuild path (issue #5934).
+        final IndexMetadata rebuildMetadata = IndexMetadata.reconstructForRebuild((IndexInternal) idx, typeName,
+            propertyNames.toArray(new String[0]));
 
         final boolean typeIndexRebuild = typeName != null && idx instanceof TypeIndex;
+
+        // Captured BEFORE the drop below (issue #5791): dropping a bucket sub-index that is the LAST one left under
+        // its TypeIndex also removes the wrapper (LocalSchema.dropIndex), which is the normal case for a
+        // single-bucket type - the common default. The rebuilt bucket index then finds no existing TypeIndex to
+        // reattach to and mints a new one, which - without the name carried through explicitly - always takes the
+        // auto-derived form even for an explicitly-named logical index.
+        final TypeIndex ownerTypeIndex = typeIndexRebuild ? null : ((IndexInternal) idx).getTypeIndex();
 
         // For a bucket sub-index, resolve its target bucket BEFORE the destructive drop below, so a truly orphaned
         // index (its bucket gone) is reported without first being deleted. Self-heal a lost association
@@ -380,12 +388,17 @@ public class RebuildIndexStatement extends DDLStatement {
 
         ((DatabaseInternal) database).executeLockingFiles(((IndexInternal) idx).getFileIds(), () -> {
           database.getSchema().dropIndex(idx.getName());
+          droppedThisAttempt[0] = true;
 
           if (typeIndexRebuild) {
+            // Preserve the logical index's own name (issue #5791, follow-up to #4732/#4139): without this the
+            // builder falls back to the auto-derived "typeName[properties]" form, so a REBUILD silently renames
+            // any explicitly-named index and every SEARCH_INDEX / name-based lookup against the old name breaks.
             database.getSchema().buildTypeIndex(typeName, propertyNames.toArray(new String[propertyNames.size()])).withType(type)
                 .withUnique(unique).withPageSize(pageSize).withCallback(callback).withBatchSize(batchSize)
                 .withMaxAttempts(maxAttempts).withNullStrategy(nullStrategy)
                 .withMetadata(rebuildMetadata)
+                .withIndexName(idx.getName())
                 .create();
 
           } else {
@@ -395,6 +408,7 @@ public class RebuildIndexStatement extends DDLStatement {
                 .withPageSize(pageSize).withCallback(callback).withBatchSize(batchSize).withMaxAttempts(maxAttempts)
                 .withNullStrategy(nullStrategy)
                 .withMetadata(rebuildMetadata)
+                .withIndexName(ownerTypeIndex != null ? ownerTypeIndex.getName() : null)
                 .create();
           }
           return null;
@@ -404,9 +418,33 @@ public class RebuildIndexStatement extends DDLStatement {
         return;
 
       } catch (NeedRetryException e) {
+        if (droppedThisAttempt[0])
+          indexDropped = true;
+
+        // maxAttempts is user-supplied (REBUILD INDEX ... WITH maxAttempts = ...), unbounded at parse time - clamp
+        // the multiplication through long arithmetic so an extreme value can't overflow budget negative, which
+        // would make the very next NeedRetryException throw immediately instead of honoring the requested attempts.
+        final int budget = indexDropped ?
+            (int) Math.min((long) maxAttempts * POST_DROP_ATTEMPT_MULTIPLIER, Integer.MAX_VALUE) : maxAttempts;
+        if (attempt >= budget) {
+          // #6040: exhaustion after the index has actually been dropped must not pass silently - unlike the old
+          // behavior of falling off the end of this method, which left the caller believing the REBUILD succeeded
+          // while the index was actually gone. A pre-drop exhaustion (lock contention only, nothing touched) is
+          // reported the same way for a consistent contract: REBUILD INDEX either succeeds or throws.
+          final String reason = indexDropped ?
+              "the index was dropped but the rebuild could not complete (error: " + e.getMessage() + "). "
+                  + "The index is now missing - retry `REBUILD INDEX " + idx.getName() + "` once the contention clears" :
+              "the index lock could not be acquired (error: " + e.getMessage() + "). The index itself is unchanged";
+          throw new CommandExecutionException(
+              "Cannot rebuild index '" + idx.getName() + "' after " + attempt + " attempts: " + reason);
+        }
+
         try {
           Thread.sleep(200 + 200L * attempt);
         } catch (InterruptedException ex) {
+          // An interrupt is a request to stop, not contention to ride out: honor it immediately rather than
+          // trying further attempts.
+          Thread.currentThread().interrupt();
           throw e;
         }
       }

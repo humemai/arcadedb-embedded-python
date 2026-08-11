@@ -18,8 +18,9 @@
  */
 package com.arcadedb.query.opencypher.executor;
 
-import com.arcadedb.exception.CommandExecutionException;
+import com.arcadedb.exception.CommandSemanticException;
 import com.arcadedb.function.StatelessFunction;
+import com.arcadedb.function.cypher.CypherFunctionHelper;
 import com.arcadedb.query.sql.executor.CommandContext;
 
 /**
@@ -50,17 +51,20 @@ public class CypherSubstringFunction implements StatelessFunction {
     final String str = args[0].toString();
     final int start = ((Number) args[1]).intValue();
     if (start < 0)
-      throw new CommandExecutionException("Cannot handle negative start index nor negative length");
+      // Invalid user-supplied argument value: surface as a client error (HTTP 400), matching left()/right().
+      // CommandSemanticException extends CommandParsingException, which the HTTP handler maps to 400. See issue #5793/#5296.
+      throw new CommandSemanticException("substring(): negative start index is not supported: " + start);
+    // Issue #5193/#5809: an explicitly supplied null length propagates null (as Neo4j does), it must not be
+    // treated as an omitted argument. This check must run before the start-past-the-end short-circuit below,
+    // otherwise null propagation silently stops once start reaches the length of the string.
+    if (CypherFunctionHelper.isExplicitNull(args, 2))
+      return null;
     if (start >= str.length())
       return "";
     if (args.length == 3) {
-      // Issue #5193: an explicitly supplied null length propagates null (as Neo4j does),
-      // it must not be treated as an omitted argument.
-      if (args[2] == null)
-        return null;
       final int length = ((Number) args[2]).intValue();
       if (length < 0)
-        throw new CommandExecutionException("Cannot handle negative start index nor negative length");
+        throw new CommandSemanticException("substring(): negative length is not supported: " + length);
       return str.substring(start, Math.min(start + length, str.length()));
     }
     return str.substring(start);

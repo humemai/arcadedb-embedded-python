@@ -98,6 +98,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -117,7 +118,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.logging.Level;
+import java.util.stream.IntStream;
 
 /**
  * Vector index implementation using JVector library with page-based transactional storage.
@@ -158,6 +161,16 @@ public class LSMVectorIndex implements Index, IndexInternal {
   // Squared bounds, so the sample costs one multiply-add per component and no square root at all.
   private static final double MIN_UNIT_MAGNITUDE_SQUARED = (1.0 - UNIT_MAGNITUDE_TOLERANCE) * (1.0 - UNIT_MAGNITUDE_TOLERANCE);
   private static final double MAX_UNIT_MAGNITUDE_SQUARED = (1.0 + UNIT_MAGNITUDE_TOLERANCE) * (1.0 + UNIT_MAGNITUDE_TOLERANCE);
+
+  // Ceiling on how far findNeighborsFromVectorGrouped will resume a search that has not yet opened `limit` distinct
+  // groups, expressed in beams (issue #5761). How far it *needs* to go is a property of the data - a group whose
+  // members are all closer to the query than any other group's nearest member has to be walked past before a second
+  // group appears - so the choice is between a bound that under-answers on pathological data and an unbounded walk
+  // that degenerates to a full scan on a low-cardinality group key. Sixteen beams is ~1,600 candidates at the default
+  // efSearch: it covers group densities into the low thousands, and costs well under a millisecond even when it is
+  // all spent. A query that exhausts it returns fewer than `limit` groups and is counted in
+  // groupedSearchesShortOfLimit, which is the operator's cue to raise efSearch.
+  private static final int GROUPED_SEARCH_CANDIDATE_BUDGET_FACTOR = 16;
 
   // Not final: a compaction swaps in a new data file, and this index is named after its component - see
   // getMostRecentFileName(). Every node names the index after the file it holds, so the leader has to
@@ -241,6 +254,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
   // long-running build operations that would otherwise block server shutdown.
   private volatile ForkJoinPool graphBuildPool;
 
+  /** {@link ForkJoinPool} rejects anything above this, so a configured graph-build width is clamped to it. */
+  private static final int MAX_GRAPH_BUILD_PARALLELISM = 0x7fff;
+
   // Live incremental graph builder: inserts vectors one at a time via addGraphNode()
   // instead of rebuilding the entire graph. The builder stays alive across put() calls.
   // Search uses builder.getGraph() which is immediately searchable after each insert.
@@ -289,7 +305,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
     /**
      * Called periodically during graph index construction.
      *
-     * @param phase          Current phase: "validating", "building", or "persisting"
+     * @param phase          Current phase: "validating", "building", "optimizing" or "persisting". "building" inserts
+     *                       every vector into the graph and reports {@code processedNodes} out of {@code totalNodes};
+     *                       "optimizing" is JVector's second pass over the finished graph (neighbor refinement and
+     *                       degree enforcement) and exposes no per-node progress, so it repeats the final counts.
+     *                       It is not a quick finalisation - on a large corpus it can cost as much wall clock as the
+     *                       insertion it follows (issue #5577)
      * @param processedNodes Number of unique nodes processed so far
      * @param totalNodes     Total number of nodes to process
      * @param vectorAccesses Total number of vector accesses (getVector calls)
@@ -634,8 +655,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * <p>
    * The CPU cost is the same as the in-place refill it replaces, but peak heap is not: the instance being replaced
    * stays reachable for its in-flight readers while the new one is built, so a rebuild transiently holds two
-   * location sets (~90 bytes per live entry each) instead of one. That is a bounded, promptly released spike and
-   * the price of the atomicity.
+   * location sets instead of one. That is a bounded, promptly released spike and the price of the atomicity, and
+   * issue #5588 made it far cheaper: a location generation costs about
+   * {@value VectorLocationIndex#APPROX_RETAINED_BYTES_PER_LOCATION} bytes per live entry rather than ~90.
    * <p>
    * The population loop runs under the write lock even though only the final store needs it. Hoisting it out would
    * shorten the locked window, but it would also let an insert commit into the instance about to be discarded, so
@@ -658,6 +680,31 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // already handed out. Carry the sequence over, or the next insert would reuse an id a tombstone still refers to.
     rebuilt.setNextId(Math.max(rebuilt.getNextId(), nextId.get()));
     vectorIndex = rebuilt;
+  }
+
+  /**
+   * An immutable copy of the locations {@code vectorIds} currently resolve to, for a graph or PQ build to read
+   * without being disturbed by concurrent writes.
+   * <p>
+   * Since issue #5588 the snapshot is a location index of the same shape as the live one rather than a
+   * {@code Map<Integer, VectorLocation>}: the map carried the whole per-entry overhead the primitive layout exists
+   * to remove, allocated in full for the duration of a build and on top of the live index it was copied from.
+   *
+   * @param source    the location index to copy from
+   * @param vectorIds the ids the build will walk
+   */
+  private static VectorLocationIndex snapshotOf(final VectorLocationIndex source, final int[] vectorIds) {
+    final VectorLocationIndex snapshot = new VectorLocationIndex(Math.max(16, vectorIds.length));
+    for (final int vectorId : vectorIds) {
+      final long offsetAndFlag = source.getOffsetAndFlag(vectorId);
+      if (offsetAndFlag == VectorLocationIndex.ABSENT)
+        continue;
+      final RID rid = source.getRid(vectorId);
+      if (rid != null)
+        snapshot.addOrUpdate(vectorId, VectorLocationIndex.isCompactedOf(offsetAndFlag),
+            VectorLocationIndex.offsetOf(offsetAndFlag), rid, false);
+    }
+    return snapshot;
   }
 
   /**
@@ -1264,8 +1311,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
                   metadata.propertyNames.getFirst() : "vector";
 
           final int[] rebuiltOrdinalToVectorId = vectorIndex.getAllVectorIds().filter(id -> {
-            final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(id);
-            if (loc == null || loc.deleted) {
+            final long offsetAndFlag = vectorIndex.getOffsetAndFlag(id);
+            if (offsetAndFlag == VectorLocationIndex.ABSENT) {
               return false;
             }
 
@@ -1276,7 +1323,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
             if (hasInlineQuantization) {
               // With INT8/BINARY quantization: verify we can read the quantized vector from pages
               try {
-                final float[] vector = readVectorFromOffset(loc.absoluteFileOffset, loc.isCompacted);
+                final float[] vector = readVectorFromOffset(VectorLocationIndex.offsetOf(offsetAndFlag),
+                    VectorLocationIndex.isCompactedOf(offsetAndFlag));
                 return vector != null && vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector);
               } catch (final Exception e) {
                 return false;
@@ -1284,7 +1332,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
             } else {
               // Without quantization: validate by reading from document.
               try {
-                final Record record = getDatabase().lookupByRID(loc.rid, false);
+                final RID rid = vectorIndex.getRid(id);
+                if (rid == null)
+                  return false;
+                final Record record = getDatabase().lookupByRID(rid, false);
                 if (record == null)
                   return false;
                 final Document doc = (Document) record;
@@ -1328,16 +1379,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
                   "PQ not available after graph load, building PQ for index: %s", indexName);
               try {
                 // Create vector values from the loaded vectorIndex for PQ building
-                final Map<Integer, VectorLocationIndex.VectorLocation> vectorLocationSnapshot = new HashMap<>();
-                for (int vectorId : ordinalToVectorId) {
-                  final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
-                  if (loc != null && !loc.deleted) {
-                    vectorLocationSnapshot.put(vectorId, loc);
-                  }
-                }
-                final RandomAccessVectorValues vectors = new ArcadePageVectorValues(getDatabase(), metadata.dimensions,
-                    vectorProp,
-                    vectorLocationSnapshot, ordinalToVectorId, this,
+                final RandomAccessVectorValues vectors = ArcadePageVectorValues.forGraphBuild(getDatabase(),
+                    metadata.dimensions, vectorProp,
+                    snapshotOf(vectorIndex, ordinalToVectorId), ordinalToVectorId, this,
                     computeGraphBuildCacheCapacity(ordinalToVectorId.length, false));
                 buildAndPersistPQ(vectors);
               } catch (final Exception e) {
@@ -1393,11 +1437,6 @@ public class LSMVectorIndex implements Index, IndexInternal {
     }
   }
 
-  /**
-   * Returns the dedicated ForkJoinPool for graph building, creating it if needed.
-   * Using a per-index pool allows us to cancel long-running builds on shutdown
-   * by calling shutdownNow() on this pool.
-   */
   /**
    * Ordinals that no path from the entry node reaches. Beam search only ever follows edges forward from the entry
    * node, so such a node can never be returned no matter how wide the beam - the graph build occasionally leaves one
@@ -1483,14 +1522,62 @@ public class LSMVectorIndex implements Index, IndexInternal {
     }
   }
 
+  /**
+   * Returns this index's dedicated graph-build pool, creating it on first use and replacing it when the configured
+   * width has changed since it was created.
+   * <p>
+   * The pool is dedicated rather than shared with {@code QueryEngineManager}'s so that {@code shutdownNow()} can
+   * cancel an in-flight build on close: JVector's {@code GraphIndexBuilder} does not observe an interrupt on the
+   * calling thread, only on its workers.
+   * <p>
+   * <b>Width.</b> It used to be hard-wired to {@code availableProcessors() / 2}, which was never a measured choice -
+   * it arrived with the pool itself, whose reason for existing was cancellation. A DEEP-10M A/B contributed on
+   * issue #5577 put the price of the halving at 17.1% of the whole build with recall unchanged, so the automatic
+   * width is now the core count minus one. The core left free is deliberate and is the only reason not to take them
+   * all: a rebuild can fire on a live index at any time, and it must not be able to occupy every core that the
+   * request, I/O and GC threads need. Deployments at either extreme - a bulk import with nothing else running, or a
+   * latency-sensitive index that must not feel a rebuild at all - set
+   * {@link GlobalConfiguration#VECTOR_INDEX_GRAPH_BUILD_PARALLELISM} explicitly.
+   */
   private synchronized ForkJoinPool getOrCreateGraphBuildPool() {
+    final int wanted = computeGraphBuildParallelism();
+
     ForkJoinPool pool = graphBuildPool;
-    if (pool == null || pool.isShutdown()) {
-      final int cores = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
-      pool = new ForkJoinPool(cores);
-      graphBuildPool = pool;
-    }
+    if (pool != null && !pool.isShutdown() && pool.getParallelism() == wanted)
+      return pool;
+
+    // A reconfigured width takes effect on the next build. The pool being replaced can never have a build running
+    // on it: every live caller of this method is inside buildGraphFromScratchExclusively, which runs under
+    // graphBuildLock, so at most one build per index exists at a time and it is the one asking for this pool.
+    // (The other caller, ensureLiveBuilder, is dead code.) shutdown() rather than shutdownNow() keeps that true
+    // even if a future caller breaks the invariant: the work would finish rather than fail.
+    if (pool != null && !pool.isShutdown())
+      pool.shutdown();
+
+    final int cores = Runtime.getRuntime().availableProcessors();
+    if (wanted > cores)
+      LogManager.instance().log(this, Level.WARNING,
+          "Vector index %s will build its graph with %d threads on %d available cores. Graph construction is "
+              + "CPU-bound, so oversubscribing it makes the build slower, not faster: lower %s unless the core count "
+              + "is deliberately understated for this process",
+          indexName, wanted, cores, GlobalConfiguration.VECTOR_INDEX_GRAPH_BUILD_PARALLELISM.getKey());
+
+    pool = new ForkJoinPool(wanted);
+    graphBuildPool = pool;
     return pool;
+  }
+
+  /**
+   * @return the configured graph-build pool width, or the automatic one (all cores but one) when unset. A configured
+   * value is clamped to what {@link ForkJoinPool} accepts, so a typo in the setting cannot turn every rebuild into an
+   * {@code IllegalArgumentException} from the pool constructor.
+   */
+  private int computeGraphBuildParallelism() {
+    final int configured = getDatabase().getConfiguration()
+        .getValueAsInteger(GlobalConfiguration.VECTOR_INDEX_GRAPH_BUILD_PARALLELISM);
+    if (configured > 0)
+      return Math.min(configured, MAX_GRAPH_BUILD_PARALLELISM);
+    return Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
   }
 
   /**
@@ -1691,10 +1778,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
         final int pageParsedCount = ridToLatestVector.size();
         // Recover entries from the in-memory vectorIndex that are missing from pages
         vectorIndex.getAllVectorIds().forEach(vectorId -> {
-          final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
-          if (loc != null && !loc.deleted && !ridToLatestVector.containsKey(loc.rid))
-            ridToLatestVector.put(loc.rid,
-                new VectorEntryForGraphBuild(vectorId, loc.rid, loc.isCompacted, loc.absoluteFileOffset));
+          final long offsetAndFlag = vectorIndex.getOffsetAndFlag(vectorId);
+          if (offsetAndFlag == VectorLocationIndex.ABSENT)
+            return;
+          final RID rid = vectorIndex.getRid(vectorId);
+          if (rid != null && !ridToLatestVector.containsKey(rid))
+            ridToLatestVector.put(rid, new VectorEntryForGraphBuild(vectorId, rid,
+                VectorLocationIndex.isCompactedOf(offsetAndFlag), VectorLocationIndex.offsetOf(offsetAndFlag)));
         });
         if (ridToLatestVector.size() > pageParsedCount)
           LogManager.instance().log(this, Level.WARNING,
@@ -1735,10 +1825,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         vectorIds = finalActiveVectorIdsFromPages; // Use vector IDs from pages (may include doc-scan fallback)
       } else {
         // Build vector IDs from existing vectorIndex
-        vectorIds = vectorIndex.getAllVectorIds().filter(id -> {
-          final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(id);
-          return loc != null && !loc.deleted;
-        }).sorted().toArray();
+        vectorIds = vectorIndex.getAllVectorIds().filter(vectorIndex::isLive).sorted().toArray();
 
         // Pages holding no live vector is the ordinary state of a brand new index, and of one whose records have
         // all been deleted: there the tombstones cancel every entry out. Neither says the database is going away,
@@ -1764,7 +1851,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // CRITICAL FIX: Validate vectors before building graph to filter out deleted documents
       // When a document is deleted, getVector() returns null which breaks JVector index building
       final int expectedSize = vectorIds.length;
-      final Map<Integer, VectorLocationIndex.VectorLocation> vectorLocationSnapshot = new HashMap<>(expectedSize * 4 / 3 + 1);
+      // The snapshot is a location index of its own, not a Map of location objects: it used to cost the same ~90
+      // bytes per vector the live index used to cost, allocated in full for the whole duration of the build and on
+      // top of the live index (issue #5588).
+      final VectorLocationIndex vectorLocationSnapshot = new VectorLocationIndex(Math.max(16, expectedSize));
 
       // Issue #3144: for inline-quantized indexes (INT8/BINARY) the graph builder reads vectors
       // straight from index pages on any thread (getImmutablePage needs no DatabaseContext), so we
@@ -1805,8 +1895,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
       int validationAllZeros = 0;
 
       for (int vectorId : vectorIds) {
-        final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
-        if (loc != null && !loc.deleted) {
+        final long offsetAndFlag = vectorIndex.getOffsetAndFlag(vectorId);
+        if (offsetAndFlag != VectorLocationIndex.ABSENT) {
+          final RID vectorRid = vectorIndex.getRid(vectorId);
+          final boolean locationIsCompacted = VectorLocationIndex.isCompactedOf(offsetAndFlag);
+          final long locationOffset = VectorLocationIndex.offsetOf(offsetAndFlag);
+          if (vectorRid == null)
+            continue;
           validationAttempts++;
 
           // CRITICAL FIX: When INT8/BINARY quantization is enabled, vectors are stored in index pages, not documents
@@ -1818,10 +1913,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
             // With INT8/BINARY quantization: vectors are in index pages, document validation not needed
             // Just validate that we can read the quantized vector
             try {
-              final float[] vector = readVectorFromOffset(loc.absoluteFileOffset, loc.isCompacted);
+              final float[] vector = readVectorFromOffset(locationOffset, locationIsCompacted);
               if (vector != null && vector.length == metadata.dimensions) {
                 if (!VectorUtils.isZeroVector(vector)) {
-                  vectorLocationSnapshot.put(vectorId, loc);
+                  vectorLocationSnapshot.addOrUpdate(vectorId, locationIsCompacted, locationOffset, vectorRid, false);
                   validVectorIds.add(vectorId);
                   // Only warm the cache up to the budget; the rest are re-read from index pages
                   // lazily during the build (issue #3144).
@@ -1855,7 +1950,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             final VectorFloat<?> fromDelta = deltaSnapshotById.get(vectorId);
             if (fromDelta != null) {
               if (fromDelta.length() == metadata.dimensions && !VectorUtils.isZeroVector(fromDelta)) {
-                vectorLocationSnapshot.put(vectorId, loc);
+                vectorLocationSnapshot.addOrUpdate(vectorId, locationIsCompacted, locationOffset, vectorRid, false);
                 validVectorIds.add(vectorId);
                 if (preloadedVectors.size() < preloadBudget)
                   preloadedVectors.put(vectorId, fromDelta);
@@ -1863,7 +1958,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             } else {
               // Without quantization: validate by reading from document.
               try {
-                final Record record = database.lookupByRID(loc.rid, false);
+                final Record record = database.lookupByRID(vectorRid, false);
 
                 final Document doc = (Document) record;
                 final Object vectorObj = doc.get(vectorProp);
@@ -1872,7 +1967,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
                   final float[] vector = VectorUtils.toFloatArray(vectorObj, metadata.encoding);
 
                   if (vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector)) {
-                    vectorLocationSnapshot.put(vectorId, loc);
+                    vectorLocationSnapshot.addOrUpdate(vectorId, locationIsCompacted, locationOffset, vectorRid, false);
                     validVectorIds.add(vectorId);
                     if (preloadedVectors.size() < preloadBudget)
                       preloadedVectors.put(vectorId, vts.createFloatVector(vector));
@@ -1932,7 +2027,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
           filteredVectorIds.length, vectorProp, graphBuildCacheSize);
 
       // Create lazy-loading vector values that reads vectors from documents or index pages (if quantized)
-      final ArcadePageVectorValues pageVectors = new ArcadePageVectorValues(database, metadata.dimensions, vectorProp,
+      final ArcadePageVectorValues pageVectors = ArcadePageVectorValues.forGraphBuild(database, metadata.dimensions,
+          vectorProp,
           vectorLocationSnapshot,  // Use immutable snapshot
           finalActiveVectorIds, this,  // Pass LSM index reference for quantization support
           graphBuildCacheSize  // Pass configurable cache size
@@ -2031,21 +2127,52 @@ public class LSMVectorIndex implements Index, IndexInternal {
           buildPool,       // simdExecutor - dedicated pool for cancellation support
           buildPool)) {    // parallelExecutor
 
+        final int totalNodes = vectors.size();
+
+        // Nodes whose insertion has returned. This is the only honest progress signal available.
+        //
+        // The monitor used to poll builder.getGraph().getIdUpperBound(), which JVector defines as
+        // "highest node id seen so far + 1". Insertion runs as IntStream.range(0, size).parallel(), so a worker
+        // reaches the top of the range within seconds of the start and that number pins at 100% while nearly the
+        // whole build is still ahead: on a 10M-vector corpus the first progress line already read 90.7% and the
+        // last one reported completion with 23 minutes of work left (issue #5577). Worse than useless as a
+        // progress bar, it also made the build look like it had a second, silent phase - three rounds of external
+        // profiling went into explaining a phase boundary that was only the meter saturating.
+        final AtomicInteger insertedNodes = new AtomicInteger();
+        final AtomicReference<String> currentPhase = new AtomicReference<>("building");
+
+        // The monitor thread polls, but the phase boundaries are pushed from here so that they are reported whatever
+        // the poll happens to land on: a build that finishes between two polls must still report its last node, not
+        // whatever fraction the previous poll caught. Serialized because the two producers would otherwise race on
+        // whatever state the callback keeps - the default one below keeps throttling state in plain arrays.
+        final Object progressLock = new Object();
+        final GraphBuildCallback reportProgress = (phase, processedNodes, total, vectorAccesses) -> {
+          if (effectiveGraphCallback == null)
+            return;
+          synchronized (progressLock) {
+            effectiveGraphCallback.onGraphBuildProgress(phase, processedNodes, total, vectorAccesses);
+          }
+        };
+
         // Start progress monitoring thread if callback provided
         final Thread progressMonitor;
         final AtomicBoolean buildComplete = new AtomicBoolean(false);
         if (effectiveGraphCallback != null) {
-          final int totalNodes = vectors.size();
           progressMonitor = new Thread(() -> {
             try {
               while (!buildComplete.get()) {
-                // Poll JVector's internal state
-                final int nodesAdded = builder.getGraph().getIdUpperBound();
-                final int insertsInProgress = builder.insertsInProgress();
+                // Read the counters under the same lock that publishes them, not before taking it. Capturing
+                // outside would let a sample read just before the insertion join is pushed after the main thread's
+                // end-of-insertion sample, so a consumer would see progress go backwards from complete.
+                // The monitor holds the lock across the callback either way, so this only adds the two reads.
+                synchronized (progressLock) {
+                  final int inserted = insertedNodes.get();
+                  final int insertsInProgress = builder.insertsInProgress();
 
-                // Report progress
-                effectiveGraphCallback.onGraphBuildProgress("building", nodesAdded, totalNodes,
-                    nodesAdded + insertsInProgress);
+                  // Report progress
+                  reportProgress.onGraphBuildProgress(currentPhase.get(), inserted, totalNodes,
+                      inserted + insertsInProgress);
+                }
 
                 // Sleep briefly before next poll
                 Thread.sleep(100); // Poll every 100ms
@@ -2064,7 +2191,54 @@ public class LSMVectorIndex implements Index, IndexInternal {
         }
 
         try {
-          builtGraph = builder.build(vectors);
+          // This is GraphIndexBuilder.build() unrolled: the same parallel insertion over the same pool, followed by
+          // the same cleanup(). Driving the two steps here is what lets the counter above see a completed insertion
+          // and what makes the boundary between them observable at all - JVector emits nothing between them, and
+          // cleanup() is not a quick finalisation but a second refinement pass over the graph that can be worth as
+          // much wall clock as the insertion itself (issue #5577).
+          //
+          // MAINTENANCE: this mirrors GraphIndexBuilder.build() as of JVector 4.0.0-rc.9, which is exactly
+          //   simdExecutor.submit(() -> IntStream.range(0, size).parallel().forEach(
+          //       n -> addGraphNode(n, vv.get().getVector(n)))).join();
+          //   cleanup();
+          //   return graph;
+          // Nothing here detects it if a future jvector.version adds a step around those two, so re-read build()
+          // when bumping the dependency. The alternative - calling build() and keeping the broken meter - is worse:
+          // it is what hid a phase worth half the wall clock of a large build.
+          final Supplier<RandomAccessVectorValues> vectorSupplier = vectors.threadLocalSupplier();
+
+          // One shared atomic per node is affordable here in a way the vector cache counters were not: a node costs
+          // a whole beam search over the graph built so far, thousands of distance evaluations, so the increment is
+          // orders of magnitude below the work it measures rather than comparable to it.
+          final long insertStart = System.currentTimeMillis();
+          buildPool.submit(() -> IntStream.range(0, totalNodes).parallel().forEach(node -> {
+            builder.addGraphNode(node, vectorSupplier.get().getVector(node));
+            insertedNodes.incrementAndGet();
+          })).join();
+          final long insertElapsed = System.currentTimeMillis() - insertStart;
+
+          // Close the insertion phase and open the next one atomically with respect to the monitor. Flipping the
+          // phase first and pushing the final sample after left a window in which the monitor could emit an
+          // "optimizing" sample and the explicit "building" one land behind it, so a live progress bar would see
+          // the phase go forwards and then back.
+          synchronized (progressLock) {
+            reportProgress.onGraphBuildProgress("building", totalNodes, totalNodes, totalNodes);
+            currentPhase.set("optimizing");
+          }
+          LogManager.instance().log(this, Level.INFO,
+              "Graph insertion completed for index %s: %d vectors inserted in %d ms with %d build threads. "
+                  + "Starting the optimization phase (neighbor refinement and degree enforcement)",
+              indexName, totalNodes, insertElapsed, buildPool.getParallelism());
+
+          final long cleanupStart = System.currentTimeMillis();
+          builder.cleanup();
+          builtGraph = builder.getGraph();
+
+          reportProgress.onGraphBuildProgress("optimizing", totalNodes, totalNodes, totalNodes);
+          LogManager.instance().log(this, Level.INFO,
+              "Graph optimization completed for index %s in %d ms (insertion %d ms, total %d ms)",
+              indexName, System.currentTimeMillis() - cleanupStart, insertElapsed,
+              System.currentTimeMillis() - insertStart);
         } finally {
           // Stop progress monitoring. Interrupt as well as flagging: the monitor sleeps 100ms between polls,
           // so flag-only shutdown made every rebuild pay up to an extra 100ms of pure wait (issue #5391).
@@ -2114,8 +2288,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // score the same vector twice in the delta scan.
         if (vectorId >= deltaSnapshotId)
           continue;
-        final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
-        if (loc == null || loc.deleted)
+        final RID vectorRid = vectorIndex.getRid(vectorId);
+        if (vectorRid == null)
           continue;
         // getVector() resolves the location through the build snapshot and never returns null: an unreadable
         // ordinal comes back as the sentinel, which would pair a real RID with a meaningless distance in the
@@ -2125,7 +2299,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         if (vector == null || (vectors instanceof final ArcadePageVectorValues pageValues
             && pageValues.isDeletedSentinel(vector)))
           continue;
-        unreachableEntries.add(new DeltaVectorEntry(vectorId, loc.rid, vector));
+        unreachableEntries.add(new DeltaVectorEntry(vectorId, vectorRid, vector));
       }
       if (!unreachableEntries.isEmpty())
         LogManager.instance().log(this, Level.WARNING,
@@ -2674,13 +2848,31 @@ public class LSMVectorIndex implements Index, IndexInternal {
         mutations, getEffectiveMutationsBeforeRebuild(), indexName);
 
     asyncRebuildThread = new Thread(() -> {
+      final boolean acquired;
       try {
         // Acquire a rebuild permit to limit concurrent rebuilds across all indexes (issue #3868).
         // This prevents multiple large graph rebuilds from running simultaneously and exhausting
-        // heap memory.  The thread blocks here until a permit becomes available.
-        REBUILD_SEMAPHORE.acquire();
+        // heap memory. Bounded rather than a plain acquire(): REBUILD_SEMAPHORE is JVM-wide with a
+        // default of a single permit, so one rebuild that never returns it (its ForkJoinPool workers
+        // not responding to shutdownNow()'s interrupt inside a tight JVector compute loop - see
+        // releaseBackgroundResources()) would otherwise starve every OTHER vector index's rebuild,
+        // process-wide, until restart - not just this index's.
+        acquired = REBUILD_SEMAPHORE.tryAcquire(
+            GlobalConfiguration.VECTOR_INDEX_REBUILD_PERMIT_TIMEOUT_MS.getValueAsLong(), TimeUnit.MILLISECONDS);
       } catch (final InterruptedException e) {
         Thread.currentThread().interrupt();
+        asyncRebuildInProgress = false;
+        asyncRebuildThread = null;
+        return;
+      }
+      if (!acquired) {
+        // Give up this cycle rather than wait longer: the next mutation-threshold or inactivity trigger
+        // (rebuildGraphBeforeSearch()) retries, so nothing is permanently lost, only delayed.
+        LogManager.instance().log(this, Level.WARNING,
+            "Timed out after %dms waiting for a vector index rebuild permit for index %s; skipping this rebuild "
+                + "cycle. Another vector index has been holding the sole JVM-wide REBUILD_SEMAPHORE permit for at "
+                + "least that long - if this recurs, that other index's rebuild is likely stuck",
+            GlobalConfiguration.VECTOR_INDEX_REBUILD_PERMIT_TIMEOUT_MS.getValueAsLong(), indexName);
         asyncRebuildInProgress = false;
         asyncRebuildThread = null;
         return;
@@ -3437,8 +3629,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
     final String vectorProp =
         metadata.propertyNames != null && !metadata.propertyNames.isEmpty() ? metadata.propertyNames.getFirst() : "vector";
-    return new ArcadePageVectorValues(getDatabase(), metadata.dimensions, vectorProp, vectorIndex, ordinalMap, this,
-        getSearchVectorCache());
+    return ArcadePageVectorValues.forSearch(getDatabase(), metadata.dimensions, vectorProp, vectorIndex, ordinalMap,
+        this, getSearchVectorCache());
   }
 
   /** Visible for tests: the ordinal-to-vector-id map the next search would capture. */
@@ -3491,9 +3683,18 @@ public class LSMVectorIndex implements Index, IndexInternal {
         continue;
       if (allowedRIDs != null && !allowedRIDs.isEmpty() && !allowedRIDs.contains(delta.rid))
         continue;
-      // Check if deleted after being added to delta
-      final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(delta.vectorId);
-      if (loc != null && loc.deleted)
+      // Check if deleted after being added to delta.
+      //
+      // Asked of the tombstone set, because a resident location cannot answer it: since issue #5516 a tombstoned
+      // id keeps no location at all, so the `getLocation(id) != null && loc.deleted` this replaces was
+      // permanently false and this guard did nothing at all.
+      //
+      // It is unreachable today for a second, better reason: remove() purges the delta buffer of every entry for
+      // the RID it deletes, so no delta entry survives its own deletion on any path a test can drive - forcing a
+      // tombstone in behind the buffer only makes the next rebuild republish the live entry the pages still
+      // carry. It stays anyway, at the price of one bit, because it is what the line above says it does and
+      // because the buffer and the tombstone set are maintained by different code paths.
+      if (vectorIndex.isDeleted(delta.vectorId))
         continue;
 
       final float score = metadata.similarityFunction.compare(queryVectorFloat, delta.vector);
@@ -3600,15 +3801,15 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final List<Pair<RID, Float>> results, final RandomAccessVectorValues vectors, final int[] ordinalMap,
       final RidHashSet seenRIDs, final ArcadePageVectorValues pageValues) {
     final int vectorId = ordinalMap[ordinal];
-    final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
-    if (loc == null || loc.deleted)
+    final RID rid = vectorIndex.getRid(vectorId);
+    if (rid == null)
       return false;
-    if (seenRIDs.contains(loc.rid))
+    if (seenRIDs.contains(rid))
       return false;
     // Redundant on the allow-list walk, which only ever resolves allowed RIDs, but it is what keeps the full scan
     // filtered when the crossover guard sends a wide allow-list here, and it is the single place the membership rule
     // lives for both paths.
-    if (allowedRIDs != null && !allowedRIDs.isEmpty() && !allowedRIDs.contains(loc.rid))
+    if (allowedRIDs != null && !allowedRIDs.isEmpty() && !allowedRIDs.contains(rid))
       return false;
 
     // The location says the vector is live, but the read can still fail - a document whose vector property was
@@ -3619,7 +3820,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       return false;
 
     final float score = metadata.similarityFunction.compare(queryVectorFloat, vec);
-    results.add(new Pair<>(bindRid(loc.rid), scoreToDistance(metadata.similarityFunction, score)));
+    results.add(new Pair<>(bindRid(rid), scoreToDistance(metadata.similarityFunction, score)));
     return true;
   }
 
@@ -3754,9 +3955,20 @@ public class LSMVectorIndex implements Index, IndexInternal {
             final int effectiveEfSearch = Math.max(k, metadata.efSearch);
             searchResult = searcher.search(ssp, k, effectiveEfSearch, 0.0f, 0.0f, bitsFilter);
           } else {
-            // Adaptive efSearch with resume for insufficient results (issue #3722).
-            // Both small and large graphs use the same two-pass strategy: search first,
-            // resume with wider beam if too few results are returned.
+            // Adaptive efSearch (issue #3722): size the beam to the graph and keep whatever it finds.
+            //
+            // There used to be a second pass here - `if (firstPass.getNodes().length < k) searchResult =
+            // searcher.resume(...)` - meant to widen the beam when the search came up short. It could only ever
+            // make things worse, and issue #5873 is what it cost. A short first pass means the result queue never
+            // reached rerankK, and JVector's searchOneLayer breaks early *only* once the queue is that full, so the
+            // loop must instead have run its candidate queue dry - having expanded every node reachable from the
+            // entry point. resume() pushes the (empty) evicted pile back onto that same empty queue and returns
+            // zero nodes, so the assignment threw the first pass away and handed the caller nothing. Width was
+            // never what ran out either, so a wider fresh search would have visited exactly the same nodes.
+            //
+            // What is actually left unreached at that point is whatever the graph cannot walk to, and the only
+            // thing that finds it is the brute-force scan below - which is already there, already gated on the
+            // shortfall, and now starts from the rows the graph did find instead of from nothing.
             final int graphSize = graphIndex.size();
             final int initialEfSearch;
             if (graphSize < 10_000)
@@ -3764,13 +3976,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             else
               initialEfSearch = Math.max(k * 2, 20);
 
-            final SearchResult firstPass = searcher.search(ssp, k, initialEfSearch, 0.0f, 0.0f, bitsFilter);
-            if (firstPass.getNodes().length < k && graphSize >= k) {
-              // Graph has enough nodes but beam search found too few - widen the beam
-              searchResult = searcher.resume(k, Math.max(k * 10, 100));
-            } else {
-              searchResult = firstPass;
-            }
+            searchResult = searcher.search(ssp, k, initialEfSearch, 0.0f, 0.0f, bitsFilter);
           }
         } finally {
           pool.release(searcher, pooledGraph, poolEpoch);
@@ -3788,13 +3994,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
           final int ordinal = nodeScore.node;
           if (ordinal >= 0 && ordinal < ordinalMap.length) {
             final int vectorId = ordinalMap[ordinal];
-            final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
-            if (loc != null && !loc.deleted) {
+            final RID rid = vectorIndex.getRid(vectorId);
+            if (rid != null) {
               // Post-filter by allowed RIDs (JVector may include entry node despite Bits filter)
-              if (allowedRIDs != null && !allowedRIDs.isEmpty() && !allowedRIDs.contains(loc.rid))
+              if (allowedRIDs != null && !allowedRIDs.isEmpty() && !allowedRIDs.contains(rid))
                 continue;
 
-              results.add(new Pair<>(bindRid(loc.rid), scoreToDistance(metadata.similarityFunction, nodeScore.score)));
+              results.add(new Pair<>(bindRid(rid), scoreToDistance(metadata.similarityFunction, nodeScore.score)));
             } else {
               skippedDeletedOrNull++;
             }
@@ -3854,26 +4060,45 @@ public class LSMVectorIndex implements Index, IndexInternal {
   }
 
   /**
-   * Search for k nearest neighbors with traversal-integrated {@code groupBy} (issue #4071). Pushes
-   * the per-group cap into the JVector graph traversal via a {@link GroupedRIDBitsFilter}: nodes
-   * whose group has already reached {@code groupSize} during the HNSW walk are filtered out before
-   * scoring. The search budget is sized to {@code limit * groupSize} so JVector can fill the heap
-   * even when groups are exhausted.
+   * Search for k nearest neighbors with {@code groupBy} (issues #5761, #4071). Runs the HNSW traversal
+   * with a liveness-only {@link LiveVectorBitsFilter}, applies the per-group cap to the score-ordered
+   * output, and {@linkplain GraphSearcher#resume(int, int) resumes} the same walk while the answer is
+   * still short of {@code limit} distinct groups.
    * <p>
-   * <b>Approximate best-per-group.</b> Unlike the sparse path's per-group min-heap, the dense
-   * traversal cannot consult scores when the {@link Bits} filter runs (it gates eligibility before
-   * scoring). Group admission therefore happens in HNSW visit order. HNSW visits approximately
-   * best-first, so the first {@code groupSize} candidates per group are usually among the best,
-   * but the integration is not score-exact - callers that need a strict best-per-group guarantee
-   * should keep the SQL-layer post-filter, which re-applies {@code GroupAdmissionState} on the
-   * search output and can fall back to the MVP behaviour at higher {@code efSearch}.
+   * <b>Why the cap is not in the traversal.</b> The first implementation pushed it into a group-aware
+   * {@code Bits} filter. {@code Bits} is score-blind - JVector calls it on each popped candidate,
+   * before any score is available to the caller - so groups were admitted in HNSW visit order. The
+   * layer-0 walk starts wherever the greedy descent through the upper layers landed, which on a
+   * sparse upper layer can be an entirely different cluster, and the {@code limit} distinct-group
+   * slots were handed out there. The nearest group could be locked out of its own answer (#5761).
+   * A score-aware variant cannot fix that either: once JVector has admitted a node into its result
+   * heap, no filter can take it back, so a later better group has nothing to evict.
+   * <p>
+   * <b>Why one beam is not enough.</b> Reading the cap off a single fixed-width beam is score-exact
+   * but under-answers: a group dense enough to fill the beam on its own leaves no room for the next
+   * one, and a query aimed at a 100-member cluster comes back with one group where {@code limit}
+   * were asked for. That is not a corner case, it is what {@code groupBy} exists for.
+   * <p>
+   * <b>Resume is what closes the gap.</b> {@code GraphSearcher.resume} continues the <em>same</em>
+   * walk: the visited set and the candidate queue survive, so each pass yields strictly new nodes
+   * further from the query, and the group state accumulates across passes. The search therefore
+   * costs one beam in the common case and pays for more ground only when the groups are genuinely
+   * short. It stops at the first of: all {@code limit} groups filled, the graph exhausted (a pass
+   * that could not fill its beam), or the candidate budget below.
+   * <p>
+   * <b>The budget, and the one case that still under-answers.</b> Finding the {@code limit}-th
+   * nearest group costs however many candidates separate the query from it, which the data decides -
+   * a group with a million members closer than anything else needs a million candidates. The pool is
+   * therefore capped at {@link #GROUPED_SEARCH_CANDIDATE_BUDGET_FACTOR} times the beam; hitting that
+   * cap returns fewer than {@code limit} groups and increments {@code groupedSearchesShortOfLimit} in
+   * {@link #getStats()}. Raise {@code efSearch} when that counter moves.
    * <p>
    * <b>Delta scan and brute-force fallback are skipped.</b> The two augmentations would re-admit
    * candidates outside the per-group cap; the delta path because it scores newly-inserted vectors
    * not yet visible to HNSW (no Bits filter applied), the brute-force path because it walks every
    * vector when the graph search returned too few hits. Skipping them is correct for the grouped
    * contract; callers that depend on either should use {@link #findNeighborsFromVector} and apply
-   * the {@code GroupAdmissionState} post-filter at the SQL layer.
+   * the group admission post-filter at the SQL layer.
    *
    * @param queryVector      query embedding
    * @param limit            max number of distinct groups to return; must be {@code > 0}
@@ -3911,7 +4136,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
       ensureGraphAvailable();
       rebuildGraphBeforeSearch();
 
-      final int searchK = limit * groupSize;
+      // Rows the caller can receive at most: limit groups of groupSize each. Used as the floor on the
+      // beam exactly the way the ungrouped path uses k, so the two efSearch policies stay in step.
+      final int maxRows = limit * groupSize;
       boolean readLockHeld = false;
       lock.readLock().lock();
       readLockHeld = true;
@@ -3923,78 +4150,94 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
         final RandomAccessVectorValues vectors = searchVectorValues(ordinalToVectorId);
 
-        // Group-aware Bits filter. Wraps the same RID validity + allowedRIDs gating that
-        // LiveVectorBitsFilter applies, plus per-group counters that reject candidates whose group has
-        // reached capacity. Per-search state lives on the filter instance; do not reuse the
-        // instance across calls.
-        final Bits bitsFilter = new GroupedRIDBitsFilter(allowedRIDs, ordinalToVectorId, vectorIndex,
-            groupKeyResolver, limit, groupSize);
+        // Liveness-only Bits filter. Unlike the first grouped implementation, we do NOT apply
+        // group-aware filtering during traversal: Bits is score-blind, so doing so lets the HNSW walk
+        // hand the per-group budget to whatever cluster the entry-point descent happened to land in
+        // (issue #5761). The group cap is applied to the score-ordered output below instead.
+        final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, ordinalToVectorId, vectorIndex);
 
-        final SearchResult searchResult;
+        final List<Pair<RID, Float>> results = new ArrayList<>(maxRows);
+        final GroupAdmissionState groups = new GroupAdmissionState(limit, groupSize);
+        final GroupedSearchTally tally = new GroupedSearchTally();
+
         final GraphSearcherPool pool = getSearcherPool();
         final long poolEpoch = searcherPoolEpoch();
         // Pin the graph reference: a concurrent rebuild may swap the volatile field, and borrow/release must
         // agree on which graph the searcher belongs to.
         final ImmutableGraphIndex pooledGraph = graphIndex;
         final GraphSearcher searcher = pool.borrow(pooledGraph, poolEpoch);
+        final int graphSize = graphIndex.size();
+        int passes = 1;
         try {
           final ScoreFunction.ExactScoreFunction exactScoreFunction = liveOnlyScoreFunction(queryVectorFloat, vectors);
           final DefaultSearchScoreProvider ssp = new DefaultSearchScoreProvider(exactScoreFunction, exactScoreFunction);
 
-          // Choose efSearch the same way the non-grouped path does, but skip the
-          // resume-on-too-few branch: the Bits filter intentionally rejects candidates whose
-          // group has reached groupSize, so a "too few results" outcome is the contract, not a
-          // beam-width problem. JVector's resume() resets the result state and runs another pass;
-          // when the Bits filter has already locked groups full, the second pass admits nothing
-          // new and we lose the first-pass survivors. Keep the first-pass result and let callers
-          // raise efSearch explicitly when they need wider coverage.
+          // Beam width is chosen exactly the way the ungrouped path chooses it, with maxRows in place of k.
           final int effectiveEfSearch;
-          if (efSearch > 0) {
-            effectiveEfSearch = Math.max(searchK, efSearch);
-          } else if (metadata.efSearch != 100) {
-            effectiveEfSearch = Math.max(searchK, metadata.efSearch);
-          } else {
-            final int graphSize = graphIndex.size();
-            effectiveEfSearch = graphSize < 10_000 ? Math.max(searchK, 100) : Math.max(searchK * 2, 20);
+          if (efSearch > 0)
+            effectiveEfSearch = Math.max(maxRows, efSearch);
+          else if (metadata.efSearch != 100)
+            effectiveEfSearch = Math.max(maxRows, metadata.efSearch);
+          else
+            effectiveEfSearch = graphSize < 10_000 ? Math.max(maxRows, 100) : Math.max(maxRows * 2, 20);
+
+          final int candidateBudget = Math.min(graphSize,
+              (int) Math.min(Integer.MAX_VALUE, (long) effectiveEfSearch * GROUPED_SEARCH_CANDIDATE_BUDGET_FACTOR));
+
+          // topK is the whole beam, not maxRows: it is candidates, not rows, that the group cap consumes, and a
+          // narrower topK would throw away scored candidates the cap still has a use for. It costs nothing to keep
+          // them - topK never reaches the layer-0 traversal (searchLayer0 passes only rerankK to searchOneLayer) and
+          // reranking is driven by rerankK too, so every one of these was already scored and reranked.
+          SearchResult searchResult = searcher.search(ssp, effectiveEfSearch, effectiveEfSearch, 0.0f, 0.0f, bitsFilter);
+          int examined = 0;
+          while (true) {
+            final int returned = searchResult.getNodes().length;
+            examined += returned;
+            admitGroupedCandidates(searchResult, ordinalToVectorId, allowedRIDs, groupKeyResolver, groups, results,
+                tally);
+
+            if (groups.isFull())
+              break;
+            // A pass that could not fill its beam ran the candidate queue dry: the reachable graph is
+            // exhausted and no further pass can add anything. This is also what makes the loop terminate -
+            // every pass that does not break here grew `examined` by a full beam.
+            if (returned < effectiveEfSearch)
+              break;
+            if (examined >= candidateBudget)
+              break;
+
+            // resume() continues this same walk - the visited set and the candidate queue survive - so the
+            // next pass returns strictly new nodes, further from the query than everything already seen.
+            searchResult = searcher.resume(effectiveEfSearch, effectiveEfSearch);
+            passes++;
           }
-          searchResult = searcher.search(ssp, searchK, effectiveEfSearch, 0.0f, 0.0f, bitsFilter);
         } finally {
           pool.release(searcher, pooledGraph, poolEpoch);
         }
 
-        LogManager.instance()
-            .log(this, Level.INFO,
-                "GraphSearcher (grouped) returned %d nodes, graphSize=%d, vectorsSize=%d, ordinalToVectorIdLength=%d, limit=%d, groupSize=%d",
-                searchResult.getNodes().length, graphIndex.size(), vectors.size(), ordinalToVectorId.length, limit, groupSize);
+        // Each pass is score-ordered and starts below where the previous one stopped, so the rows are collected in
+        // rank order - with one exception: a resumed pass expands nodes the previous one left on the frontier, and a
+        // neighbour of a mediocre node can outrank the worst row already admitted. That is the same greedy-stop
+        // approximation the ungrouped path lives with, and it is far too rare to justify buffering every candidate
+        // and sorting before the cap; but the return contract says "ascending by distance", so make it true. At most
+        // limit * groupSize entries, so the sort is free.
+        results.sort(Comparator.comparing(Pair::getSecond));
 
-        final List<Pair<RID, Float>> results = new ArrayList<>(searchK);
-        int skippedOutOfBounds = 0;
-        int skippedDeletedOrNull = 0;
-        for (final SearchResult.NodeScore nodeScore : searchResult.getNodes()) {
-          final int ordinal = nodeScore.node;
-          if (ordinal < 0 || ordinal >= ordinalToVectorId.length) {
-            skippedOutOfBounds++;
-            continue;
-          }
-          final int vectorId = ordinalToVectorId[ordinal];
-          final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
-          if (loc == null || loc.deleted) {
-            skippedDeletedOrNull++;
-            continue;
-          }
-          // Defensive post-filter: JVector may include the entry node despite Bits, and the
-          // GroupedRIDBitsFilter has already enforced the group cap, so we only need to re-check
-          // the RID whitelist here for parity with findNeighborsFromVector.
-          if (allowedRIDs != null && !allowedRIDs.isEmpty() && !allowedRIDs.contains(loc.rid))
-            continue;
-
-          results.add(new Pair<>(bindRid(loc.rid), scoreToDistance(metadata.similarityFunction, nodeScore.score)));
+        if (groups.distinctGroups() < limit) {
+          metrics.incrementGroupedSearchesShortOfLimit();
+          LogManager.instance()
+              .log(this, Level.FINE,
+                  "Vector grouped search on index %s filled only %d of %d groups after %d pass(es) - raise efSearch for wider group coverage",
+                  indexName, groups.distinctGroups(), limit, passes);
         }
 
         LogManager.instance()
-            .log(this, Level.INFO,
-                "Vector grouped search returned %d results (skipped: %d out of bounds, %d deleted/null)",
-                results.size(), skippedOutOfBounds, skippedDeletedOrNull);
+            .log(this, Level.FINE,
+                """
+                Vector grouped search returned %d results in %d group(s) over %d pass(es) (graphSize=%d, limit=%d, \
+                groupSize=%d, skipped: %d out of bounds, %d deleted/null, %d group full, %d unresolved group)""",
+                results.size(), groups.distinctGroups(), passes, graphSize, limit, groupSize, tally.outOfBounds,
+                tally.deletedOrNull, tally.groupFull, tally.unresolvedGroup);
         return results;
 
       } catch (final Exception e) {
@@ -4008,6 +4251,64 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final long elapsed = System.currentTimeMillis() - startTime;
       metrics.addSearchLatency(elapsed);
     }
+  }
+
+  /**
+   * Offers one pass of {@link #findNeighborsFromVectorGrouped}'s search output to the group cap. The nodes arrive in
+   * descending score order and every pass is strictly worse than the one before it, so feeding successive passes into
+   * the same {@link GroupAdmissionState} keeps the whole walk in rank order: the {@code groupSize} members admitted
+   * for a group really are its best, and the {@code limit} groups admitted really are the nearest.
+   */
+  private void admitGroupedCandidates(final SearchResult searchResult, final int[] ordinalToVectorId,
+      final Set<RID> allowedRIDs, final Function<RID, Object> groupKeyResolver, final GroupAdmissionState groups,
+      final List<Pair<RID, Float>> results, final GroupedSearchTally tally) {
+    for (final SearchResult.NodeScore nodeScore : searchResult.getNodes()) {
+      if (groups.isFull())
+        return;
+      final int ordinal = nodeScore.node;
+      if (ordinal < 0 || ordinal >= ordinalToVectorId.length) {
+        tally.outOfBounds++;
+        continue;
+      }
+      final int vectorId = ordinalToVectorId[ordinal];
+      final RID rid = vectorIndex.getRid(vectorId);
+      if (rid == null) {
+        tally.deletedOrNull++;
+        continue;
+      }
+      // Defensive post-filter: JVector may include the entry node despite Bits, and the LiveVectorBitsFilter has
+      // already enforced the liveness + RID-whitelist contract, so we only need to re-check the RID whitelist here
+      // for parity with findNeighborsFromVector.
+      if (allowedRIDs != null && !allowedRIDs.isEmpty() && !allowedRIDs.contains(rid))
+        continue;
+
+      final Object groupKey;
+      try {
+        groupKey = groupKeyResolver.apply(rid);
+      } catch (final RuntimeException e) {
+        // Same verdict the traversal-integrated filter gave an unresolvable candidate: drop it. Counted apart from
+        // the cap hits so the log does not read a resolver fault as a full group.
+        tally.unresolvedGroup++;
+        continue;
+      }
+      if (!groups.admit(groupKey)) {
+        tally.groupFull++;
+        continue;
+      }
+
+      results.add(new Pair<>(bindRid(rid), scoreToDistance(metadata.similarityFunction, nodeScore.score)));
+    }
+  }
+
+  /**
+   * Per-query skip counters for the grouped search, kept in one object so the multi-pass loop can accumulate them
+   * across passes without four parameters travelling by reference. Query-scoped, never shared, never thread-safe.
+   */
+  private static final class GroupedSearchTally {
+    private int outOfBounds;
+    private int deletedOrNull;
+    private int groupFull;
+    private int unresolvedGroup;
   }
 
   /**
@@ -4137,10 +4438,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
           final int ordinal = nodeScore.node;
           if (ordinal >= 0 && ordinal < ordinalMap.length) {
             final int vectorId = ordinalMap[ordinal];
-            final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
-            if (loc != null && !loc.deleted) {
+            final RID rid = vectorIndex.getRid(vectorId);
+            if (rid != null) {
               final float distance = scoreToDistance(metadata.similarityFunction, nodeScore.score);
-              results.add(new Pair<>(bindRid(loc.rid), distance));
+              results.add(new Pair<>(bindRid(rid), distance));
             } else {
               skippedDeletedOrNull++;
             }
@@ -4553,8 +4854,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // a vector-indexed type O(index size), so bulk updates degraded quadratically.
         final List<Integer> deletedIds = new ArrayList<>();
         for (final int vectorId : vectorIndex.getVectorIdsForRid(rid)) {
-          final VectorLocationIndex.VectorLocation loc = vectorIndex.getLocation(vectorId);
-          if (loc != null && loc.rid.equals(rid) && !loc.deleted) {
+          if (vectorIndex.isLocationOf(vectorId, rid)) {
             vectorIndex.markDeleted(vectorId);
             deletedIds.add(vectorId);
             // Do not let the shared search cache pin a vector that no longer exists (issue #5412)
@@ -5111,7 +5411,16 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // Build and persist graph if it hasn't been built yet
       // This ensures the graph is available on next database open (fast restart)
       // Build graph if it's in LOADING (never built) or MUTABLE (has pending changes) state
-      if (vectorIndex.size() > 0 && (graphState == GraphState.LOADING || graphState == GraphState.MUTABLE)) {
+      //
+      // LOADING means "not loaded into memory", which is not the same as "not
+      // persisted on disk": the graph loads lazily on the first search, so a
+      // session that never searched leaves it LOADING even when a complete
+      // graph is already on disk, and rebuilding then only reproduces a file
+      // that already exists. initializeGraphIndex() already draws exactly this
+      // distinction with the same predicate.
+      final boolean graphAlreadyOnDisk = graphFile != null && graphFile.hasPersistedGraph();
+      if (vectorIndex.size() > 0 && (graphState == GraphState.MUTABLE
+          || (graphState == GraphState.LOADING && !graphAlreadyOnDisk))) {
         try {
           LogManager.instance()
               .log(this, Level.FINE, "Building graph before close for index: %s (this may take 1-2 minutes for large datasets)",
@@ -5174,6 +5483,16 @@ public class LSMVectorIndex implements Index, IndexInternal {
       } catch (final InterruptedException e) {
         Thread.currentThread().interrupt();
       }
+      if (rebuildThread.isAlive())
+        // The pool shutdownNow() above and this interrupt() are best-effort: if JVector's build code was in a
+        // stretch that does not check interruption, the thread outlives this close() call. It still holds its
+        // REBUILD_SEMAPHORE permit - only released in startAsyncGraphRebuild()'s own finally block once
+        // buildGraphFromScratch() actually returns - so surface that here rather than let it show up minutes
+        // later as an unrelated rebuild-permit timeout on a completely different index.
+        LogManager.instance().log(this, Level.WARNING,
+            "Async graph rebuild thread for index %s did not terminate within 5s of close(); it may keep "
+                + "running in the background and hold the JVM-wide REBUILD_SEMAPHORE permit until it finishes",
+            indexName);
       asyncRebuildThread = null;
       asyncRebuildInProgress = false;
     }
@@ -5301,9 +5620,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // Populate metrics from LSMVectorIndexMetrics
     metrics.populateStats(stats);
 
-    // Index-scoped search cache shared by every query (issue #5412). It is the authority on the vector cache
-    // counters, so it overwrites the placeholders above. A hit ratio well below 1 on a steady workload means
-    // the working set does not fit: raise arcadedb.vectorIndex.searchCacheSize.
+    // Index-scoped search cache shared by every query (issue #5412), and the only authority on the vector cache
+    // counters. A hit ratio well below 1 on a steady workload means the working set does not fit: raise
+    // arcadedb.vectorIndex.searchCacheSize. The counters are striped per thread and so are approximate under
+    // concurrency - see VectorCache for why they cannot be atomic (issue #5577).
     final VectorCache searchCache = searchVectorCache;
     stats.put("searchVectorCacheCapacity", searchCache != null ? (long) searchCache.capacity() : 0L);
     final GraphSearcherPool searchers = searcherPool;
@@ -5311,11 +5631,15 @@ public class LSMVectorIndex implements Index, IndexInternal {
     stats.put("vectorCacheHits", searchCache != null ? searchCache.getHits() : 0L);
     stats.put("vectorCacheMisses", searchCache != null ? searchCache.getMisses() : 0L);
 
+    // Width of the pool that builds the graph (issue #5577). Report the width the next build would use, not the
+    // one of the live pool, so the effect of changing the setting is visible before a rebuild rather than after.
+    stats.put("graphBuildParallelism", (long) computeGraphBuildParallelism());
+
     // NEW: Memory estimates
-    // Quote the retained heap, not the 24-byte payload: this stat is what an operator sizes a heap from, and the
-    // payload-only figure it used to report under-estimated the location index several-fold (issue #5568).
-    stats.put("estimatedLocationIndexBytes",
-        (long) locations.size() * VectorLocationIndex.APPROX_RETAINED_BYTES_PER_LOCATION);
+    // Measured, not multiplied out: the location index reports the heap its own arrays occupy (issue #5588), so
+    // this stat answers what the index costs rather than what a per-entry estimate says it should. It used to be
+    // the 24-byte payload, then count x 90 for the retained size of the map generation (issue #5568).
+    stats.put("estimatedLocationIndexBytes", locations.estimatedRetainedBytes());
     stats.put("estimatedOrdinalMapBytes", ordinalToVectorId != null ?
         (long) ordinalToVectorId.length * 4L : 0L);
 
@@ -5562,7 +5886,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
               "vector";
       // Serialization walks every ordinal exactly once, so feed the shared search cache while doing it: the
       // index comes out of a rebuild with its working set already resident instead of cold (issue #5412).
-      final RandomAccessVectorValues vectors = new ArcadePageVectorValues(getDatabase(), metadata.dimensions,
+      final RandomAccessVectorValues vectors = ArcadePageVectorValues.forSearch(getDatabase(), metadata.dimensions,
           vectorProp,
           vectorIndex, ordinalToVectorId, this, getSearchVectorCache());
 
@@ -5752,15 +6076,16 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * <p>
    * The cap was introduced when the index held one location per WRITE, so it grew without bound on a re-embedding
    * workload. Issue #5516 removed that: a tombstoned id releases its location, so residency is O(live vectors) -
-   * proportional to the data the user asked to index, and roughly 90 bytes each. Capping that buys a memory
-   * ceiling by silently returning wrong results, which is never the right trade for a database.
+   * proportional to the data the user asked to index - and issue #5588 brought the per-vector cost from ~90 bytes
+   * to {@value VectorLocationIndex#APPROX_RETAINED_BYTES_PER_LOCATION}. Capping that buys a memory ceiling by silently returning wrong results, which is never the right trade
+   * for a database.
    * <p>
    * {@code locationCacheSize} is refused outright when it arrives through DDL or a builder
    * ({@code LSMVectorIndexMetadata.applyUserMetadata}), so the only two ways to reach this warning are the global
    * setting and a schema persisted by an older version. Both are tolerated - refusing them would stop a server
    * starting or a database opening - and both are reported here instead. Bringing the footprint down is a storage
-   * question, not an eviction one: laying the locations out in primitive arrays indexed by vector id would cost
-   * ~20 bytes each instead of ~90, with no per-entry objects at all (issue #5588).
+   * question, not an eviction one, and issue #5588 answered it: the locations are laid out in primitive arrays
+   * indexed by vector id, with no per-entry objects at all.
    *
    * @param database The database instance, since {@code mutable} may not be initialized yet
    */
@@ -5774,9 +6099,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
           """
           Ignoring a location cache limit of %d for vector index '%s': evicting a live vector location deletes the \
           only mapping from its vector id to its record, so a capped index silently drops vectors from searches. \
-          Locations are resident only for live vectors since issue #5516, so the index costs ~90 bytes per indexed \
-          vector regardless of this setting""",
-          configured, indexName);
+          Locations are resident only for live vectors since issue #5516 and are laid out in primitive arrays \
+          since issue #5588, so the index costs ~%d bytes per indexed vector regardless of this setting""",
+          configured, indexName, VectorLocationIndex.APPROX_RETAINED_BYTES_PER_LOCATION);
   }
 
   /**

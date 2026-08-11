@@ -18,6 +18,7 @@
  */
 package com.arcadedb.query.sql.antlr;
 
+import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.exception.CommandSQLParsingException;
 import com.arcadedb.query.sql.grammar.SQLLexer;
@@ -30,6 +31,7 @@ import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.DefaultErrorStrategy;
+import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.atn.PredictionMode;
 import org.antlr.v4.runtime.misc.ParseCancellationException;
 
@@ -41,7 +43,7 @@ import java.util.List;
  * This class wraps the ANTLR-generated lexer and parser, providing a clean API
  * for parsing SQL statements into ArcadeDB's internal AST representation.
  * <p>
- * It produces identical AST structures to the JavaCC-based SqlParser, ensuring
+ * It produces the same AST node types that the retired JavaCC-based parser used to, ensuring
  * 100% backward compatibility with existing code.
  * <p>
  * Usage:
@@ -73,20 +75,23 @@ public record SQLAntlrParser(Database database) {
       final CharStream input = CharStreams.fromString(sqlText);
       final SQLLexer lexer = new SQLLexer(input);
 
+      // Remove the default error listener (prints to stderr) and install ours before any token is
+      // pulled from the lexer - tokenize() below fills the whole stream eagerly, so the listener must
+      // already be in place or a lexer-level error (e.g. a malformed string escape) is only logged,
+      // never thrown, and the query silently falls through to parsing a mangled token stream.
+      final SQLErrorListener errorListener = new SQLErrorListener(sqlText);
+      lexer.removeErrorListeners();
+      lexer.addErrorListener(errorListener);
+
       // Create token stream
-      final CommonTokenStream tokens = new CommonTokenStream(lexer);
+      final CommonTokenStream tokens = tokenize(lexer);
 
       // Create parser
       final SQLParser parser = new SQLParser(tokens);
 
-      // Remove default error listeners (they print to stderr)
+      // Remove default error listeners (they print to stderr) and add our custom one
       parser.removeErrorListeners();
-      lexer.removeErrorListeners();
-
-      // Add our custom error listener
-      final SQLErrorListener errorListener = new SQLErrorListener(sqlText);
       parser.addErrorListener(errorListener);
-      lexer.addErrorListener(errorListener);
 
       // Parse the SQL using two-stage strategy:
       // 1. Try SLL mode first (faster, handles most cases)
@@ -138,20 +143,21 @@ public record SQLAntlrParser(Database database) {
       final CharStream input = CharStreams.fromString(sqlScript);
       final SQLLexer lexer = new SQLLexer(input);
 
+      // See the note in parse() - the lexer's error listener must be attached before tokenize() fills
+      // the token stream, or a lexer-level error is only logged, never thrown.
+      final SQLErrorListener errorListener = new SQLErrorListener(sqlScript);
+      lexer.removeErrorListeners();
+      lexer.addErrorListener(errorListener);
+
       // Create token stream
-      final CommonTokenStream tokens = new CommonTokenStream(lexer);
+      final CommonTokenStream tokens = tokenize(lexer);
 
       // Create parser
       final SQLParser parser = new SQLParser(tokens);
 
-      // Remove default error listeners
+      // Remove default error listeners and add our custom one
       parser.removeErrorListeners();
-      lexer.removeErrorListeners();
-
-      // Add our custom error listener
-      final SQLErrorListener errorListener = new SQLErrorListener(sqlScript);
       parser.addErrorListener(errorListener);
-      lexer.addErrorListener(errorListener);
 
       // Parse the script using two-stage strategy (SLL first, then ALL(*) on failure)
       SQLParser.ParseScriptContext parseTree;
@@ -202,20 +208,21 @@ public record SQLAntlrParser(Database database) {
       final CharStream input = CharStreams.fromString(exprText);
       final SQLLexer lexer = new SQLLexer(input);
 
+      // See the note in parse() - the lexer's error listener must be attached before tokenize() fills
+      // the token stream, or a lexer-level error is only logged, never thrown.
+      final SQLErrorListener errorListener = new SQLErrorListener(exprText);
+      lexer.removeErrorListeners();
+      lexer.addErrorListener(errorListener);
+
       // Create token stream
-      final CommonTokenStream tokens = new CommonTokenStream(lexer);
+      final CommonTokenStream tokens = tokenize(lexer);
 
       // Create parser
       final SQLParser parser = new SQLParser(tokens);
 
-      // Remove default error listeners
+      // Remove default error listeners and add our custom one
       parser.removeErrorListeners();
-      lexer.removeErrorListeners();
-
-      // Add our custom error listener
-      final SQLErrorListener errorListener = new SQLErrorListener(exprText);
       parser.addErrorListener(errorListener);
-      lexer.addErrorListener(errorListener);
 
       // Parse the expression using two-stage strategy (SLL first, then ALL(*) on failure)
       SQLParser.ParseExpressionContext parseTree;
@@ -256,20 +263,21 @@ public record SQLAntlrParser(Database database) {
       final CharStream input = CharStreams.fromString(conditionText);
       final SQLLexer lexer = new SQLLexer(input);
 
+      // See the note in parse() - the lexer's error listener must be attached before tokenize() fills
+      // the token stream, or a lexer-level error is only logged, never thrown.
+      final SQLErrorListener errorListener = new SQLErrorListener(conditionText);
+      lexer.removeErrorListeners();
+      lexer.addErrorListener(errorListener);
+
       // Create token stream
-      final CommonTokenStream tokens = new CommonTokenStream(lexer);
+      final CommonTokenStream tokens = tokenize(lexer);
 
       // Create parser
       final SQLParser parser = new SQLParser(tokens);
 
-      // Remove default error listeners
+      // Remove default error listeners and add our custom one
       parser.removeErrorListeners();
-      lexer.removeErrorListeners();
-
-      // Add our custom error listener
-      final SQLErrorListener errorListener = new SQLErrorListener(conditionText);
       parser.addErrorListener(errorListener);
-      lexer.addErrorListener(errorListener);
 
       // Parse the condition using two-stage strategy (SLL first, then ALL(*) on failure)
       SQLParser.ParseConditionContext parseTree;
@@ -305,5 +313,43 @@ public record SQLAntlrParser(Database database) {
   @Override
   public Database database() {
     return database;
+  }
+
+  /**
+   * Builds the token stream and bounds its parenthesis nesting depth before any parse is attempted.
+   * <p>
+   * The grammar resolves the ambiguity between the several rules that all start with a bare '(' - a
+   * parenthesized expression, condition, or sub-statement - by trying a fast SLL prediction first and
+   * falling back to full ALL(*) prediction on failure. For deeply nested parentheses that fallback's cost
+   * grows steeply enough that a query of only a few KB can tie up a worker thread for minutes without ever
+   * crashing (issue #5851's follow-up: unlike the OpenCypher parser, this one is not at risk of a
+   * StackOverflowError from the same input - it costs far fewer Java stack frames per nesting level - but it
+   * is at risk of this far worse failure mode, an unbounded hang rather than a fast error). Counting on the
+   * token stream rather than raw characters means a '(' inside a string literal or comment - already lexed
+   * as part of that token, never as a standalone LPAREN - is not miscounted.
+   */
+  private static CommonTokenStream tokenize(final SQLLexer lexer) {
+    final CommonTokenStream tokens = new CommonTokenStream(lexer);
+    tokens.fill(); // the parser reuses this same fully-buffered stream
+    checkExpressionDepth(tokens);
+    return tokens;
+  }
+
+  private static void checkExpressionDepth(final CommonTokenStream tokens) {
+    final int maxDepth = GlobalConfiguration.SQL_MAX_EXPRESSION_DEPTH.getValueAsInteger();
+    int depth = 0;
+    for (final Token token : tokens.getTokens()) {
+      if (token.getChannel() != Token.DEFAULT_CHANNEL)
+        continue;
+      if (token.getType() == SQLLexer.LPAREN) {
+        if (++depth > maxDepth)
+          throw new CommandSQLParsingException(
+              "Expression nesting exceeds the maximum allowed depth of " + maxDepth
+                  + " (parentheses nested inside one another). This protects the server from a query that ties up "
+                  + "a worker thread for a very long time without crashing; raise 'arcadedb.sql.maxExpressionDepth' "
+                  + "if this is a legitimate query.");
+      } else if (token.getType() == SQLLexer.RPAREN && depth > 0)
+        --depth;
+    }
   }
 }

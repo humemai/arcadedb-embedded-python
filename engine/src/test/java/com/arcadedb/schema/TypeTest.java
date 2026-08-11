@@ -28,6 +28,7 @@ import com.arcadedb.utility.MultiIterator;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.time.*;
 import java.util.*;
 
@@ -443,6 +444,101 @@ class TypeTest extends TestHelper {
   }
 
   @Test
+  void convertDoubleArrayToIntArray() {
+    final Object result = Type.convert(database, new double[] { 1.0, 2.0, 3.0 }, int[].class);
+    assertThat(result).isInstanceOf(int[].class);
+    assertThat((int[]) result).containsExactly(1, 2, 3);
+  }
+
+  @Test
+  void convertFloatArrayToShortArray() {
+    final Object result = Type.convert(database, new float[] { 1.0f, 2.0f, 3.0f }, short[].class);
+    assertThat(result).isInstanceOf(short[].class);
+    assertThat((short[]) result).containsExactly((short) 1, (short) 2, (short) 3);
+  }
+
+  @Test
+  void convertDoubleArrayToLongArray() {
+    final Object result = Type.convert(database, new double[] { 1.0, 2.0, 3.0 }, long[].class);
+    assertThat(result).isInstanceOf(long[].class);
+    assertThat((long[]) result).containsExactly(1L, 2L, 3L);
+  }
+
+  /**
+   * Issue #6020: the array-narrowing branches of {@code Type.convert()} (double[]/float[]/long[] source ->
+   * int[]/long[]/short[] target) did a raw element-wise cast with no NaN or range check, unlike the scalar path
+   * fixed by #5905/#5970. {@code (short) 3_000_000_000.0} silently wrapped to a wrong in-range value, and
+   * {@code (int) Double.NaN} silently became {@code 0} - both would corrupt a stored value with no error. The
+   * fix routes every element through the same {@code narrowToIntegral()} used by the scalar branches.
+   * <p>
+   * A {@code long[]} source has the identical unguarded-wrap defect for int[]/short[] targets even though the
+   * issue text only reproduces it via double[]/float[] - {@code (int) 3_000_000_000L} wraps to {@code -1294967296}
+   * via plain two's-complement bit truncation (long->int is not saturating, unlike double->int/long) - so it is
+   * covered here too.
+   * <p>
+   * A {@code Collection} source (e.g. a {@code List<Double>} - the shape JSON deserialization typically produces)
+   * has the same defect for the {@code int[]}/{@code long[]}/{@code short[]} targets, found in code review of the
+   * first pass of this fix, which only routed the primitive-array-source branches through
+   * {@code narrowToIntegral()} and left the sibling {@code Collection}-source branches on a raw
+   * {@code .intValue()}/{@code .longValue()}/{@code .shortValue()} cast.
+   */
+  @Test
+  void convertArrayNarrowingNaNAndOverflowRejected() {
+    // double[]/float[] -> int[]: NaN
+    assertThatThrownBy(() -> Type.convert(database, new double[] { Double.NaN }, int[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new float[] { Float.NaN }, int[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    // double[]/float[] -> int[]: out of range (Java's double->int narrowing saturates instead of wrapping, but
+    // a typed column must reject it, not silently clip it, to match scalar INTEGER conversion behavior)
+    assertThatThrownBy(() -> Type.convert(database, new double[] { 3_000_000_000.0 }, int[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new float[] { 3_000_000_000.0f }, int[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    // double[]/float[] -> short[]: NaN and out-of-range (two-step double->int->short DOES wrap:
+    // (short) 3_000_000_000.0 == -1, a wrong in-range value with no error)
+    assertThatThrownBy(() -> Type.convert(database, new double[] { Double.NaN }, short[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new float[] { Float.NaN }, short[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new double[] { 3_000_000_000.0 }, short[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new float[] { 3_000_000_000.0f }, short[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    // double[]/float[] -> long[]: NaN only (LONG is the widest integral type, no narrower range to check)
+    assertThatThrownBy(() -> Type.convert(database, new double[] { Double.NaN }, long[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new float[] { Float.NaN }, long[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    // long[] -> int[]/short[]: out of range wraps via plain bit truncation, not saturation
+    assertThatThrownBy(() -> Type.convert(database, new long[] { 3_000_000_000L }, int[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new long[] { 40_000L }, short[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    // Collection -> int[]/long[]/short[]: the sibling branches next to the primitive-array ones above had the
+    // identical raw-cast gap (caught in code review of this fix's first pass)
+    assertThatThrownBy(() -> Type.convert(database, List.of(Double.NaN), int[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, List.of(3_000_000_000.0), int[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, List.of(Double.NaN), long[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, List.of(Double.NaN), short[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, List.of(3_000_000_000.0), short[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    // A SINGLE BAD ELEMENT REJECTS THE WHOLE ARRAY, EVEN WHEN SURROUNDED BY OTHERWISE IN-RANGE VALUES - THERE IS NO
+    // PARTIAL/BEST-EFFORT CONVERSION THAT WOULD SILENTLY DROP OR ZERO OUT JUST THE OFFENDING ELEMENT
+    assertThatThrownBy(() -> Type.convert(database, new double[] { 1.0, Double.NaN, 3.0 }, int[].class))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
   void convertToEnum() {
     assertThat(Type.convert(database, "STRING", Type.class)).isEqualTo(Type.STRING);
     assertThat(Type.convert(database, 0, Type.class)).isEqualTo(Type.BOOLEAN);
@@ -454,6 +550,30 @@ class TypeTest extends TestHelper {
     assertThat(Type.convert(database, "42", Byte.class)).isEqualTo((byte) 42);
     assertThat(Type.convert(database, 42, Byte.class)).isEqualTo((byte) 42);
     assertThat(Type.convert(database, 42L, Byte.TYPE)).isEqualTo((byte) 42);
+    // BOUNDARY VALUES MUST STILL CONVERT
+    assertThat(Type.convert(database, (long) Byte.MAX_VALUE, Byte.class)).isEqualTo(Byte.MAX_VALUE);
+    assertThat(Type.convert(database, (long) Byte.MIN_VALUE, Byte.class)).isEqualTo(Byte.MIN_VALUE);
+  }
+
+  /**
+   * Issue #5905: narrowing an out-of-range value to a BYTE property must reject it rather than silently wrap
+   * (two's-complement truncation), which would corrupt the stored value with no error.
+   */
+  @Test
+  void convertToByteOutOfRangeRejected() {
+    assertThatThrownBy(() -> Type.convert(database, Byte.MAX_VALUE + 1, Byte.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Byte.MIN_VALUE - 1, Byte.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, 3_000_000_000L, Byte.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    // THE BigDecimal/BigInteger BRANCHES OF narrowToIntegral() ARE SHARED CODE, EXERCISED ELSEWHERE ONLY FOR
+    // INTEGER TARGETS (convertToIntegerOutOfRangeRejected) - COVER BYTE TOO SO A BOUNDARY-CONSTANT TYPO THERE
+    // WOULD BE CAUGHT REGARDLESS OF TARGET TYPE
+    assertThatThrownBy(() -> Type.convert(database, new BigDecimal("200"), Byte.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new BigInteger("200"), Byte.class))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
@@ -463,6 +583,26 @@ class TypeTest extends TestHelper {
     assertThat(Type.convert(database, "", Short.class)).isEqualTo((short) 0);
     assertThat(Type.convert(database, 42, Short.class)).isEqualTo((short) 42);
     assertThat(Type.convert(database, 42L, Short.TYPE)).isEqualTo((short) 42);
+    // BOUNDARY VALUES MUST STILL CONVERT
+    assertThat(Type.convert(database, (long) Short.MAX_VALUE, Short.class)).isEqualTo(Short.MAX_VALUE);
+    assertThat(Type.convert(database, (long) Short.MIN_VALUE, Short.class)).isEqualTo(Short.MIN_VALUE);
+  }
+
+  /**
+   * Issue #5905: same as {@link #convertToByteOutOfRangeRejected()} for SHORT.
+   */
+  @Test
+  void convertToShortOutOfRangeRejected() {
+    assertThatThrownBy(() -> Type.convert(database, Short.MAX_VALUE + 1, Short.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Short.MIN_VALUE - 1, Short.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, 3_000_000_000L, Short.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new BigDecimal("40000"), Short.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new BigInteger("40000"), Short.class))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
@@ -472,6 +612,76 @@ class TypeTest extends TestHelper {
     assertThat(Type.convert(database, "", Integer.class)).isEqualTo(0);
     assertThat(Type.convert(database, 42L, Integer.class)).isEqualTo(42);
     assertThat(Type.convert(database, 42L, Integer.TYPE)).isEqualTo(42);
+    // BOUNDARY VALUES MUST STILL CONVERT
+    assertThat(Type.convert(database, (long) Integer.MAX_VALUE, Integer.class)).isEqualTo(Integer.MAX_VALUE);
+    assertThat(Type.convert(database, (long) Integer.MIN_VALUE, Integer.class)).isEqualTo(Integer.MIN_VALUE);
+    assertThat(Type.convert(database, new BigDecimal(Integer.MAX_VALUE), Integer.class)).isEqualTo(Integer.MAX_VALUE);
+  }
+
+  /**
+   * Issue #5905: {@code Type.convert()} narrowed an out-of-range value to INTEGER with {@code .intValue()}, which
+   * wraps on overflow instead of rejecting (e.g. {@code 3000000000L -> -1294967296}). A typed column must reject
+   * the value rather than silently corrupt it.
+   */
+  @Test
+  void convertToIntegerOutOfRangeRejected() {
+    assertThatThrownBy(() -> Type.convert(database, 3_000_000_000L, Integer.class))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("3000000000");
+    assertThatThrownBy(() -> Type.convert(database, 2_147_483_648L, Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Long.MAX_VALUE, Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Long.MIN_VALUE, Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    // A WIDE FLOATING-POINT VALUE MUST ALSO BE REJECTED, NOT SILENTLY WRAPPED
+    assertThatThrownBy(() -> Type.convert(database, 1e20d, Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    // A BIGDECIMAL WHOSE MAGNITUDE EXCEEDS EVEN A LONG MUST ALSO BE REJECTED
+    assertThatThrownBy(() -> Type.convert(database, new BigDecimal("9999999999999999999999999999"), Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    // A BIGINTEGER WHOSE MAGNITUDE EXCEEDS EVEN A LONG MUST ALSO BE REJECTED (longValue() TRUNCATES BITS INSTEAD OF
+    // SATURATING, SO THIS EXERCISES THE DEDICATED BigInteger BRANCH IN narrowToIntegral()), IN BOTH DIRECTIONS
+    assertThatThrownBy(() -> Type.convert(database, new BigInteger("9999999999999999999999999999"), Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, new BigInteger("-9999999999999999999999999999"), Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    // AN IN-RANGE BIGINTEGER MUST STILL CONVERT
+    assertThat(Type.convert(database, BigInteger.valueOf(42), Integer.class)).isEqualTo(42);
+  }
+
+  /**
+   * Issue #5970: {@code Double.NaN.longValue()}/{@code Float.NaN.longValue()} return {@code 0} per the JLS
+   * narrowing-conversion rules, which is in-range for BYTE/SHORT/INTEGER, so the range check in
+   * {@code narrowToIntegral()} let a NaN through as a silent {@code 0} instead of rejecting it. Infinity was
+   * already caught (it saturates to {@code Long.MAX_VALUE}/{@code MIN_VALUE}, which is out of range); NaN needs
+   * its own guard. LONG never goes through {@code narrowToIntegral()} (no narrower range to check) but has the
+   * identical {@code longValue()}-returns-0 gap, caught by a review round on the fix for this issue's first pass.
+   */
+  @Test
+  void convertNaNToIntegralRejected() {
+    assertThatThrownBy(() -> Type.convert(database, Double.NaN, Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Float.NaN, Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Double.NaN, Short.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Float.NaN, Short.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Double.NaN, Byte.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Float.NaN, Byte.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Double.NaN, Long.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Float.NaN, Long.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    // INFINITY WAS ALREADY REJECTED BEFORE #5970 (IT SATURATES TO A LONG BOUNDARY, WHICH IS OUT OF RANGE) - COVERED
+    // HERE TOO SO A REGRESSION IN THE NEW NaN GUARD IS CAUGHT ALONGSIDE IT
+    assertThatThrownBy(() -> Type.convert(database, Double.POSITIVE_INFINITY, Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> Type.convert(database, Double.NEGATIVE_INFINITY, Integer.class))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
@@ -783,9 +993,67 @@ class TypeTest extends TestHelper {
 
   @Test
   void incrementIntegerOverflow() {
-    // Integer + Integer overflow -> upgrade to Long
+    // Integer + Integer positive overflow -> upgrade to Long, WITH THE CORRECT VALUE (issue #5906: the guard used
+    // to recompute the same overflowing int addition before widening it, e.g. (long)(2000000000+2000000000)
+    // produced -294967296L instead of 4000000000L)
     final Number result = Type.increment(Integer.MAX_VALUE, 1);
     assertThat(result).isInstanceOf(Long.class);
+    assertThat(result.longValue()).isEqualTo((long) Integer.MAX_VALUE + 1L);
+
+    final Number bigSum = Type.increment(2_000_000_000, 2_000_000_000);
+    assertThat(bigSum).isInstanceOf(Long.class);
+    assertThat(bigSum.longValue()).isEqualTo(4_000_000_000L);
+  }
+
+  @Test
+  void incrementIntegerNegativeOverflow() {
+    // Issue #5906: the overflow guard only checked "sum < 0 && a > 0 && b > 0", so two large negative operands
+    // (whose sum wraps positive) slipped through unchecked.
+    final Number result = Type.increment(-2_000_000_000, -2_000_000_000);
+    assertThat(result).isInstanceOf(Long.class);
+    assertThat(result.longValue()).isEqualTo(-4_000_000_000L);
+
+    final Number minValueResult = Type.increment(Integer.MIN_VALUE, -1);
+    assertThat(minValueResult).isInstanceOf(Long.class);
+    assertThat(minValueResult.longValue()).isEqualTo((long) Integer.MIN_VALUE - 1L);
+  }
+
+  @Test
+  void decrementIntegerOverflow() {
+    // Integer - Integer negative overflow -> upgrade to Long, with the correct value
+    final Number result = Type.decrement(Integer.MIN_VALUE, 1);
+    assertThat(result).isInstanceOf(Long.class);
+    assertThat(result.longValue()).isEqualTo((long) Integer.MIN_VALUE - 1L);
+
+    final Number bigDiff = Type.decrement(-2_000_000_000, 2_000_000_000);
+    assertThat(bigDiff).isInstanceOf(Long.class);
+    assertThat(bigDiff.longValue()).isEqualTo(-4_000_000_000L);
+  }
+
+  @Test
+  void decrementIntegerPositiveOverflow() {
+    // a - (-b) is an addition in disguise: Integer.MAX_VALUE - (-1) overflows positively.
+    final Number result = Type.decrement(Integer.MAX_VALUE, -1);
+    assertThat(result).isInstanceOf(Long.class);
+    assertThat(result.longValue()).isEqualTo((long) Integer.MAX_VALUE + 1L);
+  }
+
+  /**
+   * Issue #5906: the Integer-Short and Short-Integer branches of {@code decrement} have the same "recompute before
+   * widening" bug shape as {@code increment}.
+   */
+  @Test
+  void decrementIntegerMinusShortOverflow() {
+    final Number result = Type.decrement(Integer.MIN_VALUE, (short) 1);
+    assertThat(result).isInstanceOf(Long.class);
+    assertThat(result.longValue()).isEqualTo((long) Integer.MIN_VALUE - 1L);
+  }
+
+  @Test
+  void decrementShortMinusIntegerOverflow() {
+    final Number result = Type.decrement((short) -30_000, Integer.MAX_VALUE);
+    assertThat(result).isInstanceOf(Long.class);
+    assertThat(result.longValue()).isEqualTo(-30_000L - Integer.MAX_VALUE);
   }
 
   @Test
@@ -813,6 +1081,27 @@ class TypeTest extends TestHelper {
     // Short + Short overflow -> upgrade to Integer
     final Number result = Type.increment((short) Short.MAX_VALUE, (short) 1);
     assertThat(result.intValue()).isEqualTo(Short.MAX_VALUE + 1);
+  }
+
+  /**
+   * Issue #5906: the Integer+Short branch has the identical "recompute the overflowing sum before widening" shape
+   * as the Integer+Integer branch.
+   */
+  @Test
+  void incrementIntegerPlusShortOverflow() {
+    final Number result = Type.increment(Integer.MAX_VALUE, (short) 1);
+    assertThat(result).isInstanceOf(Long.class);
+    assertThat(result.longValue()).isEqualTo((long) Integer.MAX_VALUE + 1L);
+  }
+
+  /**
+   * Issue #5906: same bug shape in the Short+Integer branch.
+   */
+  @Test
+  void incrementShortPlusIntegerOverflow() {
+    final Number result = Type.increment((short) 30_000, Integer.MAX_VALUE);
+    assertThat(result).isInstanceOf(Long.class);
+    assertThat(result.longValue()).isEqualTo(30_000L + Integer.MAX_VALUE);
   }
 
   @Test
