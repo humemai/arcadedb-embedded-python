@@ -541,7 +541,85 @@ def _sparse_build(rows, backend, n_docs=8841823):
     return st.median([r["build_s"] for r in g]) if g else None
 
 
+
+# ---------------------------------------------------------------------------
+# Python-binding suite. A separate experiment from the lanes above, pinned here
+# because the project page publishes it and nothing else was checking it.
+#
+# These exist because of a specific, repeated failure: the numbers are ratios
+# between two ARMS, and picking the wrong arm yields a real median of real rows
+# that answers a different question. Swapping P-raw-call for P-SQL moves the
+# published vector ratio from 1.28 to 1.71 while every gate stays green. That
+# is the mistake these claims are here to fail on.
+_PYB = os.path.join(os.path.dirname(M.RESULTS), "..", "python-bindings")
+
+
+def _overhead_median(workload, arm):
+    """Median microseconds for one arm of the JPype overhead re-measure."""
+    import csv as _csv
+    import statistics as _stat
+    path = os.path.join(_PYB, "jpype_overhead", "results", "mini_results.csv")
+    vals = []
+    with open(path) as fh:
+        for row in _csv.reader(fh):
+            if len(row) >= 8 and row[3] == workload and row[4] == arm:
+                try:
+                    vals.append(float(row[6]))
+                except ValueError:
+                    pass
+    return _stat.median(vals) if vals else None
+
+
+def pyb_ratio(workload, numerator_arm, denominator_arm):
+    """The published ratio, stated as the exact pair of arms it compares."""
+    a = _overhead_median(workload, numerator_arm)
+    b = _overhead_median(workload, denominator_arm)
+    return None if a is None or b is None else a / b
+
+
+def pyb_cell(lane, backend, field, dataset="medium"):
+    """Median of one cell in the binding suite's frozen rows."""
+    import csv as _csv
+    import statistics as _stat
+    path = os.path.join(_PYB, "results", "runs_paper.csv")
+    vals = []
+    with open(path) as fh:
+        for r in _csv.DictReader(fh):
+            if r.get("lane") == lane and r.get("backend") == backend \
+               and r.get("dataset") == dataset:
+                try:
+                    vals.append(float(r[field]))
+                except (KeyError, ValueError, TypeError):
+                    pass
+    return _stat.median(vals) if vals else None
+
+
 CLAIMS = [
+    # --- Python binding suite (published on the project page) --------------
+    ("pyb.vector.ratio", 1.28, 0.02,
+     lambda r: pyb_ratio("vector", "P-raw-call", "J-direct"),
+     "Python vector search against the in-process Java baseline; the paper's "
+     "~1.3x. P-SQL/J-SQL is 1.12x and answers a different question"),
+    ("pyb.scan.ratio", 1.63, 0.02,
+     lambda r: pyb_ratio("query", "P-columns-100000", "J-allcols-100000"),
+     "Python 100k-row columnar scan against Java reading the same columns; "
+     "the paper's ~1.6x"),
+    ("pyb.transport.spread", 13.81, 0.15,
+     lambda r: pyb_ratio("query", "P-tolist-100000", "P-columns-100000"),
+     "row objects against columns inside Python: the choice of call costs "
+     "more than the language boundary does"),
+    ("pyb.tabular.arcadedb.oltp", 6416, 1,
+     lambda r: pyb_cell("tabular", "arcadedb", "oltp_ops_per_s"),
+     "embedded tabular OLTP ops/s"),
+    ("pyb.tabular.duckdb.olap", 9.35, 0.05,
+     lambda r: pyb_cell("tabular", "duckdb", "olap_total_ms"),
+     "DuckDB analytical suite; it wins this column and the page says so"),
+    ("pyb.graph.arcadedb.oltp", 3211.9, 1,
+     lambda r: pyb_cell("graph", "arcadedb", "oltp_ops_per_s"),
+     "embedded graph OLTP ops/s against LadybugDB"),
+    ("pyb.vector.arcadedb.recall", 0.9796, 0.001,
+     lambda r: pyb_cell("vector", "arcadedb", "recall@10"),
+     "recall at the matched graph degree, printed beside the latency"),
     # --- L1 tabular -------------------------------------------------------
     ("abstract.n_specialists", 11.0, 0.0, lambda r: _comparator_engines(),
      "specialist engines the abstract claims (was 8, data says 11)"),

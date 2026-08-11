@@ -70,6 +70,15 @@ MAPPING = {
     "l4.questdb.ingest":  ("l4", "questdb", "ingest pts/s"),
     "l4.duckdb.ingest":   ("l4", "duckdb", "ingest pts/s"),
     "l4.doc.q_global":    ("l4", "arcadedb (document path)", "12h aggregate ms"),
+    # Python binding suite. The ratio cells are the ones a wrong arm silently
+    # changes, so they are the ones most worth pinning: swapping P-raw-call for
+    # P-SQL republishes 1.71 in place of 1.28 with every other check green.
+    "pyb.vector.ratio":   ("pycost", "Python", "vs Java"),
+    "pyb.scan.ratio":     ("pycost", "Python, to_columns", "vs Java"),
+    "pyb.tabular.arcadedb.oltp": ("pyb_tabular", "arcadedb", "OLTP ops/s"),
+    "pyb.tabular.duckdb.olap":   ("pyb_tabular", "duckdb", "OLAP ms"),
+    "pyb.graph.arcadedb.oltp":   ("pyb_graph", "arcadedb", "OLTP ops/s"),
+    "pyb.vector.arcadedb.recall": ("pyb_vector", "arcadedb", "recall@10"),
 }
 
 
