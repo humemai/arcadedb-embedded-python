@@ -102,6 +102,27 @@ def display_name(backend: str) -> str:
     return backend.replace("_", " ")
 
 
+REPO = "https://github.com/humemai/arcadedb-embedded-python/blob/main"
+
+# Where each table's numbers physically come from. Published per table so a
+# reader can open the rows rather than take the page's word for them, which is
+# the whole point of generating these from data in the first place.
+SOURCES = {
+    "l3s": "benchmarks/experiments/results/runs_paper.csv",
+    "l3d": "benchmarks/experiments/results/runs_paper.csv",
+    "l2": "benchmarks/experiments/results/runs_paper.csv",
+    "l1": "benchmarks/experiments/results/runs_paper.csv",
+    "l1tpc": "benchmarks/experiments/results/runs_paper.csv",
+    "e2": "benchmarks/experiments/results/runs_paper.csv",
+    "l4": "benchmarks/experiments/results/l4_tsbs.jsonl",
+    "e4": "benchmarks/experiments/results/e4decomp_2681",
+    "pycost": "benchmarks/python-bindings/jpype_overhead/results/mini_results.csv",
+    "pyb_tabular": "benchmarks/python-bindings/results/runs_paper.csv",
+    "pyb_graph": "benchmarks/python-bindings/results/runs_paper.csv",
+    "pyb_vector": "benchmarks/python-bindings/results/runs_paper.csv",
+}
+
+
 def _num(value):
     try:
         return float(value)
@@ -679,6 +700,11 @@ def main() -> int:
         "hosts_recorded": hosts,
         "tables": tables,
     }
+
+    for table in tables:
+        rel = SOURCES.get(table["id"])
+        table["source_path"] = rel
+        table["source_url"] = f"{REPO}/{rel}" if rel else None
 
     OUT.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n",
                    encoding="utf-8")

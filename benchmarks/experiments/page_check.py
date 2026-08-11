@@ -49,6 +49,11 @@ DEFAULT_JSON = HERE / "results" / "web_benchmarks.json"
 # claim with no page cell is not a failure: the page is a summary and does not
 # publish every number the paper argues from. What IS a failure is a page cell
 # that disagrees with a claim covering the same measurement.
+# Keyed by the RAW harness backend name, not the label the page prints. The
+# page renames backends for readability, and on 2026-08-11 that rename turned
+# all nine mapped cells ABSENT at once: no number was wrong, the gate simply
+# could not find them. Resolving the raw key through the same display_name()
+# the exporter uses means a future rename moves both sides together.
 MAPPING = {
     # L1 tabular, OLTP throughput
     "l1.arcadedb.oltp":   ("l1", "arcadedb_embedded", "OLTP ops/s"),
@@ -69,13 +74,32 @@ MAPPING = {
 
 
 def _page_index(payload):
-    """(table, backend, column) -> median, for every published cell."""
+    """(table, backend label, column) -> median, for every published cell."""
     out = {}
     for table in payload.get("tables", []):
         for entry in table.get("entries", []):
             for column, stat in entry.get("metrics", {}).items():
                 out[(table["id"], entry["backend"], column)] = stat["median"]
     return out
+
+
+def _resolve(key, cells):
+    """Find the page cell for a mapping key, however the page spells it.
+
+    MAPPING mixes two kinds of name: raw harness keys like
+    `arcadedb_graph_embedded`, which the page renames, and labels the exporter
+    composes itself like `arcadedb (native TIMESERIES)`, which it does not.
+    Try the key as written first, then through display_name(). Doing only the
+    second mangles the composed labels, since they also start with "arcadedb"
+    and would collapse to a bare "ArcadeDB".
+    """
+    from export_web import display_name
+
+    table, backend, column = key
+    for candidate in (backend, display_name(backend)):
+        if (table, candidate, column) in cells:
+            return (table, candidate, column)
+    return key
 
 
 def main() -> int:
@@ -105,6 +129,7 @@ def main() -> int:
             bad += 1
             continue
         claimed, tol, note = claims[cid]
+        key = _resolve(key, cells)
         if key not in cells:
             # The page dropped a cell the paper argues from. Loud, because a
             # missing row is how a comparison quietly loses its context.

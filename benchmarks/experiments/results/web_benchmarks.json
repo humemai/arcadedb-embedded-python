@@ -824,7 +824,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
       "id": "l3d",
@@ -1091,7 +1093,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
       "id": "l2",
@@ -1406,7 +1410,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
       "id": "l1",
@@ -1622,7 +1628,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
       "id": "l1tpc",
@@ -1838,7 +1846,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
       "id": "e2",
@@ -1930,7 +1940,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
       "id": "l4",
@@ -2075,7 +2087,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/experiments/results/l4_tsbs.jsonl",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/l4_tsbs.jsonl"
     },
     {
       "id": "e4",
@@ -2355,7 +2369,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/experiments/results/e4decomp_2681",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/e4decomp_2681"
     },
     {
       "id": "pycost",
@@ -2523,7 +2539,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/python-bindings/jpype_overhead/results/mini_results.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/python-bindings/jpype_overhead/results/mini_results.csv"
     },
     {
       "id": "pyb_tabular",
@@ -2616,7 +2634,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/python-bindings/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/python-bindings/results/runs_paper.csv"
     },
     {
       "id": "pyb_graph",
@@ -2684,7 +2704,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/python-bindings/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/python-bindings/results/runs_paper.csv"
     },
     {
       "id": "pyb_vector",
@@ -2765,7 +2787,9 @@
             }
           }
         }
-      ]
+      ],
+      "source_path": "benchmarks/python-bindings/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/python-bindings/results/runs_paper.csv"
     }
   ]
 }
