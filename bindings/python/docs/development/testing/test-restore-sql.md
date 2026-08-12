@@ -30,4 +30,4 @@ This file exists because of [#6069](https://github.com/ArcadeData/arcadedb/issue
 
 The gap was left untested while that was open, deliberately. Pinning the broken behaviour would have baked a bug into the suite, and pinning the correct behaviour would have failed until the fix landed.
 
-The same-transaction case in test 4 is a **separate, still-open** defect found while verifying that fix. It is not a regression: `RESTORE` does not parse at all on the 26.8.1 release (`no viable alternative at input 'RESTORE'`), so the statement has never shipped in a release and there is no earlier behaviour it could have regressed from.
+The same-transaction case in test 4 is a **separate, still-open** defect found while verifying that fix, filed as [#6096](https://github.com/ArcadeData/arcadedb/issues/6096). It is not a regression: `RESTORE` does not parse at all on the 26.8.1 release (`no viable alternative at input 'RESTORE'`), so the statement has never shipped in a release and there is no earlier behaviour it could have regressed from.

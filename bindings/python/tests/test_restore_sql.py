@@ -15,6 +15,14 @@ The count-vs-scan comparison is the load-bearing assertion, not the row
 contents. A wrong count came back with an ordinary success and no warning, so
 nothing but asking the same question two ways could tell it apart from a
 correct one.
+
+On the `# nosec B608` markers: these interpolate a type name or a RID into
+SQL, which bandit flags. `DELETE FROM Note WHERE @rid = :rid` does bind
+correctly and was measured working, but the deletes here keep the direct-RID
+form on purpose, because that is what the upstream repro used and a different
+delete path could plausibly exercise different bucket bookkeeping, which is
+the very thing under test. `RESTORE ... RID :rid` is not an option at all: the
+RID is statement syntax there and the parser rejects a bound parameter.
 """
 
 import arcadedb_embedded as arcadedb
@@ -23,10 +31,16 @@ import pytest
 
 def _count_two_ways(db, type_name):
     """(count(*), rows a full scan returns). These must agree."""
-    counted = db.query("sql", f"SELECT count(*) AS c FROM {type_name}").to_list()[0][
-        "c"
-    ]
-    scanned = len(db.query("sql", f"SELECT FROM {type_name}").to_list())
+    counted = db.query(
+        "sql",
+        f"SELECT count(*) AS c FROM {type_name}",  # nosec B608 - test-owned type name
+    ).to_list()[0]["c"]
+    scanned = len(
+        db.query(
+            "sql",
+            f"SELECT FROM {type_name}",  # nosec B608 - test-owned type name
+        ).to_list()
+    )
     return counted, scanned
 
 
@@ -49,11 +63,17 @@ def test_restore_document_restores_the_record_count(temp_db_path):
         assert _count_two_ways(db, "Note") == (3, 3)
 
         with db.transaction():
-            db.command("sql", f"DELETE FROM {rid}")
+            db.command(
+                "sql",
+                f"DELETE FROM {rid}",  # nosec B608 - RID from our own query
+            )
         assert _count_two_ways(db, "Note") == (2, 2)
 
         with db.transaction():
-            db.command("sql", f"RESTORE DOCUMENT Note RID {rid} SET i = 1")
+            db.command(
+                "sql",
+                f"RESTORE DOCUMENT Note RID {rid} SET i = 1",  # nosec B608 - RID is syntax
+            )
         assert _count_two_ways(db, "Note") == (
             3,
             3,
@@ -80,10 +100,14 @@ def test_restore_document_returns_the_record_intact(temp_db_path):
 
         rid = db.query("sql", "SELECT @rid AS r FROM Note").to_list()[0]["r"]
         with db.transaction():
-            db.command("sql", f"DELETE FROM {rid}")
+            db.command(
+                "sql",
+                f"DELETE FROM {rid}",  # nosec B608 - RID from our own query
+            )
         with db.transaction():
             db.command(
-                "sql", f"RESTORE DOCUMENT Note RID {rid} SET i = 7, tag = 'keep'"
+                "sql",
+                f"RESTORE DOCUMENT Note RID {rid} SET i = 7, tag = 'keep'",  # nosec B608
             )
 
         rows = db.query("sql", "SELECT @rid AS r, i, tag FROM Note").to_list()
@@ -99,7 +123,7 @@ def test_restore_document_returns_the_record_intact(temp_db_path):
     "while a full scan returns 0, and the disagreement survives reopen. Same "
     "count-vs-scan shape as #6069, which 86cb4673be fixed only for the "
     "separate-transaction case. strict=True so this XPASSes and fails the "
-    "suite the day it is fixed, rather than sitting here unnoticed.",
+    "suite the day it is fixed, rather than sitting here unnoticed. Filed as #6096.",
 )
 def test_restore_in_same_transaction_as_delete(temp_db_path):
     """DELETE then RESTORE within one transaction loses the record.
@@ -107,6 +131,8 @@ def test_restore_in_same_transaction_as_delete(temp_db_path):
     Not a regression: RESTORE does not parse at all on the 26.8.1 release
     ("no viable alternative at input 'RESTORE'"), so the statement has never
     shipped and there is no earlier behaviour to have regressed from.
+
+    Filed upstream as #6096.
     """
     with arcadedb.create_database(temp_db_path) as db:
         db.command("sql", "CREATE DOCUMENT TYPE Note")
@@ -115,8 +141,14 @@ def test_restore_in_same_transaction_as_delete(temp_db_path):
 
         rid = db.query("sql", "SELECT @rid AS r FROM Note").to_list()[0]["r"]
         with db.transaction():
-            db.command("sql", f"DELETE FROM {rid}")
-            db.command("sql", f"RESTORE DOCUMENT Note RID {rid} SET i = 7")
+            db.command(
+                "sql",
+                f"DELETE FROM {rid}",  # nosec B608 - RID from our own query
+            )
+            db.command(
+                "sql",
+                f"RESTORE DOCUMENT Note RID {rid} SET i = 7",  # nosec B608 - RID is syntax
+            )
 
         counted, scanned = _count_two_ways(db, "Note")
         assert (counted, scanned) == (
@@ -143,11 +175,17 @@ def test_restore_vertex_restores_the_record_count(temp_db_path):
         ).to_list()[0]["r"]
 
         with db.transaction():
-            db.command("sql", f"DELETE FROM {rid}")
+            db.command(
+                "sql",
+                f"DELETE FROM {rid}",  # nosec B608 - RID from our own query
+            )
         assert _count_two_ways(db, "Person") == (2, 2)
 
         with db.transaction():
-            db.command("sql", f"RESTORE VERTEX Person RID {rid} SET name = 'b'")
+            db.command(
+                "sql",
+                f"RESTORE VERTEX Person RID {rid} SET name = 'b'",  # nosec B608 - RID is syntax
+            )
         assert _count_two_ways(db, "Person") == (3, 3), (
             "count(*) disagrees with a full scan after RESTORE VERTEX "
             "(upstream #6069)"
