@@ -115,3 +115,8 @@ results, tables or the page:
 same rows: it compares the page against the paper's hand-transcribed
 constants, which is the part that can drift. It catches the `q_range_ms`
 mistake mechanically.
+
+Publishing any of this to humem.ai is one command, and PUBLISHING.md says
+which one and why it is a command rather than a checklist. The short version:
+the page shows what the papers show, `figures/` is output and the `.tex` files
+are the manifest, and copying assets by hand has no step that removes one.
