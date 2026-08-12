@@ -14,6 +14,7 @@ import subprocess
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
@@ -194,12 +195,44 @@ def f3_sparse_perquery():
     gs_crop(out)
 
 
+def fit_ylim_to_annotations(fig, ax, anns, pad=1.03, iters=8):
+    """Raise the y-axis top to just clear the annotations, and no further.
+
+    f7 carried a hand-set ax.set_ylim(0, 30) against a 19.4 ms tallest bar,
+    leaving about a tenth of the panel blank. The limit cannot simply be
+    max(bar): the outcome labels sit a fixed 10 POINTS above each bar, so
+    shrinking the axis raises the bar top in display space and carries the
+    label with it. Solve it as the fixed point it is.
+
+    It converges because the offset is a constant fraction of the axes height:
+    each pass multiplies the overshoot by (10pt + text height) / axes height,
+    well under 1 here, so a few passes settle it. Call AFTER tight_layout, so
+    the axes height being solved against is the final one.
+    """
+    for _ in range(iters):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        inv = ax.transData.inverted()
+        top = max(inv.transform((0, a.get_window_extent(renderer).ymax))[1]
+                  for a in anns)
+        current = ax.get_ylim()[1]
+        want = top * pad
+        if abs(want - current) <= 0.005 * current:
+            return
+        ax.set_ylim(0, want)
+    raise SystemExit(
+        "f7: y-limit did not converge. An annotation is probably tall enough "
+        "relative to the axes that shrinking the limit outruns the fit; set a "
+        "limit by hand and say why.")
+
+
 def f7_e2(rows):
     e2 = [r for r in rows if r["lane"] == "e2"]
     order = [("arcadedb_e2", "ArcadeDB\n(one txn)"),
              ("surrealdb_e2", "SurrealDB\n(one txn)"),
              ("composed_qdrant_neo4j", "Qdrant+Neo4j\n(composed)")]
     fig, ax = plt.subplots(figsize=(3.45, 2.0))
+    anns = []
     for i, (be, label) in enumerate(order):
         h = [r["hybrid_p50_ms"] for r in e2
              if r["backend"] == be and r["workload"] == "hybrid"]
@@ -207,19 +240,25 @@ def f7_e2(rows):
              if r["backend"] == be and r["workload"] == "atomicity"]
         torn = sum(bool(t) for t in a)
         med = st.median(h)
-        bar = ax.bar(i, med, width=0.55,
-                     color="C3" if torn else "C0", alpha=0.85)
+        ax.bar(i, med, width=0.55, color="C3" if torn else "C0", alpha=0.85)
         ax.errorbar(i, med, yerr=[[med - min(h)], [max(h) - med]], color="k",
                     capsize=3, lw=1)
         outcome = (f"torn state\n{torn}/{len(a)} crashes" if torn
                    else f"atomic\n{len(a)}/{len(a)} crashes")
-        ax.annotate(outcome, (i, med), textcoords="offset points",
-                    xytext=(0, 10), ha="center", fontsize=6.5)
+        anns.append(ax.annotate(outcome, (i, med), textcoords="offset points",
+                                xytext=(0, 10), ha="center", fontsize=6.5))
     ax.set_xticks(range(len(order)))
     ax.set_xticklabels([l for _, l in order], fontsize=7)
     ax.set_ylabel("hybrid op p50 (ms)")
-    ax.set_ylim(0, 30)
+    ax.set_ylim(bottom=0)
+    # Fitting the limit shrank the range enough that matplotlib dropped to
+    # ticks every 10, coarser than the 0..30-by-5 the hand-set limit produced.
+    # Ask for the old density back without hardcoding a spacing that a
+    # re-measure would invalidate.
+    ax.yaxis.set_major_locator(
+        mticker.MaxNLocator(nbins=6, steps=[1, 2, 2.5, 5, 10]))
     fig.tight_layout()
+    fit_ylim_to_annotations(fig, ax, anns)
     path = os.path.join(FIGS, "f7_e2_hybrid.pdf")
     fig.savefig(path)
     plt.close(fig)
