@@ -114,31 +114,49 @@ def f5_sparse_scaling(rows):
               "qdrant_sparse": ("Qdrant", "s", "C0"),
               "milvus_sparse": ("Milvus", "^", "C2"),
               "elasticsearch_sparse": ("Elasticsearch", "d", "C1")}
-    scales = [("tiny", 1e5), ("small", 1e6)]
+    # ALL THREE REAL TIERS, ALL FOUR ENGINES.
+    #
+    # This plotted two tiers plus a lone open circle for ArcadeDB labelled
+    # "synthetic corpus (no cliff)", and that circle was wrong twice over. The
+    # `medium` scale holds TWO corpora: the real Big-ANN sparse track at
+    # 8,841,823 docs (dims 30109, 1000 dev queries) and an older synthetic
+    # generator at 10M (dims 30000, 100 queries). ArcadeDB has no synthetic
+    # rows left, so selecting on scale alone drew its REAL 8.84M number and
+    # captioned it synthetic, at a hardcoded x of 1e7 rather than 8.84M.
+    #
+    # It also read softer than the paper, which states plainly that ArcadeDB
+    # is last of four at this tier (83.7ms against Qdrant 16.1, Milvus 39.0,
+    # Elasticsearch 55.8) and calls it the price of an exact scan. Showing our
+    # point alone, annotated with a reason it is not so bad, is not that.
+    #
+    # So: select the real corpus explicitly, and take x from each row's own
+    # n_docs instead of a constant, which is what let the 8.84M tier masquerade
+    # as 10M in the first place.
+    REAL_SPLADE_DIMS = 30109
     fig, ax = plt.subplots(figsize=(3.45, 2.3))
     for be, (label, mark, color) in series.items():
         xs, ys, lo, hi = [], [], [], []
-        for sc, n in scales:
-            g = [r["query_p50_ms"] for r in l3s
-                 if r["backend"] == be and r["scale"] == sc]
+        for sc in ("tiny", "small", "medium"):
+            g = [r for r in l3s if r["backend"] == be and r["scale"] == sc
+                 and r["dims"] == REAL_SPLADE_DIMS]
             if not g:
                 continue
-            xs.append(n)
-            ys.append(st.median(g))
-            lo.append(st.median(g) - min(g))
-            hi.append(max(g) - st.median(g))
+            sizes = {r["n_docs"] for r in g}
+            if len(sizes) != 1:
+                raise SystemExit(
+                    f"f5: {be} at {sc} spans corpus sizes {sorted(sizes)}; "
+                    "one point cannot stand for two corpora")
+            p50 = [r["query_p50_ms"] for r in g]
+            xs.append(sizes.pop())
+            ys.append(st.median(p50))
+            lo.append(st.median(p50) - min(p50))
+            hi.append(max(p50) - st.median(p50))
+        if len(xs) != 3:
+            raise SystemExit(
+                f"f5: {be} has {len(xs)} real tiers, expected 3. A missing "
+                "point makes a claim; say why in the caption or fix the data.")
         ax.errorbar(xs, ys, yerr=[lo, hi], marker=mark, color=color,
                     label=label, lw=1.2, ms=4, capsize=2)
-    # synthetic-corpus contrast for ArcadeDB (10M docs, no cliff), dashed
-    syn = [r["query_p50_ms"] for r in l3s
-           if r["backend"] == "arcadedb_sparse_embedded"
-           and r["scale"] == "medium"]
-    if syn:
-        ax.plot([1e7], [st.median(syn)], marker="o", mfc="none", color="C3",
-                ls="none", ms=5)
-        ax.annotate("ArcadeDB, synthetic\ncorpus (no cliff)", (1e7, st.median(syn)),
-                    textcoords="offset points", xytext=(-72, 8), fontsize=6.5,
-                    color="C3")
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("corpus size (documents)")
