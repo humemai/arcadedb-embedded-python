@@ -232,6 +232,7 @@ nav:
       - Geo Predicate SQL: development/testing/test-geo-predicate-sql.md
       - Timeseries SQL: development/testing/test-timeseries-sql.md
       - Materialized View SQL: development/testing/test-materialized-view-sql.md
+      - RESTORE SQL: development/testing/test-restore-sql.md
       - Graph Algorithms SQL: development/testing/test-graph-algorithms-sql.md
       - Hash Index Schema: development/testing/test-hash-index-schema.md
     - Best Practices: development/testing/best-practices.md

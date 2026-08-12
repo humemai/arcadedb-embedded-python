@@ -77,6 +77,10 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
     ---
 
     Materialized view lifecycle, refresh, and metadata coverage
+-   :material-backup-restore: **[RESTORE SQL Tests](testing/test-restore-sql.md)**
+
+    RESTORE DOCUMENT/VERTEX: record count agrees with a full scan, and the record comes back intact.
+
 
 -   :material-map-search: **[Graph Algorithms SQL Tests](testing/test-graph-algorithms-sql.md)**
 

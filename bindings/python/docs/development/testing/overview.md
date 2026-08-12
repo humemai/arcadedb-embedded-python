@@ -97,6 +97,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_geo_predicate_sql.py`](test-geo-predicate-sql.md) | Geospatial SQL predicate semantics |
 | [`test_timeseries_sql.py`](test-timeseries-sql.md) | Time-series SQL type creation, range filters, and bucketing |
 | [`test_materialized_view_sql.py`](test-materialized-view-sql.md) | Materialized view lifecycle and refresh behavior |
+| [`test_restore_sql.py`](test-restore-sql.md) | RESTORE DOCUMENT/VERTEX record-count and record integrity |
 | [`test_graph_algorithms_sql.py`](test-graph-algorithms-sql.md) | SQL graph algorithm runtime coverage |
 | [`test_hash_index_schema.py`](test-hash-index-schema.md) | HASH index schema API behavior |
 | [`test_jvm_args.py`](test-jvm-args.md) | JVM args handling |
