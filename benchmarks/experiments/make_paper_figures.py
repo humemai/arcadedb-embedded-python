@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Generate paper figures from results/. Currently: F5 sparse scaling (with
-the real-data cliff and the per-query decile inset evidence) and F7 E2
-hybrid-transaction latency + atomicity outcome. PDFs land in ../latex/figures
-and are margin-cropped with the two-pass Ghostscript recipe (verify with
-pdfinfo; a silent crop failure must not pass).
+"""Generate the paper's figures from results/.
+
+PDFs land in $BENCH_PAPER_DIR/figures and are margin-cropped with the two-pass
+Ghostscript recipe (verify with pdfinfo; a silent crop failure must not pass).
+
+That directory is OUTPUT, not a manifest. What the paper shows is whatever the
+.tex files \includegraphics, and the two drifted apart once already: this
+docstring itself still advertised F5 after the paper deleted it. See
+_check_no_orphan_figures, which now refuses to let that happen quietly.
 """
 import json
 import os
@@ -97,6 +101,50 @@ def _check_labels_intact(path, expect=None):
             "the fontsize or shorten the text; cropping cannot recover it.")
 
 
+# Figures that intentionally exist without a paper including them, each with
+# the reason. Deliberately empty: earn a line here, do not assume one.
+WEB_ONLY_FIGURES = {}
+
+
+def _check_no_orphan_figures():
+    """Fail if a figure is generated that no paper includes.
+
+    f5_sparse_scaling was DELETED FROM THE PAPER in 366f4c1 as a superseded
+    pre-MaxScore figure once the 8.84M tier landed and T4 was restructured.
+    Nobody deleted the function, so it kept writing a PDF into figures/, and
+    that directory was later read as if it were the manifest of "the paper's
+    figures". It was not. It is output. The .tex files are the manifest.
+
+    The orphan then rotted unobserved, because the four figures a paper
+    includes get re-read every time the paper is read and this one never was:
+    it drew ArcadeDB's real 8.84M measurement, labelled it a synthetic corpus,
+    and put it at 1e7. That shipped to a public page.
+
+    So: every PDF in figures/ must be cited by some .tex, or be listed in
+    WEB_ONLY_FIGURES with a reason. Same shape as f3's refuse-to-draw guard.
+    """
+    used = set()
+    for name in sorted(os.listdir(_PAPER_DIR)):
+        if not name.endswith(".tex"):
+            continue
+        with open(os.path.join(_PAPER_DIR, name), encoding="utf-8") as fh:
+            body = fh.read()
+        for stem in re.findall(r"\\includegraphics[^{]*\{figures/([^}]+)\}", body):
+            used.add(os.path.basename(stem).removesuffix(".pdf"))
+    orphans = sorted(
+        f.removesuffix(".pdf") for f in os.listdir(FIGS)
+        if f.endswith(".pdf")
+        and f.removesuffix(".pdf") not in used
+        and f.removesuffix(".pdf") not in WEB_ONLY_FIGURES)
+    if orphans:
+        raise SystemExit(
+            "figures generated that no paper includes: " + ", ".join(orphans)
+            + "\n  A figure no paper renders is a figure nobody proofreads."
+            "\n  Either cite it from a .tex, delete it and its generator "
+            "function, or add it to WEB_ONLY_FIGURES with the reason.")
+    print(f"figures: {len(used)} generated, all cited by a paper")
+
+
 # Strings that must survive into the saved PDF. Keep these to labels that
 # have actually been at risk or that carry meaning a reader needs.
 EXPECT_IN_PDF = {
@@ -106,67 +154,6 @@ EXPECT_IN_PDF = {
     "f7_e2_hybrid.pdf": ["hybrid op p50 (ms)"],
     "f3_sparse_perquery.pdf": ["decile median"],
 }
-
-
-def f5_sparse_scaling(rows):
-    l3s = [r for r in rows if r["lane"] == "l3s"]
-    series = {"arcadedb_sparse_embedded": ("ArcadeDB (emb, int8)", "o", "C3"),
-              "qdrant_sparse": ("Qdrant", "s", "C0"),
-              "milvus_sparse": ("Milvus", "^", "C2"),
-              "elasticsearch_sparse": ("Elasticsearch", "d", "C1")}
-    # ALL THREE REAL TIERS, ALL FOUR ENGINES.
-    #
-    # This plotted two tiers plus a lone open circle for ArcadeDB labelled
-    # "synthetic corpus (no cliff)", and that circle was wrong twice over. The
-    # `medium` scale holds TWO corpora: the real Big-ANN sparse track at
-    # 8,841,823 docs (dims 30109, 1000 dev queries) and an older synthetic
-    # generator at 10M (dims 30000, 100 queries). ArcadeDB has no synthetic
-    # rows left, so selecting on scale alone drew its REAL 8.84M number and
-    # captioned it synthetic, at a hardcoded x of 1e7 rather than 8.84M.
-    #
-    # It also read softer than the paper, which states plainly that ArcadeDB
-    # is last of four at this tier (83.7ms against Qdrant 16.1, Milvus 39.0,
-    # Elasticsearch 55.8) and calls it the price of an exact scan. Showing our
-    # point alone, annotated with a reason it is not so bad, is not that.
-    #
-    # So: select the real corpus explicitly, and take x from each row's own
-    # n_docs instead of a constant, which is what let the 8.84M tier masquerade
-    # as 10M in the first place.
-    REAL_SPLADE_DIMS = 30109
-    fig, ax = plt.subplots(figsize=(3.45, 2.3))
-    for be, (label, mark, color) in series.items():
-        xs, ys, lo, hi = [], [], [], []
-        for sc in ("tiny", "small", "medium"):
-            g = [r for r in l3s if r["backend"] == be and r["scale"] == sc
-                 and r["dims"] == REAL_SPLADE_DIMS]
-            if not g:
-                continue
-            sizes = {r["n_docs"] for r in g}
-            if len(sizes) != 1:
-                raise SystemExit(
-                    f"f5: {be} at {sc} spans corpus sizes {sorted(sizes)}; "
-                    "one point cannot stand for two corpora")
-            p50 = [r["query_p50_ms"] for r in g]
-            xs.append(sizes.pop())
-            ys.append(st.median(p50))
-            lo.append(st.median(p50) - min(p50))
-            hi.append(max(p50) - st.median(p50))
-        if len(xs) != 3:
-            raise SystemExit(
-                f"f5: {be} has {len(xs)} real tiers, expected 3. A missing "
-                "point makes a claim; say why in the caption or fix the data.")
-        ax.errorbar(xs, ys, yerr=[lo, hi], marker=mark, color=color,
-                    label=label, lw=1.2, ms=4, capsize=2)
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("corpus size (documents)")
-    ax.set_ylabel("query p50 (ms)")
-    ax.legend(fontsize=6.5, loc="upper left", framealpha=0.9)
-    fig.tight_layout()
-    path = os.path.join(FIGS, "f5_sparse_scaling.pdf")
-    fig.savefig(path)
-    plt.close(fig)
-    gs_crop(path)
 
 
 def f3_sparse_perquery():
@@ -725,10 +712,10 @@ def main():
     rows = canonical()
     f3_sparse_perquery()
     f4_one_vs_n(rows)
-    f5_sparse_scaling(rows)
     f6_memory_ceiling(rows)
     f7_e2(rows)
     f8_deployment(rows)
+    _check_no_orphan_figures()
 
 
 if __name__ == "__main__":

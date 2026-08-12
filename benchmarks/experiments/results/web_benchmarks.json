@@ -174,7 +174,7 @@
       "withheld_reason": null,
       "entries": [
         {
-          "backend": "ArcadeDB (embedded)",
+          "backend": "ArcadeDB (embedded, int8 weights)",
           "is_arcadedb": true,
           "scale": "medium",
           "workload": "search",
@@ -391,7 +391,7 @@
           }
         },
         {
-          "backend": "ArcadeDB (embedded)",
+          "backend": "ArcadeDB (embedded, int8 weights)",
           "is_arcadedb": true,
           "scale": "small",
           "workload": "search",
@@ -608,7 +608,7 @@
           }
         },
         {
-          "backend": "ArcadeDB (embedded)",
+          "backend": "ArcadeDB (embedded, int8 weights)",
           "is_arcadedb": true,
           "scale": "tiny",
           "workload": "search",

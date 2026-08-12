@@ -75,7 +75,11 @@ DISPLAY_NAMES = {
     "arcadedb_graph_server": "ArcadeDB (server)",
     "arcadedb_dense_embedded": "ArcadeDB (embedded)",
     "arcadedb_dense_server": "ArcadeDB (server)",
-    "arcadedb_sparse_embedded": "ArcadeDB (embedded)",
+    # Name the quantization on BOTH sparse rows. Left as a bare
+    # "ArcadeDB (embedded)" next to "ArcadeDB (embedded, fp32 weights)", the
+    # default row reads as the plain one and the ablation as a variant, when
+    # they are two points on one axis. Spelling out int8 makes it a pair.
+    "arcadedb_sparse_embedded": "ArcadeDB (embedded, int8 weights)",
     "arcadedb_sparse_server": "ArcadeDB (server)",
     "arcadedb_sparse_embedded_fp32": "ArcadeDB (embedded, fp32 weights)",
     "arcadedb_sparse_embedded_nocompact": "ArcadeDB (embedded, no settle step)",
