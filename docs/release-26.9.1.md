@@ -152,7 +152,11 @@ garbage collector no longer traces one object graph per indexed vector.
   have to re-check.
 - **The graph-build snapshot is the same structure now.** A rebuild used to copy the whole live set into a
   `Map<Integer, VectorLocation>` for the duration of the build, on top of the live index and at the same per-vector
-  cost. On a 10M-vector index that was a transient ~900MB spike; it is now ~200MB.
+  cost. On a 10M-vector index that was a transient ~900MB spike; it is now ~200MB. The snapshot preserves the
+  source ids, so it has the same density characteristic as the live index: a chunk costs the same whether 1 or 128
+  of its ids are live, which is cheaper than the map above roughly 23% density and dearer below it. Monotonic id
+  assignment keeps a real workload far above that threshold - see [#5870](https://github.com/ArcadeData/arcadedb/issues/5870)
+  for making it unconditional.
 - **No new search allocation.** Every reader was moved onto accessors that answer one field without materializing
   anything, so the liveness filter each search applies per traversed graph ordinal costs one presence bit as before.
 - **`countEntries()` on a dense `LSM_VECTOR` is a popcount** over the presence bits - one word per 128 ids -
@@ -562,6 +566,18 @@ walk, export. They consume the whole list, order means nothing to them, and one 
 chunk page beats `stripes` of them. Paging the first N edges is where the locality cost of the rotation is
 negligible and the ordering benefit is everything.
 
+**Follow-up (#6048): the OLTP read walks pay that same locality cost too, on an ordinary full traversal.**
+`MATCH (h)-[:LINK]->(x) RETURN x` with no `LIMIT`, a Gremlin `out()`, or any other walk that consumes
+`edgeIterator()`/`vertexIterator()`/`ridIterator()` to exhaustion goes through the interleaved rotation exactly
+like a paged read does, and now keeps `stripes` chunk pages resident and hops across `stripes` files the whole
+way through - for an order it never consults, since it reads everything anyway. New setting
+`arcadedb.graph.supernodeInterleaveRounds` (default 64) bounds it: past `rounds × stripes` entries of a
+generation, `InterleavedIterator` degrades to draining whatever is left of each chain one at a time, recovering
+the maintenance walks' one-cursor locality for the remainder of a full walk while a paged read within the
+threshold keeps the full rank-fidelity above. The degrade point scales with the live stripe count, not with the
+vertex's degree, so a full walk's extra cost for the ordered prefix stays bounded no matter how large the
+super-node grows. Set it to `0` to disable interleaving entirely (immediate concatenation, the pre-#6044 order).
+
 Read-side only: no on-disk format change, no `HASH_VERSION` bump, no migration, and a database promoted by an
 earlier build gets the new order the moment it is read by this one.
 
@@ -580,7 +596,7 @@ LIMIT 100` returns 100 neighbours with no recency property whatsoever, even thou
 approximate newest-first. This is documented in `GraphAnalyticalView`'s and `StripedEdgeList`'s javadoc, and in
 `GRAPH_SUPERNODE_THRESHOLD`'s setting description, rather than qualified only here.
 
-[#6044](https://github.com/ArcadeData/arcadedb/issues/6044), [#6049](https://github.com/ArcadeData/arcadedb/issues/6049)
+[#6044](https://github.com/ArcadeData/arcadedb/issues/6044), [#6049](https://github.com/ArcadeData/arcadedb/issues/6049), [#6048](https://github.com/ArcadeData/arcadedb/issues/6048)
 
 ## `Type.convert()`: narrowing an array or Collection of `double`/`float`/`long` to a smaller integral array no longer silently corrupts values (#6020)
 
@@ -628,3 +644,199 @@ exclusion guarded against. Not a known exploitable bypass in the current built-i
 for any embedder configuring a broader one via `HostClassLookupFilter`'s public constructor.
 
 [#6045](https://github.com/ArcadeData/arcadedb/issues/6045)
+
+## Closing a database no longer risks leaving an in-flight vector graph build's thread alive indefinitely (#5872)
+
+`LSMVectorIndex` builds its HNSW graph on a dedicated `ForkJoinPool` for exactly one reason: `shutdownNow()` on
+close is supposed to cancel a build still in progress, since JVector's `GraphIndexBuilder` does not observe
+`Thread.interrupt()` on the thread that called it, only on the pool's own workers. But the insertion itself is
+`buildPool.submit(() -> IntStream.range(...).parallel().forEach(...)).join()`, joined from the calling thread -
+external to the pool. `shutdownNow()` only cancels tasks it still finds queued and unstarted; once insertion is
+under way, the joiner is parked on that specific task's own completion status, which an external (non-pool)
+`ForkJoinTask.join()` waits for without ever checking `Thread.interrupt()`. The original report reproduced a
+build thread still alive and parked in `ForkJoinTask.join()` a full 60 seconds after `db.close()` returned, with
+every pool worker already idle - `shutdownNow()` had nothing left to cancel, and nothing was ever going to mark
+that specific task done.
+
+The fix keeps a handle to the submitted insertion task and, on `releaseBackgroundResources()`, cancels it
+directly before shutting the pool down. `ForkJoinTask.cancel()` forces the task's own completion status and wakes
+every joiner waiting on it, which `shutdownNow()` cannot do for a task already under way. The resulting
+`CancellationException` is now recognized as the expected outcome of a close racing a build, logged once at INFO
+rather than surfacing as a SEVERE "Error building graph from scratch" wrapped in an opaque `IndexException`.
+
+[#5872](https://github.com/ArcadeData/arcadedb/issues/5872)
+
+## `batch()` on a gRPC connection now uses the gRPC streaming RPC instead of JSONL over HTTP (#6070)
+
+`RemoteGrpcDatabase.batch()` inherited `RemoteDatabase`'s implementation and returned a loader that posted its
+payload as JSONL to `POST /api/v1/batch`, over plain HTTP, whatever protocol the connection spoke. A caller who
+opened a gRPC connection got the HTTP transport silently, and nothing on the API surface said so. Meanwhile the
+`GraphBatchLoad` client-streaming RPC had been defined in the proto and implemented in `ArcadeDbGrpcService`
+since the gRPC module landed, with no client anywhere in the codebase calling it.
+
+`RemoteGrpcDatabase.batch()` now returns `RemoteGrpcGraphBatch`, which carries the load over that RPC. The public
+API is unchanged - same methods, same builder options, same results - so the switch is transparent to anything
+that only uses `batch()`. What changes underneath is where temporary ids are resolved. Over HTTP each flush is an
+independent request the server does not remember, so the loader has to ask for the id mapping back and rewrite
+the references of later edges itself; over one stream the server holds the mapping for the whole load, so a
+temporary id crosses a chunk boundary untouched. That removes the per-flush round trip, the client-side mapping
+arrays, and the ceiling `flushEvery` had on the HTTP path past which the server stops echoing a mapping too large
+to consume. The new loader adds `withTimeout()` for the deadline of the whole stream, and applies backpressure
+rather than handing gRPC chunks faster than the transport drains them.
+
+Wiring a real client onto the RPC surfaced the gaps that had gone unnoticed while it had none, each of which
+only shows on a load big enough to be worth a streaming transport, and each of which the HTTP endpoint had
+already had to solve:
+
+- **A load aimed at a follower is now refused instead of taken.** The bulk path mutates state only the leader can
+  serialize - the schema dictionary above all - so running it on a follower races the local state-machine apply
+  in `Dictionary.getIdByName`, which is the corruption #4122 was about and the reason `PostBatchHandler` relays
+  the payload to the leader. `GraphBatchLoad` had no such guard. It cannot relay the way HTTP does, because the
+  HA plugin exposes the leader's HTTP address only and relaying a bulk load through a follower would double the
+  traffic of the transport chosen to avoid exactly that, so it fails with `FAILED_PRECONDITION` naming the
+  leader - before writing anything, so there is nothing to reconcile.
+- **The temporary-id mapping is no longer always echoed back in full.** A load of a few million vertices built a
+  response past the default 4 MB message limit and failed at the very end, with everything already committed. The
+  new `return_id_mapping` option is a tri-state mirroring the HTTP `idMapping` parameter: unset caps it and
+  reports `id_mapping_omitted` / `id_mapping_size` past the cap, `true` demands it whatever the size, `false`
+  never sends it. The streaming loader sets `false`, having no use for a mapping the server resolves itself.
+- **A failed load now reports what it had already committed.** The batch commits incrementally, so an error is
+  not a rollback, but a gRPC status carries no message body. The counters ride the trailers of the failed call
+  and reach the caller through `getResult()`, which is readable after catching the failure - re-sending a load
+  blindly would double everything that did get through. On that trailer the edge count is what the batch
+  *flushed*, not what it received: an edge is buffered when its record arrives and reaches the database in a
+  later `commitEvery`-sized flush, with the incoming direction connected at close, so counting received edges
+  would claim ones that never landed and lead a caller to re-send too little and lose them. The counter
+  advances a flush at a time, so a load that dies mid-flush under-reports rather than over-reports - a
+  duplicate on re-send is recoverable, a silently missing edge is not. Vertices need no such distinction,
+  being counted once their own commit returns.
+- **`vertex_batch_size` is configurable.** It was hardcoded at 10,000 with no option to change it, which a
+  replicated database needs, one buffer being one Raft entry.
+- **The commit-retry knobs are reachable from the Java client.** `PostBatchHandler` had read `commitRetries` and
+  `commitRetryDelayMs` as query parameters since they were introduced, but `RemoteGraphBatch.Builder` never
+  exposed them, so no Java caller on either transport could set them. `withCommitRetries()` and
+  `withCommitRetryDelay()` were added to the shared builder, which closes the gap for HTTP as well. Both are
+  `optional` on the wire, because zero is a setting for each of them - no retries at all, and no back-off before
+  the first one - and not the same as leaving them alone, which a plain proto3 integer cannot express.
+
+The follower refusal runs *after* the caller has been resolved against the database it named, the way every
+other RPC on this service starts. Naming the leader is a fact about the cluster's layout, so a request that
+cannot reach the database it asked for is answered about that database rather than told where the leader lives.
+
+[#6070](https://github.com/ArcadeData/arcadedb/issues/6070)
+
+## Full backup is up to 27x faster, and throttles writers for 23x less time (#6072)
+
+**A full backup of a 1.25 GB database went from 18.9 seconds to 0.68 seconds - 27x - for an archive 7.5%
+larger.** On the same hardware the throughput scales almost linearly with the thread count, and the CPU spent
+is unchanged: the extra threads buy wall-clock, not work.
+
+| | before | after (8 threads) |
+|---|---|---|
+| Backup duration, 1.25 GB database | 18.9 s | **0.68 s** (27x) |
+| Effective throughput | 68 MB/s | **1,876 MB/s** |
+| Archive size | 323 MB | 348 MB (+7.5%) |
+| Writer throughput *during* the backup | 6,809 rec/s (4.3% of normal) | **123,192 rec/s (77%)** |
+| How long writers stay throttled | 48.6 s | **2.1 s** (23x less) |
+
+The last two rows are the ones that matter most in production, and they are why this is worth more than the
+headline number suggests. A backup does not merely take time, it *costs* the writers running alongside it:
+for its whole duration they are throttled. Shrinking the backup shrinks that window by the same factor, so the
+write work a single backup displaces drops by roughly 97x.
+
+The 27x is the eight-thread measurement. The default thread count is half the available processors capped at
+8, so what a given machine sees scales with it: about 4x on two cores, 8x on four, 15x on eight, and the full
+27x from sixteen cores up. All of these numbers come from `BackupCompressionBenchmark` in the integration
+module - they are measurements, not estimates, and the benchmark is in the tree so they can be reproduced.
+
+### What was slow
+
+`FullBackupFormat` streamed every database file into a ZIP at `setLevel(9)`, on the calling thread. Deflate at
+level 9 sustains roughly 20-40 MB/s on one core, so the backup was CPU bound long before it was I/O bound, and
+a 100 GB database was an hour or more of pure compression.
+
+Duration is not the only cost. The backup runs inside `PageManager.suspendFlushAndExecute`, and while flushing
+is suspended, dirty pages pile up in `PageManagerFlushThread.deferredByDatabase` until they hit
+`arcadedb.flushSuspendMaxDeferredRAM` (512 MB by default), past which committing threads are throttled instead.
+The backup's duration *is* the writer-throttling window, so making the backup n times faster shortens that
+window by the same factor. The read lock the backup also takes is not what users feel - it blocks schema
+changes and file creation, not transactions.
+
+Two changes, both measured rather than assumed:
+
+**The deflate level is now configurable and defaults to 1 instead of 9**
+(`arcadedb.backup.compressionLevel`). On a 1.25 GB database that is 3.1x faster for a 7.5% bigger archive
+(323 MB at level 9 against 348 MB at level 1). Level 6 is a reasonable middle - it costs roughly half of
+level 9 at the same ratio - and level 9 remains available for anyone who wants the smallest archive.
+
+> **Upgrade note.** This is a change of default, so a backup taken after upgrading is about 7.5% larger than
+> the same backup taken before it, with no configuration change on your side. If the backup target is sized
+> tightly, set `arcadedb.backup.compressionLevel=9` to keep exactly the previous archive sizes - they are
+> still produced several times faster than before, because the parallelism is independent of the level - or
+> `=6` for the same size at roughly half the CPU of 9.
+
+**Compression is now parallel** (`arcadedb.backup.compressionThreads`, default `-1` = half the available
+processors capped at 8). Splitting the work by archive entry would not have helped, because a database is
+often a handful of very large files and sometimes one dominant one, so the split is *inside* each entry: the
+reader cuts every file into 1 MB chunks, each chunk is deflated by its own `Deflater` and terminated with
+`SYNC_FLUSH`, and the compressed chunks are concatenated back in order. Deflate streams ended that way
+concatenate into one valid stream, which is the same construction pigz uses for parallel gzip; the only cost
+is that each chunk starts from an empty dictionary, measured at well under 1% of ratio at that chunk size. Peak heap
+for the parallel path is bounded by construction at two chunks in flight per thread, each holding a ~1 MB input and a
+~1 MB output buffer: ~32 MB of buffers at 8 threads, which is the ~45 MB the benchmark measures minus the ~12 MB
+baseline the process uses anyway.
+Scaling is close to linear: on the same 1.25 GB database, level 1 takes 6.2 s single-threaded, 2.5 s on 2
+threads, 1.3 s on 4 and 0.7 s on 8, against 18.9 s for the old default - **27x end to end**. Peak heap for the
+parallel path is bounded by construction at two chunk buffers per thread, measured at 33 MB above baseline on
+8 threads.
+
+`java.util.zip.ZipOutputStream` owns its `Deflater` and cannot be handed pre-compressed data, so the parallel
+path emits the ZIP container itself (`ParallelZipArchiveWriter`). **The archive format did not change.** Sizes
+are unknown when an entry header is written, so the writer uses the streaming form the ZIP specification
+provides for exactly that case - general-purpose bit 3, zeroed sizes in the local header, a data descriptor
+after the data - which is what `ZipOutputStream` itself emits for a `DEFLATED` entry of unknown size. Old
+backups restore, new backups restore through the unchanged restore path, and both are readable by any standard
+unzip tool, including the ZIP64 extensions an entry above 4 GB needs. The previous single-threaded writer is
+still there and is selected by `arcadedb.backup.compressionThreads = 0`.
+
+The number that matters most is not the backup's own duration but what it does to the writers it runs
+alongside. Under a sustained insert load, measuring only inside the backup window: writers sustained 159,560
+rec/s with no backup running, 6,809 rec/s (4.3%) for the 48.6 s a level-9 single-threaded backup took, and
+123,192 rec/s (77%) for the 2.1 s the new default took. The deferred-RAM high-water mark reached the 512 MB
+`flushSuspendMaxDeferredRAM` cap in every backed-up run, confirming writers were being throttled outright -
+what changed is how long they were. Commit latency inside the window is barely affected either way
+(p95 1,952 us against a 1,627 us baseline, p99 2,123 us against 3,393 us); throughput, not latency, is where
+the suspension is paid for.
+
+A third, optional knob caps the rate at which the backup reads the database files
+(`arcadedb.backup.maxMBPerSecond`, 0 = unlimited) so a backup cannot saturate the production disk. It is off by
+default, and it trades against the flush suspension: throttling makes the backup last longer, and writers are
+throttled for the whole of it.
+
+All three are settable per backup as well: on the command line (`-compressionLevel`, `-compressionThreads`,
+`-maxMBPerSecond`), through the `Backup` API, and in SQL
+(`BACKUP DATABASE ... WITH compressionLevel = 6, compressionThreads = 4`).
+
+### Two defects found on the way
+
+`BACKUP DATABASE ... WITH ...` silently dropped **every** setting. The statement matched the setting name
+against `Expression.toString()`, which renders a string quoted, so no `case` ever matched. The visible
+consequence was that `WITH encryptionKey = '...'` produced an archive in clear - it restored without the key.
+The same statement's `copy()` also dropped the settings map, so a copy taken from the statement cache lost
+them again. Both are fixed and covered by a test that proves the archive is genuinely encrypted, by asserting
+a restore without the key fails.
+
+An unrecognised setting name is now an error rather than being ignored, which closes the same hole by a
+second route: `WITH encryptionkey = '...'`, one wrong character, would otherwise still look like a request
+for an encrypted archive and produce a cleartext one. Nothing that worked stops working - until the fix
+above, every setting was ignored, so no statement can have depended on one being accepted.
+
+A backup that failed halfway still reported success. `PageManager.suspendFlushAndExecute` runs its callback
+through `CodeUtils.executeIgnoringExceptions`, which logs and swallows, so an I/O error mid-backup left the
+archive to be finalized with a valid central directory over a truncated set of entries - a backup that looks
+valid and is not, which is the worst failure mode this code has. The failure is now carried out of the
+suspension by hand, the partial archive is deleted, and only a backup that actually succeeded gets a central
+directory written at all: a failed one aborts the writer instead, so even if the delete cannot happen
+(permissions, a full or read-only filesystem) what is left is structurally invalid rather than plausible.
+
+[#6072](https://github.com/ArcadeData/arcadedb/issues/6072)

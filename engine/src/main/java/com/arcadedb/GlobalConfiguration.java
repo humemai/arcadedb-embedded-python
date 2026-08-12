@@ -460,8 +460,12 @@ public enum GlobalConfiguration {
   TX_RETRIES("arcadedb.txRetries", SCOPE.DATABASE, "Number of retries in case of MVCC exception", Integer.class, 3),
 
   TX_RETRY_DELAY("arcadedb.txRetryDelay", SCOPE.DATABASE,
-      "Maximum amount of milliseconds to compute a random number to wait for the next retry. This setting is helpful in case of high concurrency on the same pages (multi-thread insertion over the same bucket)",
+      "Cap in milliseconds on the random wait before the next transaction retry (issue #5587: exponential backoff with full jitter, min(this cap, TX_RETRY_DELAY_BASE * 2^attempt)). Helpful in case of high concurrency on the same pages (multi-thread insertion over the same bucket). Set to 0 to disable the delay entirely",
       Integer.class, 100),
+
+  TX_RETRY_DELAY_BASE("arcadedb.txRetryDelayBase", SCOPE.DATABASE,
+      "Starting size in milliseconds of the transaction retry backoff window, before doubling on each further attempt up to the TX_RETRY_DELAY cap (issue #5587). Kept small by default so light contention (which resolves in a handful of attempts) sees a shorter wait than before, while a long-running retry loop still saturates at the same worst-case cap as a single flat TX_RETRY_DELAY window",
+      Integer.class, 2),
 
   DELETE_TOLERATE_BROKEN_CHAIN("arcadedb.deleteTolerateBrokenChain", SCOPE.DATABASE,
       "When deleting a record whose own multi-page chunk chain is structurally broken, complete the deletion anyway instead of failing (for a vertex, this also disconnects its edges best-effort, which can leave dangling edges if some cannot be reached). Disabled by default: such a delete fails loudly instead, requiring an explicit CHECK DATABASE FIX to repair or remove the broken record deliberately - CHECK DATABASE FIX itself is unaffected by this setting either way, so the record is never permanently stuck (issues #4420/#4432). Enable only to restore the older behavior of a normal DELETE silently forcing through instead",
@@ -480,7 +484,7 @@ public enum GlobalConfiguration {
       Long.class, 16L * 1024 * 1024),
 
   GRAPH_SUPERNODE_THRESHOLD("arcadedb.graph.supernodeThreshold", SCOPE.DATABASE,
-      "Approximate number of edges (per vertex, per direction) after which the vertex's edge list is promoted to the striped super-node layout, spreading further appends over multiple files so concurrent insertions on the same hot vertex do not contend. FORWARD-INCOMPATIBLE ON FIRST USE: promotion writes a new record type (the stripe directory), so once any vertex promotes, the database can no longer be opened by releases older than 26.8.1; promotion is one-way. This ordering guarantee applies only to the OLTP edge-list read walks (edgeIterator/vertexIterator/ridIterator): iteration order on promoted vertices is APPROXIMATELY newest-first instead of exactly newest-first, the stripe chains are interleaved so the newest edge is always within the first 'supernodeStripes' entries and an edge of recency rank r is returned at a position of order r, but only the order WITHIN a stripe is exact - an application needing an exact order must sort or use an index. It does NOT hold for a query the planner routes through a GraphAnalyticalView (e.g. GAVExpandAll): a view returns neighbours ordered by internal dense node ID, which carries no relationship to recency. 0 disables promotion entirely (databases stay fully readable by older versions)",
+      "Approximate number of edges (per vertex, per direction) after which the vertex's edge list is promoted to the striped super-node layout, spreading further appends over multiple files so concurrent insertions on the same hot vertex do not contend. FORWARD-INCOMPATIBLE ON FIRST USE: promotion writes a new record type (the stripe directory), so once any vertex promotes, the database can no longer be opened by releases older than 26.8.1; promotion is one-way. This ordering guarantee applies only to the OLTP edge-list read walks (edgeIterator/vertexIterator/ridIterator): iteration order on promoted vertices is APPROXIMATELY newest-first instead of exactly newest-first, the stripe chains are interleaved so the newest edge is always within the first 'supernodeStripes' entries and an edge of recency rank r is returned at a position of order r, but only the order WITHIN a stripe is exact - an application needing an exact order must sort or use an index. That rank-fidelity itself only holds for the first 'supernodeInterleaveRounds x supernodeStripes' entries of a read; past that, the walk falls back to concatenating whatever is left of each chain (see GRAPH_SUPERNODE_INTERLEAVE_ROUNDS). It does NOT hold for a query the planner routes through a GraphAnalyticalView (e.g. GAVExpandAll): a view returns neighbours ordered by internal dense node ID, which carries no relationship to recency. 0 disables promotion entirely (databases stay fully readable by older versions)",
       Integer.class, 4096),
 
   GRAPH_EDGE_LIST_INITIAL_CHUNK_SIZE("arcadedb.graph.edgeListInitialChunkSize", SCOPE.DATABASE,
@@ -491,9 +495,54 @@ public enum GlobalConfiguration {
       "Number of stripes (separate edge-list files) a super-node's edge list is spread over at promotion. The stripes are hosted in a per-type bucket pool of this many files, created once per type at its first promotion (types without super-nodes cost no files). Write parallelism saturates at the number of concurrent writers, so values beyond the CPU cores rarely help. Values below 2 disable promotion entirely. Recorded per vertex at promotion time",
       Integer.class, 16),
 
+  GRAPH_SUPERNODE_INTERLEAVE_ROUNDS("arcadedb.graph.supernodeInterleaveRounds", SCOPE.DATABASE,
+      "Number of round-robin ROUNDS (one entry taken from every stripe chain per round) a super-node read walk (edgeIterator/vertexIterator/ridIterator) keeps interleaved before degrading the rest of the walk to plain concatenation of whatever is left in each chain. The interleaved (approximately newest-first) order only helps a caller reading a bounded prefix - paging, a query with a small LIMIT; a caller still reading past 'rounds x supernodeStripes' entries is doing a full walk, where the order is not going to be consulted and the interleaving's resident chunk page per stripe (as opposed to one, for a single cursor draining a chain at a time) is a pure locality cost paid for nothing (#6048). The degrade point scales with the live stripe count of the generation being walked, not with the vertex's total degree, so the extra cost a full walk pays for the ordered prefix is bounded regardless of how large the super-node grows. 0 disables interleaving entirely (immediate concatenation, the pre-#6044 order); a negative value behaves the same as 0 rather than being rejected",
+      Integer.class, 64),
+
   BACKUP_ENABLED("arcadedb.backup.enabled", SCOPE.DATABASE,
       "Allow a database to be backup. Disabling backup gives a huge boost in performance because no lock will be used for every operations",
       Boolean.class, true),
+
+  BACKUP_COMPRESSION_LEVEL("arcadedb.backup.compressionLevel", SCOPE.DATABASE,
+      """
+      Deflate level (0 = store, 1 = fastest, 9 = smallest) used to compress a full backup. The backup is CPU bound, \
+      not I/O bound, so this is the single most effective knob on its duration - and the backup's duration is also \
+      the window during which page flushing is suspended and committing threads are throttled \
+      (FLUSH_SUSPEND_MAX_DEFERRED_RAM), so a shorter backup is a shorter stall for writers. The default was lowered \
+      from 9 to 1 on measurement, not intuition: on a 1.25 GB database it is 3.1x faster for a 7.5% bigger archive \
+      (323 MB at level 9, 348 MB at level 1). Raise it when the archive size matters more than both the backup \
+      duration and its impact on concurrent writers - level 6 is a good middle, roughly half the cost of 9 at the \
+      same ratio.""",
+      Integer.class, 1, integerRangeAsStrings(0, 9)),
+
+  BACKUP_COMPRESSION_THREADS("arcadedb.backup.compressionThreads", SCOPE.DATABASE,
+      """
+      Number of threads used to compress a full backup. Each entry is cut into chunks that are deflated in parallel \
+      and concatenated back in order, so the parallelism applies WITHIN a file too and a database made of one \
+      dominant file still scales. -1 (the default) sizes the pool automatically at half the available processors, \
+      capped at 8, leaving room for the live workload the backup is running alongside; 0 selects the legacy \
+      single-threaded java.util.zip.ZipOutputStream writer, kept as an escape hatch. The archive is an ordinary ZIP \
+      whichever value is used: old backups restore and new backups restore with the unchanged restore path. Peak heap \
+      for the parallel path is bounded by construction at two chunks in flight per thread, each holding one input and \
+      one output buffer of about the 1 MB chunk size - so roughly 4 MB per thread, ~32 MB of buffers at 8 threads. That \
+      is the compressor's own footprint, not the process total: measured heap during an 8-thread backup is ~45 MB, the \
+      ~32 MB of buffers on top of a ~12 MB baseline.""",
+      // THE 256 IS THE SAME BOUND AS BackupSettings.MAX_COMPRESSION_THREADS, WHICH THE CLI, THE Backup API AND SQL
+      // VALIDATE AGAINST. IT HAS TO BE REPEATED HERE RATHER THAN REFERENCED BECAUSE THE ENGINE CANNOT DEPEND ON THE
+      // INTEGRATION MODULE: CHANGE ONE AND CHANGE THE OTHER
+      Integer.class, -1, integerRangeAsStrings(-1, 256)),
+
+  BACKUP_MAX_MB_PER_SECOND("arcadedb.backup.maxMBPerSecond", SCOPE.DATABASE,
+      """
+      Optional cap, in MB/s, on the rate at which a full backup reads the database files, so a backup cannot \
+      saturate the production disk. It is deliberately applied to the read side: that is the I/O competing with the \
+      live workload, while the archive is smaller and normally written to another device. 0 (the default) means no \
+      limit. Note the trade-off with the flush suspension: throttling makes the backup last longer, and writers are \
+      throttled for the whole of it, so this is for deployments where read I/O, not commit latency, is the scarce \
+      resource. Unlike the other two backup settings this one carries no allowed-value set, because it needs none: \
+      the range is open-ended upwards, and any non-positive value simply disables the throttle rather than being \
+      invalid.""",
+      Integer.class, 0),
 
   // SQL
   SQL_STATEMENT_CACHE("arcadedb.sqlStatementCache", SCOPE.DATABASE, "Maximum number of parsed statements to keep in cache",

@@ -19,9 +19,12 @@
 package com.arcadedb.remote;
 
 import com.arcadedb.database.RID;
+import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 
+import java.lang.reflect.Array;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -49,6 +52,13 @@ import java.util.Map;
  * }
  * // batch.getResult().getVerticesCreated() == 2
  * </pre>
+ * <p>
+ * This class is the JSONL-over-HTTP loader. A connection that speaks another protocol returns its own subclass
+ * from {@code batch()} and carries the load over that protocol instead: {@code RemoteGrpcDatabase} returns a
+ * loader backed by the {@code GraphBatchLoad} streaming RPC (issue #6070). The public API above is the same for
+ * either, and so is the meaning of every {@link Builder} option; what differs is that a transport holding one
+ * session for the whole load has the server resolve temporary ids, where this one resolves them client-side
+ * because each flush is an independent request the server does not remember.
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
@@ -58,21 +68,21 @@ public class RemoteGraphBatch implements AutoCloseable {
   private static final int DEFAULT_BUFFER_SIZE = 8192;
   private static final int INITIAL_MAPPING_CAPACITY = 1024;
 
-  private final RemoteDatabase      database;
-  private final Map<String, String> queryParams;
-  private final int                 flushEvery;
-  private final StringBuilder       buffer;
-  private       int                 vertexCounter;
+  private final   RemoteDatabase      database;
+  private final   Map<String, String> queryParams;
+  private final   int                 flushEvery;
+  private final   StringBuilder       buffer;
+  protected       int                 vertexCounter;
   /** Position of the first vertex of the buffer being filled, i.e. what the server has to number this payload from. */
-  private       int                 bufferOrdinalBase;
-  private       int                 itemsInBuffer;
-  private       boolean             hasEdges;
-  private       boolean             closed;
+  private         int                 bufferOrdinalBase;
+  private         int                 itemsInBuffer;
+  protected       boolean             hasEdges;
+  protected       boolean             closed;
 
   // --- Aggregated result across all flushes ---
-  private long totalVerticesCreated;
-  private long totalEdgesCreated;
-  private long totalElapsedMs;
+  protected long totalVerticesCreated;
+  protected long totalEdgesCreated;
+  protected long totalElapsedMs;
 
   // --- Resolved temp ID mapping: flat arrays indexed by vertex counter ---
   // resolvedBucketIds[i] and resolvedPositions[i] hold the real RID for vertex "v<i>"
@@ -96,6 +106,23 @@ public class RemoteGraphBatch implements AutoCloseable {
     this.buffer = new StringBuilder(DEFAULT_BUFFER_SIZE);
     this.resolvedBucketIds = new int[INITIAL_MAPPING_CAPACITY];
     this.resolvedPositions = new long[INITIAL_MAPPING_CAPACITY];
+  }
+
+  /**
+   * Constructor for a subclass that carries the load over a different transport. None of the state this class
+   * keeps for the JSONL-over-HTTP path is allocated: the payload buffer, the flush accounting and the
+   * client-side temporary-id mapping all exist because each flush is an independent stateless request, and a
+   * transport that holds one session for the whole load has the server resolve references instead. A subclass
+   * using it must override {@link #createVertex}, {@link #createEdge} and {@link #flush}, which would otherwise
+   * dereference the buffer this constructor leaves null.
+   */
+  protected RemoteGraphBatch(final RemoteDatabase database) {
+    this.database = database;
+    this.queryParams = null;
+    this.flushEvery = Integer.MAX_VALUE;
+    this.buffer = null;
+    this.resolvedBucketIds = null;
+    this.resolvedPositions = null;
   }
 
   /**
@@ -235,7 +262,7 @@ public class RemoteGraphBatch implements AutoCloseable {
     flush();
   }
 
-  private void checkOpen() {
+  protected void checkOpen() {
     if (closed)
       throw new IllegalStateException("Batch is already closed");
   }
@@ -269,7 +296,11 @@ public class RemoteGraphBatch implements AutoCloseable {
     resolvedPositions = Arrays.copyOf(resolvedPositions, newSize);
   }
 
-  // --- JSON serialization helpers (zero-allocation per-record) ---
+  // --- JSON serialization helpers ---
+  // Scalars and the typed primitive-array fast paths (appendJsonFloatArray and siblings) are
+  // zero-allocation. Map/Collection/JSONArray/boxed-array values are not (iterators, toList(),
+  // Array.get() boxing), but those are comparatively rare property shapes, not the per-record
+  // scalar hot path this was originally written for.
 
   static void appendProperties(final StringBuilder sb, final Object[] properties) {
     if (properties == null || properties.length == 0)
@@ -292,8 +323,160 @@ public class RemoteGraphBatch implements AutoCloseable {
       appendJsonString(sb, (String) value);
     else if (value instanceof Number || value instanceof Boolean)
       sb.append(value);
+    else if (value instanceof Map<?, ?> map)
+      // JSONObject implements Map<String, Object>, so it (and any nested JSONObject reached
+      // through recursion) is already covered here.
+      appendJsonMap(sb, map);
+    else if (value instanceof Collection<?> collection)
+      appendJsonCollection(sb, collection);
+    else if (value instanceof JSONArray jsonArray)
+      // JSONArray is Iterable<Object> but deliberately not a java.util.Collection (issue #5091),
+      // so without this branch it would fall through to value.toString() and get re-quoted as a
+      // JSON string instead of emitted as a JSON array - the same bug class this fix addresses for
+      // java.util.Map/Collection, just for ArcadeDB's own JSON wrapper type. toList() recursively
+      // normalizes any nested JSONObject/JSONArray to Map/List, so the existing
+      // appendJsonCollection -> appendJsonValue recursion handles the rest correctly.
+      appendJsonCollection(sb, jsonArray.toList());
+    else if (value instanceof float[] floats)
+      appendJsonFloatArray(sb, floats);
+    else if (value instanceof double[] doubles)
+      appendJsonDoubleArray(sb, doubles);
+    else if (value instanceof int[] ints)
+      appendJsonIntArray(sb, ints);
+    else if (value instanceof long[] longs)
+      appendJsonLongArray(sb, longs);
+    else if (value instanceof short[] shorts)
+      appendJsonShortArray(sb, shorts);
+    else if (value instanceof byte[] bytes)
+      appendJsonByteArray(sb, bytes);
+    else if (value.getClass().isArray())
+      appendJsonArray(sb, value);
     else
       appendJsonString(sb, value.toString());
+  }
+
+  // MAP-typed properties must be sent as a real JSON object (not `value.toString()`, which
+  // produces a plain string like "{1=1, 2=2}") or DocumentValidator rejects the value on
+  // the server as an incompatible type for the declared MAP property - see issue #6061.
+  // Keys are stringified with String.valueOf(), assuming the caller uses one consistent key
+  // type (ArcadeDB MAP properties are conventionally String-keyed): a map mixing key types that
+  // collide once stringified (e.g. Integer 1 and Long 1L) would silently lose an entry to
+  // last-write-wins, the same as any JSON object with a duplicate key.
+  static void appendJsonMap(final StringBuilder sb, final Map<?, ?> map) {
+    sb.append('{');
+    boolean first = true;
+    for (final Map.Entry<?, ?> entry : map.entrySet()) {
+      if (!first)
+        sb.append(',');
+      first = false;
+      appendJsonString(sb, String.valueOf(entry.getKey()));
+      sb.append(':');
+      appendJsonValue(sb, entry.getValue());
+    }
+    sb.append('}');
+  }
+
+  // Same rationale as appendJsonMap(), for LIST-typed properties.
+  static void appendJsonCollection(final StringBuilder sb, final Collection<?> collection) {
+    sb.append('[');
+    boolean first = true;
+    for (final Object item : collection) {
+      if (!first)
+        sb.append(',');
+      first = false;
+      appendJsonValue(sb, item);
+    }
+    sb.append(']');
+  }
+
+  // Typed fast paths for the primitive numeric array kinds ArcadeDB uses for vector-embedding
+  // properties (ARRAY_OF_FLOATS/_DOUBLES/_INTEGERS/_LONGS/_SHORTS). These avoid the boxing that
+  // java.lang.reflect.Array.get() forces in the generic appendJsonArray() fallback below: an
+  // embedding property routinely carries hundreds/thousands of dimensions across up to
+  // flushEvery (default 50,000) vertices per flush, and this file is documented as
+  // "zero-allocation per-record" for exactly this kind of hot path.
+  static void appendJsonFloatArray(final StringBuilder sb, final float[] array) {
+    sb.append('[');
+    for (int i = 0; i < array.length; i++) {
+      if (i > 0)
+        sb.append(',');
+      sb.append(array[i]);
+    }
+    sb.append(']');
+  }
+
+  static void appendJsonDoubleArray(final StringBuilder sb, final double[] array) {
+    sb.append('[');
+    for (int i = 0; i < array.length; i++) {
+      if (i > 0)
+        sb.append(',');
+      sb.append(array[i]);
+    }
+    sb.append(']');
+  }
+
+  static void appendJsonIntArray(final StringBuilder sb, final int[] array) {
+    sb.append('[');
+    for (int i = 0; i < array.length; i++) {
+      if (i > 0)
+        sb.append(',');
+      sb.append(array[i]);
+    }
+    sb.append(']');
+  }
+
+  static void appendJsonLongArray(final StringBuilder sb, final long[] array) {
+    sb.append('[');
+    for (int i = 0; i < array.length; i++) {
+      if (i > 0)
+        sb.append(',');
+      sb.append(array[i]);
+    }
+    sb.append(']');
+  }
+
+  static void appendJsonShortArray(final StringBuilder sb, final short[] array) {
+    sb.append('[');
+    for (int i = 0; i < array.length; i++) {
+      if (i > 0)
+        sb.append(',');
+      sb.append(array[i]);
+    }
+    sb.append(']');
+  }
+
+  // byte[] (ArcadeDB's BINARY property type) gets the same typed fast path as the numeric array
+  // kinds above. Unlike those, the server needed a matching addition: Type.convert() had narrowing
+  // branches for float[]/double[]/int[]/long[]/short[] but not byte[], so a JSON array parsed into a
+  // List<Number> was left unconverted and silently stored as an untyped List instead of a byte[]
+  // (issue #6061 code review follow-up) - see the Collection -> byte[] branch added to Type.convert().
+  static void appendJsonByteArray(final StringBuilder sb, final byte[] array) {
+    sb.append('[');
+    for (int i = 0; i < array.length; i++) {
+      if (i > 0)
+        sb.append(',');
+      sb.append(array[i]);
+    }
+    sb.append(']');
+  }
+
+  // Remaining array kinds (Object[]/String[]/..., boxed Float[]/Double[]/..., boolean[], char[])
+  // fall back to reflection - they hit the same bug as Map/List: a plain array is not a Collection,
+  // so without this branch it would fall through to value.toString() (e.g. "[F@6b95977c").
+  // java.lang.reflect.Array iterates any array type generically, mirroring JSONObject.put()'s handling
+  // of the same case. The server-side Type.convert() already knows how to narrow a JSON array (parsed
+  // as a List) back to the schema-declared array type for every array kind ArcadeDB defines a
+  // property type for, so emitting a plain JSON array here is sufficient - no further client-side
+  // type-specific handling is needed.
+  static void appendJsonArray(final StringBuilder sb, final Object array) {
+    sb.append('[');
+    final int length = Array.getLength(array);
+    for (int i = 0; i < length; i++) {
+      if (i > 0)
+        sb.append(',');
+      appendJsonValue(sb, Array.get(array, i));
+    }
+    sb.append(']');
   }
 
   static void appendJsonString(final StringBuilder sb, final String s) {
@@ -331,11 +514,28 @@ public class RemoteGraphBatch implements AutoCloseable {
    * the server-side GraphBatch.Builder options.
    */
   public static class Builder {
-    private final RemoteDatabase      database;
-    private final Map<String, String> queryParams = new HashMap<>();
-    private       int                 flushEvery  = DEFAULT_FLUSH_EVERY;
+    protected final RemoteDatabase database;
+    protected       int            flushEvery = DEFAULT_FLUSH_EVERY;
 
-    Builder(final RemoteDatabase database) {
+    // Options are held typed rather than pre-rendered into query-string entries so a subclass carrying the load
+    // over a transport that is not HTTP can read them back without parsing its own parameters (issue #6070).
+    // Boxed because "not set" and "set to the server default" are different: the server only overrides a default
+    // for an option the caller actually chose.
+    protected Integer batchSize;
+    protected Integer expectedEdgeCount;
+    protected Integer edgeListInitialSize;
+    protected Boolean lightEdges;
+    protected Boolean bidirectional;
+    protected Integer commitEvery;
+    protected Integer vertexBatchSize;
+    protected Boolean useWAL;
+    protected Boolean preAllocateEdgeChunks;
+    protected Boolean parallelFlush;
+    protected Integer commitRetries;
+    protected Long    commitRetryDelayMs;
+
+    /** Not for direct use: a builder comes from {@link RemoteDatabase#batch()}, which picks the right one for its transport. */
+    protected Builder(final RemoteDatabase database) {
       this.database = database;
     }
 
@@ -353,19 +553,19 @@ public class RemoteGraphBatch implements AutoCloseable {
 
     /** Maximum number of edges buffered before an automatic flush on the server. Default: 100,000. */
     public Builder withBatchSize(final int batchSize) {
-      queryParams.put("batchSize", String.valueOf(batchSize));
+      this.batchSize = batchSize;
       return this;
     }
 
     /** Hint for expected total edge count, used for server-side auto-tuning. */
     public Builder withExpectedEdgeCount(final int expectedEdgeCount) {
-      queryParams.put("expectedEdgeCount", String.valueOf(expectedEdgeCount));
+      this.expectedEdgeCount = expectedEdgeCount;
       return this;
     }
 
     /** Initial size in bytes for new edge segments. Default: 2048. */
     public Builder withEdgeListInitialSize(final int size) {
-      queryParams.put("edgeListInitialSize", String.valueOf(size));
+      this.edgeListInitialSize = size;
       return this;
     }
 
@@ -376,19 +576,19 @@ public class RemoteGraphBatch implements AutoCloseable {
      */
     @Deprecated
     public Builder withLightEdges(final boolean lightEdges) {
-      queryParams.put("lightEdges", String.valueOf(lightEdges));
+      this.lightEdges = lightEdges;
       return this;
     }
 
     /** If true, incoming edges are also connected. Default: true. */
     public Builder withBidirectional(final boolean bidirectional) {
-      queryParams.put("bidirectional", String.valueOf(bidirectional));
+      this.bidirectional = bidirectional;
       return this;
     }
 
     /** Number of edges to process before committing within a server-side flush. Default: 50,000. */
     public Builder withCommitEvery(final int commitEvery) {
-      queryParams.put("commitEvery", String.valueOf(commitEvery));
+      this.commitEvery = commitEvery;
       return this;
     }
 
@@ -400,32 +600,78 @@ public class RemoteGraphBatch implements AutoCloseable {
     public Builder withVertexBatchSize(final int vertexBatchSize) {
       if (vertexBatchSize < 1)
         throw new IllegalArgumentException("vertexBatchSize must be greater than 0");
-      queryParams.put("vertexBatchSize", String.valueOf(vertexBatchSize));
+      this.vertexBatchSize = vertexBatchSize;
       return this;
     }
 
     /** If true, enables Write-Ahead Logging during import. Default: false. */
     public Builder withWAL(final boolean useWAL) {
-      queryParams.put("wal", String.valueOf(useWAL));
+      this.useWAL = useWAL;
       return this;
     }
 
     /** If true, pre-allocates empty edge segments at vertex creation. Default: true. */
     public Builder withPreAllocateEdgeChunks(final boolean preAllocate) {
-      queryParams.put("preAllocateEdgeChunks", String.valueOf(preAllocate));
+      this.preAllocateEdgeChunks = preAllocate;
       return this;
     }
 
     /** If true, edge connection during flush is parallelized. Default: true. */
     public Builder withParallelFlush(final boolean parallel) {
-      queryParams.put("parallelFlush", String.valueOf(parallel));
+      this.parallelFlush = parallel;
       return this;
+    }
+
+    /**
+     * Number of times a vertex-creation commit is retried when it fails with a transient error, such as a
+     * quorum lost to a leader re-election on a replicated database. Default: 10. Set to 0 to fail on the first
+     * error instead of retrying.
+     */
+    public Builder withCommitRetries(final int commitRetries) {
+      if (commitRetries < 0)
+        throw new IllegalArgumentException("commitRetries must be >= 0");
+      this.commitRetries = commitRetries;
+      return this;
+    }
+
+    /**
+     * Initial back-off in milliseconds before the first vertex-commit retry; later retries back off
+     * exponentially from it. Default: 1000.
+     */
+    public Builder withCommitRetryDelay(final long commitRetryDelayMs) {
+      if (commitRetryDelayMs < 0)
+        throw new IllegalArgumentException("commitRetryDelayMs must be >= 0");
+      this.commitRetryDelayMs = commitRetryDelayMs;
+      return this;
+    }
+
+    /** Renders the options chosen by the caller as the query-string parameters of {@code POST /api/v1/batch}. */
+    protected Map<String, String> toQueryParams() {
+      final Map<String, String> queryParams = new HashMap<>();
+      putIfSet(queryParams, "batchSize", batchSize);
+      putIfSet(queryParams, "expectedEdgeCount", expectedEdgeCount);
+      putIfSet(queryParams, "edgeListInitialSize", edgeListInitialSize);
+      putIfSet(queryParams, "lightEdges", lightEdges);
+      putIfSet(queryParams, "bidirectional", bidirectional);
+      putIfSet(queryParams, "commitEvery", commitEvery);
+      putIfSet(queryParams, "vertexBatchSize", vertexBatchSize);
+      putIfSet(queryParams, "wal", useWAL);
+      putIfSet(queryParams, "preAllocateEdgeChunks", preAllocateEdgeChunks);
+      putIfSet(queryParams, "parallelFlush", parallelFlush);
+      putIfSet(queryParams, "commitRetries", commitRetries);
+      putIfSet(queryParams, "commitRetryDelayMs", commitRetryDelayMs);
+      return queryParams;
+    }
+
+    private static void putIfSet(final Map<String, String> queryParams, final String name, final Object value) {
+      if (value != null)
+        queryParams.put(name, value.toString());
     }
 
     /** Creates the {@link RemoteGraphBatch} ready for buffering vertices and edges. */
     public RemoteGraphBatch build() {
       final int effectiveFlushEvery = flushEvery == 0 ? Integer.MAX_VALUE : flushEvery;
-      return new RemoteGraphBatch(database, queryParams, effectiveFlushEvery);
+      return new RemoteGraphBatch(database, toQueryParams(), effectiveFlushEvery);
     }
   }
 }
