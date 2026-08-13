@@ -533,8 +533,6 @@ def _python_cost_table():
             "language boundary does. Asking for row objects is 13.8x slower "
             "than asking for columns over the same query, so the practical "
             "advice is to use the columnar or batched call for anything large.",
-            "A different setup from the engine tables above: Stack Exchange "
-            "corpora, eight cores rather than twelve. Read it on its own.",
         ],
         "columns": ["time ms", "vs Java"],
         "withheld_scales": [],

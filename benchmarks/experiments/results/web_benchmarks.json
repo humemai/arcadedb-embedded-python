@@ -2379,8 +2379,7 @@
       "dataset": "Same engine, same query, called from Java and from Python",
       "conditions": [
         "The engine itself runs at the same speed either way. What Python is charged for is moving results across the boundary, which is why the vector search costs 1.28x and the scan 1.63x rather than anything scaling with the work the engine did.",
-        "The path you choose inside Python matters far more than the language boundary does. Asking for row objects is 13.8x slower than asking for columns over the same query, so the practical advice is to use the columnar or batched call for anything large.",
-        "A different setup from the engine tables above: Stack Exchange corpora, eight cores rather than twelve. Read it on its own."
+        "The path you choose inside Python matters far more than the language boundary does. Asking for row objects is 13.8x slower than asking for columns over the same query, so the practical advice is to use the columnar or batched call for anything large."
       ],
       "columns": [
         "time ms",
