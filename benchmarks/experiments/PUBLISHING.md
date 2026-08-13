@@ -80,13 +80,26 @@ warn:
 | `provenance_check` | does every cell trace to a run |
 | `fairness_check` | F1–F9 comparison invariants |
 | `claims_check` | does the paper's hand-typed prose match the data |
-| `page_check` | does the page agree with the paper |
+| `page_check.MAPPING` | do the page's table cells agree with the paper |
+| `page_check.PROSE` | do the page's hand-typed prose numbers agree with the paper |
 | `_check_no_orphan_figures` | is every generated figure cited by a `.tex` |
 | refresh step 5 | is every figure the page references a generated one |
 
 The last two compose into the property that matters: a figure on the page must
 be a figure in a paper. `WEB_ONLY_FIGURES` is the escape hatch and is
 deliberately empty — earn a line in it, do not assume one.
+
+`MAPPING` and `PROSE` split the page the same way `claims_check` splits the
+paper, and for the same reason. Cells are written by the exporter straight from
+the frozen results, so a wrong one is nearly impossible. Prose is typed by hand,
+so a wrong one is nearly inevitable: an f4 caption shipped on 2026-08-13 giving
+Qdrant's dense latency as 1.30 ms and its recall as 98.0%, both read off the
+canonical CSV rows, while ArcadeDB's number in the same sentence came from the
+matched overlay that the paper's own T5 reads — which says 1.31 and 97.8%. No
+published cell was wrong and nothing was invented; two sources were mixed inside
+one sentence. That is the failure `_check_f4_against_tables` already guarded
+between figures and tables, after it happened three separate times. Prose was
+the last surface with no equivalent.
 
 ## Adding a table to the page
 
@@ -96,7 +109,10 @@ deliberately empty — earn a line in it, do not assume one.
 4. Add its headline cells to `page_check.MAPPING`, so the page and the paper
    are pinned to each other. A table nothing pins can drift silently, which is
    exactly what happened to f5.
-5. Run the command above.
+5. If the prose around it quotes any number, add each one to `page_check.PROSE`
+   with a regex that captures the digits as printed. Quoting a number in a
+   sentence is making a claim; a claim nothing pins is one nothing checks.
+6. Run the command above.
 
 ## Adding a figure to the page
 

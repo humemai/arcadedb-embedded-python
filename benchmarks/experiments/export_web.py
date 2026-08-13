@@ -591,9 +591,12 @@ def _embedded_vs_tables():
                 # NO conditions on these three. What used to be here is now
                 # said once each, in the right place: the shared protocol in
                 # the page's Reproducing section, and the cross-set caveat in
-                # the prose that introduces these tables. Rendered per table it
+                # the paragraph that CLOSES these tables. Rendered per table it
                 # was three tables times three paragraphs, and the protocol
                 # sentence alone appeared eight times down the page.
+                # The caveat sits after rather than before them on purpose: it
+                # only means anything once the reader has the rows in hand, and
+                # in front it read as an apology for numbers not yet seen.
                 "conditions": [],
                 "columns": [label for _, label in metrics],
                 "withheld_scales": [],

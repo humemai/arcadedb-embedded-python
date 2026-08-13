@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the paper's figures from results/.
+r"""Generate the paper's figures from results/.
 
 PDFs land in $BENCH_PAPER_DIR/figures and are margin-cropped with the two-pass
 Ghostscript recipe (verify with pdfinfo; a silent crop failure must not pass).

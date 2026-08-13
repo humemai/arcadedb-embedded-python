@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -80,6 +81,102 @@ MAPPING = {
     "pyb.graph.arcadedb.oltp":   ("pyb_graph", "arcadedb", "OLTP ops/s"),
     "pyb.vector.arcadedb.recall": ("pyb_vector", "arcadedb", "recall@10"),
 }
+
+
+# --- the page's PROSE, pinned to the paper's own tables -------------------
+#
+# MAPPING above covers TABLE CELLS, which the exporter writes straight from
+# the frozen results, so a wrong one is nearly impossible. Prose is the
+# opposite: every number in a caption or a body paragraph was typed in by
+# hand, and until 2026-08-13 nothing checked a single one of them.
+#
+# What that cost: the f4 caption read "0.96 ms against Qdrant's 1.30 ... against
+# Qdrant's 98.0%". Both comparator numbers were the canonical `runs_paper.csv`
+# rows, while ArcadeDB's 0.96 came from the matched `dense_mp5_2681` overlay
+# that T5 and the figure both read. The paper's own table says 1.31 and 97.8%.
+# Nothing was fabricated and no published cell was wrong; two sources were
+# mixed inside one sentence, which is the exact failure _check_f4_against_tables
+# was written for after it happened three times between figures and tables.
+# Prose was simply the one surface with no equivalent.
+#
+# Pinned to the TABLE rather than to the data, deliberately, for the reason
+# claims_check.cell() gives: prose -> table -> data chains through a step that
+# already regenerates byte-identical from the results, so this adds a check
+# without adding a second selection to drift. It also enforces the rule
+# PUBLISHING.md states, that the page shows what the papers show: a number the
+# page prints and the paper does not now fails here rather than going unread.
+#
+# ADD AN ENTRY whenever prose gains a number. The regex must capture exactly
+# the digits as printed, so rounding is compared at the precision published.
+PROSE = [
+    ("dense.arcadedb.warm", r"answers in ([\d.]+) ?ms against Qdrant",
+     ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 2)),
+    ("dense.qdrant.warm", r"against Qdrant's ([\d.]+), which is the",
+     ("t5_dense_ts.tex", "Qdrant", 2)),
+    ("dense.arcadedb.recall", r"returns ([\d.]+)% of the true neighbours",
+     ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 4), 100.0),
+    ("dense.qdrant.recall", r"against Qdrant's ([\d.]+)%",
+     ("t5_dense_ts.tex", "Qdrant", 4), 100.0),
+    ("dense.chroma.warm", r"faster than both at ([\d.]+) ?ms",
+     ("t5_dense_ts.tex", "Chroma", 2)),
+    ("dense.chroma.recall", r"faster than both at [\d.]+ ?ms and ([\d.]+)%",
+     ("t5_dense_ts.tex", "Chroma", 4), 100.0),
+    ("dense.int8.warm", r"off it: ([\d.]+) ?ms at",
+     ("t5_dense_ts.tex", "ArcadeDB (emb, int8)", 2)),
+    ("dense.int8.recall", r"off it: [\d.]+ ?ms at ([\d.]+)%",
+     ("t5_dense_ts.tex", "ArcadeDB (emb, int8)", 4), 100.0),
+]
+
+# repos are siblings, same assumption refresh_web_page.py makes
+PAGE_TS = Path(__file__).resolve().parents[2].parent / "humem.ai" / \
+    "src" / "lib" / "projects" / "items" / "arcadedb.ts"
+
+
+def _check_prose(page_ts):
+    """Every hand-typed number in the page's prose, against the paper's table.
+
+    Returns (checked, bad). Absent prose is a FAILURE, not a skip: an entry
+    here means the page made that claim, so a regex that stops matching means
+    either the sentence was reworded (re-pin it) or the claim was dropped
+    (delete the entry). Silently passing would turn this gate off one sentence
+    at a time, which is how the caption went unchecked in the first place.
+    """
+    import claims_check as C
+
+    if not page_ts.exists():
+        print(f"  page source not found at {page_ts}; prose unchecked")
+        return 0, 1
+    body = page_ts.read_text(encoding="utf-8")
+    checked = bad = 0
+    for entry in PROSE:
+        pid, pattern, ref = entry[0], entry[1], entry[2]
+        scale = entry[3] if len(entry) > 3 else 1.0
+        hits = re.findall(pattern, body)
+        if not hits:
+            print(f"  ABSENT {pid:24s} no prose matches /{pattern}/")
+            bad += 1
+            continue
+        if len(set(hits)) > 1:
+            print(f"  SPLIT  {pid:24s} prose says {sorted(set(hits))} in "
+                  f"{len(hits)} places")
+            bad += 1
+            continue
+        table_val = C.cell(*ref)
+        if table_val is None:
+            print(f"  STALE  {pid:24s} no cell {ref} in the paper")
+            bad += 1
+            continue
+        printed = float(hits[0])
+        want = table_val * scale
+        # Half a unit in the last printed digit: the prose rounds the table.
+        decimals = len(hits[0].split(".")[1]) if "." in hits[0] else 0
+        ok = abs(printed - want) <= 0.5 * 10 ** -decimals + 1e-9
+        checked += 1
+        print(f"  {'ok    ' if ok else 'DIFFER'} {pid:24s} "
+              f"page={printed:<11.6g} paper={want:<13.6g} {ref[1]}")
+        if not ok:
+            bad += 1
+    return checked, bad
 
 
 def _page_index(payload):
@@ -154,7 +251,12 @@ def main() -> int:
             bad += 1
 
     print(f"\n{checked} page cells checked against the paper, {bad} disagree")
-    return 1 if bad else 0
+
+    print(f"\nprose: {PAGE_TS}")
+    p_checked, p_bad = _check_prose(PAGE_TS)
+    print(f"\n{p_checked} prose numbers checked against the paper, "
+          f"{p_bad} disagree")
+    return 1 if (bad or p_bad) else 0
 
 
 if __name__ == "__main__":
