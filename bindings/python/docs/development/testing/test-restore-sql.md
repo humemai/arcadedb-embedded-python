@@ -20,14 +20,28 @@ Confirms the record comes back with its original RID and the properties given in
 
 The same check for vertices. Kept as its own test rather than parametrized with the document case, because a vertex carries edge bookkeeping a document does not, so a future regression could plausibly hit one and not the other.
 
-### 4) same-transaction restore — `xfail(strict=True)`
+### 4) same-transaction restore
 
-`DELETE` and `RESTORE` inside one transaction leaves `count(*)` reporting 1 while a full scan returns 0, and the disagreement survives reopen. Marked strict, so the day upstream fixes it the test XPASSes and fails the suite, instead of sitting here green and unnoticed.
+`DELETE` and `RESTORE` inside one transaction. This shipped as `xfail(strict=True)` while [#6096](https://github.com/ArcadeData/arcadedb/issues/6096) was open, and the strict marker is what reported the fix: the suite went red on XPASS, with no comment on the issue and no release note to say so. Now a plain assertion.
+
+### 5) `RESTORE` re-adds index entries
+
+[#6120](https://github.com/ArcadeData/arcadedb/issues/6120). The duplicate-insert assertion is the sharp one: a query on an indexed property could in principle be answered by a scan and pass with the index entry missing, but a UNIQUE index's own duplicate check cannot. If the entry is absent, the second insert is accepted and uniqueness has silently stopped holding.
 
 ## Upstream history
 
-This file exists because of [#6069](https://github.com/ArcadeData/arcadedb/issues/6069): `RESTORE` put the record back but did not fold the bucket's record-count delta, so `count(*)` returned one fewer than a full scan. Fixed upstream in `86cb4673be`.
+Three defects in one statement family, all found within two days of each other, all now fixed:
 
-The gap was left untested while that was open, deliberately. Pinning the broken behaviour would have baked a bug into the suite, and pinning the correct behaviour would have failed until the fix landed.
+| Issue | Defect | Fixed by |
+|---|---|---|
+| [#6069](https://github.com/ArcadeData/arcadedb/issues/6069) | bucket record-count delta not folded | `86cb4673be` |
+| [#6096](https://github.com/ArcadeData/arcadedb/issues/6096) | same-transaction restore wrote the record into the page header | `59e590aaa9` |
+| [#6120](https://github.com/ArcadeData/arcadedb/issues/6120) | index entries never re-added | `d1c7494fc3` |
 
-The same-transaction case in test 4 is a **separate, still-open** defect found while verifying that fix, filed as [#6096](https://github.com/ArcadeData/arcadedb/issues/6096). It is not a regression: `RESTORE` does not parse at all on the 26.8.1 release (`no viable alternative at input 'RESTORE'`), so the statement has never shipped in a release and there is no earlier behaviour it could have regressed from.
+The family was left untested while #6069 was open, deliberately: pinning the broken behaviour would have baked a bug into the suite, and pinning the correct behaviour would have failed until the fix landed.
+
+**#6096 was found by verifying the #6069 fix rather than by a workload.** The count agreed with a scan in the separate-transaction shape the original repro used, and disagreed in the same-transaction shape, in the opposite direction. It was not a regression: `RESTORE` does not parse at all on the 26.8.1 release (`no viable alternative at input 'RESTORE'`), so the statement had never shipped.
+
+**#6120 was spun off from #6096 by the maintainer**, who found it while fixing ours and kept it out of scope on purpose.
+
+All three were closed with no comment. The strict xfail is what told us #6096 had landed.

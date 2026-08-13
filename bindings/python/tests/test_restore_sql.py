@@ -7,9 +7,19 @@ a full scan and the disagreement survived close and reopen. Pinning the broken
 behaviour would have baked a bug into the suite, and pinning the correct
 behaviour would have failed until the fix landed.
 
-Fixed upstream in 86cb4673be, "fold the bucket record-count delta on RESTORE
-DOCUMENT/VERTEX/EDGE". These tests assert the fixed semantics, so they also
-serve as the regression guard.
+Three upstream defects in this one statement family, all now fixed, all
+pinned here as regression guards:
+
+  #6069  the bucket record-count delta was not folded (86cb4673be)
+  #6096  same-transaction DELETE + RESTORE wrote the record into the page
+         header and lost it, while the count still reported it (59e590aaa9)
+  #6120  index entries were never re-added, so an indexed query missed the
+         record and a UNIQUE index stopped rejecting duplicates (d1c7494fc3)
+
+#6096 was ours, found while verifying the #6069 fix. #6120 was spun off from
+#6096 by the maintainer, who found it while fixing ours and kept it out of
+scope on purpose. Every one of the three was closed with no comment, so the
+strict xfail on #6096 is what actually told us it had landed.
 
 The count-vs-scan comparison is the load-bearing assertion, not the row
 contents. A wrong count came back with an ordinary success and no warning, so
@@ -90,8 +100,8 @@ def test_restore_document_returns_the_record_intact(temp_db_path):
     """The restored record keeps its original RID and the SET properties.
 
     Delete and restore in SEPARATE transactions, which is the shape the
-    upstream repro used and the only one that currently works; see the xfail
-    below for what happens when they share a transaction.
+    original #6096 repro used. The same-transaction shape is covered below and
+    was broken until #6096 was fixed.
     """
     with arcadedb.create_database(temp_db_path) as db:
         db.command("sql", "CREATE DOCUMENT TYPE Note")
@@ -117,22 +127,21 @@ def test_restore_document_returns_the_record_intact(temp_db_path):
         assert rows[0]["tag"] == "keep"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RESTORE in the same transaction as the DELETE: count(*) reports 1 "
-    "while a full scan returns 0, and the disagreement survives reopen. Same "
-    "count-vs-scan shape as #6069, which 86cb4673be fixed only for the "
-    "separate-transaction case. strict=True so this XPASSes and fails the "
-    "suite the day it is fixed, rather than sitting here unnoticed. Filed as #6096.",
-)
 def test_restore_in_same_transaction_as_delete(temp_db_path):
-    """DELETE then RESTORE within one transaction loses the record.
+    """DELETE then RESTORE inside ONE transaction: upstream #6096, now fixed.
 
-    Not a regression: RESTORE does not parse at all on the 26.8.1 release
-    ("no viable alternative at input 'RESTORE'"), so the statement has never
-    shipped and there is no earlier behaviour to have regressed from.
+    This shipped as xfail(strict=True) while #6096 was open, and the strict
+    marker is what reported the fix: the suite went red on XPASS. There was no
+    comment on the issue and no release note, so nothing else would have said
+    so. Now a plain assertion, and the regression guard.
 
-    Filed upstream as #6096.
+    The defect was never the counter. `findContentInsertionOffset()` took a
+    plain max() over the page's slot table without treating a 0 entry as a
+    hole, so on an all-holes page the max was 0, which was then read as a
+    record header and produced an insertion offset of 1, inside the 8194-byte
+    page header. The restore wrote the record over its own slot-table entry.
+    count(*) was right about a record that was not there, because the DELETE's
+    -1 and the RESTORE's +1 cancelled out.
     """
     with arcadedb.create_database(temp_db_path) as db:
         db.command("sql", "CREATE DOCUMENT TYPE Note")
@@ -154,7 +163,7 @@ def test_restore_in_same_transaction_as_delete(temp_db_path):
         assert (counted, scanned) == (
             1,
             1,
-        ), f"count(*)={counted} but a full scan returned {scanned} rows"
+        ), f"count(*)={counted} but a full scan returned {scanned} rows (#6096)"
 
 
 def test_restore_vertex_restores_the_record_count(temp_db_path):
@@ -190,3 +199,48 @@ def test_restore_vertex_restores_the_record_count(temp_db_path):
             "count(*) disagrees with a full scan after RESTORE VERTEX "
             "(upstream #6069)"
         )
+
+
+def test_restore_readds_index_entries(temp_db_path):
+    """RESTORE must put the record back in its INDEXES too: upstream #6120.
+
+    Spun off from our #6096 by the maintainer, who found it while fixing that
+    one and kept it out of scope deliberately. The three RESTORE statements
+    called LocalBucket.restoreRecordAtPosition() directly and bypassed
+    LocalDatabase.createRecord(), which is where a normal insert indexes the
+    document.
+
+    The duplicate-insert assertion is the sharp one. Querying by an indexed
+    property could in principle be answered by a scan and pass even with the
+    index entry missing, but a UNIQUE index's own duplicate check cannot: if
+    the entry is absent, the second insert is accepted and the uniqueness
+    constraint has silently stopped holding.
+    """
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE Product")
+        db.command("sql", "CREATE PROPERTY Product.sku STRING")
+        db.command("sql", "CREATE INDEX ON Product (sku) UNIQUE")
+        with db.transaction():
+            db.command("sql", "INSERT INTO Product SET sku = 'SKU-1', n = 1")
+
+        rid = db.query("sql", "SELECT @rid AS r FROM Product").to_list()[0]["r"]
+        with db.transaction():
+            db.command(
+                "sql",
+                f"DELETE FROM {rid}",  # nosec B608 - RID from our own query
+            )
+        with db.transaction():
+            db.command(
+                "sql",
+                f"RESTORE DOCUMENT Product RID {rid} SET sku = 'SKU-1', n = 1",  # nosec B608
+            )
+
+        via_index = db.query("sql", "SELECT FROM Product WHERE sku = 'SKU-1'").to_list()
+        assert (
+            len(via_index) == 1
+        ), "a query on the indexed property missed the restored record (#6120)"
+        assert _count_two_ways(db, "Product") == (1, 1)
+
+        with pytest.raises(Exception):
+            with db.transaction():
+                db.command("sql", "INSERT INTO Product SET sku = 'SKU-1', n = 2")
