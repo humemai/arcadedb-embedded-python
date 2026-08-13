@@ -271,8 +271,8 @@ def f7_e2(rows):
 
 
 
-def _dense_overlay_p50(srv=False):
-    """Dense WARM p50 from the SAME artifacts the tables read.
+def _dense_overlay_p50(srv=False, arm="fp32", warm=True):
+    """Dense p50 from the SAME artifacts the tables read, for ANY engine.
 
     The dense lane's published numbers do not live in runs.jsonl. They live in
     results/dense_mp_2681/, as one build followed by five passes: pass 0 is
@@ -287,28 +287,39 @@ def _dense_overlay_p50(srv=False):
     consequence (five stale PDFs) but not the cause, because a generator that
     cannot start also cannot disagree with a table.
 
-    WARM IS THE CHOICE, and it is a claim rather than a convenience: f4 and f8
-    plot a steady-state comparison, and the cold pass is reported separately
-    in its own column precisely because the two are different quantities.
-    Averaging across the boundary would plot neither.
+    WARM VS COLD IS A CLAIM, never a convenience, and the caller must choose.
+    The two are different quantities and averaging across the boundary plots
+    neither, which is why the cold pass has its own column in T5.
+
+    THE DEFAULT IS WARM AND THAT IS ONLY SAFE WHEN BOTH SIDES USE IT. f4 called
+    this for ArcadeDB and read Qdrant from runs.jsonl, a single timed pass, so
+    the published bar was our steady state against their first pass. Every
+    comparator is within 3% of itself across that boundary and ArcadeDB is
+    9.27x, so the mismatch was worth the entire result: 0.15x becomes 1.35x.
+    Whenever a figure compares engines, pass warm= explicitly on both sides and
+    let _check_f4_protocol prove they match.
     """
     import glob as _glob
     import json as _json
     import make_paper_tables as _T
-    # Five independent builds now, so this pools every warm pass of every
-    # build (5 x 4 = 20) instead of the four passes of a single build. Same
-    # quantity, twenty times the support; the cold pass is still excluded
-    # because it is a different quantity, as above.
-    name = "mp_arcsrv_b*.json" if srv else "mp_fp32_b*.json"
+    # Five independent builds, so warm pools every warm pass of every build
+    # (5 x 4 = 20) rather than the four passes of one build, and cold pools the
+    # five first passes. Same quantity, more support, no mixing.
+    #
+    # `arm` names ANY engine in the matched overlay, not just ours.
+    # dense_multipass_driver.py put every comparator through the identical
+    # build-then-five-passes protocol for exactly this reason, so a comparator
+    # read from anywhere else is a different experiment wearing the same axis.
+    name = f"mp_{'arcsrv' if srv else arm}_b*.json"
     hits = sorted(_glob.glob(os.path.join(_T.RESULTS, "dense_mp5_2681", name)))
     if not hits:
         return None
-    warm = []
+    vals = []
     for h in hits:
         passes = _json.load(open(h))
-        warm += [p["p50"] for p in passes[1:]
+        vals += [p["p50"] for p in (passes[1:] if warm else passes[:1])
                  if isinstance(p.get("p50"), (int, float))]
-    return st.median(warm) if warm else None
+    return st.median(vals) if vals else None
 
 
 # f4 entry label -> the table cell that must agree with it. Only ArcadeDB's
@@ -325,12 +336,57 @@ F4_VS_TABLE = {
     # break. Both go through the tier-aware reader instead.
     "Sparse 100k p50": ("sparse", "ArcadeDB (emb, int8)", "100k"),
     "Sparse 1M p50":   ("sparse", "ArcadeDB (emb, int8)", "1M"),
-    # Column 2 is Warm p50 and the label carries its arm: T5's dense half is
-    # now System & Build & Cold p50 & Warm p50 & Cold p99 & Recall, and the
-    # embedded row split into fp32/int8. Both halves of this entry were stale.
-    "Dense 10M p50":   ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 2),
+    # T5's dense half is System & Build & Cold p50 & Warm p50 & Cold p99 &
+    # Recall, so column 1 is COLD p50 and column 2 is warm. This pointed at
+    # warm while the bar's comparator was a cold single pass; the figure now
+    # plots cold on both sides, so it pins to the cold column. See the entry's
+    # comment for why cold is the defensible choice here.
+    "Dense 10M p50":   ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 1),
     "TS 12h agg p50":  ("t5_dense_ts.tex", "ArcadeDB (native TS)", 3),
 }
+
+
+def _check_f4_protocol(entries):
+    """Assert f4's dense bar reads BOTH engines at the same pass.
+
+    _check_f4_against_tables compares each bar to its table cell, which is a
+    real check and did not catch this one: the bar and T5's warm column agreed
+    perfectly, because both were ArcadeDB's warm number. The comparator was the
+    thing measured differently, and nothing looked at it.
+
+    What shipped: our warm p50 (0.956, passes 1-4 of the matched overlay) beside
+    Qdrant's runs.jsonl row (1.295, a single timed pass). 1.35x ahead. Matched
+    at either end it is 1.37x warm or 0.15x cold, so the mismatch was worth the
+    whole finding, and in the direction that flattered us.
+
+    Both values must therefore be reproducible from dense_mp5_2681 at ONE pass
+    selection. A comparator taken from anywhere else, or read at a different
+    pass, fails here rather than becoming a bar.
+    """
+    got = dict((e[0], (e[1], e[2])) for e in entries)
+    if "Dense 10M p50" not in got:
+        raise SystemExit("f4 lost its dense entry; the protocol check is blind")
+    arcade, spec = got["Dense 10M p50"]
+    for warm in (False, True):
+        ours = _dense_overlay_p50(warm=warm)
+        if ours is None or abs(arcade - ours) > 1e-9:
+            continue
+        arms = ["qdrant", "chroma", "lancedb", "duckvss", "milvus", "sqlitevec"]
+        for a in arms:
+            v = _dense_overlay_p50(warm=warm, arm=a)
+            if v is not None and abs(spec - v) <= 1e-9:
+                print(f"    dense protocol   both sides {'warm' if warm else 'cold'}"
+                      f", overlay arm '{a}' ({arcade:.3f} vs {spec:.3f})")
+                return
+        raise SystemExit(
+            f"f4 dense: ArcadeDB is the overlay's "
+            f"{'warm' if warm else 'cold'} p50 ({arcade:.3f}) but the "
+            f"comparator ({spec:.3f}) matches no overlay arm at that pass.\n"
+            "  That is our steady state against somebody else's first pass. "
+            "Read both from _dense_overlay_p50 with the same warm=.")
+    raise SystemExit(
+        f"f4 dense: ArcadeDB's value {arcade:.3f} is neither the overlay's "
+        "cold nor its warm median, so the pass it represents is unknown.")
 
 
 def _check_f4_against_tables(entries):
@@ -495,7 +551,12 @@ def f8_deployment(rows):
         # the prose two pages earlier said 2.25x from the post-fix warm-cache
         # measurement. A figure that predates the paper's headline vector fix
         # is worse than no figure.
-        ("Dense\np50", _dense_overlay_p50(), _dense_overlay_p50(srv=True), False),
+        # warm= spelled out on both sides. Warm is right HERE, unlike in f4:
+        # this is one engine against itself across the process boundary, so the
+        # pass cancels and what is left is the transport fee. The paper's prose
+        # says "0.96 vs 2.10 ms warm" for exactly this pair.
+        ("Dense\np50", _dense_overlay_p50(warm=True),
+         _dense_overlay_p50(warm=True, srv=True), False),
         ("TPC-H Q1", med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "q1_ms"),
          med("l1tpc", "tpch1", "olap", "arcadedb_server", "q1_ms"), False),
     ]
@@ -604,10 +665,38 @@ def f4_one_vs_n(rows):
          tsmed("questdb", "q_global_ms"), False),
         ("Sparse 100k p50", _sparse_overlay_p50("tiny"),
          med("l3s", "tiny", "search", "qdrant_sparse", "query_p50_ms"), False),
-        # ArcadeDB's side from the overlay T5 uses (post-#5412); Qdrant has no
-        # overlay and its runs.jsonl row is current, so it stays as it is.
-        ("Dense 10M p50", _dense_overlay_p50(),
-         med("l3d", "deep10m", "search", "qdrant_dense", "query_p50_ms"), False),
+        # BOTH SIDES COLD, BOTH FROM THE SAME OVERLAY. This bar used to plot
+        # our WARM p50 against Qdrant's runs.jsonl row, which is a single timed
+        # pass, i.e. cold. That is task #117's defect: it was fixed in T5, which
+        # grew separate Cold and Warm columns, and never fixed here.
+        #
+        # The comment this replaces said "Qdrant has no overlay". It does:
+        # dense_mp5_2681/mp_qdrant_b*.json, five builds, twenty passes, written
+        # by dense_multipass_driver.py, whose whole purpose was to give the
+        # comparators the multi-pass protocol our rows already had.
+        #
+        # COLD, not warm, and the reason is that the choice only moves OUR bar:
+        #
+        #     engine       cold    warm    gain
+        #     Qdrant       1.342   1.312   1.02x
+        #     Chroma       0.700   0.708   0.99x
+        #     LanceDB      3.199   3.154   1.01x
+        #     DuckDB-VSS   2.586   2.551   1.01x
+        #     ArcadeDB     8.869   0.956   9.27x
+        #
+        # Every comparator is within 3% of itself, so selecting warm costs them
+        # nothing and hands us the entire result: cold/cold is 0.15x, warm/warm
+        # is 1.37x. When a knob is free for everyone else and decisive for us,
+        # the only defensible setting is the one that does not flatter us.
+        # It also matches the rest of this figure, where every other bar is a
+        # first-timed-pass number, and T5, which sorts its dense half by cold.
+        #
+        # The 9.27x itself is a real and interesting property (ArcadeDB pages
+        # its index off disk and the comparators are resident from build), so
+        # it belongs in the prose, not inside a bar that reads as a like-for-
+        # like comparison.
+        ("Dense 10M p50", _dense_overlay_p50(warm=False),
+         _dense_overlay_p50(warm=False, arm="qdrant"), False),
         ("Sparse 1M p50", _sparse_overlay_p50("small"),
          med("l3s", "small", "search", "qdrant_sparse", "query_p50_ms"), False),
         ("TS ingest pts/s", _ts_native_med("ingest_pts_per_s"),
@@ -615,6 +704,7 @@ def f4_one_vs_n(rows):
         ("TPC-H Q1", med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "q1_ms"),
          med("l1tpc", "tpch1", "olap", "duckdb", "q1_ms"), False),
     ]
+    _check_f4_protocol(entries)
     _check_f4_against_tables(entries)
 
     labels, ratios = [], []

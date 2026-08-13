@@ -108,23 +108,28 @@ MAPPING = {
 #
 # ADD AN ENTRY whenever prose gains a number. The regex must capture exactly
 # the digits as printed, so rounding is compared at the precision published.
+# T5's dense columns, 0-based after the row label:
+#   0 Build(s)  1 Cold p50  2 Warm p50  3 Cold p99  4 Recall
+# COLD AND WARM ARE DIFFERENT QUANTITIES and the pin must name which. The f4
+# caption quoted warm for ArcadeDB beside a comparator measured on its first
+# pass, which is the same mismatch the figure itself had; every entry below
+# therefore carries the column, and cold entries and warm entries are listed
+# apart so a future edit cannot slide one into the other unnoticed.
 PROSE = [
-    ("dense.arcadedb.warm", r"answers in ([\d.]+) ?ms against Qdrant",
+    # First pass, the operating point f4 plots. All three from column 1.
+    ("dense.arcadedb.cold", r"that is (\d+(?:\.\d+)?) ?ms for ArcadeDB",
+     ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 1)),
+    ("dense.qdrant.cold", r"against Qdrant's (\d+(?:\.\d+)?) and Chroma's",
+     ("t5_dense_ts.tex", "Qdrant", 1)),
+    ("dense.chroma.cold", r"and Chroma's (\d+(?:\.\d+)?)",
+     ("t5_dense_ts.tex", "Chroma", 1)),
+    # Steady state, quoted to show the gap is ours alone. Column 2.
+    ("dense.arcadedb.warm", r"ArcadeDB answers in (\d+(?:\.\d+)?) ?ms",
      ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 2)),
-    ("dense.qdrant.warm", r"against Qdrant's ([\d.]+), which is the",
+    ("dense.qdrant.warm", r"Qdrant moves to (\d+(?:\.\d+)?)",
      ("t5_dense_ts.tex", "Qdrant", 2)),
-    ("dense.arcadedb.recall", r"returns ([\d.]+)% of the true neighbours",
-     ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 4), 100.0),
-    ("dense.qdrant.recall", r"against Qdrant's ([\d.]+)%",
-     ("t5_dense_ts.tex", "Qdrant", 4), 100.0),
-    ("dense.chroma.warm", r"faster than both at ([\d.]+) ?ms",
+    ("dense.chroma.warm", r"and Chroma to (\d+(?:\.\d+)?)",
      ("t5_dense_ts.tex", "Chroma", 2)),
-    ("dense.chroma.recall", r"faster than both at [\d.]+ ?ms and ([\d.]+)%",
-     ("t5_dense_ts.tex", "Chroma", 4), 100.0),
-    ("dense.int8.warm", r"off it: ([\d.]+) ?ms at",
-     ("t5_dense_ts.tex", "ArcadeDB (emb, int8)", 2)),
-    ("dense.int8.recall", r"off it: [\d.]+ ?ms at ([\d.]+)%",
-     ("t5_dense_ts.tex", "ArcadeDB (emb, int8)", 4), 100.0),
 ]
 
 # repos are siblings, same assumption refresh_web_page.py makes
@@ -166,7 +171,21 @@ def _check_prose(page_ts):
             print(f"  STALE  {pid:24s} no cell {ref} in the paper")
             bad += 1
             continue
-        printed = float(hits[0])
+        # A capture that will not parse is a BAD REGEX, and it must be a
+        # finding rather than a traceback. `([\d.]+)` at the end of a sentence
+        # swallows the full stop and returns "0.71.", which crashed this
+        # function mid-run: entries after it were never checked at all, and
+        # refresh_web_page reported the exception line as the gate's status,
+        # so the run read as a pass. A gate that can die partway through is a
+        # gate whose coverage nobody can state.
+        try:
+            printed = float(hits[0])
+        except ValueError:
+            print(f"  REGEX  {pid:24s} captured {hits[0]!r}, not a number; "
+                  "the pattern is over-greedy (a trailing '.' is usually a "
+                  "sentence period, so prefer (\\d+(?:\\.\\d+)?))")
+            bad += 1
+            continue
         want = table_val * scale
         # Half a unit in the last printed digit: the prose rounds the table.
         decimals = len(hits[0].split(".")[1]) if "." in hits[0] else 0
