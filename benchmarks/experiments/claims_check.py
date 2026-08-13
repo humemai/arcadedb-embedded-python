@@ -768,6 +768,28 @@ CLAIMS = [
     ("e2.composed.p50", 19.43, 0.01,
      lambda r: median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                          backend="composed_qdrant_neo4j"), "composed stack hybrid"),
+    # The two RATIOS the intro now leads with. The three medians above were
+    # already pinned and the ratios were not, which is how the intro came to
+    # claim 10x against the composed stack while f4 plotted 3.8x against
+    # SurrealDB: both were arithmetically right about different comparators,
+    # and nothing compared them to each other.
+    #
+    # 3.8x is the one that carries weight. Beating a stack with no transaction
+    # spanning its engines is the easy comparison; beating the rival that DOES
+    # commit across models in one transaction is the claim a reviewer will test,
+    # and it is the number f4's cross-model bar plots.
+    ("e2.ratio.surrealdb", 3.76, 0.02,
+     lambda r: (median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
+                          backend="surrealdb_e2")
+                / median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
+                            backend="arcadedb_e2")),
+     "cross-model vs SurrealDB; the intro's 3.8x and f4's bar"),
+    ("e2.ratio.composed", 10.34, 0.02,
+     lambda r: (median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
+                          backend="composed_qdrant_neo4j")
+                / median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
+                            backend="arcadedb_e2")),
+     "cross-model vs the composed stack; the intro's 10x"),
 
     # --- L3d dense memory -------------------------------------------------
     # ArcadeDB ran this lane at two pinned heaps and the comparators at one, so
