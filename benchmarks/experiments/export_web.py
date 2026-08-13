@@ -134,6 +134,89 @@ def _num(value):
         return None
 
 
+# overlay arm -> (label the page prints, is it ours)
+DENSE_10M_ARMS = [
+    ("fp32", "ArcadeDB (embedded, fp32)", True),
+    ("int8", "ArcadeDB (embedded, int8)", True),
+    ("arcsrv", "ArcadeDB (server)", True),
+    ("qdrant", "Qdrant", False),
+    ("chroma", "Chroma", False),
+    ("duckvss", "DuckDB VSS", False),
+    ("lancedb", "LanceDB", False),
+    ("milvus", "Milvus", False),
+    ("sqlitevec", "sqlite-vec", False),
+]
+
+
+def _dense_10m_entries():
+    """The DEEP-10M tier, every engine, both passes.
+
+    THIS TIER WAS WITHHELD AND SHOULD NOT HAVE BEEN. The withheld note said
+    ArcadeDB's 10M rows "were measured on a pre-release build, which this
+    project does not publish", and that was true when it was written and false
+    by the time anyone read it: dense_mp5_2681 stamps engine_version 26.8.1 on
+    every ArcadeDB arm, a release. So the page hid the tier for a reason that
+    had expired, while f4 plotted that same tier immediately above the table,
+    and the figure's caption discussed six numbers a reader could not find
+    anywhere on the page.
+
+    The rows live here rather than in runs_paper.csv because the whole tier was
+    re-measured by dense_multipass_driver.py, which gives every engine the same
+    build-then-five-passes protocol. The withholding logic keys on ArcadeDB
+    having a canonical row at a scale, and ours are in the overlay, so it
+    dropped the tier without anyone deciding to.
+
+    Cold is pass 0, warm pools passes 1-4 over all five builds. Reported
+    together because separating them is the point: only ArcadeDB moves.
+    """
+    root = HERE / "results" / "dense_mp5_2681"
+    if not root.is_dir():
+        return []
+    out = []
+    for arm, label, ours in DENSE_10M_ARMS:
+        hits = sorted(root.glob(f"mp_{arm}_b*.json"))
+        if not hits:
+            continue
+        cold, warm, recall, build, ver = [], [], [], [], set()
+        for h in hits:
+            passes = json.loads(h.read_text(encoding="utf-8"))
+            if not passes:
+                continue
+            ver.add(passes[0].get("engine_version"))
+            build.append({"build_s": passes[0].get("build_s")})
+            cold.append({"p50": passes[0].get("p50")})
+            for p in passes[1:]:
+                warm.append({"p50": p.get("p50")})
+                recall.append({"r": p.get("recall_at_10")})
+        metrics = {}
+        for label_, rows_, field in (("cold p50 ms", cold, "p50"),
+                                     ("warm p50 ms", warm, "p50"),
+                                     ("recall@10", recall, "r"),
+                                     ("build s", build, "build_s")):
+            got = _agg(rows_, field)
+            if got is not None:
+                metrics[label_] = got
+        if not metrics:
+            continue
+        # Only OUR arms carry a version string; the comparator containers do
+        # not expose one to this driver and record "unknown (...)". Reporting
+        # that as a build would be worse than reporting nothing.
+        v = next((x for x in ver if x and not str(x).startswith("unknown")), None)
+        out.append({
+            "backend": label,
+            "is_arcadedb": ours,
+            "scale": "deep10m",
+            "workload": "search",
+            "n_docs": "10M",
+            "deployment": "server" if arm == "arcsrv" else "embedded",
+            "image": None,
+            "version_name": v,
+            "host": "mini",
+            "metrics": metrics,
+        })
+    return out
+
+
 def _agg(rows, field):
     """Median across repetitions, with the spread, matching the paper."""
     vals = [v for v in (_num(r.get(field)) for r in rows) if v is not None]
@@ -161,10 +244,19 @@ LANES = {
     "l3d": {
         "title": "Dense vector search",
         "dataset": "DEEP-10M (deep-image-96-angular) and SIFT-scale tiers",
-        "metrics": [("query_p50_ms", "p50 ms"), ("recall_at_10", "recall@10"),
+        # "cold" rather than a bare "p50" because the two passes are different
+        # quantities and the page now says so. Both lanes measure the cold
+        # column identically: l3d_dense runs 20 untimed warmups then ONE timed
+        # pass, and dense_multipass_driver runs those same 20 warmups before
+        # each of its five, so overlay pass 0 IS the campaign protocol. The
+        # small tier has no second pass, so it shows a dash there rather than a
+        # number borrowed from a different measurement.
+        "metrics": [("query_p50_ms", "cold p50 ms"),
+                    ("recall_at_10", "recall@10"),
                     ("build_s", "build s")],
         "conditions": [
             "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
+            "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
         ],
     },
     "l2": {
@@ -643,6 +735,18 @@ def main() -> int:
                     entry["metrics"][label] = got
             if entry["metrics"]:
                 entries.append(entry)
+        if lane == "l3d":
+            # REPLACE, never append. runs_paper.csv also holds deep10m
+            # comparator rows, from the campaign path, and appending put two
+            # measurements of the same cell in one table: Qdrant at 1.295 and
+            # again at 1.342, Chroma at 0.686 and 0.700. Same engine, same
+            # tier, different runs. That is the exact defect this whole pass
+            # started from, reproduced one function later.
+            #
+            # The overlay wins because it is the matched set: one driver, one
+            # protocol, every engine, and it is what T5 and f4 read.
+            entries = [e for e in entries if e["scale"] != "deep10m"]
+            entries.extend(_dense_10m_entries())
         if entries:
             # A scale where the comparators have rows and ArcadeDB does not
             # reads as "ArcadeDB could not do this tier", which is a claim the
@@ -665,7 +769,12 @@ def main() -> int:
                 "title": spec["title"],
                 "dataset": spec["dataset"],
                 "conditions": spec["conditions"],
-                "columns": [label for _, label in spec["metrics"]],
+                "columns": ([label for _, label in spec["metrics"]]
+                            if lane != "l3d" else
+                            # warm exists only where a second pass was run,
+                            # so it sits beside cold rather than replacing it
+                            ["cold p50 ms", "warm p50 ms",
+                             "recall@10", "build s"]),
                 "withheld_scales": withheld,
                 "withheld_reason": (
                     "Comparator rows exist at these tiers but ArcadeDB's were "

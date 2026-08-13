@@ -140,6 +140,68 @@ PAGE_TS = Path(__file__).resolve().parents[2].parent / "humem.ai" / \
     "src" / "lib" / "projects" / "items" / "arcadedb.ts"
 
 
+# The page's DEEP-10M rows against T5's, cell for cell.
+#
+# Both sides read results/dense_mp5_2681, but through two separate
+# implementations: export_web._dense_10m_entries for the page and
+# make_paper_tables for the paper. That is the "two generators aggregate
+# independently" hazard this file's docstring opens with, now applied to the
+# tier that was withheld until 2026-08-13 and so never had a pin at all.
+#
+# page label -> (T5 row label, cold col, warm col, recall col)
+DENSE_10M = {
+    "ArcadeDB (embedded, fp32)": ("ArcadeDB (emb, fp32)", 1, 2, 4),
+    "ArcadeDB (embedded, int8)": ("ArcadeDB (emb, int8)", 1, 2, 4),
+    "ArcadeDB (server)":         ("ArcadeDB (srv)", 1, 2, 4),
+    "Qdrant":                    ("Qdrant", 1, 2, 4),
+    "Chroma":                    ("Chroma", 1, 2, 4),
+    "DuckDB VSS":                ("DuckDB-VSS", 1, 2, 4),
+    "LanceDB":                   ("LanceDB", 1, 2, 4),
+    "Milvus":                    ("Milvus", 1, 2, 4),
+}
+
+
+def _check_dense_10m(payload):
+    """Page's 10M cells vs the paper's, at the precision the paper prints."""
+    import claims_check as C
+
+    rows = {}
+    for table in payload.get("tables", []):
+        if table["id"] != "l3d":
+            continue
+        for e in table["entries"]:
+            if e.get("scale") == "deep10m":
+                rows[e["backend"]] = e["metrics"]
+    if not rows:
+        print("  no deep10m rows on the page; the tier is withheld again")
+        return 0, 1
+    checked = bad = 0
+    for label, (trow, ccol, wcol, rcol) in sorted(DENSE_10M.items()):
+        m = rows.get(label)
+        if m is None:
+            print(f"  ABSENT {label:28s} no such page row")
+            bad += 1
+            continue
+        for name, col, key in (("cold", ccol, "cold p50 ms"),
+                               ("warm", wcol, "warm p50 ms"),
+                               ("recall", rcol, "recall@10")):
+            want = C.cell("t5_dense_ts.tex", trow, col)
+            got = m.get(key, {}).get("median")
+            if want is None or got is None:
+                print(f"  ABSENT {label:28s} {name}: page={got} paper={want}")
+                bad += 1
+                continue
+            # T5 prints 3 significant figures, so compare there.
+            ok = abs(got - want) <= max(0.005 * abs(want), 0.005)
+            checked += 1
+            if not ok:
+                print(f"  DIFFER {label:28s} {name}: page={got:.6g} "
+                      f"paper={want:.6g}")
+                bad += 1
+    print(f"  {checked} DEEP-10M cells match the paper's table")
+    return checked, bad
+
+
 def _check_prose(page_ts):
     """Every hand-typed number in the page's prose, against the paper's table.
 
@@ -274,11 +336,14 @@ def main() -> int:
 
     print(f"\n{checked} page cells checked against the paper, {bad} disagree")
 
+    print("\nDEEP-10M tier, page table vs the paper's table")
+    d_checked, d_bad = _check_dense_10m(payload)
+
     print(f"\nprose: {PAGE_TS}")
     p_checked, p_bad = _check_prose(PAGE_TS)
     print(f"\n{p_checked} prose numbers checked against the paper, "
           f"{p_bad} disagree")
-    return 1 if (bad or p_bad) else 0
+    return 1 if (bad or d_bad or p_bad) else 0
 
 
 if __name__ == "__main__":
