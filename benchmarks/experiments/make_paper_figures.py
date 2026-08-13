@@ -148,7 +148,7 @@ def _check_no_orphan_figures():
 # Strings that must survive into the saved PDF. Keep these to labels that
 # have actually been at risk or that carry meaning a reader needs.
 EXPECT_IN_PDF = {
-    "f4_one_vs_n.pdf": ["log scale", "best specialist"],
+    "f4_one_vs_n.pdf": ["log scale", "best specialist at equal recall"],
     "f6_memory_ceiling.pdf": ["(#3144)", "raw vectors"],
     "f8_deployment.pdf": ["server cost / embedded"],
     "f7_e2_hybrid.pdf": ["hybrid op p50 (ms)"],
@@ -271,6 +271,31 @@ def f7_e2(rows):
 
 
 
+def _dense_overlay_recall(arm="fp32"):
+    """recall@10 for one overlay arm, pooled over every warm pass.
+
+    Recall is a property of the index and the query set, not of the pass, so it
+    is read from the timed passes without a cold/warm split. Cold pass 0 does
+    not record it on every arm, which is the only reason this reads 1: onward.
+    """
+    import make_paper_tables as _T
+
+    root = os.path.join(_T.RESULTS, "dense_mp5_2681")
+    vals = []
+    for h in sorted(_glob_json(root, f"mp_{arm}_b*.json")):
+        with open(h, encoding="utf-8") as fh:
+            for p in json.load(fh)[1:]:
+                v = p.get("recall_at_10")
+                if isinstance(v, (int, float)):
+                    vals.append(v)
+    return st.median(vals) if vals else None
+
+
+def _glob_json(root, pattern):
+    import glob as _glob
+    return _glob.glob(os.path.join(root, pattern))
+
+
 def _dense_overlay_p50(srv=False, arm="fp32", warm=True):
     """Dense p50 from the SAME artifacts the tables read, for ANY engine.
 
@@ -344,6 +369,56 @@ F4_VS_TABLE = {
     "Dense 10M p50":   ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 1),
     "TS 12h agg p50":  ("t5_dense_ts.tex", "ArcadeDB (native TS)", 3),
 }
+
+
+def _check_f4_comparators(entries):
+    """On the vector rows, is the plotted engine really the best ELIGIBLE one?
+
+    "Best specialist" is ambiguous exactly where it matters. At DEEP-10M the
+    fastest engine outright is Chroma at 0.700 ms, but it returns 93.4% of the
+    true neighbours against our 95.1%, so dividing by it would compare us to
+    something searching less thoroughly. The rule the figure actually uses is
+    the fastest engine whose recall is at least ours, which is Qdrant at 1.342.
+    Both readings are defensible; publishing one and labelling it the other is
+    not, and until the page published this tier a reader could not tell.
+
+    So the rule is now checked rather than asserted in a caption. Milvus and
+    sqlite-vec also clear the recall bar and are slower; Chroma, LanceDB and
+    DuckDB-VSS are faster and do not clear it.
+
+    Vector rows only. Elsewhere there is no quality axis, so "best" is just
+    fastest and needs no rule.
+    """
+    ours_recall = _dense_overlay_recall()
+    if ours_recall is None:
+        raise SystemExit("f4: no recall for our dense arm; eligibility unknown")
+    got = dict((e[0], (e[1], e[2])) for e in entries)
+    arcade, spec = got["Dense 10M p50"]
+    eligible = []
+    for a in ("qdrant", "chroma", "lancedb", "duckvss", "milvus", "sqlitevec"):
+        p50 = _dense_overlay_p50(warm=False, arm=a)
+        rec = _dense_overlay_recall(arm=a)
+        if p50 is None or rec is None:
+            continue
+        if rec >= ours_recall - 1e-9:
+            eligible.append((p50, a, rec))
+    if not eligible:
+        raise SystemExit(
+            f"f4 dense: no comparator reaches our recall ({ours_recall:.4f}), "
+            "so 'best specialist at equal recall' names nothing. Either the "
+            "label or the row has to change.")
+    best_p50, best_arm, best_rec = min(eligible)
+    if abs(spec - best_p50) > 1e-9:
+        faster = [(p, a) for p, a, _ in
+                  [(x[0], x[1], x[2]) for x in eligible] if p < spec]
+        raise SystemExit(
+            f"f4 dense plots {spec:.3f} ms but the fastest engine at recall "
+            f">= ours ({ours_recall:.4f}) is {best_arm} at {best_p50:.3f} ms "
+            f"(recall {best_rec:.4f}).\n"
+            f"  The axis says 'best specialist at equal recall'. Make it true "
+            f"or change the axis. {faster}")
+    print(f"    dense comparator {best_arm} is fastest at recall >= "
+          f"{ours_recall:.4f} ({best_p50:.3f} ms, recall {best_rec:.4f})")
 
 
 def _check_f4_protocol(entries):
@@ -705,6 +780,7 @@ def f4_one_vs_n(rows):
          med("l1tpc", "tpch1", "olap", "duckdb", "q1_ms"), False),
     ]
     _check_f4_protocol(entries)
+    _check_f4_comparators(entries)
     _check_f4_against_tables(entries)
 
     labels, ratios = [], []
@@ -731,8 +807,21 @@ def f4_one_vs_n(rows):
     # cannot rescue it: that shrinks the axes to fit decorations inside the
     # figure, and nothing can fit a label longer than the figure itself. The
     # gs crop then measured the ink it was given and reported success.
-    ax.set_xlabel("ArcadeDB (embedded) vs best specialist, log scale",
-                  fontsize=7)
+    # "at equal recall" is load-bearing, not decoration. Chroma answers the
+    # dense 10M tier in 0.700 ms against our 8.869, which would be 0.0789x, but
+    # it returns 93.4% of the true neighbours to our 95.1%. A bare "best
+    # specialist" promises the fastest engine outright and this row does not
+    # use it, which a reader can now check for themselves because the page
+    # publishes the whole tier. Say the rule instead of hoping nobody looks.
+    # _check_f4_comparators enforces it; EXPECT_IN_PDF pins the wording.
+    # TWO LINES, not a smaller font. The honest label does not fit on one line
+    # in 3.45in: at 6.2pt it still clipped and _check_labels_intact caught it,
+    # which is the failure that guard exists for. Shrinking further would have
+    # made the axis unreadable in print to preserve a layout nobody needs.
+    # Each line here is shorter than the 48-character label that fitted at 7pt,
+    # so the size stays legible and the text stays whole.
+    ax.set_xlabel("ArcadeDB (embedded) vs best specialist\n"
+                  "at equal recall, log scale", fontsize=7)
     fig.tight_layout()
     path = os.path.join(FIGS, "f4_one_vs_n.pdf")
     fig.savefig(path)
