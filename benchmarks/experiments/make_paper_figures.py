@@ -148,7 +148,8 @@ def _check_no_orphan_figures():
 # Strings that must survive into the saved PDF. Keep these to labels that
 # have actually been at risk or that carry meaning a reader needs.
 EXPECT_IN_PDF = {
-    "f4_one_vs_n.pdf": ["log scale", "best specialist at equal recall"],
+    "f4_one_vs_n.pdf": ["log scale", "best specialist at equal recall",
+                        "warm"],
     "f6_memory_ceiling.pdf": ["(#3144)", "raw vectors"],
     "f8_deployment.pdf": ["server cost / embedded"],
     "f7_e2_hybrid.pdf": ["hybrid op p50 (ms)"],
@@ -730,8 +731,20 @@ def f4_one_vs_n(rows):
         return st.median(v) if v else None
 
     entries = [  # (label, arcade value, best specialist value, higher_better)
+        # SurrealDB, NOT the composed Qdrant+Neo4j stack. The composed stack is
+        # 19.43 ms and SurrealDB 7.06, so plotting the stack claimed 10x where
+        # the strongest comparator gives 3.8x. Both engines are in the e2 table
+        # the page publishes, side by side, so the overstatement was one glance
+        # from being caught.
+        #
+        # The composed stack exists in that lane to show ATOMICITY, not to be a
+        # speed baseline: it has no transaction spanning both engines, which is
+        # the lane's own stated point. SurrealDB is the engine that does what we
+        # do, one transaction across models, and it is faster than the stack.
+        # Beating the non-transactional option by 10x is not the claim; beating
+        # the transactional rival by 3.8x is, and it is the stronger one.
         ("Cross-model txn p50", med("e2", "e2", "hybrid", "arcadedb_e2", "hybrid_p50_ms"),
-         med("e2", "e2", "hybrid", "composed_qdrant_neo4j", "hybrid_p50_ms"), False),
+         med("e2", "e2", "hybrid", "surrealdb_e2", "hybrid_p50_ms"), False),
         ("OLTP ops/s", med("l1", "medium", "oltp", "arcadedb_embedded", "oltp_ops_per_s"),
          med("l1", "medium", "oltp", "postgres", "oltp_ops_per_s"), True),
         ("Graph 1-hop p50", med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "hop1_p50_ms"),
@@ -794,9 +807,43 @@ def f4_one_vs_n(rows):
     colors = ["C0" if r >= 1 else "C3" for r in ratios]
     ax.barh(list(ys), ratios, color=colors, alpha=0.85, height=0.6)
     ax.axvline(1.0, color="k", lw=0.8, ls="--")
-    for y, r in zip(ys, ratios):
-        ax.annotate(f"{r:.3g}x" if r < 1 else f"{r:.2g}x", (max(r, 0.002), y),
-                    textcoords="offset points", xytext=(3, -2), fontsize=6.5)
+    dense_i = labels.index("Dense 10M p50") if "Dense 10M p50" in labels else -1
+    for i, (y, r) in enumerate(zip(ys, ratios)):
+        text = f"{r:.3g}x" if r < 1 else f"{r:.2g}x"
+        if i == dense_i:
+            # INSIDE the bar for this row only. Its warm marker sits at 1.37
+            # and the outside label runs right from 0.151, so on a log axis the
+            # two overlap and the figure reads "0.151x" with a diamond through
+            # it. The bar is wide enough to hold the number, and moving it left
+            # leaves the whole right side to the pass comparison, which is the
+            # thing this row exists to show.
+            ax.annotate(text, (r, y), textcoords="offset points",
+                        xytext=(-3, -2), fontsize=6.5, ha="right",
+                        color="white")
+        else:
+            ax.annotate(text, (max(r, 0.002), y), textcoords="offset points",
+                        xytext=(3, -2), fontsize=6.5)
+    # SHOW BOTH PASSES ON THE DENSE ROW instead of picking one and arguing for
+    # it in a caption. Choosing cold was defensible and still required a reader
+    # to take our word that warm would have flattered us; drawing both makes the
+    # claim self-evident and costs one marker. The bar stays cold, because that
+    # is the pass every other row is measured at and a bar is what gets compared
+    # across rows, and the diamond marks the same comparison in steady state.
+    #
+    # Only this row can have it. Every other lane times a single pass, so there
+    # is no warm number to mark and inventing one would be worse than the gap.
+    warm_a = _dense_overlay_p50(warm=True)
+    warm_s = _dense_overlay_p50(warm=True, arm="qdrant")
+    if warm_a and warm_s and "Dense 10M p50" in labels:
+        yw = list(ys)[labels.index("Dense 10M p50")]
+        r_cold = ratios[labels.index("Dense 10M p50")]
+        r_warm = warm_s / warm_a
+        ax.plot([r_cold, r_warm], [yw, yw], ls=":", lw=0.7, color="0.25",
+                zorder=4)
+        ax.plot([r_warm], [yw], marker="D", ms=3.2, color="C0", zorder=5)
+        ax.annotate(f"{r_warm:.2g}x warm", (r_warm, yw),
+                    textcoords="offset points", xytext=(4, 2), fontsize=6,
+                    color="C0")
     ax.set_yticks(list(ys))
     ax.set_yticklabels(labels, fontsize=6.5)
     ax.set_xscale("log")
