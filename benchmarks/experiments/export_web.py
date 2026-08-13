@@ -588,21 +588,13 @@ def _embedded_vs_tables():
                 "id": f"pyb_{lane}",
                 "title": title,
                 "dataset": "Stack Exchange (Cross Validated), all engines in one Python process",
-                # ONE line, and only the one the surrounding prose does not
-                # already carry. This block used to hold three paragraphs, and
-                # since it is built inside the per-lane loop that meant the
-                # same three appeared under all three tables: nine paragraphs
-                # of one argument in one section. Two of them were already in
-                # the page prose, the closing one nearly verbatim ("three
-                # databases and the code that keeps them agreeing"). What is
-                # left is the cross-set caveat, which the prose does NOT say
-                # and which belongs beside the numbers a reader might
-                # otherwise compare upward.
-                "conditions": [
-                    "A different setup from the engine tables higher up the page: "
-                    "different corpora, different comparators, eight cores rather "
-                    "than twelve. The two sets are not continuous.",
-                ],
+                # NO conditions on these three. What used to be here is now
+                # said once each, in the right place: the shared protocol in
+                # the page's Reproducing section, and the cross-set caveat in
+                # the prose that introduces these tables. Rendered per table it
+                # was three tables times three paragraphs, and the protocol
+                # sentence alone appeared eight times down the page.
+                "conditions": [],
                 "columns": [label for _, label in metrics],
                 "withheld_scales": [],
                 "withheld_reason": None,

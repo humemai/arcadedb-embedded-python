@@ -2546,9 +2546,7 @@
       "id": "pyb_tabular",
       "title": "Tabular, embedded",
       "dataset": "Stack Exchange (Cross Validated), all engines in one Python process",
-      "conditions": [
-        "A different setup from the engine tables higher up the page: different corpora, different comparators, eight cores rather than twelve. The two sets are not continuous."
-      ],
+      "conditions": [],
       "columns": [
         "OLTP ops/s",
         "OLAP ms"
@@ -2639,9 +2637,7 @@
       "id": "pyb_graph",
       "title": "Graph, embedded",
       "dataset": "Stack Exchange (Cross Validated), all engines in one Python process",
-      "conditions": [
-        "A different setup from the engine tables higher up the page: different corpora, different comparators, eight cores rather than twelve. The two sets are not continuous."
-      ],
+      "conditions": [],
       "columns": [
         "OLTP ops/s",
         "OLAP ms"
@@ -2707,9 +2703,7 @@
       "id": "pyb_vector",
       "title": "Vector, embedded",
       "dataset": "Stack Exchange (Cross Validated), all engines in one Python process",
-      "conditions": [
-        "A different setup from the engine tables higher up the page: different corpora, different comparators, eight cores rather than twelve. The two sets are not continuous."
-      ],
+      "conditions": [],
       "columns": [
         "query ms",
         "recall@10",
