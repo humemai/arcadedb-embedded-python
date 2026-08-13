@@ -76,10 +76,13 @@ MAPPING = {
     # P-SQL republishes 1.71 in place of 1.28 with every other check green.
     "pyb.vector.ratio":   ("pycost", "Python", "vs Java"),
     "pyb.scan.ratio":     ("pycost", "Python, to_columns", "vs Java"),
-    "pyb.tabular.arcadedb.oltp": ("pyb_tabular", "arcadedb", "OLTP ops/s"),
-    "pyb.tabular.duckdb.olap":   ("pyb_tabular", "duckdb", "OLAP ms"),
-    "pyb.graph.arcadedb.oltp":   ("pyb_graph", "arcadedb", "OLTP ops/s"),
-    "pyb.vector.arcadedb.recall": ("pyb_vector", "arcadedb", "recall@10"),
+    # The four pyb_tabular/pyb_graph/pyb_vector cells that used to sit here
+    # went with their tables on 2026-08-13; export_web._embedded_vs_tables
+    # carries the reasoning. Removed rather than left to report ABSENT: this
+    # gate's whole contract is that an absent pin means something broke, so a
+    # pin kept alive for a table the page deliberately dropped would train a
+    # reader to ignore the one signal it exists to send. Restoring the tables
+    # means restoring these four.
 }
 
 

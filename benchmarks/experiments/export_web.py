@@ -675,7 +675,33 @@ def main() -> int:
                 "entries": shown,
             })
 
-    for extra in (_l4_table(), _e4_table(), _python_cost_table(), *_embedded_vs_tables()):
+    # _embedded_vs_tables() is NOT exported. It builds the SciPy paper's three
+    # one-process tables (tabular/graph/vector over Stack Exchange), and they
+    # were pulled from the page on 2026-08-13.
+    #
+    # They are legal under the papers-only rule and were still the wrong thing
+    # to publish here. In the SciPy paper they sit beside a capability matrix
+    # that states the claim they support: only the multi-model engine covers
+    # documents, graph traversal and vector search in one process. The page
+    # carries the tables and not the matrix, so it printed the evidence for an
+    # argument it never made, and what a reader saw was three small benchmarks
+    # ArcadeDB loses (13x to SQLite on OLTP, 150x to DuckDB on OLAP, 12.8x to
+    # LadybugDB on graph OLAP, 3.5x to Chroma on vector) for no stated reason.
+    #
+    # The framing written to rescue them did not survive its own check either.
+    # "No other row appears in all three" holds only because each table picked
+    # a different comparator: on this page's own data DuckDB covers tabular,
+    # time series and vector, and SQLite covers tabular and vector. Graph is
+    # the model nothing else here combines with the rest.
+    #
+    # The page makes the point better twice already, with one atomic operation
+    # instead of three separate benchmarks: the cross-model transaction section
+    # and f4's cross-model bar at 10x against a composed stack.
+    #
+    # The function stays because the SciPy paper still publishes these rows and
+    # a future page may want them WITH the matrix. Restoring them means adding
+    # the matrix too, and re-adding their cells to page_check.MAPPING.
+    for extra in (_l4_table(), _e4_table(), _python_cost_table()):
         if extra and extra["entries"]:
             tables.append(extra)
 
