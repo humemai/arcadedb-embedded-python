@@ -18,6 +18,8 @@
  */
 package com.arcadedb.server.ha.raft;
 
+import com.arcadedb.database.LocalDatabase;
+import com.arcadedb.engine.PageSnapshot;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 
@@ -31,12 +33,22 @@ import java.util.Map;
 import java.util.zip.CRC32;
 
 /**
- * Utility methods for snapshot-based resync in Raft HA.
+ * Manifest and checksum helpers for snapshot-based resync in Raft HA.
  * <p>
- * Currently provides checksum computation and file-diffing helpers. Full
- * {@code installSnapshot()} integration with Ratis is not yet wired - replicas
- * that fall behind past log compaction require a manual data copy from the leader.
- * These utilities are the building blocks for the future automatic resync.
+ * A follower that falls behind the compacted Raft log downloads the WHOLE database as a ZIP from
+ * {@code SnapshotHttpHandler} and installs it through {@code SnapshotInstaller}; this class carries the manifest
+ * that transfer is verified with, and the checksum computation behind the {@code /checksums} endpoint.
+ * <p>
+ * <b>There is deliberately no file-level diff here</b> (#6125). One used to be - a {@code findDifferingFiles}
+ * helper, called from nothing but its own unit test, whose presence suggested resync could ship only what changed.
+ * It was removed rather than wired in, for two reasons. Granularity: an ArcadeDB database is usually dominated by
+ * one bucket file, so a whole-file comparison saves nothing the moment a single byte of it changes. Consistency:
+ * the checksums come from one point-in-time window and the ZIP from another, so a file that matched when it was
+ * compared can be rewritten before the transfer starts, and a follower that kept its local copy on the strength of
+ * that match would hold a database torn across two instants. Incremental resync therefore belongs at the PAGE
+ * level, on the page-version manifest of phase 3 (#6115), where both halves come from the same window. Until then
+ * {@code /checksums} is an operator diagnostic - "do these two nodes hold the same bytes?" without moving a
+ * database - and nothing more.
  */
 public final class SnapshotManager {
 
@@ -110,7 +122,7 @@ public final class SnapshotManager {
   }
 
   /**
-   * Computes CRC32 checksums for all regular files in the given directory.
+   * Computes CRC32 checksums for all regular files in the given directory, reading them live off the disk.
    *
    * @param directory the directory to scan
    *
@@ -119,17 +131,70 @@ public final class SnapshotManager {
    * @throws IOException if a file cannot be read
    */
   public static Map<String, Long> computeFileChecksums(final File directory) throws IOException {
+    return computeFileChecksums(directory, null);
+  }
+
+  /**
+   * Computes the checksums of a database directory, taking the content of every page file from a point-in-time
+   * snapshot window instead of reading it live (#6116).
+   * <p>
+   * This is what lets the {@code /checksums} endpoint stop freezing the data files with
+   * {@code PageManager.suspendFlushAndExecute}, which was the last writer-throttling reader left in the product
+   * after #6075 migrated the backup, the HA verify and the HA snapshot ship. It needs a directory-oriented shape
+   * rather than the verify handler's file-list one because the endpoint's contract is "every non-transient file in
+   * the database directory", which includes files the page snapshot does not cover at all - {@code database.json},
+   * {@code schema.json}, the {@code .ts.sealed} time-series stores, the {@code last-tx-id.bin} marker. Those are
+   * read raw, as before; the database read lock the caller holds is what makes that safe, and is unchanged.
+   * <p>
+   * A page file the window does not carry was created after t0, so it has no point-in-time content to report: it is
+   * skipped rather than read live, which is the same rule {@code PostVerifyDatabaseHandler} follows by iterating the
+   * window's own file list. Reading it live would put a torn CRC of a file being actively written into a map whose
+   * whole purpose is to be compared with another node's.
+   * <p>
+   * "Is this a page file" is decided from the NAME ({@link LocalDatabase#isComponentFileName}) rather than by asking
+   * the {@code FileManager} what it currently has registered. The registry is a moving target even under the
+   * database read lock this runs beneath: index compaction creates and drops component files without the write
+   * lock, so a name set captured a moment before the directory listing can miss a file that is already on disk -
+   * and that file would then be CRC'd live, which is precisely the case being excluded.
+   *
+   * @param directory the database directory to scan
+   * @param snapshot  the open window to serve page files from, or {@code null} to read everything live
+   *
+   * @return a map of file name to CRC32 checksum value
+   *
+   * @throws IOException if a file cannot be read
+   */
+  public static Map<String, Long> computeFileChecksums(final File directory, final PageSnapshot snapshot)
+      throws IOException {
     final Map<String, Long> checksums = new HashMap<>();
     final File[] files = directory.listFiles(File::isFile);
     if (files == null)
       return checksums;
 
+    final Map<String, Integer> snapshotFileIds = new HashMap<>();
+    if (snapshot != null)
+      for (final PageSnapshot.SnapshotFile file : snapshot.getFiles())
+        snapshotFileIds.put(file.fileName(), file.fileId());
+
     final byte[] buffer = new byte[8192];
     for (final File file : files) {
       final String name = file.getName();
       // Skip transient files that differ between nodes: WAL logs, schema backups, lock files,
-      // and WAL files preserved as .corrupt evidence after an aborted recovery (#4958)
-      if (name.endsWith(".wal") || name.endsWith(".prev.json") || name.endsWith(".lock") || name.endsWith(".corrupt"))
+      // WAL files preserved as .corrupt evidence after an aborted recovery (#4958), and the scratch spill file of
+      // an open snapshot window (#6075), which is pure copy-on-write working state and never part of the database
+      if (name.endsWith(".wal") || name.endsWith(".prev.json") || name.endsWith(".lock") || name.endsWith(".corrupt")
+          || name.endsWith("." + PageSnapshot.SHADOW_FILE_EXT))
+        continue;
+
+      final Integer snapshotFileId = snapshotFileIds.get(name);
+      if (snapshotFileId != null) {
+        checksums.put(name, snapshot.calculateChecksum(snapshotFileId));
+        continue;
+      }
+
+      if (snapshot != null && LocalDatabase.isComponentFileName(name))
+        // A PAGE FILE THE WINDOW DOES NOT CARRY WAS CREATED AFTER t0 (INDEX COMPACTION DOES THIS DURING A BACKUP):
+        // IT HAS NO POINT-IN-TIME CONTENT, SO IT IS ABSENT RATHER THAN TORN
         continue;
 
       final CRC32 crc = new CRC32();
@@ -142,28 +207,5 @@ public final class SnapshotManager {
     }
 
     return checksums;
-  }
-
-  /**
-   * Identifies files that differ between leader and replica based on checksums.
-   * A file is considered differing if it exists on the leader but not on the replica,
-   * or if its checksum does not match.
-   *
-   * @param leaderChecksums  checksums from the leader node
-   * @param replicaChecksums checksums from the replica node
-   *
-   * @return list of file names that need to be transferred
-   */
-  public static List<String> findDifferingFiles(final Map<String, Long> leaderChecksums,
-      final Map<String, Long> replicaChecksums) {
-    final List<String> differing = new ArrayList<>();
-
-    for (final Map.Entry<String, Long> entry : leaderChecksums.entrySet()) {
-      final Long replicaChecksum = replicaChecksums.get(entry.getKey());
-      if (replicaChecksum == null || !replicaChecksum.equals(entry.getValue()))
-        differing.add(entry.getKey());
-    }
-
-    return differing;
   }
 }

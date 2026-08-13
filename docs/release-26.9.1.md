@@ -840,3 +840,514 @@ directory written at all: a failed one aborts the writer instead, so even if the
 (permissions, a full or read-only filesystem) what is left is structurally invalid rather than plausible.
 
 [#6072](https://github.com/ArcadeData/arcadedb/issues/6072)
+
+## A backup no longer freezes the database: point-in-time page snapshots replace the flush suspension (#6075)
+
+Phase 1 (#6072) made the backup 27x faster, which shortened the window during which writers are throttled but did
+not remove the throttling. This removes it. `PageManager.suspendFlushAndExecute` - which parks the page-flush
+thread for the whole of a backup, an HA snapshot ship or an HA database verify, so dirty pages accumulate in RAM
+until `arcadedb.flushSuspendMaxDeferredRAM` (512 MB) and committing threads are then throttled outright - is
+replaced by a real snapshot primitive: `PageManager.openSnapshot()`, a **page-level copy-on-write shadow**.
+
+While a window is open, the first write to any page that existed at t0 first copies that page's current on-disk
+image into a shadow, inside the per-page I/O slot the write already holds. A reader resolves every page as "shadow
+if present, data file otherwise" and therefore sees exactly the t0 image, however far the live database has moved
+on. Flushing is never suspended, so writers run at full speed for the whole operation.
+
+Three things follow from that, beyond the writer impact:
+
+- **Index compaction runs during a backup again.** The suspension was the only thing stopping `LSMTreeIndex` and
+  `LSMVectorIndex` compaction from dropping a file under a running backup (`LSMTreeIndexCompactor` does not take the
+  database write lock, so the backup's read lock never excluded it), and both refuse to compact while it is held. A
+  long backup silently stopped compaction. Now a file dropped while a window is open simply has its physical
+  deletion deferred until the window closes, so compaction proceeds.
+- **The snapshot point is a real transaction boundary.** The window opens on a FULL drain of the flush queue, not
+  the in-flight batch alone, so the restored database contains every transaction committed before t0 - closing the
+  recency gap that could leave a restored backup a few hundred transactions behind. The HA snapshot ship now also
+  reports the t0 transaction id (#5277's `last-tx-id.bin` marker) instead of the live counter, so the marker can no
+  longer name a transaction whose pages were still in the queue.
+- **The page image and its version are provably paired**, because they are read together, under the same per-page
+  lock, from the same snapshot. That is the property incremental backup (phase 3) has to be built on: with a fuzzy
+  copy, a manifest recorded at a different instant than the image it describes makes the next incremental conclude
+  "unchanged" and silently drop a revision.
+
+### Zero cost when no snapshot is open
+
+With no window open the write path pays one volatile field read and a branch the predictor always gets right, inside
+a critical section that already performs a page-size (64 KB) `pwrite`: roughly 1 ns against 10-50 us. That is
+implementation discipline rather than design - a single nullable field, not a listener list; nothing before the null
+check; and the hook goes strictly inside the existing `concurrentPageAccess` write branch, which is the single funnel
+both physical page-write call sites already go through, so it needs no new lock and adds no lock-ordering risk.
+
+### The barrier, which is where the correctness lives
+
+Flipping the flag is not the same as opening the window: a writer can already be inside its write section having
+read "no window", and would then overwrite its page unshadowed. So every writer is excluded before t0 is stamped,
+each by the mechanism that already serializes it - a full flush-queue drain, then a suspension parking the flush
+thread on a batch (that is, transaction) boundary, then the transaction manager's apply lock to exclude Raft and
+recovery replay, then the global page-manager lock to exclude synchronous commits. Only then are the per-file page
+counts and `lastTxId` recorded. Performing these in the other order produces subtly torn snapshots that pass tests
+and fail in production, which is why the barrier is what the test suite hammers hardest.
+
+### Reading stays sequential
+
+The obvious snapshot reader takes the per-page I/O slot for every page, turning one streaming `transferTo` into a
+lock acquisition per page. It is not needed: a write during the window ALWAYS shadows the page before touching the
+file, so a run of pages is read in one bulk call with no lock at all and the shadow re-probed afterwards - any page
+a writer touched underneath the read is now in the shadow, and its t0 image is taken from there. A torn read is
+therefore always detected, and the common case costs one probe per page against a primitive open-addressing map.
+
+### Bounded, and with a fallback
+
+The shadow is RAM first (`arcadedb.pageSnapshotMaxRAM`, 64 MB) spilling to an append-only scratch file, and capped
+overall (`arcadedb.pageSnapshotMaxSize`, 1 GB). Worst case it grows to the working set dirtied during the window,
+which on a small very hot database approaches the database size, so an uncapped shadow would reproduce the "snapshot
+full" failure of sparse-file snapshots. On breach the window is invalidated and every read fails loudly: a backup
+restarts on the suspend-and-freeze path, which throttles writers but always completes. That path stays available
+and can be selected outright with `arcadedb.pageSnapshotEnabled = false`. The shadow file is pure scratch - recovery
+never reads it, its extension is not a supported component extension, and an orphan left by a crash is deleted at
+the next open.
+
+Overlapping windows are supported rather than serialized: each owns its shadow, and a write captures the same
+freshly read pre-image into every window that still needs it.
+
+### One incidental change to every backup archive
+
+The two backup writers disagreed about ZIP entry timestamps: the parallel one stamped the source file's
+modification time, the single-threaded one left `ZipOutputStream` to stamp the moment the entry was written. Adding
+the stream-based entry API the snapshot path needs routed both through one implementation, so they now agree on the
+source file's modification time - which is the more useful of the two, and was already what the default
+(multi-threaded) writer produced. Nothing about restoring changes; only the timestamps a listing shows for an
+archive written with `arcadedb.backup.compressionThreads = 0`.
+
+[#6075](https://github.com/ArcadeData/arcadedb/issues/6075)
+
+## The snapshot backup, measured; an open window is now visible in the metrics; the HA `/checksums` endpoint stops freezing the files (#6116)
+
+Three loose ends left behind by the point-in-time snapshot of #6075.
+
+### The benchmarks #6075 asked for
+
+`Issue6075SnapshotBackupIT` measured the suspension fraction and nothing else. Two harnesses now cover the rest:
+`PageSnapshotOverheadBenchmark` (engine) for the write path, the t0 barrier, the flush-thread drain rate and the
+`TransactionManager` apply lock, and `PageSnapshotBackupBenchmark` (integration) for what a running backup does to
+the writers beside it, shaped like the #6072 harness so the two sets of numbers can be read together. Both are
+`@Tag("benchmark")`, so neither runs in CI.
+
+Two of the numbers they produce are worth stating here, because both correct something the #6075 write-up asserted:
+
+- **The t0 barrier is not "a few ms" under load.** With no concurrent writer it is 13-120 us. With one to eight
+  writer threads committing continuously it runs to tens of milliseconds, occasionally past 100 ms, and the driver
+  is not the flush-queue depth (which stays small) but the barrier RETRYING: it drains the queue in full, and a
+  commit landing between that drain and the flush-thread suspension makes it start over. It is still bounded, still
+  vastly better than a suspension held for the whole backup, and still the only stall in the design - but its size
+  is now known rather than assumed.
+- **The copy-on-write shadow can reach the size of the database.** During a throttled backup of a 128 MB database,
+  the shadow peaked at 37% of it with a writer pausing 100 ms between transactions, 84% at 20 ms, and 100% with a
+  writer running flat out - it holds the pre-image of every page dirtied while the window is open, so a hot
+  database rewrites all of them. The 1 GB `arcadedb.pageSnapshotMaxSize` default is therefore not the generous
+  ceiling it looks like: on a database much beyond a gigabyte under a heavy write load, expect the window to breach
+  it and the backup to restart on the suspend-and-freeze path. Raise it (or accept the fallback) accordingly - and
+  the new `arcadedb_engine_snapshot_shadow_usage_percent` gauge below is how to tell which of the two you are
+  heading for.
+
+The writer-impact comparison itself, on a 128 MB database rebuilt before each run, with a mixed insert/update load
+and the backup throttled to 32 MB/s, counting only the commits that fall inside the backup window:
+
+| | rec/s inside the window | of the no-backup baseline | peak deferred RAM |
+|---|---|---|---|
+| no backup running | 193,854 | - | 0 |
+| backup, snapshot path | 185,120 | **95.5%** | **0** |
+| backup, suspend-and-freeze | 5,274 | 2.7% | 513 MB |
+
+513 MB is `arcadedb.flushSuspendMaxDeferredRAM` reached, which is the point at which committing threads stop being
+merely slowed and start being throttled outright. On the snapshot path the deferred-RAM gauge never leaves zero -
+the claim #6075 rested on, stated as a measurement rather than as a design argument.
+
+### An open window is now visible
+
+`PageManager.getStats()` gained the snapshot readings, so they reach both Prometheus (through
+`EngineMetricsBinder`) and Studio's server page (through `Profiler`, which renders every stat it publishes). Per
+the counter/gauge distinction of #5636, the per-window state is gauges and only the JVM-wide totals are counters:
+
+| Metric | Type | |
+|---|---|---|
+| `arcadedb_engine_snapshot_windows_open` | gauge | windows open right now |
+| `arcadedb_engine_snapshot_shadow_pages` | gauge | pages held in their shadows |
+| `arcadedb_engine_snapshot_shadow_bytes` | gauge | bytes held, RAM plus spill |
+| `arcadedb_engine_snapshot_shadow_spilled_bytes` | gauge | of which spilled to disk |
+| `arcadedb_engine_snapshot_shadow_usage_percent` | gauge | the fullest window against `pageSnapshotMaxSize` |
+| `arcadedb_engine_snapshot_window_age_ms` | gauge | age of the oldest open window |
+| `arcadedb_engine_snapshot_windows_opened_total` | counter | windows opened |
+| `arcadedb_engine_snapshot_windows_invalidated_total` | counter | windows that lost their point in time |
+| `arcadedb_engine_snapshot_preimages_captured_total` | counter | pre-images copied |
+| `arcadedb_engine_flush_deferred_bytes` | gauge | dirty bytes deferred by a flush suspension (#6087) |
+
+The alertable ones are the usage percentage and the invalidation counter. A window that breaches its cap is
+invalidated and its consumer falls back to the suspend-and-freeze path, which still completes - so before this, a
+backup that had quietly gone back to throttling every writer on the server left no trace except a WARNING in the
+log.
+
+### `GET /api/v1/ha/snapshot/{db}/checksums` no longer suspends flushing
+
+The last writer-throttling reader in the product. #6075 migrated the backup, the HA verify and the HA snapshot
+ship but left this one on `suspendFlushAndExecute`, because it reads the database DIRECTORY rather than the
+registered page files and so needed a different shape. It now takes each page file's content from a window and
+reads everything the window does not cover - `database.json`, `schema.json`, the `.ts.sealed` time-series stores -
+raw, as before, under the same database read lock. A page file created after t0 is left out rather than read live,
+matching what the verify endpoint reports; the checksums are byte-for-byte the ones a peer still on the fallback
+path computes, so a migrated leader does not report every file as differing.
+
+One transient file was being checksummed that should not have been: the `.pshadow` scratch of an open snapshot
+window lives in the database directory, so any node that happened to have a backup running reported a file no peer
+had.
+
+[#6116](https://github.com/ArcadeData/arcadedb/issues/6116)
+
+## `RESTORE DOCUMENT/VERTEX/EDGE` now applies the type's schema and fires the create events (#6127)
+
+`RESTORE` deliberately did less than a normal create: it skipped `setDefaultValues()` and `validate()`, and it
+fired no create event. The reasoning was that an emergency repair must never be blocked - its most common form is a
+structure-only shell restore with no `SET` clause at all, recovering a RID that other records still reference, and
+a mandatory-property check would refuse exactly that.
+
+The trade-off does not hold up. A record written past its own `MANDATORY`/`NOTNULL` constraints is **frozen**:
+`updateRecord` validates too, so every later UPDATE of it throws until the missing property is supplied. And
+nothing downstream catches it - `CHECK DATABASE` is a structural check (page layout, record markers, graph
+adjacency, index entries) and never evaluates schema constraints. So the permissive path was not buying a usable
+record, it was buying a record you could look at and not touch, with no diagnostic anywhere.
+
+`RESTORE` is now indistinguishable from an `INSERT` at a fixed RID:
+
+- declared default values are applied;
+- the record is validated, and a restore that would violate the type is refused instead of persisted;
+- the create events fire - both the database-level listeners and the per-type `RecordEventsRegistry` - so anything
+  that rebuilds derived state from create events no longer silently drifts after a repair.
+
+On a type with mandatory properties the structure-only form now needs them supplied explicitly:
+
+```sql
+RESTORE VERTEX Person RID #12:7 SET name = '<unknown>'
+```
+
+which makes the placeholder value the operator's choice rather than a hole in the record. `GraphEngine.restoreVertexAt`,
+which builds a property-less shell by design, is subject to the same rule and raises `ValidationException` on such a type.
+
+One intentional difference from `createRecordNoLock` remains, in the other direction: a `beforeCreate` listener that
+vetoes the write makes `RESTORE` **raise** rather than return quietly. A repair that reports success without writing
+the record is the one outcome this statement must never produce.
+
+If you have an `afterCreate` trigger on a **graph** type, note two interleavings that were previously impossible,
+because RESTORE fired no events at all.
+
+`RESTORE EDGE` does not reconnect adjacency - in the case it repairs, a raw record delete never touched the
+neighbours, so the endpoints still reference the RID - which means the event now fires on an edge whose endpoints'
+adjacency lists the statement has not written. A trigger that assumes "create event fired, therefore both endpoints
+already list this edge", which holds for `Vertex.newEdge`, does not hold on this path.
+
+`RESTORE VERTEX` fires the event on the bare vertex, before it rebuilds adjacency from the surviving edges. That is
+the INSERT-parity ordering rather than a gap in it - a vertex a plain INSERT creates has no edges either - but it
+means a trigger deriving something from adjacency (a degree counter, say) sees zero and is never notified of the
+reconnection that follows, since reconnecting adjacency writes no records and so raises no event of its own. Drive
+such a trigger from the statement's `reconnectedOutEdges`/`reconnectedInEdges` result instead.
+
+### `Issue5279ConcurrentUpdateTest` re-triaged: a contention regime, not a flake
+
+`growingUpdatesUnderContentionKeepTheDatabaseConsistent` had been written off as a chronic flake. It is neither
+flaky nor a hole in the slot-merge logic. Instrumenting a failing run: 146 successful slot rebases, 30 records
+spilling out of their page, 16 `ConcurrentModificationException`s reaching the retry loop, 5 of 8 threads out of
+the default 3 retries. While the payloads still fit the shared 64 KB page the disjoint-slot merge absorbs
+everything; once they outgrow it every record becomes a multi-page chunk record whose updates no merge can replay,
+so eight threads on a single-bucket type serialize with one winner per round. With a larger budget every run
+converges, `CHECK DATABASE` is clean and every record holds its last written value.
+
+The test now states that contract instead of hiding it: a new `growingUpdatesThatStayInsideTheirPageNeverConflict`
+asserts **zero** conflicts at `attempts=1` for the whole in-page growth phase (and proves it stayed in-page by
+checking the bucket layout), while the spill-out case keeps an explicit retry budget and asserts convergence plus
+structural soundness. [#6129](https://github.com/ArcadeData/arcadedb/issues/6129) tracks extending the slot merge
+to chunked and placeholder records, which is what would make the `TX_RETRIES` default enough there.
+
+[#6127](https://github.com/ArcadeData/arcadedb/issues/6127)
+## The snapshot shadow cap sizes itself, the t0 barrier stops retrying, and two smaller loose ends (#6125)
+
+Four items the benchmarks of #6116 turned up. None was a correctness bug; two of them contradict an assumption
+#6075 shipped on, and could only be stated once there were measurements.
+
+### `arcadedb.pageSnapshotMaxSize` is no longer a flat number
+
+The measurement first: on a 128 MB database with the backup throttled to 32 MB/s, the copy-on-write shadow peaked
+at 37% of the database with a writer pausing 100 ms between transactions, 84% at 20 ms, and **100%** with a writer
+running flat out. The shadow holds the pre-image of every page dirtied while the window is open, so its ceiling is
+the working set of the backup's duration, and a hot database rewrites all of it.
+
+That makes any fixed default simply the database size above which backups silently start falling back to the
+suspend-and-freeze path - the very writer throttling #6075 set out to remove. The 1 GB default only reliably
+covered databases up to about a gigabyte under sustained writes.
+
+The cap is now sized when the window opens. `arcadedb.pageSnapshotMaxSize` defaults to **-1**, meaning automatic:
+
+```
+cap = min( sum(pageCount * pageSize) at t0,   // the ceiling the shadow provably cannot exceed
+           usableSpace(spill volume) / 2 )    // so a window can never be why the disk filled
+```
+
+The first term is exact rather than a heuristic: the shadow holds one pre-image per page that existed at t0, and
+pages appended after t0 need none, so it cannot grow past the t0 size of the page files. A positive value still
+means an absolute number of MB and `0` still means uncapped, so no existing configuration changes meaning.
+
+Related, and the reason for the second term: the spill file lands in the database directory, where a breach-sized
+shadow competes for disk with the data it is protecting. The new **`arcadedb.pageSnapshotSpillPath`** moves it to
+another volume, and the automatic cap is then measured against the free space there.
+
+The two ways a window can lose its point in time are also counted apart now, because they send an operator to
+different places: `arcadedb_engine_snapshot_windows_overflowed_total` is a tuning problem (raise the cap, or give
+the spill volume room), `arcadedb_engine_snapshot_windows_failed_total` is a disk problem. Their sum remains
+`arcadedb_engine_snapshot_windows_invalidated_total`.
+
+### The t0 barrier is single-pass, exact, and measured
+
+#6116 measured the barrier at tens of milliseconds under load against 13 us idle, and found the driver was not the
+flush-queue depth - which stays near zero on an SSD - but the barrier **retrying**: it drained the flush queue in
+full, and a commit landing between that drain and the flush-thread suspension made it start over. After three
+attempts it stopped retrying and stamped a t0 that could sit slightly behind the last committed transaction.
+
+The gap is now closed by construction. `PageManager.publishPages` already holds the global page-manager lock across
+*both* halves of publication - the synchronous page write and the flush-queue enqueue - so the barrier takes that
+lock (after the apply lock, in the order it already used) and repeats the drain underneath it. Nothing can feed the
+pipeline while the lock is held, so that second drain is guaranteed to converge, and it is normally instant because
+a first, lock-free drain has already emptied the pipeline. The retry loop and `SNAPSHOT_BARRIER_ATTEMPTS` are gone.
+
+Everything the barrier does under that lock shares one hard 5 s budget, because the lock is JVM-wide and the waits
+those steps use elsewhere are either uncapped (the wait for the in-flight flush batch polls until a synchronous
+`file.write` returns) or capped only by the 60 s progress-based `arcadedb.flushAllPagesTimeout` - either of which
+would let one sick disk stall every committer in the process. Exhausting it is handled per step according to what it
+costs: a pipeline that has not drained only means t0 may sit slightly behind the last commit, which is logged and
+accepted, while a suspension that cannot be acquired or an in-flight batch that has not landed abandons the window
+outright and the consumer falls back to the suspend-and-freeze path - slower for one database rather than briefly
+fatal for all of them.
+
+Exactness matters beyond tidiness: the HA snapshot ship writes `lastTxId` into the `last-tx-id.bin` recency marker
+a follower is judged by at cold bootstrap, and a marker naming a transaction whose pages were still queued claims
+data the archive does not contain.
+
+The obvious inversion still does not work and is now documented as such: suspending the flush thread before the
+drain makes the drain unable to ever complete, because a suspended thread defers batches instead of writing them.
+
+The barrier is also reported now, the way a Prometheus timer is - a count and a summed duration, so
+`rate(seconds)/rate(count)` is the average - plus the high-water mark a scalar snapshot cannot otherwise carry:
+
+| Metric | Type | |
+|---|---|---|
+| `arcadedb_engine_snapshot_barrier_count_total` | counter | t0 barriers executed |
+| `arcadedb_engine_snapshot_barrier_seconds_total` | counter | total time spent in them |
+| `arcadedb_engine_snapshot_barrier_max_seconds` | gauge | the longest one observed |
+| `arcadedb_engine_snapshot_barrier_inexact_total` | counter | barriers that could not prove the pipeline was empty |
+
+The last one should stay at zero: no commit can cause it any more, so a non-zero value means index compaction was
+feeding the flush pipeline throughout the barrier - harmless for consistency, since those writes go to pages beyond
+the t0 page count of a file being built, but worth being able to see.
+
+### `/checksums` validates the database name before taking its branch
+
+`SnapshotHttpHandler` dispatched the `/checksums` sub-path *before* the block that rejects `..`, separators, NUL
+and non-ASCII. It was not exploitable - the checksums path gates on an exact-match lookup over the already-open
+databases, so a traversal string 404'd and the database was never resolved - but the guarantee lived two calls away
+from the handler that needed it. The sub-path is now stripped, the name validated, and only then is a branch
+chosen. A malformed name on the checksums route answers 400 instead of 404, which the OpenAPI spec now documents.
+
+### The unused checksum diff is gone
+
+`SnapshotManager.findDifferingFiles()` was called from nothing but its own unit test, while its presence - and the
+`/checksums` description - suggested resync could ship only what changed. It has been removed rather than wired in,
+for two reasons. Granularity: an ArcadeDB database is usually dominated by one bucket file, so a whole-file
+comparison saves nothing the moment a single byte of it changes. Consistency: the checksums come from one
+point-in-time window and the ZIP from another, so a file that matched when it was compared can be rewritten before
+the transfer starts, and a follower that kept its local copy on the strength of that match would hold a database
+torn across two instants. Incremental resync belongs at the **page** level, on the page-version manifest of phase 3
+(#6115), where both halves come from the same window. `/checksums` is documented as what it actually is: an
+operator diagnostic.
+
+[#6125](https://github.com/ArcadeData/arcadedb/issues/6125)
+
+## The disjoint-slot merge now covers the records that outgrew their page (#6129)
+
+The commit-time disjoint-slot merge (`arcadedb.txPageSlotMerge`, #5381/#5279/#5569) turns a page-level
+`ConcurrentModificationException` back into the record-level verdict it should have been: when the only reason a
+bucket page conflicts is that another transaction wrote a *different* slot on it, this transaction's slot writes are
+replayed on top of the newer committed page instead of failing the whole transaction. Until now it stopped at the
+page boundary. A record that grew past the page size became a chunk chain or a placeholder, and from then on every
+update of it poisoned its page unconditionally - so on a single-bucket type whose records had all outgrown their
+page, concurrent updates of *unrelated* records conflicted for good. That is exactly the false conflict #5279
+removed, reappearing one size class up.
+
+Measured on the regression test that first exposed it (8 threads, 40 records of one bucket, each thread rewriting
+only its own): once the records had spilled, **280 of 320 commits conflicted** - seven of eight writers lost every
+round - and every one of those conflicts was on the single page holding the records' head chunks. With the merge
+extended, the same run reports **zero**.
+
+Three shapes are now tracked, each with its own slot *kind* so the replay checks the marker on the committed page and
+not only the bytes:
+
+- **The head chunk of a multi-page record.** Its footprint on the page is fixed when the record spills and is never
+  grown again - an update rewrites the chunk size, the pointer to the next chunk and the chunk content, all inside
+  the record's own bytes - so the page sees a single-slot write that commutes with writes to every other slot.
+- **The spill itself**, where a plain record that no longer fits is turned into that head chunk. It is the one
+  tracked write whose two images differ in shape, and the replay re-establishes the room the spill used: the slot's
+  own footprint, plus the free tail of the page when it is the last record. Leaving this out was not a one-off cost -
+  a transaction whose spill loses the race retries and spills again, so under contention the records that have to
+  spill could starve instead of converging.
+- **The content record behind a placeholder pointer**, in place or growing on its own page. It is an ordinary record
+  on that page; only its size marker is negative.
+
+The continuation chunks are still out: they are placed through inline record-table writes that no tracked slot image
+accounts for, so every page they land on is poisoned, as is the head chunk's own page when the chain comes back to
+it. So is a slot turning into - or being rebuilt from - a placeholder *pointer*, which changes two pages at once.
+
+### The head chunk needed one guarantee the pre-image check cannot give
+
+Every replay is gated on a byte-for-byte pre-image check, which is what tells a false page conflict from a true one
+(two transactions writing the *same* record must still conflict, so the application reloads). For a multi-page record
+that check can only see the head chunk, because that is the only part of the record living on the page being
+replayed: a concurrent transaction that rewrote the record only *past* that chunk would have slipped through it and
+been silently overwritten.
+
+`LocalBucket.chunkChainTailFingerprint` closes that. It is a 64-bit FNV-1a over the chain past the head chunk (each
+chunk's RID, size and content), taken when the record is taken for update - the same moment its page is pinned - and
+again at commit before the chain is rewritten. The head chunk is replayable only while the two agree; when they do
+not, the page falls back to the plain retry it took before this change. `Issue6129ChunkedSlotMergeTest` pins it with
+two 200 KB values differing only in their last byte, which share their whole head chunk: without the fingerprint that
+commit silently drops the other transaction's write.
+
+The cost is proportional to work the update was going to do anyway: an update of a multi-page record rewrites every
+chunk of its chain, so the fingerprint walks pages it is about to load and write regardless, and a record that is not
+a chunk chain pays nothing beyond reading its own marker.
+
+Worth stating plainly what that trades, because it is the one guarantee this change moves rather than widens. For a
+multi-page record, "two transactions writing the same record always conflict" used to hold absolutely - for the blunt
+reason that the head chunk's page was poisoned no matter what. It now holds up to a fingerprint collision: ~2^-64 per
+pair of concurrent updates to one such record whose head chunks are byte-identical. Deliberate collisions are not a
+threat model here: both colliding tails are content of the same record, so producing one requires write access to it,
+and whoever has that can already overwrite it by committing last - which is the very outcome a collision would
+produce. An installation that wants the absolute form back sets `arcadedb.txPageSlotMerge=false` and gets
+unconditional poisoning, at the cost of the false conflicts the mechanism exists to remove.
+
+### `TX_RETRIES` is enough again
+
+`Issue5279ConcurrentUpdateTest.growingUpdatesUnderContentionKeepTheDatabaseConsistent` needed an explicit budget of
+50 attempts (#6127 item 3, the re-triage of what used to look like a chronic flake). It now runs at the `TX_RETRIES`
+default of 3 - the absence of an `attempts` argument is the assertion.
+
+[#6129](https://github.com/ArcadeData/arcadedb/issues/6129)
+## `CHECK DATABASE FIX`: the last two unbounded repair paths, and what the numbers it reports mean (#6136)
+
+#6131 bounded the repair transaction a `CHECK DATABASE ... FIX` builds, committing every
+`arcadedb.checkDatabaseRepairBatchPages` dirtied pages so that a large repair on a replicated database no longer
+runs for hours and then dies whole at the commit with `ReplicatedEntryTooLargeException`. It deliberately reached
+only the post-scan loops. These are the two paths it did not, plus the reporting the split made necessary.
+
+### The index rebuild no longer buffers its whole WAL in leader heap
+
+`BucketIndexBuilder.create()` wraps an index build in `schema.recordFileChanges(...)`, which on a Raft leader marks
+the thread so that `commit()` **buffers** instead of replicating: the files being created do not exist on the
+followers yet, so a `TX_ENTRY` referring to them would have its pages silently dropped there. `LSMTreeIndex.build()`
+then commits once per `IndexBuilder.BUILD_BATCH_SIZE` (5000) records, and every one of those WAL images stayed
+resident until the callback returned. Peak leader heap was therefore roughly the whole rebuilt index, plus a repeat
+of every page more than one batch touched - on the node that is, by construction, the cluster's leader. A
+`CHECK DATABASE FIX` over a large damaged type drops and rebuilds every index on the affected buckets, which is
+exactly that shape.
+
+The buffer is now shipped in ordered **instalments** as it fills, so leader heap is bounded by the threshold rather
+than by the size of the index. Nothing new goes on the wire: this is the ordered-prefix sequence `splitSchemaEntry`
+has produced since #4743, emitted as the payload is produced rather than after it has been built in full. Files
+first, so pages have somewhere to land; WAL in the middle; and the fields that *publish* the change - the schema
+JSON and the files to retire - only in the session's final entry. Every prefix a follower can be left holding is
+therefore self-consistent, and a partially written new file is unreferenced bytes until the last entry publishes
+it. Followers need no new code, because that sequence is the one they already receive.
+
+The one difference from a `splitSchemaEntry` split carries the whole safety argument: the last chunk of an
+instalment is still marked `moreChunksFollow`, because an instalment is not the end of the change. A follower that
+mistook it for a publication would reload its schema from a half-delivered state, and #5443 measured what that
+costs - the reload detaches a compacted sub-index it cannot resolve yet, the later real publication reuses the same
+in-memory component, and the follower serves only its mutable pages from then on, silently and permanently.
+
+The threshold is derived rather than configured: half the maximum replicated entry size, the same expression the
+compaction path already uses for its own chunk budget. Lowering `arcadedb.ha.appendBufferSize` lowers it too, and
+that is worth knowing before tuning it down: a smaller buffer means more instalments per rebuild, and therefore more
+quorum round trips taken under the write lock (see below).
+
+**What it costs**, stated precisely because it is a trade and not only a heap win. The recording session stays open
+for the whole build, so a concurrent writer on the leader still waits on it - and, before that, on the database write
+lock the callback holds. Bounding the heap does not shorten that window, and each instalment *lengthens* it: a quorum
+round trip is now taken while that write lock is held, where the single final entry had always been submitted after
+the callback returned and the lock was released. Normally that is milliseconds against a build measured in minutes;
+against a slow or briefly partitioned quorum member it is up to `arcadedb.ha.quorumTimeout` per instalment, and the
+whole database's writers wait it out. Accepted, because the alternative is not "no round trips" - without instalments
+the one final entry carries the whole index, `splitSchemaEntry` splits it, and the same number of round trips happens
+anyway, after the lock but only once the leader has held the entire rebuilt index in heap. Making the window itself
+shorter means taking the build out of the recording session altogether, which is a different change on the same code
+path.
+
+**If the build fails after an instalment has shipped**, the followers are holding files and pages that the entry
+which would have published or retired them never reaches, because it lives after the line that threw - and every
+instalment chunk is marked `moreChunksFollow`, so there is no abandonment signal a follower could act on by itself.
+The session now sends a compensating removal, and *which* files it retires is the whole correctness of it: one the
+leader no longer has is retired (the case `BucketIndexBuilder.create()` produces, since it drops the half-built index
+from its own error handler), while one the leader still has is left alone and reported, because retiring that would
+take a state both sides agree on and make them disagree.
+
+### The in-scan repairs are bounded too
+
+Two repairs used to write from *inside* the vertex scan, where nothing can commit: `LocalDatabase.scanType` holds
+the database read lock for the length of the scan, and the chunk iterator being walked would not survive a commit
+taken under it.
+
+- the back-reference fix-up - one write to a **far** vertex per edge found "not connected from the other side",
+  each able to allocate a fresh edge-list chunk;
+- `resetChain`, which drops an unreadable adjacency chain so it can be rebuilt from the surviving edge records.
+
+Both are now *planned* during the scan and applied after it, through the same page budget as everything else. The
+chain resets needed no new state at all: every `resetChain` call site already registered its vertex in one of the
+two reconnect sets, so those sets were the complete list. The back-reference fix-up accumulates three RIDs per
+defective edge in flat `int[]`/`long[]` arrays - and the `ArrayList<Edge>` the chain rebuild used to fill, which
+held a fully materialised record per entry, was replaced by the same structure.
+
+One in-scan write remains and is named rather than implied: the iterator `remove()` that prunes a dangling
+adjacency entry. It is not deferrable the way the others were - the removal is made through the chunk iterator's
+live position, and replaying it afterwards would turn a linear pass into a quadratic one - and it is the mildest of
+the three, rewriting a chunk page the walk is already reading and never allocating one.
+
+### `autoFix` now comes with a breakdown
+
+`autoFix` is a count of repair **actions**, not of corruption instances: after #6131 it is records deleted plus
+dangling adjacency entries pruned, so one edge that is both listed in a chain and corrupt as a record contributes
+two. A rebuilt chain, meanwhile, contributed nothing at all and was visible only in the warnings. The one number an
+operator reads to decide whether a run did anything was a mixture of three repair kinds with different weights, one
+of them invisible.
+
+`autoFix` keeps its meaning - existing readers and existing expectations depend on it - and the result now also
+carries `removedRecords`, `prunedDanglingEntries` and `reconnectedEdges`. The first two sum to `autoFix`; the third
+is deliberately not in that sum, since folding a rebuilt chain in would change every number a current run reports.
+All three are always present, zero included. The first is named `removedRecords` rather than `deletedRecords`
+because the result already carries `totalDeletedRecords` - records found in the DELETED state by the bucket scan,
+nothing to do with repair - and a key one word away from it would read as its non-total sibling.
+
+**One key pair is gone, which is a non-additive change to that map.** `GraphDatabaseChecker.checkVertices` used to
+put the `List<Edge>` of reconnected edges under `outEdgesToReconnect`/`inEdgesToReconnect`; both keys are removed
+and `reconnectedEdges` carries the count instead. Nothing in the repository read them, and they never reached the
+`CHECK DATABASE` command result at all - `DatabaseChecker.updateStats` folds only `Long` values - so an operator
+reading the SQL output never saw them. Only a caller invoking `checkVertices` directly as an API could have, and
+holding a fully materialised `Edge` per reconnected entry was one of the unbounded-heap sources this change exists
+to remove, so they are not coming back.
+
+### The transaction-nesting headroom, measured rather than assumed
+
+#6136 also reported the FIX path as sitting exactly on `DatabaseContext`'s hardcoded limit of 3 nested
+transactions - the HTTP handler's, the arm's own, and the repair batch's - leaving no headroom. It does not.
+`CheckDatabaseStatement.executeSimple` opens by rolling the caller's transaction back, so the handler's level is
+released before the check starts; the arms' `begin()` then finds the last context inactive and reuses it rather
+than pushing; and the repair batch commits and re-begins at that same level. The path runs at **one** level with
+two to spare, and is now pinned both by sampling the depth it reaches and by running it under a cap of 1, so that a
+future change adding a level arrives as a red build naming the cap rather than as a `TransactionException` in a
+repair someone is running against a damaged production database.
+
+[#6136](https://github.com/ArcadeData/arcadedb/issues/6136)

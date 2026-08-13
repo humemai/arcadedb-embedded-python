@@ -95,6 +95,18 @@ public class LocalSchema implements Schema {
   public static final String                                 CACHED_COUNT_FILE_NAME_LEGACY = "cached-count.json"; // DEPRECATED FROM v25.2.1
   public static final String                                 STATISTICS_FILE_NAME          = "statistics.json";
   public static final int                                    BUILD_TX_BATCH_SIZE           = 100_000;
+
+  // The rest of the NTFS/Windows-reserved character set beyond '/', '\' and '*', which checkValidBucketName()
+  // checks separately: '<', '>', ':', '"', '|' and '?'.
+  private static final String                                WINDOWS_ILLEGAL_CHARS         = "<>:\"|?";
+
+  // Windows reserves these as device names for the segment of a file name up to (and not including) the first
+  // dot, regardless of what an extension or further dotted segment says: "CON.txt" is refused exactly like "CON".
+  private static final Set<String>                           WINDOWS_RESERVED_NAMES        = Set.of(//
+      "CON", "PRN", "AUX", "NUL",//
+      "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",//
+      "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9");
+
   final               IndexFactory                           indexFactory                  = new IndexFactory();
   final               Map<String, LocalDocumentType>         types                         = new ConcurrentHashMap<>();
   private             String                                 encoding                      = DEFAULT_ENCODING;
@@ -519,6 +531,8 @@ public class LocalSchema implements Schema {
   public LocalBucket createBucket(final String bucketName, final int pageSize, final String parentDirectory, final int version) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
 
+    checkValidBucketName(bucketName);
+
     if (bucketMap.containsKey(bucketName))
       throw new SchemaException("Cannot create bucket '" + bucketName + "' because already exists");
 
@@ -555,6 +569,80 @@ public class LocalSchema implements Schema {
         throw new SchemaException("Cannot create bucket '" + bucketName + "' (error=" + e + ")", e);
       }
     });
+  }
+
+  /**
+   * A bucket name becomes the last path segment of its component file, so it must address a file inside the
+   * database directory and nothing else. A type name reaches the same place already percent-encoded by
+   * {@link FileUtils#encode} (which escapes both separators), so a bucket created directly is the only unencoded
+   * route in.
+   * <p>
+   * Dots inside the name are deliberately allowed: the component-file name is parsed right-to-left, peeling the
+   * fixed {@code .fileId.pageSize.vVersion.ext} tail, so a dot in the name survives the round trip. Only a name
+   * that is exactly "." or ".." references a directory.
+   * <p>
+   * The remaining checks reject the rest of the NTFS/Windows-illegal character set and the reserved device stems
+   * ({@code CON}, {@code PRN}, {@code AUX}, {@code NUL}, {@code COM1}-{@code COM9}, {@code LPT1}-{@code LPT9}).
+   * Nothing here is a directory-escape concern, since a bucket name is never used as anything but the last path
+   * segment: it is error quality on Windows, turning a raw {@code IOException} out of {@code Files.move}/file
+   * creation into a {@code SchemaException} that names the offending character or stem at validation time.
+   */
+  public static void checkValidBucketName(final String bucketName) {
+    if (bucketName == null || bucketName.isEmpty())
+      throw new SchemaException("Invalid bucket name '" + bucketName + "'");
+
+    if (bucketName.indexOf('/') > -1 || bucketName.indexOf('\\') > -1 || ".".equals(bucketName) || "..".equals(bucketName))
+      throw new SchemaException("Invalid bucket name '" + bucketName + "': it cannot reference a path");
+
+    // '*' is left untouched by URLEncoder and is not a legal file name character on Windows.
+    if (bucketName.indexOf('*') > -1)
+      throw new SchemaException("Invalid bucket name '" + bucketName + "': it cannot contain '*'");
+
+    for (int i = 0; i < bucketName.length(); ++i) {
+      final char c = bucketName.charAt(i);
+      if (c < 0x20 || WINDOWS_ILLEGAL_CHARS.indexOf(c) > -1) {
+        // A control character is not printable, so render it as \\uXXXX to keep the exception message and any
+        // log it lands in readable.
+        final String printableChar = c < 0x20 ? String.format("\\u%04x", (int) c) : String.valueOf(c);
+        throw new SchemaException(
+            "Invalid bucket name '" + bucketName + "': it cannot contain the character '" + printableChar + "' (illegal on Windows)");
+      }
+    }
+
+    final int firstDot = bucketName.indexOf('.');
+    final String stem = firstDot > -1 ? bucketName.substring(0, firstDot) : bucketName;
+    if (WINDOWS_RESERVED_NAMES.contains(stem.toUpperCase(Locale.ROOT)))
+      throw new SchemaException("Invalid bucket name '" + bucketName + "': '" + stem + "' is a reserved device name on Windows");
+  }
+
+  /**
+   * Re-bases a component name built as {@code <encodedTypeName><suffix>} onto a new type name, keeping the suffix
+   * verbatim. The suffix carries the bucket index, the {@code _out_edges}/{@code _in_edges} marker and the index
+   * timestamp, so it must not be re-derived by searching for a delimiter: both '_' and '.' are legal inside a type
+   * name and any such search picks the wrong one.
+   * <p>
+   * Returns {@code null} when the component name is not derived from the old type name, which is the case for a
+   * bucket created on its own and attached with {@link DocumentType#addBucket} (and for anything named after such a
+   * bucket). A name that was never built from the type name must not follow it when the type is renamed, so the
+   * caller leaves that component untouched.
+   * <p>
+   * The result needs no further validation: it is {@link FileUtils#encode}d, and the suffix it carries came from a
+   * name that was validated by {@link #checkValidBucketName} when its bucket was created.
+   */
+  public static String rebaseComponentName(final String componentName, final String oldTypeName, final String newTypeName,
+      final String encoding) {
+    final String oldPrefix = FileUtils.encode(oldTypeName, encoding);
+
+    // Every derived name is '<encodedTypeName>_<something>': '_<index>' for a bucket, plus '_out_edges'/'_in_edges'
+    // or '_<timestamp>' for what hangs off it. Requiring the '_' is what separates a derived name from an attached
+    // bucket that merely happens to start with the type name, e.g. "OrderArchive" on type "Order": a bare prefix
+    // match would rebase that one too, which is the same infer-the-boundary-from-content mistake this method exists
+    // to remove.
+    if (componentName.length() <= oldPrefix.length() || !componentName.startsWith(oldPrefix)
+        || componentName.charAt(oldPrefix.length()) != '_')
+      return null;
+
+    return FileUtils.encode(newTypeName, encoding) + componentName.substring(oldPrefix.length());
   }
 
   public String getEncoding() {

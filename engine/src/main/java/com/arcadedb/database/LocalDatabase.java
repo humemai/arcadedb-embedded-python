@@ -32,6 +32,7 @@ import com.arcadedb.engine.ErrorRecordCallback;
 import com.arcadedb.engine.FileManager;
 import com.arcadedb.engine.LocalBucket;
 import com.arcadedb.engine.PageManager;
+import com.arcadedb.engine.PageSnapshot;
 import com.arcadedb.engine.TransactionManager;
 import com.arcadedb.engine.WALFile;
 import com.arcadedb.engine.WALFileFactory;
@@ -162,6 +163,23 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       TimeSeriesTagDictionary.DICT_EXT,
       HashIndexBucket.UNIQUE_INDEX_EXT,
       HashIndexBucket.NOTUNIQUE_INDEX_EXT);
+
+  /**
+   * True when {@code fileName}'s extension is one the {@link FileManager} treats as a component file, i.e. one whose
+   * content a point-in-time page snapshot (#6075) covers. The extension is taken from the NAME, never the path, so a
+   * database directory containing a dot does not confuse it - the same rule
+   * {@code FileManager.scanDirectoryForComponentFiles} applies when deciding what to register.
+   * <p>
+   * Exposed (#6116) so a reader walking the database DIRECTORY rather than the registered files - the HA
+   * {@code /checksums} endpoint - can tell a page file from a configuration or time-series file by name alone. The
+   * obvious alternative, asking the {@code FileManager} which files it currently has registered, is a moving target:
+   * index compaction creates and drops component files WITHOUT the database write lock, so a set captured a moment
+   * earlier can miss a file that is already on disk.
+   */
+  public static boolean isComponentFileName(final String fileName) {
+    final int lastDot = fileName.lastIndexOf('.');
+    return lastDot >= 0 && SUPPORTED_FILE_EXT.contains(fileName.substring(lastDot + 1));
+  }
 
   public final       AtomicLong                                indexCompactions          = new AtomicLong();
   protected final    String                                    name;
@@ -1093,6 +1111,132 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           wrappedDatabaseInstance.rollback();
       }
     }
+  }
+
+  @Override
+  public RID restoreRecord(final Record record, final LocalBucket bucket, final long position) {
+    if (record.getIdentity() != null)
+      throw new IllegalArgumentException(
+          "Cannot restore record " + record.getIdentity() + " because it is already persistent");
+
+    if (mode == ComponentFile.MODE.READ_ONLY)
+      throw new DatabaseIsReadOnlyException("Cannot restore a record");
+
+    // Restoring into an infrastructure bucket would recreate a serializer payload blob as if it were a user record,
+    // corrupting the schema's accounting of which records are real - same reason createRecordNoLock refuses it.
+    if (bucket.getPurpose() != LocalBucket.Purpose.PRIMARY)
+      throw new IllegalArgumentException(
+          "Bucket '" + bucket.getName() + "' is internal (purpose=" + bucket.getPurpose() + ") and cannot be restored into");
+
+    // Auto-transaction parity with createRecordNoLock: on a database opened with setAutoTransaction(true) a plain
+    // INSERT wraps itself in a transaction, and RESTORE must not be the one statement that throws instead. Without
+    // it, both paths still fail identically outside a transaction (autoTransaction defaults to false).
+    // The implicit transaction is opened AND committed inside the SAME read lock the restore write holds, the way
+    // createRecord wraps all of createRecordNoLock. Committing after releasing it would leave a window - unique in
+    // this class - for an executeInWriteLock caller (drop(), close()) to interleave between the physical page write
+    // and the commit that persists it. The whole sequence below - validation and the beforeCreate listeners
+    // included - is inside that lock for the same reason createRecord puts them there: a listener is arbitrary user
+    // code, and it must not run against a database an executeInWriteLock caller is free to close underneath it.
+    return executeInReadLock(() -> {
+      boolean success = false;
+      // Opened BEFORE the checks below, where createRecordNoLock opens it after them - forced, not an oversight:
+      // checkRestoreTargetIsFree reads the target page through the transaction, so there has to be one to read it
+      // through. The only visible difference is that with autoTransaction a RESTORE that fails validation opens and
+      // rolls back an empty implicit transaction where the equivalent INSERT would not have opened one, which costs
+      // nothing - a rollback with no modified page is a no-op.
+      final boolean implicitTransaction = checkTransactionIsActive(autoTransaction);
+      try {
+        // Checked before the record's own constraints (#6127 review): aiming at a RID that is still live is the
+        // likeliest mistake with this statement and used to be the only error it could return, so a
+        // mandatory-property violation must not be what a caller sees first and goes off to fix. Advisory only -
+        // restoreRecordAtPosition runs the same check again, authoritatively, on the page it writes.
+        bucket.checkRestoreTargetIsFree(position);
+
+        // #6127: the schema contract, applied exactly as createRecordNoLock applies it. RESTORE used to skip both of
+        // these on the grounds that an emergency repair must never be blocked - but a record written past its own
+        // MANDATORY/NOTNULL constraints cannot even be UPDATEd afterwards (updateRecord validates too, so every later
+        // write throws until the missing property is supplied), and CHECK DATABASE is a structural check that never
+        // looks at schema constraints, so nothing downstream catches it either. Refusing up front costs the caller one
+        // explicit `SET name = '<unknown>'` and yields a record the rest of the engine can actually work with.
+        setDefaultValues(record);
+
+        if (record instanceof MutableDocument doc)
+          doc.validate();
+
+        // #6127: the create events, likewise. Whoever may RESTORE may also INSERT, and the same triggers already run
+        // on every INSERT, so firing them here adds no privilege or behavioural surface that was not already
+        // reachable - while NOT firing them silently drifts any derived state a trigger maintains. Unlike
+        // createRecordNoLock, a veto raises instead of returning quietly: a repair that reports success without
+        // writing the record is the one outcome this statement must never produce.
+        if (!events.onBeforeCreate(record))
+          throw new DatabaseOperationException(
+              "Cannot restore record at position " + position + " in bucket '" + bucket.getName()
+                  + "': a database-level beforeCreate listener vetoed it");
+        if (record instanceof Document doc)
+          if (!((RecordEventsRegistry) doc.getType().getEvents()).onBeforeCreate(record))
+            throw new DatabaseOperationException(
+                "Cannot restore record at position " + position + " in bucket '" + bucket.getName()
+                    + "': a beforeCreate listener on type '" + doc.getTypeName() + "' vetoed it");
+
+        final RID restoredRid = restoreRecordInTransaction(record, bucket, position);
+        success = true;
+
+        // INVOKE EVENT CALLBACKS - before the implicit commit, exactly where createRecordNoLock fires them.
+        events.onAfterCreate(record);
+        if (record instanceof Document doc)
+          ((RecordEventsRegistry) doc.getType().getEvents()).onAfterCreate(record);
+
+        return restoredRid;
+      } finally {
+        if (implicitTransaction) {
+          if (success)
+            wrappedDatabaseInstance.commit();
+          else
+            wrappedDatabaseInstance.rollback();
+        }
+      }
+    });
+  }
+
+  private RID restoreRecordInTransaction(final Record record, final LocalBucket bucket, final long position) {
+    final RID rid = bucket.restoreRecordAtPosition(position, record);
+
+    final TransactionContext transaction = getTransaction();
+    transaction.updateRecordInCache(record);
+    // #6069: restoreRecordAtPosition does the physical page write only, so fold the same +1 on the cached bucket
+    // record-count delta that count(*) reads and a normal create applies.
+    transaction.updateBucketRecordDelta(bucket.getFileId(), +1);
+
+    // Same reason createRecordNoLock poisons it: a restored edge chunk or stripe directory is absent from the
+    // committed version of its page, so replaying this transaction's appends against that page at commit would
+    // target the wrong bytes. No current caller restores one - every RESTORE arm passes a document/vertex/edge
+    // shell - but this is a general Record-typed primitive on a shared interface, and a future caller should get
+    // the correct behaviour rather than a silent gap. (restoreRecordAtPosition already poisons the SLOT merge;
+    // this is the separate commutative edge-append merge.)
+    if (record instanceof MutableEdgeSegment || record instanceof StripeDirectory)
+      transaction.poisonEdgeAppendPage(record.getIdentity());
+
+    if (record instanceof MutableDocument doc) {
+      // The record did not exist before this transaction, so for a rollback it is a NEW record: keep it out of
+      // the reload loop and reset its identity to provisional (#4562, #4940) rather than leaving a dangling RID
+      // on the caller's object.
+      //
+      // Registered BEFORE indexing, matching createRecordNoLock's order: indexer.createDocument can throw inline
+      // (Index.put -> checkIsValid on a dropped/invalidated index, or convertKeys on a key it cannot coerce), and
+      // registering after would skip the rollback identity reset on exactly those paths. Note this is NOT the
+      // unique-constraint path - a duplicate key is detected at commit, by which point both calls have run.
+      transaction.registerNewRecord(record);
+
+      // #6120: the index entries. Without this the restored record is returned by a full scan but not by any
+      // index-resolved query, and a UNIQUE index never learns the key came back - so a later restore or insert
+      // could hand the same key to a second record unchallenged. Deliberately the same call createRecordNoLock
+      // makes: a restored record is indexed exactly like an inserted one, duplicate rejection included.
+      indexer.createDocument(doc, doc.getType(), bucket);
+    }
+
+    ((RecordInternal) record).unsetDirty();
+
+    return rid;
   }
 
   @Override
@@ -2493,12 +2637,31 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     transactionManager.checkIntegrity();
   }
 
+  /** Removes any {@code .pshadow} scratch file left behind by a snapshot window that a crash interrupted (#6075). */
+  private void deleteOrphanSnapshotShadows() {
+    final File[] orphans = new File(databasePath).listFiles(
+        (dir, name) -> name.endsWith("." + PageSnapshot.SHADOW_FILE_EXT));
+    if (orphans == null)
+      return;
+    for (final File orphan : orphans) {
+      LogManager.instance().log(this, Level.FINE, "Deleting orphan snapshot shadow file '%s'", null, orphan.getName());
+      if (!orphan.delete())
+        LogManager.instance().log(this, Level.WARNING, "Cannot delete the orphan snapshot shadow file '%s'", null, orphan);
+    }
+  }
+
   private void openInternal() {
     try {
       DatabaseContext.INSTANCE.init(this);
       setLockingEnabled(configuration.getValueAsBoolean(GlobalConfiguration.BACKUP_ENABLED));
 
+      // #6075 (challenge C8): the copy-on-write shadow of a snapshot window is pure scratch - recovery never reads
+      // it - so a crash mid-window leaves nothing but an orphan file to delete here. Its extension is deliberately
+      // absent from SUPPORTED_FILE_EXT, so the FileManager scan below never mistakes one for a data file.
+      deleteOrphanSnapshotShadows();
+
       fileManager = new FileManager(databasePath, mode, SUPPORTED_FILE_EXT, resolveExternalBucketPath());
+      fileManager.setDroppedFileHandler(file -> PageManager.INSTANCE.deferFileDrop(wrappedDatabaseInstance, file));
       transactionManager = new TransactionManager(wrappedDatabaseInstance);
 
       open = true;

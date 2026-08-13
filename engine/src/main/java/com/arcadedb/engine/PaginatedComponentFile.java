@@ -154,6 +154,14 @@ public class PaginatedComponentFile extends ComponentFile {
     }
   }
 
+  /**
+   * Renames the underlying OS file. {@code newFileName} is the complete file name, tail included; a name without a
+   * path separator is resolved against the current parent directory.
+   * <p>
+   * To change only the component name and keep the {@code .fileId.pageSize.vVersion.ext} tail, call
+   * {@link #renameComponent(String)}: this method cannot infer where the component name ends, and every heuristic
+   * for doing so is wrong for a name that itself contains the delimiter being searched for.
+   */
   public void rename(final String newFileName) throws IOException {
     channelLock.writeLock().lock();
     try {
@@ -161,20 +169,10 @@ public class PaginatedComponentFile extends ComponentFile {
       LogManager.instance().log(this, Level.FINE, "Renaming file %s (id=%d) to %s...", null, filePath, fileId, newFileName);
 
       final File newFile;
-      if (newFileName.contains(File.separator) || (File.separatorChar != '/' && newFileName.contains("/"))) {
-        // newFileName is an absolute path (e.g., from removeTempSuffix)
+      if (newFileName.indexOf(File.separatorChar) > -1 || newFileName.indexOf('/') > -1)
         newFile = new File(newFileName);
-      } else if (newFileName.contains(".") && newFileName.contains("_")) {
-        // newFileName is already a complete filename, but not an absolute path
+      else
         newFile = new File(osFile.getParentFile(), newFileName);
-      } else {
-        // newFileName is a component name, append the suffix from original file
-        final int suffixStart = osFile.getName().indexOf("_");
-        if (suffixStart < 0)
-          throw new IOException("Original file name '" + osFile.getName() + "' does not contain '_' to extract suffix");
-        final String newFilePath = newFileName + osFile.getName().substring(suffixStart);
-        newFile = new File(osFile.getParentFile(), newFilePath);
-      }
       try {
         Files.move(osFile.getAbsoluteFile().toPath(), newFile.getAbsoluteFile().toPath(), StandardCopyOption.ATOMIC_MOVE);
         open(newFile.getAbsolutePath(), mode);
@@ -185,6 +183,20 @@ public class PaginatedComponentFile extends ComponentFile {
     } finally {
       channelLock.writeLock().unlock();
     }
+  }
+
+  /**
+   * Renames only the component name, recomposing the file name from the fields the open-time parser already
+   * resolved. Nothing is inferred from either the current or the new name, so a component name containing '.' or
+   * '_' round-trips like any other.
+   */
+  public void renameComponent(final String newComponentName) throws IOException {
+    if (newComponentName == null || newComponentName.isEmpty())
+      throw new IOException("Invalid component name '" + newComponentName + "'");
+    if (newComponentName.indexOf(File.separatorChar) > -1 || newComponentName.indexOf('/') > -1)
+      throw new IOException("Component name '" + newComponentName + "' cannot contain a path separator");
+
+    rename(newComponentName + "." + fileId + "." + pageSize + ".v" + version + "." + fileExtension);
   }
 
   @Override
@@ -348,6 +360,46 @@ public class PaginatedComponentFile extends ComponentFile {
       }
     } finally {
       channelLock.readLock().unlock();
+    }
+  }
+
+  /**
+   * Reads a RUN of consecutive pages in one call into {@code buf} at its current position, which must have at least
+   * {@code pages * pageSize} bytes remaining. Unlike {@link #readPage} the buffer is NOT cleared, so several runs can
+   * be assembled into one larger buffer.
+   * <p>
+   * Used by the point-in-time snapshot reader ({@link PageSnapshot}, issue #6075) to keep the copy sequential: the
+   * copy-on-write shadow removes the need for a per-page interlock, so a megabyte can be read in one syscall instead
+   * of sixteen and the OS readahead works exactly as it did for the bulk {@code transferTo} the snapshot replaced.
+   */
+  public void readPages(final int fromPageNumber, final int pages, final ByteBuffer buf) throws IOException {
+    if (fromPageNumber < 0)
+      throw new IllegalArgumentException("Invalid page number to read: " + fromPageNumber);
+
+    final int expected = pages * pageSize;
+    if (buf.remaining() < expected)
+      throw new IllegalArgumentException(
+          "Buffer too small to read " + pages + " pages of file '" + getFileName() + "': " + buf.remaining() + " < " + expected);
+
+    final int limit = buf.limit();
+    buf.limit(buf.position() + expected);
+    channelLock.readLock().lock();
+    try {
+      if (channel == null)
+        throw new IllegalArgumentException(
+            "Cannot read pages from " + fromPageNumber + " because the file '" + getFileName() + "' is closed");
+
+      long pos = pageSize * (long) fromPageNumber;
+      while (buf.hasRemaining()) {
+        final int r = channel.read(buf, pos);
+        if (r < 0)
+          throw new IOException(
+              "Unexpected EOF reading " + pages + " pages from page " + fromPageNumber + " of file '" + getFileName() + "'");
+        pos += r;
+      }
+    } finally {
+      channelLock.readLock().unlock();
+      buf.limit(limit);
     }
   }
 

@@ -303,6 +303,30 @@ public class Profiler {
     json.put("writeCachePages", new JSONObject().put("count", writeCachePages));
     json.put("indexCompactions", new JSONObject().put("count", indexCompactions));
 
+    // #6116: the point-in-time snapshot windows of #6075. The five instantaneous readings are per-window state and
+    // go back to zero when the last window closes (so they must never be read as counters, #5636); the three totals
+    // that follow are JVM-wide and monotonic. deferredRAM (#6087) travels with them because it is the same question
+    // asked of the OTHER path: what a reader that froze the files is costing the writers right now.
+    json.put("snapshotWindowsOpen", new JSONObject().put("value", pStats.snapshotWindowsOpen));
+    json.put("snapshotShadowedPages", new JSONObject().put("value", pStats.snapshotShadowedPages));
+    json.put("snapshotShadowSize", new JSONObject().put("space", pStats.snapshotShadowBytes));
+    json.put("snapshotShadowSpilledSize", new JSONObject().put("space", pStats.snapshotShadowSpilledBytes));
+    json.put("snapshotShadowUsagePerc", new JSONObject().put("perc", pStats.snapshotShadowUsagePerc));
+    json.put("snapshotOldestWindowAge", new JSONObject().put("value", pStats.snapshotOldestWindowMillis));
+    json.put("snapshotWindowsOpened", new JSONObject().put("count", pStats.snapshotWindowsOpened));
+    json.put("snapshotWindowsInvalidated", new JSONObject().put("count", pStats.snapshotWindowsInvalidated));
+    // #6125: the split of the line above, because the two reasons take an operator to different places, plus the
+    // timer over the t0 barrier - the one stall the snapshot path still has, and until now the only thing about it
+    // that was reported was a WARNING when it gave up.
+    json.put("snapshotWindowsOverflowed", new JSONObject().put("count", pStats.snapshotWindowsOverflowed));
+    json.put("snapshotWindowsFailed", new JSONObject().put("count", pStats.snapshotWindowsFailed));
+    json.put("snapshotPreImagesCaptured", new JSONObject().put("count", pStats.snapshotPreImagesCaptured));
+    json.put("snapshotBarriers", new JSONObject().put("count", pStats.snapshotBarriers));
+    json.put("snapshotBarrierTime", new JSONObject().put("count", pStats.snapshotBarrierMillis));
+    json.put("snapshotBarrierMaxTime", new JSONObject().put("value", pStats.snapshotBarrierMaxMillis));
+    json.put("snapshotBarriersInexact", new JSONObject().put("count", pStats.snapshotBarriersInexact));
+    json.put("deferredRAM", new JSONObject().put("space", pStats.deferredRAMBytes));
+
     final long freeSpace = new File(".").getFreeSpace();
     final long totalSpace = new File(".").getTotalSpace();
     final float freeSpacePerc = freeSpace * 100F / totalSpace;
@@ -465,8 +489,8 @@ public class Profiler {
       buffer.append("%n INDEXES compactions=%d".formatted(indexCompactions));
 
       buffer.append(
-        "%n PAGE-MANAGER flushQueue=%d cacheHits=%d cacheMiss=%d concModExceptions=%d evictionRuns=%d pagesEvicted=%d".formatted(
-          pageFlushQueueLength,
+        "%n PAGE-MANAGER flushQueue=%d deferredRAM=%s cacheHits=%d cacheMiss=%d concModExceptions=%d evictionRuns=%d pagesEvicted=%d".formatted(
+          pageFlushQueueLength, FileUtils.getSizeAsString(pStats.deferredRAMBytes),
           pageCacheHits, pageCacheMiss, concurrentModificationExceptions, evictionRuns, pagesEvicted));
 
       // #5608: read this line together with concModExceptions above. Contention absorbed by a merge never becomes a
@@ -474,6 +498,24 @@ public class Profiler {
       // without declaring its coverage (see MutablePage.beginCoveredWrite).
       buffer.append("%n    edgeAppendMerges=%d txPageSlotMerges=%d mergesDeclinedByCoverage=%d".formatted(
           edgeAppendMerges, txPageSlotMerges, mergesDeclinedByCoverage));
+
+      // #6116: printed unconditionally, zeros included. "No window is open" is the answer an operator is looking for
+      // most of the time, and a line that appears only sometimes cannot be read as one.
+      buffer.append(
+        "%n PAGE-SNAPSHOT windowsOpen=%d shadowPages=%d shadow=%s (spilled=%s, %.1f%% of the cap) oldestWindow=%,dms opened=%d invalidated=%d preImages=%d".formatted(
+          pStats.snapshotWindowsOpen, pStats.snapshotShadowedPages, FileUtils.getSizeAsString(pStats.snapshotShadowBytes),
+          FileUtils.getSizeAsString(pStats.snapshotShadowSpilledBytes), pStats.snapshotShadowUsagePerc,
+          pStats.snapshotOldestWindowMillis, pStats.snapshotWindowsOpened, pStats.snapshotWindowsInvalidated,
+          pStats.snapshotPreImagesCaptured));
+
+      // #6125: the t0 barrier on its own line. The average is what an operator compares against their write-latency
+      // budget; the max is what a single unlucky backup actually cost, and averaging it away hides exactly the
+      // outlier worth chasing.
+      buffer.append("%n    barriers=%d avg=%,dms max=%,dms inexact=%d overflowed=%d failed=%d".formatted(
+          pStats.snapshotBarriers,
+          pStats.snapshotBarriers > 0 ? pStats.snapshotBarrierMillis / pStats.snapshotBarriers : 0L,
+          pStats.snapshotBarrierMaxMillis, pStats.snapshotBarriersInexact, pStats.snapshotWindowsOverflowed,
+          pStats.snapshotWindowsFailed));
 
       buffer.append(
         "%n WAL totalFiles=%d pagesWritten=%d bytesWritten=%s".formatted(walTotalFiles, walPagesWritten,

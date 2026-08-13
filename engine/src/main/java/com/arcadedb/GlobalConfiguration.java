@@ -439,6 +439,33 @@ public enum GlobalConfiguration {
       Larger values reduce commit overhead on single-node setups at the cost of bigger transactions.""",
       Integer.class, 1000),
 
+  CHECK_DATABASE_REPAIR_BATCH_PAGES("arcadedb.checkDatabaseRepairBatchPages", SCOPE.DATABASE,
+      """
+      Number of modified pages CHECK DATABASE ... FIX accumulates before committing its repair and opening the next \
+      transaction. Same rationale as arcadedb.truncateBatchSize, and the same failure it avoids (issue #6128): the \
+      repair of one type - every reconnected edge and every deleted record - used to be a SINGLE transaction, which \
+      in HA is a SINGLE Raft log entry, and a transaction entry has no splitter the way a schema entry has had since \
+      issue #4743. Above min(arcadedb.ha.appendBufferSize, arcadedb.ha.grpcMessageSizeMax) the entry is rejected with \
+      ReplicatedEntryTooLargeException - not a NeedRetryException, so nothing retries it - and a repair that had run \
+      for hours was rolled back whole. Counted in PAGES rather than records because pages are what the entry \
+      contains: how many records a repair touched says nothing about how many distinct pages it dirtied. Sizing the \
+      default of 256, without rounding the arithmetic in its own favour: 256 pages at the 64KB bucket default is \
+      16MB of PAGES, half the 32MB appendBufferSize default, which is margin rather than comfort once the soft \
+      ceiling below is taken into account. The entry itself is far smaller in practice - the WAL carries each \
+      page's CHANGED RANGE rather than the whole page, and is compressed on top of that, so a repair reconnecting \
+      1500 edges was measured well under 128KB - but that is a property of typical repairs, not a bound. If a \
+      deployment raises the bucket page size or lowers appendBufferSize, re-check this against BOTH rather than \
+      trusting the default. Raising it lowers commit overhead on an embedded database at the cost of bigger \
+      transactions; 0 \
+      disables batching entirely, restoring the all-or-nothing repair semantics of a single transaction. \
+      ALSO BOUNDS CHECK DATABASE ... COMPRESS, whose per-transaction page count was a hardcoded 10 - one Raft round \
+      trip per ten pages, which on a replicated database of any size does not finish; COMPRESS keeps that 10 when \
+      this is set to 0, since one transaction over every page in the database helps nobody. \
+      A SOFT ceiling, not a hard cap: the budget is checked between units of repair work, so a transaction can \
+      exceed it by whatever the unit in flight dirties (reconnecting one very wide adjacency list, or a hub record \
+      spanning several pages). Leave headroom when picking a value close to the replicated-entry limit.""",
+      Integer.class, 256),
+
   PAGE_FLUSH_QUEUE("arcadedb.pageFlushQueue", SCOPE.DATABASE, "Size of the asynchronous page flush queue", Integer.class, 512),
 
   FLUSH_SUSPEND_MAX_DEFERRED_RAM("arcadedb.flushSuspendMaxDeferredRAM", SCOPE.DATABASE,
@@ -450,6 +477,48 @@ public enum GlobalConfiguration {
       the heap (issue #4728: a busy leader shipping a multi-GB snapshot OOM'd). Set to 0 to disable the cap \
       (unbounded, pre-4728 behavior).""",
       Long.class, 512),
+
+  PAGE_SNAPSHOT_ENABLED("arcadedb.pageSnapshotEnabled", SCOPE.DATABASE,
+      """
+      Serve point-in-time readers (full backup, HA database verify, HA snapshot ship) from the page-level \
+      copy-on-write shadow instead of freezing the data files with FLUSH_SUSPEND_MAX_DEFERRED_RAM-bounded flush \
+      suspension (issue #6075). With the shadow the only stall is one bounded flush-queue drain when the window \
+      opens; after that writers run at full speed for the whole operation and index compaction is no longer \
+      postponed. Set to false to fall back to the historical suspend-and-freeze path, which is also selected \
+      automatically when a shadow breaches PAGE_SNAPSHOT_MAX_SIZE.""",
+      Boolean.class, true),
+
+  PAGE_SNAPSHOT_MAX_RAM("arcadedb.pageSnapshotMaxRAM", SCOPE.DATABASE,
+      """
+      Maximum amount of RAM (in MB) of page pre-images a snapshot window keeps in memory before spilling the rest \
+      to a scratch file next to the database (issue #6075). The shadow only ever holds the pages DIRTIED while the \
+      window is open, once each, so a short backup on a moderately busy database often never touches the disk at \
+      all - which is the point of making it RAM first. Raise it to trade heap for keeping longer windows in memory.""",
+      Long.class, 64),
+
+  PAGE_SNAPSHOT_MAX_SIZE("arcadedb.pageSnapshotMaxSize", SCOPE.DATABASE,
+      """
+      Hard cap (in MB, RAM plus spill file) on the size a single snapshot shadow may reach before the window is \
+      declared overflowed (issue #6075, challenge C4). On breach the window stops capturing and every reader fails \
+      loudly, so the consumer can fall back to the suspend-and-freeze path - never a silently truncated or torn \
+      snapshot. The default -1 sizes the cap AUTOMATICALLY when the window opens (issue #6125), as the smaller of \
+      the ceiling the shadow provably cannot exceed - one pre-image per page that existed at t0, so the t0 size of \
+      the page files - and half the space still usable on the volume holding the spill file. A flat number cannot \
+      do that: measurements on a 128 MB database show the shadow reaching 100% of the database under a flat-out \
+      writer, so any fixed default is simply the database size above which backups silently start falling back to \
+      throttling the writers. Set a positive value to pin an absolute cap in MB, or 0 for no cap at all; any \
+      negative value means automatic, so -1 is the spelling to use rather than the only one accepted.""",
+      Long.class, -1),
+
+  PAGE_SNAPSHOT_SPILL_PATH("arcadedb.pageSnapshotSpillPath", SCOPE.DATABASE,
+      """
+      Directory holding the scratch spill file of a snapshot shadow, empty (the default) to keep it in the database \
+      directory (issue #6125). A shadow can grow to the size of the database, so on a volume sized for the data \
+      alone it competes for space with the very files it is protecting; pointing this at another volume removes \
+      that coupling, and the automatic PAGE_SNAPSHOT_MAX_SIZE is then measured against the free space THERE. The \
+      file is pure scratch - it is created when the RAM budget is exhausted, deleted when the window closes, and \
+      never read by recovery.""",
+      String.class, ""),
 
   EXPLICIT_LOCK_TIMEOUT("arcadedb.explicitLockTimeout", SCOPE.DATABASE, "Timeout in ms to lock resources on explicit lock",
       Long.class, 5000),
@@ -476,7 +545,7 @@ public enum GlobalConfiguration {
       Boolean.class, true),
 
   TX_PAGE_SLOT_MERGE("arcadedb.txPageSlotMerge", SCOPE.DATABASE,
-      "Generalization of GRAPH_EDGE_APPEND_MERGE to arbitrary records. At commit, when a bucket page conflicts only because concurrent transactions touched DIFFERENT record slots on it (logically-unrelated records sharing a page), re-apply this transaction's slot writes on top of the newer committed page instead of failing the whole transaction with a ConcurrentModificationException. Covers new-record inserts into free slots, every update that stays inside the page - an overwrite of the same size or smaller (e.g. the vertex edge-list head-pointer flip on super-node insertion) as well as a record growth the page can host by shifting the records that follow - and the delete of a plain in-place record, which only frees its own slot; a genuine same-record conflict, or any non-rebasable change (multi-page/placeholder record, a record that has to spill out of its page), still raises the exception so it is retried",
+      "Generalization of GRAPH_EDGE_APPEND_MERGE to arbitrary records. At commit, when a bucket page conflicts only because concurrent transactions touched DIFFERENT record slots on it (logically-unrelated records sharing a page), re-apply this transaction's slot writes on top of the newer committed page instead of failing the whole transaction with a ConcurrentModificationException. Covers new-record inserts into free slots, every update that stays inside the page - an overwrite of the same size or smaller (e.g. the vertex edge-list head-pointer flip on super-node insertion) as well as a record growth the page can host by shifting the records that follow - the delete of a plain in-place record, which only frees its own slot, and the shapes a record takes once it outgrows its page: the content record behind a placeholder pointer, the head chunk of a multi-page record, and the spill that turns a plain record into that head chunk. A genuine same-record conflict, or any change that is not confined to one slot (a placeholder pointer being created or rebuilt, the continuation chunks of a multi-page record), still raises the exception so it is retried",
       Boolean.class, true),
 
   TX_PAGE_SLOT_MERGE_MAX_BYTES("arcadedb.txPageSlotMergeMaxBytes", SCOPE.DATABASE,
@@ -1233,7 +1302,11 @@ public enum GlobalConfiguration {
       ones (binary blobs, base64, encrypted fields, float vectors) map roughly 1:1. Raise it when single \
       transactions or records are bigger than the default, and raise arcadedb.ha.writeBufferSize with it \
       (it must stay >= this value + 8 bytes). Cost of raising it: a directly-allocated write buffer of \
-      writeBufferSize per server, plus up to this many bytes of heap per follower appender during catch-up.""",
+      writeBufferSize per server, plus up to this many bytes of heap per follower appender during catch-up. \
+      Cost of LOWERING it (issue #6136): an index rebuild ships its WAL to the followers in instalments of half \
+      this size, and each instalment is a quorum round trip taken while the database write lock is held, so a \
+      smaller value means more round trips and a longer window in which every writer on that database waits - \
+      up to arcadedb.ha.quorumTimeout per instalment if a quorum member is slow or briefly partitioned.""",
       String.class, "32MB"),
 
   HA_APPEND_ELEMENT_LIMIT("arcadedb.ha.appendElementLimit", SCOPE.SERVER,

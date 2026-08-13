@@ -28,6 +28,7 @@ import io.swagger.v3.oas.models.responses.ApiResponse;
 import io.swagger.v3.oas.models.responses.ApiResponses;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Documents the routes contributed by server plugins rather than by {@code HttpServer} itself: the
@@ -54,6 +55,27 @@ import java.util.List;
  * specification, which needs no new dependency because the assertion can compare plain path strings.
  */
 public class PluginApiSpec implements OpenApiContributor {
+
+  /**
+   * The Raft high-availability cluster management and snapshot routes {@code RaftHAPlugin}
+   * registers, mirrored here because that module cannot declare its own (see the class Javadoc
+   * above). Verified against the plugin's actual {@code registerAPI} output by
+   * {@code RaftHAPluginRegisteredRoutesMatchApiSpecTest} in the ha-raft module, and against
+   * {@link #contribute} by {@code ApiSpecPathConstantsTest} (issue #4896).
+   */
+  public static final Set<String> HA_RAFT_PATHS = Set.of(
+      "/api/v1/cluster", "/api/v1/cluster/peer", "/api/v1/cluster/peer/{peerId}",
+      "/api/v1/cluster/leader", "/api/v1/cluster/stepdown", "/api/v1/cluster/leave",
+      "/api/v1/cluster/verify/{database}", "/api/v1/cluster/resync/{database}",
+      "/api/v1/cluster/bootstrap-state",
+      "/api/v1/ha/snapshot/{database}", "/api/v1/ha/snapshot/{database}/checksums");
+
+  /**
+   * The Prometheus scrape route {@code PrometheusMetricsPlugin} registers, mirrored here for the
+   * same reason as {@link #HA_RAFT_PATHS}. Verified against the plugin's actual {@code registerAPI}
+   * output by {@code PrometheusMetricsPluginRegisteredRoutesMatchApiSpecTest} in the metrics module.
+   */
+  public static final Set<String> METRICS_PATHS = Set.of("/prometheus");
 
   private static final String RAFT_REQUIRED =
       "Requires RaftHAPlugin: the route is registered on every server, but answers only where high availability is configured.";
@@ -319,19 +341,26 @@ public class PluginApiSpec implements OpenApiContributor {
     final Operation get = SpecBuilders.operation("getDatabaseSnapshotChecksums", "Cluster",
         "Read the checksums of a snapshot's files",
         """
-            Returns the per-file checksums of the database a snapshot download would produce, so a \
-            follower can decide whether it needs the full transfer. Only the root user may read them.
+            Returns the per-file checksums of the database as a snapshot download would produce it, read \
+            through the same point-in-time window. Only the root user may read them.
+
+            This is an operator diagnostic: it answers "do these two nodes hold the same bytes?" without \
+            transferring a database. Resync itself does not consult it - a follower that falls behind the \
+            compacted Raft log always downloads the full snapshot ZIP - because a whole-file comparison is the \
+            wrong granularity for an ArcadeDB database, which is usually dominated by one bucket file that any \
+            single changed byte re-ships in full. Incremental resync is tracked as a page-level diff in #6115.
 
             This route accepts HTTP Basic only, for the same reason as the snapshot download. """
             + RAFT_REQUIRED);
     get.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
     SpecBuilders.basicAuthOnly(get);
-    // No 400: unlike the snapshot download branch, the checksums branch never validates the database
-    // name (missing/invalid characters); an unknown name simply resolves to 404. A checksum
-    // computation failure is caught locally and reported as 500.
+    // 400 since #6125: the database name is validated (non-empty, no separators, no '..', printable ASCII)
+    // BEFORE this branch is taken, exactly as on the snapshot download route, so a malformed name is refused
+    // here rather than resolving to a 404 further down. A checksum computation failure is caught locally and
+    // reported as 500.
     get.setResponses(SpecBuilders.standardResponses("200",
         SpecBuilders.jsonResponse("Per-file checksums", null),
-        "401", "403", "404", "500", "503"));
+        "400", "401", "403", "404", "500", "503"));
 
     final PathItem pathItem = new PathItem();
     pathItem.setGet(get);

@@ -59,6 +59,9 @@ public final class EngineMetricsBinder implements MeterBinder {
 
   private static final long SNAPSHOT_TTL_NANOS = TimeUnit.SECONDS.toNanos(1);
 
+  /** The engine times the t0 barrier in milliseconds; a {@code _seconds} series is what Prometheus expects (#6125). */
+  private static final double MILLIS_TO_SECONDS = 0.001d;
+
   /**
    * The memoized {@link Profiler} snapshot every meter reads through.
    * <p>
@@ -99,10 +102,65 @@ public final class EngineMetricsBinder implements MeterBinder {
     counter(registry, "arcadedb.engine.queries", "Queries executed", "queries");
     counter(registry, "arcadedb.engine.commands", "Commands executed", "commands");
 
+    // #6116: the copy-on-write work an open snapshot window (#6075) is doing, and how often a window loses its point
+    // in time. An invalidated window is invisible from the outside - its consumer restarts on the suspend-and-freeze
+    // path and still completes - so without this counter the only trace of a backup that fell back to throttling the
+    // writers is a WARNING in the log.
+    counter(registry, "arcadedb.engine.snapshot.windows.opened", "Point-in-time snapshot windows opened",
+        "snapshotWindowsOpened");
+    counter(registry, "arcadedb.engine.snapshot.windows.invalidated",
+        "Snapshot windows that lost their point in time (shadow cap breach or I/O error)", "snapshotWindowsInvalidated");
+    counter(registry, "arcadedb.engine.snapshot.preimages.captured",
+        "Page pre-images copied into a snapshot shadow", "snapshotPreImagesCaptured");
+
+    // #6125: the split of windows.invalidated above. The two reasons take an operator to different places - a cap
+    // breach is answered by raising arcadedb.pageSnapshotMaxSize or giving the spill volume room, a capture failure
+    // by looking at the disk - and a single summed counter cannot say which.
+    counter(registry, "arcadedb.engine.snapshot.windows.overflowed",
+        "Snapshot windows whose shadow reached its size cap", "snapshotWindowsOverflowed");
+    counter(registry, "arcadedb.engine.snapshot.windows.failed",
+        "Snapshot windows lost to an I/O error while capturing a pre-image", "snapshotWindowsFailed");
+
+    // #6125: the t0 barrier, the ONE stall the snapshot path still has, exported as a Prometheus timer is: a count
+    // and a summed duration, so rate(seconds)/rate(count) is the average latency. It is a pair of counters rather
+    // than a real Timer because this binder reads scalars out of a memoized Profiler snapshot and never sees the
+    // individual events; the pair carries the same information a Timer's _sum and _count do.
+    counter(registry, "arcadedb.engine.snapshot.barrier.count", "Point-in-time snapshot t0 barriers executed",
+        "snapshotBarriers");
+    counter(registry, "arcadedb.engine.snapshot.barrier.seconds",
+        "Total time spent in the snapshot t0 barrier", "snapshotBarrierTime", MILLIS_TO_SECONDS);
+    counter(registry, "arcadedb.engine.snapshot.barrier.inexact",
+        "Barriers that could not prove the flush pipeline was empty at t0", "snapshotBarriersInexact");
+    // A HIGH-WATER MARK: MONOTONIC, BUT A rate() OVER IT WOULD BE MEANINGLESS, WHICH IS WHY IT IS THE ONE MONOTONIC
+    // READING HERE THAT STAYS A GAUGE
+    gauge(registry, "arcadedb.engine.snapshot.barrier.max.seconds",
+        "Longest snapshot t0 barrier observed", "snapshotBarrierMaxTime", MILLIS_TO_SECONDS);
+
     // Instantaneous readings: these go up AND down, so they are the only ones that stay gauges.
     gauge(registry, "arcadedb.engine.wal.files", "WAL files", "walTotalFiles");
     gauge(registry, "arcadedb.engine.files.open", "Open file descriptors", "totalOpenFiles");
     gauge(registry, "arcadedb.engine.databases", "Open databases", "totalDatabases");
+
+    // #6116: per-window state, so every one of these returns to zero when the last window closes - gauges, not
+    // counters (#5636). The usage percentage is the alertable one: a window that reaches 100% of
+    // arcadedb.pageSnapshotMaxSize is invalidated, and its backup restarts on the path that throttles writers.
+    gauge(registry, "arcadedb.engine.snapshot.windows.open", "Point-in-time snapshot windows currently open",
+        "snapshotWindowsOpen");
+    gauge(registry, "arcadedb.engine.snapshot.shadow.pages", "Pages held in the open snapshot shadows",
+        "snapshotShadowedPages");
+    gauge(registry, "arcadedb.engine.snapshot.shadow.bytes", "Bytes held in the open snapshot shadows, RAM plus spill",
+        "snapshotShadowSize");
+    gauge(registry, "arcadedb.engine.snapshot.shadow.spilled.bytes", "Snapshot shadow bytes spilled to disk",
+        "snapshotShadowSpilledSize");
+    gauge(registry, "arcadedb.engine.snapshot.shadow.usage.percent",
+        "Fullest open shadow as a percentage of arcadedb.pageSnapshotMaxSize", "snapshotShadowUsagePerc");
+    gauge(registry, "arcadedb.engine.snapshot.window.age.ms", "Age of the oldest open snapshot window",
+        "snapshotOldestWindowAge");
+
+    // #6087: the companion reading for the OTHER path. While a reader freezes the files with a flush suspension,
+    // dirty pages pile up here; crossing arcadedb.flushSuspendMaxDeferredRAM throttles committing threads outright.
+    gauge(registry, "arcadedb.engine.flush.deferred.bytes", "Dirty page bytes deferred by a flush suspension",
+        "deferredRAM");
   }
 
   /**
@@ -112,16 +170,31 @@ public final class EngineMetricsBinder implements MeterBinder {
    * comes straight back.
    */
   private void counter(final MeterRegistry registry, final String name, final String description, final String jsonKey) {
+    counter(registry, name, description, jsonKey, 1d);
+  }
+
+  /**
+   * @param scale factor applied to the raw stat, for the readings the engine keeps in a different unit from the one
+   *     the series name promises (#6125: the barrier durations are milliseconds in {@code Profiler} and seconds on
+   *     the wire, which is what Prometheus dashboards and alert rules expect of a {@code _seconds} series).
+   */
+  private void counter(final MeterRegistry registry, final String name, final String description, final String jsonKey,
+      final double scale) {
     // No baseUnit(): Micrometer's Prometheus renderer splices the base unit INTO the series name
     // (arcadedb_engine_wal_bytes_written_bytes_total), which is a second, gratuitous rename on top of the _total
     // suffix this change already introduces.
-    FunctionCounter.builder(name, CACHE, c -> c.read(jsonKey))
+    FunctionCounter.builder(name, CACHE, c -> c.read(jsonKey) * scale)
         .description(description)
         .register(registry);
   }
 
   private void gauge(final MeterRegistry registry, final String name, final String description, final String jsonKey) {
-    Gauge.builder(name, CACHE, c -> c.read(jsonKey))
+    gauge(registry, name, description, jsonKey, 1d);
+  }
+
+  private void gauge(final MeterRegistry registry, final String name, final String description, final String jsonKey,
+      final double scale) {
+    Gauge.builder(name, CACHE, c -> c.read(jsonKey) * scale)
         .description(description)
         .register(registry);
   }
@@ -151,6 +224,11 @@ public final class EngineMetricsBinder implements MeterBinder {
           return nested.getLong("space", 0L);
         if (nested.has("value"))
           return nested.getLong("value", 0L);
+        // A percentage is the one stat shape that is genuinely fractional, so it is read as a double: rounding it to
+        // a long would flatten every reading below 1% to zero, and "the shadow is at 0%" is exactly the wrong thing
+        // to tell an operator watching it fill (#6116).
+        if (nested.has("perc"))
+          return nested.getDouble("perc", 0d);
         return 0d;
       }
       if (value instanceof Number n)

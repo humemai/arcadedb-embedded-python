@@ -42,6 +42,15 @@ import java.util.Objects;
  * lists still reference this RID - the usual case this repairs, since a raw record delete never touches the
  * neighbours - restoring the edge record itself is enough. Refuses if either endpoint vertex does not exist: an
  * edge to a missing vertex is not what this statement is for (see RESTORE VERTEX first in that case).
+ * <p>
+ * The type's schema applies in full (#6127): declared default values are set, the edge is validated, and the create
+ * events fire.
+ * <p>
+ * One caveat specific to the edge arm, for anyone writing an afterCreate trigger on an edge type: because no
+ * adjacency reconnection follows, the event fires on an edge record whose endpoints' adjacency lists this statement
+ * has not touched. In the case this repairs they still reference the RID and the graph is whole, but a trigger that
+ * assumes "create event fired therefore both endpoints already list this edge" - true of {@code Vertex.newEdge},
+ * which writes the adjacency itself - does not hold here.
  */
 public class RestoreEdgeStatement extends SimpleExecStatement {
   public Identifier targetType;
@@ -50,8 +59,7 @@ public class RestoreEdgeStatement extends SimpleExecStatement {
   public Rid        toRid;
   public InsertBody insertBody;
 
-  public RestoreEdgeStatement(final int id) {
-    super(id);
+  public RestoreEdgeStatement() {
   }
 
   @Override
@@ -83,7 +91,7 @@ public class RestoreEdgeStatement extends SimpleExecStatement {
     RestoreStatementSupport.applyBody(shell, insertBody, context);
 
     final LocalBucket bucket = (LocalBucket) database.getSchema().getBucketById(rid.getBucketId());
-    final RID restoredRid = RestoreStatementSupport.restoreRecordAndUpdateCount(database, bucket, rid.getPosition(), shell);
+    final RID restoredRid = database.restoreRecord(shell, bucket, rid.getPosition());
 
     final ResultInternal result = new ResultInternal(database);
     result.setProperty("operation", "restore edge");
@@ -119,7 +127,7 @@ public class RestoreEdgeStatement extends SimpleExecStatement {
 
   @Override
   public RestoreEdgeStatement copy() {
-    final RestoreEdgeStatement result = new RestoreEdgeStatement(-1);
+    final RestoreEdgeStatement result = new RestoreEdgeStatement();
     result.targetType = targetType == null ? null : targetType.copy();
     result.targetRid = targetRid == null ? null : targetRid.copy();
     result.fromRid = fromRid == null ? null : fromRid.copy();

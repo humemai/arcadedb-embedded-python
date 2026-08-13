@@ -18,6 +18,7 @@
  */
 package com.arcadedb.engine;
 
+import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Document;
@@ -126,6 +127,23 @@ public class DatabaseChecker {
       LogManager.instance().log(this, Level.INFO, "Integrity check of database '%s' started", null, database.getName());
 
     result.put("autoFix", 0L);
+    // Issue #6136 (3): the breakdown behind autoFix, seeded so the three keys are always present rather than
+    // appearing only on the runs that happened to perform that kind of repair.
+    //
+    // autoFix stays the ACTION count it has always been - removedRecords + prunedDanglingEntries - because
+    // existing readers and existing tests depend on it, and because "how many defects were there" is not a
+    // question the arms can answer jointly: one edge that is both listed in an adjacency chain and corrupt as a
+    // record is one defect, two repairs, two writes to two distinct pages. reconnectedEdges is NOT in the sum, for
+    // the same backward-compatibility reason - a rebuilt chain has never contributed to autoFix and making it do
+    // so would change every existing number. Read the three together to learn what a run did.
+    //
+    // "removedRecords" rather than the "deletedRecords" the issue proposed, deliberately: the result already
+    // carries "totalDeletedRecords", which counts records found in the DELETED state by the bucket scan and has
+    // nothing to do with repair, and a key differing from it by one word would read as its non-total sibling. This
+    // one is the count of "deletedRecordsAfterFix", the list of what this run actually took out.
+    result.put("removedRecords", 0L);
+    result.put("prunedDanglingEntries", 0L);
+    result.put("reconnectedEdges", 0L);
     result.put("invalidLinks", 0L);
     result.put("warnings", new LinkedHashSet<>());
     result.put("deletedRecordsAfterFix", new LinkedHashSet<>());
@@ -135,6 +153,17 @@ public class DatabaseChecker {
     result.put("totalCorruptedRecords", 0L);
     result.put("distinctMissingReferences", 0L);
     result.put("topMissingReferences", new ArrayList<String>());
+    // Issue #6128 (5): says WHICH copy of a replicated database this answer describes. The statement is classified
+    // non-idempotent, so a follower forwards it to the leader and the check only ever reads the leader's pages;
+    // repairs then reach the other nodes as WAL deltas over the page ranges they touched. Neither direction covers a
+    // follower whose own copy diverged. Reported as a field rather than left to the documentation because the
+    // dangerous reading of a clean result - "the cluster is fine" - is one an operator makes from the output.
+    result.put("checkedNodeScope", database.isReplicated() ? "this node only (replicated database)" : "whole database");
+
+    if (database.isReplicated())
+      addWarning("this database is replicated and this check inspected only the node that ran it: a clean result "
+          + "does not certify the other nodes, and a repair reaches them as replicated changes rather than by each "
+          + "node repairing itself. Progress is published per node too, so poll it on the node running the check");
 
     // COMPUTE THE STEP PLAN UPFRONT so every progress emission carries a stable stepIndex/totalSteps pair.
     final List<DocumentType> edgeTypes = new ArrayList<>();
@@ -314,7 +343,8 @@ public class DatabaseChecker {
         // the larger LOCK_POST_DROP_ATTEMPT_MULTIPLIER budget instead of giving up at LOCK_MAX_ATTEMPTS.
         boolean rebuilt = false;
         boolean indexDropped = false;
-        NeedRetryException lastRetryFailure = null;
+        RuntimeException lastFailure = null;
+        boolean lastFailureRetryable = true;
         int attemptsUsed = 0;
         for (int attempt = 1; ; attempt++) {
           attemptsUsed = attempt;
@@ -344,7 +374,8 @@ public class DatabaseChecker {
             rebuilt = true;
             break;
           } catch (final NeedRetryException e) {
-            lastRetryFailure = e;
+            lastFailure = e;
+            lastFailureRetryable = true;
             if (droppedThisAttempt[0])
               indexDropped = true;
 
@@ -359,26 +390,52 @@ public class DatabaseChecker {
               Thread.currentThread().interrupt();
               throw e;
             }
+          } catch (final RuntimeException e) {
+            // NOT retryable, so it gets no attempts: a DuplicatedKeyException from a unique index whose bucket
+            // already holds a violating record, a ReplicatedEntryTooLargeException on an HA leader whose rebuilt
+            // index exceeds arcadedb.ha.appendBufferSize, an IndexException from a record the build cannot read.
+            // Retrying reproduces it exactly.
+            //
+            // Caught at all - rather than left to unwind - for the reason the NeedRetryException arm above already
+            // states and which applies with MORE force here: this loop runs after checkDocuments/checkVertices/
+            // checkEdges have already found and repaired things, and none of that may be thrown away because ONE
+            // index could not be rebuilt. Before this arm existed, any such failure escaped check() with that
+            // attempt's dropIndex() already committed, so the single most destructive outcome (index gone, nothing
+            // reported, remaining indexes never even attempted) was also the one with no handling at all.
+            //
+            // RuntimeException, not a narrower list: the set of ways a rebuild can fail is open (every index type
+            // has its own, and the HA wrapper adds more), and the alternative to catching an unanticipated one is
+            // destroying the run. Nothing is swallowed - the exception's own message is quoted in the warning
+            // below and the index is struck from rebuiltIndexes.
+            lastFailure = e;
+            lastFailureRetryable = false;
+            if (droppedThisAttempt[0])
+              indexDropped = true;
+            break;
           }
         }
 
-        // Isolated per index rather than letting the exhausted retry unwind out of check(): this loop repairs
-        // potentially many indexes plus whatever checkDocuments/checkVertices/checkEdges already found and fixed,
-        // and none of that should be discarded because retrying ONE index ran out of attempts. Report it (this
-        // class's "reported, never silent" convention - see the manual-index warning above) and correct the
-        // rebuiltIndexes claim instead of pretending the rebuild happened.
+        // Isolated per index rather than letting the failure unwind out of check(): this loop repairs potentially
+        // many indexes plus whatever checkDocuments/checkVertices/checkEdges already found and fixed, and none of
+        // that should be discarded because ONE index could not be rebuilt - whether it ran out of retry attempts
+        // or failed outright. Report it (this class's "reported, never silent" convention - see the manual-index
+        // warning above) and correct the rebuiltIndexes claim instead of pretending the rebuild happened.
         //
-        // The warning's phrasing follows indexDropped (#6040): lock-acquisition exhaustion leaves the index
-        // exactly as it was, while post-drop exhaustion means the index is actually gone, not merely unrebuilt -
-        // lastRetryFailure.getMessage() is also surfaced so the operator can see the underlying cause either way.
+        // The warning's phrasing follows indexDropped (#6040) and retryability - see rebuildFailureStatus - and
+        // quotes lastFailure.getMessage() so the operator can see the underlying cause in every case.
         if (!rebuilt) {
           rebuildIndexes.remove(idx.getName());
-          final String status = indexDropped ?
-              "the index was dropped but the rebuild could not complete; it is now missing" :
-              "the index lock could not be acquired; the index itself is unchanged";
-          addWarning("index '" + idx.getName() + "' did not finish rebuilding after " + attemptsUsed + " attempts (" + status
-              + ", error: " + lastRetryFailure.getMessage() + "). Verify with `SELECT FROM schema:indexes WHERE name = '"
-              + idx.getName() + "'` and run CHECK DATABASE FIX again if it is missing");
+          // Named by the OWNING TypeIndex where there is one, because that is the name the operator created and
+          // the only one they can act on: idx.getName() is the internal per-bucket sub-index ("Doc_0_<nanos>"),
+          // which nobody typed and which makes the follow-up query below return nothing. The sub-index name is
+          // still quoted when the two differ, since a multi-bucket type has several and this says which failed.
+          final String reportedName = ownerTypeIndex != null ? ownerTypeIndex.getName() : idx.getName();
+          final String bucketSubIndex = reportedName.equals(idx.getName()) ? "" : " (bucket sub-index '" + idx.getName() + "')";
+          addWarning("index '" + reportedName + "'" + bucketSubIndex + " " + (lastFailureRetryable ?
+              "did not finish rebuilding after " + attemptsUsed + " attempts" :
+              "could not be rebuilt") + " (" + rebuildFailureStatus(indexDropped, lastFailureRetryable)
+              + ", error: " + lastFailure.getMessage() + "). Verify with `SELECT FROM schema:indexes WHERE name = '"
+              + reportedName + "'` and run CHECK DATABASE FIX again if it is missing");
         }
 
         stepTick();
@@ -397,6 +454,39 @@ public class DatabaseChecker {
       LogManager.instance().log(this, Level.INFO, "Result:\n%s", null, new JSONObject(result).toString(2));
 
     return result;
+  }
+
+  /**
+   * What state a failed index rebuild left behind, which is the only part of the warning an operator has to act
+   * on: an index that is MISSING needs recreating, one that is unchanged needs nothing.
+   * <p>
+   * Both dimensions matter and neither implies the other. {@code indexDropped} says whether this attempt's
+   * {@code dropIndex()} had already committed when it failed - #6040's distinction, and the difference between
+   * "gone" and "merely unrebuilt". Retryability says whether it was worth attempting again, which is what decides
+   * between the two ways of not being dropped: exhausting the lock-acquisition budget, or failing outright before
+   * the drop.
+   */
+  private static String rebuildFailureStatus(final boolean indexDropped, final boolean retryable) {
+    if (indexDropped)
+      return "the index was dropped but the rebuild could not complete; it is now missing";
+    return retryable ?
+        "the index lock could not be acquired; the index itself is unchanged" :
+        "the rebuild failed before the index was dropped; the index itself is unchanged";
+  }
+
+  /**
+   * Merges the records a sub-check actually deleted into {@code deletedRecordsAfterFix}.
+   * <p>
+   * Absent before, which made the field answer a different question depending on which pass did the removing: the
+   * bucket-wide {@code LocalBucket.check} listed what it deleted, while the vertex and edge arms deleted silently
+   * and reported only an {@code autoFix} count. The distinction was invisible while a broken-chain record was
+   * always removed by the bucket pass; once the arms could remove it first, the same repair stopped listing the
+   * same record. Reported by whichever pass performs it, or the field cannot be read at all.
+   */
+  private void mergeDeletedRecords(final Map<String, Object> stats) {
+    final Collection<RID> deleted = (Collection<RID>) stats.get("deletedRecordsAfterFix");
+    if (deleted != null)
+      ((LinkedHashSet<RID>) result.get("deletedRecordsAfterFix")).addAll(deleted);
   }
 
   /** Merges one scan's per-target dangling-reference counts into the cross-scan accumulator. */
@@ -429,13 +519,18 @@ public class DatabaseChecker {
    *   {@code totalWarnings}/{@code totalCorruptedRecords}, so a corrupt document reported different numbers
    *   depending on which path found it - and, since the totals are what a capped run reports, reported zero once
    *   the sets filled up;</li>
-   *   <li>it called a document a "vertex", and said it was "removing it" when nothing here removes anything -
-   *   {@code corruptedRecords} only drives the index rebuild at the end of {@link #check()};</li>
+   *   <li>it called a document a "vertex", and claimed to be "removing it" while removing nothing;</li>
    *   <li>it kept no cap at all, so a type whose whole bucket is unreadable retained one message per record.</li>
    * </ul>
    * Both paths now go through {@link #addWarning}/{@link #addCorrupted}. The accumulators are also per-type now:
    * they used to be declared outside the loop and re-added to the result after every type, which the sets absorbed
    * but paid for in re-insertions proportional to the square of the type count.
+   * <p>
+   * The second of those was settled the OTHER way round afterwards, so do not restore the old wording from the
+   * bullet above: under {@code FIX} this arm now really does remove the record, via
+   * {@link #deleteCorruptedRecords}, matching the vertex and edge arms. Flagging without removing was not merely a
+   * reporting quirk - {@code corruptedRecords} drives the index rebuild at the end of {@link #check()}, and that
+   * rebuild rescans the bucket, so the record left behind destroyed the very index the flag asked to repair.
    */
   private void checkDocuments(final List<DocumentType> documentTypes) {
     if (verboseLevel > 0)
@@ -443,6 +538,10 @@ public class DatabaseChecker {
 
     for (final DocumentType type : documentTypes) {
       stepBegin("Checking documents '" + type.getName() + "'", database.countType(type.getName(), false));
+
+      // Collected during the scan and deleted after it: LocalBucket.scan is walking the very pages the delete
+      // would rewrite, so removing a record from inside the callback would mutate the structure being iterated.
+      final List<RID> toDelete = new ArrayList<>();
 
       database.begin();
       try {
@@ -456,17 +555,75 @@ public class DatabaseChecker {
             } catch (Exception e) {
               addWarning("document " + rid + " cannot be loaded");
               addCorrupted(rid);
+              if (fix)
+                toDelete.add(rid);
             }
             stepTick();
             return true;
           }, null);
         }
 
+        deleteCorruptedRecords(toDelete);
+
       } finally {
         database.commit();
       }
 
       stepComplete();
+    }
+  }
+
+  /**
+   * Removes the records this pass flagged corrupted, counting them into {@code autoFix} and {@code removedRecords}.
+   * <p>
+   * Counts a repair only once the delete and its counter delta have both succeeded, and counts nothing for a record
+   * that was already gone. {@code GraphDatabaseChecker}'s vertex and edge arms used to differ here - they counted
+   * BEFORE attempting the delete, so a record they then failed to remove was still reported as fixed - and #6128
+   * aligned them on this one: {@code autoFix} is what an operator reads to decide whether the run did anything, and
+   * a number that includes failed deletes cannot answer that.
+   * <p>
+   * This is not merely tidiness, and it is not optional. A corrupted record's RID goes into
+   * {@code corruptedRecords}, which is what {@link #check()} turns into {@code affectedBuckets}, and every index on
+   * an affected bucket is then dropped and rebuilt. The rebuild's own bucket scan re-reads every record in it, so a
+   * corrupt record LEFT IN PLACE is met a second time by {@code LSMTreeIndex.build}, whose error callback
+   * propagates rather than logging (deliberately - a swallowed failure would leave the index silently incomplete).
+   * That exception escaped {@link #check()} with the drop already committed, which destroyed the index and
+   * abandoned the rest of the run. The document arms used to flag without deleting and were the only way to reach
+   * that state; {@link #rebuildFailureStatus} now contains the damage if a rebuild fails for some other reason,
+   * but not creating the state in the first place is the actual fix.
+   * <p>
+   * Deletes through the bucket rather than {@code database.deleteRecord}: the record cannot be materialised - that
+   * is what "corrupted" means here - so there is nothing to hand the record-level API, and its index entries are
+   * about to be regenerated from scratch by the rebuild anyway. Same call the graph arms use.
+   */
+  private void deleteCorruptedRecords(final List<RID> toDelete) {
+    for (final RID rid : toDelete) {
+      try {
+        final Bucket bucket = database.getSchema().getBucketById(rid.getBucketId());
+        // See GraphDatabaseChecker.deleteCorruptedRecord: escalates to a force delete for the one failure force
+        // exists to clear, a structurally broken chunk chain, which a plain delete reports as a retry signal.
+        if (bucket instanceof LocalBucket localBucket)
+          localBucket.deleteCorruptedRecord(rid);
+        else
+          bucket.deleteRecord(rid);
+        // Mirror the accounting in LocalDatabase.cascadeDeleteExternalValues (and in checkExternalProperties just
+        // below) so count() stays consistent: LocalBucket.deleteRecord does NOT touch cachedRecordCount, and
+        // count(*) reads that counter rather than scanning. Without this the type keeps reporting the deleted
+        // record until something else recomputes the counter - which a full-scope run happens to do in
+        // checkBuckets, but the RECORD scope deliberately skips, so the same repair would report two different
+        // counts depending on the scope it was asked for.
+        database.getTransaction().updateBucketRecordDelta(rid.getBucketId(), -1);
+        result.put("autoFix", (Long) result.get("autoFix") + 1);
+        // The per-kind arm of the same repair (issue #6136, item 3): this arm only ever deletes, so its whole
+        // contribution to autoFix is a deleted record.
+        result.put("removedRecords", (Long) result.get("removedRecords") + 1);
+        // Same reason as mergeDeletedRecords: a removal nobody lists cannot be audited.
+        ((LinkedHashSet<RID>) result.get("deletedRecordsAfterFix")).add(rid);
+      } catch (final RecordNotFoundException e) {
+        // ALREADY GONE
+      } catch (final Exception e) {
+        addWarning("document " + rid + " cannot be removed (error: " + e.getMessage() + ")");
+      }
     }
   }
 
@@ -479,7 +636,16 @@ public class DatabaseChecker {
       totalPagesToCompress += ((LocalBucket) b).getTotalPages();
     stepBegin("Compressing buckets", totalPagesToCompress);
 
-    int pageTxBatch = 10;
+    // Issue #6128 (4): the hardcoded 10 made COMPRESS unusable on a replicated database. Every commit is a Raft
+    // consensus round trip, so ten pages per transaction means one round trip per ten pages - millions of them on a
+    // database of any size, which is not a slow operation but one that does not finish. Reusing the repair budget
+    // rather than adding a second knob: it answers the same question ("how many pages may one CHECK DATABASE
+    // transaction accumulate"), and at its 256 default this is a 25x reduction in round trips while staying well
+    // under the appendBufferSize the entry has to fit in. Guarded so a 0 (batching disabled) does not turn into a
+    // single transaction over every page in the database, which is the one outcome nobody wants here.
+    final int budget = database.getConfiguration()
+        .getValueAsInteger(GlobalConfiguration.CHECK_DATABASE_REPAIR_BATCH_PAGES);
+    final int pageTxBatch = budget > 0 ? budget : 10;
     int pageBatch = 0;
 
     for (final Bucket b : database.getSchema().getBuckets()) {
@@ -583,6 +749,7 @@ public class DatabaseChecker {
       updateStats(stats);
       ((LinkedHashSet<String>) result.get("warnings")).addAll((Collection<String>) stats.get("warnings"));
       ((LinkedHashSet<RID>) result.get("corruptedRecords")).addAll((Collection<RID>) stats.get("corruptedRecords"));
+      mergeDeletedRecords(stats);
       mergeMissingReferences((Map<RID, Long>) stats.get("missingReferences"),
           (Map<RID, String>) stats.get("missingReferenceErrors"));
     }
@@ -648,6 +815,8 @@ public class DatabaseChecker {
   private void checkScopedDocuments(final DocumentType type, final List<RID> rids) {
     stepBegin("Checking records of '" + type.getName() + "'", rids.size());
 
+    final List<RID> toDelete = new ArrayList<>();
+
     database.begin();
     try {
       for (final RID rid : rids) {
@@ -658,12 +827,18 @@ public class DatabaseChecker {
           // every index on it - see the same guard in GraphDatabaseChecker's scoped arms.
           addWarning("document " + rid + " does not exist");
         } catch (final Exception e) {
-          // NOT "removing it": corruptedRecords only drives the index rebuild, nothing deletes the record here.
           addWarning("document " + rid + " cannot be loaded");
           addCorrupted(rid);
+          if (fix)
+            toDelete.add(rid);
         }
         stepTick();
       }
+
+      // Same removal as the type-wide arm, for the same reason: this scope also feeds affectedBuckets, so a
+      // corrupt record left here would be met again by the rebuild that its own flagging triggers.
+      deleteCorruptedRecords(toDelete);
+
     } finally {
       database.commit();
     }
@@ -689,6 +864,7 @@ public class DatabaseChecker {
 
       ((LinkedHashSet<String>) result.get("warnings")).addAll((Collection<String>) stats.get("warnings"));
       ((LinkedHashSet<RID>) result.get("corruptedRecords")).addAll((Collection<RID>) stats.get("corruptedRecords"));
+      mergeDeletedRecords(stats);
       mergeMissingReferences((Map<RID, Long>) stats.get("missingReferences"),
           (Map<RID, String>) stats.get("missingReferenceErrors"));
     }
@@ -712,6 +888,7 @@ public class DatabaseChecker {
 
       ((LinkedHashSet<String>) result.get("warnings")).addAll((Collection<String>) stats.get("warnings"));
       ((LinkedHashSet<RID>) result.get("corruptedRecords")).addAll((Collection<RID>) stats.get("corruptedRecords"));
+      mergeDeletedRecords(stats);
       mergeMissingReferences((Map<RID, Long>) stats.get("missingReferences"),
           (Map<RID, String>) stats.get("missingReferenceErrors"));
     }

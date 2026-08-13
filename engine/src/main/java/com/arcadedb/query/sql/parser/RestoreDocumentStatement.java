@@ -38,14 +38,18 @@ import java.util.Objects;
  * Emergency repair: recreates a deleted DOCUMENT record at the exact RID it used to hold, so existing references to
  * that RID stay valid. Refuses if the slot is occupied by a live record (see
  * {@link LocalBucket#restoreRecordAtPosition}) - this can never silently overwrite data.
+ * <p>
+ * The type's schema applies in full (#6127): declared default values are set, the document is validated, and the
+ * create events fire, exactly as for an INSERT. A restore that would violate the type is refused rather than
+ * persisted, since the record it used to produce could not be updated afterwards either and no consistency pass ever
+ * flagged it.
  */
 public class RestoreDocumentStatement extends SimpleExecStatement {
   public Identifier targetType;
   public Rid        targetRid;
   public InsertBody insertBody;
 
-  public RestoreDocumentStatement(final int id) {
-    super(id);
+  public RestoreDocumentStatement() {
   }
 
   @Override
@@ -64,7 +68,7 @@ public class RestoreDocumentStatement extends SimpleExecStatement {
     RestoreStatementSupport.applyBody(doc, insertBody, context);
 
     final LocalBucket bucket = (LocalBucket) database.getSchema().getBucketById(rid.getBucketId());
-    final RID restoredRid = RestoreStatementSupport.restoreRecordAndUpdateCount(database, bucket, rid.getPosition(), doc);
+    final RID restoredRid = database.restoreRecord(doc, bucket, rid.getPosition());
 
     final ResultInternal result = new ResultInternal(database);
     result.setProperty("operation", "restore document");
@@ -89,7 +93,7 @@ public class RestoreDocumentStatement extends SimpleExecStatement {
 
   @Override
   public RestoreDocumentStatement copy() {
-    final RestoreDocumentStatement result = new RestoreDocumentStatement(-1);
+    final RestoreDocumentStatement result = new RestoreDocumentStatement();
     result.targetType = targetType == null ? null : targetType.copy();
     result.targetRid = targetRid == null ? null : targetRid.copy();
     result.insertBody = insertBody == null ? null : insertBody.copy();
