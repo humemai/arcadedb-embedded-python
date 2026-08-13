@@ -2547,9 +2547,7 @@
       "title": "Tabular, embedded",
       "dataset": "Stack Exchange (Cross Validated), all engines in one Python process",
       "conditions": [
-        "Every engine here runs embedded, in the same process as the caller, which is the comparison someone choosing a local database actually faces.",
-        "A different setup from the engine tables higher up the page: different corpora, different comparators, eight cores rather than twelve. The two sets are not continuous.",
-        "The specialists win where they are specialized, and that is the expected result rather than a surprise. DuckDB is a columnar analytics engine and answers the analytical suite far faster; SQLite is an extremely fast single-file store for point operations; Chroma keeps its whole index in RAM and serves lower-latency vector queries. The case for one engine is not that it wins each column, it is that these numbers come from one process with one file and one transaction across all three models, where the alternative is three systems and the code between them."
+        "A different setup from the engine tables higher up the page: different corpora, different comparators, eight cores rather than twelve. The two sets are not continuous."
       ],
       "columns": [
         "OLTP ops/s",
@@ -2642,9 +2640,7 @@
       "title": "Graph, embedded",
       "dataset": "Stack Exchange (Cross Validated), all engines in one Python process",
       "conditions": [
-        "Every engine here runs embedded, in the same process as the caller, which is the comparison someone choosing a local database actually faces.",
-        "A different setup from the engine tables higher up the page: different corpora, different comparators, eight cores rather than twelve. The two sets are not continuous.",
-        "The specialists win where they are specialized, and that is the expected result rather than a surprise. DuckDB is a columnar analytics engine and answers the analytical suite far faster; SQLite is an extremely fast single-file store for point operations; Chroma keeps its whole index in RAM and serves lower-latency vector queries. The case for one engine is not that it wins each column, it is that these numbers come from one process with one file and one transaction across all three models, where the alternative is three systems and the code between them."
+        "A different setup from the engine tables higher up the page: different corpora, different comparators, eight cores rather than twelve. The two sets are not continuous."
       ],
       "columns": [
         "OLTP ops/s",
@@ -2712,9 +2708,7 @@
       "title": "Vector, embedded",
       "dataset": "Stack Exchange (Cross Validated), all engines in one Python process",
       "conditions": [
-        "Every engine here runs embedded, in the same process as the caller, which is the comparison someone choosing a local database actually faces.",
-        "A different setup from the engine tables higher up the page: different corpora, different comparators, eight cores rather than twelve. The two sets are not continuous.",
-        "The specialists win where they are specialized, and that is the expected result rather than a surprise. DuckDB is a columnar analytics engine and answers the analytical suite far faster; SQLite is an extremely fast single-file store for point operations; Chroma keeps its whole index in RAM and serves lower-latency vector queries. The case for one engine is not that it wins each column, it is that these numbers come from one process with one file and one transaction across all three models, where the alternative is three systems and the code between them."
+        "A different setup from the engine tables higher up the page: different corpora, different comparators, eight cores rather than twelve. The two sets are not continuous."
       ],
       "columns": [
         "query ms",
