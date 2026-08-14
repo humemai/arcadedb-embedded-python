@@ -737,6 +737,36 @@ def main():
             print("  (mapped files are audited by lane_files(); these are not.\n"
                   "   If make_paper_tables reads one, add it to FEEDS_FILES.)")
 
+    # --- WHICH IMAGE, counted rather than gated ---------------------------
+    # Reported the way fairness_check reports unstamped rows: not passed and
+    # not failed. Records written before BENCH_IMAGE existed genuinely cannot
+    # carry it, and failing on them would only teach the next reader to pass
+    # --no-verify. Counting them makes the debt visible every run and drives
+    # to zero as lanes are re-measured; a NEW overlay that arrives without an
+    # image will stand out against a shrinking number rather than hide in a
+    # silent pass.
+    if not args.table:
+        no_img, with_img = 0, 0
+        for p in glob.glob(os.path.join(RESULTS, "*", "*.json")):
+            try:
+                recs = json.load(open(p))
+            except Exception:
+                continue
+            for r in (recs if isinstance(recs, list) else [recs]):
+                if not isinstance(r, dict) or "p50" not in r and "query_p50_ms" not in r:
+                    continue
+                if r.get("image") or r.get("server_image"):
+                    with_img += 1
+                else:
+                    no_img += 1
+        if no_img:
+            print(f"\n=== overlay records carrying no image ===\n"
+                  f"  {no_img} without, {with_img} with.\n"
+                  f"  These predate BENCH_IMAGE, so the run WAS pinned "
+                  f"(runner.py holds the digest) but the artifact cannot show\n"
+                  f"  it. Not passed and not failed: it is the population that "
+                  f"needs re-measuring, and silence would read as coverage.")
+
     print(f"\n{bad} BAD finding(s)"
           + (f": {'0 (NOT CHECKED)' if not _CAPTION_CHECK_RAN else bad_caption}"
              f" caption, {bad_cond} missing run conditions, "

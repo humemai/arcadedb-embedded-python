@@ -552,6 +552,16 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
+        # TELL THE CONTAINER WHAT IT IS RUNNING. Only this process knows the
+        # backend's image and pinned server digest; inside the container that
+        # is unknowable. Without it a driver cannot record its own provenance
+        # even in principle, which is why every overlay artifact carries no
+        # image while the paper claims served comparators are pinned by digest.
+        # run_conditions() in bench_common.py reads these two.
+        bench_env += ["-e", f"BENCH_IMAGE={be['image']}"]
+        if be.get("server_image"):
+            bench_env += ["-e", f"BENCH_SERVER_IMAGE={be['server_image']}"]
+
         cmd = (["docker", "run", "-d", "--network", net_name,
                 "--label", "dbbench=1",
                 "--name", f"cli-{run_id}", "--cpuset-cpus", cpuset]

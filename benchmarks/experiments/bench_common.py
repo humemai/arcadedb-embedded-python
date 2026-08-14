@@ -121,6 +121,25 @@ def run_conditions(**extra):
         # that knows. But unset now reports what is actually readable, and
         # says so when that is a container ID rather than a machine name.
         "host": _host_identity(),
+        # WHICH IMAGE. The last field a published cell was missing.
+        #
+        # runner.py knows every backend's image and its pinned digest, and
+        # stamps them onto lane rows. An overlay driver runs inside a container
+        # that is never told what image it is, so it could not record one even
+        # in principle -- and the overlays are what T4 and T5 print. The
+        # consequence was concrete: T5's Qdrant row is produced by a file whose
+        # engine_version reads "unknown (PackageNotFoundError)" and which
+        # carries no image at all, while the paper states "served comparators
+        # are pinned by image digest". That claim is TRUE -- runner.py pins
+        # qdrant/qdrant@sha256:75eab8c4... -- but the artifact cannot show it,
+        # so the reproducibility promise rests on a config file the reader
+        # never sees rather than on the result they are reading.
+        #
+        # Same rule as host and producer above: read what is passed, and when
+        # nothing is passed say so rather than omitting the key. A missing key
+        # looks like an old schema; an explicit None looks like what it is.
+        "image": os.environ.get("BENCH_IMAGE"),
+        "server_image": os.environ.get("BENCH_SERVER_IMAGE"),
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
     }
     try:
