@@ -298,6 +298,84 @@ def _resolve(key, cells):
     return key
 
 
+def _check_page_atomicity(page_path):
+    """The page's atomicity counts, against the artifact rather than the paper.
+
+    Added because I put "200 of 200" on a public page and pinned it to nothing,
+    on the same day as an audit whose whole subject was unpinned numbers. The
+    other PROSE entries compare the page to a TABLE cell; these counts are in
+    no table, so they need the artifact directly -- the same rows
+    claims_check's e2_atomicity() reads.
+
+    A count is exactly the kind of number that rots quietly: re-run the lane
+    with a different E2_TRIALS and the page still reads 200, still sounds
+    authoritative, and nothing anywhere disagrees.
+    """
+    import json as _json
+    import re as _re
+    text = open(page_path, encoding="utf-8").read()
+    totals = {}
+    for backend in ("arcadedb_e2", "surrealdb_e2", "composed_qdrant_neo4j"):
+        n_trials = n_torn = 0
+        seen = False
+        with open(HERE / "results" / "runs.jsonl") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    r = _json.loads(line)
+                except ValueError:
+                    continue
+                if (r.get("lane") == "e2" and r.get("workload") == "atomicity"
+                        and r.get("backend") == backend
+                        and r.get("trials") is not None):
+                    seen = True
+                    n_trials += int(r.get("trials") or 0)
+                    n_torn += int(r.get("torn_count") or 0)
+        totals[backend] = (n_trials, n_torn) if seen else None
+
+    checks = [
+        ("page.e2.trials",
+         r"interrupted (\d+) operations against each system",
+         lambda: totals["arcadedb_e2"] and totals["arcadedb_e2"][0]),
+        ("page.e2.composed_torn",
+         r"left half-updated in all (\d+)",
+         lambda: totals["composed_qdrant_neo4j"] and totals["composed_qdrant_neo4j"][1]),
+    ]
+    checked = bad = 0
+    for name, rx, get in checks:
+        m = _re.search(rx, text)
+        want = get()
+        if m is None:
+            print(f"  MISSING {name}: the page no longer states this count")
+            bad += 1
+            continue
+        if want is None:
+            print(f"  NODATA  {name}: page says {m.group(1)}, artifact has no "
+                  f"fixed-harness rows")
+            bad += 1
+            continue
+        checked += 1
+        got = int(m.group(1))
+        if got == want:
+            print(f"  ok      {name:24} page={got:<6} artifact={want}")
+        else:
+            print(f"  DISAGREE {name:23} page={got:<6} artifact={want}")
+            bad += 1
+    # The single-engine arms must be ZERO torn, and zero is the one value a
+    # broken read also produces, so assert the trial count alongside it.
+    for be in ("arcadedb_e2", "surrealdb_e2"):
+        t = totals[be]
+        if t is None:
+            print(f"  NODATA  page.e2.{be}: no fixed-harness rows"); bad += 1
+        elif t[1] != 0:
+            print(f"  DISAGREE page.e2.{be}: {t[1]} torn, page says none"); bad += 1
+        else:
+            checked += 1
+            print(f"  ok      page.e2.{be:17} 0 torn over {t[0]} trials")
+    return checked, bad
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", default=str(DEFAULT_JSON))
@@ -349,7 +427,12 @@ def main() -> int:
     p_checked, p_bad = _check_prose(PAGE_TS)
     print(f"\n{p_checked} prose numbers checked against the paper, "
           f"{p_bad} disagree")
-    return 1 if (bad or d_bad or p_bad) else 0
+
+    print("\nE2 atomicity counts on the page, against the artifact")
+    a_checked, a_bad = _check_page_atomicity(PAGE_TS)
+    print(f"\n{a_checked} page count(s) checked against the artifact, "
+          f"{a_bad} disagree")
+    return 1 if (bad or d_bad or p_bad or a_bad) else 0
 
 
 if __name__ == "__main__":
