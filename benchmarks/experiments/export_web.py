@@ -760,6 +760,24 @@ def main() -> int:
         for (ln, scale, backend, workload), rs in sorted(grouped.items()):
             if ln != lane:
                 continue
+            # The no-settle ablation is MEASURED but not PUBLISHED, and the
+            # page was the only place it appeared. Neither paper reports it:
+            # T4 is a clean head-to-head, one ArcadeDB row against three
+            # comparators, and claims_check has no claim for it.
+            #
+            # It was a fair row in the sense that matters least. It costs us
+            # (11.3 -> 36.7 ms at 1M, fourth place to last) so nobody was
+            # flattered, but it sat among engine rows while being an ablation,
+            # and no comparator has one, because nobody has run Elasticsearch
+            # without its force-merge. So it could never answer the question it
+            # invited: is leaning on compaction an ArcadeDB trait, or normal?
+            #
+            # The experiment stays in the harness; it is what de-confounded the
+            # deployment axis. It comes off the page for the same reason the
+            # f5 figure did: a number no paper reports is a number nobody
+            # proofreads. Publish it when a comparator has the matching arm.
+            if backend == "arcadedb_sparse_embedded_nocompact":
+                continue
             image = BACKENDS.get(backend, {}).get("server_image")
             label = display_name(backend)
             if lane == "l3d":

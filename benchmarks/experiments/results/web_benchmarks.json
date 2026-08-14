@@ -236,37 +236,6 @@
           }
         },
         {
-          "backend": "ArcadeDB (embedded, no settle step)",
-          "is_arcadedb": true,
-          "scale": "medium",
-          "workload": "search",
-          "n_docs": "8841823",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": "container:2cff95369eec (host unknown)",
-          "metrics": {
-            "p50 ms": {
-              "median": 105.513,
-              "min": 104.445,
-              "max": 106.38,
-              "n": 5
-            },
-            "recall@10": {
-              "median": 0.9913,
-              "min": 0.9913,
-              "max": 0.9913,
-              "n": 5
-            },
-            "build s": {
-              "median": 848.68,
-              "min": 829.27,
-              "max": 867.34,
-              "n": 5
-            }
-          }
-        },
-        {
           "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "medium",
@@ -453,37 +422,6 @@
           }
         },
         {
-          "backend": "ArcadeDB (embedded, no settle step)",
-          "is_arcadedb": true,
-          "scale": "small",
-          "workload": "search",
-          "n_docs": "1000000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": "container:9c1d6f2a09ab (host unknown)",
-          "metrics": {
-            "p50 ms": {
-              "median": 36.695,
-              "min": 35.954,
-              "max": 37.325,
-              "n": 5
-            },
-            "recall@10": {
-              "median": 0.9938,
-              "min": 0.9938,
-              "max": 0.9938,
-              "n": 5
-            },
-            "build s": {
-              "median": 87.12,
-              "min": 85.86,
-              "max": 88.07,
-              "n": 5
-            }
-          }
-        },
-        {
           "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
           "scale": "small",
@@ -665,37 +603,6 @@
               "median": 9.25,
               "min": 9.08,
               "max": 9.37,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "ArcadeDB (embedded, no settle step)",
-          "is_arcadedb": true,
-          "scale": "tiny",
-          "workload": "search",
-          "n_docs": "100000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": "container:3783e91c69a0 (host unknown)",
-          "metrics": {
-            "p50 ms": {
-              "median": 5.911,
-              "min": 5.851,
-              "max": 6.099,
-              "n": 5
-            },
-            "recall@10": {
-              "median": 0.9957,
-              "min": 0.9957,
-              "max": 0.9957,
-              "n": 5
-            },
-            "build s": {
-              "median": 8.69,
-              "min": 8.6,
-              "max": 8.78,
               "n": 5
             }
           }
