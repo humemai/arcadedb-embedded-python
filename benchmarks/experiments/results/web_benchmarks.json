@@ -164,7 +164,7 @@
       "conditions": [
         "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
         "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
-        "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is ingest rather than indexing. Both run the same index code, but the embedded arm loads documents through the in-process API as primitive arrays, while the server arm sends INSERT statements over HTTP because that is its remote surface. A document here carries about 127 non-zero weights, so each row crosses the wire as roughly 254 numbers printed as text and is parsed again on arrival."
+        "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers."
       ],
       "columns": [
         "p50 ms",
@@ -1765,18 +1765,52 @@
       "title": "Graph analytics, with and without the Graph Analytical View",
       "dataset": "LDBC-SNB, SF10",
       "conditions": [
-        "The Graph Analytical View is ArcadeDB's in-core projection of the graph for analytical queries. Building it took 2.0 seconds here, once, before any query was timed.",
+        "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
+        "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
         "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
         "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap."
       ],
       "columns": [
-        "friend age by city ms",
-        "same-city edges ms",
-        "top degree ms"
+        "average friend age ms",
+        "friends in same city ms",
+        "most friends ms"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
       "entries": [
+        {
+          "backend": "ArcadeDB (embedded, GAV)",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.8.1",
+          "host": null,
+          "metrics": {
+            "average friend age ms": {
+              "median": 492.85,
+              "min": 474.66,
+              "max": 502.32,
+              "n": 5
+            },
+            "friends in same city ms": {
+              "median": 500.41,
+              "min": 472.79,
+              "max": 519.72,
+              "n": 5
+            },
+            "most friends ms": {
+              "median": 56.62,
+              "min": 55.95,
+              "max": 57.57,
+              "n": 5
+            }
+          }
+        },
         {
           "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
@@ -1790,52 +1824,19 @@
           "version_name": "arcadedb 26.8.1",
           "host": null,
           "metrics": {
-            "friend age by city ms": {
-              "median": 492.85,
-              "min": 474.66,
-              "max": 502.32,
-              "n": 5
-            },
-            "same-city edges ms": {
-              "median": 500.41,
-              "min": 472.79,
-              "max": 519.72,
-              "n": 5
-            },
-            "top degree ms": {
-              "median": 56.62,
-              "min": 55.95,
-              "max": 57.57,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "ArcadeDB (embedded, no GAV)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "sf10",
-          "scale_label": "SF10 (73k people)",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.8.1",
-          "host": null,
-          "metrics": {
-            "friend age by city ms": {
+            "average friend age ms": {
               "median": 1213.34,
               "min": 1180.9,
               "max": 1215.21,
               "n": 5
             },
-            "same-city edges ms": {
+            "friends in same city ms": {
               "median": 1196.1,
               "min": 1172.35,
               "max": 1212.76,
               "n": 5
             },
-            "top degree ms": {
+            "most friends ms": {
               "median": 367.98,
               "min": 363.99,
               "max": 385.86,
@@ -1844,7 +1845,7 @@
           }
         },
         {
-          "backend": "ArcadeDB (server)",
+          "backend": "ArcadeDB (server, GAV)",
           "is_arcadedb": true,
           "precision": null,
           "scale": "sf10",
@@ -1856,19 +1857,19 @@
           "version_name": "arcadedb 26.8.1",
           "host": null,
           "metrics": {
-            "friend age by city ms": {
+            "average friend age ms": {
               "median": 526.52,
               "min": 517.84,
               "max": 532.91,
               "n": 5
             },
-            "same-city edges ms": {
+            "friends in same city ms": {
               "median": 528.88,
               "min": 514.81,
               "max": 533.81,
               "n": 5
             },
-            "top degree ms": {
+            "most friends ms": {
               "median": 67.52,
               "min": 66.0,
               "max": 68.77,
@@ -1889,19 +1890,19 @@
           "version_name": "ladybugdb 0.18.1",
           "host": null,
           "metrics": {
-            "friend age by city ms": {
+            "average friend age ms": {
               "median": 55.01,
               "min": 53.79,
               "max": 59.09,
               "n": 5
             },
-            "same-city edges ms": {
+            "friends in same city ms": {
               "median": 63.49,
               "min": 62.32,
               "max": 63.83,
               "n": 5
             },
-            "top degree ms": {
+            "most friends ms": {
               "median": 2.75,
               "min": 2.67,
               "max": 2.81,
@@ -1922,19 +1923,19 @@
           "version_name": "neo4j 5-community",
           "host": null,
           "metrics": {
-            "friend age by city ms": {
+            "average friend age ms": {
               "median": 571.52,
               "min": 557.52,
               "max": 581.09,
               "n": 5
             },
-            "same-city edges ms": {
+            "friends in same city ms": {
               "median": 615.99,
               "min": 608.74,
               "max": 648.54,
               "n": 5
             },
-            "top degree ms": {
+            "most friends ms": {
               "median": 320.09,
               "min": 315.06,
               "max": 323.84,
@@ -2316,8 +2317,8 @@
       "title": "Cross-model transaction",
       "dataset": "Vector hit to graph traversal to document update, in one transaction",
       "conditions": [
-        "The composed stack (Qdrant plus Neo4j) has no transaction spanning both engines. The comparison is of an atomic path against a non-atomic one, which is the point rather than a caveat.",
-        "The torn-state and post-crash columns in the raw data record whether a mid-write failure left the stores disagreeing; that is the result this lane exists for, not the latency."
+        "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
+        "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show."
       ],
       "columns": [
         "p50 ms",
@@ -2573,17 +2574,17 @@
       "title": "What the client/server split costs",
       "dataset": "200,000-row projection, one engine, three deployments",
       "conditions": [
-        "One released engine (26.8.1) on all three arms, 15 repetitions after 3 warmup, identical cpuset 0-11, memory cap 8g and heap 6g.",
-        "All three arms materialize results the same way, so the difference is the deployment and not our choice of result format.",
-        "The separate-container arm is loopback on one host. It says what co-locating costs, and says nothing about a real network.",
-        "The process-boundary column goes slightly negative at the smaller result sizes. That is not a container being faster than an in-process server; it is the boundary term sitting below what this design can resolve, so run-to-run noise swamps it and the sign flips. Reported rather than clamped to zero, because the negative values are the evidence for the claim: at these sizes co-locating costs nothing measurable. The wire format, in the column beside it, stays firmly positive at every size."
+        "Every number is milliseconds. One released engine (26.8.1) in all three setups, 15 repetitions after 3 warmup, identical cpuset 0-11, memory cap 8g and heap 6g.",
+        "All three setups turn the answer into Python objects the same way, so the difference is how the database was deployed and not how we read the result.",
+        "The separate container runs on the same machine, talking over the local network interface. It says what running the database beside your program costs, and says nothing about a database on another machine across a real network.",
+        "The separate-process column goes slightly negative at the smaller result sizes. That is not a container being faster than an in-process server; it is the boundary term sitting below what this design can resolve, so run-to-run noise swamps it and the sign flips. Reported rather than clamped to zero, because the negative values are the evidence for the claim: at these sizes co-locating costs nothing measurable. The packing cost, in the column beside it, stays firmly positive at every size."
       ],
       "columns": [
-        "in-process, no protocol",
-        "in-process server over HTTP",
-        "separate container over HTTP",
-        "wire format",
-        "process boundary"
+        "in-process ms",
+        "in-process server, HTTP ms",
+        "separate container, HTTP ms",
+        "packing cost ms",
+        "separate process ms"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -2599,31 +2600,31 @@
           "version_name": "26.8.1",
           "host": "container:b6d721c693fd (host unknown)",
           "metrics": {
-            "in-process, no protocol": {
+            "in-process ms": {
               "median": 1.0507,
               "min": 1.0507,
               "max": 1.0507,
               "n": 3
             },
-            "in-process server over HTTP": {
+            "in-process server, HTTP ms": {
               "median": 2.4745,
               "min": 2.4745,
               "max": 2.4745,
               "n": 3
             },
-            "separate container over HTTP": {
+            "separate container, HTTP ms": {
               "median": 1.693,
               "min": 1.693,
               "max": 1.693,
               "n": 3
             },
-            "wire format": {
+            "packing cost ms": {
               "median": 1.4238,
               "min": 1.4238,
               "max": 1.4238,
               "n": 3
             },
-            "process boundary": {
+            "separate process ms": {
               "median": -0.7815,
               "min": -0.7815,
               "max": -0.7815,
@@ -2642,31 +2643,31 @@
           "version_name": "26.8.1",
           "host": "container:b6d721c693fd (host unknown)",
           "metrics": {
-            "in-process, no protocol": {
+            "in-process ms": {
               "median": 0.8581,
               "min": 0.8581,
               "max": 0.8581,
               "n": 3
             },
-            "in-process server over HTTP": {
+            "in-process server, HTTP ms": {
               "median": 1.8966,
               "min": 1.8966,
               "max": 1.8966,
               "n": 3
             },
-            "separate container over HTTP": {
+            "separate container, HTTP ms": {
               "median": 1.3411,
               "min": 1.3411,
               "max": 1.3411,
               "n": 3
             },
-            "wire format": {
+            "packing cost ms": {
               "median": 1.0385,
               "min": 1.0385,
               "max": 1.0385,
               "n": 3
             },
-            "process boundary": {
+            "separate process ms": {
               "median": -0.5555,
               "min": -0.5555,
               "max": -0.5555,
@@ -2685,31 +2686,31 @@
           "version_name": "26.8.1",
           "host": "container:b6d721c693fd (host unknown)",
           "metrics": {
-            "in-process, no protocol": {
+            "in-process ms": {
               "median": 1.2321,
               "min": 1.2321,
               "max": 1.2321,
               "n": 3
             },
-            "in-process server over HTTP": {
+            "in-process server, HTTP ms": {
               "median": 2.8214,
               "min": 2.8214,
               "max": 2.8214,
               "n": 3
             },
-            "separate container over HTTP": {
+            "separate container, HTTP ms": {
               "median": 2.0328,
               "min": 2.0328,
               "max": 2.0328,
               "n": 3
             },
-            "wire format": {
+            "packing cost ms": {
               "median": 1.5893,
               "min": 1.5893,
               "max": 1.5893,
               "n": 3
             },
-            "process boundary": {
+            "separate process ms": {
               "median": -0.7886,
               "min": -0.7886,
               "max": -0.7886,
@@ -2728,31 +2729,31 @@
           "version_name": "26.8.1",
           "host": "container:b6d721c693fd (host unknown)",
           "metrics": {
-            "in-process, no protocol": {
+            "in-process ms": {
               "median": 3.3215,
               "min": 3.3215,
               "max": 3.3215,
               "n": 3
             },
-            "in-process server over HTTP": {
+            "in-process server, HTTP ms": {
               "median": 5.9997,
               "min": 5.9997,
               "max": 5.9997,
               "n": 3
             },
-            "separate container over HTTP": {
+            "separate container, HTTP ms": {
               "median": 4.5634,
               "min": 4.5634,
               "max": 4.5634,
               "n": 3
             },
-            "wire format": {
+            "packing cost ms": {
               "median": 2.6782,
               "min": 2.6782,
               "max": 2.6782,
               "n": 3
             },
-            "process boundary": {
+            "separate process ms": {
               "median": -1.4363,
               "min": -1.4363,
               "max": -1.4363,
@@ -2771,31 +2772,31 @@
           "version_name": "26.8.1",
           "host": "container:b6d721c693fd (host unknown)",
           "metrics": {
-            "in-process, no protocol": {
+            "in-process ms": {
               "median": 20.4386,
               "min": 20.4386,
               "max": 20.4386,
               "n": 3
             },
-            "in-process server over HTTP": {
+            "in-process server, HTTP ms": {
               "median": 29.595,
               "min": 29.595,
               "max": 29.595,
               "n": 3
             },
-            "separate container over HTTP": {
+            "separate container, HTTP ms": {
               "median": 30.1154,
               "min": 30.1154,
               "max": 30.1154,
               "n": 3
             },
-            "wire format": {
+            "packing cost ms": {
               "median": 9.1564,
               "min": 9.1564,
               "max": 9.1564,
               "n": 3
             },
-            "process boundary": {
+            "separate process ms": {
               "median": 0.5204,
               "min": 0.5204,
               "max": 0.5204,
@@ -2814,31 +2815,31 @@
           "version_name": "26.8.1",
           "host": "container:b6d721c693fd (host unknown)",
           "metrics": {
-            "in-process, no protocol": {
+            "in-process ms": {
               "median": 201.0578,
               "min": 201.0578,
               "max": 201.0578,
               "n": 3
             },
-            "in-process server over HTTP": {
+            "in-process server, HTTP ms": {
               "median": 271.2813,
               "min": 271.2813,
               "max": 271.2813,
               "n": 3
             },
-            "separate container over HTTP": {
+            "separate container, HTTP ms": {
               "median": 275.9864,
               "min": 275.9864,
               "max": 275.9864,
               "n": 3
             },
-            "wire format": {
+            "packing cost ms": {
               "median": 70.2235,
               "min": 70.2235,
               "max": 70.2235,
               "n": 3
             },
-            "process boundary": {
+            "separate process ms": {
               "median": 4.7051,
               "min": 4.7051,
               "max": 4.7051,

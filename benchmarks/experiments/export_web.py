@@ -427,7 +427,7 @@ LANES = {
         "conditions": [
             "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
             "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
-            "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is ingest rather than indexing. Both run the same index code, but the embedded arm loads documents through the in-process API as primitive arrays, while the server arm sends INSERT statements over HTTP because that is its remote surface. A document here carries about 127 non-zero weights, so each row crosses the wire as roughly 254 numbers printed as text and is parsed again on arrival.",
+            "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
         ],
     },
     "l3d": {
@@ -480,11 +480,12 @@ LANES = {
         "lane_source": "l2",
         "only_scales": {"sf10"},
         "only_workload": "olap",
-        "metrics": [("friend_age_by_city_mean_ms", "friend age by city ms"),
-                    ("same_city_edges_mean_ms", "same-city edges ms"),
-                    ("top_degree_mean_ms", "top degree ms")],
+        "metrics": [("friend_age_by_city_mean_ms", "average friend age ms"),
+                    ("same_city_edges_mean_ms", "friends in same city ms"),
+                    ("top_degree_mean_ms", "most friends ms")],
         "conditions": [
-            "The Graph Analytical View is ArcadeDB's in-core projection of the graph for analytical queries. Building it took 2.0 seconds here, once, before any query was timed.",
+            "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
+            "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
             "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
             "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
         ],
@@ -511,8 +512,8 @@ LANES = {
         "dataset": "Vector hit to graph traversal to document update, in one transaction",
         "metrics": [("hybrid_p50_ms", "p50 ms"), ("hybrid_p99_ms", "p99 ms")],
         "conditions": [
-            "The composed stack (Qdrant plus Neo4j) has no transaction spanning both engines. The comparison is of an atomic path against a non-atomic one, which is the point rather than a caveat.",
-            "The torn-state and post-crash columns in the raw data record whether a mid-write failure left the stores disagreeing; that is the result this lane exists for, not the latency.",
+            "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
+            "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
         ],
     },
 }
@@ -532,9 +533,9 @@ E4_DIR = HERE / "results" / "e4decomp_2681"
 # boundary held constant; inproc_http -> docker_http then adds the boundary
 # with the wire format held constant.
 E4_ARMS = [
-    ("embedded", "in-process, no protocol"),
-    ("inproc_http", "in-process server over HTTP"),
-    ("docker_http", "separate container over HTTP"),
+    ("embedded", "in-process ms"),
+    ("inproc_http", "in-process server, HTTP ms"),
+    ("docker_http", "separate container, HTTP ms"),
 ]
 
 
@@ -577,7 +578,8 @@ def _e4_table():
                               "n": len(loaded)}
         protocol = per_arm["inproc_http"] - per_arm["embedded"]
         boundary = per_arm["docker_http"] - per_arm["inproc_http"]
-        for label, value in (("wire format", protocol), ("process boundary", boundary)):
+        for label, value in (("packing cost ms", protocol),
+                             ("separate process ms", boundary)):
             metrics[label] = {"median": round(value, 4), "min": round(value, 4),
                               "max": round(value, 4), "n": len(loaded)}
 
@@ -599,24 +601,29 @@ def _e4_table():
         "title": "What the client/server split costs",
         "dataset": f"{meta.get('rows'):,}-row projection, one engine, three deployments",
         "conditions": [
-            f"One released engine ({meta.get('engine_version')}) on all three arms, "
+            f"Every number is milliseconds. One released engine "
+            f"({meta.get('engine_version')}) in all three setups, "
             f"{meta.get('reps')} repetitions after {meta.get('warmup')} warmup, "
             f"identical cpuset {meta.get('cpuset')}, memory cap {meta.get('mem_cap')} "
             f"and heap {meta.get('heap')}.",
-            "All three arms materialize results the same way, so the difference "
-            "is the deployment and not our choice of result format.",
-            "The separate-container arm is loopback on one host. It says what "
-            "co-locating costs, and says nothing about a real network.",
-            "The process-boundary column goes slightly negative at the smaller "
+            "All three setups turn the answer into Python objects the same "
+            "way, so the difference is how the database was deployed and not "
+            "how we read the result.",
+            "The separate container runs on the same machine, talking over the "
+            "local network interface. It says what running the database beside "
+            "your program costs, and says nothing about a database on another "
+            "machine across a real network.",
+            "The separate-process column goes slightly negative at the smaller "
             "result sizes. That is not a container being faster than an "
             "in-process server; it is the boundary term sitting below what this "
             "design can resolve, so run-to-run noise swamps it and the sign "
             "flips. Reported rather than clamped to zero, because the negative "
             "values are the evidence for the claim: at these sizes co-locating "
-            "costs nothing measurable. The wire format, in the column beside "
+            "costs nothing measurable. The packing cost, in the column beside "
             "it, stays firmly positive at every size.",
         ],
-        "columns": [label for _, label in E4_ARMS] + ["wire format", "process boundary"],
+        "columns": [label for _, label in E4_ARMS] + ["packing cost ms",
+                                                       "separate process ms"],
         "withheld_scales": [],
         "withheld_reason": None,
         "entries": entries,
@@ -1018,9 +1025,11 @@ def main() -> int:
                          else f"{label} ({prec})")
             # The ablation runs under the same backend name, so the row has to
             # say which arm it is or the table shows one engine twice.
-            if gav == "False":
-                label = (f"{label[:-1]}, no GAV)" if label.endswith(")")
-                         else f"{label} (no GAV)")
+            # The VIEW-ON rows carry the label, because the view is the thing
+            # worth naming; the ablation is plain ArcadeDB with a feature off.
+            if lane == "l2olap" and gav != "False" and "arcade" in backend:
+                label = (f"{label[:-1]}, GAV)" if label.endswith(")")
+                         else f"{label} (GAV)")
             entry = {
                 "backend": label,
                 "is_arcadedb": "arcade" in backend,
