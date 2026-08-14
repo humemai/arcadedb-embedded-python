@@ -129,6 +129,21 @@ DISPLAY_NAMES = {
 # unlabelled row as full precision. One of them is not. LanceDB's 0.93 recall
 # and ArcadeDB-int8's 0.94 are then the same kind of number, where Chroma's
 # 0.93 at fp32 is a different kind, and only the label makes that visible.
+# Sparse weight precision, ArcadeDB only. LSM_SPARSE_VECTOR quantizes posting
+# weights to int8 by default and the fp32 arm is our own ablation, so these
+# three are read off the backend name the harness ran.
+#
+# The comparators are deliberately absent, which renders as a dash rather than
+# a guess. Unlike the dense lane, where each engine's index type states what it
+# stores, sparse weight encoding is internal to Qdrant, Milvus and
+# Elasticsearch and we have not audited it. A dash is a true statement about
+# what we know; "fp32" would not be.
+SPARSE_PRECISION = {
+    "arcadedb_sparse_embedded": "int8",
+    "arcadedb_sparse_embedded_fp32": "fp32",
+    "arcadedb_sparse_server": "int8",
+}
+
 DENSE_PRECISION = {
     "arcadedb_dense_embedded": "fp32",
     "arcadedb_dense_server": "fp32",
@@ -254,6 +269,7 @@ def _dense_10m_entries():
         out.append({
             "backend": label,
             "is_arcadedb": ours,
+            "precision": "int8" if arm == "int8" else "fp32",
             "scale": "deep10m",
             "workload": "search",
             "n_docs": "10M",
@@ -800,6 +816,13 @@ def main() -> int:
             entry = {
                 "backend": label,
                 "is_arcadedb": "arcade" in backend,
+                # Precision is a FIELD, not a suffix on the name. The page
+                # renders it as its own column beside Mode, so the label does
+                # not have to carry it in brackets. Kept in the label too,
+                # because page_check pins that string to the paper's table and
+                # a gate key should not move for a layout change.
+                "precision": (DENSE_PRECISION.get(backend) if lane == "l3d"
+                              else SPARSE_PRECISION.get(backend)),
                 "scale": scale,
                 "workload": workload,
                 "n_docs": rs[0].get("n_docs") or None,

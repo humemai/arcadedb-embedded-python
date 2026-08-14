@@ -176,6 +176,7 @@
         {
           "backend": "ArcadeDB (embedded, int8)",
           "is_arcadedb": true,
+          "precision": "int8",
           "scale": "medium",
           "workload": "search",
           "n_docs": "8841823",
@@ -207,6 +208,7 @@
         {
           "backend": "ArcadeDB (embedded, fp32)",
           "is_arcadedb": true,
+          "precision": "fp32",
           "scale": "medium",
           "workload": "search",
           "n_docs": "8841823",
@@ -238,6 +240,7 @@
         {
           "backend": "ArcadeDB (server, int8)",
           "is_arcadedb": true,
+          "precision": "int8",
           "scale": "medium",
           "workload": "search",
           "n_docs": "8841823",
@@ -269,6 +272,7 @@
         {
           "backend": "Elasticsearch",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "medium",
           "workload": "search",
           "n_docs": "8841823",
@@ -300,6 +304,7 @@
         {
           "backend": "Milvus",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "medium",
           "workload": "search",
           "n_docs": "10000000",
@@ -331,6 +336,7 @@
         {
           "backend": "Qdrant",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "medium",
           "workload": "search",
           "n_docs": "10000000",
@@ -362,6 +368,7 @@
         {
           "backend": "ArcadeDB (embedded, int8)",
           "is_arcadedb": true,
+          "precision": "int8",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -393,6 +400,7 @@
         {
           "backend": "ArcadeDB (embedded, fp32)",
           "is_arcadedb": true,
+          "precision": "fp32",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -424,6 +432,7 @@
         {
           "backend": "ArcadeDB (server, int8)",
           "is_arcadedb": true,
+          "precision": "int8",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -455,6 +464,7 @@
         {
           "backend": "Elasticsearch",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -486,6 +496,7 @@
         {
           "backend": "Milvus",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -517,6 +528,7 @@
         {
           "backend": "Qdrant",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -548,6 +560,7 @@
         {
           "backend": "ArcadeDB (embedded, int8)",
           "is_arcadedb": true,
+          "precision": "int8",
           "scale": "tiny",
           "workload": "search",
           "n_docs": "100000",
@@ -579,6 +592,7 @@
         {
           "backend": "ArcadeDB (embedded, fp32)",
           "is_arcadedb": true,
+          "precision": "fp32",
           "scale": "tiny",
           "workload": "search",
           "n_docs": "100000",
@@ -610,6 +624,7 @@
         {
           "backend": "ArcadeDB (server, int8)",
           "is_arcadedb": true,
+          "precision": "int8",
           "scale": "tiny",
           "workload": "search",
           "n_docs": "100000",
@@ -641,6 +656,7 @@
         {
           "backend": "Elasticsearch",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "tiny",
           "workload": "search",
           "n_docs": "100000",
@@ -672,6 +688,7 @@
         {
           "backend": "Milvus",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "tiny",
           "workload": "search",
           "n_docs": "100000",
@@ -703,6 +720,7 @@
         {
           "backend": "Qdrant",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "tiny",
           "workload": "search",
           "n_docs": "100000",
@@ -761,6 +779,7 @@
         {
           "backend": "ArcadeDB (embedded, fp32)",
           "is_arcadedb": true,
+          "precision": "fp32",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -792,6 +811,7 @@
         {
           "backend": "ArcadeDB (server, fp32)",
           "is_arcadedb": true,
+          "precision": "fp32",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -823,6 +843,7 @@
         {
           "backend": "Chroma (fp32)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -854,6 +875,7 @@
         {
           "backend": "DuckDB VSS (fp32)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -885,6 +907,7 @@
         {
           "backend": "LanceDB (int8)",
           "is_arcadedb": false,
+          "precision": "int8",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -916,6 +939,7 @@
         {
           "backend": "Milvus (fp32)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -947,6 +971,7 @@
         {
           "backend": "Qdrant (fp32)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -978,6 +1003,7 @@
         {
           "backend": "sqlite-vec (fp32)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "small",
           "workload": "search",
           "n_docs": "1000000",
@@ -1009,6 +1035,7 @@
         {
           "backend": "ArcadeDB (embedded, fp32)",
           "is_arcadedb": true,
+          "precision": "fp32",
           "scale": "deep10m",
           "workload": "search",
           "n_docs": "10M",
@@ -1046,6 +1073,7 @@
         {
           "backend": "ArcadeDB (embedded, int8)",
           "is_arcadedb": true,
+          "precision": "int8",
           "scale": "deep10m",
           "workload": "search",
           "n_docs": "10M",
@@ -1083,6 +1111,7 @@
         {
           "backend": "ArcadeDB (server, fp32)",
           "is_arcadedb": true,
+          "precision": "fp32",
           "scale": "deep10m",
           "workload": "search",
           "n_docs": "10M",
@@ -1120,6 +1149,7 @@
         {
           "backend": "Qdrant (fp32)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "deep10m",
           "workload": "search",
           "n_docs": "10M",
@@ -1157,6 +1187,7 @@
         {
           "backend": "Chroma (fp32)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "deep10m",
           "workload": "search",
           "n_docs": "10M",
@@ -1194,6 +1225,7 @@
         {
           "backend": "DuckDB VSS (fp32)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "deep10m",
           "workload": "search",
           "n_docs": "10M",
@@ -1231,6 +1263,7 @@
         {
           "backend": "LanceDB (int8)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "deep10m",
           "workload": "search",
           "n_docs": "10M",
@@ -1268,6 +1301,7 @@
         {
           "backend": "Milvus (fp32)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "deep10m",
           "workload": "search",
           "n_docs": "10M",
@@ -1305,6 +1339,7 @@
         {
           "backend": "sqlite-vec (fp32)",
           "is_arcadedb": false,
+          "precision": "fp32",
           "scale": "deep10m",
           "workload": "search",
           "n_docs": "10M",
@@ -1371,6 +1406,7 @@
         {
           "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "sf1",
           "workload": "oltp",
           "n_docs": null,
@@ -1408,6 +1444,7 @@
         {
           "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "sf1",
           "workload": "oltp",
           "n_docs": null,
@@ -1445,6 +1482,7 @@
         {
           "backend": "LadybugDB",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "sf1",
           "workload": "oltp",
           "n_docs": null,
@@ -1482,6 +1520,7 @@
         {
           "backend": "Neo4j",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "sf1",
           "workload": "oltp",
           "n_docs": null,
@@ -1519,6 +1558,7 @@
         {
           "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "sf10",
           "workload": "oltp",
           "n_docs": null,
@@ -1556,6 +1596,7 @@
         {
           "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "sf10",
           "workload": "oltp",
           "n_docs": null,
@@ -1593,6 +1634,7 @@
         {
           "backend": "LadybugDB",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "sf10",
           "workload": "oltp",
           "n_docs": null,
@@ -1630,6 +1672,7 @@
         {
           "backend": "Neo4j",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "sf10",
           "workload": "oltp",
           "n_docs": null,
@@ -1691,6 +1734,7 @@
         {
           "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "medium",
           "workload": "olap",
           "n_docs": null,
@@ -1710,6 +1754,7 @@
         {
           "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "medium",
           "workload": "oltp",
           "n_docs": null,
@@ -1741,6 +1786,7 @@
         {
           "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "medium",
           "workload": "olap",
           "n_docs": null,
@@ -1760,6 +1806,7 @@
         {
           "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "medium",
           "workload": "oltp",
           "n_docs": null,
@@ -1791,6 +1838,7 @@
         {
           "backend": "DuckDB",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "medium",
           "workload": "olap",
           "n_docs": null,
@@ -1810,6 +1858,7 @@
         {
           "backend": "DuckDB",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "medium",
           "workload": "oltp",
           "n_docs": null,
@@ -1841,6 +1890,7 @@
         {
           "backend": "PostgreSQL",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "medium",
           "workload": "olap",
           "n_docs": null,
@@ -1860,6 +1910,7 @@
         {
           "backend": "PostgreSQL",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "medium",
           "workload": "oltp",
           "n_docs": null,
@@ -1915,6 +1966,7 @@
         {
           "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "tpch1",
           "workload": "olap",
           "n_docs": null,
@@ -1940,6 +1992,7 @@
         {
           "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "tpch1",
           "workload": "oltp",
           "n_docs": null,
@@ -1965,6 +2018,7 @@
         {
           "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "tpch1",
           "workload": "olap",
           "n_docs": null,
@@ -1990,6 +2044,7 @@
         {
           "backend": "ArcadeDB (server)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "tpch1",
           "workload": "oltp",
           "n_docs": null,
@@ -2015,6 +2070,7 @@
         {
           "backend": "DuckDB",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "tpch1",
           "workload": "olap",
           "n_docs": null,
@@ -2040,6 +2096,7 @@
         {
           "backend": "DuckDB",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "tpch1",
           "workload": "oltp",
           "n_docs": null,
@@ -2065,6 +2122,7 @@
         {
           "backend": "PostgreSQL",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "tpch1",
           "workload": "olap",
           "n_docs": null,
@@ -2090,6 +2148,7 @@
         {
           "backend": "PostgreSQL",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "tpch1",
           "workload": "oltp",
           "n_docs": null,
@@ -2140,6 +2199,7 @@
         {
           "backend": "ArcadeDB (one transaction)",
           "is_arcadedb": true,
+          "precision": null,
           "scale": "e2",
           "workload": "hybrid",
           "n_docs": null,
@@ -2165,6 +2225,7 @@
         {
           "backend": "Qdrant + Neo4j (no shared transaction)",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "e2",
           "workload": "hybrid",
           "n_docs": null,
@@ -2190,6 +2251,7 @@
         {
           "backend": "SurrealDB",
           "is_arcadedb": false,
+          "precision": null,
           "scale": "e2",
           "workload": "hybrid",
           "n_docs": null,
