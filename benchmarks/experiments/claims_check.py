@@ -248,6 +248,44 @@ def sparse_cell(system, tier, metric):
     return None
 
 
+def sparse_multipass(tier, stat):
+    """Cold/warm gain from the queue82 sparse multi-pass overlay.
+
+    stat is "max_gain" (the largest gain any engine makes at this tier),
+    "min_gain", "arcade_gain" or "elastic_gain". The paper quotes a RANGE
+    across engines rather than one engine's number, so the claim has to be
+    computed over the whole set: quoting only ours would be the flattering
+    half of a comparison whose point is that nobody gains much.
+    """
+    import glob as _glob
+    import json as _json
+    root = os.path.join(M.RESULTS, "sparse_mp")
+    gains = {}
+    for fp in sorted(_glob.glob(os.path.join(root, f"sp_*_{tier}.json"))):
+        try:
+            with open(fp, encoding="utf-8") as fh:
+                reps = _json.load(fh)
+        except Exception:
+            continue
+        cold = [r["query_p50_ms"] for r in reps if r.get("rep") == 0]
+        warm = [r["query_p50_ms"] for r in reps if r.get("rep", 0) >= 1]
+        if not cold or not warm:
+            continue
+        name = os.path.basename(fp)[len("sp_"):-len(f"_{tier}.json")]
+        gains[name] = cold[0] / st.median(warm)
+    if not gains:
+        return None
+    if stat == "max_gain":
+        return max(gains.values())
+    if stat == "min_gain":
+        return min(gains.values())
+    if stat == "arcade_gain":
+        return max(v for k, v in gains.items() if k.startswith("arc"))
+    if stat == "elastic_gain":
+        return gains.get("elastic")
+    return None
+
+
 def gav_ablation(field):
     """Median of one OLAP query with the Graph Analytical View DISABLED.
 
@@ -1030,6 +1068,21 @@ CLAIMS = [
      lambda r: e4_term_ms("total", 100000),
      "full embedded->containerised gap at 100k rows, ms"),
     # --- the two prose numbers that had no artifact until 2026-08-10 -------
+    # The sparse multi-pass paragraph. A range across ENGINES, so each bound is
+    # gated separately; quoting only ArcadeDB's would hide that the point is
+    # that nobody gains much.
+    ("l3s.multipass.small.max", 1.18, 0.02,
+     lambda r: sparse_multipass("small", "max_gain"),
+     "largest cold/warm gain by any engine at 1M"),
+    ("l3s.multipass.medium.max", 1.13, 0.02,
+     lambda r: sparse_multipass("medium", "max_gain"),
+     "largest cold/warm gain by any engine at 8.84M"),
+    ("l3s.multipass.medium.arcade", 1.04, 0.02,
+     lambda r: sparse_multipass("medium", "arcade_gain"),
+     "ArcadeDB's own gain at 8.84M, the smallest of the six"),
+    ("l3s.multipass.medium.elastic", 1.13, 0.02,
+     lambda r: sparse_multipass("medium", "elastic_gain"),
+     "Elasticsearch's gain at 8.84M, the largest of the six"),
     ("l2.gav_ablated.friendage", 1213, 1,
      lambda r: gav_ablation("friend_age_by_city_mean_ms"),
      "friend-age WITHOUT the analytical view"),
