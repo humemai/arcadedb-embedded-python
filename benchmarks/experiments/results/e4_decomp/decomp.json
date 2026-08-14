@@ -1,0 +1,176 @@
+{
+  "meta": {
+    "engine_version": "26.8.1.dev24",
+    "rows": 200000,
+    "sizes": [
+      1,
+      10,
+      100,
+      1000,
+      10000,
+      100000
+    ],
+    "reps": 9,
+    "warmup": 3,
+    "heap": null,
+    "embedded_materialisation": "to_json_list",
+    "note": "embedded arm uses to_json_list so all three arms return list-of-dicts",
+    "cpuset": "0-11",
+    "mem_cap": "32g",
+    "role": "embedded+inproc_server",
+    "host": "mini",
+    "ts_utc": "2026-08-01T16:37:06+00:00",
+    "lane": "e4_decomp",
+    "row_count_agreement": "ok"
+  },
+  "results": {
+    "embedded": {
+      "1": {
+        "p50_ms": 0.8803,
+        "rows_returned": 1,
+        "n": 9,
+        "mean_ms": 0.8916,
+        "std_ms": 0.0278,
+        "min_ms": 0.8589,
+        "p90_ms": 0.9198,
+        "p95_ms": 0.9372,
+        "p99_ms": 0.9511,
+        "max_ms": 0.9546
+      },
+      "10": {
+        "p50_ms": 1.1555,
+        "rows_returned": 10,
+        "n": 9,
+        "mean_ms": 1.1644,
+        "std_ms": 0.0614,
+        "min_ms": 1.1029,
+        "p90_ms": 1.227,
+        "p95_ms": 1.2689,
+        "p99_ms": 1.3023,
+        "max_ms": 1.3107
+      },
+      "100": {
+        "p50_ms": 1.8911,
+        "rows_returned": 100,
+        "n": 9,
+        "mean_ms": 1.9276,
+        "std_ms": 0.3745,
+        "min_ms": 1.3855,
+        "p90_ms": 2.3804,
+        "p95_ms": 2.3959,
+        "p99_ms": 2.4084,
+        "max_ms": 2.4115
+      },
+      "1000": {
+        "p50_ms": 6.8299,
+        "rows_returned": 1000,
+        "n": 9,
+        "mean_ms": 6.7585,
+        "std_ms": 0.2904,
+        "min_ms": 6.1753,
+        "p90_ms": 7.069,
+        "p95_ms": 7.0928,
+        "p99_ms": 7.1118,
+        "max_ms": 7.1166
+      },
+      "10000": {
+        "p50_ms": 27.6051,
+        "rows_returned": 10000,
+        "n": 9,
+        "mean_ms": 26.5408,
+        "std_ms": 3.6194,
+        "min_ms": 20.0611,
+        "p90_ms": 29.1907,
+        "p95_ms": 30.3518,
+        "p99_ms": 31.2808,
+        "max_ms": 31.513
+      },
+      "100000": {
+        "p50_ms": 267.2374,
+        "rows_returned": 100000,
+        "n": 9,
+        "mean_ms": 256.8673,
+        "std_ms": 22.4888,
+        "min_ms": 201.7786,
+        "p90_ms": 270.2577,
+        "p95_ms": 270.9074,
+        "p99_ms": 271.4271,
+        "max_ms": 271.557
+      }
+    },
+    "inproc_http": {
+      "1": {
+        "p50_ms": 1.4549,
+        "rows_returned": 1,
+        "n": 9,
+        "mean_ms": 1.4435,
+        "std_ms": 0.0417,
+        "min_ms": 1.3603,
+        "p90_ms": 1.4862,
+        "p95_ms": 1.495,
+        "p99_ms": 1.5021,
+        "max_ms": 1.5039
+      },
+      "10": {
+        "p50_ms": 1.4566,
+        "rows_returned": 10,
+        "n": 9,
+        "mean_ms": 1.4802,
+        "std_ms": 0.0821,
+        "min_ms": 1.389,
+        "p90_ms": 1.5941,
+        "p95_ms": 1.6094,
+        "p99_ms": 1.6216,
+        "max_ms": 1.6246
+      },
+      "100": {
+        "p50_ms": 1.9042,
+        "rows_returned": 100,
+        "n": 9,
+        "mean_ms": 1.9001,
+        "std_ms": 0.0501,
+        "min_ms": 1.8237,
+        "p90_ms": 1.9739,
+        "p95_ms": 1.9766,
+        "p99_ms": 1.9788,
+        "max_ms": 1.9794
+      },
+      "1000": {
+        "p50_ms": 4.9841,
+        "rows_returned": 1000,
+        "n": 9,
+        "mean_ms": 5.1734,
+        "std_ms": 0.9844,
+        "min_ms": 4.3991,
+        "p90_ms": 5.7334,
+        "p95_ms": 6.7905,
+        "p99_ms": 7.6361,
+        "max_ms": 7.8476
+      },
+      "10000": {
+        "p50_ms": 28.433,
+        "rows_returned": 10000,
+        "n": 9,
+        "mean_ms": 28.6676,
+        "std_ms": 0.675,
+        "min_ms": 27.9262,
+        "p90_ms": 29.8592,
+        "p95_ms": 29.8666,
+        "p99_ms": 29.8725,
+        "max_ms": 29.874
+      },
+      "100000": {
+        "p50_ms": 283.2828,
+        "rows_returned": 100000,
+        "n": 9,
+        "mean_ms": 283.7593,
+        "std_ms": 5.0379,
+        "min_ms": 278.0539,
+        "p90_ms": 290.8167,
+        "p95_ms": 291.3129,
+        "p99_ms": 291.7099,
+        "max_ms": 291.8092
+      }
+    }
+  }
+}

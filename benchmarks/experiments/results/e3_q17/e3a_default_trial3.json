@@ -1,0 +1,1 @@
+{"recovery_s": 0.375, "rows": 6110, "max_key": 6109, "contiguous": true, "max_duplicates": 1, "wal_flush": "default", "engine_version": "26.8.1"}

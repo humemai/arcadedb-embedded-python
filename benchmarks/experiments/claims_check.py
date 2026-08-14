@@ -694,6 +694,34 @@ def e2_clean_baseline_disagreements():
     return total if seen else None
 
 
+def e3(kind, field, stat="median"):
+    """E3 durability and failover, from results/e3_q17/.
+
+    These artifacts lived only on mini's home directory until 2026-08-14, so
+    every number in the paper's durability subsection was correct and yet
+    unverifiable from the repository -- an auditor reading results/ concluded
+    the section had no evidence at all. Copied in and pinned here.
+
+    e3a_default_* is the default asynchronous WAL contract, e3a_2_* is
+    per-commit flush; the paper reports ten trials pooled across both.
+    """
+    import glob as _glob
+    import json as _json
+    import statistics as _stat
+    pat = {"recovery": "e3a_*trial*.json", "failover": "e3b_*.json"}[kind]
+    vals = []
+    for f in sorted(_glob.glob(os.path.join(M.RESULTS, "e3_q17", pat))):
+        try:
+            d = _json.load(open(f))
+        except Exception:
+            continue
+        if isinstance(d.get(field), (int, float)):
+            vals.append(float(d[field]))
+    if not vals:
+        return None
+    return {"median": _stat.median, "min": min, "max": max}[stat](vals)
+
+
 def pyb_ratio(workload, numerator_arm, denominator_arm):
     """The published ratio, stated as the exact pair of arms it compares."""
     a = _overhead_median(workload, numerator_arm)
@@ -1042,6 +1070,37 @@ CLAIMS = [
     ("l3d.srv.p50", 2.10, 0.015,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv, fp32)", D_WARM),
      "dense server p50 warm (published multipass row, not the #109 A/B)"),
+    # --- E3 durability and failover ---------------------------------------
+    # Pinned late: these artifacts were on mini only, so this subsection was the
+    # one part of the evaluation no gate could reach.
+    ("e3.recovery.median", 0.361, 0.0005,
+     lambda r: e3("recovery", "recovery_s", "median"),
+     "SIGKILL-during-ingest recovery, median of ten trials"),
+    ("e3.recovery.min", 0.354, 0.0005,
+     lambda r: e3("recovery", "recovery_s", "min"), "fastest of the ten"),
+    ("e3.recovery.max", 0.375, 0.0005,
+     lambda r: e3("recovery", "recovery_s", "max"), "slowest of the ten"),
+    ("e3.recovery.trials", 10.0, 0.0,
+     lambda r: float(len([1 for _ in __import__("glob").glob(
+         os.path.join(M.RESULTS, "e3_q17", "e3a_*trial*.json"))])),
+     "recovery trials, five under the default async WAL contract and five "
+     "under per-commit flush; the paper states both halves"),
+    ("e3.failover.election", 9.60, 0.01,
+     lambda r: e3("failover", "election_s", "median"),
+     "Raft election, median of five"),
+    ("e3.failover.overhead", 0.21, 0.01,
+     lambda r: e3("failover", "client_overhead_s", "median"),
+     "delay from a new leader to the first acknowledged write"),
+    ("e3.failover.total", 9.81, 0.01,
+     lambda r: e3("failover", "failover_s", "median"),
+     "client-observed failover; the paper reports election and overhead "
+     "separately because 'failover time' means different things to the "
+     "cluster and to the client"),
+    ("e3.integrity.no_acked_loss", 5.0, 0.0,
+     lambda r: e3("failover", "no_acked_loss", "median") and float(len([1 for _ in
+         __import__("glob").glob(os.path.join(M.RESULTS, "e3_q17", "e3b_*.json"))])),
+     "failover trials in which no acknowledged write was lost; this is the "
+     "correctness claim, the timing is secondary to it"),
     # --- E2 atomicity, the thesis experiment -------------------------------
     # THE CONTROL, and it is the claim the old version of this experiment could
     # not make. It used to pin "1 distinct torn-evidence pair", derived from

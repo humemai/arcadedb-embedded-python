@@ -1,0 +1,1 @@
+{"killed_leader": "e3n1", "nodes": ["e3n1", "e3n2", "e3n3"], "acked_before_kill": 200, "new_leader": "e3n2", "election_s": 8.073, "failover_s": 8.286, "client_overhead_s": 0.213, "resumed": true, "inflight_ambiguous": 1, "ts_utc": "2026-08-05T11:47:27+00:00", "verified_on": "e3n2", "acked_present_after": 200, "no_acked_loss": true}
