@@ -249,8 +249,18 @@ def f7_e2(rows):
         ax.bar(i, med, width=0.55, color="C3" if torn else "C0", alpha=0.85)
         ax.errorbar(i, med, yerr=[[med - min(h)], [max(h) - med]], color="k",
                     capsize=3, lw=1)
-        outcome = (f"torn state\n{torn}/{len(a)} crashes" if torn
-                   else f"atomic\n{len(a)}/{len(a)} crashes")
+        # The label must not read the same way on a pass and on a failure.
+        # It used to say "torn state 5/5 crashes" and "atomic 5/5 crashes",
+        # so the identical "5/5" meant FAILED on one bar and PASSED on the
+        # next, distinguished only by the small word above it -- readers
+        # consistently took every bar as a failure count. Two fixes: say what
+        # happened in words that carry their own valence, and never print the
+        # same fraction for opposite outcomes. "crashes" is also wrong: the
+        # injection raises an error inside the operation, it does not kill
+        # anything, and the real kill -9 test is a different experiment.
+        n = len(a)
+        outcome = (f"left half-updated\nin {torn} of {n}" if torn
+                   else f"undone cleanly\nall {n}")
         anns.append(ax.annotate(outcome, (i, med), textcoords="offset points",
                                 xytext=(0, 10), ha="center", fontsize=6.5))
     ax.set_xticks(range(len(order)))
