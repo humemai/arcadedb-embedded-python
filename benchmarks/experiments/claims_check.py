@@ -625,6 +625,75 @@ def _overhead_median(workload, arm):
     return _stat.median(vals) if vals else None
 
 
+def e2_atomicity(backend, field):
+    """Totals over the E2 atomicity cells, summed across repetitions.
+
+    Pinned because this experiment shipped a result for months that no gate
+    covered, and the result was wrong: torn_state was decided by the PYTHON
+    TYPE of the state object rather than by any comparison, so every
+    single-engine backend was stamped atomic by construction while SurrealDB's
+    writes were silently not landing at all. A gate on the outcome would not
+    have caught that by itself, but a gate on the TRIAL COUNT would have: the
+    published claim was "5 of 5", and five trials cannot support an atomicity
+    claim (rule of three: the 95% upper bound on the failure rate is ~45%).
+    So both the count and the outcome are pinned here.
+    """
+    import json as _json
+    import statistics as _stat  # noqa: F401  (kept for symmetry with siblings)
+    path = os.path.join(M.RESULTS, "runs.jsonl")
+    total = 0
+    seen = 0
+    with open(path) as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                r = _json.loads(line)
+            except ValueError:
+                continue
+            # `trials` exists only on rows written by the FIXED harness, which
+            # is exactly the discriminator we want: pre-fix rows must not be
+            # able to satisfy this claim.
+            if (r.get("lane") == "e2" and r.get("workload") == "atomicity"
+                    and r.get("backend") == backend
+                    and r.get("trials") is not None):
+                seen += 1
+                total += int(r.get(field) or 0)
+    return float(total) if seen else None
+
+
+def e2_clean_baseline_disagreements():
+    """Disagreeing records before the first injection, over composed cells.
+
+    The harness records evidence for the first few torn trials, each carrying
+    the pre- and post-injection state. Trial 0's PRE is the clean baseline:
+    fifty completed operations have written both stores and nothing has been
+    interrupted yet, so the two must agree exactly.
+    """
+    import json as _json
+    path = os.path.join(M.RESULTS, "runs.jsonl")
+    total = 0.0
+    seen = 0
+    with open(path) as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                r = _json.loads(line)
+            except ValueError:
+                continue
+            if (r.get("lane") == "e2" and r.get("workload") == "atomicity"
+                    and r.get("backend") == "composed_qdrant_neo4j"
+                    and r.get("trials") is not None):
+                ev = r.get("torn_evidence") or []
+                first = next((e for e in ev if e.get("trial") == 0), None)
+                if first:
+                    seen += 1
+                    total += float((first.get("pre") or {}).get(
+                        "disagreeing_products", 0))
+    return total if seen else None
+
+
 def pyb_ratio(workload, numerator_arm, denominator_arm):
     """The published ratio, stated as the exact pair of arms it compares."""
     a = _overhead_median(workload, numerator_arm)
@@ -808,19 +877,19 @@ CLAIMS = [
     # --- E2 hybrid --------------------------------------------------------
     # These are the ones a hand-rolled median got wrong. load_canonical drops
     # the two single-rep pilots, so the N=5 measurement stands alone.
-    ("e2.arcadedb.p50", 1.88, 0.01,
+    ("e2.arcadedb.p50", 1.819, 0.01,
      lambda r: median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                          backend="arcadedb_e2"), "hybrid p50"),
-    ("e2.arcadedb.max", 2.00, 0.01,
+    ("e2.arcadedb.max", 2.0910, 0.01,
      lambda r: max_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                       backend="arcadedb_e2"), "hybrid range max"),
-    ("e2.arcadedb.min", 1.83, 0.01,
+    ("e2.arcadedb.min", 1.796, 0.01,
      lambda r: min_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                       backend="arcadedb_e2"), "hybrid range min"),
-    ("e2.surrealdb.p50", 7.06, 0.01,
+    ("e2.surrealdb.p50", 7.678, 0.01,
      lambda r: median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                          backend="surrealdb_e2"), "SurrealDB hybrid"),
-    ("e2.composed.p50", 19.43, 0.01,
+    ("e2.composed.p50", 19.674, 0.01,
      lambda r: median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                          backend="composed_qdrant_neo4j"), "composed stack hybrid"),
     # The two RATIOS the intro now leads with. The three medians above were
@@ -833,13 +902,13 @@ CLAIMS = [
     # spanning its engines is the easy comparison; beating the rival that DOES
     # commit across models in one transaction is the claim a reviewer will test,
     # and it is the number f4's cross-model bar plots.
-    ("e2.ratio.surrealdb", 3.76, 0.02,
+    ("e2.ratio.surrealdb", 4.221, 0.02,
      lambda r: (median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                           backend="surrealdb_e2")
                 / median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                             backend="arcadedb_e2")),
      "cross-model vs SurrealDB; the intro's 3.8x and f4's bar"),
-    ("e2.ratio.composed", 10.34, 0.02,
+    ("e2.ratio.composed", 10.82, 0.02,
      lambda r: (median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
                           backend="composed_qdrant_neo4j")
                 / median_of(r, "hybrid_p50_ms", lane="e2", workload="hybrid",
@@ -974,14 +1043,20 @@ CLAIMS = [
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv, fp32)", D_WARM),
      "dense server p50 warm (published multipass row, not the #109 A/B)"),
     # --- E2 atomicity, the thesis experiment -------------------------------
-    # The tear is deterministic, not a race we caught once: all five trials
-    # report the same pair. The prose said "a representative trial", which is
-    # true and weaker than the evidence.
-    ("e2.torn.distinct_evidence", 1.0, 0.0,
-     lambda r: float(len({(e.get("neo4j_view_sum"), e.get("qdrant_bumped_points"))
-                          for e in (x.get("torn_evidence") or {} for x in M.load_canonical())
-                          if e})),
-     "distinct torn-evidence pairs across trials (1 = deterministic)"),
+    # THE CONTROL, and it is the claim the old version of this experiment could
+    # not make. It used to pin "1 distinct torn-evidence pair", derived from
+    # neo4j_view_sum vs qdrant_bumped_points -- a SUM against a COUNT of a
+    # boolean flag, two quantities that drift apart with no crash and no
+    # tearing at all, so the pair it called deterministic was measuring the
+    # workload rather than the failure. Both stores now hold the same counter,
+    # and what gets pinned is that they AGREE while nothing is injected. A
+    # disagreement metric that never reads zero proves nothing; this is what
+    # makes a non-zero reading afterwards evidence.
+    ("e2.torn.clean_baseline", 0.0, 0.0,
+     lambda r: e2_clean_baseline_disagreements(),
+     "records the two stores disagree about BEFORE the first injection, "
+     "summed over every composed-stack repetition; must be zero, otherwise "
+     "the tear counted afterwards cannot be attributed to the injection"),
     ("e2.torn.composed", 5, 0,
      lambda r: torn_count("composed_qdrant_neo4j"), "composed stack torn 5/5"),
     ("e2.torn.arcadedb", 0, 0,
@@ -1098,6 +1173,31 @@ CLAIMS = [
     ("l1.ingest.bulk_500k", 201647, 1,
      lambda r: ingest_ab("insert_many"),
      "bindings' bulk insert API at 500k; was 177.1k before the re-measure"),
+    # E2 atomicity. The trial COUNT is pinned alongside the outcome: the claim
+    # this experiment used to publish was "5 of 5", and five trials cannot
+    # carry it. If a future run quietly drops back to one trial per rep, the
+    # count claim fails even though the outcome would still look perfect.
+    ("e2.atomicity.trials.arcade", 200.0, 0.0,
+     lambda r: e2_atomicity("arcadedb_e2", "trials"),
+     "injections against ArcadeDB, summed over the five repetitions"),
+    ("e2.atomicity.trials.composed", 200.0, 0.0,
+     lambda r: e2_atomicity("composed_qdrant_neo4j", "trials"),
+     "injections against the composed stack, summed over the five repetitions"),
+    ("e2.atomicity.torn.arcade", 0.0, 0.0,
+     lambda r: e2_atomicity("arcadedb_e2", "torn_count"),
+     "ArcadeDB operations left half-updated; the transaction must undo the "
+     "interrupted operation every time, so anything above zero is a defect"),
+    ("e2.atomicity.torn.surreal", 0.0, 0.0,
+     lambda r: e2_atomicity("surrealdb_e2", "torn_count"),
+     "SurrealDB operations left half-updated. Zero is the CLAIM, not the "
+     "default: the old harness reported zero for this arm while its writes "
+     "were never landing, so this is pinned against the fixed harness only"),
+    ("e2.atomicity.torn.composed", 200.0, 0.0,
+     lambda r: e2_atomicity("composed_qdrant_neo4j", "torn_count"),
+     "composed-stack operations left half-updated, measured by counting the "
+     "records the two stores disagree about; the count is zero while "
+     "operations complete normally, which is what makes this reading mean "
+     "something"),
     ("e4.boundary_negative_sizes", 4.0, 0.0,
      lambda r: e4_boundary_negative_sizes(),
      "result sizes whose median container/loopback term is BELOW ZERO, which "
