@@ -277,7 +277,7 @@
         {
           "backend": "Elasticsearch",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "~9-bit",
           "scale": "medium",
           "scale_label": "8.84M",
           "workload": "search",
@@ -310,7 +310,7 @@
         {
           "backend": "Milvus",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "fp32",
           "scale": "medium",
           "scale_label": "8.84M",
           "workload": "search",
@@ -343,7 +343,7 @@
         {
           "backend": "Qdrant",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "fp32",
           "scale": "medium",
           "scale_label": "8.84M",
           "workload": "search",
@@ -475,7 +475,7 @@
         {
           "backend": "Elasticsearch",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "~9-bit",
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
@@ -508,7 +508,7 @@
         {
           "backend": "Milvus",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "fp32",
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
@@ -541,7 +541,7 @@
         {
           "backend": "Qdrant",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "fp32",
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
@@ -673,7 +673,7 @@
         {
           "backend": "Elasticsearch",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "~9-bit",
           "scale": "tiny",
           "scale_label": "100k",
           "workload": "search",
@@ -706,7 +706,7 @@
         {
           "backend": "Milvus",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "fp32",
           "scale": "tiny",
           "scale_label": "100k",
           "workload": "search",
@@ -739,7 +739,7 @@
         {
           "backend": "Qdrant",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "fp32",
           "scale": "tiny",
           "scale_label": "100k",
           "workload": "search",
@@ -2540,7 +2540,7 @@
         {
           "backend": "Elasticsearch",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "~9-bit",
           "scale": "medium",
           "scale_label": "8.84M",
           "workload": "search",
@@ -2573,7 +2573,7 @@
         {
           "backend": "Milvus",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "fp32",
           "scale": "medium",
           "scale_label": "8.84M",
           "workload": "search",
@@ -2606,7 +2606,7 @@
         {
           "backend": "Qdrant",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "fp32",
           "scale": "medium",
           "scale_label": "8.84M",
           "workload": "search",
@@ -2738,7 +2738,7 @@
         {
           "backend": "Elasticsearch",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "~9-bit",
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
@@ -2771,7 +2771,7 @@
         {
           "backend": "Milvus",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "fp32",
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
@@ -2804,7 +2804,7 @@
         {
           "backend": "Qdrant",
           "is_arcadedb": false,
-          "precision": null,
+          "precision": "fp32",
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",

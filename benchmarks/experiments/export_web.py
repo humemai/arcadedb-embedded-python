@@ -189,10 +189,55 @@ DISPLAY_NAMES = {
 # stores, sparse weight encoding is internal to Qdrant, Milvus and
 # Elasticsearch and we have not audited it. A dash is a true statement about
 # what we know; "fp32" would not be.
+# AUDITED 2026-08-14. Until then this held only our own three rows and every
+# comparator printed a dash. The dash was honest ("we have not read their
+# formats") but it left a reader to assume quantization is an ArcadeDB
+# peculiarity, when two of the three comparators store weights at full
+# precision and the third is lossier than our default.
+#
+# Read from each vendor's docs AND source at the version we run, never inferred
+# from the recall we measured:
+#
+#   Qdrant v1.18.2   fp32. SparseIndexParams.datatype defaults to Float32
+#                    (openapi.json at tag v1.18.2); source has
+#                    `pub type DimWeight = f32`, and with on_disk=false the
+#                    mutable RAM inverted index never consults datatype at all.
+#                    Sparse quantization exists as that datatype field and is
+#                    off by default. It is NOT quantization_config, which is
+#                    dense-only; our call passes neither.
+#   Milvus v2.6.13   fp32, from SOURCE, and the citation matters here. The
+#                    often-quoted sentence "the value part can be a
+#                    non-negative 32-bit floating-point number" is on the
+#                    v2.4.x and v3.0.x doc pages but NOT on v2.6.x, which
+#                    dropped that FAQ, so quoting it against the version we run
+#                    would be citing a page that does not say it. A skeptic
+#                    refuted exactly that and was right to.
+#                    What holds at our version: the digest resolves to
+#                    v2.6.13, which pins knowhere v2.6.10, whose
+#                    include/knowhere/operands.h has
+#                    `struct sparse_u32_f32 { using ValueType = float; }` and
+#                    sparse_utils.h a `static_assert(is_same_v<T, fp32>,
+#                    "SparseRow supports float only")`. sparse_index_node.cc
+#                    instantiates InvertedIndex<float, float> for metric IP;
+#                    the uint16-quantized variant of the same class is chosen
+#                    only for BM25, which we do not use. The shipped
+#                    libknowhere.so in that image carries the matching
+#                    typeinfo symbols, so the binary agrees with the source.
+#   Elasticsearch 9  ~9 significant bits, their own wording: "sparse_vector
+#                    fields only preserve 9 significant bits for the precision,
+#                    which translates to a relative error of about 0.4%."
+#
+# The trap both claims were checked against: Qdrant and Milvus document DENSE
+# quantization far more loudly than sparse storage, so a citation that is
+# really about dense vectors is the likeliest way to put a wrong label on a
+# competitor's row. Both were confirmed against version-pinned source.
 SPARSE_PRECISION = {
     "arcadedb_sparse_embedded": "int8",
     "arcadedb_sparse_embedded_fp32": "fp32",
     "arcadedb_sparse_server": "int8",
+    "qdrant_sparse": "fp32",
+    "milvus_sparse": "fp32",
+    "elasticsearch_sparse": "~9-bit",
 }
 
 DENSE_PRECISION = {
