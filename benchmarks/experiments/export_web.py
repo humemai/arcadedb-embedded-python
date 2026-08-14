@@ -76,17 +76,17 @@ DISPLAY_NAMES = {
     "arcadedb_dense_embedded": "ArcadeDB (embedded)",
     "arcadedb_dense_server": "ArcadeDB (server)",
     # Name the quantization on BOTH sparse rows. Left as a bare
-    # "ArcadeDB (embedded)" next to "ArcadeDB (embedded, fp32 weights)", the
+    # "ArcadeDB (embedded)" next to "ArcadeDB (embedded, fp32)", the
     # default row reads as the plain one and the ablation as a variant, when
     # they are two points on one axis. Spelling out int8 makes it a pair.
-    "arcadedb_sparse_embedded": "ArcadeDB (embedded, int8 weights)",
+    "arcadedb_sparse_embedded": "ArcadeDB (embedded, int8)",
     # int8 like the embedded default, and for the same reason: the server's DDL
     # is CREATE INDEX ... LSM_SPARSE_VECTOR METADATA {"dimensions": N} with no
     # quantization key, so it takes the engine default. Labelled because a row
-    # sitting between "embedded, int8 weights" and "embedded, fp32 weights"
+    # sitting between "embedded, int8" and "embedded, fp32"
     # with no precision of its own reads as a third, unstated option.
-    "arcadedb_sparse_server": "ArcadeDB (server, int8 weights)",
-    "arcadedb_sparse_embedded_fp32": "ArcadeDB (embedded, fp32 weights)",
+    "arcadedb_sparse_server": "ArcadeDB (server, int8)",
+    "arcadedb_sparse_embedded_fp32": "ArcadeDB (embedded, fp32)",
     "arcadedb_sparse_embedded_nocompact": "ArcadeDB (embedded, no settle step)",
     "arcadedb_e2": "ArcadeDB (one transaction)",
     "composed_qdrant_neo4j": "Qdrant + Neo4j (no shared transaction)",

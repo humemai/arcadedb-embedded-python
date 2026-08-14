@@ -149,7 +149,7 @@ def _check_no_orphan_figures():
 # have actually been at risk or that carry meaning a reader needs.
 EXPECT_IN_PDF = {
     "f4_one_vs_n.pdf": ["log scale", "best specialist at equal recall",
-                        "ArcadeDB faster", "warm"],
+                        "unitless ratio", "warm"],
     "f6_memory_ceiling.pdf": ["(#3144)", "raw vectors"],
     "f8_deployment.pdf": ["server cost / embedded"],
     "f7_e2_hybrid.pdf": ["hybrid op p50 (ms)"],
@@ -872,8 +872,21 @@ def f4_one_vs_n(rows):
     # good; the colours and the dashed line encode it and neither is explained
     # inside the figure. Both lines are at or under the 48 characters known to
     # fit at 7pt, which is what the two-line split bought.
+    # THE AXIS HAS NO UNIT AND HAD TO SAY SO. Each bar divides two measurements
+    # of one quantity, so ms and ops/s both cancel; the unit lives in the ROW
+    # label (p50 is milliseconds, ops/s is throughput) and the axis carries a
+    # bare ratio. Without that stated, "16x" reads as a number missing its unit.
+    #
+    # "better", not "faster": the rows mix directions. Latency rows divide
+    # theirs by ours and throughput rows divide ours by theirs, precisely so
+    # that >1 means ArcadeDB ahead on both, and "faster" is wrong for ops/s.
+    #
+    # Three lines because two could not hold it under the 48 characters that
+    # fit at 7pt, and shrinking the font to protect the layout is what produced
+    # the clipped "...log sca" this figure once shipped with.
     ax.set_xlabel("ArcadeDB (embedded) vs best specialist\n"
-                  "at equal recall. >1 = ArcadeDB faster, log scale",
+                  "at equal recall, log scale\n"
+                  "unitless ratio of the row's metric; >1 = better",
                   fontsize=7)
     fig.tight_layout()
     path = os.path.join(FIGS, "f4_one_vs_n.pdf")
