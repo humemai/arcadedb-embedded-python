@@ -149,7 +149,7 @@ def _check_no_orphan_figures():
 # have actually been at risk or that carry meaning a reader needs.
 EXPECT_IN_PDF = {
     "f4_one_vs_n.pdf": ["log scale", "best specialist at equal recall",
-                        "warm"],
+                        "ArcadeDB faster", "warm"],
     "f6_memory_ceiling.pdf": ["(#3144)", "raw vectors"],
     "f8_deployment.pdf": ["server cost / embedded"],
     "f7_e2_hybrid.pdf": ["hybrid op p50 (ms)"],
@@ -867,8 +867,14 @@ def f4_one_vs_n(rows):
     # made the axis unreadable in print to preserve a layout nobody needs.
     # Each line here is shorter than the 48-character label that fitted at 7pt,
     # so the size stays legible and the text stays whole.
+    # The axis named the COMPARISON and never the QUANTITY. A reader saw "16x"
+    # and "0.151x" with nothing saying these are ratios, nor which direction is
+    # good; the colours and the dashed line encode it and neither is explained
+    # inside the figure. Both lines are at or under the 48 characters known to
+    # fit at 7pt, which is what the two-line split bought.
     ax.set_xlabel("ArcadeDB (embedded) vs best specialist\n"
-                  "at equal recall, log scale", fontsize=7)
+                  "at equal recall. >1 = ArcadeDB faster, log scale",
+                  fontsize=7)
     fig.tight_layout()
     path = os.path.join(FIGS, "f4_one_vs_n.pdf")
     fig.savefig(path)
