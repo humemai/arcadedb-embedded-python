@@ -52,13 +52,64 @@ _VERSION_COMMENT = re.compile(
 )
 
 
+_VERSION_TOKEN = re.compile(r"\bv?\d+(?:\.\d+)+\b|\b\d+-[a-z]+\b")
+
+
+def _short_version(raw: str | None) -> str | None:
+    """A version, not a sentence.
+
+    This used to publish the pin's CODE COMMENT verbatim, capped at 60
+    characters, which is how the page came to print "9.4.1, matches the 9.4.1
+    client" as Elasticsearch's version and nothing at all for ArcadeDB, whose
+    comment ran past the cap. The time-series lane had its own variant: QuestDB
+    reports a build banner, so the page carried its JDK version and its git
+    commit hash in a provenance line meant to say which release ran.
+
+    The first version-shaped token is what a reader wants. The full string is
+    still in the artifact, and the image digest below it is the real identity.
+    """
+    if not raw:
+        return None
+    # Only a version-shaped token counts. The adapters also stamp things like
+    # "server:latest", "arcadedb-embedded" and "unknown (PackageNotFoundError)"
+    # when they cannot determine a version, and printing those as if they were
+    # releases is worse than printing nothing.
+    m = _VERSION_TOKEN.search(raw)
+    return m.group(0) if m else None
+
+
+def _engine_version(label: str, raw: str | None,
+                    image: str | None = None) -> str | None:
+    """"<engine> <version>", from a row label and whatever the adapter stamped.
+
+    The engine name comes from the IMAGE when there is one. A row label names
+    the deployment a reader sees, which is not always the thing the version
+    belongs to: the composed-stack row is labelled "Qdrant + Neo4j" and its
+    pinned image is Neo4j's, so taking the name from the label produced
+    "qdrant + neo4j 5-community" for a version only one of them has.
+    """
+    ver = _short_version(raw)
+    if not ver:
+        return None
+    if image:
+        repo = image.split("@")[0].split(":")[0]
+        engine = repo.rsplit("/", 1)[-1].lower()
+    else:
+        engine = label.split(" (")[0].strip().lower()
+    return f"{engine} {ver}"
+
+
 def _image_version_names() -> dict[str, str]:
     src = (HERE / "runner.py").read_text(encoding="utf-8")
     out = {}
     for image, comment in _VERSION_COMMENT.findall(src):
-        name = comment.strip()
-        # Keep short version-ish comments, drop the long fairness rationales.
-        if len(name) <= 60:
+        # Prefer the image's own tag: arcadedata/arcadedb:26.8.1@sha256:... is
+        # the engine saying its version, where the comment is us saying it.
+        tag = None
+        if "@" in image and ":" in image.split("@")[0]:
+            tag = image.split("@")[0].rsplit(":", 1)[1]
+        name = tag or _short_version(comment)
+        if name:
             out[image] = name
     return out
 
@@ -156,6 +207,74 @@ DENSE_PRECISION = {
 }
 
 
+# The Scale column showed the harness's own tier names: "tiny", "small",
+# "medium", "deep10m", "tpch1". Those mean something to us and nothing to a
+# reader, and worse, they mean different things in different lanes -- "small"
+# is a million sparse vectors in one table and a million dense ones in another,
+# while "medium" is 8.84 million in the sparse table and 20 million rows in the
+# tabular one. A reader comparing tables across the page would be comparing
+# labels that look identical and are not.
+#
+# So the page prints the size. The raw tier name stays on the entry as `scale`
+# because it is the grouping key and page_check pins cells by it; this is the
+# rendered string only.
+SCALE_LABELS = {
+    ("l3s", "tiny"): "100k",
+    ("l3s", "small"): "1M",
+    ("l3s", "medium"): "8.84M",
+    ("l3d", "small"): "1M",
+    ("l3d", "deep10m"): "9.99M",
+    # LDBC publishes its tiers as scale factors, so SF1/SF10 are the corpus's
+    # own vocabulary rather than ours; the person count says how big that is.
+    ("l2", "sf1"): "SF1 (11k people)",
+    ("l2", "sf10"): "SF10 (73k people)",
+    ("l1", "medium"): "20M rows",
+    ("l1tpc", "tpch1"): "SF1",
+    ("e2", "e2"): "50k products",
+}
+
+
+def scale_label(lane: str, scale: str) -> str:
+    """Reader-facing size for a lane's tier name.
+
+    Raises rather than falling back to the raw name: a new tier that reaches
+    the page under its harness label is exactly the defect this map exists to
+    prevent, and a silent fallback would let it through looking deliberate.
+    """
+    try:
+        return SCALE_LABELS[(lane, scale)]
+    except KeyError:
+        raise SystemExit(
+            f"no SCALE_LABELS entry for lane {lane!r} scale {scale!r}.\n"
+            "  Add one: the page prints corpus sizes, not harness tier names.")
+
+
+# The Mode column said "embedded" for Qdrant, Milvus, Elasticsearch, Neo4j and
+# PostgreSQL, every one of which runs as a server container that the benchmark
+# talks to over the wire. The rule was `"server" if "server" in backend`, which
+# reads a DEPLOYMENT off a NAME: it happens to be right for ours, because our
+# server arms are called *_server, and wrong for every comparator, because
+# theirs are called qdrant_sparse and neo4j_graph.
+#
+# That is not a cosmetic mislabel. The page's deployment story is that ArcadeDB
+# can run in-process where the specialists cannot, and the Mode column was
+# quietly awarding the comparators the same property. It also inverted the E4
+# section's point one table earlier: the client/server split costs something,
+# and the table said nobody was paying it.
+#
+# runner.py's topology is the fact of the matter, since it is what decides
+# whether a cell gets a server container at all.
+def deployment_of(backend: str) -> str:
+    try:
+        topo = BACKENDS[backend]["topology"]
+    except KeyError:
+        raise SystemExit(
+            f"backend {backend!r} is not in runner.BACKENDS, so its deployment "
+            "cannot be read from its topology.\n  Do not guess from the name: "
+            "that is the bug this function replaced.")
+    return "server" if topo == "client_server" else "embedded"
+
+
 def display_name(backend: str) -> str:
     if backend in DISPLAY_NAMES:
         return DISPLAY_NAMES[backend]
@@ -196,19 +315,22 @@ def _num(value):
 
 
 # overlay arm -> (label the page prints, is it ours)
+# (overlay filename arm, runner backend key, display label, is ours)
+# The backend key is here so Mode can be read off runner.py's topology instead
+# of guessed from a name -- see deployment_of().
 DENSE_10M_ARMS = [
-    ("fp32", "ArcadeDB (embedded, fp32)", True),
-    ("int8", "ArcadeDB (embedded, int8)", True),
+    ("fp32", "arcadedb_dense_embedded", "ArcadeDB (embedded, fp32)", True),
+    ("int8", "arcadedb_dense_embedded", "ArcadeDB (embedded, int8)", True),
     # the server overlay stamps quantization='fp32'
-    ("arcsrv", "ArcadeDB (server, fp32)", True),
-    ("qdrant", "Qdrant (fp32)", False),
-    ("chroma", "Chroma (fp32)", False),
-    ("duckvss", "DuckDB VSS (fp32)", False),
+    ("arcsrv", "arcadedb_dense_server", "ArcadeDB (server, fp32)", True),
+    ("qdrant", "qdrant_dense", "Qdrant (fp32)", False),
+    ("chroma", "chroma_dense", "Chroma (fp32)", False),
+    ("duckvss", "duckdb_vss_dense", "DuckDB VSS (fp32)", False),
     # IVF_HNSW_SQ: the only quantized comparator, and it was unlabelled while
     # ArcadeDB's two arms were, which made quantization read as our quirk.
-    ("lancedb", "LanceDB (int8)", False),
-    ("milvus", "Milvus (fp32)", False),
-    ("sqlitevec", "sqlite-vec (fp32)", False),
+    ("lancedb", "lancedb_dense", "LanceDB (int8)", False),
+    ("milvus", "milvus_dense", "Milvus (fp32)", False),
+    ("sqlitevec", "sqlite_vec_dense", "sqlite-vec (fp32)", False),
 ]
 
 
@@ -237,7 +359,7 @@ def _dense_10m_entries():
     if not root.is_dir():
         return []
     out = []
-    for arm, label, ours in DENSE_10M_ARMS:
+    for arm, backend_key, label, ours in DENSE_10M_ARMS:
         hits = sorted(root.glob(f"mp_{arm}_b*.json"))
         if not hits:
             continue
@@ -271,11 +393,12 @@ def _dense_10m_entries():
             "is_arcadedb": ours,
             "precision": "int8" if arm == "int8" else "fp32",
             "scale": "deep10m",
+            "scale_label": scale_label("l3d", "deep10m"),
             "workload": "search",
-            "n_docs": "10M",
-            "deployment": "server" if arm == "arcsrv" else "embedded",
+            "n_docs": "9,990,000",
+            "deployment": deployment_of(backend_key),
             "image": None,
-            "version_name": v,
+            "version_name": _engine_version(label, v),
             "host": "mini",
             "metrics": metrics,
         })
@@ -304,6 +427,7 @@ LANES = {
         "conditions": [
             "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
             "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
+            "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is ingest rather than indexing. Both run the same index code, but the embedded arm loads documents through the in-process API as primitive arrays, while the server arm sends INSERT statements over HTTP because that is its remote surface. A document here carries about 127 non-zero weights, so each row crosses the wire as roughly 254 numbers printed as text and is parsed again on arrival.",
         ],
     },
     "l3d": {
@@ -329,9 +453,40 @@ LANES = {
         "dataset": "LDBC-SNB Interactive (SF1, SF10)",
         "metrics": [("point_p50_ms", "point p50 ms"), ("hop1_p50_ms", "1-hop p50 ms"),
                     ("hop2_p50_ms", "2-hop p50 ms"), ("write_p50_ms", "write p50 ms")],
+        # Two conditions came off this list on 2026-08-14 for being written to a
+        # reviewer and read by everyone else. One explained that bidirectional
+        # edges are a pointer-storage choice rather than a semantic one, which
+        # answers a fairness objection nobody browsing the page has raised; the
+        # other explained 2-hop dispersion in terms of seed degree, which needs
+        # the seed-sampling method in hand to parse. Both remain in the papers,
+        # where the reader has that context. The page states what was run.
         "conditions": [
-            "Edges are bidirectional in every arm. In ArcadeDB that is a pointer-storage choice rather than a semantic one, and the OLAP planner needs it.",
-            "2-hop latency tracks seed degree, so the spread across repetitions is a property of the seed sample rather than instability.",
+            "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
+        ],
+    },
+    # A second view of the graph lane: the same corpus and the same engines,
+    # but the analytical queries rather than the transactional ones. It is a
+    # separate table because it is a separate question, and because it carries
+    # a row no other table has: the same engine with its Graph Analytical View
+    # turned off. The paper reports all six numbers.
+    #
+    # SF10 only, and that is a real limit rather than a presentation choice.
+    # The ablation was run at SF10, so SF1 has no view-off arm, and a table
+    # with an ablation row that is dashed at one scale invites the reader to
+    # read the dash as a failure.
+    "l2olap": {
+        "title": "Graph analytics, with and without the Graph Analytical View",
+        "dataset": "LDBC-SNB, SF10",
+        "lane_source": "l2",
+        "only_scales": {"sf10"},
+        "only_workload": "olap",
+        "metrics": [("friend_age_by_city_mean_ms", "friend age by city ms"),
+                    ("same_city_edges_mean_ms", "same-city edges ms"),
+                    ("top_degree_mean_ms", "top degree ms")],
+        "conditions": [
+            "The Graph Analytical View is ArcadeDB's in-core projection of the graph for analytical queries. Building it took 2.0 seconds here, once, before any query was timed.",
+            "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
+            "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
         ],
     },
     "l1": {
@@ -346,7 +501,10 @@ LANES = {
         "dataset": "TPC-H queries, TPC-C new-order",
         "metrics": [("q1_ms", "Q1 ms"), ("q6_ms", "Q6 ms"),
                     ("neworder_p50_ms", "new-order p50 ms"), ("oltp_ops_per_s", "OLTP ops/s")],
-        "conditions": [],
+        "conditions": [
+            "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
+            "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
+        ],
     },
     "e2": {
         "title": "Cross-model transaction",
@@ -485,7 +643,10 @@ L4_SHAPE = {"scale": "2.59M points", "workload": "TSBS cpu-only"}
 # unbounded field everywhere keeps the column comparing like with like.
 L4_METRICS = [
     ("ingest_pts_per_s", "ingest pts/s"),
-    (("q_last_unbounded_ms", "q_last_ms"), "last-point ms"),
+    # "last-point" is TSBS's own name for this query and it reads as "the
+    # final point" rather than "the newest one", which is what it means.
+    # The page says what the query does; the papers keep the TSBS term.
+    (("q_last_unbounded_ms", "q_last_ms"), "newest reading ms"),
     ("q_global_ms", "12h aggregate ms"),
 ]
 
@@ -533,6 +694,12 @@ def _l4_table():
 
     order = ["arcadedb (native TIMESERIES)", "arcadedb (document path)",
              "questdb", "duckdb"]
+    # This lane predates runner.BACKENDS and keeps its own adapters, so the
+    # topology lookup does not reach it. QuestDB is a server (ILP ingest on
+    # 9009, SQL over pg-wire, see l4_tsbs.py); the other two run in-process.
+    L4_DEPLOYMENT = {"arcadedb (native TIMESERIES)": "embedded",
+                     "arcadedb (document path)": "embedded",
+                     "questdb": "server", "duckdb": "embedded"}
     entries = []
     for label in sorted(grouped, key=lambda k: (order.index(k) if k in order else 99, k)):
         rs = grouped[label]
@@ -542,9 +709,14 @@ def _l4_table():
             "scale": L4_SHAPE["scale"],
             "workload": L4_SHAPE["workload"],
             "n_docs": str(rs[0].get("n_points")),
-            "deployment": "embedded",
+            "deployment": L4_DEPLOYMENT[label],
             "image": None,
-            "version_name": rs[0].get("backend_version") or rs[0].get("engine_version"),
+            # One engine name plus one version. The two ArcadeDB arms recorded
+            # this differently ("26.8.1" from one adapter, "arcadedb 26.8.1"
+            # from the other), so the provenance block listed the same build
+            # twice under two spellings and looked like two builds.
+            "version_name": _engine_version(
+                label, rs[0].get("backend_version") or rs[0].get("engine_version")),
             "host": rs[0].get("host"),
             "metrics": {},
         }
@@ -565,10 +737,8 @@ def _l4_table():
         "title": "Time series",
         "dataset": "TSBS cpu-only, 2,592,000 points",
         "conditions": [
-            "Two ArcadeDB arms are shown on purpose. The native time-series "
-            "type and the general-purpose document path are both real ways to "
-            "store this data, and the gap between them is what the specialized "
-            "layout buys rather than a result about the competition.",
+            # The two-arm explanation moved into the page caption, where a
+            # reader meets the rows; saying it in both places said it twice.
             "No engine takes a settle step, and that was measured rather than "
             "assumed: sealing the write buffer makes the aggregation faster and "
             "the last-point query slower, since the unsealed tail a scan walks "
@@ -580,10 +750,13 @@ def _l4_table():
             "the comparison is internally fair, but it is not the full "
             "benchmark. A matched one-tag/ten-tag run prices the schema at "
             "2.0x on ingest and 2.6x faster on last-point.",
-            "Last-point is the unbounded query, which is the faster of the two "
-            "measured here (0.720 against 0.860 ms with a recency window).",
-            "Builds are each engine's own reported version rather than a "
-            "stamped constant, which is why QuestDB's carries its commit hash.",
+            "Newest reading means the most recent value each sensor has "
+            "reported, which is what a monitoring dashboard asks for when it "
+            "shows the current state of a fleet. TSBS calls this query "
+            "last-point. It is run without a time bound: telling the engine to "
+            "look only at the past hour made it slower, 0.860 ms against "
+            "0.720, because evaluating the time filter costs more than the "
+            "scan it saves.",
         ],
         "columns": [lab for _, lab in L4_METRICS],
         "withheld_scales": [],
@@ -771,15 +944,45 @@ def main() -> int:
     rows = list(csv.DictReader(FROZEN.open()))
     names = _image_version_names()
 
+    # The tabular lanes run OLTP and OLAP as separate workloads over ONE corpus
+    # and one engine, and grouping by workload gave each engine two rows whose
+    # columns were disjoint: an OLAP row with three dashes and an OLTP row with
+    # one. Eight rows to carry four engines' worth of numbers, every cell that
+    # was not dashed sitting in a different row from its neighbour.
+    #
+    # They merge because the split is an artefact of how the harness schedules
+    # work, not of what was measured. A metric only ever appears in the rows of
+    # the workload that produced it, so aggregating over the union puts each
+    # number in exactly the cell it belongs to. The vector and graph lanes are
+    # unaffected: they run a single workload each.
+    MERGED_WORKLOAD_LANES = {"l1", "l1tpc"}
     grouped = defaultdict(list)
     for r in rows:
-        grouped[(r["lane"], r["scale"], r["backend"], r.get("workload", ""))].append(r)
+        wl = ("" if r["lane"] in MERGED_WORKLOAD_LANES
+              else r.get("workload", ""))
+        # gav belongs in the key. It is the Graph Analytical View ablation, run
+        # as extra rows under the SAME backend name, so without it the five
+        # ablation rows pooled with the five default rows and every graph OLAP
+        # median would have been taken over a mixture of view-on and view-off.
+        # Nothing published today reads those fields, so this fixes a trap
+        # rather than a wrong number, and the l2olap table below is what would
+        # have sprung it.
+        grouped[(r["lane"], r["scale"], r["backend"], wl,
+                 r.get("gav") or "")].append(r)
 
     tables = []
     for lane, spec in LANES.items():
         entries = []
-        for (ln, scale, backend, workload), rs in sorted(grouped.items()):
-            if ln != lane:
+        # A page table usually IS a lane, but l2olap is a second view of the
+        # graph lane's rows, so the spec may name the lane it reads.
+        src_lane = spec.get("lane_source", lane)
+        only_scales = spec.get("only_scales")
+        for (ln, scale, backend, workload, gav), rs in sorted(grouped.items()):
+            if ln != src_lane:
+                continue
+            if only_scales and scale not in only_scales:
+                continue
+            if spec.get("only_workload") and workload != spec["only_workload"]:
                 continue
             # The no-settle ablation is MEASURED but not PUBLISHED, and the
             # page was the only place it appeared. Neither paper reports it:
@@ -813,6 +1016,11 @@ def main() -> int:
                         "which builds IVF_HNSW_SQ and is int8.")
                 label = (f"{label[:-1]}, {prec})" if label.endswith(")")
                          else f"{label} ({prec})")
+            # The ablation runs under the same backend name, so the row has to
+            # say which arm it is or the table shows one engine twice.
+            if gav == "False":
+                label = (f"{label[:-1]}, no GAV)" if label.endswith(")")
+                         else f"{label} (no GAV)")
             entry = {
                 "backend": label,
                 "is_arcadedb": "arcade" in backend,
@@ -824,11 +1032,25 @@ def main() -> int:
                 "precision": (DENSE_PRECISION.get(backend) if lane == "l3d"
                               else SPARSE_PRECISION.get(backend)),
                 "scale": scale,
+                "scale_label": scale_label(src_lane, scale),
                 "workload": workload,
                 "n_docs": rs[0].get("n_docs") or None,
-                "deployment": "server" if "server" in backend else "embedded",
+                "deployment": deployment_of(backend),
                 "image": image,
-                "version_name": names.get(image) if image else None,
+                # A served backend is identified by its pinned image; an
+                # embedded one has no image, and used to end up with no build
+                # line at all. So the sparse, graph and tabular tables named
+                # every comparator's release and left OUR engine's version
+                # blank, on the tables where the engine under test is the whole
+                # point. The rows have carried engine_version all along.
+                # Prefixed with the engine either way, so one engine's two
+                # artifacts (the wheel and the pinned server image) read as the
+                # same version rather than as "26.8.1" and "arcadedb 26.8.1",
+                # which listed as two unrelated builds.
+                "version_name": _engine_version(
+                    label,
+                    names.get(image) if image else rs[0].get("engine_version"),
+                    image),
                 "host": rs[0].get("host") or None,
                 "metrics": {},
             }

@@ -163,7 +163,8 @@
       "dataset": "Big-ANN'23 Sparse (real SPLADE over MS MARCO)",
       "conditions": [
         "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
-        "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour."
+        "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
+        "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is ingest rather than indexing. Both run the same index code, but the embedded arm loads documents through the in-process API as primitive arrays, while the server arm sends INSERT statements over HTTP because that is its remote surface. A document here carries about 127 non-zero weights, so each row crosses the wire as roughly 254 numbers printed as text and is parsed again on arrival."
       ],
       "columns": [
         "p50 ms",
@@ -178,11 +179,12 @@
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "medium",
+          "scale_label": "8.84M",
           "workload": "search",
           "n_docs": "8841823",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:38c3aaa21dbb (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -210,11 +212,12 @@
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "medium",
+          "scale_label": "8.84M",
           "workload": "search",
           "n_docs": "8841823",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:7c802307c7cb (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -242,11 +245,12 @@
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "medium",
+          "scale_label": "8.84M",
           "workload": "search",
           "n_docs": "8841823",
           "deployment": "server",
           "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:5544de28f693 (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -274,11 +278,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "medium",
+          "scale_label": "8.84M",
           "workload": "search",
           "n_docs": "8841823",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",
-          "version_name": "9.4.1, matches the 9.4.1 client",
+          "version_name": "elasticsearch 9.4.1",
           "host": "container:f20bc77e75ad (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -306,9 +311,10 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "medium",
+          "scale_label": "8.84M",
           "workload": "search",
           "n_docs": "10000000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
           "version_name": null,
           "host": null,
@@ -338,11 +344,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "medium",
+          "scale_label": "8.84M",
           "workload": "search",
           "n_docs": "10000000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "v1.18.2",
+          "version_name": "qdrant v1.18.2",
           "host": null,
           "metrics": {
             "p50 ms": {
@@ -370,11 +377,12 @@
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:b0365c59e85f (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -402,11 +410,12 @@
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:0e07a89faea2 (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -434,11 +443,12 @@
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "server",
           "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:406d1c1a989c (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -466,11 +476,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",
-          "version_name": "9.4.1, matches the 9.4.1 client",
+          "version_name": "elasticsearch 9.4.1",
           "host": "container:ee51d85a847b (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -498,9 +509,10 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
           "version_name": null,
           "host": "container:b4ebdea30988 (host unknown)",
@@ -530,11 +542,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "v1.18.2",
+          "version_name": "qdrant v1.18.2",
           "host": "container:e77660850b17 (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -562,11 +575,12 @@
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "tiny",
+          "scale_label": "100k",
           "workload": "search",
           "n_docs": "100000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:23773f0f3d48 (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -594,11 +608,12 @@
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "tiny",
+          "scale_label": "100k",
           "workload": "search",
           "n_docs": "100000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:2e9328cd993c (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -626,11 +641,12 @@
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "tiny",
+          "scale_label": "100k",
           "workload": "search",
           "n_docs": "100000",
           "deployment": "server",
           "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:9477ef2ae4fa (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -658,11 +674,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "tiny",
+          "scale_label": "100k",
           "workload": "search",
           "n_docs": "100000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",
-          "version_name": "9.4.1, matches the 9.4.1 client",
+          "version_name": "elasticsearch 9.4.1",
           "host": "container:bbc9dfc8e6c6 (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -690,9 +707,10 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "tiny",
+          "scale_label": "100k",
           "workload": "search",
           "n_docs": "100000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
           "version_name": null,
           "host": "container:7a12d04ab069 (host unknown)",
@@ -722,11 +740,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "tiny",
+          "scale_label": "100k",
           "workload": "search",
           "n_docs": "100000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "v1.18.2",
+          "version_name": "qdrant v1.18.2",
           "host": "container:d6ef88fedf76 (host unknown)",
           "metrics": {
             "p50 ms": {
@@ -781,11 +800,12 @@
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:b29b3a5d24e7 (host unknown)",
           "metrics": {
             "cold p50 ms": {
@@ -813,11 +833,12 @@
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "server",
           "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": "container:6f0e9de6e671 (host unknown)",
           "metrics": {
             "cold p50 ms": {
@@ -845,11 +866,12 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "chroma 1.5.9",
           "host": "container:aca11fb4b981 (host unknown)",
           "metrics": {
             "cold p50 ms": {
@@ -877,11 +899,12 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "duckdb vss 1.5.4",
           "host": "container:7ef36148a330 (host unknown)",
           "metrics": {
             "cold p50 ms": {
@@ -909,11 +932,12 @@
           "is_arcadedb": false,
           "precision": "int8",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "lancedb 0.34.0",
           "host": "container:4d64466ed2b6 (host unknown)",
           "metrics": {
             "cold p50 ms": {
@@ -941,9 +965,10 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
           "version_name": null,
           "host": "container:6793970f7145 (host unknown)",
@@ -973,11 +998,12 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "v1.18.2",
+          "version_name": "qdrant v1.18.2",
           "host": "container:5522a41a0d39 (host unknown)",
           "metrics": {
             "cold p50 ms": {
@@ -1005,11 +1031,12 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "small",
+          "scale_label": "1M",
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "sqlite-vec 0.1.9",
           "host": "container:7a0472ce673b (host unknown)",
           "metrics": {
             "cold p50 ms": {
@@ -1037,11 +1064,12 @@
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "deep10m",
+          "scale_label": "9.99M",
           "workload": "search",
-          "n_docs": "10M",
+          "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
-          "version_name": "26.8.1",
+          "version_name": "arcadedb 26.8.1",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -1075,11 +1103,12 @@
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "deep10m",
+          "scale_label": "9.99M",
           "workload": "search",
-          "n_docs": "10M",
+          "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
-          "version_name": "26.8.1",
+          "version_name": "arcadedb 26.8.1",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -1113,8 +1142,9 @@
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "deep10m",
+          "scale_label": "9.99M",
           "workload": "search",
-          "n_docs": "10M",
+          "n_docs": "9,990,000",
           "deployment": "server",
           "image": null,
           "version_name": null,
@@ -1151,9 +1181,10 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "deep10m",
+          "scale_label": "9.99M",
           "workload": "search",
-          "n_docs": "10M",
-          "deployment": "embedded",
+          "n_docs": "9,990,000",
+          "deployment": "server",
           "image": null,
           "version_name": null,
           "host": "mini",
@@ -1189,8 +1220,9 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "deep10m",
+          "scale_label": "9.99M",
           "workload": "search",
-          "n_docs": "10M",
+          "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
           "version_name": null,
@@ -1227,8 +1259,9 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "deep10m",
+          "scale_label": "9.99M",
           "workload": "search",
-          "n_docs": "10M",
+          "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
           "version_name": null,
@@ -1265,8 +1298,9 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "deep10m",
+          "scale_label": "9.99M",
           "workload": "search",
-          "n_docs": "10M",
+          "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
           "version_name": null,
@@ -1303,9 +1337,10 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "deep10m",
+          "scale_label": "9.99M",
           "workload": "search",
-          "n_docs": "10M",
-          "deployment": "embedded",
+          "n_docs": "9,990,000",
+          "deployment": "server",
           "image": null,
           "version_name": null,
           "host": "mini",
@@ -1341,8 +1376,9 @@
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "deep10m",
+          "scale_label": "9.99M",
           "workload": "search",
-          "n_docs": "10M",
+          "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
           "version_name": null,
@@ -1391,8 +1427,7 @@
       "title": "Graph traversal",
       "dataset": "LDBC-SNB Interactive (SF1, SF10)",
       "conditions": [
-        "Edges are bidirectional in every arm. In ArcadeDB that is a pointer-storage choice rather than a semantic one, and the OLAP planner needs it.",
-        "2-hop latency tracks seed degree, so the spread across repetitions is a property of the seed sample rather than instability."
+        "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions."
       ],
       "columns": [
         "point p50 ms",
@@ -1408,11 +1443,12 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -1446,11 +1482,12 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "server",
           "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -1484,11 +1521,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "ladybugdb 0.18.1",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -1522,11 +1560,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
           "workload": "oltp",
           "n_docs": null,
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "5-community",
+          "version_name": "neo4j 5-community",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -1560,11 +1599,12 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -1598,11 +1638,12 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "server",
           "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -1636,11 +1677,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "ladybugdb 0.18.1",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -1674,11 +1716,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
           "workload": "oltp",
           "n_docs": null,
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "5-community",
+          "version_name": "neo4j 5-community",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -1718,6 +1761,194 @@
       "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
+      "id": "l2olap",
+      "title": "Graph analytics, with and without the Graph Analytical View",
+      "dataset": "LDBC-SNB, SF10",
+      "conditions": [
+        "The Graph Analytical View is ArcadeDB's in-core projection of the graph for analytical queries. Building it took 2.0 seconds here, once, before any query was timed.",
+        "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
+        "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap."
+      ],
+      "columns": [
+        "friend age by city ms",
+        "same-city edges ms",
+        "top degree ms"
+      ],
+      "withheld_scales": [],
+      "withheld_reason": null,
+      "entries": [
+        {
+          "backend": "ArcadeDB (embedded)",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.8.1",
+          "host": null,
+          "metrics": {
+            "friend age by city ms": {
+              "median": 492.85,
+              "min": 474.66,
+              "max": 502.32,
+              "n": 5
+            },
+            "same-city edges ms": {
+              "median": 500.41,
+              "min": 472.79,
+              "max": 519.72,
+              "n": 5
+            },
+            "top degree ms": {
+              "median": 56.62,
+              "min": 55.95,
+              "max": 57.57,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (embedded, no GAV)",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.8.1",
+          "host": null,
+          "metrics": {
+            "friend age by city ms": {
+              "median": 1213.34,
+              "min": 1180.9,
+              "max": 1215.21,
+              "n": 5
+            },
+            "same-city edges ms": {
+              "median": 1196.1,
+              "min": 1172.35,
+              "max": 1212.76,
+              "n": 5
+            },
+            "top degree ms": {
+              "median": 367.98,
+              "min": 363.99,
+              "max": 385.86,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server)",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "version_name": "arcadedb 26.8.1",
+          "host": null,
+          "metrics": {
+            "friend age by city ms": {
+              "median": 526.52,
+              "min": 517.84,
+              "max": 532.91,
+              "n": 5
+            },
+            "same-city edges ms": {
+              "median": 528.88,
+              "min": 514.81,
+              "max": 533.81,
+              "n": 5
+            },
+            "top degree ms": {
+              "median": 67.52,
+              "min": 66.0,
+              "max": 68.77,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "LadybugDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "ladybugdb 0.18.1",
+          "host": null,
+          "metrics": {
+            "friend age by city ms": {
+              "median": 55.01,
+              "min": 53.79,
+              "max": 59.09,
+              "n": 5
+            },
+            "same-city edges ms": {
+              "median": 63.49,
+              "min": 62.32,
+              "max": 63.83,
+              "n": 5
+            },
+            "top degree ms": {
+              "median": 2.75,
+              "min": 2.67,
+              "max": 2.81,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Neo4j",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
+          "version_name": "neo4j 5-community",
+          "host": null,
+          "metrics": {
+            "friend age by city ms": {
+              "median": 571.52,
+              "min": 557.52,
+              "max": 581.09,
+              "n": 5
+            },
+            "same-city edges ms": {
+              "median": 615.99,
+              "min": 608.74,
+              "max": 648.54,
+              "n": 5
+            },
+            "top degree ms": {
+              "median": 320.09,
+              "min": 315.06,
+              "max": 323.84,
+              "n": 5
+            }
+          }
+        }
+      ],
+      "source_paths": [],
+      "source_urls": [],
+      "source_path": null,
+      "source_url": null
+    },
+    {
       "id": "l1",
       "title": "Tabular OLTP and OLAP",
       "dataset": "Synthetic orders workload",
@@ -1736,31 +1967,12 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "medium",
-          "workload": "olap",
+          "scale_label": "20M rows",
+          "workload": "",
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
-          "host": null,
-          "metrics": {
-            "OLAP total ms": {
-              "median": 70807.34,
-              "min": 68129.287,
-              "max": 71601.273,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "ArcadeDB (embedded)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "medium",
-          "workload": "oltp",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": null,
           "metrics": {
             "read p50 ms": {
@@ -1780,25 +1992,11 @@
               "min": 6989.1,
               "max": 8452.8,
               "n": 5
-            }
-          }
-        },
-        {
-          "backend": "ArcadeDB (server)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "medium",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
-          "version_name": null,
-          "host": null,
-          "metrics": {
+            },
             "OLAP total ms": {
-              "median": 77852.811,
-              "min": 76348.694,
-              "max": 78922.548,
+              "median": 70807.34,
+              "min": 68129.287,
+              "max": 71601.273,
               "n": 5
             }
           }
@@ -1808,11 +2006,12 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "medium",
-          "workload": "oltp",
+          "scale_label": "20M rows",
+          "workload": "",
           "n_docs": null,
           "deployment": "server",
           "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": null,
           "metrics": {
             "read p50 ms": {
@@ -1832,25 +2031,11 @@
               "min": 1405.5,
               "max": 1555.1,
               "n": 5
-            }
-          }
-        },
-        {
-          "backend": "DuckDB",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "medium",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "metrics": {
+            },
             "OLAP total ms": {
-              "median": 108.154,
-              "min": 107.501,
-              "max": 109.398,
+              "median": 77852.811,
+              "min": 76348.694,
+              "max": 78922.548,
               "n": 5
             }
           }
@@ -1860,11 +2045,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "medium",
-          "workload": "oltp",
+          "scale_label": "20M rows",
+          "workload": "",
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "duckdb 1.5.5",
           "host": null,
           "metrics": {
             "read p50 ms": {
@@ -1884,25 +2070,11 @@
               "min": 268.6,
               "max": 275.4,
               "n": 5
-            }
-          }
-        },
-        {
-          "backend": "PostgreSQL",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "medium",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
-          "version_name": "17.10",
-          "host": null,
-          "metrics": {
+            },
             "OLAP total ms": {
-              "median": 3246.89,
-              "min": 3226.31,
-              "max": 3255.636,
+              "median": 108.154,
+              "min": 107.501,
+              "max": 109.398,
               "n": 5
             }
           }
@@ -1912,11 +2084,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "medium",
-          "workload": "oltp",
+          "scale_label": "20M rows",
+          "workload": "",
           "n_docs": null,
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
-          "version_name": "17.10",
+          "version_name": "postgres 17.10",
           "host": null,
           "metrics": {
             "read p50 ms": {
@@ -1936,6 +2109,12 @@
               "min": 517.4,
               "max": 545.8,
               "n": 5
+            },
+            "OLAP total ms": {
+              "median": 3246.89,
+              "min": 3226.31,
+              "max": 3255.636,
+              "n": 5
             }
           }
         }
@@ -1953,7 +2132,10 @@
       "id": "l1tpc",
       "title": "Tabular (TPC-H and TPC-C shapes)",
       "dataset": "TPC-H queries, TPC-C new-order",
-      "conditions": [],
+      "conditions": [
+        "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
+        "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction."
+      ],
       "columns": [
         "Q1 ms",
         "Q6 ms",
@@ -1968,11 +2150,12 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "tpch1",
-          "workload": "olap",
+          "scale_label": "SF1",
+          "workload": "",
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": null,
           "metrics": {
             "Q1 ms": {
@@ -1986,21 +2169,7 @@
               "min": 839.89,
               "max": 859.34,
               "n": 5
-            }
-          }
-        },
-        {
-          "backend": "ArcadeDB (embedded)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "tpch1",
-          "workload": "oltp",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "metrics": {
+            },
             "new-order p50 ms": {
               "median": 0.345,
               "min": 0.335,
@@ -2020,11 +2189,12 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "tpch1",
-          "workload": "olap",
+          "scale_label": "SF1",
+          "workload": "",
           "n_docs": null,
           "deployment": "server",
           "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
-          "version_name": null,
+          "version_name": "arcadedb 26.8.1",
           "host": null,
           "metrics": {
             "Q1 ms": {
@@ -2038,21 +2208,7 @@
               "min": 882.04,
               "max": 907.63,
               "n": 5
-            }
-          }
-        },
-        {
-          "backend": "ArcadeDB (server)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "tpch1",
-          "workload": "oltp",
-          "n_docs": null,
-          "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
-          "version_name": null,
-          "host": null,
-          "metrics": {
+            },
             "new-order p50 ms": {
               "median": 1.114,
               "min": 1.068,
@@ -2072,11 +2228,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "tpch1",
-          "workload": "olap",
+          "scale_label": "SF1",
+          "workload": "",
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "duckdb 1.5.5",
           "host": null,
           "metrics": {
             "Q1 ms": {
@@ -2090,21 +2247,7 @@
               "min": 7.16,
               "max": 7.64,
               "n": 5
-            }
-          }
-        },
-        {
-          "backend": "DuckDB",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "tpch1",
-          "workload": "oltp",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "metrics": {
+            },
             "new-order p50 ms": {
               "median": 9.255,
               "min": 9.15,
@@ -2124,11 +2267,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "tpch1",
-          "workload": "olap",
+          "scale_label": "SF1",
+          "workload": "",
           "n_docs": null,
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
-          "version_name": "17.10",
+          "version_name": "postgres 17.10",
           "host": null,
           "metrics": {
             "Q1 ms": {
@@ -2142,21 +2286,7 @@
               "min": 110.74,
               "max": 114.53,
               "n": 5
-            }
-          }
-        },
-        {
-          "backend": "PostgreSQL",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "tpch1",
-          "workload": "oltp",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
-          "version_name": "17.10",
-          "host": null,
-          "metrics": {
+            },
             "new-order p50 ms": {
               "median": 2.346,
               "min": 2.33,
@@ -2201,6 +2331,7 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "e2",
+          "scale_label": "50k products",
           "workload": "hybrid",
           "n_docs": null,
           "deployment": "embedded",
@@ -2227,11 +2358,12 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
+          "scale_label": "50k products",
           "workload": "hybrid",
           "n_docs": null,
-          "deployment": "embedded",
+          "deployment": "server",
           "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "5-community",
+          "version_name": "neo4j 5-community",
           "host": null,
           "metrics": {
             "p50 ms": {
@@ -2253,6 +2385,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
+          "scale_label": "50k products",
           "workload": "hybrid",
           "n_docs": null,
           "deployment": "embedded",
@@ -2289,15 +2422,13 @@
       "title": "Time series",
       "dataset": "TSBS cpu-only, 2,592,000 points",
       "conditions": [
-        "Two ArcadeDB arms are shown on purpose. The native time-series type and the general-purpose document path are both real ways to store this data, and the gap between them is what the specialized layout buys rather than a result about the competition.",
         "No engine takes a settle step, and that was measured rather than assumed: sealing the write buffer makes the aggregation faster and the last-point query slower, since the unsealed tail a scan walks is where the newest point lives. Settling only ours would have been a one-sided advantage.",
         "One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark. A matched one-tag/ten-tag run prices the schema at 2.0x on ingest and 2.6x faster on last-point.",
-        "Last-point is the unbounded query, which is the faster of the two measured here (0.720 against 0.860 ms with a recency window).",
-        "Builds are each engine's own reported version rather than a stamped constant, which is why QuestDB's carries its commit hash."
+        "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound: telling the engine to look only at the past hour made it slower, 0.860 ms against 0.720, because evaluating the time filter costs more than the scan it saves."
       ],
       "columns": [
         "ingest pts/s",
-        "last-point ms",
+        "newest reading ms",
         "12h aggregate ms"
       ],
       "withheld_scales": [],
@@ -2311,7 +2442,7 @@
           "n_docs": "2592000",
           "deployment": "embedded",
           "image": null,
-          "version_name": "26.8.1",
+          "version_name": "arcadedb 26.8.1",
           "host": "container:817eae0b8686 (host unknown)",
           "metrics": {
             "ingest pts/s": {
@@ -2320,7 +2451,7 @@
               "max": 1914436.0,
               "n": 5
             },
-            "last-point ms": {
+            "newest reading ms": {
               "median": 0.72,
               "min": 0.69,
               "max": 0.84,
@@ -2351,7 +2482,7 @@
               "max": 40739.6,
               "n": 5
             },
-            "last-point ms": {
+            "newest reading ms": {
               "median": 0.43,
               "min": 0.42,
               "max": 0.51,
@@ -2371,9 +2502,9 @@
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",
           "n_docs": "2592000",
-          "deployment": "embedded",
+          "deployment": "server",
           "image": null,
-          "version_name": "questdb Build Information: QuestDB 9.1.1, JDK 17.0.11, Commit Hash a266bb980e4fa6d908d2f81a4c04145d3944fdf4",
+          "version_name": "questdb 9.1.1",
           "host": "mini",
           "metrics": {
             "ingest pts/s": {
@@ -2382,7 +2513,7 @@
               "max": 434725.8,
               "n": 5
             },
-            "last-point ms": {
+            "newest reading ms": {
               "median": 0.8,
               "min": 0.75,
               "max": 0.88,
@@ -2413,7 +2544,7 @@
               "max": 1886906.9,
               "n": 5
             },
-            "last-point ms": {
+            "newest reading ms": {
               "median": 1.5,
               "min": 1.38,
               "max": 1.83,
