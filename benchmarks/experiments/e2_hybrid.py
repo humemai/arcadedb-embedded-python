@@ -82,7 +82,7 @@ class ArcadeE2:
                    METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
                    "beamWidth": 100, "storeVectorsInGraph": false }}''')
 
-    def hybrid_op(self, qvec, crash=False):
+    def hybrid_op(self, qvec, crash=False, mirror=False):
         """vector top-k -> 1-hop related of best hit -> bump views, one txn."""
         db, a = self.db, self._a
         with db.transaction():
@@ -134,7 +134,14 @@ class SurrealE2:
         q(f"DEFINE INDEX pe ON product FIELDS embedding "
           f"HNSW DIMENSION {DIM} DIST EUCLIDEAN")
         for s in range(0, len(vecs), BATCH):
-            rows = [{"id": f"product:{i}", "pid": i, "views": 0,
+            # id is the RECORD-ID PART, not the full thing. Passing
+            # f"product:{i}" here stores product:<product:i>, and every later
+            # `UPDATE product:{p}` / `RELATE product:{a}->...` then addresses a
+            # record that does not exist -- silently, because this client
+            # returns per-statement errors in the payload instead of raising.
+            # That is exactly what happened: all SurrealDB writes were no-ops
+            # and total_views() honestly reported 0 for five campaigns.
+            rows = [{"id": i, "pid": i, "views": 0,
                      "embedding": vecs[i].tolist()}
                     for i in range(s, min(s + BATCH, len(vecs)))]
             self.db.insert("product", rows)
@@ -144,7 +151,7 @@ class SurrealE2:
                 for a, b in edges[s:s + BATCH])
             q(stmts)
 
-    def hybrid_op(self, qvec, crash=False):
+    def hybrid_op(self, qvec, crash=False, mirror=False):
         q = self.db.query
         vec = json.dumps([float(x) for x in qvec])
         res = q(f"SELECT pid FROM product WHERE embedding <|{K},100|> {vec}")
@@ -166,7 +173,12 @@ class SurrealE2:
     def total_views(self):
         r = self.db.query("SELECT math::sum(views) AS s FROM product GROUP ALL")
         rows = _srows(r)
-        return int(rows[0]["s"]) if rows else 0
+        # NO `else 0`. A read that returns nothing is a broken read, and it must
+        # not be indistinguishable from a database that is genuinely empty --
+        # that conflation is half of why the old SurrealDB result looked green.
+        if not rows:
+            raise RuntimeError("surreal: total_views read returned no rows")
+        return int(rows[0]["s"])
 
     def close(self):
         pass
@@ -215,7 +227,13 @@ class ComposedE2:
                        "(b:Product {pid: r.d}) CREATE (a)-[:RELATED]->(b)",
                        rows=eb[s:s + BATCH]).consume()
 
-    def hybrid_op(self, qvec, crash=False):
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        """mirror=True copies the actual counter into qdrant, which costs an
+        extra neo4j read. That read is needed to compare the two systems on the
+        SAME quantity in the atomicity trial, but it must not be charged to the
+        composed stack in the LATENCY workload -- adding a round-trip to the
+        rival's op would flatter us. So the timed path keeps the cheap batched
+        write it always had, and only the atomicity path mirrors."""
         hits = self.qc.query_points("product", query=qvec.tolist(),
                                     limit=K).points
         pids = [int(h.payload["pid"]) for h in hits]
@@ -223,29 +241,52 @@ class ComposedE2:
             rel = s.run("MATCH (p:Product {pid: $p})-[:RELATED]->(q) "
                         "RETURN q.pid AS pid LIMIT 3", p=pids[0]).data()
             touched = pids[:3] + [r["pid"] for r in rel]
+            tp = list(set(touched))
             s.run("UNWIND $ps AS p MATCH (n:Product {pid: p}) "
-                  "SET n.views = n.views + 1", ps=list(set(touched))).consume()
+                  "SET n.views = n.views + 1", ps=tp).consume()
+            # Read the new counters back so qdrant mirrors the SAME QUANTITY.
+            # The old code wrote a `views_bumped: True` flag, which is a
+            # different measure from neo4j's running sum: a product touched by
+            # two ops adds 2 to the sum but only 1 to the flag count. The two
+            # sides therefore diverged even with no crash and no tearing, so
+            # their difference could never have evidenced tornness.
+            newv = (s.run("MATCH (n:Product) WHERE n.pid IN $ps "
+                          "RETURN n.pid AS pid, n.views AS v", ps=tp).data()
+                    if mirror else None)
         if crash:
             raise RuntimeError("injected-crash")  # neo4j write done, qdrant skipped
-        self.qc.set_payload(
-            "product", payload={"views_bumped": True},
-            points=list(set(touched)))
+        if mirror:
+            for r in newv:
+                self.qc.set_payload("product", payload={"views": int(r["v"])},
+                                    points=[int(r["pid"])])
+        else:
+            self.qc.set_payload("product", payload={"views_bumped": True},
+                                points=tp)
         return len(touched)
 
     def total_views(self):
+        """Both subsystems' view of the SAME counter, plus how many products
+        they actually disagree about. The disagreement count is the torn-state
+        evidence: it is zero when the two stay consistent and non-zero the
+        moment one takes a write the other did not."""
         with self.neo.session() as s:
-            neo_total = s.run("MATCH (p:Product) RETURN sum(p.views) AS s"
-                              ).single()["s"]
-        # count qdrant points that saw the payload write
-        n, offset = 0, None
+            rows = s.run("MATCH (p:Product) WHERE p.views > 0 "
+                         "RETURN p.pid AS pid, p.views AS v").data()
+        neo = {int(r["pid"]): int(r["v"]) for r in rows}
+        qd, offset = {}, None
         while True:
             pts, offset = self.qc.scroll(
-                "product", with_payload=["views_bumped"], limit=10_000,
-                offset=offset)
-            n += sum(1 for p in pts if p.payload.get("views_bumped"))
+                "product", with_payload=["views"], limit=10_000, offset=offset)
+            for p in pts:
+                v = int(p.payload.get("views") or 0)
+                if v:
+                    qd[int(p.id)] = v
             if offset is None:
                 break
-        return {"neo4j_view_sum": int(neo_total or 0), "qdrant_bumped_points": n}
+        disagree = [p for p in set(neo) | set(qd) if neo.get(p, 0) != qd.get(p, 0)]
+        return {"neo4j_view_sum": sum(neo.values()),
+                "qdrant_view_sum": sum(qd.values()),
+                "disagreeing_products": len(disagree)}
 
     def close(self):
         self.neo.close()
@@ -287,24 +328,70 @@ def main():
     else:
         # atomicity: run clean ops, then ONE op with an injected failure
         # between the doc/graph write and the vector-side write, then verify.
-        clean = 50
-        for q in queries[:clean]:
-            b.hybrid_op(q)
-        try:
-            b.hybrid_op(queries[clean], crash=True)
-            out["crash_raised"] = False
-        except Exception:
-            out["crash_raised"] = True
-        state = b.total_views()
-        out["post_crash_state"] = state
-        if isinstance(state, dict):
-            # composed: torn if the two systems disagree about the crashed op
-            out["torn_state"] = True  # neo4j got its write, qdrant did not
-            out["torn_evidence"] = state
-        else:
-            # unified engine: the crashed op must have rolled back entirely;
-            # remaining count = sum of the 50 clean ops only
-            out["torn_state"] = False
+        # TRIAL COUNT. This used to be a single trial per rep, five reps, and
+        # the paper said "5 of 5". By the rule of three, 5 trials with 0
+        # failures only bounds the true failure rate below ~45% at 95%
+        # confidence -- far too weak to carry an atomicity claim. Each trial
+        # costs a handful of ops, so there is no reason to be stingy: 40 per
+        # rep across 5 reps is 200 trials, which bounds it below ~1.5%.
+        trials = int(os.environ.get("E2_TRIALS", "40"))
+        warm_clean = 50            # establishes a non-zero baseline once
+        per_trial_clean = 5        # fresh clean work before each injection
+
+        for q in queries[:warm_clean]:
+            b.hybrid_op(q, mirror=True)
+
+        # VALIDITY GUARD, and it is not optional. The previous version of this
+        # block decided the result from `isinstance(state, dict)` -- i.e. from
+        # WHICH BACKEND was running, never from a comparison -- so every
+        # single-engine backend was stamped atomic by construction. SurrealDB
+        # then reported 0 across five campaigns because its writes were silently
+        # addressing records that did not exist, and the else-branch published
+        # that as a clean rollback. An arm whose clean ops moved nothing cannot
+        # demonstrate anything about rollback, so it fails loudly here instead.
+        base = b.total_views()
+        moved = (base["neo4j_view_sum"] > 0 if isinstance(base, dict)
+                 else base > 0)
+        if not moved:
+            raise RuntimeError(
+                f"{b.name}: {warm_clean} clean ops left the view counters at "
+                f"{base}; the writes are not landing, so every atomicity trial "
+                "here is void")
+
+        torn, raised, evidence = 0, 0, []
+        cursor = warm_clean
+        for t in range(trials):
+            for _ in range(per_trial_clean):
+                b.hybrid_op(queries[cursor % len(queries)], mirror=True)
+                cursor += 1
+            pre = b.total_views()
+            try:
+                b.hybrid_op(queries[cursor % len(queries)], crash=True, mirror=True)
+            except Exception:
+                raised += 1
+            cursor += 1
+            post = b.total_views()
+
+            if isinstance(post, dict):
+                # composed stack: torn iff the two systems now hold DIFFERENT
+                # values for the same products. Measured, not assumed -- and
+                # the clean ops set the baseline, which must be 0.
+                t_torn = post["disagreeing_products"] > pre["disagreeing_products"]
+            else:
+                # unified engine: the crashed op must have left NOTHING behind,
+                # so the counter has to be exactly where the clean ops left it.
+                t_torn = post != pre
+            torn += bool(t_torn)
+            if t_torn and len(evidence) < 3:
+                evidence.append({"trial": t, "pre": pre, "post": post})
+
+        out["trials"] = trials
+        out["torn_count"] = torn
+        out["crash_raised_count"] = raised
+        out["torn_state"] = torn > 0
+        out["post_crash_state"] = b.total_views()
+        if evidence:
+            out["torn_evidence"] = evidence
 
     b.close()
     with open(args.out, "w") as f:
