@@ -792,6 +792,37 @@ def f4_one_vs_n(rows):
         ("TPC-H Q1", med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "q1_ms"),
          med("l1tpc", "tpch1", "olap", "duckdb", "q1_ms"), False),
     ]
+    # DISPLAY ORDER IS A DECISION, so it is written down rather than inherited
+    # from the order someone happened to append tuples in. That order had two
+    # faults:
+    #
+    #   Sparse 100k, Dense 10M, Sparse 1M   the two sparse tiers were split by
+    #                                       the dense row, and the two
+    #                                       time-series rows sat 4 apart
+    #   the three blue bars came first      wins at the top, losses below, which
+    #                                       is a flattering arrangement nobody
+    #                                       chose but everybody would notice
+    #
+    # Grouped by model instead: cross-model first because it is the claim the
+    # paper is about, then tabular, graph, time series, vector. Within a group,
+    # write before read and small before large. That interleaves the colours,
+    # which is the honest consequence: this engine wins some rows and loses
+    # others, and sorting so the wins arrive first is a thumb on the scale.
+    F4_ROW_ORDER = [
+        "Cross-model txn p50",
+        "OLTP ops/s", "TPC-H Q1",
+        "Graph 1-hop p50",
+        "TS ingest pts/s", "TS 12h agg p50",
+        "Sparse 100k p50", "Sparse 1M p50", "Dense 10M p50",
+    ]
+    unordered = [e[0] for e in entries if e[0] not in F4_ROW_ORDER]
+    if unordered:
+        raise SystemExit(
+            f"f4: {unordered} have no place in F4_ROW_ORDER. A new row has to "
+            "be given one, so that adding a bar is a decision about where it "
+            "belongs rather than an append to the end.")
+    entries.sort(key=lambda e: F4_ROW_ORDER.index(e[0]))
+
     _check_f4_protocol(entries)
     _check_f4_comparators(entries)
     _check_f4_against_tables(entries)
