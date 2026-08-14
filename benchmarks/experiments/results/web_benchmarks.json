@@ -236,7 +236,7 @@
           }
         },
         {
-          "backend": "ArcadeDB (server)",
+          "backend": "ArcadeDB (server, int8 weights)",
           "is_arcadedb": true,
           "scale": "medium",
           "workload": "search",
@@ -422,7 +422,7 @@
           }
         },
         {
-          "backend": "ArcadeDB (server)",
+          "backend": "ArcadeDB (server, int8 weights)",
           "is_arcadedb": true,
           "scale": "small",
           "workload": "search",
@@ -608,7 +608,7 @@
           }
         },
         {
-          "backend": "ArcadeDB (server)",
+          "backend": "ArcadeDB (server, int8 weights)",
           "is_arcadedb": true,
           "scale": "tiny",
           "workload": "search",

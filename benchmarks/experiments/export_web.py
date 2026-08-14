@@ -80,7 +80,12 @@ DISPLAY_NAMES = {
     # default row reads as the plain one and the ablation as a variant, when
     # they are two points on one axis. Spelling out int8 makes it a pair.
     "arcadedb_sparse_embedded": "ArcadeDB (embedded, int8 weights)",
-    "arcadedb_sparse_server": "ArcadeDB (server)",
+    # int8 like the embedded default, and for the same reason: the server's DDL
+    # is CREATE INDEX ... LSM_SPARSE_VECTOR METADATA {"dimensions": N} with no
+    # quantization key, so it takes the engine default. Labelled because a row
+    # sitting between "embedded, int8 weights" and "embedded, fp32 weights"
+    # with no precision of its own reads as a third, unstated option.
+    "arcadedb_sparse_server": "ArcadeDB (server, int8 weights)",
     "arcadedb_sparse_embedded_fp32": "ArcadeDB (embedded, fp32 weights)",
     "arcadedb_sparse_embedded_nocompact": "ArcadeDB (embedded, no settle step)",
     "arcadedb_e2": "ArcadeDB (one transaction)",
