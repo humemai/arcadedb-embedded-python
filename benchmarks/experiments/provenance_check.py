@@ -481,7 +481,7 @@ def caption_n():
         "ArcadeDB (emb, int8)": ({3, 5}, "T4 caption: N=5 except the 8.84M row"),
         "ArcadeDB (emb)": ({4, 5}, "T5 caption: four warm passes over one build"),
         "ArcadeDB (emb, int8, 16GiB)": ({4}, "T5 caption: same treatment"),
-        "ArcadeDB (srv)": ({4, 5}, "T5 caption: same treatment"),
+        "ArcadeDB (srv, fp32)": ({4, 5}, "T5 caption: same treatment"),
         # The native-TS row was listed here at N=3. It was re-measured to N=5
         # on the current line (results/ts59), so the entry is gone and the
         # caption's exception with it. Leaving a stale disclosure claiming a

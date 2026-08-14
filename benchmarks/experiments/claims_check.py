@@ -203,7 +203,8 @@ def torn_count(backend):
 # That was the lucky outcome. Had the labels still matched, the column
 # reindexing below would have compared warm p50 against cold p50 and recall
 # against p99, and reported all-green.
-DENSE_ROWS = ["ArcadeDB (emb, fp32)", "ArcadeDB (emb, int8)", "ArcadeDB (srv)",
+DENSE_ROWS = ["ArcadeDB (emb, fp32)", "ArcadeDB (emb, int8)",
+              "ArcadeDB (srv, fp32)",
               "Qdrant", "Milvus", "Chroma", "LanceDB", "sqlite-vec",
               "DuckDB-VSS"]
 
@@ -346,9 +347,25 @@ def _dense_rank(col, row="ArcadeDB (emb, fp32)"):
     mine = cell("t5_dense_ts.tex", row, col)
     if mine is None:
         return None
+    # EVERY ROW MUST RESOLVE. `or float("inf")` used to swallow a name that no
+    # longer matched T5, ranking silently over the survivors: relabelling the
+    # server arm "ArcadeDB (srv, fp32)" on 2026-08-13 left this list pointing
+    # at "ArcadeDB (srv)", so four rank claims computed over eight engines
+    # while their own descriptions said "of 9". They stayed green by luck,
+    # because the missing engine is slower than ours on both columns, so no
+    # rank moved. A denominator that can quietly shrink is worse than a wrong
+    # number: nothing looks different when it happens.
+    missing = [s for s in DENSE_ROWS
+               if cell("t5_dense_ts.tex", s, col) is None]
+    if missing:
+        raise SystemExit(
+            f"dense_rank: {missing} not found in T5 column {col}.\n"
+            "  DENSE_ROWS must name the table's rows exactly. A row that does "
+            "not resolve is dropped from the ranking, and the rank keeps "
+            "reporting a total it no longer has.")
     return 1.0 + sum(1 for s in DENSE_ROWS
                      if s != row
-                     and (cell("t5_dense_ts.tex", s, col) or float("inf")) < mine)
+                     and cell("t5_dense_ts.tex", s, col) < mine)
 
 
 
