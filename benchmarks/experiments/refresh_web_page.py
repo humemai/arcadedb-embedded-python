@@ -125,6 +125,24 @@ def main() -> int:
     shutil.copyfile(exported, target)
     print(f"  {PAGE_DATA}: {'updated' if changed else 'unchanged'}")
 
+    # VERIFY THE COPY LANDED. The gates in step 3 read the exporter's own
+    # output; the site serves this copy. Nothing else compares the two, so a
+    # failed write, a stale checkout, or someone editing the site's copy by
+    # hand would publish numbers that no gate ever saw.
+    #
+    # Demonstrated live on 2026-08-14: a wrong value planted in the site's
+    # copy left all four gates green, because every one of them reads the
+    # generated file instead. That is the same defect class as a figure and a
+    # table disagreeing, one directory further downstream.
+    if target.read_bytes() != exported.read_bytes():
+        raise SystemExit(
+            f"  the published copy does not match what the gates checked:\n"
+            f"    gates read {exported}\n"
+            f"    site serves {target}\n"
+            "  Copy failed, or the site's copy was edited by hand. Nothing "
+            "below this point should run.")
+    print("  verified: the site serves exactly the file the gates checked")
+
     step(5, "Sync the figures the page actually references")
     wanted = set(IMAGE_URL_RE.findall(page_source.read_text(encoding="utf-8")))
     if not wanted:
