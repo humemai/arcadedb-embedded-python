@@ -113,7 +113,10 @@ REPO = "https://github.com/humemai/arcadedb-embedded-python/blob/main"
 # the whole point of generating these from data in the first place.
 SOURCES = {
     "l3s": "benchmarks/experiments/results/runs_paper.csv",
-    "l3d": "benchmarks/experiments/results/runs_paper.csv",
+    # Two tiers, two artifacts: small comes from the campaign's frozen rows,
+    # DEEP-10M from the matched multipass overlay. Both are published.
+    "l3d": ["benchmarks/experiments/results/runs_paper.csv",
+            "benchmarks/experiments/results/dense_mp5_2681"],
     "l2": "benchmarks/experiments/results/runs_paper.csv",
     "l1": "benchmarks/experiments/results/runs_paper.csv",
     "l1tpc": "benchmarks/experiments/results/runs_paper.csv",
@@ -830,10 +833,26 @@ def main() -> int:
         "tables": tables,
     }
 
+    # A table can draw on more than one artifact, so this is a LIST. It was a
+    # single string, and on 2026-08-13 that made the page lie: the DEEP-10M
+    # rows were added to l3d from results/dense_mp5_2681/ while the table went
+    # on printing "Measured rows: runs_paper.csv" under all of them. Nine rows
+    # pointed a reader at a file that does not contain them.
+    #
+    # No gate caught it. provenance_check asks whether every CELL traces to a
+    # run, which these do; nothing asked whether the SOURCE LINK the page
+    # prints actually holds the rows above it. Adding a tier to a table has to
+    # add its source here, and a list makes that the obvious thing to do rather
+    # than a choice between two paths that only fits one.
     for table in tables:
         rel = SOURCES.get(table["id"])
-        table["source_path"] = rel
-        table["source_url"] = f"{REPO}/{rel}" if rel else None
+        paths = [rel] if isinstance(rel, str) else list(rel or [])
+        table["source_paths"] = paths
+        table["source_urls"] = [f"{REPO}/{p}" for p in paths]
+        # Kept so an older page build still renders something true: the first
+        # entry, never a silently-wrong one.
+        table["source_path"] = paths[0] if paths else None
+        table["source_url"] = f"{REPO}/{paths[0]}" if paths else None
 
     OUT.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n",
                    encoding="utf-8")
