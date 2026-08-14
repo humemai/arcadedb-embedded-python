@@ -695,6 +695,97 @@ def _l4_rows():
     return out
 
 
+# (overlay filename arm, runner backend key, display label)
+SPARSE_MP_ARMS = [
+    ("arc_int8", "arcadedb_sparse_embedded", "ArcadeDB (embedded, int8)"),
+    ("arc_fp32", "arcadedb_sparse_embedded_fp32", "ArcadeDB (embedded, fp32)"),
+    ("arc_srv", "arcadedb_sparse_server", "ArcadeDB (server, int8)"),
+    ("elastic", "elasticsearch_sparse", "Elasticsearch"),
+    ("milvus", "milvus_sparse", "Milvus"),
+    ("qdrant", "qdrant_sparse", "Qdrant"),
+]
+
+
+def _sparse_multipass_table():
+    """What a second pass buys each engine on the sparse lane.
+
+    A SEPARATE table rather than two more columns on the sparse one, and the
+    reason is the defect this whole exercise started from. The sparse table's
+    p50 comes from the lane at N=5; these numbers come from one build of a
+    different driver. Putting them side by side in one row would be a warm
+    number from one protocol next to a cold number from another, which is
+    exactly what f4 did before it was fixed.
+
+    The dense table CAN carry both columns because both of its passes come out
+    of the same overlay. This one cannot, so it says so instead.
+    """
+    root = HERE / "results" / "sparse_mp"
+    if not root.is_dir():
+        return None
+    entries = []
+    for tier in ("medium", "small"):
+        for arm, backend, label in SPARSE_MP_ARMS:
+            fp = root / f"sp_{arm}_{tier}.json"
+            if not fp.is_file():
+                continue
+            passes = json.loads(fp.read_text(encoding="utf-8"))
+            cold = [r for r in passes if r.get("rep") == 0]
+            warm = [r for r in passes if r.get("rep", 0) >= 1]
+            if not cold or not warm:
+                continue
+            c = cold[0]["query_p50_ms"]
+            w = statistics.median(r["query_p50_ms"] for r in warm)
+            entries.append({
+                "backend": label,
+                "is_arcadedb": "arcade" in backend,
+                "precision": SPARSE_PRECISION.get(backend),
+                "scale": tier,
+                "scale_label": scale_label("l3s", tier),
+                "workload": "search",
+                "n_docs": str(cold[0].get("n_docs") or ""),
+                "deployment": deployment_of(backend),
+                "image": None,
+                "version_name": _engine_version(label, cold[0].get("engine_version")),
+                "host": "mini",
+                "metrics": {
+                    "cold p50 ms": {"median": round(c, 3), "min": round(c, 3),
+                                    "max": round(c, 3), "n": 1},
+                    "warm p50 ms": {"median": round(w, 3), "min": round(w, 3),
+                                    "max": round(w, 3), "n": len(warm)},
+                    "gain": {"median": round(c / w, 2), "min": round(c / w, 2),
+                             "max": round(c / w, 2), "n": 1},
+                },
+            })
+    if not entries:
+        return None
+    return {
+        "id": "l3smp",
+        "title": "Sparse search: what a second pass buys",
+        "dataset": "Big-ANN'23 Sparse, one build per engine, cold then warm",
+        "conditions": [
+            "Cold is the first timed pass after the index is built. Warm is the "
+            "median of five more passes over a DIFFERENT half of the query set, "
+            "so a warm number cannot be explained by the engine having already "
+            "answered that exact query. Both halves are drawn from the same "
+            "1,000 dev queries in the same order.",
+            "One build per engine here, against five in the table above, which "
+            "is why these are a separate table rather than two more columns on "
+            "it. Reading a warm number from this protocol beside a cold number "
+            "from that one is the mistake this table exists to avoid.",
+            "The order is the same cold and warm at both sizes. The dense table "
+            "further down is not like this: there ArcadeDB alone gains about "
+            "nine times on a second pass, so which pass you time decides the "
+            "ranking, and it has to say which.",
+        ],
+        "columns": ["cold p50 ms", "warm p50 ms", "gain"],
+        "withheld_scales": [],
+        "withheld_reason": None,
+        "source_paths": ["benchmarks/experiments/results/sparse_mp"],
+        "source_urls": [f"{REPO}/benchmarks/experiments/results/sparse_mp"],
+        "entries": entries,
+    }
+
+
 def _l4_table():
     grouped = _l4_rows()
     if not grouped:
@@ -1145,7 +1236,8 @@ def main() -> int:
     # The function stays because the SciPy paper still publishes these rows and
     # a future page may want them WITH the matrix. Restoring them means adding
     # the matrix too, and re-adding their cells to page_check.MAPPING.
-    for extra in (_l4_table(), _e4_table(), _python_cost_table()):
+    for extra in (_sparse_multipass_table(), _l4_table(), _e4_table(),
+                  _python_cost_table()):
         if extra and extra["entries"]:
             tables.append(extra)
 

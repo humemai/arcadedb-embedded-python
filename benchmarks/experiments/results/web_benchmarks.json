@@ -2420,6 +2420,425 @@
       "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
+      "id": "l3smp",
+      "title": "Sparse search: what a second pass buys",
+      "dataset": "Big-ANN'23 Sparse, one build per engine, cold then warm",
+      "conditions": [
+        "Cold is the first timed pass after the index is built. Warm is the median of five more passes over a DIFFERENT half of the query set, so a warm number cannot be explained by the engine having already answered that exact query. Both halves are drawn from the same 1,000 dev queries in the same order.",
+        "One build per engine here, against five in the table above, which is why these are a separate table rather than two more columns on it. Reading a warm number from this protocol beside a cold number from that one is the mistake this table exists to avoid.",
+        "The order is the same cold and warm at both sizes. The dense table further down is not like this: there ArcadeDB alone gains about nine times on a second pass, so which pass you time decides the ranking, and it has to say which."
+      ],
+      "columns": [
+        "cold p50 ms",
+        "warm p50 ms",
+        "gain"
+      ],
+      "withheld_scales": [],
+      "withheld_reason": null,
+      "source_paths": [],
+      "source_urls": [],
+      "entries": [
+        {
+          "backend": "ArcadeDB (embedded, int8)",
+          "is_arcadedb": true,
+          "precision": "int8",
+          "scale": "medium",
+          "scale_label": "8.84M",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.8.1",
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 87.926,
+              "min": 87.926,
+              "max": 87.926,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 84.485,
+              "min": 84.485,
+              "max": 84.485,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.04,
+              "min": 1.04,
+              "max": 1.04,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (embedded, fp32)",
+          "is_arcadedb": true,
+          "precision": "fp32",
+          "scale": "medium",
+          "scale_label": "8.84M",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.8.1",
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 88.991,
+              "min": 88.991,
+              "max": 88.991,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 86.446,
+              "min": 86.446,
+              "max": 86.446,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.03,
+              "min": 1.03,
+              "max": 1.03,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server, int8)",
+          "is_arcadedb": true,
+          "precision": "int8",
+          "scale": "medium",
+          "scale_label": "8.84M",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "server",
+          "image": null,
+          "version_name": null,
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 90.928,
+              "min": 90.928,
+              "max": 90.928,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 88.017,
+              "min": 88.017,
+              "max": 88.017,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.03,
+              "min": 1.03,
+              "max": 1.03,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Elasticsearch",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "medium",
+          "scale_label": "8.84M",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "server",
+          "image": null,
+          "version_name": null,
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 59.089,
+              "min": 59.089,
+              "max": 59.089,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 52.113,
+              "min": 52.113,
+              "max": 52.113,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.13,
+              "min": 1.13,
+              "max": 1.13,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Milvus",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "medium",
+          "scale_label": "8.84M",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "server",
+          "image": null,
+          "version_name": null,
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 40.912,
+              "min": 40.912,
+              "max": 40.912,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 37.305,
+              "min": 37.305,
+              "max": 37.305,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.1,
+              "min": 1.1,
+              "max": 1.1,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Qdrant",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "medium",
+          "scale_label": "8.84M",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "server",
+          "image": null,
+          "version_name": null,
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 16.717,
+              "min": 16.717,
+              "max": 16.717,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 16.669,
+              "min": 16.669,
+              "max": 16.669,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (embedded, int8)",
+          "is_arcadedb": true,
+          "precision": "int8",
+          "scale": "small",
+          "scale_label": "1M",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.8.1",
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 12.022,
+              "min": 12.022,
+              "max": 12.022,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 10.187,
+              "min": 10.187,
+              "max": 10.187,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.18,
+              "min": 1.18,
+              "max": 1.18,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (embedded, fp32)",
+          "is_arcadedb": true,
+          "precision": "fp32",
+          "scale": "small",
+          "scale_label": "1M",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.8.1",
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 12.251,
+              "min": 12.251,
+              "max": 12.251,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 11.5,
+              "min": 11.5,
+              "max": 11.5,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.07,
+              "min": 1.07,
+              "max": 1.07,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server, int8)",
+          "is_arcadedb": true,
+          "precision": "int8",
+          "scale": "small",
+          "scale_label": "1M",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": null,
+          "version_name": null,
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 14.056,
+              "min": 14.056,
+              "max": 14.056,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 12.792,
+              "min": 12.792,
+              "max": 12.792,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.1,
+              "min": 1.1,
+              "max": 1.1,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Elasticsearch",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "small",
+          "scale_label": "1M",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": null,
+          "version_name": null,
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 10.2,
+              "min": 10.2,
+              "max": 10.2,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 9.002,
+              "min": 9.002,
+              "max": 9.002,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.13,
+              "min": 1.13,
+              "max": 1.13,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Milvus",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "small",
+          "scale_label": "1M",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": null,
+          "version_name": null,
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 9.39,
+              "min": 9.39,
+              "max": 9.39,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 8.674,
+              "min": 8.674,
+              "max": 8.674,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.08,
+              "min": 1.08,
+              "max": 1.08,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Qdrant",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "small",
+          "scale_label": "1M",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": null,
+          "version_name": null,
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 2.976,
+              "min": 2.976,
+              "max": 2.976,
+              "n": 1
+            },
+            "warm p50 ms": {
+              "median": 2.926,
+              "min": 2.926,
+              "max": 2.926,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.02,
+              "min": 1.02,
+              "max": 1.02,
+              "n": 1
+            }
+          }
+        }
+      ],
+      "source_path": null,
+      "source_url": null
+    },
+    {
       "id": "l4",
       "title": "Time series",
       "dataset": "TSBS cpu-only, 2,592,000 points",
