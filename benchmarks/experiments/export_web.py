@@ -98,6 +98,44 @@ DISPLAY_NAMES = {
 }
 
 
+# What each dense engine actually STORES its vectors as, read from the adapter
+# that configures it in l3d_dense.py. Not from the data.
+#
+# The rows carry a `quantization` field and it is USELESS for comparators: it
+# echoes BENCH_DENSE_QUANT, an ArcadeDB-only knob, so it reports "fp32" for
+# LanceDB, which builds IVF_HNSW_SQ and is int8. Publishing that field would
+# have put a false label on a competitor's row.
+#
+# So this is read from the code that creates each index, the same way image
+# version names are read from runner.py rather than guessed:
+#
+#   ArcadeDB     ARRAY_OF_FLOATS, LSM_VECTOR with the "quantization" key set
+#                only when BENCH_DENSE_QUANT asks; fp32 when omitted
+#   LanceDB      create_index(index_type="IVF_HNSW_SQ")  <- int8 scalar quant,
+#                LanceDB's only HNSW offering, already noted in the adapter
+#   Chroma       collection metadata sets hnsw:* only; stores float32
+#   Qdrant       VectorParams(size, distance) with NO quantization_config
+#   Milvus       DataType.FLOAT_VECTOR + HNSW
+#   DuckDB VSS   vec::FLOAT[DIM] + HNSW
+#   sqlite-vec   vec0(embedding float[DIM])
+#
+# WHY IT IS ON THE PAGE: ArcadeDB's two arms were labelled and nobody else was,
+# so a reader saw quantization as an ArcadeDB peculiarity and read every
+# unlabelled row as full precision. One of them is not. LanceDB's 0.93 recall
+# and ArcadeDB-int8's 0.94 are then the same kind of number, where Chroma's
+# 0.93 at fp32 is a different kind, and only the label makes that visible.
+DENSE_PRECISION = {
+    "arcadedb_dense_embedded": "fp32",
+    "arcadedb_dense_server": "fp32",
+    "chroma_dense": "fp32",
+    "qdrant_dense": "fp32",
+    "milvus_dense": "fp32",
+    "duckdb_vss_dense": "fp32",
+    "sqlite_vec_dense": "fp32",
+    "lancedb_dense": "int8",
+}
+
+
 def display_name(backend: str) -> str:
     if backend in DISPLAY_NAMES:
         return DISPLAY_NAMES[backend]
@@ -141,13 +179,16 @@ def _num(value):
 DENSE_10M_ARMS = [
     ("fp32", "ArcadeDB (embedded, fp32)", True),
     ("int8", "ArcadeDB (embedded, int8)", True),
-    ("arcsrv", "ArcadeDB (server)", True),
-    ("qdrant", "Qdrant", False),
-    ("chroma", "Chroma", False),
-    ("duckvss", "DuckDB VSS", False),
-    ("lancedb", "LanceDB", False),
-    ("milvus", "Milvus", False),
-    ("sqlitevec", "sqlite-vec", False),
+    # the server overlay stamps quantization='fp32'
+    ("arcsrv", "ArcadeDB (server, fp32)", True),
+    ("qdrant", "Qdrant (fp32)", False),
+    ("chroma", "Chroma (fp32)", False),
+    ("duckvss", "DuckDB VSS (fp32)", False),
+    # IVF_HNSW_SQ: the only quantized comparator, and it was unlabelled while
+    # ArcadeDB's two arms were, which made quantization read as our quirk.
+    ("lancedb", "LanceDB (int8)", False),
+    ("milvus", "Milvus (fp32)", False),
+    ("sqlitevec", "sqlite-vec (fp32)", False),
 ]
 
 
@@ -720,8 +761,21 @@ def main() -> int:
             if ln != lane:
                 continue
             image = BACKENDS.get(backend, {}).get("server_image")
+            label = display_name(backend)
+            if lane == "l3d":
+                prec = DENSE_PRECISION.get(backend)
+                if prec is None:
+                    raise SystemExit(
+                        f"l3d backend {backend!r} has no DENSE_PRECISION entry.\n"
+                        "  Every dense row must state what it stores. Read the "
+                        "adapter in l3d_dense.py, NOT the rows' `quantization` "
+                        "field: that field echoes BENCH_DENSE_QUANT, an "
+                        "ArcadeDB-only knob, and reports 'fp32' for LanceDB, "
+                        "which builds IVF_HNSW_SQ and is int8.")
+                label = (f"{label[:-1]}, {prec})" if label.endswith(")")
+                         else f"{label} ({prec})")
             entry = {
-                "backend": display_name(backend),
+                "backend": label,
                 "is_arcadedb": "arcade" in backend,
                 "scale": scale,
                 "workload": workload,

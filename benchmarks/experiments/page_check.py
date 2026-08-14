@@ -149,15 +149,21 @@ PAGE_TS = Path(__file__).resolve().parents[2].parent / "humem.ai" / \
 # tier that was withheld until 2026-08-13 and so never had a pin at all.
 #
 # page label -> (T5 row label, cold col, warm col, recall col)
+# Both label sets now carry the stored precision, so both sides of this map
+# moved at once. That is the case a mapping like this is worst at: rename one
+# side and every row goes ABSENT, which reads as "the tier vanished" rather
+# than "the label changed" (it happened on 2026-08-11 to all nine MAPPING
+# cells). Keeping the two columns literally side by side is the cheap defence.
 DENSE_10M = {
+    # page label                  T5 row label            cold warm recall
     "ArcadeDB (embedded, fp32)": ("ArcadeDB (emb, fp32)", 1, 2, 4),
     "ArcadeDB (embedded, int8)": ("ArcadeDB (emb, int8)", 1, 2, 4),
-    "ArcadeDB (server)":         ("ArcadeDB (srv)", 1, 2, 4),
-    "Qdrant":                    ("Qdrant", 1, 2, 4),
-    "Chroma":                    ("Chroma", 1, 2, 4),
-    "DuckDB VSS":                ("DuckDB-VSS", 1, 2, 4),
-    "LanceDB":                   ("LanceDB", 1, 2, 4),
-    "Milvus":                    ("Milvus", 1, 2, 4),
+    "ArcadeDB (server, fp32)":   ("ArcadeDB (srv, fp32)", 1, 2, 4),
+    "Qdrant (fp32)":             ("Qdrant (fp32)", 1, 2, 4),
+    "Chroma (fp32)":             ("Chroma (fp32)", 1, 2, 4),
+    "DuckDB VSS (fp32)":         ("DuckDB-VSS (fp32)", 1, 2, 4),
+    "LanceDB (int8)":            ("LanceDB (int8)", 1, 2, 4),
+    "Milvus (fp32)":             ("Milvus (fp32)", 1, 2, 4),
 }
 
 

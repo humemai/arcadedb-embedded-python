@@ -852,7 +852,7 @@
       "withheld_reason": null,
       "entries": [
         {
-          "backend": "ArcadeDB (embedded)",
+          "backend": "ArcadeDB (embedded, fp32)",
           "is_arcadedb": true,
           "scale": "small",
           "workload": "search",
@@ -883,7 +883,7 @@
           }
         },
         {
-          "backend": "ArcadeDB (server)",
+          "backend": "ArcadeDB (server, fp32)",
           "is_arcadedb": true,
           "scale": "small",
           "workload": "search",
@@ -914,7 +914,7 @@
           }
         },
         {
-          "backend": "Chroma",
+          "backend": "Chroma (fp32)",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -945,7 +945,7 @@
           }
         },
         {
-          "backend": "DuckDB VSS",
+          "backend": "DuckDB VSS (fp32)",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -976,7 +976,7 @@
           }
         },
         {
-          "backend": "LanceDB",
+          "backend": "LanceDB (int8)",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -1007,7 +1007,7 @@
           }
         },
         {
-          "backend": "Milvus",
+          "backend": "Milvus (fp32)",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -1038,7 +1038,7 @@
           }
         },
         {
-          "backend": "Qdrant",
+          "backend": "Qdrant (fp32)",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -1069,7 +1069,7 @@
           }
         },
         {
-          "backend": "sqlite-vec",
+          "backend": "sqlite-vec (fp32)",
           "is_arcadedb": false,
           "scale": "small",
           "workload": "search",
@@ -1174,7 +1174,7 @@
           }
         },
         {
-          "backend": "ArcadeDB (server)",
+          "backend": "ArcadeDB (server, fp32)",
           "is_arcadedb": true,
           "scale": "deep10m",
           "workload": "search",
@@ -1211,7 +1211,7 @@
           }
         },
         {
-          "backend": "Qdrant",
+          "backend": "Qdrant (fp32)",
           "is_arcadedb": false,
           "scale": "deep10m",
           "workload": "search",
@@ -1248,7 +1248,7 @@
           }
         },
         {
-          "backend": "Chroma",
+          "backend": "Chroma (fp32)",
           "is_arcadedb": false,
           "scale": "deep10m",
           "workload": "search",
@@ -1285,7 +1285,7 @@
           }
         },
         {
-          "backend": "DuckDB VSS",
+          "backend": "DuckDB VSS (fp32)",
           "is_arcadedb": false,
           "scale": "deep10m",
           "workload": "search",
@@ -1322,7 +1322,7 @@
           }
         },
         {
-          "backend": "LanceDB",
+          "backend": "LanceDB (int8)",
           "is_arcadedb": false,
           "scale": "deep10m",
           "workload": "search",
@@ -1359,7 +1359,7 @@
           }
         },
         {
-          "backend": "Milvus",
+          "backend": "Milvus (fp32)",
           "is_arcadedb": false,
           "scale": "deep10m",
           "workload": "search",
@@ -1396,7 +1396,7 @@
           }
         },
         {
-          "backend": "sqlite-vec",
+          "backend": "sqlite-vec (fp32)",
           "is_arcadedb": false,
           "scale": "deep10m",
           "workload": "search",

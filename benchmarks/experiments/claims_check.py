@@ -916,7 +916,7 @@ CLAIMS = [
     # different run would be a worse error than the mismatch it fixed -- but
     # it must SAY that is what it is.
     ("l3d.srv.p50", 2.10, 0.015,
-     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", D_WARM),
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv, fp32)", D_WARM),
      "dense server p50 warm (published multipass row, not the #109 A/B)"),
     # --- E2 atomicity, the thesis experiment -------------------------------
     # The tear is deterministic, not a race we caught once: all five trials
@@ -995,7 +995,7 @@ CLAIMS = [
     # divide a page-cache fill by a warm search and call the quotient
     # transport.
     ("l3d.deployment_ratio", 2.18, 0.03,
-     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv)", D_WARM)
+     lambda r: cell("t5_dense_ts.tex", "ArcadeDB (srv, fp32)", D_WARM)
                / cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_WARM),
      "dense transport ratio (prose, table and f8 must agree)"),
     # The deployment decomposition, N=4 matched runs on the released engine.

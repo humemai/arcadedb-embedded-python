@@ -48,10 +48,20 @@ NAMES = {
     "qdrant_sparse": "Qdrant", "milvus_sparse": "Milvus",
     "elasticsearch_sparse": "Elasticsearch",
     "arcadedb_dense_embedded": "ArcadeDB (emb)",
-    "arcadedb_dense_server": "ArcadeDB (srv)",
-    "qdrant_dense": "Qdrant", "milvus_dense": "Milvus",
-    "chroma_dense": "Chroma", "lancedb_dense": "LanceDB",
-    "sqlite_vec_dense": "sqlite-vec", "duckdb_vss_dense": "DuckDB-VSS",
+    # the dense server overlay stamps quantization=fp32
+    "arcadedb_dense_server": "ArcadeDB (srv, fp32)",
+    # DENSE ROWS STATE WHAT THEY STORE, all of them. T5 labelled only our two
+    # arms "(emb, fp32)" and "(emb, int8)", so quantization read as an ArcadeDB
+    # peculiarity and every unlabelled row read as full precision. LanceDB is
+    # not: it builds IVF_HNSW_SQ, int8 scalar-quantized, its only HNSW offering.
+    # That makes its 0.932 recall the same kind of number as our int8 arm's
+    # 0.943, where Chroma's 0.934 at fp32 is a different kind. Read from the
+    # adapters in l3d_dense.py, never from the rows' `quantization` field, which
+    # echoes BENCH_DENSE_QUANT and reports "fp32" for every comparator.
+    "qdrant_dense": "Qdrant (fp32)", "milvus_dense": "Milvus (fp32)",
+    "chroma_dense": "Chroma (fp32)", "lancedb_dense": "LanceDB (int8)",
+    "sqlite_vec_dense": "sqlite-vec (fp32)",
+    "duckdb_vss_dense": "DuckDB-VSS (fp32)",
     "arcadedb_e2": "ArcadeDB (one txn)", "surrealdb_e2": "SurrealDB (one txn)",
     "composed_qdrant_neo4j": "Qdrant+Neo4j (composed)",
     "questdb": "QuestDB", "arcadedb": "ArcadeDB (emb)",
@@ -528,7 +538,12 @@ def _dense_multipass():
             q = str(p0.get("quantization", "")).lower()
             label = "ArcadeDB (emb, int8)" if "int8" in q else "ArcadeDB (emb, fp32)"
         elif be == "arcadedb_dense_server":
-            label = "ArcadeDB (srv)"
+            # Reads its own stamp rather than hard-coding fp32, so a future
+            # quantized server run relabels itself instead of publishing a
+            # precision it did not run. The embedded arm above already does
+            # this; the server arm was the one row still asserting.
+            q = str(p0.get("quantization", "")).lower()
+            label = "ArcadeDB (srv, int8)" if "int8" in q else "ArcadeDB (srv, fp32)"
         s = stats.setdefault(label, {"build": [], "cold": [], "warm": [],
                                      "cold99": [], "recall": []})
         # One value per BUILD for anything that is a property of the build.
@@ -612,7 +627,7 @@ def dense_ts_table(rows):
         # sqlite-vec is exact brute force, so its recall of 1.000 is a property
         # of the method rather than a result. The dagger points at the caption.
         if label.startswith("sqlite-vec"):
-            label = r"sqlite-vec$^{\dagger}$"
+            label = r"sqlite-vec (fp32)$^{\dagger}$"
         lines.append(" & ".join([
             label, fmt(build, "build"), fmt(cold50, "cold"), fmt(warm, "warm"),
             fmt(cold99, "cold99"), fmt(recall, "recall", digits=3)]) + r" \\")
