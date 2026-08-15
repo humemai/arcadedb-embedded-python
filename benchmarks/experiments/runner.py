@@ -837,6 +837,20 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         _parts = insp.stdout.split()
         if len(_parts) == 2:
             oom, exit_code = _parts
+        # DISK BEFORE REMOVAL. This is the only moment the client's writable
+        # layer still exists: docker_rm below deletes it, and the finally
+        # block runs afterwards. Measuring there returned "no such object" for
+        # every embedded cell, which the old instrument recorded as a bare
+        # None and this one recorded as a reason.
+        #
+        # The container has EXITED but not been removed, which is fine:
+        # inspect --size works on a stopped container (verified), and an
+        # embedded engine writes to /tmp, which IS the writable layer. Its
+        # only mounts are binds we own, so there are no volumes to miss.
+        _cd = container_disk(cli_cid, tries=1)
+        row["client_disk_mb"] = _cd["disk_mb"]
+        if _cd["disk_note"]:
+            row["client_disk_note"] = _cd["disk_note"]
         docker_rm(cli_cid)
         row["rc"] = rc
         row["oom_killed"] = (oom == "true")
@@ -872,16 +886,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row["server_disk_settled"] = d["disk_settled"]
             if d["disk_note"]:
                 row["server_disk_note"] = d["disk_note"]
-        # The CLIENT has already exited by now, so it has no live shell and no
-        # volumes we could du. That is fine and not a gap: a client container
-        # mounts only binds (/work, /data:ro), and an embedded engine writes to
-        # /tmp, which IS the writable layer. SizeRw works on a stopped
-        # container, verified.
-        if cli_cid:
-            d = container_disk(cli_cid, tries=1)
-            row["client_disk_mb"] = d["disk_mb"]
-            if d["disk_note"]:
-                row["client_disk_note"] = d["disk_note"]
+        # No client measurement here: it is taken above, just before
+        # docker_rm, because this block runs after the container is gone.
         _d = [row.get(k) for k in ("server_disk_mb", "client_disk_mb")
               if row.get(k) is not None]
         _b = [row.get(k) for k in ("server_disk_baseline_mb", "client_disk_baseline_mb")
