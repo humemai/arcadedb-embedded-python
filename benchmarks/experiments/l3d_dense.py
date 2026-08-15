@@ -234,7 +234,18 @@ class Base:
         raise NotImplementedError
 
     def close(self):
-        pass
+        """Release the engine handle. Overridden where there is one to release.
+
+        A no-op here records close_s=0.0, and 0.0 must mean "this engine has
+        nothing to release", never "we did not ask". The distinction decides
+        whether a close cost is comparable: ArcadeDB measured 157.5 s against
+        a 185.9 s build at l3d/small, and reporting that beside an unmeasured
+        0.0 would be the same asymmetry, pointed the other way. Adapters with
+        a real handle override this; adapters whose library exposes none set
+        close_note instead, so the row says which case it is.
+        """
+
+    close_note = None
 
 
 class ArcadeEmbedded(Base):
@@ -351,6 +362,9 @@ class ArcadeServer(Base):
 
 class Chroma(Base):
     name = "chroma_dense"
+    # chromadb 1.5.9 exposes no close/shutdown on PersistentClient (checked
+    # dir(chromadb.Client)); it flushes per write. Nothing to ask for.
+    close_note = "chromadb exposes no close()"
 
     def connect(self):
         import chromadb
@@ -373,6 +387,9 @@ class Chroma(Base):
 
 class LanceDB(Base):
     name = "lancedb_dense"
+    # lancedb 0.37.1 exposes no close on the connection (checked dir); its
+    # tables are files written on commit.
+    close_note = "lancedb exposes no close()"
 
     def connect(self):
         import lancedb
@@ -410,6 +427,9 @@ class LanceDB(Base):
 class SqliteVec(Base):
     name = "sqlite_vec_dense"
 
+    def close(self):
+        self.cx.close()
+
     def connect(self):
         import sqlite3
         import sqlite_vec
@@ -438,6 +458,9 @@ class SqliteVec(Base):
 
 class DuckVSS(Base):
     name = "duckdb_vss_dense"
+
+    def close(self):
+        self.cx.close()
 
     def connect(self):
         import duckdb
@@ -622,6 +645,11 @@ def main():
     _t = time.perf_counter()
     b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
+    # 0.0 MUST MEAN "nothing to release", NEVER "we did not ask". Without this
+    # the dense table would read ArcadeDB 157.5 s against six flat zeros, four
+    # of which were simply unmeasured.
+    if getattr(b, "close_note", None):
+        out["close_note"] = b.close_note
 
     # Stamp the conditions. runner.py wraps this script and adds cpuset, heap,
     # mem_cap and a manifest to runs.jsonl, so a full campaign row is already
