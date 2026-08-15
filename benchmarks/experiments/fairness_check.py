@@ -128,6 +128,17 @@ def _gib(s):
         return None
 
 
+def _is_jvm(backend):
+    """Does this backend run on a JVM, and therefore have a heap worth checking.
+
+    Mirrors runner.JVM_BACKENDS. Kept as a substring match on the name so that
+    adding a JVM comparator without listing it shows up as an unchecked heap
+    rather than as an engine that legitimately has none.
+    """
+    return any(t in str(backend) for t in ("arcadedb", "arcade", "neo4j",
+                                           "elasticsearch", "questdb"))
+
+
 def _total_envelope(r):
     """The envelope the CELL got, normalised across topologies.
 
@@ -180,7 +191,20 @@ def _total_envelope(r):
             split = SERVER_MEM_FRACTION_DEFAULT
         if not 0 < split < 1:
             split = SERVER_MEM_FRACTION_DEFAULT
-        return (str(srv_heap or r.get("heap")), f"{srv_cap / split:g}g")
+        # NO FALLING BACK TO THE REQUEST. srv_heap is the witness, read from
+        # the daemon; r["heap"] is what the cell ASKED for, and it equals
+        # ArcadeDB's by construction. Substituting one for the other made the
+        # gate pass by definition on every served JVM row, so a comparator
+        # silently running its image default was indistinguishable from a
+        # compliant one. That is not hypothetical: make_paper_tables carries an
+        # Elasticsearch-only rule for exactly this, added after ES ran 4g while
+        # its row said 16g.
+        #
+        # A JVM server with no witness is reported as a witness gap. A non-JVM
+        # server legitimately has no heap and is left alone.
+        if not srv_heap and _is_jvm(r.get("backend")):
+            return ("NO-WITNESS", f"{srv_cap / split:g}g")
+        return (str(srv_heap or "n/a"), f"{srv_cap / split:g}g")
 
     cap = _gib(r.get("mem_cap"))
     if cap is None:
@@ -220,12 +244,20 @@ def check_envelope(rows):
         # calling that a mismatched envelope against ArcadeDB's 24g compares a
         # setting to its own absence. The MEMORY CAP is the cross-engine
         # quantity and is compared for everyone.
-        if h in ("None", "", None):
-            if "arcade" in str(r.get("backend")):
-                # ArcadeDB is a JVM engine, so a missing heap here is a
-                # RECORDING gap, not an engine property. Reported separately
-                # rather than excused, because an unrecorded heap is exactly
-                # how an unmatched one would hide.
+        if h == "NO-WITNESS":
+            # Recorded, not excused: the engine ran a heap nobody observed.
+            noheap[(r["lane"], r["scale"])].add(str(r.get("backend")) + " (no witness)")
+            h = "n/a"
+        elif h in ("None", "", "n/a", None):
+            if _is_jvm(r.get("backend")):
+                # A JVM engine with no recorded heap is a RECORDING gap,
+                # not an engine property. Reported separately rather than
+                # excused, because an unrecorded heap is exactly how an
+                # unmatched one would hide.
+                #
+                # This used to test "arcade" in the backend name, so the same
+                # gap on Neo4j, Elasticsearch or QuestDB was silently treated
+                # as "this engine has no heap". All three are JVM engines.
                 noheap[(r["lane"], r["scale"])].add(r["backend"])
             h = "n/a"
         g[(r["lane"], r["scale"])][r["backend"]].add((h, m))
