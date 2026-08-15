@@ -148,7 +148,8 @@ DISPLAY_NAMES = {
     "chroma_dense": "Chroma", "lancedb_dense": "LanceDB",
     "sqlite_vec_dense": "sqlite-vec", "duckdb_vss_dense": "DuckDB VSS",
     "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
-    "postgres": "PostgreSQL", "duckdb": "DuckDB", "questdb": "QuestDB",
+    "postgres": "PostgreSQL", "postgres_tuned": "PostgreSQL (tuned)",
+    "duckdb": "DuckDB", "questdb": "QuestDB",
     "arcadedb": "ArcadeDB",
     "sqlite": "SQLite", "chroma": "Chroma", "ladybug": "LadybugDB",
 }

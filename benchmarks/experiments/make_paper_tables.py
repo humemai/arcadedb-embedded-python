@@ -38,6 +38,8 @@ PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
 NAMES = {
     "arcadedb_embedded": "ArcadeDB (emb)", "arcadedb_server": "ArcadeDB (srv)",
     "duckdb": "DuckDB", "postgres": "PostgreSQL",
+    # the buffer-pool ablation; named so a table cannot print a raw backend id
+    "postgres_tuned": "PostgreSQL (tuned)",
     "arcadedb_graph_embedded": "ArcadeDB (emb)",
     "arcadedb_graph_server": "ArcadeDB (srv)",
     "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
