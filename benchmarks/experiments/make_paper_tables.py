@@ -338,9 +338,14 @@ def tabular_table(rows):
     l1 = [r for r in rows if r["lane"] == "l1"]
     tpc = [r for r in rows if r["lane"] == "l1tpc"]
     order = ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"]
-    lines = [r"\begin{tabular}{lrrrr}", r"\toprule",
+    # Peak anon from the OLTP rows only. This lane runs OLTP and OLAP over one
+    # corpus, and memory is recorded for BOTH, so pooling them would report a
+    # median straddling two workloads: PostgreSQL reads 0.119 GiB on OLTP and
+    # 0.152 on OLAP, and their midpoint describes neither run. The latency
+    # columns are already per-workload by construction.
+    lines = [r"\begin{tabular}{lrrrrr}", r"\toprule",
              r"System & OLTP (ops/s) & Ins.\ p99 (ms) & "
-             r"Q1 (ms) & Q6 (ms) \\", r"\midrule"]
+             r"Q1 (ms) & Q6 (ms) & Peak anon (GiB) \\", r"\midrule"]
     for be in order:
         oltp = [r for r in l1 if r["backend"] == be and r["workload"] == "oltp"]
         tq = [r for r in tpc if r["backend"] == be and r["workload"] == "olap"]
@@ -364,6 +369,7 @@ def tabular_table(rows):
             fmt(st.median([r["q6_ms"] for r in tq
                            if isinstance(r.get("q6_ms"), (int, float))]))
             if any(isinstance(r.get("q6_ms"), (int, float)) for r in tq) else "--",
+            mmm(oltp, "peak_anon_mib_sum", 1.0 / 1024),
         ]) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
     write("t2_tabular.tex", "\n".join(lines) + "\n")

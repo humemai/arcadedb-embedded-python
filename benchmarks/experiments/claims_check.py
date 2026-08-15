@@ -1140,9 +1140,12 @@ CLAIMS = [
      "failover trials in which no acknowledged write was lost; this is the "
      "correctness claim, the timing is secondary to it"),
     # --- the cross-lane memory section's five ratios ----------------------
-    ("mem.ratio.postgres", 97.5, 1.0,
-     lambda r: mem_ratio("l1", "arcadedb_embedded", "l1", "postgres", "medium", "medium"),
-     "tabular OLTP at medium: our largest memory loss anywhere, 98x"),
+    ("mem.ratio.postgres", 107.2, 1.0,
+     lambda r: mem_ratio("l1", "arcadedb_embedded", "l1", "postgres",
+                         "medium", "medium", "oltp"),
+     "tabular OLTP at medium: our largest memory loss anywhere. Scoped to the "
+     "OLTP rows to match T2's column; pooling OLTP and OLAP gave 97.5, and the "
+     "prose and the table would then have disagreed with each other"),
     ("mem.ratio.ladybug", 22.1, 0.3,
      lambda r: mem_ratio("l2", "arcadedb_graph_embedded", "l2", "ladybug_graph",
                          "sf10", "sf10", "oltp"),
