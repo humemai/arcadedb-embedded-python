@@ -1195,7 +1195,16 @@ def main():
     ap.add_argument("--timeout", type=int, default=0,
                     help="per-cell timeout override in seconds (0 = scale default)")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--results-file", default="runs.jsonl",
+                    help="where rows are appended, relative to results/. Use a "
+                         "scratch file for smoke runs: the canonical rule takes "
+                         "the LATEST row per (lane, scale, workload, backend, "
+                         "rep), so an N=1 smoke at a paper scale silently "
+                         "supersedes rep 1 of a finished cell and the table "
+                         "then prints one smoke row beside four real ones.")
     args = ap.parse_args()
+    if os.sep in args.results_file or args.results_file.startswith("."):
+        ap.error("--results-file is a bare filename under results/")
 
     if args.timeout:
         for k in TIMEOUT_BY_SCALE:
@@ -1247,7 +1256,7 @@ def main():
     json.dump(manifest, open(os.path.join(RESULTS, f"manifest-{ts}.json"), "w"), indent=2)
 
     rows = []
-    jsonl = open(os.path.join(RESULTS, "runs.jsonl"), "a")
+    jsonl = open(os.path.join(RESULTS, args.results_file), "a")
     total = len(cells)
     print(f"{total} cell-runs (tier={args.tier}, scale={args.scale}, "
           f"workers={workers}, shards={shards})")
