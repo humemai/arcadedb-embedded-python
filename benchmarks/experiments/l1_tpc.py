@@ -375,7 +375,14 @@ def main():
         out["neworder_p50_ms"] = round(statistics.median(lat), 3)
         out["neworder_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)
 
+    # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
+    # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
+    # settles a roughly fixed 30-87 MB, against nothing at all for an
+    # already-settled comparator. An unrecorded close is an unpriced one, and
+    # the row cannot be told apart from a lane that never settles.
+    _t = time.perf_counter()
     b.close()
+    out["close_s"] = round(time.perf_counter() - _t, 3)
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out), flush=True)

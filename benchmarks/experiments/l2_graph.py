@@ -535,7 +535,14 @@ def main():
         if not out["gav"]:
             out["backend_arm"] = "nogav"
 
+    # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
+    # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
+    # settles a roughly fixed 30-87 MB, against nothing at all for an
+    # already-settled comparator. An unrecorded close is an unpriced one, and
+    # the row cannot be told apart from a lane that never settles.
+    _t = time.perf_counter()
     ad.close()
+    out["close_s"] = round(time.perf_counter() - _t, 3)
     with open(args.out, "w") as f:
         json.dump(out, f)
     print(json.dumps(out))

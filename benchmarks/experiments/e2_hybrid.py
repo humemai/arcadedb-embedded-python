@@ -399,7 +399,15 @@ def main():
         if evidence:
             out["torn_evidence"] = evidence
 
+    # TIME THE CLOSE, do not merely perform it. This lane always closed, but it
+    # never recorded what the close cost, so the row could not be told apart
+    # from a lane that hard-exits and never settles at all (#155). A clean
+    # close is when compaction, writeback and WAL truncation happen: measured
+    # on 26.8.1 it settles a roughly fixed 30-87 MB, against nothing at all for
+    # an already-settled comparator. An unrecorded close is an unpriced one.
+    _t = time.perf_counter()
     b.close()
+    out["close_s"] = round(time.perf_counter() - _t, 3)
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out))

@@ -529,6 +529,16 @@ def main():
     else:
         out.update(b.olap())
 
+    # CLOSE, AND TIME IT (#155). This lane hard-exited without ever shutting an
+    # engine down, so deferred shutdown work was never paid by anyone and the
+    # on-disk state it left was a crash state. A clean close is when
+    # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
+    # settles a roughly fixed 30-87 MB, against nothing at all for an
+    # already-settled comparator. After all measurement, so nothing above moves.
+    _t = time.perf_counter()
+    b.close()
+    out["close_s"] = round(time.perf_counter() - _t, 3)
+
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(out, open(args.out, "w"), indent=1)
     print(f"RESULT {json.dumps(out)[:400]}")

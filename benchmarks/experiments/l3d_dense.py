@@ -614,7 +614,14 @@ def main():
     out["qps"] = round(len(test) / span, 1)
     out["recall_at_10"] = round(statistics.mean(recalls), 4)
 
+    # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
+    # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
+    # settles a roughly fixed 30-87 MB, against nothing at all for an
+    # already-settled comparator. An unrecorded close is an unpriced one, and
+    # the row cannot be told apart from a lane that never settles.
+    _t = time.perf_counter()
     b.close()
+    out["close_s"] = round(time.perf_counter() - _t, 3)
 
     # Stamp the conditions. runner.py wraps this script and adds cpuset, heap,
     # mem_cap and a manifest to runs.jsonl, so a full campaign row is already

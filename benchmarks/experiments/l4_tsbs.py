@@ -263,7 +263,14 @@ def main():
         out["backend_version"] = b.version()
     except Exception as e:
         out["backend_version"] = f"unknown ({e.__class__.__name__})"
+    # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
+    # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
+    # settles a roughly fixed 30-87 MB, against nothing at all for an
+    # already-settled comparator. An unrecorded close is an unpriced one, and
+    # the row cannot be told apart from a lane that never settles.
+    _t = time.perf_counter()
     b.close()
+    out["close_s"] = round(time.perf_counter() - _t, 3)
 
     # Stamp what this actually ran under. Until now every row this lane wrote
     # carried only the backend name and the metrics, so T5's time-series block
