@@ -63,7 +63,7 @@ filter at all; the tags below say where that matters.
 - Never let a result object's Python type stand in for the finding, and abort an arm whose control operations moved nothing. E2 stamped every single-engine backend atomic by construction. **GATE** validity guard in `e2_hybrid.py`
 - Pin trial counts and denominators, not only outcomes. "5 of 5" bounds the failure rate only below ~45%; 200 injections bound it at ~1.5%. **GATE** `claims_check.e2_atomicity`, `page_check` count assertions
 - Re-profile on the release rather than assuming a dev build's profile transfers (substrate share 5.05% on 26.8.1 against 3.49% on dev23), and never add overlapping percentages. **REMEMBERED**
-- Do not add a new recorded field to a published driver until its lane is re-run; the driver's own frozen artifacts will not have the field. **REMEMBERED**
+- Do not add a new recorded field to a published driver until its lane is re-run; the driver's own frozen artifacts will not have the field. **GATE** `provenance_check.check_schema_homogeneity`, which compares the measured fields of every row in a (lane, scale, workload, backend) family and reports any field some rows carry and their siblings do not. Promoted from REMEMBERED on 2026-08-15 after the rule failed three times in one hour
 
 ## 3. How a comparison is kept fair
 
