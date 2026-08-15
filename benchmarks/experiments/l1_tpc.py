@@ -295,7 +295,20 @@ class ArcadeServerTPC(ArcadeTPC):
         pass
 
 
-BACKENDS = {c.name: c for c in (DuckTPC, PostgresTPC, ArcadeTPC, ArcadeServerTPC)}
+# The buffer-pool ablation reuses this adapter unchanged. Only the SERVER
+# container differs (shared_buffers and friends sized from its memory cap
+# instead of left at the image's start-anywhere defaults), and that is set by
+# runner.py's server_cmd, not by anything on this side of the wire. Making it
+# a subclass rather than a second entry pointing at the same class keeps
+# argparse's --backend choices honest: the runner passes the arm's name down,
+# and a name the lane script does not know must fail loudly, which is how this
+# ablation's first smoke run failed in 19 seconds instead of eight hours.
+class PostgresTunedTPC(PostgresTPC):
+    name = "postgres_tuned"
+
+
+BACKENDS = {c.name: c for c in (DuckTPC, PostgresTPC, PostgresTunedTPC,
+                                ArcadeTPC, ArcadeServerTPC)}
 
 
 def main():
