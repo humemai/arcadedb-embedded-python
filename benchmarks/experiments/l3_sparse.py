@@ -441,8 +441,17 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    # PHASE TIMERS. This lane recorded build_s and nothing else, and build is
+    # a MINORITY of the cell: at the 8.84M tier the median build is 15.6 min
+    # against cell wall-clocks of 130-190 min, so 85% of the most expensive
+    # measurement on the machine was unaccounted for. Not knowing where it
+    # goes is also why the campaign could not be honestly costed or shortened.
+    _p0 = time.perf_counter()
     n_docs = SCALE_DOCS[args.scale]
     queries = gen_queries(SCALE_QUERIES[args.scale])
+    _query_gen_s = time.perf_counter() - _p0
+
+    _p0 = time.perf_counter()
     gt = None
     if os.environ.get("BENCH_SPARSE_SOURCE") == "bigann":
         gt = _src.load_gt(args.scale)
@@ -451,10 +460,13 @@ def main():
         if os.path.exists(gt_path):
             import numpy as np
             gt = np.load(gt_path)
+    _gt_load_s = time.perf_counter() - _p0
 
     b = BACKENDS[args.backend]()
     out = {"lane": "l3s", "n_docs": n_docs, "dims": DIMENSIONS, "k": K,
-           "n_queries": len(queries)}
+           "n_queries": len(queries),
+           "query_gen_s": round(_query_gen_s, 2),
+           "gt_load_s": round(_gt_load_s, 2)}
 
     t0 = time.perf_counter()
     b.connect()
@@ -475,6 +487,7 @@ def main():
     out["build_docs_per_s"] = round(n_docs / build, 1)
 
     # timed warm search
+    _search_t0 = time.perf_counter()
     lats, raw_results = [], []
     for qi, (idx, vals) in enumerate(queries):
         t0 = time.perf_counter()
@@ -485,8 +498,12 @@ def main():
         raw_results.append(ids)
     out.update({f"query_{k2}": v for k2, v in pct(lats).items()})
     out["qps"] = round(len(lats) / sum(lats), 1)
+    out["search_wall_s"] = round(time.perf_counter() - _search_t0, 2)
 
-    # recall (untimed; resolve backend-native hits to doc ordinals)
+    # recall: was untimed and is NOT free at scale, since it resolves every
+    # returned hit back to a doc ordinal. Untimed does not mean zero, and an
+    # unaccounted phase is exactly what made this lane's cost unexplainable.
+    _recall_t0 = time.perf_counter()
     if gt is not None:
         recalls = []
         for qi, ids in enumerate(raw_results):
@@ -496,6 +513,15 @@ def main():
     else:
         out["recall_at_10"] = None
         out["gt_missing"] = True
+    out["recall_calc_s"] = round(time.perf_counter() - _recall_t0, 2)
+    # WHAT THIS CELL COULD NOT ACCOUNT FOR. Sum of the phases we now time,
+    # against the wall clock the runner sees. A large residual means there is
+    # still a phase nobody is measuring, and it says so in the row rather than
+    # leaving the next person to rediscover it from a campaign log.
+    out["phases_accounted_s"] = round(
+        out.get("connect_s", 0) + out.get("query_gen_s", 0)
+        + out.get("gt_load_s", 0) + out.get("build_s", 0)
+        + out.get("search_wall_s", 0) + out.get("recall_calc_s", 0), 2)
 
     # Read the cpuset, heap and memory cap out of this container's own cgroup.
     # Without them a cell cannot be reproduced or extended from its own

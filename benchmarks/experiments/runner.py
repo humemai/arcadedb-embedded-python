@@ -397,6 +397,29 @@ def read_cpu_stat(cg):
     return out
 
 
+def read_io_stat(cg):
+    """Bytes actually read from and written to disk by a container, summed
+    over devices, from cgroup v2 io.stat.
+
+    Pairs with the writable-layer size: that says how big the data ENDED UP,
+    this says how much IO it took to get there. The gap between them is write
+    amplification, which for an LSM engine is the interesting half and is a
+    thing we assert about compaction without ever having measured it.
+
+    Free to collect: two reads of one file per cell.
+    """
+    out = {"rbytes": 0, "wbytes": 0}
+    try:
+        for line in open(os.path.join(cg, "io.stat")):
+            for tok in line.split()[1:]:
+                k, _, v = tok.partition("=")
+                if k in out:
+                    out[k] += int(v)
+    except (OSError, ValueError):
+        return {}
+    return out
+
+
 def read_memory_stat(cg):
     """anon = anonymous working set (heaps/buffers); file = reclaimable page
     cache. anon is the honest memory metric; file is the confound to exclude."""
@@ -438,6 +461,7 @@ class CgroupSampler(threading.Thread):
         self.peak_shmem = 0
         self.end_shmem = None
         self.peak_file = 0
+        self.io = {}
         self.end_file = None
 
     def run(self):
@@ -460,6 +484,11 @@ class CgroupSampler(threading.Thread):
                     self.end_shmem = stat["shmem"]
                 if stat.get("file") is not None:
                     self.peak_file = max(self.peak_file, stat["file"])
+                # io.stat counters are cumulative, so the LAST read is the
+                # total for the cell; no max() needed and none wanted.
+                io = read_io_stat(cg)
+                if io:
+                    self.io = io
                 if stat.get("file") is not None:
                     self.end_file = stat["file"]
                 cpu = read_cpu_stat(cg)
@@ -767,6 +796,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row[f"{name}_end_anon_mib"] = mib(s.end_anon)    # steady-state
             row[f"{name}_peak_shmem_mib"] = mib(s.peak_shmem)  # deliberate: buffer pools
             row[f"{name}_peak_file_mib"] = mib(s.peak_file)    # incidental: kernel cache
+            row[f"{name}_io_read_mib"] = mib(s.io.get("rbytes"))
+            row[f"{name}_io_write_mib"] = mib(s.io.get("wbytes"))
             row[f"{name}_end_file_mib"] = mib(s.end_file)    # page cache at exit
             row[f"{name}_cpu_usec"] = s.cpu.get("usage_usec")
         if len(samplers) == 2:
@@ -777,6 +808,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # cross-architecture comparable an anon-only column is not.
             row["peak_owned_mib_sum"] = mib(sum(s.peak_anon + s.peak_shmem
                                                 for _, s in samplers))
+            row["io_write_mib_sum"] = mib(sum((s.io.get("wbytes") or 0)
+                                              for _, s in samplers))
+            row["io_read_mib_sum"] = mib(sum((s.io.get("rbytes") or 0)
+                                             for _, s in samplers))
             row["end_anon_mib_sum"] = mib(sum((s.end_anon or 0) for _, s in samplers))
             row["cpu_usec_sum"] = sum((s.cpu.get("usage_usec") or 0) for _, s in samplers)
         elif samplers:
@@ -785,6 +820,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row["peak_shmem_mib_sum"] = row.get("client_peak_shmem_mib")
             row["peak_owned_mib_sum"] = mib(samplers[0][1].peak_anon
                                             + samplers[0][1].peak_shmem)
+            row["io_write_mib_sum"] = mib(samplers[0][1].io.get("wbytes"))
+            row["io_read_mib_sum"] = mib(samplers[0][1].io.get("rbytes"))
             row["end_anon_mib_sum"] = row.get("client_end_anon_mib")
             row["cpu_usec_sum"] = row.get("client_cpu_usec")
         if server_cid:
