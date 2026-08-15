@@ -346,6 +346,19 @@ def main():
                 times.append((time.perf_counter() - t) * 1000)
                 ref = r
             out[f"{which}_ms"] = round(statistics.median(times), 2)
+            # COLD AND WARM, both free: this loop discards no warmup, so the
+            # published median already BLENDS the first touch with the
+            # repeats, and how much it blends depends on OLAP_ITER. Q1 and Q6
+            # are full-scan and narrow-filter reads over the same fact table,
+            # which is exactly where cache state moves a number: the graph lane
+            # measured Neo4j gaining 9.9x on a second pass while LadybugDB,
+            # resident from load, gained nothing.
+            #
+            # The published field is unchanged so existing numbers stay
+            # comparable. These two say what it is made of.
+            out[f"cold_{which}_ms"] = round(times[0], 2)
+            if len(times) > 1:
+                out[f"warm_{which}_ms"] = round(statistics.median(times[1:]), 2)
             out[f"{which}_rows"] = len(ref) if ref is not None else 0
     else:
         rng = random.Random(SEED)
