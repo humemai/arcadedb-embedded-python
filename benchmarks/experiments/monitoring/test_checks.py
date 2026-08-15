@@ -4,8 +4,11 @@
 A rule that has silently stopped firing looks exactly like a clean campaign,
 which is the failure mode a monitor cannot afford. So every rule gets a
 control row that must stay quiet and a mutated row that must go red, and the
-release-version cases are checked explicitly because a substring test for
-"rc" matches "a-rc-adedb" and that exact bug has now been written twice.
+release-version cases are checked explicitly because substring tests keep
+matching things that are not versions: "rc" matches "a-rc-adedb", and a
+\d[ab]\d alpha/beta pattern matches the "2b0" inside a git build hash. Three
+instances of that one class of bug in a single day, which is why the fix is a
+test rather than another patch.
 
     python3 monitoring/test_checks.py     # exits non-zero if any rule misbehaves
 """
@@ -52,7 +55,13 @@ DEFECTS = [
 # Releases, and strings that merely CONTAIN a pre-release-looking substring.
 # Every one of these must stay quiet.
 RELEASES = ["26.8.1", "27.0.0", "1.5.5", "ladybug:0.19.1", "arcadedb:26.8.1",
-            "qdrant:1.19.0", "server:26.8.1"]
+            "qdrant:1.19.0", "server:26.8.1",
+            # The real string an ArcadeDB server reports. Its git hash ends
+            # "...6299b2b0c", and a \d[ab]\d pattern applied to the whole
+            # string matches the "2b0" inside it, so a healthy released server
+            # was reported as a pre-release the table loader would reject.
+            # Third time this class of bug shipped in one day; it stays here.
+            "server:26.8.1 (build 727aa4568cdface314ee15cd242f71d6299b2b0c/1785790932717/main)"]
 
 
 def findings(row, isjvm=True):

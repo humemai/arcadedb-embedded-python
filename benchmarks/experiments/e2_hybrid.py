@@ -67,7 +67,10 @@ class ArcadeE2:
             # everyone, the comparator got the committed, latency-stable
             # heap and ArcadeDB got one that grows.
             jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
-        self.version = "arcadedb-embedded"
+        # THE WHEEL'S version, not its name (#156). A row stamped
+        # "arcadedb-embedded" cannot be re-measured by anyone including us.
+        from importlib.metadata import version as _v
+        self.version = _v("arcadedb-embedded")
 
     def build(self, vecs, edges):
         db, a = self.db, self._a
@@ -133,7 +136,11 @@ class SurrealE2:
         from surrealdb import Surreal
         self.db = Surreal("mem://")
         self.db.use("bench", "bench")
-        self.version = "surrealdb-py"
+        # THE DRIVER'S version, not its name (#156). Note this is the Python
+        # client: this arm runs SurrealDB IN-PROCESS at mem://, so there is no
+        # server to ask, which is itself the disclosure #153 is about.
+        from importlib.metadata import version as _v
+        self.version = "surrealdb-py:" + _v("surrealdb")
 
     def build(self, vecs, edges):
         q = self.db.query
@@ -207,7 +214,21 @@ class ComposedE2:
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
         self.neo = GraphDatabase.driver(f"bolt://{host}:7687",
                                         auth=("neo4j", "dbbenchpass"))
-        self.version = "qdrant-local+neo4j"
+        # BOTH HALVES, with versions (#156). A composed stack whose row names
+        # two engines and versions neither cannot be reproduced, and this arm
+        # is the comparator our atomicity claim rests on.
+        from importlib.metadata import version as _v
+        try:
+            _qv = _v("qdrant-client")
+        except Exception:
+            _qv = "?"
+        try:
+            with self.neo.session() as _s:
+                _nv = _s.run("CALL dbms.components() YIELD versions "
+                             "RETURN versions[0] AS v").single()["v"]
+        except Exception as e:
+            _nv = f"unknown ({e.__class__.__name__})"
+        self.version = f"qdrant-local:{_qv}+neo4j:{_nv}"
 
     def build(self, vecs, edges):
         from qdrant_client import models as qm

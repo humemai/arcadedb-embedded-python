@@ -36,11 +36,21 @@ import sys
 RES = os.path.expanduser("~/repos/humemai/arcadedb-embedded-python/"
                          "benchmarks/experiments/results")
 
-# ANCHOR THE PRE-RELEASE TEST TO A VERSION, NEVER TO A SUBSTRING OF THE WHOLE
-# STRING. A bare `"rc" in ver` matches "a-rc-adedb", and the identical mistake
-# in build_images.sh refused every correct release build until it was found.
-# Each alternative below must sit against a digit or a boundary.
-_PRERELEASE = re.compile(r"(\.dev\d|[-_.]?rc\d|\d[ab]\d|-SNAPSHOT)", re.I)
+# EXTRACT THE VERSION, THEN TEST IT. Testing the whole string has now failed
+# three times in one day, each time differently:
+#   "rc" in ARCADE_PKGS      matched "a-rc-adedb"        (build_images.sh)
+#   "rc" in engine_version   matched "a-rc-adedb"        (here)
+#   \d[ab]\d in the string   matched "...6299b2b0c",     (here)
+#     the git hash inside "server:26.8.1 (build 727aa4568...)", so a healthy
+#     released server was reported as a pre-release the table loader rejects.
+# A version is a dotted numeric token. Find those, test only those, and a
+# build hash or a package name cannot reach the pattern at all.
+_VERSION_TOKEN = re.compile(r"\d+(?:\.\d+)+[A-Za-z0-9.\-_+]*")
+_PRERELEASE = re.compile(r"(\.dev\d|[-_.]?rc\d|\d[ab]\d|-?SNAPSHOT)", re.I)
+
+
+def _is_prerelease(ver):
+    return any(_PRERELEASE.search(tok) for tok in _VERSION_TOKEN.findall(ver))
 
 JVM = ("arcadedb", "neo4j", "elasticsearch", "questdb")
 VOLUME_ENGINES = ("arcadedb_graph_server", "arcadedb_server", "arcadedb_sparse_server",
@@ -242,7 +252,7 @@ def check_row(r, tag, isjvm, fail):
         # cell nobody can reproduce.
         fail.append(f"{tag}: engine_version={ver!r} names the engine but gives "
                     f"no version (#156)")
-    elif _PRERELEASE.search(ver):
+    elif _is_prerelease(ver):
         fail.append(f"{tag}: engine_version={ver!r} is a pre-release; "
                     f"the table loader will reject this row")
     if r.get("cpuset") not in (None, "0-11"):
@@ -266,9 +276,14 @@ def main():
                     help="every row ever written; expect history to fire rules")
     ap.add_argument("--expect-reps", type=int, default=5,
                     help="reps a complete cell should have (0 disables the check)")
+    ap.add_argument("--results-file", default="runs.jsonl",
+                    help="which results file to read, under results/. The smoke "
+                         "stage writes runs_smoke.jsonl so it cannot supersede a "
+                         "finished cell, and its rows still have to be checked "
+                         "before the stage counts as passed.")
     args = ap.parse_args()
 
-    with open(os.path.join(RES, "runs.jsonl")) as fh:
+    with open(os.path.join(RES, args.results_file)) as fh:
         rows = [json.loads(ln) for ln in fh if ln.strip()]
 
     cut = _cut_point(args, rows)

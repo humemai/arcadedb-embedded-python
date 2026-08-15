@@ -111,7 +111,16 @@ class PostgresTPC:
         self.cx = psycopg.connect(
             f"host={host} dbname=bench user=postgres password=dbbenchpass",
             autocommit=False)
-        self.version = "postgres"
+        # ASK THE SERVER. "postgres" is a name, not a version, and a row
+        # carrying one cannot be re-measured by anyone including us (#156).
+        # Never lose a completed run over provenance: record the reason.
+        try:
+            with self.cx.cursor() as _c:
+                _c.execute("SELECT version()")
+                self.version = _c.fetchone()[0].split(" (")[0]
+            self.cx.rollback()
+        except Exception as e:
+            self.version = f"postgres:unknown ({e.__class__.__name__})"
 
     def build(self, li, part):
         cur = self.cx.cursor()
@@ -241,7 +250,15 @@ class ArcadeServerTPC(ArcadeTPC):
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
         self.base = f"http://{host}:2480/api/v1"
         self.rq.auth = ("root", "dbbenchpass")
-        self.version = "server"
+        # ASK THE SERVER, as l1_tabular, l2_graph, l3_sparse and l3d_dense all
+        # already do. "server" is a name, not a version (#156), and this lane
+        # was the last one still asserting it. The same defect in another form
+        # made ArcadeDB rows read "server:latest" while a pinned digest ran.
+        try:
+            info = self.rq.get(f"http://{host}:2480/api/v1/server", timeout=30)
+            self.version = "server:" + (info.json().get("version") or "?")
+        except Exception as e:
+            self.version = f"server:unknown ({e.__class__.__name__})"
 
     def _cmd(self, command, timeout=1800, language="sql"):
         r = self.rq.post(f"{self.base}/command/bench",

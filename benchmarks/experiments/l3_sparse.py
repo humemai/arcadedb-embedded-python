@@ -334,7 +334,14 @@ class Qdrant(Base):
         self.models = models
         host = os.environ["BENCH_SERVER_HOST"]
         self.cl = QdrantClient(url=f"http://{host}:6333", timeout=600)
-        self.version = "qdrant"
+        # THE SERVER'S version, not the string "qdrant" (#156). The paper says
+        # served comparators are pinned by image digest, which is true of
+        # runner.py's config but was unverifiable from the artifact a reader
+        # actually gets. Never lose a run over provenance: record the reason.
+        try:
+            self.version = "qdrant:" + str(self.cl.info().version)
+        except Exception as e:
+            self.version = f"qdrant:unknown ({e.__class__.__name__})"
         self.cl.create_collection(
             collection_name=self.COLL,
             vectors_config={},
@@ -381,7 +388,11 @@ class Milvus(Base):
         from pymilvus import DataType, MilvusClient
         host = os.environ["BENCH_SERVER_HOST"]
         self.cl = MilvusClient(uri=f"http://{host}:19530")
-        self.version = "milvus"
+        # THE SERVER'S version, not the string "milvus" (#156).
+        try:
+            self.version = "milvus:" + str(self.cl.get_server_version())
+        except Exception as e:
+            self.version = f"milvus:unknown ({e.__class__.__name__})"
         schema = self.cl.create_schema(auto_id=False)
         schema.add_field("id", DataType.INT64, is_primary=True)
         schema.add_field("emb", DataType.SPARSE_FLOAT_VECTOR)
