@@ -60,7 +60,13 @@ class ArcadeE2:
         self._a = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "4g")
         self.db = arcadedb.create_database(
-            "/tmp/e2_arcade", jvm_kwargs={"heap_size": heap})
+            "/tmp/e2_arcade",
+            # In THIS lane the asymmetry had a direct comparator: the
+            # composed arm's Neo4j gets NEO4J_server_memory_heap_initial
+            # __size pinned, so under a protocol the paper says applies to
+            # everyone, the comparator got the committed, latency-stable
+            # heap and ArcadeDB got one that grows.
+            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
         self.version = "arcadedb-embedded"
 
     def build(self, vecs, edges):

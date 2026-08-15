@@ -53,7 +53,14 @@ class ArcadeTS:
         self._arcadedb = arcadedb
         heap = os.environ.get("ARCADEDB_HEAP", "6g")
         self.db = arcadedb.create_database("/tmp/l4_arcade",
-                                           jvm_kwargs={"heap_size": heap})
+                                           # -Xms pinned to -Xmx, matching every server arm and the other lanes.
+                                           # heap_size sets -Xmx ONLY (bindings jvm.py), so without this the JVM
+                                           # starts at its default initial heap, 1/64 of the cgroup, and grows
+                                           # under load. The paper states -Xms=-Xmx as a protocol invariant for
+                                           # everyone. It was true of l1, l2, l3s, l3d and every server arm, and
+                                           # false here.
+                                           jvm_kwargs={"heap_size": heap,
+                                                       "jvm_args": f"-Xms{heap}"})
 
     def version(self):
         return f"arcadedb {self._arcadedb.__version__}"
