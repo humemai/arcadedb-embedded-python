@@ -31,6 +31,7 @@ Run it before regenerating tables, and at the freeze.
 Exit status is 1 if any BAD finding is reported, so it can gate a re-generation.
 """
 import argparse
+import collections
 import glob
 import json
 import os
@@ -626,6 +627,70 @@ def _versions_in(subdir):
     return vals, keys, n, missing
 
 
+def check_schema_homogeneity(rows):
+    """Every row of a (lane, scale) must carry the same measured fields.
+
+    THE FAILURE THIS CATCHES cost three campaign restarts on 2026-08-15. An
+    instrument or lane-script change landing mid-run gives the cells that ran
+    after it a field the earlier cells lack. Nothing downstream notices: the
+    generators take a median over whatever is present, so half a lane measured
+    one way and half another averages into a tidy number that describes
+    neither. PROTOCOL.md states the rule as REMEMBERED, and remembering it is
+    what failed three times in one hour.
+
+    Compares only MEASURED fields. Provenance and identity keys are excluded
+    because they legitimately vary: an embedded arm has no server_*, a non-JVM
+    arm has no heap, and an ablation carries its own marker.
+
+    Reports rather than fails on history: rows predating an instrument are the
+    normal state of an append-only results file, so the finding is scoped to
+    fields that some CURRENT rows have and their siblings do not.
+    """
+    IGNORE_PREFIX = ("server_", "client_", "ts_", "run_", "image", "engine_",
+                     "producer", "host", "cpuset", "mem_", "heap", "gav",
+                     "backend", "lane", "scale", "workload", "rep", "tier",
+                     "topology", "rc", "error", "oom", "disk_note")
+    def measured(r):
+        return {k for k, v in r.items()
+                if isinstance(v, (int, float))
+                and not k.startswith(IGNORE_PREFIX)}
+
+    # KEYED ON WORKLOAD TOO. Without it an oltp row (insert_p50_ms) is
+    # compared against an olap row (olap_*_ms) from the same backend, and the
+    # check fires on every cell family in the corpus. They measure different
+    # things by design; only rows of the same workload are comparable.
+    by = collections.defaultdict(list)
+    for r in rows:
+        by[(r.get("lane"), r.get("scale"), r.get("workload"))].append(r)
+
+    bad = 0
+    for key, rs in sorted(by.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
+        if len(rs) < 2:
+            continue
+        # Union minus intersection = fields not every row of this cell family
+        # carries. Per BACKEND, since different engines legitimately report
+        # different metrics (recall exists only where there is ground truth).
+        per_be = collections.defaultdict(list)
+        for r in rs:
+            per_be[r.get("backend")].append(r)
+        for be, brs in sorted(per_be.items(), key=lambda kv: str(kv[0])):
+            if len(brs) < 2:
+                continue
+            sets = [measured(r) for r in brs]
+            union, inter = set().union(*sets), set.intersection(*sets)
+            diff = union - inter
+            if diff:
+                bad += 1
+                print(f"  SPLIT SCHEMA {key[0]}/{key[1]}/{key[2]}/{be}: "
+                      f"{len(brs)} rows disagree on {sorted(diff)[:6]}"
+                      + (" ..." if len(diff) > 6 else ""))
+                print(f"    A lane whose rows measured different things cannot "
+                      f"be aggregated; re-run the cell family or drop the odd rows.")
+    if not bad:
+        print("  every (lane, scale, backend) family agrees on its measured fields")
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--table", help="check only this table (e.g. T5)")
@@ -766,6 +831,18 @@ def main():
                   f"(runner.py holds the digest) but the artifact cannot show\n"
                   f"  it. Not passed and not failed: it is the population that "
                   f"needs re-measuring, and silence would read as coverage.")
+
+    # SCHEMA HOMOGENEITY. Runs last because it reads the same canonical rows
+    # everything else does, and because a split schema invalidates the
+    # aggregates the other checks were validating.
+    print("\n=== schema homogeneity: one lane, one set of measured fields ===")
+    try:
+        import make_paper_tables as _M
+        bad_schema = check_schema_homogeneity(_M.load_canonical())
+    except Exception as _e:
+        bad_schema = 0
+        print(f"  NOT CHECKED: {_e.__class__.__name__}: {_e}")
+    bad += bad_schema
 
     print(f"\n{bad} BAD finding(s)"
           + (f": {'0 (NOT CHECKED)' if not _CAPTION_CHECK_RAN else bad_caption}"
