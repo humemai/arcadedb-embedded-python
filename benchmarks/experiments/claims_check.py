@@ -426,7 +426,14 @@ def _comparator_engines():
                "chroma_dense": "chroma", "lancedb_dense": "lancedb",
                "elasticsearch_sparse": "elasticsearch",
                "neo4j_graph": "neo4j", "ladybug_graph": "ladybug",
-               "surrealdb_e2": "surrealdb"}
+               "surrealdb_e2": "surrealdb",
+               # THE BUFFER-POOL ABLATION IS NOT A TWELFTH ENGINE. It is
+               # PostgreSQL with shared_buffers turned up, same image digest,
+               # and without this alias it counted as its own engine and the
+               # gate reported 12 against the paper's correct "eleven". The
+               # hazard is not the gate going red, it is somebody trusting
+               # data=12 and editing the prose to match.
+               "postgres_tuned": "postgres"}
     names = set()
     for r in M.load_canonical():
         b = r.get("backend")
@@ -638,27 +645,27 @@ def e2_atomicity(backend, field):
     claim (rule of three: the 95% upper bound on the failure rate is ~45%).
     So both the count and the outcome are pinned here.
     """
-    import json as _json
-    import statistics as _stat  # noqa: F401  (kept for symmetry with siblings)
-    path = os.path.join(M.RESULTS, "runs.jsonl")
+    # THROUGH load_canonical, NOT THE RAW LOG. Reading runs.jsonl directly
+    # bypassed dedupe, the rc filter, PAPER_SCALES, the cpuset guard and the
+    # pre-release guard, so every superseded repetition was summed again:
+    # 30 rows where 15 are canonical, returning 400 against a pinned 200, and
+    # it would have returned 600 after the next campaign.
+    #
+    # The direction matters. The paper reads "0 of 200", and 0-of-400 is a
+    # materially stronger rule-of-three bound than 0-of-200 -- so the defect
+    # inflated OUR OWN safety claim. Three sibling gates stayed green only
+    # because zero times any row count is still zero.
+    #
+    # `trials` remains the discriminator: it exists only on rows written by
+    # the FIXED harness, so pre-fix rows cannot satisfy this claim.
     total = 0
     seen = 0
-    with open(path) as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            try:
-                r = _json.loads(line)
-            except ValueError:
-                continue
-            # `trials` exists only on rows written by the FIXED harness, which
-            # is exactly the discriminator we want: pre-fix rows must not be
-            # able to satisfy this claim.
-            if (r.get("lane") == "e2" and r.get("workload") == "atomicity"
-                    and r.get("backend") == backend
-                    and r.get("trials") is not None):
-                seen += 1
-                total += int(r.get(field) or 0)
+    for r in M.load_canonical():
+        if (r.get("lane") == "e2" and r.get("workload") == "atomicity"
+                and r.get("backend") == backend
+                and r.get("trials") is not None):
+            seen += 1
+            total += int(r.get(field) or 0)
     return float(total) if seen else None
 
 
@@ -670,18 +677,14 @@ def e2_clean_baseline_disagreements():
     fifty completed operations have written both stores and nothing has been
     interrupted yet, so the two must agree exactly.
     """
-    import json as _json
-    path = os.path.join(M.RESULTS, "runs.jsonl")
+    # Through load_canonical for the same reason as e2_atomicity above: the
+    # raw log double-counts superseded repetitions. Green today only because
+    # the value is zero, and zero times any row count is zero -- which is
+    # exactly the kind of accident that hides a defect until the number moves.
     total = 0.0
     seen = 0
-    with open(path) as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            try:
-                r = _json.loads(line)
-            except ValueError:
-                continue
+    if True:
+        for r in M.load_canonical():
             if (r.get("lane") == "e2" and r.get("workload") == "atomicity"
                     and r.get("backend") == "composed_qdrant_neo4j"
                     and r.get("trials") is not None):
@@ -1530,7 +1533,12 @@ def regen():
     saved = M.OUT
     try:
         M.OUT = tmp
-        M.main()
+        # freeze=False: OUT is redirected but RESULTS is not, and main() would
+        # otherwise write runs_paper.csv -- the committed record of the
+        # PREVIOUS campaign's canonical selection -- from the CURRENT rows.
+        # That made the documented read-only check destructive, and
+        # irreversibly so, since load_canonical always dedupes to latest.
+        M.main(freeze=False)
     except Exception as e:
         print(f"  ERROR regenerating: {e.__class__.__name__}: {e}")
         return 1

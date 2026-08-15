@@ -848,7 +848,22 @@ def freeze_paper_rows(rows):
     print(f"froze {len(rows)} canonical rows -> {os.path.relpath(path, HERE)}")
 
 
-def main():
+def main(freeze=True):
+    """Regenerate the tables. freeze=False writes NO tracked file.
+
+    THE FREEZE IS A SIDE EFFECT, and a destructive one. claims_check --regen
+    is documented as a read-only check ("generates into a temp directory and
+    diffs; never writes the real tables") and it redirects OUT to a temp dir
+    to keep that promise -- but freeze_paper_rows writes to RESULTS, which is
+    not redirected, so running the read-only gate overwrote runs_paper.csv:
+    the only committed record of the PREVIOUS campaign's canonical selection,
+    381 rows replaced by 405. That file cannot be regenerated back, because
+    load_canonical() always dedupes to the latest ts_utc.
+
+    Worse than the loss: after such a run the repo holds a CSV frozen from one
+    row set beside tables built from another, two tracked files that look
+    consistent and are not.
+    """
     strict = "--strict" in sys.argv
     failed = run_gates()
     if failed and strict:
@@ -857,7 +872,8 @@ def main():
 
     rows = load_canonical()
     print(f"{len(rows)} canonical rows")
-    freeze_paper_rows(rows)
+    if freeze:
+        freeze_paper_rows(rows)
     tabular_table(rows)
     graph_table(rows)
     sparse_table(rows)
