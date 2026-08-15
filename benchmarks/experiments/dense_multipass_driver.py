@@ -30,7 +30,7 @@ import time
 
 from l3d_dense import (BACKENDS, load_dataset, K, canonical_quant_label,
                         degree_stamp)
-from bench_common import run_conditions
+from bench_common import run_conditions, SelfMemorySampler
 
 # Read with .get, not [], so the module can be IMPORTED without the run
 # environment. queue61's contract check does `import dense_multipass_driver`
@@ -55,6 +55,13 @@ def main():
         test, gt = test[:NQ], gt[:NQ]
     b = BACKENDS[BACKEND]()
     b.connect()
+
+    # Peak memory for the WHOLE cell, build included, matching what the
+    # lane rows mean by peak_anon_mib_sum. Started here rather than
+    # around the query passes because an index build is where a vector
+    # engine's memory actually peaks, and T5's memory column would
+    # otherwise report a steady state the lane column does not.
+    mem = SelfMemorySampler().start()
 
     t0 = time.perf_counter()
     b.build(train)
@@ -107,6 +114,14 @@ def main():
         rec.update(run_conditions(lane="l3d_mp"))
         out_reps.append(rec)
         print("RESULT " + json.dumps(rec), flush=True)
+
+    # One peak for the cell, stamped onto every pass of it. finish()
+    # is called ONCE: calling it inside the loop would stop the
+    # sampler on pass 0 and freeze every later row at whatever the
+    # peak happened to be before the warm passes ran.
+    cell_mem = mem.finish()
+    for _r in out_reps:
+        _r.update(cell_mem)
 
     outp = os.environ.get("PROBE_OUT", "")
     if outp:

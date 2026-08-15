@@ -50,7 +50,7 @@ import time
 
 from l3_sparse import (BACKENDS, K, WARMUP, DIMENSIONS, SCALE_DOCS,
                        SCALE_QUERIES, gen_queries, pct, recall_at_k, _src)
-from bench_common import run_conditions
+from bench_common import run_conditions, SelfMemorySampler
 
 # Read with .get so the module can be imported without the run environment;
 # the dense driver's contract check broke on a module-level os.environ[...].
@@ -104,6 +104,13 @@ def main():
     b = BACKENDS[BACKEND]()
     b.connect()
 
+    # Peak memory for the WHOLE cell, build included, matching what the
+    # lane rows mean by peak_anon_mib_sum. Started here rather than
+    # around the query passes because an index build is where a vector
+    # engine's memory actually peaks, and T4's memory column would
+    # otherwise report a steady state the lane column does not.
+    mem = SelfMemorySampler().start()
+
     t0 = time.perf_counter()
     b.build(n_docs)
     b.post_build()          # the vendor settle step, same as the lane
@@ -135,6 +142,14 @@ def main():
         rec.update(run_conditions(lane="l3s_mp"))
         out_reps.append(rec)
         print("RESULT " + json.dumps(rec), flush=True)
+
+    # One peak for the cell, stamped onto every pass of it. finish()
+    # is called ONCE: calling it inside the loop would stop the
+    # sampler on pass 0 and freeze every later row at whatever the
+    # peak happened to be before the warm passes ran.
+    cell_mem = mem.finish()
+    for _r in out_reps:
+        _r.update(cell_mem)
 
     outp = os.environ.get("PROBE_OUT", "")
     if outp:

@@ -496,6 +496,39 @@ def docker_rm(cid):
     subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
 
 
+def container_disk_mb(cid):
+    """Bytes written into a container's writable layer, in MiB.
+
+    ON-DISK SIZE was in the campaign plan from the start ("bulk-load time,
+    query p50/p99, QPS, recall@10, disk, peak RSS") and no lane ever recorded
+    it. For a storage engine that is a strange omission: how much space an
+    index costs is half of what makes an index choice a tradeoff, and it is
+    the axis where our sparse int8 quantization should show its win.
+
+    Measured as the container's writable layer rather than by du-ing a data
+    directory, because a per-backend path is a per-backend ASSERTION: eight
+    engines, eight guesses, and a wrong guess returns a confident zero rather
+    than an error. The writable layer needs no path, works the same for an
+    embedded engine writing to /tmp and a server writing to /var/lib, and is
+    read from the daemon.
+
+    Two things it deliberately does NOT count, both correct: the read-only
+    image layers (not data), and bind-mounted input, since /data is mounted
+    read-only and the corpus is not the engine's storage.
+
+    Sampled twice per cell. The baseline right after ready captures whatever
+    the engine writes to start up (initdb is ~50 MB before a row is loaded),
+    so the difference is what the WORKLOAD cost rather than what the image
+    ships with.
+    """
+    out = sh(["docker", "inspect", "--size", "-f", "{{.SizeRw}}", cid],
+             check=False)
+    try:
+        return round(int(out.strip()) / 1048576.0, 1)
+    except (ValueError, AttributeError):
+        return None
+
+
 def observe_server(cid):
     """The server container's real cpuset, cap, heap and image, from docker.
 
@@ -549,7 +582,11 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
            "mem_cap": MEM_BY_SCALE[scale],
            "ts_utc": datetime.now(timezone.utc).isoformat()}
 
-    server_cid, samplers = None, []
+    # cli_cid initialised HERE, not at its assignment 90 lines down: the
+    # finally block reads it, and a server that fails to start returns
+    # before the client is ever created. Leaving it unbound turns a
+    # recorded server_not_ready row into a NameError that loses the cell.
+    server_cid, cli_cid, samplers = None, None, []
     try:
         if be["topology"] == "client_server":
             server_mem = int(total_mem * SERVER_MEM_FRACTION)
@@ -596,6 +633,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 row["error"] = (f"server heap {row['server_heap']} != requested "
                                 f"{heap}; the cell is not the one we specified")
                 return row
+            # Before any of our data exists: the engine's own startup cost.
+            row["server_disk_baseline_mb"] = container_disk_mb(server_cid)
             s_srv = CgroupSampler(server_cid)
             s_srv.start()
             samplers.append(("server", s_srv))
@@ -647,6 +686,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         if len(cli_cid) < 12:
             row["error"] = "client_failed_to_start"
             return row
+        row["client_disk_baseline_mb"] = container_disk_mb(cli_cid)
         s_cli = CgroupSampler(cli_cid)
         s_cli.start()
         samplers.append(("client", s_cli))
@@ -701,6 +741,25 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row.update(json.load(open(out_path)))
     finally:
         mib = lambda b: round((b or 0) / 2**20, 1)
+        # Disk BEFORE the samplers are torn down and the containers removed:
+        # the writable layer disappears with the container, so a measurement
+        # taken after cleanup is not late, it is impossible.
+        if server_cid:
+            row["server_disk_mb"] = container_disk_mb(server_cid)
+        if cli_cid:
+            row["client_disk_mb"] = container_disk_mb(cli_cid)
+        _d = [row.get(k) for k in ("server_disk_mb", "client_disk_mb")
+              if row.get(k) is not None]
+        _b = [row.get(k) for k in ("server_disk_baseline_mb", "client_disk_baseline_mb")
+              if row.get(k) is not None]
+        if _d:
+            row["disk_mb_sum"] = round(sum(_d), 1)
+            # What the WORKLOAD wrote, with the engine's startup footprint
+            # (initdb, empty catalogs, logs) taken off. This is the number a
+            # storage comparison wants; the raw ones stay beside it so the
+            # subtraction is visible rather than baked in.
+            row["disk_data_mb"] = round(sum(_d) - sum(_b), 1) if _b else None
+
         for name, s in samplers:
             s.finish()
             row[f"{name}_peak_mib"] = mib(s.peak)          # incl. page cache
