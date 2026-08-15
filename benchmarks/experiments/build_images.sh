@@ -37,17 +37,32 @@ declare -A PKGS=(
 )
 # A GUARD, not a comment. The dev pin above survived because nothing checked
 # it. BENCH_ALLOW_DEV=1 is the deliberate escape hatch for engine debugging.
-case "$ARCADE_PKGS" in
-  *dev*|*rc*|*SNAPSHOT*)
+#
+# MATCH THE VERSION, NOT THE PACKAGE STRING. The first version of this guard
+# tested the whole of ARCADE_PKGS for *rc*, and "a-r-c-adedb" contains "rc", so
+# it refused the correct 26.8.1 release build and blocked every rebuild. A
+# guard that cannot tell 26.8.1 from 26.8.1.dev20 is worse than no guard: it
+# gets disabled, and then nothing checks. So isolate the version token and
+# test only that. Same for the wheel path, whose basename carries the version.
+_pin=""
+if [ -n "${ARCADEDB_WHEEL:-}" ]; then
+  # arcadedb_embedded-26.8.1.dev20-py3-none-linux_x86_64.whl -> 26.8.1.dev20
+  _pin=$(basename "$ARCADEDB_WHEEL" | cut -d- -f2)
+else
+  _pin=${ARCADE_PKGS#*arcadedb-embedded==}; _pin=${_pin%% *}
+fi
+case "$_pin" in
+  *dev*|*rc[0-9]*|*a[0-9]*|*b[0-9]*|*SNAPSHOT*)
     if [ -z "${BENCH_ALLOW_DEV:-}" ]; then
-      echo "REFUSING: ARCADE_PKGS names a pre-release ($ARCADE_PKGS)." >&2
+      echo "REFUSING: ArcadeDB pin '$_pin' is a pre-release." >&2
       echo "Published rows must come from a stable release; the table loader" >&2
       echo "rejects dev builds, so this would produce rows no table admits." >&2
       echo "Set BENCH_ALLOW_DEV=1 if you are debugging rather than publishing." >&2
       exit 1
     fi
-    echo "WARNING: building a PRE-RELEASE image; these rows cannot be published" >&2 ;;
+    echo "WARNING: building a PRE-RELEASE image ($_pin); these rows cannot be published" >&2 ;;
 esac
+echo "arcadedb pin: $_pin"
 
 targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense)
 for be in "${targets[@]}"; do
