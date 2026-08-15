@@ -525,37 +525,121 @@ def docker_rm(cid):
     subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
 
 
-def container_disk_mb(cid):
-    """Bytes written into a container's writable layer, in MiB.
+def _docker(cmd_args):
+    """Run a docker command, returning (stdout, stderr, rc) rather than just
+    stdout. The disk instrument needs the failure reason, not a silent None."""
+    r = subprocess.run(["docker"] + cmd_args, capture_output=True, text=True)
+    return r.stdout.strip(), r.stderr.strip(), r.returncode
 
-    ON-DISK SIZE was in the campaign plan from the start ("bulk-load time,
-    query p50/p99, QPS, recall@10, disk, peak RSS") and no lane ever recorded
-    it. For a storage engine that is a strange omission: how much space an
-    index costs is half of what makes an index choice a tradeoff, and it is
-    the axis where our sparse int8 quantization should show its win.
 
-    Measured as the container's writable layer rather than by du-ing a data
-    directory, because a per-backend path is a per-backend ASSERTION: eight
-    engines, eight guesses, and a wrong guess returns a confident zero rather
-    than an error. The writable layer needs no path, works the same for an
-    embedded engine writing to /tmp and a server writing to /var/lib, and is
-    read from the daemon.
+def container_disk(cid, settle_s=3.0, tries=3):
+    """On-disk bytes a container is responsible for, and whether it settled.
 
-    Two things it deliberately does NOT count, both correct: the read-only
-    image layers (not data), and bind-mounted input, since /data is mounted
-    read-only and the corpus is not the engine's storage.
+    ON-DISK SIZE was in the campaign plan from the start, beside latency,
+    recall and peak RSS, and no lane ever recorded it. Index size is half of
+    what makes an index choice a tradeoff, and it is the axis where sparse
+    int8 quantization should show a win the paper gives it no credit for: we
+    print the recall quantization COSTS and never measured the bytes it SAVES.
 
-    Sampled twice per cell. The baseline right after ready captures whatever
-    the engine writes to start up (initdb is ~50 MB before a row is loaded),
-    so the difference is what the WORKLOAD cost rather than what the image
-    ships with.
+    WHERE THE BYTES ARE. Two places, and an engine may use either.
+
+      - The container's writable layer, which `docker inspect --size` reports
+        as SizeRw. That is where an embedded engine writing to /tmp puts data.
+      - A VOLUME. The first version of this measured only SizeRw and was wrong
+        for exactly the engines that matter. Verified directly: a PostgreSQL
+        container loaded with 2M rows reported SizeRw = 20480 bytes, unchanged
+        from empty, while the data sat in its volume at 1017.5 MiB. ArcadeDB,
+        Neo4j and PostgreSQL all declare volumes.
+
+    Volume destinations are read FROM THE DAEMON, not from a per-backend path
+    table. A table of guessed paths is eight assertions that fail silently;
+    docker inspect already knows where each volume is mounted. BIND mounts are
+    excluded deliberately: /data is the read-only corpus and /work is the
+    repo, and neither is the engine's storage.
+
+    SETTLING, which is the part that makes this hard. On-disk size is not
+    fixed at the moment a database closes. It drifts:
+      - writeback: du counts ALLOCATED blocks and ext4 delays allocation, so
+        an immediate reading under-counts whatever is still dirty. Hence sync.
+      - background compaction: every LSM engine here does it, ours included,
+        and obsolete segments live until a merge retires them. Drifts DOWN,
+        sometimes minutes later.
+      - deferred cleanup, and WAL truncation after checkpoint.
+
+    So this samples repeatedly and requires two consecutive readings to agree
+    within 1%. If they never agree it returns settled=False WITH both
+    readings, because a number that silently depended on when we looked is the
+    same class of defect as the memory column withdrawn this week.
+
+    Returns a dict, never a bare number, so a caller cannot mistake an
+    unsettled or failed reading for a measured one.
     """
-    out = sh(["docker", "inspect", "--size", "-f", "{{.SizeRw}}", cid],
-             check=False)
-    try:
-        return round(int(out.strip()) / 1048576.0, 1)
-    except (ValueError, AttributeError):
-        return None
+    out = {"disk_mb": None, "disk_rw_mb": None, "disk_vol_mb": None,
+           "disk_settled": None, "disk_note": None}
+
+    def sizerw():
+        so, se, rc = _docker(["inspect", "--size", "-f", "{{.SizeRw}}", cid])
+        if rc != 0:
+            return None, se[:120]
+        try:
+            return int(so) / 1048576.0, None
+        except ValueError:
+            return None, f"unparseable SizeRw {so!r}"
+
+    running, _, _ = _docker(["inspect", "-f", "{{.State.Running}}", cid])
+    vol_dests = []
+    if running == "true":
+        so, _, rc = _docker(["inspect", "-f",
+                             '{{range .Mounts}}{{if eq .Type "volume"}}{{.Destination}}'
+                             + chr(10) + '{{end}}{{end}}', cid])
+        if rc == 0:
+            vol_dests = [d for d in so.splitlines() if d.strip()]
+
+    def volumes_mb():
+        if not vol_dests:
+            return 0.0, None
+        total = 0.0
+        for d in vol_dests:
+            so, se, rc = _docker(["exec", cid, "du", "-sb", d])
+            if rc != 0:
+                return None, f"du {d}: {se[:80]}"
+            try:
+                total += int(so.split()[0]) / 1048576.0
+            except (ValueError, IndexError):
+                return None, f"du {d}: unparseable {so[:60]!r}"
+        return total, None
+
+    def sample():
+        rw, e1 = sizerw()
+        vol, e2 = volumes_mb()
+        if rw is None or vol is None:
+            return None, None, None, (e1 or e2)
+        return rw + vol, rw, vol, None
+
+    # Flush before the first reading, or it under-counts whatever is dirty.
+    if running == "true":
+        _docker(["exec", cid, "sync"])
+
+    prev, note = None, None
+    for i in range(tries):
+        total, rw, vol, err = sample()
+        if total is None:
+            out["disk_note"] = f"sample failed: {err}"
+            return out
+        out["disk_mb"], out["disk_rw_mb"], out["disk_vol_mb"] = (
+            round(total, 1), round(rw, 1), round(vol, 1))
+        if prev is not None:
+            spread = abs(total - prev) / max(total, prev, 1e-9)
+            if spread <= 0.01:
+                out["disk_settled"] = True
+                return out
+            note = f"still moving after {i + 1} samples: {prev:.1f} -> {total:.1f} MiB"
+        prev = total
+        if i < tries - 1:
+            time.sleep(settle_s)
+    out["disk_settled"] = False
+    out["disk_note"] = note or "did not converge"
+    return out
 
 
 def observe_server(cid):
@@ -663,7 +747,9 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                                 f"{heap}; the cell is not the one we specified")
                 return row
             # Before any of our data exists: the engine's own startup cost.
-            row["server_disk_baseline_mb"] = container_disk_mb(server_cid)
+            # No settle loop here, the engine is idle and just booted.
+            row["server_disk_baseline_mb"] = container_disk(
+                server_cid, tries=1)["disk_mb"]
             s_srv = CgroupSampler(server_cid)
             s_srv.start()
             samplers.append(("server", s_srv))
@@ -715,7 +801,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         if len(cli_cid) < 12:
             row["error"] = "client_failed_to_start"
             return row
-        row["client_disk_baseline_mb"] = container_disk_mb(cli_cid)
+        row["client_disk_baseline_mb"] = container_disk(cli_cid, tries=1)["disk_mb"]
         s_cli = CgroupSampler(cli_cid)
         s_cli.start()
         samplers.append(("client", s_cli))
@@ -773,10 +859,29 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         # Disk BEFORE the samplers are torn down and the containers removed:
         # the writable layer disappears with the container, so a measurement
         # taken after cleanup is not late, it is impossible.
+        # The SERVER is still running here, which is what makes its volumes
+        # measurable at all: docker exec needs a live container, and the
+        # engines that keep data in a volume are exactly the ones SizeRw
+        # cannot see. The settle loop runs on this side only, since this is
+        # where compaction and writeback are still in flight.
         if server_cid:
-            row["server_disk_mb"] = container_disk_mb(server_cid)
+            d = container_disk(server_cid)
+            row["server_disk_mb"] = d["disk_mb"]
+            row["server_disk_rw_mb"] = d["disk_rw_mb"]
+            row["server_disk_vol_mb"] = d["disk_vol_mb"]
+            row["server_disk_settled"] = d["disk_settled"]
+            if d["disk_note"]:
+                row["server_disk_note"] = d["disk_note"]
+        # The CLIENT has already exited by now, so it has no live shell and no
+        # volumes we could du. That is fine and not a gap: a client container
+        # mounts only binds (/work, /data:ro), and an embedded engine writes to
+        # /tmp, which IS the writable layer. SizeRw works on a stopped
+        # container, verified.
         if cli_cid:
-            row["client_disk_mb"] = container_disk_mb(cli_cid)
+            d = container_disk(cli_cid, tries=1)
+            row["client_disk_mb"] = d["disk_mb"]
+            if d["disk_note"]:
+                row["client_disk_note"] = d["disk_note"]
         _d = [row.get(k) for k in ("server_disk_mb", "client_disk_mb")
               if row.get(k) is not None]
         _b = [row.get(k) for k in ("server_disk_baseline_mb", "client_disk_baseline_mb")
