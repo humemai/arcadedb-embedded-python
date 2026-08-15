@@ -21,8 +21,9 @@ while true; do
     echo "###JOBS"
     pgrep -cf "q87_full_instrumented" 2>/dev/null || echo 0
     pgrep -cf "q88_sparse_medium" 2>/dev/null || echo 0
+    pgrep -cf "q89_neo4j_cache" 2>/dev/null || echo 0
     echo "###STATUS"
-    grep -aE "q8[678] " ~/STATUS.txt 2>/dev/null | tail -3
+    grep -aE "q8[6789] " ~/STATUS.txt 2>/dev/null | tail -3
     echo "###FAIL"
     # ONLY THE CURRENT RUNNER INVOCATION. q87.log is appended across every
     # launch, so a bare grep resurfaces this morning\x27s aborted smoke forever
@@ -47,7 +48,7 @@ while true; do
 
   sec() { printf '%s\n' "$snap" | sed -n "/^###$1\$/,/^###/p" | sed '1d;$d'; }
 
-  q87=$(sec JOBS | sed -n 1p); q88=$(sec JOBS | sed -n 2p)
+  q87=$(sec JOBS | sed -n 1p); q88=$(sec JOBS | sed -n 2p); q89=$(sec JOBS | sed -n 3p)
   status_last=$(sec STATUS | tail -1)
   fail_last=$(sec FAIL | tail -1)
   lane=$(sec LANE)
@@ -72,7 +73,7 @@ while true; do
 
   # 4. the queue went empty without finishing. THE failure mode a
   #    progress-only filter would sleep through.
-  if [ "${q87:-0}" = "0" ] && [ "${q88:-0}" = "0" ] && [ "$dead_reported" = "0" ]; then
+  if [ "${q87:-0}" = "0" ] && [ "${q88:-0}" = "0" ] && [ "${q89:-0}" = "0" ] && [ "$dead_reported" = "0" ]; then
     case "$status_last" in
       *ALL-DONE*) echo "CAMPAIGN: queue empty and last marker is ALL-DONE, finished cleanly" ;;
       *)          echo "CAMPAIGN DIED: no q87/q88 process and last marker is: $status_last" ;;
@@ -91,7 +92,7 @@ while true; do
   # 6. a slow heartbeat so a long quiet lane is distinguishable from a
   #    wedged monitor. Every 30 polls at 120s is once an hour.
   if [ $((tick % 30)) -eq 0 ]; then
-    echo "CAMPAIGN OK: $lane | q87=$q87 q88=$q88 | mem $(printf '%s\n' "$hostline" | sed -n 2p)"
+    echo "CAMPAIGN OK: $lane | q87=$q87 q89=$q89 q88=$q88 | mem $(printf '%s\n' "$hostline" | sed -n 2p)"
   fi
 
   sleep 120
