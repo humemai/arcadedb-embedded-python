@@ -80,6 +80,32 @@ class Base:
     def connect(self):
         raise NotImplementedError
 
+    def close(self):
+        """Release the engine handle. Overridden where there is one to release.
+
+        This lane hard-exits via os._exit(), so before this existed no adapter
+        here was ever shut down and deferred shutdown work was never paid by
+        anyone (#155). Measured on 26.8.1 in the sibling lanes: a clean close
+        settles a roughly fixed 30-87 MB, which is most of a toy database and
+        2.0% of a 1.5 GB one, while an already-settled comparator releases
+        nothing. So any disk figure taken before a close compares our
+        unsettled state against their settled one.
+
+        Every adapter answers close() so a caller never has to know which
+        engines hold a handle.
+        """
+
+    def reopen(self):
+        """Open an ALREADY-BUILT database, with no DDL and no ingest.
+
+        Separate from connect(), which creates the database and issues the
+        schema: calling that twice fails, and if it did not it would time
+        creation rather than opening. This is the quantity a build/query phase
+        split introduces (#154). Adapters with no reopen path leave this alone
+        and the probe records the reason rather than a number it did not get.
+        """
+        raise NotImplementedError(f"{self.name} has no reopen path")
+
     def exec(self, sql, params=None):
         raise NotImplementedError
 
@@ -209,6 +235,18 @@ class DuckDB(Base):
                                           len(os.sched_getaffinity(0))))
         self.con.execute(f"PRAGMA threads={self.threads}")
 
+    def close(self):
+        self.con.close()
+
+    def reopen(self):
+        import duckdb
+        self.con = duckdb.connect("/tmp/l1.duckdb")
+        # The thread pool is a connection property, so it has to be set again
+        # or the reopened arm silently runs at DuckDB's host-derived default
+        # (20 on mini) inside a 12-CPU cpuset. Same override, same reason as
+        # connect(); F6 fairness applies to a reopened engine too.
+        self.con.execute(f"PRAGMA threads={self.threads}")
+
     def exec(self, sql, params=None):
         self.con.execute(sql, params or [])
 
@@ -292,6 +330,32 @@ class ArcadeEmbedded(Base):
                         "jvm_args": f"-Xms{heap} "
                                     "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"})
         self.version = arcadedb.__version__
+        self._tx = False
+
+    def close(self):
+        self.db.close()
+
+    def reopen(self):
+        """Open the built database again: no create, no DDL, no ingest.
+
+        IN-PROCESS CAVEAT that decides how the number may be read: the JVM is
+        already up, so heap_size is inert here and what is timed is the engine
+        opening its files, not a JVM start. A phase split done as a container
+        restart pays the JVM start too, and that lands on every JVM engine and
+        on none of the others.
+
+        The heap override goes back on for the same reason DuckDB's thread
+        pragma does: it is a documented fairness override (#5215), and an arm
+        that reopened without it would be a different operating point wearing
+        the same label.
+        """
+        import arcadedb_embedded as arcadedb
+        heap = os.environ.get("ARCADEDB_HEAP", "4g")
+        self.db = arcadedb.open_database(
+            "/tmp/l1_arcade",
+            jvm_kwargs={"heap_size": heap,
+                        "jvm_args": f"-Xms{heap} "
+                                    "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"})
         self._tx = False
 
     def schema(self):
