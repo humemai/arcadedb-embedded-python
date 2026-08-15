@@ -760,6 +760,25 @@ def mem_ratio(lane_a, be_a, lane_b, be_b, scale_a=None, scale_b=None, wl=None):
     return a / b if a and b else None
 
 
+def anon_share(backend):
+    """What fraction of an engine's peak memory anonymous accounting captures.
+
+    Added after the T2 column made a 107x "memory loss" against PostgreSQL,
+    which turned out to be the image's default 128 MB shared_buffers measured
+    against a 16 GiB heap we configured. PostgreSQL's working set is in the
+    kernel page cache; anon does not count it. This number makes the asymmetry
+    a checkable quantity rather than a thing someone has to remember.
+    """
+    import statistics as _stat
+    a = [r["peak_anon_mib_sum"] for r in M.load_canonical()
+         if r.get("backend") == backend
+         and isinstance(r.get("peak_anon_mib_sum"), (int, float))]
+    t = [r["peak_mib_sum"] for r in M.load_canonical()
+         if r.get("backend") == backend
+         and isinstance(r.get("peak_mib_sum"), (int, float))]
+    return _stat.median(a) / _stat.median(t) if a and t else None
+
+
 def pyb_ratio(workload, numerator_arm, denominator_arm):
     """The published ratio, stated as the exact pair of arms it compares."""
     a = _overhead_median(workload, numerator_arm)
@@ -1140,12 +1159,23 @@ CLAIMS = [
      "failover trials in which no acknowledged write was lost; this is the "
      "correctness claim, the timing is secondary to it"),
     # --- the cross-lane memory section's five ratios ----------------------
-    ("mem.ratio.postgres", 107.2, 1.0,
-     lambda r: mem_ratio("l1", "arcadedb_embedded", "l1", "postgres",
-                         "medium", "medium", "oltp"),
-     "tabular OLTP at medium: our largest memory loss anywhere. Scoped to the "
-     "OLTP rows to match T2's column; pooling OLTP and OLAP gave 97.5, and the "
-     "prose and the table would then have disagreed with each other"),
+    # The PostgreSQL memory ratio is NOT pinned as a result, because it is not
+    # one. Its anon is 0.119 GiB, which is the image's default 128 MB
+    # shared_buffers and nothing else: PostgreSQL keeps its working set in the
+    # kernel page cache, which anon does not count. We set ArcadeDB's heap per
+    # scale tier and left that default alone, so the ratio priced our own
+    # configuration. What IS pinned is the confound itself, so that a future
+    # reader who recomputes the ratio finds this note instead of a claim.
+    ("mem.anon_share.postgres", 0.262, 0.02,
+     lambda r: anon_share("postgres"),
+     "fraction of PostgreSQL's peak that anon accounting captures. Low because "
+     "its working set is page cache; the number exists so the asymmetry is "
+     "checkable rather than remembered"),
+    ("mem.anon_share.arcadedb_graph", 0.975, 0.02,
+     lambda r: anon_share("arcadedb_graph_embedded"),
+     "same fraction for a JVM engine, where the heap IS anonymous. The gap "
+     "between this and the row above is why an anon ratio across these two "
+     "architectures is not a comparison"),
     ("mem.ratio.ladybug", 22.1, 0.3,
      lambda r: mem_ratio("l2", "arcadedb_graph_embedded", "l2", "ladybug_graph",
                          "sf10", "sf10", "oltp"),
