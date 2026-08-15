@@ -321,6 +321,21 @@ def main():
             if done:
                 fail.append(f"{tag}: {len(rs)} reps, expected {args.expect_reps}")
 
+        # --- reps of one cell must come from ONE campaign ----------------------
+        # The canonical rule takes the latest row per rep, so a re-measure that
+        # dies halfway leaves a cell holding new reps 1-3 beside old reps 4-5.
+        # It prints a median like any other cell and nothing looks wrong. Two
+        # signatures catch it: reps disagreeing about the engine version, or
+        # spanning a gap far longer than a cell takes.
+        vers = {str(r.get("engine_version")) for r in rs if r.get("engine_version")}
+        if len(vers) > 1:
+            fail.append(f"{tag}: reps span {len(vers)} engine versions "
+                        f"{sorted(vers)}; this cell mixes campaigns")
+        stamps = sorted(str(r.get("ts_utc")) for r in rs if r.get("ts_utc"))
+        if len(stamps) >= 2 and stamps[0][:10] != stamps[-1][:10]:
+            fail.append(f"{tag}: reps span {stamps[0][:10]}..{stamps[-1][:10]}; "
+                        f"a partly re-measured cell mixes old and new rows")
+
         # --- reps of one cell must agree --------------------------------------
         if len(rs) >= 3:
             for field in ("peak_owned_mib_sum", "point_p50_ms", "hop1_p50_ms",
