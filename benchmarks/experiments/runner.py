@@ -72,13 +72,21 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # -Xms=-Xmx, so the heap is committed up front and the
                  # headroom is real, not notional.
                  #
-                 # Every tier is heap = 50% of cap. deep10m is the exception at
-                 # 67% (24g in 36g): the degree-matched build peaks near 19 GB,
-                 # and 16g OOMed. Its server share is 27g against a 24g heap,
-                 # i.e. 3g of headroom -- the tightest on the board, and the
-                 # one place this policy could bite. arcadedb_dense_server's
-                 # artifact records no heap, so that margin is currently
-                 # unverifiable; fairness_check names it rather than assuming.
+                 # Every tier is heap = 50% of cap. deep10m is the exception
+                 # at 67% (24g in 36g), which is where the degree-matched
+                 # build actually peaks.
+                 #
+                 # This comment used to justify that with "the build peaks
+                 # near 19 GB, and 16g OOMed". That claim was WITHDRAWN after
+                 # #5412 made the build cache auto-size; the paper now states
+                 # twice that both quantizations build inside 16 GiB. Left as
+                 # a record because the number outlived its evidence in three
+                 # places at once, here, in the Fig. 6 annotation, and in the
+                 # lessons section.
+                 #
+                 # The served arm's headroom is no longer 3g: it now gets the
+                 # full 36g cap rather than 0.75 of it, so 12g against a 24g
+                 # heap.
                  "sf1": "4g", "sf10": "12g", "deep10m": "24g", "e2": "6g", "tpch1": "8g",
                     "tpch10": "16g"}
 # THE SERVED ENGINE GETS THE FULL TIER CAP, and the driver gets its own budget

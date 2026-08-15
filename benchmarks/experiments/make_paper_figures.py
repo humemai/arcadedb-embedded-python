@@ -975,7 +975,13 @@ def f6_memory_ceiling(rows):
     # "#" not "\\#": these are matplotlib strings, not LaTeX. The escape a
     # .tex file needs renders here as a literal backslash, and the figure
     # shipped reading "(\#3144)".
-    ax.annotate("build OOMs at 16 GiB heap;\nneeds 19+ (#3144)",
+    # The claim this used to carry, "build OOMs at 16 GiB heap; needs 19+",
+    # was WITHDRAWN after #5412 made the build cache auto-size: the body text
+    # now says twice that both quantizations build inside 16 GiB. A figure
+    # contradicting its own paper on the exact axis the figure is about is a
+    # credibility problem, not a typo, so this annotates the surviving finding
+    # instead: the envelope is set by the heap we pin, not by demand.
+    ax.annotate("envelope set by the pinned 24 GiB heap,\nnot by demand (#3144)",
                 (0.4, 17.5), fontsize=6.5, color="C3")
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, fontsize=6, rotation=20, ha="right")
