@@ -222,3 +222,91 @@ class timed:
     def __exit__(self, *exc):
         self.s = time.time() - self._t0
         return False
+
+class SelfMemorySampler:
+    """Peak anonymous working set of the process's OWN cgroup, sampled.
+
+    WHY THIS EXISTS. runner.py samples each container's cgroup from the host,
+    which is why every lane row carries peak_anon_mib_sum. The overlay drivers
+    are not launched that way: they run inside a container the runner did not
+    start, so nothing samples them, and their records carry only mem_cap, the
+    ceiling we set. That is why five of the eleven project-page tables have no
+    memory column while the underlying question was measured everywhere else.
+
+    A peak cannot be read after the fact. memory.stat's `anon` is an instant,
+    and memory.peak (which would be a kernel-maintained maximum) is absent in
+    this cgroup layout, so the only way to a peak is to sample. Same loop the
+    runner uses, running on the measured side instead of the host side.
+
+    Usage mirrors the runner's:
+
+        s = SelfMemorySampler(); s.start()
+        ... build and query ...
+        out.update(s.finish())          # peak_anon_mib_sum, end_anon_mib_sum
+
+    The field names deliberately match the lane rows, so a page table or a
+    claim can read one field for both sources instead of branching.
+
+    Returns None values rather than zeros when the cgroup files are absent (a
+    non-Linux host, or cgroup v1), because a zero here would read as "measured,
+    used nothing" and this project has already shipped one green result built
+    on a measurement that silently returned nothing.
+
+    SCOPE, and it is not a detail. This reads the CGROUP, not the process. In
+    a benchmark container that is the same thing: one cgroup, one engine, and
+    the number is the engine's. Run it anywhere else and it reports whatever
+    else shares the cgroup. Tested on the laptop it returned 15.8 GiB while
+    the process under test had allocated 300 MiB, because the laptop's shell
+    session is one cgroup. So: valid inside the bench containers, meaningless
+    outside them, and run_conditions()'s `host` field is what tells a reader
+    which of the two they are looking at.
+    """
+
+    INTERVAL = 0.5
+
+    def __init__(self, interval=None):
+        import threading
+        self.interval = interval or self.INTERVAL
+        self._stop = threading.Event()
+        self._thread = None
+        self.peak_anon = 0
+        self.end_anon = None
+        self._read_ok = False
+
+    def _anon(self):
+        try:
+            with open("/sys/fs/cgroup/memory.stat") as fh:
+                for line in fh:
+                    if line.startswith("anon "):
+                        return int(line.split()[1])
+        except (OSError, ValueError):
+            return None
+        return None
+
+    def _loop(self):
+        while not self._stop.is_set():
+            v = self._anon()
+            if v is not None:
+                self._read_ok = True
+                self.peak_anon = max(self.peak_anon, v)
+                self.end_anon = v
+            self._stop.wait(self.interval)
+
+    def start(self):
+        import threading
+        if self._anon() is None:
+            return self          # nothing to sample; finish() reports None
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def finish(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2 * self.interval)
+        if not self._read_ok:
+            return {"peak_anon_mib_sum": None, "end_anon_mib_sum": None}
+        return {
+            "peak_anon_mib_sum": round(self.peak_anon / (1 << 20), 1),
+            "end_anon_mib_sum": round((self.end_anon or 0) / (1 << 20), 1),
+        }
