@@ -1,282 +1,213 @@
-# Benchmark protocol (decided 2026-07-06)
+# PROTOCOL
 
-## Resource envelope — parent-cgroup equality
+How this benchmark harness must be operated. It is the single source for rules
+that used to live in code comments, commit messages, task notes and one person's
+head, and every rule carries a tag saying whether anything checks it (**GATE**
+with the check name, or **REMEMBERED**). The tags exist because remembering has
+failed here at least four separate times: 20 canonical rows were still on
+26.8.1.dev0/.dev3 after a whole re-measure campaign that was supposed to put
+everything on a stable release; three fairness defects were found in one
+afternoon on 2026-07-31 and all three favored us; a queue script that omitted
+`BENCH_SPARSE_SOURCE` wrote 94 sparse rows against a synthetic corpus with no
+ground truth; and the paper asserted N=5 globally while printing rows built from
+three and four passes. REMEMBERED means nothing will catch the next violation.
 
-Every cell runs under ONE parent cgroup (`docker run --cgroup-parent=<slice>`)
-carrying the cell's TOTAL budget: cpuset = P-core threads only (0-11 on the
-i9-12900HK bench host), `--memory` + `--memory-swap` caps, same JVM-heap policy
-per scale tier.
+Companion documents: FAIRNESS.md (F1-F9 and their incident histories),
+PUBLISHING.md (page policy), READING-RESULTS.md (how to read results/ without
+repeating a stale note), CAMPAIGN_2026-07.md (canonical-row definition).
 
-- Embedded topology: 1 container under the parent (engine + workload in-process).
-- Client-server topology (implementation note 2026-07-06: docker slice limits
-  need root, unavailable on the bench host — pragmatic equivalent adopted):
-  server and client containers share the SAME cpuset (CPU is work-conserving,
-  so competition is natural and unbiased — no split tunable), while MEMORY is
-  split explicitly (default 75/25 server/client; memory does not arbitrate
-  gracefully under contention — OOM). Sums must respect the cell total. One
-  sensitivity cell per family uses 85/15 to show conclusions don't depend on
-  the split.
-- HA topology (E3): 3 server containers + client under one parent with a bigger,
-  stated budget (the co-running IS the experiment).
+---
 
-## Accounting — always sum both sides
+## 1. What may reach a table
 
-- Memory: parent cgroup `memory.peak` (= client + server summed, comparable to
-  embedded's single-process number, which inherently includes client-side work).
-  Per-container peaks also recorded for breakdown figures.
-- CPU: parent cgroup usage (user+sys), plus per-container.
-- Cross-check parent numbers against `docker stats` samples (the RSS-confound
-  lesson from the cypherglot harness).
+The admission filter is `make_paper_tables.load_canonical()`. Every test below
+runs **before** the dedupe, so a bad row can never shadow a good one by being
+newer. A row that reaches a cell through an overlay directory never passes the
+filter at all; the tags below say where that matters.
 
-## Measurement rules
+- `rc == 0`. **GATE** `load_canonical`
+- Scale is in `PAPER_SCALES` for that lane. Retired and exploratory tiers cannot reach a cell. **GATE** `load_canonical`
+- `cpuset` is `"0-11"` or unrecorded. A partial cpuset is a parallel sweep shard, and the dedupe keys on `ts_utc` with no idea what a cpuset is. **GATE** `load_canonical` + `fairness_check.check_cpuset` (F1/F2, vacuous downstream of the loader)
+- `engine_version` matches no `dev\d|SNAPSHOT`. Policy is one stable release per number; 20 rows survived a campaign on dev builds. **GATE** `load_canonical._DEV_RE` for T2, T3 and the comparator rows, re-applied in `claims_check.ingest_ab` and `_e4_decomp`; **GATE (report only)** for T5's time-series row, which warns on stderr and writes the row anyway; **REMEMBERED** for T5 dense, which never passes through the loader
+- l3s rows carry `recall_at_10`. The synthetic sparse generator ships no ground truth, and at tiny and small both corpora hold 100k/1M docs, so nothing else tells them apart. **GATE** `load_canonical`
+- Elasticsearch rows carry `server_heap` equal to `heap`. `heap` records the request; ES ran a hardcoded 4g at tiny, small and medium while comparators scaled 4g/8g/16g. **GATE** `load_canonical` + `runner.observe_server`
+- Elasticsearch rows carry `es_prune is False`. ES 9.1+ prunes by default on thresholds tuned for ELSERv2; on our SPLADE corpus that is recall 0.725-0.929 against 0.991-0.9985. **GATE** `load_canonical`
+- A served row names a `d.d.d` version or carries an `@sha256` digest. `server:latest`, `server` and `unknown (PackageNotFoundError)` are not versions and the pre-release guard cannot see through them. **GATE** `load_canonical` for `runs.jsonl` rows; **REMEMBERED** for the dense overlay, which publishes `ArcadeDB (srv, fp32)` from records carrying `unknown (PackageNotFoundError)` and no `server_image_ref`
+- A witness field must be present **and** equal. Three rows had `heap=None` and `server_heap=None`, which bare equality passes by matching nothing against nothing. **GATE** `load_canonical`
+- Dedupe key is `(lane, scale, n_docs, workload, backend, gav is not False, rep)`, latest `ts_utc`, never `run_id`. Pre-2026-07-21 run_ids were not scale-qualified; without the `gav` term the no-view ablation overwrites T3 with numbers 2-7x worse. **GATE** `load_canonical`
+- One released engine line per table. Delete preference cascades, never reorder them: T4's ArcadeDB row came from a six-deep dev-overlay cascade, and f8 divided a pre-fix 165 ms embedded number by a re-measured 13.3 ms server one and made the server look 12x faster. **GATE** T4 refusal in `make_paper_tables` and five of f8's six bars in `make_paper_figures`; **REMEMBERED** for f8's dense bar, whose `_dense_multipass` source reads no version field, and for every other table (F5)
+- Lane scripts publish; bespoke drivers investigate. Both known protocol violations were bespoke-driver rows promoted to cells, and T5's dense half and native time-series row are bespoke-driver rows now. **GATE** `fairness_check.report_producers` (F6b) for `runs.jsonl` lanes, which sees no overlay record and knows neither `l3d_mp` nor `l4n`; **REMEMBERED** for every overlay-fed cell
+- Every cell is N=5, or its shortfall is disclosed in `EXPECTED` and in the caption, and the disclosure is deleted when the shortfall is fixed. **GATE** `provenance_check.caption_n` for T2, T3, T4 and T5's time-series block; **REMEMBERED** for T5's dense half, which renders through a local `fmt()` the check never sees, and for the deletion half, which `if ns == {5}: continue` short-circuits before the `EXPECTED` lookup
+- Never publish a scale where comparators have rows and we do not; print what was withheld and why at export time. **GATE** withheld-scale guard in `export_web`
+- Every artifact a paper cites lives in this repository, and the superseded run is not left where it can be compared against. **GATE (report only)** `provenance_check.FEEDS`: an empty feed prints "(no result files)" and counts nothing, and the superseded overlays (`dense_mp_2681`, `e4decomp`, `e4decomp_2681`) are listed as unmapped and left in place
+- Every overlay directory and top-level result file feeding a table records run conditions and a real version; "feeds a table" means "is opened by make_paper_tables". **GATE** `run_conditions`, `lane_files` and `_is_real_version` for the two lane files; **REMEMBERED** for the overlay directories T4 and T5 print, whose audit accepts any non-empty string (25 of 45 dense files carry only a placeholder)
+- A SNAPSHOT build's commit date must not predate a landmark commit. **GATE** `provenance_check.LANDMARKS`
 
-- Metrics per cell: latency p50/p95/p99 + mean, sustained QPS, bulk-load /
-  index-build time, recall@10 vs exact ground truth, peak + post-load RSS,
-  on-disk size, cold-start where relevant.
-- N=5 repeats -> mean±std; warmups discarded and counted.
-- Two-tier parallelism: shuffled parallel sweep (2-3 workers, disjoint cpusets)
-  for exploration only; EVERY number reported in the paper comes from serial
-  re-runs (one cell at a time, full budget). Manifests record the tier.
-- Images pinned by digest on first run; engine versions in every manifest.
+## 2. How a cell is measured
 
-## Experiment matrix (revised 2026-07-06 — eval must mirror the multi-model thesis)
+- Published latency, throughput, percentile and memory cells run serial, one at a time, on the full cpuset. Permutation protects a ratio; it cannot restore an absolute level or a tail that never happened. **GATE** `runner.py` paper tier refuses `workers != 1`
+- Reps per build, warmup count, settle step and query set are properties of the lane, fixed before a driver is written. T5 dense gave ArcadeDB 1 build + 5 passes against comparators' 5 builds + 1 pass, worth 4.0-6.1x. **REMEMBERED**
+- Never print one-build-many-passes beside per-rep-builds in one table: the two shapes price different work, and the table does not show which shape a row has. **GATE (report only)** `fairness_check.check_protocol_overlays` (F4)
+- Warm queries must be disjoint from cold ones. Replaying one set cannot separate residency from recall of the same queries. **GATE** `sparse_multipass_driver` protocol for l3s, pinned in `claims_check` as the upper bound at small and both bounds at medium; **REMEMBERED** and knowingly violated for l3d, whose driver replays the `test` set on every pass after 20 untimed warmups drawn from it
+- Each engine gets its own vendor-documented settle step, timed inside build so the build is timed to a queryable index, and none is skipped. **REMEMBERED**
+- Ingest timers must stop on the same completion semantics across a lane, or the rates price different work. Currently violated in L4: QuestDB's WAL-apply poll is inside its timer, ArcadeDB's stops at `wait_completion()`, and the 4.3x headline rests on the difference. **REMEMBERED**
+- Observe conditions from the daemon and the engine; never record what the launcher meant to do. A heap that disagrees with the request fails the cell. **GATE** `runner.observe_server`
+- Overlay drivers sample their own peak memory from inside the container, started before the build. `run_conditions` records the ceiling, not the use. **GATE** `bench_common.SelfMemorySampler`
+- The cgroup memory reading is valid only inside a bench container; record `host` so a reader knows which they have. **REMEMBERED**
+- Time every phase of a lane and record the sum beside the runner's wall clock, so the residual is visible. l3s recorded only build_s while 85% of an 8.84M cell was unaccounted for. **GATE** `phases_accounted_s` in `l3_sparse.py`
+- On-disk size is the writable layer plus every declared volume, destinations read from the daemon, and it must settle (two readings within 1%, else `disk_settled=False` with both). PostgreSQL's SizeRw stayed at 20480 bytes with 1017.5 MiB in its volume. **GATE** `runner.container_disk`
+- Record IO alongside disk, taking the last `io.stat` reading: the counters are cumulative, so only the last one is the run's total. **GATE** `CgroupSampler`
+- A silently killed cell must not read as success. Thirty OOM-killed TPC-H cells exited 0 with empty error strings. **GATE** OOM inspect + non-zero exit in `runner.py`
+- Prefer the loud failure: when a lane can measure something other than what was asked for, make it abort rather than annotate. The loud crash cost 80 cells; the quiet wrong corpus cost 94 rows and nearly a paper. **REMEMBERED**
+- A server adapter that sends vectors as text must round-trip float32 exactly (`%.9f`, not `%.6f`), because float32 needs nine significant decimal digits to survive the trip. **REMEMBERED**: `precision_check.py` is a synthetic experiment that reads no artifact, always exits 0, and nothing invokes
+- Never let a result object's Python type stand in for the finding, and abort an arm whose control operations moved nothing. E2 stamped every single-engine backend atomic by construction. **GATE** validity guard in `e2_hybrid.py`
+- Pin trial counts and denominators, not only outcomes. "5 of 5" bounds the failure rate only below ~45%; 200 injections bound it at ~1.5%. **GATE** `claims_check.e2_atomicity`, `page_check` count assertions
+- Re-profile on the release rather than assuming a dev build's profile transfers (substrate share 5.05% on 26.8.1 against 3.49% on dev23), and never add overlapping percentages. **REMEMBERED**
+- Do not add a new recorded field to a published driver until its lane is re-run; the driver's own frozen artifacts will not have the field. **REMEMBERED**
 
-Per-model lanes (compact: 1 figure/table each). DESIGN RULE: each lane pairs
-one SERVER-grade specialist with one EMBEDDED specialist — the baseline set
-itself restates the thesis (ArcadeDB is the only engine on both sides of every
-lane):
-- L1 tabular OLTP+OLAP: PostgreSQL (server) + DuckDB (embedded), 10-100M rows
-- L2 graph OLTP+OLAP (Cypher engines): Neo4j (server) + LadybugDB (embedded),
-  LDBC-SNB-style ~10M nodes / ~80M edges. Cypherglot harness reused with FRESH
-  runs + a standard-workload query set — no result overlap with the CypherGlot
-  paper (papers cross-cite; re-check disjointness when both drafts exist).
-  Memgraph/AGE/FalkorDB cited, not run.
-- L3 vector dense: Qdrant or pgvector (server) + LanceDB (embedded, columnar
-  Lance format — no server mode, worth a sentence)
-- L3 vector sparse (headline): Elasticsearch + Qdrant + Milvus (all server) at
-  100k/1M/10M x 30k-dim + E1b scale-ceiling past 10M on the fixed 61GiB node
-  ("max corpus per node" figure); real-SPLADE 1M subset for external validity.
-  NOTE: no embedded learned-sparse engine exists to our knowledge — citable
-  claim; ArcadeDB is the only embedded entry in this lane by definition.
-- L4 time-series (small): InfluxDB (server), one table
+## 3. How a comparison is kept fair
 
-Unification experiments (the depth):
-- U1 hybrid cross-model ACID txn (vector hit -> graph traversal -> doc update,
-  ONE transaction) vs composed Postgres+Neo4j+Qdrant stack: latency + atomicity
-  demonstration (induced mid-write failure)
-- U2 deployment axis: same workload embedded (wheel) vs server
-- U3 durability: kill -9 during ingest -> WAL recovery; 3-node Raft failover
-- Headline summary figure: "one engine vs N specialists" — ArcadeDB within X
-  of the best specialist per lane, only system present in every row
+- Every container in a published cell gets the full 0-11 cpuset; a client/server pair shares that one cpuset rather than each getting its own cores. CPU competition stays inside the deployment under test. **GATE** `fairness_check.check_cpuset` (F1) + the loader filter, for the client or embedded container only; **REMEMBERED** for the server side of a pair: `observe_server` records `server_cpuset` and the observed cap, and no consumer reads either
+- Every backend at a (lane, scale) gets the same `--memory`/`--memory-swap` and, for JVM engines, the same heap. Raising a resource for one engine obliges a re-measure of every engine at that tier: DEEP-10M went 28g/16g to 36g/24g and only ArcadeDB was re-measured. **GATE** `fairness_check.check_envelope` (F3)
+- Normalize a served topology before comparing: total is `srv_cap / mem_split`, never client + server. Addition read 1.75x the envelope and failed five compliant tiers. **GATE** `_total_envelope` for the arithmetic; **REMEMBERED** for the constant, already stale: the runner now stamps `mem_split="full+client"` (section 7), which `float()` rejects, so the `SERVER_MEM_FRACTION_DEFAULT = 0.75` fallback will report 1.33x the true envelope on the first cell run under it
+- Do not compare a setting to its own absence: heaps are compared only among engines that have one, and a missing heap on an ArcadeDB row is reported as a recording gap. **GATE** `check_envelope`
+- Every dense backend at a scale gets the same effective base-layer degree, read in each engine's own unit (ArcadeDB maxConnections as-is, hnswlib-family M doubled at layer 0). A row recording no degree FAILS; sqlite-vec is exempt as an exact scan. Stamp the matched parameter from one shared function, called from both the lane and its bespoke driver, so the two cannot diverge. **GATE** `fairness_check.check_degree` (F7) + `l3d_dense.degree_stamp(backend)`
+- Check the rows the table prints. Where a table reads an overlay, the fairness checks read that overlay too. **GATE** `_dense_rows()` swap in F3/F7
+- Fit every engine's thread pools to the cpuset via `sched_getaffinity`; `os.cpu_count()`, `nproc --all` and `/proc/cpuinfo` in an adapter are the bug. DuckDB ran threads=20 inside a 12-CPU cpuset, ~1.7x oversubscribed. **REMEMBERED** (F6, and three DuckDB lanes are still unfixed)
+- Verify the shared cpuset equalizes **use**, not merely the resource, before comparing p50s. Measured 2026-08-03: no embedded dense engine parallelizes a single query; LanceDB is ~20% slower on 12 CPUs than on 1. **REMEMBERED** (F1 evidence)
+- When a campaign re-measures one engine and carries the others forward, re-run one untouched comparator as a control and record its old-vs-new delta beside the table it licenses. If the control does not reproduce, the tier is re-measured in full. F1-F8 constrain a cell's configuration and none constrains when it ran. **REMEMBERED** (F9)
+- Measure every row in one table on the same engine release as the row beside it, so a version difference cannot be read as a configuration difference. **GATE** T4 and f8 only; **REMEMBERED** elsewhere (F5)
+- Never divide a number from one experiment by a number from another and call the quotient a cost. The ten-tag schema cost was published as 23x by crossing two campaigns; within one probe it is 1.97x. **GATE** `claims_check._tentag` and the dense cold/warm boundary note
+- Equalize a comparator's default only where leaving it makes the comparison apples-to-oranges (the four categories in section 7), and never relax a durability default under the same arm name: the arm then measures a system its name does not describe. **REMEMBERED**
+- A fix that costs the rival a round-trip goes only in the untimed path, or the round-trip is charged to their latency (E2's counter mirror runs in the atomicity trial, not the latency path). **REMEMBERED**
+- State the consequence of the memory contract that cuts against us: the JVM heap lives inside the container cap, so ArcadeDB's 24 GiB heap leaves ~12 GiB for JVM overhead and page cache while non-JVM comparators have all 36 GiB. Equal caps are what we can enforce. **REMEMBERED** (stated in the paper's protocol section)
+- Keep `fairness_check.DISCLOSED` empty unless an override is live, and delete a disclosure the moment the asymmetry it describes is fixed. A disclosure that outlives its subject invites a reviewer to distrust the rest. **REMEMBERED**
 
-Datasets: synthetic SPLADE-shape (seeded generator), MS MARCO SPLADE 1M,
-Stack Exchange multi-model corpus (reused, U1/U2), LDBC-SNB-style graph
-(cypherglot generator), TPC-H-style or Stack Exchange tables (L1), synthetic
-metrics stream (L4).
+## 4. What may be said about a number
 
-Disjointness: SciPy paper = embedded-from-Python, small scale, SQLite/Chroma/
-Ladybug; this paper = engine-level, 10-100x scale, Postgres/Neo4j/ES/Qdrant/
-Milvus/InfluxDB. CypherGlot = workload-shape claims; harness reuse only.
+- Never recompute a claim your own way: `import make_paper_tables` and ask `load_canonical()`. A hand-rolled median produced three false findings and replaced a correct number with an incorrect one. **GATE** `claims_check`
+- Pin prose to a generated table cell (prose to table to data), address cells by meaning (system, tier, metric) and never by column index, and parse the k/M suffixes when reading a cell back. Restructuring T4 to three rows per system silently made two claims read a recall out of a p50 slot. **GATE** `claims_check.sparse_cell`, `cell()`
+- Verify separately that the committed tables regenerate byte-identically from the data (generate into a temp dir and diff). Otherwise every cell-pinned claim passes against a stale file. **GATE** `claims_check --regen`
+- Tolerance is the number's own printed rounding, half a unit in the last digit, so a wider window cannot pass a number the table no longer prints. **GATE** `page_check._check_prose`, which derives it as `0.5 * 10 ** -decimals`; **REMEMBERED** for `claims_check`, where tolerance is a hand-typed third tuple element and several are an order of magnitude or more past half a unit
+- A selector that returns no rows, or raises, is a FAILURE, never a skip: it is otherwise green while pinning nothing. **GATE** `claims_check` NODATA/ERROR paths
+- Pin ranks as well as values, and fail loudly when a name stops resolving; never let a lookup fall back to a sentinel. Relabeling one dense arm left four rank claims computing over 8 rows while their text said 9, green by luck. **GATE** `_dense_rank` raises on unresolved `DENSE_ROWS`
+- Pin a ratio by recomputing it from its operands, and pin the endpoints of any range stated as one summary number. Both operands can be right and the quotient stale (2.4x against a true 3.7x); "within 15%" was 8% and 22%. **GATE** `claims_check` ratio selectors
+- State every ratio in one direction, ours over theirs, even where flipping it would read as a win, so a regression moves the whole group the same way. **GATE** `mem.ratio.neo4j` pinned at 0.62
+- Pin a "beats both" claim to the comparator we lose to. LadybugDB loads SF10 in 3.5 s against our 26.2. **GATE** `claims_check` L2 block
+- When one system contributes two arms, pin each arm separately. "0.52 ms beats both specialists" was the document path in a paragraph about the native engine, which is 4.16 ms and loses. **GATE** `claims_check` l4 arm claims
+- Select on `n_docs` wherever one scale name covers two corpora, and count reps for one arm, because an N claim describes a cell and not a pooled lane. **GATE** `_sparse_build`, `_sparse_reps`
+- Exclude the GAV ablation (`gav is False`) from every ordinary selector; the ablation gets its own reader. Pooling gave 841.6 ms, the midpoint of two arms and a description of neither. **GATE** `claims_check._sel`
+- Read one source per measurement. No fallback cascade across engine lines or overlay generations: the arms use different last-point keys, so a fallback changes the quantity as well as the engine. **GATE** `ts_arm`
+- A number that appears in no table needs its own claim, or it has no auditor. **GATE** `gav_ablation`, `ingest_ab`, `e3`, `_sparse_arm`, `l2_peak_anon_gib`
+- Leave an unsourced prose number pinned and FAILING rather than deleting the claim or nudging the number. **REMEMBERED**: the CLAIMS comment block enforces nothing, and the one deliberately failing pin (`l1.ingest.batched_UNSOURCED`) has been replaced by three passing ones
+- Pin a known confound as a checkable quantity instead of publishing the ratio it corrupts. Never publish a cross-engine memory ratio computed from anonymous memory: anon is 26% of PostgreSQL's peak and 97.5% of ArcadeDB's. **GATE** `anon_share`, `anon_client_share`
+- Split a served cell's memory into client and server before comparing with an embedded engine. The PostgreSQL cell a reader compares against ArcadeDB's 12.7 GiB is 88% our own Python driver on L1 and 99.6% on TPC-H. **GATE** `mem.postgres.client_share`
+- Reject a throughput from a run that wrote the wrong number of rows. **GATE** `ingest_ab` honors `count_ok`
+- Aggregate a decomposition over all matched released runs, and pin the fact that a term sits below resolution rather than quoting one tidy run. **GATE** `_e4_decomp`
+- Pin a binding-overhead ratio by the exact pair of arms it compares. Swapping P-raw-call for P-SQL moves the published vector ratio 1.28 to 1.71 with every gate green. **GATE** `pyb_ratio`
+- Sweep the paper at every freeze for ratios and unit-bearing measurements that no claim pins, so a new number cannot reach a freeze without an auditor. **GATE (report only)** `claims_check --sweep`
+- Every figure the paper `\includegraphics` must be newer than the newest generated table, and no figure may exist that no paper cites: a stale figure plots numbers the tables no longer hold, and an orphan is what a later citation reaches for. **GATE** `figures_fresh`, `_check_no_orphan_figures`
+- Both sides of a plotted ratio come from one artifact at one pass selection. f4's dense bar compared our warm p50 against Qdrant's cold one (0.15x cold/cold, 1.37x warm/warm). **GATE** `_check_f4_protocol`
+- Enforce a comparator-selection rule in code, not on the axis: the real rule is "fastest engine at recall at least ours". **GATE** `_check_f4_comparators`
+- Read labels back out of the rendered PDF. A figure can be wrong while every data check is right ("...log sca"). **GATE** `_check_labels_intact` + `EXPECT_IN_PDF`
+- A figure label must carry its own valence and must not borrow another experiment's vocabulary. f7 printed "torn state 5/5" and "atomic 5/5" as identical fractions with opposite verdicts. **REMEMBERED**
+- A caption's asserted engine version must appear in the versions its feeding overlays record; distinguish BAD (data contradicts) from UNVERIFIABLE (data cannot say). A caption is a provenance claim. **GATE** `provenance_check.caption_versions`
+- Flag a table whose rows come from more than one engine version (the one-release-per-table rule is otherwise unchecked outside T4 and f8), and name every driver that writes a hardcoded version literal about itself. **GATE (report only)** `provenance_check`
+- The page may show fewer numbers than the paper, never a different one: a page cell covering a claimed measurement must agree within that claim's tolerance, a STALE mapping fails, an ABSENT cell fails, and a pin for a deliberately dropped table is deleted rather than left reporting ABSENT. **GATE** `page_check.MAPPING`; deletion is **REMEMBERED**
+- Key page pins on the raw harness backend name and resolve through the exporter's own `display_name()`, literal key first. A rename once turned all nine mapped cells ABSENT at once. **GATE** `page_check._resolve`
+- Pin every hand-typed number in the page's prose to a named table column, keep cold and warm entries listed apart, and treat an unmatched regex or an unparseable capture as a failure. One caption sentence mixed a runs_paper.csv row with the dense overlay. **GATE** `page_check.PROSE`
+- Check the page's atomicity counts against the artifact and assert the trial count alongside every zero-torn claim, because zero is what a broken read also produces. **GATE** `_check_page_atomicity`
+- After copying the export to the site, verify the served file is byte-identical to the one the gates read. A planted wrong value left all four gates green. **GATE** `refresh_web_page`
+- Read every published label from the thing it describes: deployment from the backend topology, version from the image tag, scale from an explicit map, dense precision from the adapter. `"server" in backend` told readers five served engines run in-process. **GATE** `export_web` topology lookup and `SCALE_LABELS` for l1/l2/l3 deployment, scale and label presence; **REMEMBERED** for the adapter half, since `DENSE_PRECISION` is a hand-transcribed dict nothing compares against `l3d_dense.py`, and for l4, which bypasses `deployment_of()` for a hardcoded `L4_DEPLOYMENT`
+- Give every arm a display name; a raw backend id names a harness arm, not a system. **GATE** `display_name()`
+- A table may have more than one source, and the source link printed under it must hold the rows above it. **REMEMBERED**: `SOURCES` is hand-maintained, nothing compares a table's declared paths against where its rows were read, and a table id missing from it gets an empty list and no warning
+- State a comparator's storage precision from its own version-pinned source, never from our recall or a doc page for another version: precision changes between releases, and recall is not evidence of a storage format. **REMEMBERED**
 
-## Workload design — OLTP and OLAP are separate suites (decided 2026-07-06)
+## 5. How the checkers themselves must behave
 
-- Every lane defines TWO fixed, versioned query suites: OLTP (point reads /
-  inserts / updates / point traversals -> ops/s + latency percentiles) and OLAP
-  (analytical aggregations / multi-hop traversals -> per-query ms, mean of K
-  runs). Never blended into a single number; figures show them side by side.
-- Every engine runs BOTH suites, with its IDIOMATIC configuration per workload
-  (no strawmen): ArcadeDB graph OLAP = Graph Analytical View enabled (build
-  polled to READY; build time reported as a separate one-time-cost column);
-  specialists get their recommended indexes/settings per workload.
-- Results are annotated with each engine's design orientation (DuckDB and
-  LadybugDB are OLAP-oriented; Postgres/Neo4j OLTP-oriented; ArcadeDB
-  OLTP-oriented with GAV as its OLAP answer) so wins/losses read as
-  workload-shaped, not engine-shaped — the same honesty pattern protects
-  ArcadeDB where specialists win.
-- Index policy: indexed mode is the default reported configuration; an
-  unindexed ablation only where it teaches something (cf. cypherglot's
-  index-removal finding), not everywhere.
+- A check that could not run is carried to the summary as NOT CHECKED, not as a pass. **GATE** `_CAPTION_CHECK_RAN` and its warning, and `page_check._check_prose` returning `(0, 1)`; **REMEMBERED** for the rest, which is most of them: `caption_n` returns 0 on both skip paths, `run_conditions` continues past an empty feed, `figures_fresh` returns 0
+- Handle both artifact shapes (object and array of per-pass records), and count an unreadable file as a finding rather than skipping it. A silent skip made the best-stamped feed in the paper audit as "no result files". **GATE** `_versions_in`, `run_conditions`
+- Search for a version at every nesting level, since a key nested under `run_conditions` is invisible to a top-level scan, and reject populated but uninformative values ("unknown...", "?", "n/a", anything with no digit). **GATE** `_nested_version_keys` and `_is_real_version`, neither of which the overlay audit calls
+- Exclude sidecars (`_buildstats.json`, `_gc.json`, `_manifest.json`) from version and condition audits. A checker that cries wolf is a checker nobody runs. **GATE** `SIDECAR_SUFFIXES`
+- A gate that fails on compliance is worse than no gate: fix the checker before believing its findings. F3 once reported five FAILs, none real, with one true finding buried among them. **REMEMBERED**
+- Derive a reported quantity by instrumenting the real generator, not by re-deriving it. A second implementation is a second thing that can drift. **GATE** `caption_n` monkeypatches `mmm`/`mmm_rec`
+- Count unfixable history rather than failing on it, and name what it is: 415 overlay records predate `BENCH_IMAGE`, 235 of 380 canonical rows carry no producer stamp. Neither passed nor failed. **GATE** counters in `provenance_check` and `fairness_check`
+- Keep check functions and their tables above `if __name__ == "__main__"`, and key them on the lane spelling `runs.jsonl` uses. F6b was dead code until 2026-08-01 and keyed `l1_tpc` where the data says `l1tpc`. **REMEMBERED**, nothing tests that a check is reachable
 
-## Configuration policy — defaults first, fairness overrides (2026-07-07)
+## 6. How work is queued and stored
 
-Every backend runs **as shipped, with default index/engine settings**, unless a
-deviation is required to make the comparison fair. Legitimate deviations, each
-recorded in the manifest and in the paper's configuration table with its
-justification:
+- Every campaign dataset switch lives in `campaign_env.sh` in the repo and is sourced by the lane scripts. A launcher in a home directory is not where configuration lives: one written on 2026-08-08 omitted all six `BENCH_*` switches, and only l2 happened to validate its scale name. **REMEMBERED**: nothing sources the file, and the one live campaign script hardcodes its own switches and corpus test
+- Check each corpus is present, not merely that its path variable is set; a set path with no corpus is how the synthetic sparse rows got in. **GATE** `campaign_env_check()` for a caller that sources it
+- Run a smoke stage before any long matrix and let it abort the campaign. It caught an unknown backend arm in 19 seconds, and aborted q87 when the new disk columns came back null. **REMEMBERED**: no SMOKE-BAD stage survives outside the archive, and queue82's per-image import check runs no cell
+- One runner per bench host. `sweep_orphans()` destroys a live campaign's in-flight cells, so the runner takes an exclusive flock; never rebuild a bench image and never co-run a smoke while a campaign is live. **GATE** `results/.runner.lock`
+- The env forward list is an allowlist and gets a new entry with every new switch, or the flag parses and changes nothing; naming a workload no selected lane defines is an error. **GATE** allowlist and explicit-workload validation in `runner.py`
+- A new tier is registered only when every scale table has it. `tpch10` reached MEM/TIMEOUT but not HEAP and died on KeyError after four hours in a queue. **REMEMBERED**, argparse validates against the first table only
+- Pin server images by immutable digest and client libraries by exact version; the embedded wheel and the server image must be the same release. `:latest` once resolved to a SNAPSHOT on one host and a different digest on the other. **GATE** partial (served rows must carry a version or digest); **REMEMBERED** for the client pins
+- Read a library version from the installed distribution (`importlib.metadata`), never from a module attribute. `qdrant-client` defines no `__version__`, so that row recorded "?" from the day the lane was written. **REMEMBERED**: no check inspects how a version was obtained, and "?" passes the overlay audit
+- Merge campaign rows by appending, never replacing, and refuse the merge if it would shrink the canonical cell count, since a replacing merge drops rows a campaign already paid for. Dry run by default, timestamped backup first. **GATE** `merge_campaign.py`
+- Keep the live append log untracked and write `results/runs_paper.csv` in the same call that writes the tables, so published rows and published tables cannot come from different states of the log. **GATE** `make_paper_tables.main`
+- Archive before deleting anything under `results/`, guard the delete on the archive's own contents, and keep the archive tracked in the repo (check the ignore rules did not swallow it). The keep-list covers the logs of every job it keeps, not just the scripts, because the log is the only record of how a kept job ran. zsh does not word-split, so the first attempt tarred zero entries and then ran rm; the guard later fired for real on that empty archive. **REMEMBERED**
+- Read the artifact for current state. Trackers, task notes and append-only status files are history; only the last entry describes now. **REMEMBERED**
+- Published numbers are measured on tk@mini; a number from another host is not comparable with the rows beside it. The laptop is for harness development and smoke only. **REMEMBERED**
 
-1. **Resource fitting** (always applied): heap/thread-pool/memory settings that
-   adapt an engine to the cell's cpuset+memory envelope (JVM heap by scale,
-   `SET threads` in DuckDB, ES `ES_JAVA_OPTS`). Not tuning — envelope equality.
-2. **Vendor-documented settle steps** (bulk-load-then-query preparation, timed
-   inside build): ES forcemerge, Milvus flush+load, Qdrant green-wait, ArcadeDB
-   LSM compact. Each engine gets its own documented step; none gets skipped.
-3. **Operating-point matching**: where defaults put systems at different points
-   of a quality/latency tradeoff, raw latency comparison is misleading — match
-   the points or sweep the curve. Dense ANN (L3d): same HNSW M/efConstruction
-   everywhere, efSearch swept -> recall-latency curves; float32 everywhere, no
-   PQ/SQ. Sparse: still no COMMON quantization axis (competitors' posting
-   formats are internal and not user-selectable), so quality is surfaced via
-   first-class recall@10 next to every latency number. As of 26.7.2, ArcadeDB
-   DOES expose `weightQuantization` (engine #5143, filed off this benchmark),
-   so we additionally report an INT8-vs-FP32 ablation on our own engine to
-   price the default's recall cost (backend `arcadedb_sparse_embedded_fp32`).
-4. **Escape hatch**: if a default is demonstrably pathological for a workload
-   (e.g., a batch-size or refresh-interval default that cripples ingest), tune
-   it to the vendor's own documented recommendation for that workload, apply
-   the same care to every backend in the lane, and say so in the paper.
+---
 
-What we never do: per-system expert tuning beyond vendor-documented guidance,
-or tuning ArcadeDB with insider knowledge not applied to competitors.
+## 7. Defaults and sanctioned overrides
 
-### ArcadeDB embedded vs server — parity matrix (2026-07-07)
+We run every engine as shipped, and override a default only where leaving it would
+make the comparison meaningless. Four sanctioned categories:
 
-The deployment axis (E4) is only meaningful if the two deployments of the
-same engine differ ONLY in transport. Pinned:
+1. **Resource fitting** (always applied): heap, thread pool and memory settings that
+   fit an engine to the cell's cpuset and memory envelope. Envelope equality, not tuning.
+2. **Vendor settle step**: documented bulk-load-then-query preparation, timed inside build (section 2).
+3. **Operating-point matching**: where defaults put engines at different points of a
+   quality/latency tradeoff, move them onto one point, because a latency comparison
+   at unequal recall compares nothing.
+4. **Documented escape hatch**: a default that is demonstrably pathological, tuned to
+   the vendor's own recommendation, with the same care applied to every backend in the lane.
 
-| dimension | embedded | server | status |
-|---|---|---|---|
-| heap | -Xms{heap} -Xmx{heap} via jvm_kwargs | ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap} | MATCHED per scale tier |
-| GC | bundled-JRE default (G1) | JAVA_OPTS override drops image ZGC -> G1 | MATCHED (G1 both) |
-| JDK | wheel's jlink'd JRE 21 | image jdk-21 | same major; exact builds recorded in manifests |
-| cpuset / mem-swap caps | 32g container | 24g srv + 8g client (75/25) | envelope equality: totals identical; split is inherent to the topology |
-| DDL / index metadata | identical CREATE INDEX | identical | MATCHED |
-| ingest path | native document API | SQL over HTTP | intentionally different — each surface's native bulk path |
-| settle step | LSM compact() via Java API | none reachable over HTTP/SQL | documented product asymmetry (lessons material) |
-| engine RAM-derived defaults | from 32g container | from 24g container | follows the envelope split; recorded, not tuned |
+What we never do: per-system expert tuning beyond vendor guidance, or tuning
+ArcadeDB with insider knowledge not applied to comparators.
 
-Every row's heap and mem cap now land in runs.jsonl (`heap`, `mem_cap`).
-History: the 2GB-default heap starvation (user-caught 2026-07-07) cost the
-server 15% p50 and 35% build time at 10M — parity is load-bearing.
+An override nobody can find is a defect, whichever way it moves the number. Every
+override is stamped on the row where a field exists (`es_prune`, `degree_param`,
+`degree_family`, `heap`, `server_heap`) **and** named in reader-facing text (paper,
+table caption, or page condition). `DISCLOSED WHERE = NOWHERE` below marks work
+still to do.
 
-## CPU allocation (explicit, 2026-07-06)
-
-- Paper tier: 12 threads = full P-core set (cpuset 0-11; 6 physical P cores x
-  2 SMT on the i9-12900HK), one cell at a time. E-core threads 12-19 stay
-  OUTSIDE all containers (OS/dockerd/harness overhead never pollutes cells).
-- Client-server: both containers share the same 12-thread cpuset (see topology
-  note); sweep tier: 3 workers x 4 disjoint threads, never reported.
-- ENGINE THREAD POOLS PINNED EXPLICITLY to the cpuset size — cpuset alone does
-  not control pools sized from detected CPUs, and detection differs (JVM is
-  cgroup-aware; DuckDB hardware_concurrency may see the host's 20):
-  DuckDB `SET threads=12`; Postgres `max_parallel_workers=12` (+ per-gather);
-  ArcadeDB JVM default (cgroup-aware) + ForkJoin parallelism stated;
-  ES/Milvus/Qdrant per their config, documented per engine in the manifest.
-  Every manifest records the engine's effective thread setting.
-
-## Runtime budget & co-scheduling decision (2026-07-06)
-
-> The standing parallelism policy now lives in **FAIRNESS.md, "Parallelism
-> policy: maximise it, but never inside a published absolute"**. Read that
-> first: it states which classes of work may run concurrently, why permutation
-> fixes ratios but not absolutes or tails, and the sharding rule. What follows
-> is the original per-cell budget reasoning it was derived from.
-
-
-1. BUILD ONCE, QUERY MANY: ingest/index-build happens once per (backend, scale)
-   and is timed with its own N=3; the N=5 query repeats run against the
-   persisted store with an engine restart between reps. This removes the
-   dominant cost (multi-hour graph/sparse builds) from the repeat loop with
-   zero fairness impact.
-2. CALIBRATION STUDY decides paper-tier co-scheduling: ~6 representative cells
-   run both solo (12 threads) and 2-at-once (disjoint 6-thread cpusets, no SMT
-   sharing across jobs). If co-run deltas on means AND p95/p99 fall within the
-   solo std, the paper tier runs 2-at-once and the paper states the measured
-   perturbation bound; otherwise latency-bearing cells stay serial and only
-   build/ingest cells co-run. (Permutation cancels between-config bias — fine
-   for ratios — but cannot restore absolute levels/tails, and our headline
-   claims are single-node absolutes.)
-3. 10M-scale and scale-ceiling cells are serial regardless (RAM-bound) — they
-   are also the longest, so co-scheduling only ever accelerates the cheap half
-   of the matrix.
-
-## Bench host (2026-07-06)
-
-- tk@mini (i9-12900HK, 61 GiB, 1.8 TB NVMe) is EXCLUSIVE to this paper's runs;
-  CypherGlot's campaigns run on Hetzner (standing arrangement, per maintainer).
-  Paper-tier cells therefore run on an otherwise-idle host by default.
-- Laptop is for harness development and smoke (plumbing validation) only —
-  nothing measured on the laptop is ever reported.
-- Before first mini runs: verify cpuset layout with lscpu (P-thread IDs 0-11
-  assumed), stage images + datasets, re-run the tiny smoke there.
-
-## One runner per bench host (enforced 2026-07-10)
-
-`sweep_orphans()` force-removes every container labeled `dbbench=1` at
-runner startup. A second runner therefore DESTROYS a live campaign's in-flight
-cells. This actually happened: a micro smoke launched while the L1 N=5 medium
-tier was running wiped an in-flight cell (`can not get logs from container`)
-and pushed another to the 6h watchdog (`timeout_after_21600s`). Those L1 rows
-are contaminated and superseded by the definitive 26.7.2 campaign.
-
-`runner.py` now takes an exclusive `flock` on `results/.runner.lock` before
-sweeping. A second runner exits with an error instead of stomping the first.
-Corollary rules: never rebuild a bench image while a campaign is live (running
-containers keep the old image, new cells get the new one, so a campaign would
-straddle two engine builds), and never co-run a smoke with a paper-tier run.
-
-## Version pinning (fixed 2026-07-10, after a real skew was found)
-
-PROTOCOL claimed "images pinned by digest on first run". The code did not do it.
-Found while chasing LadybugDB issue #645:
-
-- `arcadedata/arcadedb:latest` resolved to **26.7.2-SNAPSHOT**, while the
-  embedded wheel was pinned to **26.7.2** (the release). The deployment axis
-  (E4), one of the paper's four claims, was comparing a pre-release snapshot
-  against a release build.
-- The same `:latest` tag had **different digests on the laptop and on mini**,
-  so the two hosts were not even running the same server.
-- Every Python client library (real_ladybug, neo4j, qdrant-client, pymilvus,
-  elasticsearch) was unpinned and resolved at image-build time.
-
-Now enforced:
-- Every `server_image` is pinned by immutable digest. ArcadeDB server is
-  `arcadedata/arcadedb:26.7.2@sha256:5dbd3ae2...`, matching `arcadedb-embedded==26.7.2`.
-- Every client library is version-pinned (real_ladybug==0.15.3, neo4j==6.2.0,
-  qdrant-client==1.18.0, pymilvus==3.0.0, elasticsearch==9.4.1).
-- Manifests still record the digest actually used, so a row can always be traced.
-
-Consequence: the in-flight 26.7.2 campaign carries the server-image skew on its
-`arcadedb_*_server` rows. It is preliminary data and is superseded by the
-26.8.1 re-campaign (engine #5189 fix), which runs fully pinned.
-
-## Comparator versions are a LIVING pin (TK, 2026-07-10)
-
-This paper has months of runway (unlike CypherGlot, which is time-boxed on
-Hetzner), so comparator versions are refreshed as they move, and re-pinned for
-real before the campaign that produces the paper's tables. Rules:
-
-- Pin by immutable digest (server images) and exact version (client libs).
-- Re-check "is this still current?" before the final campaign, not after.
-- Client and server of the same system must match (Elasticsearch 9.4.1 server
-  and 9.4.1 client; not 9.0.0 vs 9.4.1).
-- ArcadeDB embedded and server must be the SAME release (26.7.2 wheel and the
-  26.7.2 release image, never :latest, which resolves to a SNAPSHOT).
-
-Current pins (2026-07-10):
-| component | pin | note |
-|---|---|---|
-| ArcadeDB embedded | arcadedb-embedded==26.7.2 | moves to 26.8.1 (engine #5189 fix) |
-| ArcadeDB server | arcadedata/arcadedb:26.7.2 (digest) | release, matches embedded |
-| LadybugDB | ladybug==0.18.1 | was real_ladybug==0.15.3, a stale fork from lbugdb/lbug |
-| Neo4j | neo4j:5-community (digest) + driver 6.2.0 | current supported line |
-| Qdrant | qdrant 1.18.2 (digest) + client 1.18.0 | latest |
-| Milvus | milvusdb/milvus (digest) + pymilvus 3.0.0 | current |
-| Elasticsearch | 9.4.1 (digest) + client 9.4.1 | aligned |
-| PostgreSQL | postgres 17.10 (digest) | current supported line |
-
-## 26.8.1 re-campaign changes (2026-07-11)
-
-- **Version pins**: embedded `arcadedb-embedded==26.8.1.dev0`, server
-  `arcadedata/arcadedb:26.8.1-SNAPSHOT` (digest sha256:7aa633c5...). Both the
-  same 26.8.1 dev line, so the deployment axis compares identical engine code.
-- **Memory instrument fixed** (was task #52): the memory column now reports
-  ANON working set (peak_anon_mib_sum / end_anon_mib_sum) from memory.stat, not
-  total memory.peak (which included reclaimable FILE page cache -- ES read
-  20.1+-0.0 GB that way, pegged page cache, not engine need). Old peak_mib_sum
-  is still recorded for continuity; end_file_mib records page cache at exit.
-- **Sparse settle parity** (engine #5144, #5189): the server adapter now runs
-  `COMPACT INDEX \`Doc[tokens,weights]\`` over HTTP as its settle step, matching
-  embedded's idx.compact(). So E4 (embedded vs server) isolates transport, not
-  the settle asymmetry. `arcadedb_sparse_embedded_nocompact` still isolates the
-  settle cost itself. FP32 (`arcadedb_sparse_embedded_fp32`) now runs at MEDIUM
-  too (#5189 streamed the segment build past the 2 GB WAL ceiling).
+| Engine | Setting | Category | Why | Disclosed where |
+|---|---|---|---|---|
+| ArcadeDB dense (emb + srv) | `LSM_VECTOR METADATA {"addHierarchy": true}` (default false) | operating-point | Makes the graph structurally comparable to the hierarchical hnswlib family. Inconsistent with our own E2 lane, which builds flat. | **NOWHERE**, and not stamped on any row |
+| ArcadeDB server (all 4 arms) | `queryMaxHeapElementsAllowedPerOp=5000000` | escape hatch | Lets a >1.24M-group top-N complete. On 26.8.1 the default auto-scales to `max(500k, heap/2048)`, so the pin is LOWER than default at the 12g, 16g and 24g tiers and higher at 4g/6g/8g. | **NOWHERE** (code comment only) |
+| ArcadeDB embedded (L1 tabular only) | same knob, `jvm_args` | escape hatch | Applied in 1 of the 8 ArcadeDB embedded adapters, so E4 compares two different query-memory caps. | **NOWHERE** |
+| ArcadeDB embedded (L1-TPC, E2, L4 doc) | `heap_size` sets `-Xmx` only, `-Xms` left at the JVM default | resource fitting (absent) | The paper asserts `-Xms=-Xmx` as blanket protocol. False for three published arms whose server counterparts are pinned. | **CONTRADICTED** by paper.tex protocol paragraph |
+| QuestDB (L4) | WAL-apply poll inside the timed ingest region | settle step, misplaced | Cannot exit under 3 s of sleep; QuestDB's 5.99 s measured ingest is roughly half poll. The 4.3x headline would fall near 2x. | **NOWHERE**, and the time-series section's prose says "No engine here takes a settle step" |
+| ArcadeDB native TS vs QuestDB/DuckDB | ingest timer stops at `wait_completion()` (accepted, sealing outstanding) | operating-point | Three ingest rates timed to three completion semantics. | **NOWHERE** |
+| ArcadeDB native TS | `SHARDS 4` (default 0 = 11 under this cpuset) | resource fitting | Fixes the shard count instead of deriving it from the cpuset. | raw JSON only |
+| ArcadeDB native TS | `TS_PRIMITIVE=1` (default 0); `TS_NUMPY` already defaults to 1 | escape hatch | One opt-in fast path under the 1.86M pts/s headline; comparators use ordinary bulk paths. `TS_NUMPY=0` exists only to reproduce the pre-fix number. | raw JSON only |
+| DuckDB (L1 tabular) | `PRAGMA threads = len(sched_getaffinity(0))` | resource fitting | The F6 fix. Applied in 1 of 4 DuckDB lanes; l1_tpc, l3d and l4 still run ~1.7x oversubscribed. | FAIRNESS.md F6 (as fixed); **NOWHERE** reader-facing |
+| DuckDB (L1 tabular) | drop indexes before bulk load, recreate after | escape hatch | Idiomatic columnar bulk load, one arm only, under the published "10.7x ahead" loader claim. | **NOWHERE** |
+| DuckDB VSS (L3d) | `hnsw_enable_experimental_persistence=true` | escape hatch | Required to persist an HNSW index at all. The row is measured on a vendor-labeled experimental configuration. | **NOWHERE** |
+| ArcadeDB (L1-TPC) | index on `LineItem(l_shipdate)`, comparators get none | operating-point | Both published TPC-H queries filter that column. Bias runs for us; PostgreSQL would benefit most. | **NOWHERE** |
+| Elasticsearch (L3s) | `xpack.security.enabled=false` | escape hatch | Harness plumbing; also removes TLS and auth from every ES latency measurement. | **NOWHERE** |
+| Elasticsearch (L3s) | `number_of_replicas=0` | resource fitting | A single-node cluster cannot allocate a replica; the index would sit yellow forever. | **NOWHERE** |
+| SurrealDB, composed Qdrant (E2) | `mem://` and `location=":memory:"` while ArcadeDB runs on disk | **unsanctioned** | Latency and atomicity both compared against in-memory stores. Weakens "rolled back cleanly in 200 of 200". | **NOWHERE** |
+| sqlite-vec (L3d) | no PRAGMA cache/mmap/journal settings at all | resource fitting (absent) | The one dense arm given no resource fitting: stock ~2 MB page cache inside a 36 GiB cap. | partly (dagger discloses exact scan only) |
+| Neo4j (L2, E2) | heap pinned per tier; `server_memory_pagecache_size` = container mem less heap less a 1 GiB reserve, floored at 512m | resource fitting | Heap parity, with the rest of the cap fitted for Neo4j rather than left at its default. | **NOWHERE** (runner comment only) |
+| PostgreSQL (`postgres_tuned`) | shared_buffers etc derived from the container cap, durability untouched | resource fitting | Ablation arm asking whether image defaults make the latency comparison unfair. Has never run: 0 rows. | display name exists for a row that does not |
+| harness-wide | manifest records cpuset/mem/heap/images and no engine configuration | **unsanctioned** | Nothing records the overrides above: the manifest holds ts, tier, scale, cpuset, workers, shards, reps, seed, mem, heap and images, and no configuration table exists in the paper. | **NOWHERE** |
+| ArcadeDB dense, E2 | `"similarity": "EUCLIDEAN"` (default COSINE) | operating-point | SIFT1M ships exact L2 ground truth, DEEP-10M is unit-normalized, comparators are set to L2. Correct and symmetric. | lane docstring only |
+| LanceDB (L3d) | `.ef(100).nprobes(10)` | operating-point | Puts LanceDB on the lane's shared operating point (unset ef gave recall 0.711); nprobes 10 from a flat sweep. | adapter comments only |
+| all dense arms | `EF_CONSTRUCTION=100`, `EF_SEARCH=100` | operating-point | Shared beam. No-op for ArcadeDB; moves some comparators down from their own defaults, and no audit of those defaults exists. | lane docstring only |
+| ArcadeDB server (all arms) | `JAVA_OPTS` replaces the image's `-XX:+UseZGC` | operating-point | Keeps E4 a transport comparison rather than a GC comparison (G1 both sides). | **NOWHERE** (code comment only) |
+| ArcadeDB server (all arms) | `ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}` (image ships 2G) | resource fitting | Heap parity per tier. The 2 GB default cost the server 15% p50 and 35% build time at 10M. | DISCLOSED: paper, T5 caption, F3, `server_heap` read back |
+| Elasticsearch (L3s) | `ES_JAVA_OPTS=-Xms{heap} -Xmx{heap}` | resource fitting | Envelope equality across the lane's JVM engines. | DISCLOSED: FAIRNESS.md F3, enforced by `observe_server` |
+| all served backends | server takes the full tier cap, client a separate `BENCH_CLIENT_MEM` (default 8g), stamped `mem_split="full+client"`; heap 50% of cap (67% at deep10m) | resource fitting | A served engine now sees exactly the cap an embedded engine of the same tier sees, with the driver on top. Changed 2026-08-14 in `c1cbf44721`; all 990 split-bearing rows in `results/` still carry the old 0.75. | **CONTRADICTED**: paper and T5 caption assert a 0.75/0.25 split |
+| ES, Milvus, Qdrant, ArcadeDB, Neo4j, LadybugDB | forcemerge / flush+load / green-wait / COMPACT INDEX / awaitIndexes / CHECKPOINT, inside build | settle step | Each engine's own documented preparation. ArcadeDB takes none on L2 OLTP, and in the dense lane only Qdrant and Milvus define one at all. | DISCLOSED as a class: paper Limitations, FAIRNESS.md |
+| ArcadeDB (L2 OLAP) | Graph Analytical View, `UPDATE MODE OFF`, build counted; `BENCH_GAV=0` ablation published | operating-point | ArcadeDB's documented OLAP answer, priced separately, with the view-off arm published. | DISCLOSED: page conditions, paper, `gav` on every row |
+| ArcadeDB (L3s) | int8 posting quantization (the engine default); fp32 arm prices it | operating-point | The headline arm is the default. The ablation is the only quantization axis available. | DISCLOSED: T4 caption, `SPARSE_PRECISION` |
+| ArcadeDB vs dense comparators | `M=32` (maxConnections) against `M=16` (doubled at base) | operating-point | Numerically equal settings build graphs of half the degree, so the lane matches effective base degree. 32 is also 26.8.1's own default, so only the comparator side is set. Getting it wrong once published "0.951 vs 0.971, a small deficit". | FULLY DISCLOSED: paper, T5 caption, page, per-row stamps, F7 |
+| Elasticsearch (L3s) | `index_options {"prune": false}` | operating-point | ES 9.1+ prunes on ELSERv2 thresholds; on SPLADE that costs the recall in section 1, and the default's bias ran in our favor. | FULLY DISCLOSED: paper subsection, page condition, `es_prune` on every row |
+| ArcadeDB native TS | `TS_TAGS=1` reduced schema; unbounded last-point query | operating-point | Applied to all three engines. The published unbounded form is the faster one for us: 0.720 ms against 0.860 ms for the 1-hour window (`TS_LAST_WINDOW_S=3600`), measured as a pair in the same rep. | DISCLOSED: schema-fidelity paragraph in the paper, which states both numbers |
+| Milvus | `DEPLOY_MODE=STANDALONE`, embedded etcd, vendor's own `embedEtcd.yaml` | resource fitting | Single-container deployment plumbing; the mounted file is Milvus's own default. | not stated, low severity |
+| Qdrant (L3s), ArcadeDB dense (L3d, E2) | sparse `on_disk=False`; dense `storeVectorsInGraph:false`, `beamWidth:100` | not an override | Explicit restatements of engine defaults, recorded so a future audit does not mistake one for a deviation. Their presence makes the ArcadeDB metadata clause look uniformly deliberate and hides which key actually departs. | recorded here only |

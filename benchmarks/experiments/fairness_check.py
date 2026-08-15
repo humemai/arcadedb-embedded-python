@@ -185,8 +185,23 @@ def _total_envelope(r):
         # is srv_cap / split -- 32g from both shapes above, no classification
         # required. This function's own docstring says a gate that fails on
         # compliance is worse than no gate; that is what it had become.
+        # "full+client" means the server container got the WHOLE tier cap and
+        # the driver got its own budget on top, so srv_cap already IS the
+        # envelope and dividing would inflate it. Handled explicitly because
+        # the fallback below silently turns any unparseable split into 0.75,
+        # which for these rows reports 1.33x the true envelope and would have
+        # failed compliant cells across the whole re-campaign.
+        #
+        # Found by PROTOCOL.md, which was assembled from the code the same day
+        # the runner changed and flagged this line as stale before any row
+        # under the new split had been checked.
+        raw = r.get("mem_split")
+        if raw == "full+client":
+            return (str(srv_heap or "n/a"), f"{srv_cap:g}g") if not (
+                not srv_heap and _is_jvm(r.get("backend"))) else (
+                "NO-WITNESS", f"{srv_cap:g}g")
         try:
-            split = float(r.get("mem_split") or SERVER_MEM_FRACTION_DEFAULT)
+            split = float(raw or SERVER_MEM_FRACTION_DEFAULT)
         except (TypeError, ValueError):
             split = SERVER_MEM_FRACTION_DEFAULT
         if not 0 < split < 1:
