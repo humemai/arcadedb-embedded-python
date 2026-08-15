@@ -739,6 +739,27 @@ def l2_peak_anon_gib(backend, scale="sf10", workload="oltp"):
     return _stat.median([r["peak_anon_mib_sum"] for r in rs]) / 1024 if rs else None
 
 
+def mem_ratio(lane_a, be_a, lane_b, be_b, scale_a=None, scale_b=None, wl=None):
+    """Peak-anon ratio between two engines in one lane, as the prose states it.
+
+    The cross-lane memory section quotes five ratios spanning two orders of
+    magnitude. A ratio is the most fragile thing to leave unpinned: both
+    operands can be individually correct and the quotient still stale, which
+    is how "2.4x" survived into a draft of that paragraph when the artifact
+    said 3.7 (I had copied it from a summary using a different scale).
+    """
+    import statistics as _stat
+    def med(lane, be, sc):
+        v = [r["peak_anon_mib_sum"] for r in M.load_canonical()
+             if r.get("lane") == lane and r.get("backend") == be
+             and (sc is None or r.get("scale") == sc)
+             and (wl is None or r.get("workload") == wl)
+             and isinstance(r.get("peak_anon_mib_sum"), (int, float))]
+        return _stat.median(v) if v else None
+    a, b = med(lane_a, be_a, scale_a), med(lane_b, be_b, scale_b)
+    return a / b if a and b else None
+
+
 def pyb_ratio(workload, numerator_arm, denominator_arm):
     """The published ratio, stated as the exact pair of arms it compares."""
     a = _overhead_median(workload, numerator_arm)
@@ -1118,6 +1139,27 @@ CLAIMS = [
          __import__("glob").glob(os.path.join(M.RESULTS, "e3_q17", "e3b_*.json"))])),
      "failover trials in which no acknowledged write was lost; this is the "
      "correctness claim, the timing is secondary to it"),
+    # --- the cross-lane memory section's five ratios ----------------------
+    ("mem.ratio.postgres", 97.5, 1.0,
+     lambda r: mem_ratio("l1", "arcadedb_embedded", "l1", "postgres", "medium", "medium"),
+     "tabular OLTP at medium: our largest memory loss anywhere, 98x"),
+    ("mem.ratio.ladybug", 22.1, 0.3,
+     lambda r: mem_ratio("l2", "arcadedb_graph_embedded", "l2", "ladybug_graph",
+                         "sf10", "sf10", "oltp"),
+     "graph SF10 OLTP against the non-JVM columnar engine"),
+    ("mem.ratio.qdrant_dense", 2.54, 0.05,
+     lambda r: mem_ratio("l3d", "arcadedb_dense_embedded", "l3d", "qdrant_dense"),
+     "dense DEEP-10M"),
+    ("mem.ratio.qdrant_sparse", 3.67, 0.06,
+     lambda r: mem_ratio("l3s", "arcadedb_sparse_embedded", "l3s", "qdrant_sparse",
+                         "small", "small"),
+     "sparse 1M. Pinned at 3.7 because a draft said 2.4, copied from a summary "
+     "over a different scale selection: both operands right, quotient wrong"),
+    ("mem.ratio.neo4j", 0.62, 0.02,
+     lambda r: mem_ratio("l2", "arcadedb_graph_embedded", "l2", "neo4j_graph",
+                         "sf10", "sf10", "oltp"),
+     "the one comparison that favours us, stated as ours-over-theirs so a "
+     "regression moves it the same direction as the losses above"),
     # --- graph memory, the column T3 grew on 2026-08-14 -------------------
     ("l2.mem.arcade_sf10", 8.06, 0.02,
      lambda r: l2_peak_anon_gib("arcadedb_graph_embedded"),
