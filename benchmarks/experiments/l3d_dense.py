@@ -501,17 +501,21 @@ class Qdrant(Base):
     def connect(self):
         from qdrant_client import QdrantClient
         import qdrant_client
-        # THE SERVER'S version. lib_version reads the CLIENT package, which
-        # is the right answer for an embedded comparator and the wrong one for
-        # a served one: the sparse lane records "qdrant:1.18.2" (the server)
-        # while this recorded "1.19.0" (the client), so one paper carried two
-        # different meanings under one column name.
-        try:
-            self.version = "qdrant:" + str(self.cl.info().version)
-        except Exception:
-            self.version = "qdrant-client:" + lib_version(qdrant_client, "qdrant-client")
         self.cl = QdrantClient(host=os.environ["BENCH_SERVER_HOST"], port=6333,
                                timeout=600)
+        # THE SERVER'S version, and AFTER the client exists. lib_version reads
+        # the CLIENT package, which is right for an embedded comparator and
+        # wrong for a served one: the sparse lane records "qdrant:1.18.2" (the
+        # server) while this recorded "1.19.0" (the client), so one paper
+        # carried two meanings under one column name. The first version of this
+        # fix asked before constructing self.cl, so the fallback fired every
+        # time and it silently kept reporting the client -- caught by the smoke
+        # only because the recorded string named which branch had run.
+        try:
+            self.version = "qdrant:" + str(self.cl.info().version)
+        except Exception as e:
+            self.version = ("qdrant-client:" + lib_version(qdrant_client, "qdrant-client")
+                            + f" (server unreachable: {e.__class__.__name__})")
 
     def build(self, vecs):
         from qdrant_client import models as qm
@@ -547,15 +551,16 @@ class Milvus(Base):
     def connect(self):
         from pymilvus import MilvusClient
         import pymilvus
-        # THE SERVER'S version, for the same reason as Qdrant above: the
-        # sparse lane records "milvus:pkg/v2.6.13" while this recorded "3.0.1",
-        # which is pymilvus.
-        try:
-            self.version = "milvus:" + str(self.cl.get_server_version())
-        except Exception:
-            self.version = "pymilvus:" + lib_version(pymilvus, "pymilvus")
         self.cl = MilvusClient(
             uri=f"http://{os.environ['BENCH_SERVER_HOST']}:19530", timeout=600)
+        # THE SERVER'S version, and AFTER the client exists (see Qdrant above
+        # for the ordering bug this had). The sparse lane records
+        # "milvus:pkg/v2.6.13" while this recorded "3.0.1", which is pymilvus.
+        try:
+            self.version = "milvus:" + str(self.cl.get_server_version())
+        except Exception as e:
+            self.version = ("pymilvus:" + lib_version(pymilvus, "pymilvus")
+                            + f" (server unreachable: {e.__class__.__name__})")
 
     def build(self, vecs):
         from pymilvus import DataType
