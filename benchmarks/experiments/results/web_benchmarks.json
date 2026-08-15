@@ -2610,7 +2610,8 @@
       "dataset": "Vector hit to graph traversal to document update, in one transaction",
       "conditions": [
         "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
-        "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show."
+        "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
+        "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do."
       ],
       "columns": [
         "p50 ms",
