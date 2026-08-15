@@ -284,7 +284,19 @@ class Neo4jGraph(Base):
         self.driver = neo4j.GraphDatabase.driver(
             f"bolt://{host}:{port}", auth=("neo4j", "dbbenchpass"))
         self.driver.verify_connectivity()
-        self.version = f"neo4j-driver:{neo4j.__version__}"
+        # THE SERVER'S version, not the driver's. This recorded
+        # "neo4j-driver:6.2.0" while the server it measured is 5.26.28 -- and
+        # e2_hybrid's composed arm asks dbms.components() and gets the server,
+        # so one paper reported two different quantities as "the Neo4j
+        # version". The driver version is still worth keeping, separately.
+        try:
+            with self.driver.session() as _s:
+                _v = _s.run("CALL dbms.components() YIELD versions "
+                            "RETURN versions[0] AS v").single()["v"]
+            self.version = f"neo4j:{_v}"
+        except Exception as e:
+            self.version = f"neo4j:unknown ({e.__class__.__name__})"
+        self.driver_version = f"neo4j-driver:{neo4j.__version__}"
         with self.driver.session() as s:
             s.run("CREATE INDEX person_id IF NOT EXISTS "
                   "FOR (p:Person) ON (p.id)").consume()

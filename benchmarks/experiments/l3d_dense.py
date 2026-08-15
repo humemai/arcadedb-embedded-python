@@ -501,7 +501,15 @@ class Qdrant(Base):
     def connect(self):
         from qdrant_client import QdrantClient
         import qdrant_client
-        self.version = lib_version(qdrant_client, "qdrant-client")
+        # THE SERVER'S version. lib_version reads the CLIENT package, which
+        # is the right answer for an embedded comparator and the wrong one for
+        # a served one: the sparse lane records "qdrant:1.18.2" (the server)
+        # while this recorded "1.19.0" (the client), so one paper carried two
+        # different meanings under one column name.
+        try:
+            self.version = "qdrant:" + str(self.cl.info().version)
+        except Exception:
+            self.version = "qdrant-client:" + lib_version(qdrant_client, "qdrant-client")
         self.cl = QdrantClient(host=os.environ["BENCH_SERVER_HOST"], port=6333,
                                timeout=600)
 
@@ -539,7 +547,13 @@ class Milvus(Base):
     def connect(self):
         from pymilvus import MilvusClient
         import pymilvus
-        self.version = lib_version(pymilvus, "pymilvus")
+        # THE SERVER'S version, for the same reason as Qdrant above: the
+        # sparse lane records "milvus:pkg/v2.6.13" while this recorded "3.0.1",
+        # which is pymilvus.
+        try:
+            self.version = "milvus:" + str(self.cl.get_server_version())
+        except Exception:
+            self.version = "pymilvus:" + lib_version(pymilvus, "pymilvus")
         self.cl = MilvusClient(
             uri=f"http://{os.environ['BENCH_SERVER_HOST']}:19530", timeout=600)
 
@@ -674,9 +688,17 @@ def main():
         out.update(bench_common.run_conditions(lane="l3d", scale=args.scale,
                                                backend=args.backend))
         out["backend_version"] = backend_version
-        if args.backend != "arcadedb" and not str(args.backend).startswith("arcadedb"):
-            out["harness_arcadedb_version"] = out.pop("engine_version", None)
-            out["engine_version"] = backend_version
+        # THE ADAPTER ALWAYS WINS, and the test is no longer the backend NAME.
+        # It used to be `not backend.startswith("arcadedb")`, which is true for
+        # arcadedb_dense_server -- an ArcadeDB arm that runs in dbbench:client,
+        # where the wheel is not installed. So the one arm the special case was
+        # meant to protect kept run_conditions' answer and published
+        # engine_version="unknown (PackageNotFoundError)" while its adapter had
+        # correctly read "server:26.8.1 (build ...)" from the server itself.
+        # The adapter measured the engine under test; run_conditions read the
+        # container. Keep both, and never let the second overwrite the first.
+        out["harness_arcadedb_version"] = out.pop("engine_version", None)
+        out["engine_version"] = backend_version
     except Exception as e:                     # never lose a measured result
         out["conditions_error"] = f"{e.__class__.__name__}: {e}"
 
