@@ -437,6 +437,13 @@ def _pagecache_for(server_mem_bytes, heap):
     the point is to stop under-provisioning it, not to introduce a new way to
     do so.
     """
+    # An explicit override exists for ONE purpose: re-running the starved
+    # configuration on demand, to separate "we never disclosed cache state"
+    # from "we starved the comparator". Unset, this returns the computed size
+    # and behaviour is exactly as before.
+    forced = os.environ.get("BENCH_NEO4J_PAGECACHE")
+    if forced:
+        return forced
     reserve = 1 << 30
     left = server_mem_bytes - mem_bytes(heap) - reserve
     gib = left / float(1 << 30)
@@ -891,7 +898,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         for _k in ("BENCH_SPARSE_SOURCE", "BENCH_SPARSE_DATA",
                    "BENCH_GRAPH_SOURCE", "BENCH_GRAPH_DATA",
                    "BENCH_DENSE_DATA", "BENCH_DENSE_M",
-                   "BENCH_TPC_DATA", "BENCH_TPC_SF", "BENCH_GAV"):
+                   "BENCH_TPC_DATA", "BENCH_TPC_SF", "BENCH_GAV",
+                   "BENCH_NEO4J_PAGECACHE"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
