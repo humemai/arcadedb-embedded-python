@@ -191,34 +191,46 @@ class ArcadeTPC:
         db.command("sql", "CREATE PROPERTY Part.p_partkey LONG")
         db.command("sql", "CREATE INDEX ON Part (p_partkey) UNIQUE")
         db.command("sql", "CREATE DOCUMENT TYPE OrderNew")
-        # bulk path: batched multi-row INSERT via parameters
-        db.begin()
-        n = 0
-        for t in li.itertuples(index=False):
-            db.command("sql",
-                       "INSERT INTO LineItem SET l_orderkey=:a, l_partkey=:b, "
-                       "l_quantity=:c, l_extendedprice=:d, l_discount=:e, "
-                       "l_returnflag=:f, l_linestatus=:g, l_shipdate=:h",
-                       {"a": int(t.l_orderkey), "b": int(t.l_partkey),
-                        "c": float(t.l_quantity), "d": float(t.l_extendedprice),
-                        "e": float(t.l_discount), "f": t.l_returnflag,
-                        "g": t.l_linestatus, "h": t.l_shipdate})
-            n += 1
-            if n % BATCH == 0:
-                db.commit()
-                db.begin()
-        db.commit()
-        db.begin()
-        n = 0
-        for t in part.itertuples(index=False):
-            db.command("sql", "INSERT INTO Part SET p_partkey=:k, "
-                       "p_retailprice=:p, stock=100",
-                       {"k": int(t.p_partkey), "p": float(t.p_retailprice)})
-            n += 1
-            if n % BATCH == 0:
-                db.commit()
-                db.begin()
-        db.commit()
+        # THE ENGINE'S BULK PATH, not one SQL statement per row.
+        #
+        # This block used to issue a parameterised INSERT per row and call
+        # itself "bulk path: batched multi-row INSERT". It was neither: at
+        # TPC-H SF10 that is 60M separate db.command() calls, each crossing
+        # JPype, each parsed as its own SQL statement. Measured on mini at
+        # tpch10, build_s medians: DuckDB 113 s, PostgreSQL 245 s, ArcadeDB
+        # 2234 s. A 20x gap against DuckDB that is our binding usage, not the
+        # storage engine -- the fifth instance of "the harness, not the
+        # engine" in this project, and this one handicapped OURSELVES in a
+        # published build_s.
+        #
+        # insert_many serialises a batch to one JSON payload and loops it
+        # Java-side (DocumentBatcher), so the FFI crossing is per BATCH rather
+        # than per row. This is the same class of idiomatic bulk path the
+        # other engines already get here: DuckDB registers an Arrow table,
+        # PostgreSQL uses COPY FROM STDIN. Using per-row SQL for us while they
+        # get native bulk was never a defensible comparison.
+        #
+        # numpy scalars are converted at the boundary on purpose: insert_many
+        # json.dumps the batch and falls back to the slow per-row path on a
+        # TypeError, so an unconverted np.int64 would silently restore exactly
+        # the behaviour this replaces.
+        for start in range(0, len(li), BATCH):
+            chunk = li.iloc[start:start + BATCH]
+            db.insert_many("LineItem", [
+                {"l_orderkey": int(t.l_orderkey), "l_partkey": int(t.l_partkey),
+                 "l_quantity": float(t.l_quantity),
+                 "l_extendedprice": float(t.l_extendedprice),
+                 "l_discount": float(t.l_discount),
+                 "l_returnflag": str(t.l_returnflag),
+                 "l_linestatus": str(t.l_linestatus),
+                 "l_shipdate": str(t.l_shipdate)}
+                for t in chunk.itertuples(index=False)], commit_every=BATCH)
+        for start in range(0, len(part), BATCH):
+            chunk = part.iloc[start:start + BATCH]
+            db.insert_many("Part", [
+                {"p_partkey": int(t.p_partkey),
+                 "p_retailprice": float(t.p_retailprice), "stock": 100}
+                for t in chunk.itertuples(index=False)], commit_every=BATCH)
         # aggregate columns indexed so Q1/Q6 filters avoid full scans
         db.command("sql", "CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
 
