@@ -152,7 +152,15 @@ def main():
     except Exception as e:
         out["reopen_error"] = f"{e.__class__.__name__}: {e}"
 
-    out.update(run_conditions(lane=f"{args.lane}_lifecycle", scale=args.scale))
+    # THE ADAPTER'S version, not the container's arcadedb-embedded. run_conditions
+    # reads the arcadedb wheel, which is right for an ArcadeDB arm and wrong for
+    # every other engine: the LadybugDB row came back
+    # engine_version="unknown (PackageNotFoundError)" because dbbench:client has
+    # no arcadedb in it. A comparator row with no version is a row that cannot be
+    # re-measured, which is the same defect #113 tracks in the overlays. extra
+    # merges last, so passing it here wins.
+    out.update(run_conditions(lane=f"{args.lane}_lifecycle", scale=args.scale,
+                              engine_version=getattr(b, "version", None) or "unrecorded"))
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(out, open(args.out, "w"), indent=1)
     print("RESULT " + json.dumps(out))
