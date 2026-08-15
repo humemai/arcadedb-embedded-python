@@ -450,11 +450,22 @@ def _dense_10m_entries():
     return out
 
 
+# Fields whose stored unit is not the unit the column claims. The artifact
+# records memory in MiB because that is what cgroup reports; the paper and the
+# page both talk in GiB, and a column headed "GiB" printing 8256 would be a
+# defect the reader has to catch. Divide here, once, rather than in each table
+# spec where the next lane to add memory would forget it.
+_UNIT_DIVISOR = {"peak_anon_mib_sum": 1024.0, "end_anon_mib_sum": 1024.0}
+
+
 def _agg(rows, field):
     """Median across repetitions, with the spread, matching the paper."""
     vals = [v for v in (_num(r.get(field)) for r in rows) if v is not None]
     if not vals:
         return None
+    div = _UNIT_DIVISOR.get(field)
+    if div:
+        vals = [v / div for v in vals]
     return {
         "median": round(statistics.median(vals), 4),
         "min": round(min(vals), 4),
@@ -497,8 +508,26 @@ LANES = {
     "l2": {
         "title": "Graph traversal",
         "dataset": "LDBC-SNB Interactive (SF1, SF10)",
+        # Peak anon last, and present at all because the page had no memory
+        # column anywhere while every lane has measured it since the #52 fix.
+        # It is also the column that shows our largest loss on this lane:
+        # LadybugDB runs the same SF10 workload in a twenty-second of the
+        # memory. A page that omits the resource axis reads as if latency
+        # were the only axis anyone deploys on.
         "metrics": [("point_p50_ms", "point p50 ms"), ("hop1_p50_ms", "1-hop p50 ms"),
-                    ("hop2_p50_ms", "2-hop p50 ms"), ("write_p50_ms", "write p50 ms")],
+                    ("hop2_p50_ms", "2-hop p50 ms"), ("write_p50_ms", "write p50 ms"),
+                    ("peak_anon_mib_sum", "peak memory GiB")],
+        # OLTP only. The OLAP rows live in the l2olap table below, which is
+        # also where the GAV ablation belongs: at SF10 the OLAP cell splits
+        # into view-on and view-off, and this table does not group on gav, so
+        # both land here as two rows identical in every printed field.
+        #
+        # That stayed invisible while every metric here was an OLTP one and
+        # the OLAP rows came out empty. Adding peak memory, which every row
+        # has, made the pair appear. A metric that is present for ALL rows
+        # exposes any grouping key the table is missing, which is worth
+        # remembering the next time a column is added anywhere.
+        "only_workload": "oltp",
         # Two conditions came off this list on 2026-08-14 for being written to a
         # reviewer and read by everyone else. One explained that bidirectional
         # edges are a pointer-storage choice rather than a semantic one, which

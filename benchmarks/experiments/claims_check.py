@@ -722,6 +722,23 @@ def e3(kind, field, stat="median"):
     return {"median": _stat.median, "min": min, "max": max}[stat](vals)
 
 
+def l2_peak_anon_gib(backend, scale="sf10", workload="oltp"):
+    """Peak anonymous working set for one graph cell, in GiB.
+
+    Pinned because memory was measured in every lane from the start and
+    reported in almost none of them: T3 grew its column on 2026-08-14, and
+    before that the only memory numbers in the paper were three prose
+    sentences. A number that appears once in prose and nowhere in a table is
+    exactly the kind that drifts, since nothing regenerates it.
+    """
+    import statistics as _stat
+    rs = [r for r in M.load_canonical()
+          if r.get("lane") == "l2" and r.get("backend") == backend
+          and r.get("scale") == scale and r.get("workload") == workload
+          and isinstance(r.get("peak_anon_mib_sum"), (int, float))]
+    return _stat.median([r["peak_anon_mib_sum"] for r in rs]) / 1024 if rs else None
+
+
 def pyb_ratio(workload, numerator_arm, denominator_arm):
     """The published ratio, stated as the exact pair of arms it compares."""
     a = _overhead_median(workload, numerator_arm)
@@ -1101,6 +1118,18 @@ CLAIMS = [
          __import__("glob").glob(os.path.join(M.RESULTS, "e3_q17", "e3b_*.json"))])),
      "failover trials in which no acknowledged write was lost; this is the "
      "correctness claim, the timing is secondary to it"),
+    # --- graph memory, the column T3 grew on 2026-08-14 -------------------
+    ("l2.mem.arcade_sf10", 8.06, 0.02,
+     lambda r: l2_peak_anon_gib("arcadedb_graph_embedded"),
+     "peak anon GiB, SF10 OLTP; the paper rounds it to 8.1"),
+    ("l2.mem.neo4j_sf10", 12.93, 0.02,
+     lambda r: l2_peak_anon_gib("neo4j_graph"),
+     "Neo4j at the same cell; the 37% claim is this over ours"),
+    ("l2.mem.ladybug_sf10", 0.365, 0.01,
+     lambda r: l2_peak_anon_gib("ladybug_graph"),
+     "LadybugDB at the same cell. This is OUR LOSS and the largest margin in "
+     "the row: 22x less than ArcadeDB. Pinned so the prose that now states it "
+     "cannot quietly revert to naming only the comparator we beat"),
     # --- E2 atomicity, the thesis experiment -------------------------------
     # THE CONTROL, and it is the claim the old version of this experiment could
     # not make. It used to pin "1 distinct torn-evidence pair", derived from

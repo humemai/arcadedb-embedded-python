@@ -373,9 +373,14 @@ def graph_table(rows):
     l2 = [r for r in rows if r["lane"] == "l2"]
     order = ["arcadedb_graph_embedded", "arcadedb_graph_server",
              "neo4j_graph", "ladybug_graph"]
-    lines = [r"\begin{tabular}{llrrr}", r"\toprule",
+    # Peak anon is the LAST column deliberately: it is a resource axis, not a
+    # latency, and putting it beside the p99s invites reading it as one. The
+    # field is peak_anon_mib_sum, which for a served backend is server+client
+    # and for an embedded one is the single process, so both deployments
+    # report the whole engine's footprint rather than half of it.
+    lines = [r"\begin{tabular}{llrrrr}", r"\toprule",
              r"System & Scale & 1-hop p50 (ms) & 1-hop p99 (ms) & "
-             r"2-hop p99 (ms) \\", r"\midrule"]
+             r"2-hop p99 (ms) & Peak anon (GiB) \\", r"\midrule"]
     for be in order:
         for sc in ("sf1", "sf10"):
             g = [r for r in l2 if r["backend"] == be and r["scale"] == sc
@@ -385,7 +390,8 @@ def graph_table(rows):
             lines.append(" & ".join([
                 NAMES[be], sc.upper(),
                 mmm(g, "hop1_p50_ms"), mmm(g, "hop1_p99_ms"),
-                mmm(g, "hop2_p99_ms")]) + r" \\")
+                mmm(g, "hop2_p99_ms"),
+                mmm(g, "peak_anon_mib_sum", 1.0 / 1024)]) + r" \\")
     lines += [r"\bottomrule", r"\end{tabular}"]
     write("t3_graph.tex", "\n".join(lines) + "\n")
 

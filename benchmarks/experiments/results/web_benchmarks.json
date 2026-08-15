@@ -1434,7 +1434,8 @@
         "point p50 ms",
         "1-hop p50 ms",
         "2-hop p50 ms",
-        "write p50 ms"
+        "write p50 ms",
+        "peak memory GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -1475,6 +1476,12 @@
               "min": 0.927,
               "max": 1.004,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.2563,
+              "min": 1.0441,
+              "max": 1.5709,
+              "n": 5
             }
           }
         },
@@ -1513,6 +1520,12 @@
               "median": 1.47,
               "min": 1.365,
               "max": 1.549,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 3.3931,
+              "min": 3.3641,
+              "max": 3.458,
               "n": 5
             }
           }
@@ -1553,6 +1566,12 @@
               "min": 9.539,
               "max": 9.916,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.2227,
+              "min": 0.2149,
+              "max": 0.2261,
+              "n": 5
             }
           }
         },
@@ -1591,6 +1610,12 @@
               "median": 7.853,
               "min": 7.581,
               "max": 8.185,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 4.6068,
+              "min": 4.5976,
+              "max": 4.6131,
               "n": 5
             }
           }
@@ -1631,6 +1656,12 @@
               "min": 0.657,
               "max": 0.724,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 8.0641,
+              "min": 8.0213,
+              "max": 8.0922,
+              "n": 5
             }
           }
         },
@@ -1669,6 +1700,12 @@
               "median": 1.726,
               "min": 1.687,
               "max": 1.873,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 7.8749,
+              "min": 7.8635,
+              "max": 7.8796,
               "n": 5
             }
           }
@@ -1709,6 +1746,12 @@
               "min": 9.62,
               "max": 9.754,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.3646,
+              "min": 0.3268,
+              "max": 0.3749,
+              "n": 5
             }
           }
         },
@@ -1747,6 +1790,12 @@
               "median": 8.225,
               "min": 8.01,
               "max": 8.33,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 12.9279,
+              "min": 12.9066,
+              "max": 12.9349,
               "n": 5
             }
           }
