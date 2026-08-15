@@ -158,15 +158,31 @@ class Base:
         out = {}
         for name, sql in OLAP_SQL:
             runs = []
+            cold = None
             for i in range(OLAP_RUNS + WARMUP_OLAP):
                 t0 = time.perf_counter()
                 self.query_all(sql)
+                dt = time.perf_counter() - t0
+                # THE COLD NUMBER WAS ALREADY BEING MEASURED AND THROWN AWAY.
+                # Iteration 0 is the first touch of this query against a cache
+                # that has not seen it, which is exactly the quantity the dense
+                # lane found worth 9x for ArcadeDB, and every lane outside the
+                # two vector ones reported a single figure without saying which
+                # side of that it was. Keeping it costs nothing: no extra query
+                # runs, the timer was already around this call.
+                if i == 0:
+                    cold = dt
                 if i >= WARMUP_OLAP:
-                    runs.append(time.perf_counter() - t0)
+                    runs.append(dt)
             out[f"olap_{name}_ms"] = round(statistics.mean(runs) * 1e3, 3)
+            out[f"cold_olap_{name}_ms"] = round(cold * 1e3, 3)
         out["olap_total_ms"] = round(sum(v for k, v in out.items()
                                          if k.startswith("olap_") and k.endswith("_ms")
                                          and k != "olap_total_ms"), 3)
+        out["cold_olap_total_ms"] = round(sum(v for k, v in out.items()
+                                              if k.startswith("cold_olap_")
+                                              and k.endswith("_ms")
+                                              and k != "cold_olap_total_ms"), 3)
         return out
 
 

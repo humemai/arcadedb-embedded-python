@@ -394,17 +394,42 @@ def main():
     if args.workload == "oltp":
         ids = pick_query_ids(n_persons, n_q)
         total_t0 = time.perf_counter()
-        for op, tmpl in OLTP_READS.items():
-            lat = []
-            for w, pid in enumerate(ids):
-                t = time.perf_counter()
-                ad.run_cypher(tmpl.format(id=pid))
-                if w >= 5:  # warmups discarded
-                    lat.append((time.perf_counter() - t) * 1000)
-            lat.sort()
-            out[f"{op}_p50_ms"] = round(pct(lat, 0.50), 3)
-            out[f"{op}_p95_ms"] = round(pct(lat, 0.95), 3)
-            out[f"{op}_p99_ms"] = round(pct(lat, 0.99), 3)
+
+        def _read_pass(prefix=""):
+            """One full pass over the read set, identical on both calls.
+
+            COLD VERSUS WARM. Every lane except the two vector ones timed a
+            single pass and reported it without saying which it was. That is
+            not a safe omission: the dense lane found ArcadeDB gains about 9x
+            on a second pass, because it pages its index off disk while every
+            comparator is already resident. If any of that effect exists here,
+            a single timed pass is an arbitrary point on that curve, and the
+            project page asserts "every other lane times a single pass" as
+            though it were a design choice rather than a gap.
+
+            The first call is left EXACTLY as it was, five discarded warmups
+            included, so previously published numbers stay comparable. The
+            second call is the same code on the same query set, so the delta
+            is what a repeat buys and nothing else.
+            """
+            res = {}
+            for op, tmpl in OLTP_READS.items():
+                lat = []
+                for w, pid in enumerate(ids):
+                    t = time.perf_counter()
+                    ad.run_cypher(tmpl.format(id=pid))
+                    if w >= 5:  # warmups discarded
+                        lat.append((time.perf_counter() - t) * 1000)
+                lat.sort()
+                res[f"{prefix}{op}_p50_ms"] = round(pct(lat, 0.50), 3)
+                res[f"{prefix}{op}_p95_ms"] = round(pct(lat, 0.95), 3)
+                res[f"{prefix}{op}_p99_ms"] = round(pct(lat, 0.99), 3)
+            return res
+
+        out.update(_read_pass())            # first touch
+        out.update(_read_pass("warm_"))     # same queries, index now resident
+        # Writes stay single-pass on purpose. A second write pass is not a
+        # warm repeat, it is a different workload against a larger graph.
         n_writes = min(100, n_q)
         lat = []
         for w, pid in enumerate(ids[:n_writes]):
@@ -419,7 +444,16 @@ def main():
         out["oltp_total_s"] = round(time.perf_counter() - total_t0, 2)
     else:
         for qname, text in OLAP_QUERIES.items():
-            rows0 = ad.run_cypher(text)  # warmup, sanity row count
+            # The warmup WAS the cold pass, and it was not even timed. Timing
+            # it costs nothing (the query ran either way) and gives this lane
+            # the cold/warm split every non-vector lane was missing. The dense
+            # lane found that split worth about 9x for ArcadeDB, which pages
+            # its index off disk while resident comparators do not, so a lane
+            # that reports one number without saying which side it is on is
+            # reporting an arbitrary point on that curve.
+            _c0 = time.perf_counter()
+            rows0 = ad.run_cypher(text)  # first touch, now measured
+            out[f"cold_{qname}_ms"] = round((time.perf_counter() - _c0) * 1000, 2)
             lat = []
             for _ in range(OLAP_ITERATIONS):
                 t = time.perf_counter()
