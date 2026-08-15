@@ -479,7 +479,8 @@ LANES = {
         "title": "Sparse vector search",
         "dataset": "Big-ANN'23 Sparse (real SPLADE over MS MARCO)",
         "metrics": [("query_p50_ms", "p50 ms"), ("recall_at_10", "recall@10"),
-                    ("build_s", "build s")],
+                    ("build_s", "build s"),
+                    ("peak_anon_mib_sum", "peak memory GiB")],
         "conditions": [
             "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
             "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
@@ -499,7 +500,8 @@ LANES = {
         # number borrowed from a different measurement.
         "metrics": [("query_p50_ms", "cold p50 ms"),
                     ("recall_at_10", "recall@10"),
-                    ("build_s", "build s")],
+                    ("build_s", "build s"),
+                    ("peak_anon_mib_sum", "peak memory GiB")],
         "conditions": [
             "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
             "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
@@ -557,7 +559,8 @@ LANES = {
         "only_workload": "olap",
         "metrics": [("friend_age_by_city_mean_ms", "average friend age ms"),
                     ("same_city_edges_mean_ms", "friends in same city ms"),
-                    ("top_degree_mean_ms", "most friends ms")],
+                    ("top_degree_mean_ms", "most friends ms"),
+                    ("peak_anon_mib_sum", "peak memory GiB")],
         "conditions": [
             "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
             "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
@@ -569,14 +572,16 @@ LANES = {
         "title": "Tabular OLTP and OLAP",
         "dataset": "Synthetic orders workload",
         "metrics": [("read_p50_ms", "read p50 ms"), ("insert_p50_ms", "insert p50 ms"),
-                    ("oltp_ops_per_s", "OLTP ops/s"), ("olap_total_ms", "OLAP total ms")],
+                    ("oltp_ops_per_s", "OLTP ops/s"), ("olap_total_ms", "OLAP total ms"),
+                    ("peak_anon_mib_sum", "peak memory GiB")],
         "conditions": [],
     },
     "l1tpc": {
         "title": "Tabular (TPC-H and TPC-C shapes)",
         "dataset": "TPC-H queries, TPC-C new-order",
         "metrics": [("q1_ms", "Q1 ms"), ("q6_ms", "Q6 ms"),
-                    ("neworder_p50_ms", "new-order p50 ms"), ("oltp_ops_per_s", "OLTP ops/s")],
+                    ("neworder_p50_ms", "new-order p50 ms"), ("oltp_ops_per_s", "OLTP ops/s"),
+                    ("peak_anon_mib_sum", "peak memory GiB")],
         "conditions": [
             "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
             "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
@@ -585,7 +590,19 @@ LANES = {
     "e2": {
         "title": "Cross-model transaction",
         "dataset": "Vector hit to graph traversal to document update, in one transaction",
-        "metrics": [("hybrid_p50_ms", "p50 ms"), ("hybrid_p99_ms", "p99 ms")],
+        "metrics": [("hybrid_p50_ms", "p50 ms"), ("hybrid_p99_ms", "p99 ms"),
+                    ("peak_anon_mib_sum", "peak memory GiB")],
+        # HYBRID ONLY. The atomicity workload has no latency to print, so
+        # while every metric here was a latency its rows came out empty and
+        # collapsed invisibly onto the hybrid ones. Adding peak memory, which
+        # every row has, made them appear as duplicates a reader cannot tell
+        # apart. Same defect the graph table had, same cause: a metric present
+        # for ALL rows exposes any grouping the table does not do.
+        #
+        # The atomicity RESULT is not lost, it is prose on the page: 200
+        # injections per system, composed half-updated in all 200, both single
+        # engines in none.
+        "only_workload": "hybrid",
         "conditions": [
             "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
             "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
@@ -1129,6 +1146,15 @@ def main() -> int:
     # number in exactly the cell it belongs to. The vector and graph lanes are
     # unaffected: they run a single workload each.
     MERGED_WORKLOAD_LANES = {"l1", "l1tpc"}
+    # ... with one exception, added when memory arrived. The merge is sound for
+    # a metric that appears in only ONE workload's rows: aggregating over the
+    # union puts each number in the cell it belongs to. Memory is not like
+    # that. peak_anon_mib_sum is recorded for every row of every workload, so
+    # merging pools two different runs into one median: PostgreSQL's l1 cell
+    # read 0.135 GiB, the midpoint of 0.119 (OLTP) and 0.152 (OLAP), a figure
+    # describing neither. Keep only the transactional rows of a merged lane
+    # when aggregating a metric that spans workloads.
+    MEM_FIELDS = {"peak_anon_mib_sum", "end_anon_mib_sum"}
     grouped = defaultdict(list)
     for r in rows:
         wl = ("" if r["lane"] in MERGED_WORKLOAD_LANES
@@ -1230,7 +1256,14 @@ def main() -> int:
                 "metrics": {},
             }
             for field, label in spec["metrics"]:
-                got = _agg(rs, field)
+                src = rs
+                if field in MEM_FIELDS and src_lane in MERGED_WORKLOAD_LANES:
+                    # See MEM_FIELDS above: this lane's rows were merged across
+                    # workloads, which is right for a metric that only one
+                    # workload produces and wrong for one both produce. Report
+                    # the transactional run rather than a median straddling two.
+                    src = [r for r in rs if r.get("workload") == "oltp"] or rs
+                got = _agg(src, field)
                 if got is not None:
                     entry["metrics"][label] = got
             if entry["metrics"]:

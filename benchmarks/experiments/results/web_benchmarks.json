@@ -170,7 +170,8 @@
       "columns": [
         "p50 ms",
         "recall@10",
-        "build s"
+        "build s",
+        "peak memory GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -205,6 +206,12 @@
               "min": 889.16,
               "max": 940.9,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 16.7855,
+              "min": 16.7563,
+              "max": 16.7957,
+              "n": 5
             }
           }
         },
@@ -237,6 +244,12 @@
               "median": 914.92,
               "min": 893.07,
               "max": 935.13,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 16.7642,
+              "min": 16.7564,
+              "max": 16.7823,
               "n": 5
             }
           }
@@ -271,6 +284,12 @@
               "min": 2216.52,
               "max": 2245.16,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 16.8343,
+              "min": 16.8263,
+              "max": 16.8445,
+              "n": 5
             }
           }
         },
@@ -303,6 +322,12 @@
               "median": 3111.13,
               "min": 2820.42,
               "max": 3113.38,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 17.3776,
+              "min": 17.3321,
+              "max": 17.3906,
               "n": 5
             }
           }
@@ -337,6 +362,12 @@
               "min": 438.88,
               "max": 1008.21,
               "n": 10
+            },
+            "peak memory GiB": {
+              "median": 13.5881,
+              "min": 8.2049,
+              "max": 18.2701,
+              "n": 10
             }
           }
         },
@@ -369,6 +400,12 @@
               "median": 1067.835,
               "min": 377.98,
               "max": 1779.01,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 9.6899,
+              "min": 4.5586,
+              "max": 14.731,
               "n": 10
             }
           }
@@ -403,6 +440,12 @@
               "min": 95.02,
               "max": 96.1,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 8.3814,
+              "min": 8.3599,
+              "max": 8.3907,
+              "n": 5
             }
           }
         },
@@ -435,6 +478,12 @@
               "median": 95.98,
               "min": 94.95,
               "max": 96.52,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 8.4159,
+              "min": 8.4144,
+              "max": 8.5074,
               "n": 5
             }
           }
@@ -469,6 +518,12 @@
               "min": 243.53,
               "max": 246.11,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 8.5099,
+              "min": 8.5029,
+              "max": 8.5669,
+              "n": 5
             }
           }
         },
@@ -501,6 +556,12 @@
               "median": 320.86,
               "min": 319.89,
               "max": 322.88,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 9.0477,
+              "min": 9.0224,
+              "max": 9.1107,
               "n": 5
             }
           }
@@ -535,6 +596,12 @@
               "min": 100.83,
               "max": 103.46,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 4.7643,
+              "min": 4.6914,
+              "max": 5.6972,
+              "n": 5
             }
           }
         },
@@ -567,6 +634,12 @@
               "median": 91.92,
               "min": 90.9,
               "max": 94.43,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 2.2816,
+              "min": 2.1938,
+              "max": 2.4334,
               "n": 5
             }
           }
@@ -601,6 +674,12 @@
               "min": 9.17,
               "max": 9.74,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 3.0198,
+              "min": 2.9972,
+              "max": 3.2146,
+              "n": 5
             }
           }
         },
@@ -633,6 +712,12 @@
               "median": 9.25,
               "min": 9.08,
               "max": 9.37,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 3.1468,
+              "min": 3.1275,
+              "max": 3.3521,
               "n": 5
             }
           }
@@ -667,6 +752,12 @@
               "min": 25.99,
               "max": 26.06,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 4.3364,
+              "min": 4.33,
+              "max": 4.3499,
+              "n": 5
             }
           }
         },
@@ -699,6 +790,12 @@
               "median": 33.87,
               "min": 33.23,
               "max": 34.35,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 4.7914,
+              "min": 4.7801,
+              "max": 4.8197,
               "n": 5
             }
           }
@@ -733,6 +830,12 @@
               "min": 10.85,
               "max": 11.17,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.2705,
+              "min": 1.2668,
+              "max": 1.3163,
+              "n": 5
             }
           }
         },
@@ -765,6 +868,12 @@
               "median": 8.17,
               "min": 8.01,
               "max": 8.98,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.6877,
+              "min": 0.6604,
+              "max": 0.6999,
               "n": 5
             }
           }
@@ -826,6 +935,12 @@
               "min": 183.65,
               "max": 193.25,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 8.3243,
+              "min": 7.4955,
+              "max": 8.3438,
+              "n": 5
             }
           }
         },
@@ -858,6 +973,12 @@
               "median": 258.68,
               "min": 255.41,
               "max": 263.09,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 7.6663,
+              "min": 7.5897,
+              "max": 8.0239,
               "n": 5
             }
           }
@@ -892,6 +1013,12 @@
               "min": 144.91,
               "max": 146.63,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.1409,
+              "min": 1.1405,
+              "max": 1.1581,
+              "n": 5
             }
           }
         },
@@ -924,6 +1051,12 @@
               "median": 59.67,
               "min": 58.94,
               "max": 59.75,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 2.8109,
+              "min": 2.5768,
+              "max": 2.9229,
               "n": 5
             }
           }
@@ -958,6 +1091,12 @@
               "min": 20.4,
               "max": 21.49,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 2.2191,
+              "min": 1.898,
+              "max": 2.2817,
+              "n": 5
             }
           }
         },
@@ -990,6 +1129,12 @@
               "median": 17.37,
               "min": 16.76,
               "max": 19.22,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 2.5153,
+              "min": 2.3687,
+              "max": 2.5549,
               "n": 5
             }
           }
@@ -1024,6 +1169,12 @@
               "min": 43.28,
               "max": 44.3,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.6534,
+              "min": 0.6486,
+              "max": 0.6988,
+              "n": 5
             }
           }
         },
@@ -1056,6 +1207,12 @@
               "median": 7.63,
               "min": 7.43,
               "max": 7.68,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.0385,
+              "min": 0.0385,
+              "max": 0.0385,
               "n": 5
             }
           }
@@ -1823,7 +1980,8 @@
       "columns": [
         "average friend age ms",
         "friends in same city ms",
-        "most friends ms"
+        "most friends ms",
+        "peak memory GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -1858,6 +2016,12 @@
               "min": 55.95,
               "max": 57.57,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 8.1553,
+              "min": 8.1009,
+              "max": 8.1793,
+              "n": 5
             }
           }
         },
@@ -1890,6 +2054,12 @@
               "median": 367.98,
               "min": 363.99,
               "max": 385.86,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 8.1179,
+              "min": 8.0653,
+              "max": 8.1515,
               "n": 5
             }
           }
@@ -1924,6 +2094,12 @@
               "min": 66.0,
               "max": 68.77,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 7.9178,
+              "min": 7.9114,
+              "max": 7.9309,
+              "n": 5
             }
           }
         },
@@ -1956,6 +2132,12 @@
               "median": 2.75,
               "min": 2.67,
               "max": 2.81,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.3499,
+              "min": 0.3221,
+              "max": 0.3629,
               "n": 5
             }
           }
@@ -1990,6 +2172,12 @@
               "min": 315.06,
               "max": 323.84,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 12.8596,
+              "min": 12.8486,
+              "max": 12.8885,
+              "n": 5
             }
           }
         }
@@ -2008,7 +2196,8 @@
         "read p50 ms",
         "insert p50 ms",
         "OLTP ops/s",
-        "OLAP total ms"
+        "OLAP total ms",
+        "peak memory GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -2049,6 +2238,12 @@
               "min": 68129.287,
               "max": 71601.273,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 12.7415,
+              "min": 12.7308,
+              "max": 12.9516,
+              "n": 5
             }
           }
         },
@@ -2087,6 +2282,12 @@
               "median": 77852.811,
               "min": 76348.694,
               "max": 78922.548,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 12.8958,
+              "min": 12.7014,
+              "max": 13.0906,
               "n": 5
             }
           }
@@ -2127,6 +2328,12 @@
               "min": 107.501,
               "max": 109.398,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.977,
+              "min": 1.958,
+              "max": 1.9988,
+              "n": 5
             }
           }
         },
@@ -2166,6 +2373,12 @@
               "min": 3226.31,
               "max": 3255.636,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.1188,
+              "min": 0.0993,
+              "max": 0.1256,
+              "n": 5
             }
           }
         }
@@ -2191,7 +2404,8 @@
         "Q1 ms",
         "Q6 ms",
         "new-order p50 ms",
-        "OLTP ops/s"
+        "OLTP ops/s",
+        "peak memory GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -2232,6 +2446,12 @@
               "min": 2230.9,
               "max": 2486.1,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 2.4003,
+              "min": 2.3976,
+              "max": 2.4283,
+              "n": 5
             }
           }
         },
@@ -2270,6 +2490,12 @@
               "median": 841.8,
               "min": 805.0,
               "max": 873.5,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 7.375,
+              "min": 7.335,
+              "max": 7.4162,
               "n": 5
             }
           }
@@ -2310,6 +2536,12 @@
               "min": 103.1,
               "max": 106.9,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.8572,
+              "min": 1.8011,
+              "max": 1.8827,
+              "n": 5
             }
           }
         },
@@ -2349,6 +2581,12 @@
               "min": 338.2,
               "max": 426.1,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.5842,
+              "min": 1.5592,
+              "max": 1.6357,
+              "n": 5
             }
           }
         }
@@ -2372,7 +2610,8 @@
       ],
       "columns": [
         "p50 ms",
-        "p99 ms"
+        "p99 ms",
+        "peak memory GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -2401,6 +2640,12 @@
               "min": 5.382,
               "max": 7.981,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.9339,
+              "min": 0.7741,
+              "max": 1.0976,
+              "n": 5
             }
           }
         },
@@ -2428,6 +2673,12 @@
               "min": 25.732,
               "max": 28.448,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 6.7754,
+              "min": 6.7622,
+              "max": 6.793,
+              "n": 5
             }
           }
         },
@@ -2454,6 +2705,12 @@
               "median": 8.694,
               "min": 8.519,
               "max": 8.965,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.8,
+              "min": 0.7962,
+              "max": 0.8077,
               "n": 5
             }
           }
