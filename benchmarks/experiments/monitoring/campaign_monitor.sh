@@ -71,7 +71,17 @@ while true; do
     pgrep -cf '$PAT' 2>/dev/null
     docker ps -q --filter label=dbbench=1 | wc -l
     echo '###STATUS'
-    grep -aE '$MARKER' ~/STATUS.txt 2>/dev/null | tail -3
+    # EVERYTHING THE CAMPAIGN HAS WRITTEN SINCE ITS START LINE, not only the
+    # lines matching the marker. Filtering by the marker meant the only line
+    # that could ever match was the START itself, so the monitor reported a
+    # finished campaign as still starting, and the branch that reports a queue
+    # gone empty could never fire: it could watch a run but not see it end.
+    # NOTE: no double quotes anywhere in this block. The whole snapshot is one
+    # double-quoted string, so a quote in a COMMENT closes it and every command
+    # below is silently dropped -- which is exactly how this line first failed.
+    # sed from the last marker occurrence to EOF gives the campaign's whole
+    # tail, which is the campaign state a reader actually wants.
+    awk -v m='$MARKER' 'index(\$0, m) {start=NR} {line[NR]=\$0} END {for (i=start; i<=NR; i++) print line[i]}' ~/STATUS.txt 2>/dev/null | tail -3
     echo '###FAIL'
     # TWO SCOPES, BOTH NECESSARY, BOTH LEARNED FROM A FALSE ALARM.
     #
