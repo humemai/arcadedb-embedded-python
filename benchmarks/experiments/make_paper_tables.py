@@ -31,6 +31,10 @@ _PAPER_DIR = os.environ.get(
     "BENCH_PAPER_DIR", os.path.join(HERE, "..", "..", "paper"))
 OUT = os.path.join(_PAPER_DIR, "tables")
 
+# Every published cell is N=5. A row outside 1..5 is a probe, not a repetition;
+# see the rep filter in load_canonical for the 34 rows that made this explicit.
+MAX_REP = 5
+
 PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
                 "l3s": ["tiny", "small", "medium"], "l3d": ["small", "deep10m"],
                 "e2": ["e2"]}
@@ -93,6 +97,25 @@ def load_canonical():
         # serial row it would otherwise outrank on ts_utc. See FAIRNESS.md F2.
         cpuset = str(r.get("cpuset"))
         if cpuset not in ("0-11", "None"):
+            continue
+        # A PUBLISHED CELL HAS reps 1..N, AND NOTHING ELSE. `rep` is part of the
+        # canonical key below, so an out-of-range rep does not supersede
+        # anything -- it ADDS a repetition to a finished cell, silently, and the
+        # median and the printed [min--max] both move.
+        #
+        # Not hypothetical: 34 rows carrying rep=9 sit in runs.jsonl from
+        # overnight probe batches on 2026-08-15 (01:00-02:55 UTC), written at
+        # tier=paper before --results-file existed to send scratch elsewhere.
+        # Six batches of four l2/sf1 backends plus six l1/small PostgreSQL
+        # rows. They would have turned four graph cells into N=6, and one of
+        # them is decisive on its own: ladybug rep 9 ran 0.18.1 while reps 1-5
+        # of the same cell ran 0.19.1, so a single cell would have mixed two
+        # comparator releases -- exactly what this round's pinning work
+        # existed to prevent.
+        #
+        # The rows are KEPT in runs.jsonl, which is append-only and is the
+        # record of what was run. They are excluded from what gets published.
+        if not isinstance(r.get("rep"), int) or not 1 <= r["rep"] <= MAX_REP:
             continue
         # NO PRE-RELEASE ENGINE REACHES A TABLE. DECISIONS #42: every ICDE
         # number comes from a monthly stable release. That was policy enforced

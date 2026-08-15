@@ -739,7 +739,7 @@ def l2_peak_anon_gib(backend, scale="sf10", workload="oltp"):
     return _stat.median([r["peak_anon_mib_sum"] for r in rs]) / 1024 if rs else None
 
 
-def mem_ratio(lane_a, be_a, lane_b, be_b, scale_a=None, scale_b=None, wl=None):
+def mem_ratio(lane_a, be_a, lane_b, be_b, scale_a, scale_b, wl=None):
     """Peak-anon ratio between two engines in one lane, as the prose states it.
 
     The cross-lane memory section quotes five ratios spanning two orders of
@@ -747,6 +747,16 @@ def mem_ratio(lane_a, be_a, lane_b, be_b, scale_a=None, scale_b=None, wl=None):
     operands can be individually correct and the quotient still stale, which
     is how "2.4x" survived into a draft of that paragraph when the artifact
     said 3.7 (I had copied it from a summary using a different scale).
+
+    THE SCALES ARE REQUIRED, and that is the whole point. They used to default
+    to None, which med() reads as "no filter", so a caller who forgot them got
+    a quotient pooled across every scale -- a number corresponding to no
+    measurement anyone made. mem.ratio.qdrant_dense did exactly that: the
+    numerator was ArcadeDB at 1M (n=5) and the denominator a pooled 1M+10M
+    median (n=10), giving 2.54, which its gate then reported green while the
+    same-scale figure is 12.27. The ratio is ours-over-theirs, so the silent
+    default understated OUR memory by 4.8x. A missing scale is now a
+    TypeError at import, not a plausible number.
     """
     import statistics as _stat
     def med(lane, be, sc):
@@ -1231,8 +1241,20 @@ CLAIMS = [
      lambda r: mem_ratio("l2", "arcadedb_graph_embedded", "l2", "ladybug_graph",
                          "sf10", "sf10", "oltp"),
      "graph SF10 OLTP against the non-JVM columnar engine"),
+    # DELIBERATELY LEFT TO FAIL, and the failure is the honest state.
+    # This claim says DEEP-10M, so it now asks for DEEP-10M -- and ArcadeDB has
+    # no canonical row there, because every one carries 26.8.1.dev3 or
+    # -SNAPSHOT and the pre-release guard drops it. So the ratio cannot be
+    # computed at the scale the paper names, and the check reports missing data
+    # instead of a cross-scale quotient that flattered us by 4.8x.
+    # Resolve by re-measuring ArcadeDB dense at DEEP-10M on a released engine,
+    # or by withdrawing the dense memory comparison the way the PostgreSQL one
+    # was withdrawn (#150). Do not "fix" this by re-pinning to 12.27: at
+    # l3d/small ArcadeDB's peak IS its 8 GiB heap, the same caveat the sparse
+    # paragraph already carries.
     ("mem.ratio.qdrant_dense", 2.54, 0.05,
-     lambda r: mem_ratio("l3d", "arcadedb_dense_embedded", "l3d", "qdrant_dense"),
+     lambda r: mem_ratio("l3d", "arcadedb_dense_embedded", "l3d", "qdrant_dense",
+                         "deep10m", "deep10m"),
      "dense DEEP-10M"),
     ("mem.ratio.qdrant_sparse", 3.67, 0.06,
      lambda r: mem_ratio("l3s", "arcadedb_sparse_embedded", "l3s", "qdrant_sparse",
