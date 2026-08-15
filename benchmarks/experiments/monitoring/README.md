@@ -42,7 +42,7 @@ is hypothetical:
   name where a version belongs, which nobody can re-measure (#156)
 - a cell that quietly finished at N=3 and printed a median like any other
 
-## Four rules learned building it
+## Six rules learned building it
 
 **Scope every check to the current run, across files as well as within them.**
 The first version grepped the whole of one appended log and reported an
@@ -54,6 +54,18 @@ newer than the start marker, and within each file the last runner invocation.
 **The marker names the START line.** Match on a job prefix instead and the
 last match is that job's own ALL-DONE, so the window collapses and the
 campaign's log falls outside its own scope.
+
+**Never kill by a pattern your own shell matches.** Restarting the monitor
+with `pkill -f campaign_monitor.sh` in the same command killed the shell that
+was launching the replacement, so both the old and new monitors died and a
+live campaign ran unwatched. Same shape as an ssh kill pattern that matched
+its own ssh. Launch the replacement in a separate invocation, or match on
+pids from `pgrep` rather than on a string the launcher also contains.
+
+**Completeness is an end-of-run check.** Mid-run every cell is legitimately
+short, so a "N reps, expected 5" rule fires on every in-flight cell and
+buries everything else. It lives behind `--final`, which the live monitor
+never passes and the queue script runs once after ALL-DONE.
 
 **Check the premise before trusting the rule.** A rule asserting that a JVM
 arm's resident memory should approach its committed heap fired on ten healthy

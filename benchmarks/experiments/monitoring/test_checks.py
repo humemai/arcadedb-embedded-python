@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Does each monitor rule actually fire? Run after touching check_row.
+r"""Does each monitor rule actually fire? Run after touching check_row.
 
 A rule that has silently stopped firing looks exactly like a clean campaign,
 which is the failure mode a monitor cannot afford. So every rule gets a

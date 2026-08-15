@@ -276,6 +276,10 @@ def main():
                     help="every row ever written; expect history to fire rules")
     ap.add_argument("--expect-reps", type=int, default=5,
                     help="reps a complete cell should have (0 disables the check)")
+    ap.add_argument("--final", action="store_true",
+                    help="run end-of-campaign checks that are meaningless while "
+                         "cells are still in flight, i.e. cell completeness. The "
+                         "live monitor must NOT pass this.")
     ap.add_argument("--results-file", default="runs.jsonl",
                     help="which results file to read, under results/. The smoke "
                          "stage writes runs_smoke.jsonl so it cannot supersede a "
@@ -331,9 +335,16 @@ def main():
         # --- the cell is complete --------------------------------------------
         # A short cell is not visibly broken: it prints a median like any
         # other. Table IV's 8.84M row is stuck at N=3 for exactly this reason.
-        if args.expect_reps and 0 < len(rs) < args.expect_reps:
-            done = all(r.get("rc") == 0 for r in rs)
-            if done:
+        #
+        # BUT ONLY AT THE END. Mid-run every cell is legitimately short, so
+        # this fired on all four in-flight l2/sf1 cells within 20 seconds of
+        # stage 2 starting. A monitor that cries wolf on every poll is one
+        # people stop reading, and the next real finding arrives into that
+        # silence -- which is written in this directory's own README. So the
+        # live monitor never passes --final; the queue script runs it once
+        # after ALL-DONE, beside the gates.
+        if args.final and args.expect_reps and 0 < len(rs) < args.expect_reps:
+            if all(r.get("rc") == 0 for r in rs):
                 fail.append(f"{tag}: {len(rs)} reps, expected {args.expect_reps}")
 
         # --- reps of one cell must come from ONE campaign ----------------------
