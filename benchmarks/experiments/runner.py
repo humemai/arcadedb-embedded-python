@@ -81,7 +81,19 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # unverifiable; fairness_check names it rather than assuming.
                  "sf1": "4g", "sf10": "12g", "deep10m": "24g", "e2": "6g", "tpch1": "8g",
                     "tpch10": "16g"}
-SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0.75"))
+# THE SERVED ENGINE GETS THE FULL TIER CAP, and the driver gets its own budget
+# on top. It used to take 0.75 of the cap while the embedded arm took all of
+# it, so at medium an embedded engine ran in 32g and a served one in 24g, with
+# both given the same heap. The headline ArcadeDB number in every table is the
+# EMBEDDED arm, which is the one arm that never paid that split, and the
+# deployment-axis claim attributed the resulting delta to serialisation.
+#
+# Cost is host RAM: a served cell now needs cap + CLIENT_MEM rather than cap.
+# The largest published tier is deep10m at 36g, so 44g against mini's 61g.
+CLIENT_MEM = os.environ.get("BENCH_CLIENT_MEM", "8g")
+# Kept for the sweep tier and for anyone reproducing an older run; unused by
+# the paper tier now. Setting it forces the old behaviour back.
+SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0")) or None
 
 # ---------------------------------------------------------------- backends
 # Each backend: image (bench image for the workload driver), topology, and for
@@ -192,7 +204,24 @@ BACKENDS = {
         # heap parity with the ArcadeDB deployments (same per-scale heap)
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
-                       "-e", "NEO4J_server_memory_heap_max__size={heap}"],
+                       "-e", "NEO4J_server_memory_heap_max__size={heap}",
+                       # PAGE CACHE, which for Neo4j is the load-bearing
+                       # setting and was never set. The image entrypoint
+                       # hard-codes 512M (docker-entrypoint.sh), and it does
+                       # NOT derive from the container: measured on the pinned
+                       # digest at 3g, 4g, 6g and 20g caps, Neo4j reads the
+                       # cgroup correctly and reports 512.00MiB every time.
+                       #
+                       # So our headline graph comparator ran a 512 MiB store
+                       # cache at every tier, micro through SF10, in a table
+                       # ArcadeDB wins on 1-hop by 9.5x. Same pathology as
+                       # PostgreSQL's 128 MB shared_buffers, which we answered
+                       # with the postgres_tuned arm; this one had no arm and
+                       # no disclosure.
+                       #
+                       # {pagecache} is the container's memory minus the heap,
+                       # minus a fixed reserve for the JVM's non-heap needs.
+                       "-e", "NEO4J_server_memory_pagecache_size={pagecache}"],
         "server_port": 7687,
         "ready_regex": r"Started\.",
     },
@@ -216,7 +245,24 @@ BACKENDS = {
         "server_image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
-                       "-e", "NEO4J_server_memory_heap_max__size={heap}"],
+                       "-e", "NEO4J_server_memory_heap_max__size={heap}",
+                       # PAGE CACHE, which for Neo4j is the load-bearing
+                       # setting and was never set. The image entrypoint
+                       # hard-codes 512M (docker-entrypoint.sh), and it does
+                       # NOT derive from the container: measured on the pinned
+                       # digest at 3g, 4g, 6g and 20g caps, Neo4j reads the
+                       # cgroup correctly and reports 512.00MiB every time.
+                       #
+                       # So our headline graph comparator ran a 512 MiB store
+                       # cache at every tier, micro through SF10, in a table
+                       # ArcadeDB wins on 1-hop by 9.5x. Same pathology as
+                       # PostgreSQL's 128 MB shared_buffers, which we answered
+                       # with the postgres_tuned arm; this one had no arm and
+                       # no disclosure.
+                       #
+                       # {pagecache} is the container's memory minus the heap,
+                       # minus a fixed reserve for the JVM's non-heap needs.
+                       "-e", "NEO4J_server_memory_pagecache_size={pagecache}"],
         "server_port": 7687,
         "ready_regex": r"Started\.",
     },
@@ -364,6 +410,25 @@ LANES = {
             ["search"]),
     # l4 timeseries: added as adapters land.
 }
+
+
+def _pagecache_for(server_mem_bytes, heap):
+    """What is left for an off-heap page cache once the heap is taken out.
+
+    Neo4j's own guidance is heap + page cache + about 1g of JVM overhead
+    (metaspace, code cache, thread stacks, direct buffers) inside the
+    container. Anything we do not hand it, its entrypoint pins at 512M
+    regardless of container size, which is what made the graph comparison
+    unfair rather than merely untuned.
+
+    Floors at 512m so a small tier can never end up BELOW the image default:
+    the point is to stop under-provisioning it, not to introduce a new way to
+    do so.
+    """
+    reserve = 1 << 30
+    left = server_mem_bytes - mem_bytes(heap) - reserve
+    gib = left / float(1 << 30)
+    return f"{gib:.1f}g" if gib >= 0.5 else "512m"
 
 
 def sh(cmd, **kw):
@@ -702,9 +767,18 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     server_cid, cli_cid, samplers = None, None, []
     try:
         if be["topology"] == "client_server":
-            server_mem = int(total_mem * SERVER_MEM_FRACTION)
-            client_mem = total_mem - server_mem
-            row["mem_split"] = f"{SERVER_MEM_FRACTION:.2f}"
+            if SERVER_MEM_FRACTION:
+                server_mem = int(total_mem * SERVER_MEM_FRACTION)
+                client_mem = total_mem - server_mem
+                row["mem_split"] = f"{SERVER_MEM_FRACTION:.2f}"
+            else:
+                # Full cap to the engine, so it sees exactly what an embedded
+                # engine of the same tier sees. The driver is additional.
+                server_mem = total_mem
+                client_mem = mem_bytes(CLIENT_MEM)
+                row["mem_split"] = "full+client"
+                row["client_mem_cap"] = CLIENT_MEM
+            row["server_mem_cap_g"] = round(server_mem / 2**30, 1)
             # Buffer-pool sizing derived from this container's own budget, on
             # PostgreSQL's own guidance (a quarter resident, three quarters
             # assumed cached). Only the tuned arm uses these; every other
@@ -722,7 +796,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                              "--name", f"srv-{run_id}",
                              "--cpuset-cpus", cpuset,
                              "--memory", str(server_mem), "--memory-swap", str(server_mem)]
-                            + [s.format(heap=heap) for s in be.get("server_env", [])]
+                            + [s.format(heap=heap, pagecache=_pagecache_for(server_mem, heap))
+                               for s in be.get("server_env", [])]
                             + be.get("server_volumes", [])
                             + [be["server_image"]]
                             + server_cmd)
@@ -792,7 +867,16 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 "--label", "dbbench=1",
                 "--name", f"cli-{run_id}", "--cpuset-cpus", cpuset]
                + client_caps + bench_env
-               + ["-e", f"ARCADEDB_HEAP={heap}", "-e", f"RUN_LABEL={run_id}",
+               # ARCADEDB_HEAP ONLY WHERE IT MEANS SOMETHING. It used to be
+               # exported into every client container, so a Rust or C engine's
+               # row carried a JVM heap it never had. fairness_check's whole
+               # heap design rests on non-JVM engines reporting heap=None, and
+               # they were reporting ArcadeDB's tier heap instead, so its
+               # "engines that have a heap" carve-out never fired and the JVM
+               # count it prints was not a count of anything.
+               + (["-e", f"ARCADEDB_HEAP={heap}"]
+                  if "arcadedb" in job["backend"] else [])
+               + ["-e", f"RUN_LABEL={run_id}",
                   "-v", f"{HERE}:/work", "-w", "/work", "-v", f"{DATA}:/data:ro",
                   be["image"], "python", job["script"],
                   "--backend", job["backend"], "--workload", job["workload"],
