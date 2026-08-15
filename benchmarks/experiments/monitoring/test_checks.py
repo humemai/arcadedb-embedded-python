@@ -64,6 +64,31 @@ RELEASES = ["26.8.1", "27.0.0", "1.5.5", "ladybug:0.19.1", "arcadedb:26.8.1",
             "server:26.8.1 (build 727aa4568cdface314ee15cd242f71d6299b2b0c/1785790932717/main)"]
 
 
+# Rep sequences measured on mini at l1/small, 2026-08-15. The postgres one is
+# the defect the drift check was written for; the rest are healthy cells from
+# the same run and must stay quiet, which is what stops the rule from being a
+# blanket "reps disagree" alarm.
+DRIFT_CASES = [
+    ("postgres OLTP, the real drift", [0.356, 0.398, 0.400, 0.613, 0.601], True),
+    ("postgres_tuned, healthy",       [0.569, 0.579, 0.489, 0.576, 0.619], False),
+    ("arcadedb_server, healthy",      [0.662, 0.734, 0.657, 0.727, 0.655], False),
+    ("duckdb, healthy",               [1.005, 0.988, 0.960, 0.987, 0.992], False),
+    ("noisy but no trend",            [1.0, 2.0, 1.0, 2.0, 1.0],           False),
+]
+
+
+def drift_ratio(vals, field="read_p50_ms"):
+    import statistics as st
+    ordered = [{"rep": i + 1, field: v} for i, v in enumerate(vals)]
+    half = len(ordered) // 2
+    a = [x for x in (W.num(r.get(field)) for r in ordered[:half]) if x]
+    b = [x for x in (W.num(r.get(field)) for r in ordered[-half:]) if x]
+    if len(a) < 2 or len(b) < 2:
+        return None
+    ma, mb = st.median(a), st.median(b)
+    return mb / ma if ma and mb else None
+
+
 def findings(row, isjvm=True):
     out = []
     W.check_row(row, "TAG", isjvm, out)
@@ -98,6 +123,14 @@ def main():
             bad += 1
             print(f"  FALSE POSITIVE on release {ver!r}: {got}")
     print(f"releases stayed quiet: {len(RELEASES)} checked")
+
+    for name, vals, should_fire in DRIFT_CASES:
+        r = drift_ratio(vals)
+        fired = r is not None and (r > 1.25 or r < 1 / 1.25)
+        if fired != should_fire:
+            bad += 1
+            print(f"  DRIFT WRONG {name}: ratio={r}, fired={fired}, expected={should_fire}")
+    print(f"drift cases behaved: {len(DRIFT_CASES)} checked")
 
     print("\nALL CHECKS BEHAVE" if not bad else f"\n{bad} PROBLEMS")
     return 1 if bad else 0

@@ -37,6 +37,7 @@ WATCH=${MONITOR_WATCH_PATH:-~/repos/humemai/arcadedb-embedded-python/benchmarks/
 
 seen_status=""
 seen_fail=""
+seen_suspect=""
 dead_reported=0
 tick=0
 
@@ -109,8 +110,14 @@ while true; do
     seen_fail="$fail_last"
   fi
 
-  if [ -n "$suspect" ]; then
+  # ONLY WHEN THE SET CHANGES. A finding that is real but not yet actionable --
+  # Milvus never settling its disk, say -- is still true on every poll, and
+  # re-emitting it every two minutes buries the next genuinely new one. That is
+  # the same reasoning as the ACK list in the watcher, applied to the stream:
+  # 45 KB of one repeated line is how this first showed up.
+  if [ -n "$suspect" ] && [ "$suspect" != "$seen_suspect" ]; then
     echo "CAMPAIGN SUSPECT ROWS: $(printf '%s' "$suspect" | tr '\n' ' | ')"
+    seen_suspect="$suspect"
   fi
 
   # The queue went empty without finishing. THE failure mode a progress-only

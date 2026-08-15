@@ -362,6 +362,32 @@ def main():
             fail.append(f"{tag}: reps span {stamps[0][:10]}..{stamps[-1][:10]}; "
                         f"a partly re-measured cell mixes old and new rows")
 
+        # --- a cell must not DRIFT across its own reps -------------------------
+        # Spread and drift are different defects and the spread rule cannot see
+        # this one. l1/small postgres OLTP ran 0.356, 0.398, 0.400, 0.613,
+        # 0.601 ms with throughput falling 793 -> 691 ops/s in step: a 1.6x
+        # trend, well inside the 3x spread threshold, and completely invisible
+        # in the median the table would print. Comparing the first half of the
+        # reps against the second half separates a trend from noise, because
+        # noise has no order and a drift does.
+        #
+        # Reps are compared IN REP ORDER, not in file order: the runner
+        # permutes cells, so file order is not time order within a cell.
+        if len(rs) >= 4:
+            ordered = sorted(rs, key=lambda r: r.get("rep") or 0)
+            half = len(ordered) // 2
+            for field in ("point_p50_ms", "hop1_p50_ms", "query_p50_ms",
+                          "read_p50_ms", "oltp_ops_per_s", "build_s"):
+                a = [x for x in (num(r.get(field)) for r in ordered[:half]) if x]
+                b = [x for x in (num(r.get(field)) for r in ordered[-half:]) if x]
+                if len(a) < 2 or len(b) < 2:
+                    continue
+                ma, mb = st.median(a), st.median(b)
+                if ma and mb and (mb / ma > 1.25 or ma / mb > 1.25):
+                    fail.append(f"{tag}: {field} DRIFTS across reps, "
+                                f"{ma:.4g} -> {mb:.4g} ({mb/ma:.2f}x first half to "
+                                f"second); the median hides a trend")
+
         # --- reps of one cell must agree --------------------------------------
         if len(rs) >= 3:
             for field in ("peak_owned_mib_sum", "point_p50_ms", "hop1_p50_ms",
