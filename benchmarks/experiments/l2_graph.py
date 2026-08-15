@@ -149,9 +149,13 @@ class ArcadeGraphEmbedded(Base):
         # traversal band rather than moving toward LadybugDB's columnar one,
         # which is what an effective projection should look like.
         if os.environ.get("BENCH_GAV", "1") == "0":
+            self.gav_build_s = 0.0
             return
         # ArcadeDB's documented OLAP mode: build a Graph Analytical View and
         # wait for READY; the executor then uses it for matching traversals.
+        # TIMED SEPARATELY: a view that accelerates a query is not free, and
+        # the paper cannot claim the speedup without pricing the view.
+        _gav_t0 = time.perf_counter()
         self.db.command(
             "sql",
             f"CREATE GRAPH ANALYTICAL VIEW {GAV_NAME} "
@@ -165,6 +169,7 @@ class ArcadeGraphEmbedded(Base):
                 GAV_NAME).to_json_list()
             status = rows[0].get("status") if rows else None
             if status == "READY":
+                self.gav_build_s = round(time.perf_counter() - _gav_t0, 3)
                 return
             if status in ("FAILED", "ERROR"):
                 raise RuntimeError(f"GAV build failed: {rows[0]}")
@@ -245,6 +250,16 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
     def post_build(self, workload):
         if workload != "olap":
             return
+        # THE SERVER ARM HONOURS BENCH_GAV TOO. It did not, and that is worse
+        # than a missing ablation: main() stamps out["gav"] from the env var
+        # regardless, so BENCH_GAV=0 would have written server rows LABELLED
+        # gav=False that had a view built anyway. The ablation would then have
+        # compared a view against a view and reported the difference as the
+        # view's effect. Caught before the ablation ran, not after.
+        if os.environ.get("BENCH_GAV", "1") == "0":
+            self.gav_build_s = 0.0
+            return
+        _gav_t0 = time.perf_counter()
         self._http("command", "sql",
                    f"CREATE GRAPH ANALYTICAL VIEW {GAV_NAME} "
                    "VERTEX TYPES (Person) EDGE TYPES (KNOWS) "
@@ -257,6 +272,7 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
                 f"SELECT FROM schema:graphAnalyticalViews WHERE name = '{GAV_NAME}'")
             status = rows[0].get("status") if rows else None
             if status == "READY":
+                self.gav_build_s = round(time.perf_counter() - _gav_t0, 3)
                 return
             if status in ("FAILED", "ERROR"):
                 raise RuntimeError(f"GAV build failed: {rows[0]}")
@@ -552,6 +568,16 @@ def main():
     # settles a roughly fixed 30-87 MB, against nothing at all for an
     # already-settled comparator. An unrecorded close is an unpriced one, and
     # the row cannot be told apart from a lane that never settles.
+    #
+    # WHAT THE VIEW COST, beside what it bought. Absent on a backend that has
+    # no view; 0.0 on the ablated arm, which is a measurement rather than a
+    # gap. Until this existed the GAV build sat inside build_s, so "OLAP is Nx
+    # faster with the view" had no companion number for what the view cost to
+    # make, and the two ablation arms differed by a term nobody could see.
+    _gav = getattr(ad, "gav_build_s", None)
+    if _gav is not None:
+        out["gav_build_s"] = _gav
+
     _t = time.perf_counter()
     ad.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
