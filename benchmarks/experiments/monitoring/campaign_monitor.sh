@@ -35,6 +35,24 @@ INTERVAL=${MONITOR_INTERVAL:-120}
 # a noisy or broken rule without touching the checkout the campaign is running.
 WATCH=${MONITOR_WATCH_PATH:-~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments/monitoring/campaign_watch.py}
 
+# RUN ON THE BENCH HOST ITSELF, OR POLL IT OVER SSH.
+#
+# BENCH_HOST_SSH=local runs the snapshot with a plain shell instead of ssh, so
+# the monitor can live on the bench host under setsid/nohup and outlive any
+# workstation session. That is the difference between "monitoring" and
+# "monitoring until my laptop hiccups": four separate laptop-side monitors died
+# mid-campaign -- two to a kill pattern that matched their own launcher, one to
+# a deliberate restart, one to a session reap -- and each time a live campaign
+# ran unwatched until somebody noticed.
+#
+# Over ssh it still works unchanged, which is right for watching from a
+# workstation while you are there.
+if [ "$HOST" = "local" ]; then
+  RUNNER="bash -c"
+else
+  RUNNER="ssh -o ConnectTimeout=20 -o BatchMode=yes $HOST"
+fi
+
 seen_status=""
 seen_fail=""
 seen_suspect=""
@@ -44,7 +62,7 @@ tick=0
 while true; do
   tick=$((tick + 1))
 
-  snap=$(ssh -o ConnectTimeout=20 -o BatchMode=yes "$HOST" "
+  snap=$($RUNNER "
     echo '###JOBS'
     # NO '|| echo 0'. pgrep -c already prints 0 when nothing matches, and it
     # exits 1 while doing so, so the fallback appended a SECOND zero and every
