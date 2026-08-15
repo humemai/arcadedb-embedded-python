@@ -381,6 +381,10 @@ BACKENDS = {
     },
 }
 
+# Which backends run on a JVM, and therefore have a heap worth recording and
+# checking. Substring match against the backend name.
+JVM_BACKENDS = ("arcadedb", "neo4j", "elasticsearch", "questdb")
+
 LANES = {
     # lane -> (bench script, backends, workloads)
     "l1": ("l1_tabular.py",
@@ -756,7 +760,18 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     heap = HEAP_BY_SCALE[scale]
     row = {"run_id": run_id, "lane": job["lane"], "backend": job["backend"],
            "workload": job["workload"], "scale": scale, "rep": rep, "tier": tier,
-           "cpuset": cpuset, "topology": be["topology"], "heap": heap,
+           "cpuset": cpuset, "topology": be["topology"],
+           # HEAP ONLY WHERE THERE IS A JVM. This used to be recorded for
+           # every backend, so a Rust or C engine's row carried ArcadeDB's
+           # tier heap. fairness_check's heap axis is built on the premise
+           # that non-JVM engines report heap=None, so the premise was false
+           # and its "engines that have a heap" carve-out never fired.
+           #
+           # Deliberately keyed on the backend NAME rather than a flag, so
+           # adding a JVM comparator without listing it here fails loudly as a
+           # missing heap rather than quietly as an unchecked one.
+           **({"heap": heap} if any(t in job["backend"] for t in JVM_BACKENDS)
+              else {}),
            "mem_cap": MEM_BY_SCALE[scale],
            "ts_utc": datetime.now(timezone.utc).isoformat()}
 
