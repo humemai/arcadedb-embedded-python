@@ -28,6 +28,12 @@ HOST=${BENCH_HOST_SSH:-mini}
 PAT=${1:?usage: campaign_monitor.sh <job-pattern> [marker]}
 MARKER=${2:-$PAT}
 INTERVAL=${MONITOR_INTERVAL:-120}
+# WHERE THE CHECKER LIVES ON THE BENCH HOST. Normally the repo copy. The
+# override exists because the checker must be improvable DURING a campaign
+# while the lane scripts must not: syncing the repo mid-run is what split one
+# lane's rows across two schemas. Point this at a scp'd copy under /tmp to fix
+# a noisy or broken rule without touching the checkout the campaign is running.
+WATCH=${MONITOR_WATCH_PATH:-~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments/monitoring/campaign_watch.py}
 
 seen_status=""
 seen_fail=""
@@ -71,7 +77,7 @@ while true; do
     awk '/^pswpin|^pswpout/{printf \"%s \", \$2}' /proc/vmstat
     echo
     echo '###WATCH'
-    python3 ~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments/monitoring/campaign_watch.py \
+    python3 $WATCH \
       --since-marker '$MARKER' 2>&1 | sed -n '/SUSPECT/,\$p' | head -8
   " 2>/dev/null)
 
