@@ -45,6 +45,19 @@ def recall_at_k(result_ids, gt_row):
 
 
 class Base:
+    def close(self):
+        """Release the engine handle. Overridden where there is one to release.
+
+        Every adapter answers close() so a caller never has to know which
+        engines hold a handle. Absent this, l3_sparse held its ArcadeDB
+        database open for the life of the process and the lifecycle probe's
+        reopen failed outright with "Found active instance of database
+        '/tmp/l3_arcade' already in use". That was our omission, not an engine
+        limitation: l2_graph and l3d_dense have closed their databases all
+        along, and the same binding call works here.
+        """
+        pass
+
     name = "base"
 
     def connect(self):
@@ -167,6 +180,8 @@ class ArcadeEmbedded(Base):
         by_rid = {r["r"]: r["id"] for r in rows}
         return [by_rid.get(x, -1) for x in rids]
 
+    def close(self):
+        self.db.close()
 
 class ArcadeEmbeddedFP32(ArcadeEmbedded):
     """Quantization ablation (engine #5143): exact FP32 posting weights vs the
@@ -268,7 +283,14 @@ class ArcadeServer(ArcadeEmbedded):
             f"SELECT id, @rid AS r FROM [{in_list}]")
         by_rid = {r["r"]: r["id"] for r in rows}
         return [by_rid.get(x, -1) for x in rids]
-
+    def close(self):
+        # Served arm: the database lives in another container. Closing here
+        # releases the HTTP session only, which is why a served arm's
+        # lifecycle equivalent is stopping that container, not this call.
+        try:
+            self.s.close()
+        except Exception:
+            pass
 
 class Qdrant(Base):
     name = "qdrant_sparse"
