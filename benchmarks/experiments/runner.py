@@ -744,13 +744,32 @@ def observe_server(cid):
         out["server_mem_cap"] = f"{int(mem) // (1 << 30)}g"
     env = sh(["docker", "inspect", "-f", "{{json .Config.Env}}", cid])
     try:
-        hits = re.findall(r"-Xmx(\d+)([gGmM])", " ".join(json.loads(env)))
+        envs = " ".join(json.loads(env))
     except Exception:
-        hits = []
+        envs = ""
+    # TWO SPELLINGS, because -Xmx is not how every JVM image takes its heap.
+    # This used to match -Xmx only, so ArcadeDB and Elasticsearch (ES_JAVA_OPTS
+    # carries -Xmx) had a witness and NEO4J DID NOT: it takes
+    # NEO4J_server_memory_heap_max__size=12g, which the old pattern could not
+    # see. Neo4j is the comparator in the one table we win on traversal, and
+    # the missing witness is exactly the failure mode that let Elasticsearch
+    # run a hardcoded 4g for three tiers while its row claimed 16g.
+    #
+    # Found by the campaign monitor on live rows, independently of the heap
+    # audit that predicted it.
+    hits = re.findall(r"-Xmx(\d+)([gGmM])", envs)
+    if not hits:
+        hits = re.findall(r"heap[_.]max_?_?size=(\d+)([gGmM])", envs, re.I)
     if hits:
         val, unit = hits[-1]
         out["server_heap"] = (f"{val}g" if unit in "gG"
                               else f"{int(val) // 1024}g")
+    # The other half of Neo4j's memory contract, and the setting the audit
+    # found pinned at the image default of 512M on every tier. Recorded so a
+    # future reader can see it was sized rather than inherited.
+    pc = re.findall(r"pagecache[_.]size=([\d.]+)([gGmM])", envs, re.I)
+    if pc:
+        out["server_pagecache"] = f"{pc[-1][0]}{pc[-1][1].lower()}"
     return out
 
 
