@@ -760,14 +760,55 @@ def mem_ratio(lane_a, be_a, lane_b, be_b, scale_a=None, scale_b=None, wl=None):
     return a / b if a and b else None
 
 
+def _med_field(backend, lane, scale, workload, field):
+    """Median of any numeric field for one cell. Used where a claim needs a
+    raw per-container column rather than the summed one."""
+    import statistics as _stat
+    v = [r[field] for r in M.load_canonical()
+         if r.get("lane") == lane and r.get("backend") == backend
+         and r.get("scale") == scale and r.get("workload") == workload
+         and isinstance(r.get(field), (int, float))]
+    return _stat.median(v) if v else None
+
+
+def anon_client_share(backend, lane, scale, workload):
+    """Of a cell's summed anonymous set, how much is the benchmark DRIVER.
+
+    runner.py sums client and server containers into peak_anon_mib_sum, which
+    is the right thing to do for an engine that holds its memory in its own
+    address space. For PostgreSQL it inverts the meaning of the column: the
+    server contributes 0.014 GiB and our Python client 0.105, so the cell that
+    a reader compares against ArcadeDB's 12.7 is 88% our own harness.
+
+    Pinned per cell rather than pooled because it is a property of the workload
+    shape. The same PostgreSQL server under TPC-H reads 1.571 client against
+    0.006 server, since the driver materialises result sets there.
+    """
+    import statistics as _stat
+    rs = [r for r in M.load_canonical()
+          if r.get("lane") == lane and r.get("backend") == backend
+          and r.get("scale") == scale and r.get("workload") == workload
+          and isinstance(r.get("client_peak_anon_mib"), (int, float))
+          and isinstance(r.get("peak_anon_mib_sum"), (int, float))]
+    if not rs:
+        return None
+    c = _stat.median([r["client_peak_anon_mib"] for r in rs])
+    t = _stat.median([r["peak_anon_mib_sum"] for r in rs])
+    return c / t if t else None
+
+
 def anon_share(backend):
     """What fraction of an engine's peak memory anonymous accounting captures.
 
-    Added after the T2 column made a 107x "memory loss" against PostgreSQL,
-    which turned out to be the image's default 128 MB shared_buffers measured
-    against a 16 GiB heap we configured. PostgreSQL's working set is in the
-    kernel page cache; anon does not count it. This number makes the asymmetry
-    a checkable quantity rather than a thing someone has to remember.
+    Added after the T2 column made a 107x "memory loss" against PostgreSQL.
+    My first explanation was that 0.12 GiB is the image's default 128 MB
+    shared_buffers, which was wrong twice over, and the correction is what
+    anon_client_share below pins: the number is mostly our Python driver, and
+    PostgreSQL's buffer pool is POSIX shared memory that cgroup v2 files under
+    shmem, so it never appears in anon at any size. Probed directly:
+    shared_buffers=2GB over a 3M-row scan gives 5 MiB anon, 78 MiB shmem,
+    1.6 GiB file. These two numbers make the asymmetry a checkable quantity
+    rather than a thing someone has to remember.
     """
     import statistics as _stat
     a = [r["peak_anon_mib_sum"] for r in M.load_canonical()
@@ -1166,6 +1207,16 @@ CLAIMS = [
     # scale tier and left that default alone, so the ratio priced our own
     # configuration. What IS pinned is the confound itself, so that a future
     # reader who recomputes the ratio finds this note instead of a claim.
+    ("mem.postgres.client_share", 0.884, 0.02,
+     lambda r: anon_client_share("postgres", "l1", "medium", "oltp"),
+     "of the PostgreSQL tabular cell's anon, this fraction is our Python "
+     "driver, not the server (0.105 GiB client vs 0.014 server)"),
+    ("mem.postgres.server_anon_gib", 0.014, 0.004,
+     lambda r: (lambda v: v / 1024 if v is not None else None)(
+         _med_field("postgres", "l1", "medium", "oltp", "server_peak_anon_mib")),
+     "the PostgreSQL server's own anonymous set on the cell T2 prints; its "
+     "buffer pool is shmem and its working set page cache, so anon sees "
+     "neither at any shared_buffers setting"),
     ("mem.anon_share.postgres", 0.262, 0.02,
      lambda r: anon_share("postgres"),
      "fraction of PostgreSQL's peak that anon accounting captures. Low because "

@@ -574,7 +574,13 @@ LANES = {
         "metrics": [("read_p50_ms", "read p50 ms"), ("insert_p50_ms", "insert p50 ms"),
                     ("oltp_ops_per_s", "OLTP ops/s"), ("olap_total_ms", "OLAP total ms"),
                     ("peak_anon_mib_sum", "peak memory GiB")],
-        "conditions": [],
+        # The memory column is the one cell on this page a reader can most
+        # easily misread, because the gap looks like two orders of magnitude
+        # and is mostly an accounting boundary. Stated here rather than left
+        # for the reader to work out.
+        "conditions": [
+            "PostgreSQL's memory cell is not comparable to the other two. It keeps its data in shared memory and in the file cache the kernel holds for it, and this column counts neither, so it reads 0.12 GiB where the run's actual peak was 3.85. Most of even that 0.12 is our own benchmark client rather than the database: 0.105 of it. We checked that this is the measure and not the setting, by giving a PostgreSQL container a 2 GB buffer pool and watching this column stay at 5 MiB.",
+        ],
     },
     "l1tpc": {
         "title": "Tabular (TPC-H and TPC-C shapes)",
@@ -585,6 +591,7 @@ LANES = {
         "conditions": [
             "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
             "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
+            "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
         ],
     },
     "e2": {
@@ -612,6 +619,7 @@ LANES = {
 
 GLOBAL_CONDITIONS = [
     "Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.",
+    "Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it deliberately leaves out the file cache the kernel keeps on the engine's behalf. That makes it the honest number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.",
     "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
     "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
     "Comparators are pinned by sha256 image digest, not by a floating tag.",

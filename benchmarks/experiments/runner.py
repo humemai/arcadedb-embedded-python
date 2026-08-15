@@ -125,6 +125,50 @@ BACKENDS = {
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
     },
+    # PostgreSQL with its memory settings tuned for the container it is in,
+    # as an ABLATION against the default arm above.
+    #
+    # WHY THIS ARM EXISTS. We set ArcadeDB's heap per scale tier (16g at
+    # medium) and left PostgreSQL at the image's defaults, which are 128 MB
+    # shared_buffers and 4 MB work_mem: numbers chosen so PostgreSQL starts on
+    # any machine, not numbers anyone deploys. Our fairness policy says to
+    # equalize a default that makes the comparison apples-to-oranges, and we
+    # had never tested whether this one does.
+    #
+    # It is NOT here to fix the memory column. Verified directly: a container
+    # given shared_buffers=2GB still reports 5 MiB anon, because the buffer
+    # pool is POSIX shared memory that cgroup v2 files under shmem. This arm
+    # answers the LATENCY half of the question and nothing else.
+    #
+    # Sized by PostgreSQL's own guidance against the 24g this container gets
+    # (0.75 of the medium tier's 32g): shared_buffers a quarter,
+    # effective_cache_size three quarters, work_mem and maintenance_work_mem
+    # raised off the floor, max_wal_size raised so a bulk load does not
+    # checkpoint-storm.
+    #
+    # DURABILITY IS UNTOUCHED, deliberately. fsync and synchronous_commit stay
+    # on, because the tables disclose that PostgreSQL fsyncs per commit while
+    # ArcadeDB groups commits, and an arm that quietly relaxed that would be
+    # answering a different question while wearing this one's name.
+    "postgres_tuned": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",  # 17.10, same digest as the default arm
+        "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        # Sized from the container, not written as a constant. The two lanes
+        # that run PostgreSQL get different envelopes (24g at medium, 12g at
+        # tpch1), so a literal 6GB would be a quarter of one and a half of the
+        # other. {sb} and {ecs} are filled in below from the memory this
+        # container is actually given.
+        "server_cmd": ["-c", "shared_buffers={sb}",
+                       "-c", "effective_cache_size={ecs}",
+                       "-c", "work_mem=64MB",
+                       "-c", "maintenance_work_mem=1GB",
+                       "-c", "max_wal_size=4GB"],
+        "server_port": 5432,
+        "ready_regex": r"(?s)PostgreSQL init process complete.*"
+                       r"database system is ready to accept connections",
+    },
     # ---- L3 sparse lane ----
     "arcadedb_graph_embedded": {
         "topology": "embedded",
@@ -294,14 +338,16 @@ BACKENDS = {
 LANES = {
     # lane -> (bench script, backends, workloads)
     "l1": ("l1_tabular.py",
-           ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"],
+           ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres",
+            "postgres_tuned"],
            ["oltp", "olap"]),
     "l2": ("l2_graph.py",
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
             "neo4j_graph", "ladybug_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
-              ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres"],
+              ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres",
+               "postgres_tuned"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "surrealdb_e2", "composed_qdrant_neo4j"],
@@ -358,7 +404,13 @@ def read_memory_stat(cg):
     try:
         for line in open(os.path.join(cg, "memory.stat")):
             parts = line.split()
-            if len(parts) == 2 and parts[0] in ("anon", "file"):
+            # shmem added 2026-08-14. anon+file answered "how much"; without
+            # shmem we could not answer "where", and that is what made a
+            # PostgreSQL cell unreadable: its buffer pool is POSIX shared
+            # memory, which lands in shmem and is ALSO counted inside file, so
+            # a reader with only these two cannot tell a page the engine
+            # deliberately holds from one the kernel happens to be caching.
+            if len(parts) == 2 and parts[0] in ("anon", "file", "shmem"):
                 out[parts[0]] = int(parts[1])
     except Exception:
         pass
@@ -383,6 +435,9 @@ class CgroupSampler(threading.Thread):
         self.series, self.peak, self.cpu = [], 0, {}
         self.peak_anon = 0
         self.end_anon = None
+        self.peak_shmem = 0
+        self.end_shmem = None
+        self.peak_file = 0
         self.end_file = None
 
     def run(self):
@@ -400,6 +455,11 @@ class CgroupSampler(threading.Thread):
                 if stat.get("anon") is not None:
                     self.peak_anon = max(self.peak_anon, stat["anon"])
                     self.end_anon = stat["anon"]
+                if stat.get("shmem") is not None:
+                    self.peak_shmem = max(self.peak_shmem, stat["shmem"])
+                    self.end_shmem = stat["shmem"]
+                if stat.get("file") is not None:
+                    self.peak_file = max(self.peak_file, stat["file"])
                 if stat.get("file") is not None:
                     self.end_file = stat["file"]
                 cpu = read_cpu_stat(cg)
@@ -495,6 +555,18 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             server_mem = int(total_mem * SERVER_MEM_FRACTION)
             client_mem = total_mem - server_mem
             row["mem_split"] = f"{SERVER_MEM_FRACTION:.2f}"
+            # Buffer-pool sizing derived from this container's own budget, on
+            # PostgreSQL's own guidance (a quarter resident, three quarters
+            # assumed cached). Only the tuned arm uses these; every other
+            # backend's server_cmd has no placeholders and formats to itself.
+            srv_gb = max(1, server_mem // (1 << 30))
+            server_cmd = [c.format(sb=f"{max(1, srv_gb // 4)}GB",
+                                   ecs=f"{max(1, srv_gb * 3 // 4)}GB")
+                          for c in be.get("server_cmd", [])]
+            # What it was actually launched with, so a reader of the row does
+            # not have to re-derive it from the scale.
+            if server_cmd:
+                row["server_cmd"] = " ".join(server_cmd)
             server_cid = sh(["docker", "run", "-d", "--network", net_name,
                              "--label", "dbbench=1",
                              "--name", f"srv-{run_id}",
@@ -503,7 +575,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                             + [s.format(heap=heap) for s in be.get("server_env", [])]
                             + be.get("server_volumes", [])
                             + [be["server_image"]]
-                            + be.get("server_cmd", []))
+                            + server_cmd)
             if len(server_cid) < 12 or not wait_ready(server_cid, be["ready_regex"]):
                 row["error"] = "server_not_ready"
                 return row
@@ -634,16 +706,26 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row[f"{name}_peak_mib"] = mib(s.peak)          # incl. page cache
             row[f"{name}_peak_anon_mib"] = mib(s.peak_anon)  # working set
             row[f"{name}_end_anon_mib"] = mib(s.end_anon)    # steady-state
+            row[f"{name}_peak_shmem_mib"] = mib(s.peak_shmem)  # deliberate: buffer pools
+            row[f"{name}_peak_file_mib"] = mib(s.peak_file)    # incidental: kernel cache
             row[f"{name}_end_file_mib"] = mib(s.end_file)    # page cache at exit
             row[f"{name}_cpu_usec"] = s.cpu.get("usage_usec")
         if len(samplers) == 2:
             row["peak_mib_sum"] = mib(sum(s.peak for _, s in samplers))
             row["peak_anon_mib_sum"] = mib(sum(s.peak_anon for _, s in samplers))
+            row["peak_shmem_mib_sum"] = mib(sum(s.peak_shmem for _, s in samplers))
+            # anon + shmem = memory the engines chose to hold, which is the
+            # cross-architecture comparable an anon-only column is not.
+            row["peak_owned_mib_sum"] = mib(sum(s.peak_anon + s.peak_shmem
+                                                for _, s in samplers))
             row["end_anon_mib_sum"] = mib(sum((s.end_anon or 0) for _, s in samplers))
             row["cpu_usec_sum"] = sum((s.cpu.get("usage_usec") or 0) for _, s in samplers)
         elif samplers:
             row["peak_mib_sum"] = row.get("client_peak_mib")
             row["peak_anon_mib_sum"] = row.get("client_peak_anon_mib")
+            row["peak_shmem_mib_sum"] = row.get("client_peak_shmem_mib")
+            row["peak_owned_mib_sum"] = mib(samplers[0][1].peak_anon
+                                            + samplers[0][1].peak_shmem)
             row["end_anon_mib_sum"] = row.get("client_end_anon_mib")
             row["cpu_usec_sum"] = row.get("client_cpu_usec")
         if server_cid:
