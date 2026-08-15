@@ -606,7 +606,20 @@ def wait_ready(cid, regex, timeout_s=120):
 
 
 def docker_rm(cid):
-    subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
+    """Remove a container AND the anonymous volumes it created.
+
+    The -v is not optional. Without it, every container built from an image
+    that declares VOLUME (postgres, neo4j, arcadedb, elasticsearch) leaves its
+    anonymous volume behind on removal, and nothing ever collects them.
+    Measured on the bench host 2026-08-15: 2891 orphaned volumes holding
+    891.3 GB, every byte reclaimable, accumulated across every campaign this
+    project has ever run.
+
+    That is also why disk kept looking fine while quietly not being: docker
+    system df reports volumes separately from images, and nobody was reading
+    that line.
+    """
+    subprocess.run(["docker", "rm", "-fv", cid], capture_output=True)
 
 
 def _docker(cmd_args):
