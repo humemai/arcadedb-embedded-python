@@ -63,6 +63,21 @@ class Base:
     def connect(self):
         raise NotImplementedError
 
+    def reopen(self):
+        """Open an ALREADY-BUILT database, with no DDL and no ingest.
+
+        Separate from connect() on purpose. connect() creates the database and
+        issues the schema, so calling it twice fails ("already exists") and,
+        if it did not, would time creation rather than opening. Reopening is
+        the quantity a build/query phase split would introduce and that
+        nothing in this project measures today (#154), so it gets its own
+        method rather than a flag on the published path.
+
+        Adapters that cannot reopen say so by leaving this unimplemented; the
+        probe records the reason instead of reporting a number it did not get.
+        """
+        raise NotImplementedError(f"{self.name} has no reopen path")
+
     def build(self, n_docs):
         """Ingest corpus (index maintained per backend's idiomatic path)."""
         raise NotImplementedError
@@ -115,6 +130,24 @@ class ArcadeEmbedded(Base):
         self.db.command("sql", "CREATE INDEX ON Doc (tokens, weights) "
                                "LSM_SPARSE_VECTOR METADATA "
                                + self._index_metadata())
+        self.idx_name = "Doc[tokens,weights]"
+
+    def reopen(self):
+        """Open the built database again: no create, no DDL, no ingest.
+
+        IN-PROCESS CAVEAT, and it decides how the number may be read. The JVM
+        is already running by the time this is called, so heap_size here is
+        inert and what gets timed is the engine opening its files, not a JVM
+        start. For a phase split implemented as a container restart the JVM
+        start is real and would have to be added; measuring it separately is
+        the point, since it is charged to every JVM engine and to none of the
+        others.
+        """
+        import arcadedb_embedded as arcadedb
+        heap = os.environ.get("ARCADEDB_HEAP", "4g")
+        self.db = arcadedb.open_database(
+            "/tmp/l3_arcade",
+            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
         self.idx_name = "Doc[tokens,weights]"
 
     def build(self, n_docs):

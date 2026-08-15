@@ -104,8 +104,7 @@ def main():
         b.build(mod.SCALE_PERSONS[args.scale])
     else:
         b.build(mod.SCALE_ROWS[args.scale])
-    if hasattr(b, "post_build"):
-        b.post_build()
+    _post_build(b, args)
     out["build_s"] = round(time.perf_counter() - t, 2)
 
     # ---- FIRST cold pass: the protocol we use today -----------------------
@@ -133,10 +132,15 @@ def main():
             out["disk_after_close_mb"] - out["disk_before_close_mb"], 1)
 
     # ---- reopen an ALREADY-BUILT database ---------------------------------
+    # reopen(), NOT connect(). connect() creates the database and issues the
+    # schema, so calling it a second time fails outright ("Database
+    # '/tmp/l3_arcade' already exists") and, if it somehow did not, it would
+    # time creation instead of opening. That is what killed this arm on the
+    # first run.
     try:
         b2 = adapters[args.backend]()
         t = time.perf_counter()
-        b2.connect()
+        b2.reopen()
         out["reopen_s"] = round(time.perf_counter() - t, 3)
         # THE DECIDING NUMBER. Compare against cold_after_build: if they
         # differ a lot, the split changes what "cold" means, and by how much
@@ -159,6 +163,26 @@ def main():
 
 def _mb(n):
     return None if n is None else round(n / 1048576.0, 1)
+
+
+def _post_build(b, args):
+    """Call the adapter's settle step under whichever signature its lane uses.
+
+    l2_graph's post_build takes the workload (its settle step differs for OLTP
+    and OLAP); l3_sparse and l1_tabular take none. Calling the l2 form with no
+    argument is a TypeError, which is exactly how two of the three arms died
+    on the first run. Inspect rather than assume, so this keeps working if a
+    lane changes its mind.
+    """
+    fn = getattr(b, "post_build", None)
+    if fn is None:
+        return
+    import inspect
+    if len(inspect.signature(fn).parameters) >= 1:
+        # The probe times one query shape only, and it is a read.
+        fn("oltp")
+    else:
+        fn()
 
 
 def _one_pass(mod, b, args):

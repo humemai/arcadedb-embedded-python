@@ -46,6 +46,18 @@ class Base:
     def post_build(self, workload):
         """Engine's documented settle step; counted inside build time."""
 
+    def reopen(self):
+        """Open an ALREADY-BUILT database, with no DDL and no ingest.
+
+        Separate from connect(), which creates the database and issues the
+        schema: calling that twice fails, and if it did not it would time
+        creation rather than opening. Reopening is the quantity a build/query
+        phase split introduces and that nothing here measures today (#154).
+        Adapters with no reopen path leave this alone and the probe records
+        the reason rather than a number it did not get.
+        """
+        raise NotImplementedError(f"{self.name} has no reopen path")
+
     def run_cypher(self, text):
         """Execute one cypher statement, return row count (results consumed)."""
         raise NotImplementedError
@@ -78,6 +90,22 @@ class ArcadeGraphEmbedded(Base):
                     "CREATE EDGE TYPE KNOWS",
                     "CREATE PROPERTY KNOWS.since INTEGER"]:
             self.db.command("sql", ddl)
+
+    def reopen(self):
+        """Open the built database again: no create, no DDL, no ingest.
+
+        IN-PROCESS CAVEAT that decides how the number may be read: the JVM is
+        already up, so heap_size is inert here and what is timed is the engine
+        opening its files, not a JVM start. A phase split implemented as a
+        container restart pays the JVM start too, and that cost lands on every
+        JVM engine and on none of the others, so it has to be measured
+        separately rather than folded in.
+        """
+        import arcadedb_embedded as arcadedb
+        heap = os.environ.get("ARCADEDB_HEAP", "4g")
+        self.db = arcadedb.open_database(
+            "/tmp/l2_arcade",
+            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
 
     def build(self, n_persons):
         # Native Java API with batched commits — ArcadeDB's embedded bulk path
@@ -343,6 +371,34 @@ class LadybugGraph(Base):
 
     def post_build(self, workload):
         self.conn.execute("CHECKPOINT")
+
+    def close(self):
+        """Close the connection and the database.
+
+        LadybugDB inherited the no-op close(), so this lane never shut its
+        control engine down either: the same defect as #155 in l3_sparse, and
+        it matters for the same reason. Whatever a clean close settles here is
+        work the comparator was not charged for, and it is the engine we
+        compare against. Both handles expose close() in 0.19.1.
+        """
+        for h in ("conn", "db"):
+            obj = getattr(self, h, None)
+            if obj is not None:
+                obj.close()
+
+    def reopen(self):
+        """Reattach to the built database: no DDL, the tables persist.
+
+        The control arm for the reopen measurement. LadybugDB is resident from
+        load and gains 1.00x on a warm pass where ArcadeDB gains 9x, so if a
+        phase split moved the cold pass this is the engine that should not
+        care. An arm that moves here is a harness artifact, not an engine
+        property.
+        """
+        import ladybug
+        self._mod = ladybug
+        self.db = ladybug.Database("/tmp/l2_ladybug")
+        self.conn = ladybug.Connection(self.db)
 
     def run_cypher(self, text):
         return len(list(self.conn.execute(text)))
