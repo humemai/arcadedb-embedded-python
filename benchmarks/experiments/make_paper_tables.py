@@ -65,6 +65,12 @@ NAMES = {
     # adapters in l3d_dense.py, never from the rows' `quantization` field, which
     # echoes BENCH_DENSE_QUANT and reports "fp32" for every comparator.
     "qdrant_dense": "Qdrant (fp32)", "milvus_dense": "Milvus (fp32)",
+    # The int8 arms. Every dense row already states its precision, which is why
+    # LanceDB reads "(int8)" -- so a quantized arm that printed a bare engine
+    # name would be the one row in the table whose precision a reader had to
+    # infer.
+    "arcadedb_dense_embedded_int8": "ArcadeDB (emb, int8)",
+    "qdrant_dense_int8": "Qdrant (int8)", "milvus_dense_int8": "Milvus (int8)",
     "chroma_dense": "Chroma (fp32)", "lancedb_dense": "LanceDB (int8)",
     "sqlite_vec_dense": "sqlite-vec (fp32)",
     "duckdb_vss_dense": "DuckDB-VSS (fp32)",

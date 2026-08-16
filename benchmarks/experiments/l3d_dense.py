@@ -151,9 +151,18 @@ def degree_stamp(backend):
     """
     hnswlib_style = {"chroma_dense", "lancedb_dense", "qdrant_dense",
                      "milvus_dense", "duckdb_vss_dense"}
-    if str(backend).startswith("arcadedb"):
+    # A PRECISION ARM IS THE SAME INDEX AT A DIFFERENT PRECISION, so it keeps
+    # its parent's degree and unit. Without this strip, qdrant_dense_int8 and
+    # milvus_dense_int8 missed the set and were stamped "exact_scan_no_ann" --
+    # a false provenance claim (they are HNSW at M=16) that would also have
+    # made F7's degree-matching invariant vacuous for exactly the rows the
+    # ablation exists to compare.
+    base = str(backend)
+    if base.endswith("_int8"):
+        base = base[:-len("_int8")]
+    if base.startswith("arcadedb"):
         return M, "arcadedb_maxconnections_per_layer"
-    if backend in hnswlib_style:
+    if base in hnswlib_style:
         return COMPARATOR_M, "hnswlib_m_doubled_at_base"
     return None, "exact_scan_no_ann"
 
@@ -586,8 +595,93 @@ class Milvus(Base):
         return [int(h["id"]) for h in res[0]]
 
 
+# ---------------------------------------------------------------- int8 arms
+#
+# EVERY ENGINE THAT CAN QUANTIZE, MEASURED AT BOTH PRECISIONS. The sparse lane
+# has done this for ArcadeDB since #5143 (int8 default + an fp32 ablation); the
+# dense lane did not, so T5 compared our fp32 against a mix of fp32 engines and
+# ONE int8 engine (LanceDB, whose IVF_HNSW_SQ is its only HNSW offering), with
+# the precision visible only in a row label. Our own int8 dense numbers came
+# from a bespoke overlay rather than the lane.
+#
+# Each arm SUBCLASSES its fp32 sibling so the operating point cannot drift:
+# same corpus, same degree, same ef, same settle step, same queries. Precision
+# is the only variable, which is what makes the pair an ablation rather than
+# two unrelated configurations.
+#
+# Chroma, DuckDB-VSS and sqlite-vec have no int8 path and get no arm:
+# sqlite-vec is an exact scan by construction, and inventing a quantized
+# configuration an engine does not ship would be a worse comparison than
+# omitting it.
+
+
+class ArcadeEmbeddedInt8(ArcadeEmbedded):
+    """ArcadeDB with LSM_VECTOR INT8 quantization, its documented compact mode."""
+    name = "arcadedb_dense_embedded_int8"
+
+    def build(self, vecs):
+        # resolve_quant reads BENCH_DENSE_QUANT; set it for this arm only so
+        # the parent's DDL path is reused verbatim rather than duplicated.
+        prev = os.environ.get("BENCH_DENSE_QUANT")
+        os.environ["BENCH_DENSE_QUANT"] = "INT8"
+        try:
+            super().build(vecs)
+        finally:
+            if prev is None:
+                os.environ.pop("BENCH_DENSE_QUANT", None)
+            else:
+                os.environ["BENCH_DENSE_QUANT"] = prev
+
+
+class QdrantInt8(Qdrant):
+    """Qdrant with scalar quantization (int8), its documented compact mode.
+
+    quantile=0.99 and always_ram are Qdrant's own recommended defaults for
+    scalar quantization; rescore stays ON, which is Qdrant's default and the
+    configuration a user gets by asking for quantization.
+    """
+    name = "qdrant_dense_int8"
+
+    def build(self, vecs):
+        from qdrant_client import models as qm
+        self.cl.create_collection(
+            "articles",
+            vectors_config=qm.VectorParams(
+                size=DIM, distance=qm.Distance.EUCLID,
+                hnsw_config=qm.HnswConfigDiff(m=COMPARATOR_M,
+                                              ef_construct=EF_CONSTRUCTION)),
+            quantization_config=qm.ScalarQuantization(
+                scalar=qm.ScalarQuantizationConfig(
+                    type=qm.ScalarType.INT8, quantile=0.99, always_ram=True)))
+        for i in range(0, len(vecs), BATCH):
+            self.cl.upsert("articles", points=qm.Batch(
+                ids=list(range(i, i + len(vecs[i:i + BATCH]))),
+                vectors=vecs[i:i + BATCH].tolist()))
+
+
+class MilvusInt8(Milvus):
+    """Milvus HNSW_SQ at SQ8, its int8 scalar-quantized HNSW variant."""
+    name = "milvus_dense_int8"
+
+    def build(self, vecs):
+        from pymilvus import DataType
+        sch = self.cl.create_schema()
+        sch.add_field("id", DataType.INT64, is_primary=True)
+        sch.add_field("vec", DataType.FLOAT_VECTOR, dim=DIM)
+        idx = self.cl.prepare_index_params()
+        idx.add_index("vec", index_type="HNSW_SQ", metric_type="L2",
+                      params={"M": COMPARATOR_M, "efConstruction": EF_CONSTRUCTION,
+                              "sq_type": "SQ8"})
+        self.cl.create_collection("articles", schema=sch, index_params=idx)
+        for i in range(0, len(vecs), BATCH):
+            self.cl.insert("articles", [
+                {"id": i + j, "vec": vecs[i + j].tolist()}
+                for j in range(min(BATCH, len(vecs) - i))])
+
+
 BACKENDS = {b.name: b for b in
-            (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus)}
+            (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus,
+             ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8)}
 
 
 def pct(vals):

@@ -362,6 +362,11 @@ BACKENDS = {
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
+    # PRECISION ARMS. Same topology and image as their fp32 siblings, because
+    # the only variable is the index precision; anything else would make the
+    # pair two configurations rather than an ablation.
+    "arcadedb_dense_embedded_int8": {"topology": "embedded",
+                                     "image": "dbbench:arcadedb"},
     "chroma_dense": {"topology": "embedded", "image": "dbbench:dense"},
     "lancedb_dense": {"topology": "embedded", "image": "dbbench:dense"},
     "sqlite_vec_dense": {"topology": "embedded", "image": "dbbench:dense"},
@@ -373,7 +378,36 @@ BACKENDS = {
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
+    # The int8 arm of qdrant_dense: identical image digest, port and
+    # readiness probe, because only the INDEX precision differs. Cloned
+    # rather than referenced so a future digest bump cannot move one arm
+    # of an ablation without the other.
+    "qdrant_dense_int8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
+        "server_port": 6333,
+        "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
+    },
     "milvus_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+        "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
+                       "-e", "ETCD_USE_EMBED=true",
+                       "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
+                       "-e", "ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml",
+                       "-e", "COMMON_STORAGETYPE=local"],
+        "server_volumes": ["-v", f"{HERE}/docker-conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml"],
+        "server_cmd": ["milvus", "run", "standalone"],
+        "server_port": 19530,
+        "ready_regex": r"Proxy successfully started|successfully started",
+    },
+    # The int8 arm of milvus_dense: identical image digest, port and
+    # readiness probe, because only the INDEX precision differs. Cloned
+    # rather than referenced so a future digest bump cannot move one arm
+    # of an ablation without the other.
+    "milvus_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
@@ -418,7 +452,12 @@ LANES = {
     "l3d": ("l3d_dense.py",
             ["arcadedb_dense_embedded", "arcadedb_dense_server", "chroma_dense", "lancedb_dense",
              "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
-             "milvus_dense"],
+             "milvus_dense",
+             # int8 arms for every dense engine that ships a quantized index.
+             # Chroma, DuckDB-VSS and sqlite-vec have none; LanceDB is int8
+             # already (IVF_HNSW_SQ is its only HNSW offering).
+             "arcadedb_dense_embedded_int8", "qdrant_dense_int8",
+             "milvus_dense_int8"],
             ["search"]),
     # l4 timeseries: added as adapters land.
 }
