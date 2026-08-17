@@ -148,6 +148,58 @@ Beyond the lane's own metrics:
 - **Envelope.** cpuset, memory cap, heap, observed server heap and page cache,
   `mem_split`, image digest, engine version.
 
+## 3b. Heap and memory caps
+
+**One cap per tier, identical for every engine.** A cap is a ceiling rather
+than a reservation, so an engine that needs less is unaffected by a tier whose
+cap is generous. A per-backend cap would be the unfairness the caps exist to
+prevent.
+
+**One heap per tier, identical for every JVM engine.** ArcadeDB embedded,
+ArcadeDB server, Neo4j and Elasticsearch all receive the same `{heap}` from one
+table (`-Xmx`, `NEO4J_server_memory_heap_max__size`, `ES_JAVA_OPTS`
+respectively). Non-JVM comparators have no equivalent knob, which is why heap
+sizing is a documented resource-fitting override rather than a per-engine
+advantage.
+
+**heap = 0.50 x cap, and deep10m is the one exception at 0.69.** The runner
+prints this table at startup and marks any deviation, because the ratio was an
+unwritten rule until it was broken and nothing said so.
+
+WHY 0.50 RATHER THAN SOMETHING HIGHER. The obvious objection is that a JVM
+database should get most of the container, since the heap is where its data
+lives. Two measurements say otherwise here:
+
+  - At every tier except deep10m, `peak_anon` is BELOW the committed heap:
+    4g heap against 2.7 GiB touched at tiny, 8g against 6.1-6.5 GiB at small.
+    `-Xms` commits address space without pre-touching it, so the JVM never
+    needed the heap it already had. Raising the ratio would have changed
+    nothing measurable at ten of the eleven tiers.
+  - The other half of the cap is not idle. It holds the OS page cache for the
+    engine's own files, and this lane's cold/warm split prices that at 9-18x
+    for ArcadeDB (lazy loading) against 1.0x for engines resident from load.
+    Taking the cap to 0.70 would buy heap the engine does not touch by
+    shrinking the cache it demonstrably depends on.
+
+So 0.50 is a deliberate split between heap and page cache, not a conservative
+default nobody revisited.
+
+WHY deep10m IS THE EXCEPTION. Since ArcadeDB #3144 the fp32 dense build
+auto-sizes an HNSW build cache to hold the whole corpus when it fits
+`graphBuildCacheMaxHeapPercent` (default 25). At 9.99M x 128 that cache is
+5.36 GiB, against a flat 55 MiB bound before the fix -- a 100x increase on the
+path where "vectors live in the documents", because every cache miss there
+costs a record read. The build therefore needs about 29 GiB of heap where the
+pre-fix engine fit in 24. Restoring 0.50 would require a 58g cap on a 61.3 GiB
+host, leaving 3 GiB for everything else, so the ratio is unsatisfiable at this
+tier rather than merely inconvenient.
+
+The INT8 arm is unaffected and builds fine: an inline-quantized index reads a
+miss straight from an index page and keeps a small bound. That asymmetry is
+also why #3144 was closed on INT8 evidence with "fp32 preload noted as
+follow-up" -- the fp32 half was never measured until it measured itself as a
+six-hour timeout.
+
 ## 4. Monitoring
 
 `monitoring/campaign_watch.py` reads the rows and reports what looks wrong;

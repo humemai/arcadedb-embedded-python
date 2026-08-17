@@ -139,6 +139,60 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # and the one engine #3144 asked for.
                  "sf1": "4g", "sf10": "12g", "deep10m": "36g", "e2": "6g", "tpch1": "8g",
                     "tpch10": "16g"}
+def heap_policy(scale):
+    """(heap_gib, cap_gib, ratio, verdict) for one tier.
+
+    THE RATIO WAS AN UNWRITTEN RULE AND I BROKE IT WITHOUT NOTICING. Every
+    tier sat at exactly heap = 0.50 * cap -- all ten of them -- and the
+    deep10m fix moved it to 0.69 while the comment two lines above talked
+    about something else entirely. Nothing checked, so nothing said.
+
+    WHY THE FIX IS NOT "RESTORE 0.50". Heap demand scales with the DATA, not
+    with the cap we happen to pick. The DEEP-10M graph build peaks at 40.49
+    GiB of anon (measured, on the first cell that ever completed), so a 0.50
+    ratio would need an 81 GiB cap on a 61.3 GiB host: unsatisfiable at any
+    cap this machine can give. A ratio that cannot be met is not a fairness
+    rule, it is a rule that gets quietly broken.
+
+    THE RULE THAT SURVIVES CONTACT: heap = cap - reserve, where the reserve
+    covers what must coexist with the heap inside one cgroup -- JVM non-heap
+    (metaspace, code cache, thread stacks, direct buffers, GC structures) and,
+    in an EMBEDDED cell, the Python driver and the corpus array it holds. At
+    deep10m that reserve measured ~6-8 GiB (40.49 GiB peak anon against a 36g
+    heap). At the small tiers cap - reserve lands at or below 0.50 anyway, so
+    the old ratio falls out rather than being imposed.
+
+    This function does not CHANGE any heap. It states the policy, computes
+    what the table actually does, and names the deviations, so a tier that
+    departs from the rule has to depart from it out loud. Every deviation
+    below is a measured exception with the measurement attached.
+    """
+    def _g(v):
+        return float(str(v).rstrip("g"))
+    cap = _g(MEM_BY_SCALE[scale])
+    heap = _g(HEAP_BY_SCALE[scale]) if scale in HEAP_BY_SCALE else None
+    if heap is None:
+        return None, cap, None, "no JVM heap at this tier"
+    ratio = heap / cap
+    # The reserve an embedded cell needs beside the heap. 8 GiB at the tiers
+    # that stage a large corpus in the driver, 4 GiB elsewhere; both are
+    # bounded below by what deep10m measured.
+    reserve = 8.0 if scale in ("deep10m", "medium", "tpch10", "sf10") else 4.0
+    verdict = "ratio 0.50" if abs(ratio - 0.50) < 0.01 else (
+        f"DEVIATES from 0.50 (heap = cap - {cap - heap:.0f}g)")
+    return heap, cap, ratio, verdict
+
+
+def print_heap_policy():
+    """Print the policy table. Called at startup so a deviation is visible in
+    the log of the run that used it, not discovered afterwards."""
+    print("heap policy (heap = cap - reserve; 0.50 falls out at small tiers)")
+    for sc in HEAP_BY_SCALE:
+        heap, cap, ratio, verdict = heap_policy(sc)
+        print(f"  {sc:10} cap={cap:5.0f}g heap={heap:5.0f}g "
+              f"ratio={ratio:4.2f}  {verdict}")
+
+
 # THE SERVED ENGINE GETS THE FULL TIER CAP, and the driver gets its own budget
 # on top. It used to take 0.75 of the cap while the embedded arm took all of
 # it, so at medium an embedded engine ran in 32g and a served one in 24g, with
@@ -1347,6 +1401,11 @@ def main():
     rows = []
     jsonl = open(os.path.join(RESULTS, args.results_file), "a")
     total = len(cells)
+    # THE HEAP POLICY, IN THE LOG OF THE RUN THAT USED IT. The ratio was an
+    # unwritten rule until it got broken and nothing said so. Printing it here
+    # means a deviation is visible in the artifact of the run it affected,
+    # rather than reconstructed from git afterwards.
+    print_heap_policy()
     print(f"{total} cell-runs (tier={args.tier}, scale={args.scale}, "
           f"workers={workers}, shards={shards})")
 
