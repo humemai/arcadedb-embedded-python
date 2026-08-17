@@ -1340,6 +1340,12 @@ def main():
                          "(sweep tier only; 0 = 1 for paper, 2 for sweep)")
     ap.add_argument("--timeout", type=int, default=0,
                     help="per-cell timeout override in seconds (0 = scale default)")
+    ap.add_argument("--heap", default="",
+                    help="JVM heap override for this invocation (e.g. 36g). "
+                         "DIAGNOSTIC ONLY: it breaks the tier's heap policy, so "
+                         "rows produced under it are not comparable with the "
+                         "tier's own. Use --results-file to keep them out of "
+                         "runs.jsonl.")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--results-file", default="runs.jsonl",
                     help="where rows are appended, relative to results/. Use a "
@@ -1352,6 +1358,13 @@ def main():
     if os.sep in args.results_file or args.results_file.startswith("."):
         ap.error("--results-file is a bare filename under results/")
 
+    if args.heap:
+        # Applied to every scale, because an invocation runs one scale and a
+        # partial override is how a heap ends up disagreeing with the row that
+        # records it.
+        for k in HEAP_BY_SCALE:
+            HEAP_BY_SCALE[k] = args.heap
+        print(f"HEAP OVERRIDE: {args.heap} (diagnostic; breaks the heap policy)")
     if args.timeout:
         for k in TIMEOUT_BY_SCALE:
             TIMEOUT_BY_SCALE[k] = args.timeout
