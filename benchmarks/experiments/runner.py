@@ -45,9 +45,32 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 "large": "48g",
                 # LDBC-SNB tiers (l2 lane, BENCH_GRAPH_SOURCE=ldbc)
                 "sf1": "8g", "sf10": "24g",
-                # DEEP-10M dense tier (l3d); 36g since the degree-matched
-                # ablation (maxConnections=32, #5352) peaks ~19GB build heap
-                "deep10m": "36g",
+                # DEEP-10M dense tier (l3d). 44g since 2026-08-17, and the
+                # reason is measured rather than estimated.
+                #
+                # At 36g the EMBEDDED arm could not finish: the graph build
+                # reached 93.8% (9,365,625 of 9,990,000) with the JVM heap at
+                # 24081 of 24576 MB, 97.8% of -Xmx, and the rate collapsed
+                # from 1254 vec/s at 18.6 GB of heap to 434 vec/s at 24.0 GB.
+                # cpu_usec_sum showed 8.9 cores busy against a workload that
+                # normally uses 1.4 -- GC, not index work. It was ~25 minutes
+                # from finishing when the 6h watchdog killed it.
+                #
+                # The cause is the envelope, not the engine. An embedded cell
+                # holds the 24g heap AND the Python driver AND the 5.1 GB
+                # corpus array inside ONE cap; peak_mib_sum hit exactly 36864,
+                # i.e. the cgroup ceiling. The SERVED arm builds the same index
+                # at the same degree in 63 minutes because its container holds
+                # only the engine. So the previous 36g measured how tightly we
+                # had squeezed our own embedded deployment, and the pinned
+                # l3d.deployment_ratio inherited that.
+                #
+                # The cap rises for EVERY backend at this tier, not just ours:
+                # a cap is a ceiling rather than a reservation, so comparators
+                # that used less are unaffected, and a per-backend cap would be
+                # the unfairness this is fixing. Same precedent as the earlier
+                # 28g/16g -> 36g/24g move. 44g of 61.3 GiB still runs serial.
+                "deep10m": "44g",
                 "e2": "12g", "tpch1": "16g",
                 # TPC-H SF10 (~10 GB). SF1 is 1 GB, which reads as a toy
                 # scale at a DB venue where comparable papers run 700 GB+.
@@ -56,7 +79,11 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "medium": 6 * 3600, "large": 24 * 3600,
-                    "sf1": 3600, "sf10": 6 * 3600, "deep10m": 6 * 3600,
+                    # deep10m at 8h, not 6: the 36g build died ~25 min short
+                    # of finishing, so a near-miss cost a whole cell. The cap
+                    # rise should make it moot, and a watchdog that only fires
+                    # on a real hang is the point of having one.
+                    "sf1": 3600, "sf10": 8 * 3600, "deep10m": 8 * 3600,
                     "e2": 3600, "tpch1": 3 * 3600,
                     "tpch10": 8 * 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
