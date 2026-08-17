@@ -267,6 +267,28 @@ class ArcadeEmbedded(Base):
         # ARCADEDB_EXTRA_JVM_ARGS: space-separated extras (e.g. an
         # -agentpath:...  profiler agent for the #3144 heap investigation)
         extra = os.environ.get("ARCADEDB_EXTRA_JVM_ARGS", "")
+        # THE HNSW BUILD CACHE IS BOUNDED, and this is a disclosed fairness
+        # override rather than a tuning choice.
+        #
+        # Since #3144 the engine auto-sizes this cache to hold the WHOLE corpus
+        # when it fits graphBuildCacheMaxHeapPercent (default 25). At 9.99M x
+        # 128 that is 5.36 GiB of heap, against the flat 100,000-vector bound
+        # (55 MiB) the engine shipped before the fix -- a 100x increase, and it
+        # applies only to the fp32 path where vectors live in the documents.
+        #
+        # No comparator caches its corpus during an index build. Accepting the
+        # default would mean ArcadeDB takes 5.36 GiB that Qdrant, Milvus,
+        # Chroma and LanceDB do not, and then raising the tier's envelope so it
+        # fits -- room only one engine gets. That is the apples-to-oranges
+        # default the config policy exists to equalize, so the bound is
+        # restored to the engine's OWN previous default rather than to a number
+        # we invented.
+        #
+        # BENCH_DENSE_BUILD_CACHE=0 restores the auto-sizing for the ablation
+        # arm, so the cost of the default is measurable rather than asserted.
+        cache = os.environ.get("BENCH_DENSE_BUILD_CACHE", "100000").strip()
+        extra = (f"{extra} -Darcadedb.vectorIndex.graphBuildCacheSize={cache}").strip()
+        self.build_cache_size = int(cache)
         self.db = arcadedb.create_database(
             "/tmp/l3d_arcade",
             jvm_kwargs={"heap_size": heap,
@@ -721,6 +743,14 @@ def main():
     # same split that made BENCH_DENSE_QUANT=fp32 look like a legal input.
     # Nothing consumes this field programmatically (it is provenance), so
     # normalising costs nothing and old artifacts stay readable.
+    # THE OVERRIDE, ON THE ROW. A disclosed fairness override that only lives in
+    # a comment is not disclosed to anyone reading the artifact.
+    _bc = getattr(b, "build_cache_size", None)
+    if _bc is not None:
+        out["graph_build_cache_size"] = _bc
+        out["graph_build_cache_policy"] = (
+            "engine auto (whole corpus up to 25% of heap)" if _bc == 0
+            else "bounded to the engine's pre-#3144 default")
     out["quantization"] = canonical_quant_label(
         os.environ.get("BENCH_DENSE_QUANT", ""))
     t0 = time.perf_counter()

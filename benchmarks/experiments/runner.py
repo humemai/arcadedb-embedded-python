@@ -81,7 +81,7 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 # than a reservation, so comparators that used less are
                 # unaffected, and a per-backend cap would be the unfairness
                 # this is fixing. 52g of 61.3 GiB still runs serial.
-                "deep10m": "52g",
+                "deep10m": "36g",
                 "e2": "12g", "tpch1": "16g",
                 # TPC-H SF10 (~10 GB). SF1 is 1 GB, which reads as a toy
                 # scale at a DB venue where comparable papers run 700 GB+.
@@ -137,7 +137,7 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # measuring the ceiling again. peak_anon on a completed cell
                  # is then the real demand, which is the number worth reporting
                  # and the one engine #3144 asked for.
-                 "sf1": "4g", "sf10": "12g", "deep10m": "36g", "e2": "6g", "tpch1": "8g",
+                 "sf1": "4g", "sf10": "12g", "deep10m": "24g", "e2": "6g", "tpch1": "8g",
                     "tpch10": "16g"}
 def heap_policy(scale):
     """(heap_gib, cap_gib, ratio, verdict) for one tier.
@@ -1054,6 +1054,9 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         for _k in ("BENCH_SPARSE_SOURCE", "BENCH_SPARSE_DATA",
                    "BENCH_GRAPH_SOURCE", "BENCH_GRAPH_DATA",
                    "BENCH_DENSE_DATA", "BENCH_DENSE_M",
+                   # the HNSW build-cache bound; unset means the lane's
+                   # disclosed default of 100000, 0 means engine auto-sizing
+                   "BENCH_DENSE_BUILD_CACHE",
                    "BENCH_TPC_DATA", "BENCH_TPC_SF", "BENCH_GAV",
                    "BENCH_NEO4J_PAGECACHE"):
             if os.environ.get(_k):

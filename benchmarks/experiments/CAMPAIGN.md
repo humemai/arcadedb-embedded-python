@@ -184,15 +184,38 @@ lives. Two measurements say otherwise here:
 So 0.50 is a deliberate split between heap and page cache, not a conservative
 default nobody revisited.
 
-WHY deep10m IS THE EXCEPTION. Since ArcadeDB #3144 the fp32 dense build
-auto-sizes an HNSW build cache to hold the whole corpus when it fits
-`graphBuildCacheMaxHeapPercent` (default 25). At 9.99M x 128 that cache is
-5.36 GiB, against a flat 55 MiB bound before the fix -- a 100x increase on the
-path where "vectors live in the documents", because every cache miss there
-costs a record read. The build therefore needs about 29 GiB of heap where the
-pre-fix engine fit in 24. Restoring 0.50 would require a 58g cap on a 61.3 GiB
-host, leaving 3 GiB for everything else, so the ratio is unsatisfiable at this
-tier rather than merely inconvenient.
+WHY deep10m SITS AT 0.67, and why the answer was NOT to raise the envelope.
+Since ArcadeDB #3144 the fp32 dense build auto-sizes an HNSW build cache to
+hold the whole corpus when it fits `graphBuildCacheMaxHeapPercent` (default
+25). At 9.99M x 128 that cache is 5.36 GiB, against a flat 55 MiB bound before
+the fix -- a 100x increase, and only on the path where vectors live in the
+documents, because a miss there costs a record read.
+
+The first response was to grow the tier's envelope until the default fitted:
+cap 36g -> 44g -> 52g, heap 24g -> 36g. That was wrong, and the reason is the
+config policy rather than the arithmetic. NO COMPARATOR CACHES ITS CORPUS
+DURING AN INDEX BUILD. Accepting the default means ArcadeDB takes 5.36 GiB
+that Qdrant, Milvus, Chroma and LanceDB do not, and then the envelope grows so
+that it fits -- room only one engine gets, in a lane whose whole claim is a
+matched operating point. That is the apples-to-oranges default the policy
+exists to equalize.
+
+So the cache is bounded to `graphBuildCacheSize=100000`, which is the engine's
+OWN pre-#3144 default rather than a number we invented, and the tier keeps the
+36g/24g envelope it has always had. The bound is recorded on every row as
+`graph_build_cache_size` and `graph_build_cache_policy`: an override that only
+lives in a comment is not disclosed to anyone reading the artifact.
+`BENCH_DENSE_BUILD_CACHE=0` restores auto-sizing, so the cost of the default
+stays measurable rather than asserted.
+
+What the default costs, measured while finding this: at 24g heap the auto-sized
+build stalls at 93.8% with -Xmx full at 98.2% and ~7 cores on GC; given a 36g
+heap it completes in 2640 s at 40.5 GiB of anon. The pre-fix engine completed
+the same build at 24g in 2771 s and 28.3 GiB. So the default buys about 5% of
+build time for roughly 12 GiB, on a comparison that is not even controlled --
+which is the observation owed upstream, since #3144 was closed on INT8
+evidence with "fp32 preload noted as follow-up" and the fp32 half was never
+measured.
 
 The INT8 arm is unaffected and builds fine: an inline-quantized index reads a
 miss straight from an index page and keeps a small bound. That asymmetry is
