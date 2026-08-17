@@ -1340,6 +1340,10 @@ def main():
                          "(sweep tier only; 0 = 1 for paper, 2 for sweep)")
     ap.add_argument("--timeout", type=int, default=0,
                     help="per-cell timeout override in seconds (0 = scale default)")
+    ap.add_argument("--mem", default="",
+                    help="container memory cap override (e.g. 52g). Pair it "
+                         "with --heap: a heap raised to the cap leaves no room "
+                         "for the driver, the corpus or JVM non-heap.")
     ap.add_argument("--heap", default="",
                     help="JVM heap override for this invocation (e.g. 36g). "
                          "DIAGNOSTIC ONLY: it breaks the tier's heap policy, so "
@@ -1358,6 +1362,14 @@ def main():
     if os.sep in args.results_file or args.results_file.startswith("."):
         ap.error("--results-file is a bare filename under results/")
 
+    if args.mem:
+        # Paired with --heap: raising the heap without raising the cap puts the
+        # JVM's committed heap at the cgroup ceiling with nothing left for the
+        # driver, the corpus or JVM non-heap, which OOM-kills or thrashes
+        # instead of measuring. Same diagnostic-only warning as --heap.
+        for k in MEM_BY_SCALE:
+            MEM_BY_SCALE[k] = args.mem
+        print(f"MEM CAP OVERRIDE: {args.mem} (diagnostic)")
     if args.heap:
         # Applied to every scale, because an invocation runs one scale and a
         # partial override is how a heap ends up disagreeing with the row that
