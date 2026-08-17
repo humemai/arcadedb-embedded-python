@@ -65,12 +65,23 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 # had squeezed our own embedded deployment, and the pinned
                 # l3d.deployment_ratio inherited that.
                 #
-                # The cap rises for EVERY backend at this tier, not just ours:
-                # a cap is a ceiling rather than a reservation, so comparators
-                # that used less are unaffected, and a per-backend cap would be
-                # the unfairness this is fixing. Same precedent as the earlier
-                # 28g/16g -> 36g/24g move. 44g of 61.3 GiB still runs serial.
-                "deep10m": "44g",
+                # RAISING THE CAP ALONE DID NOT WORK, and the second attempt
+                # is what proved the mechanism. At a 44g cap the same cell
+                # stalled at the SAME point (9,365,625 of 9,990,000) with the
+                # container using only 28.65 of 44 GiB while the JVM heap sat
+                # at 24128.9 of 24576 MB. A JVM cannot grow past -Xmx however
+                # much room the cgroup has, so the heap was the binding
+                # ceiling all along and the cgroup pressure at 36g was a
+                # symptom of it, not the cause.
+                #
+                # So the heap rises too (see HEAP_BY_SCALE), and the cap rises
+                # with it to leave room for the heap plus the Python driver
+                # plus the 5.1 GB corpus array plus JVM non-heap. The cap rises
+                # for EVERY backend at this tier: a cap is a ceiling rather
+                # than a reservation, so comparators that used less are
+                # unaffected, and a per-backend cap would be the unfairness
+                # this is fixing. 52g of 61.3 GiB still runs serial.
+                "deep10m": "52g",
                 "e2": "12g", "tpch1": "16g",
                 # TPC-H SF10 (~10 GB). SF1 is 1 GB, which reads as a toy
                 # scale at a DB venue where comparable papers run 700 GB+.
@@ -114,7 +125,19 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # The served arm's headroom is no longer 3g: it now gets the
                  # full 36g cap rather than 0.75 of it, so 12g against a 24g
                  # heap.
-                 "sf1": "4g", "sf10": "12g", "deep10m": "24g", "e2": "6g", "tpch1": "8g",
+                 # DEEP-10M NEEDS MORE THAN 24g OF JAVA HEAP, measured twice.
+                 # The HNSW graph build over 9.99M x 128 at maxConnections=32
+                 # reached 93.8% and stalled with -Xmx24g full at 98.2%, under
+                 # BOTH a 36g and a 44g container cap -- at 44g the container
+                 # used only 28.65 of 44 GiB, so the cgroup was never the
+                 # constraint and a JVM cannot grow past -Xmx however much room
+                 # it has. 36g is deliberately generous rather than minimal:
+                 # the point is to let the build COMPLETE and record what it
+                 # actually peaks at, instead of clipping it a third time and
+                 # measuring the ceiling again. peak_anon on a completed cell
+                 # is then the real demand, which is the number worth reporting
+                 # and the one engine #3144 asked for.
+                 "sf1": "4g", "sf10": "12g", "deep10m": "36g", "e2": "6g", "tpch1": "8g",
                     "tpch10": "16g"}
 # THE SERVED ENGINE GETS THE FULL TIER CAP, and the driver gets its own budget
 # on top. It used to take 0.75 of the cap while the embedded arm took all of
