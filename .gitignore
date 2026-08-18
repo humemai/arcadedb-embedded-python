@@ -584,6 +584,21 @@ benchmarks/experiments/results/runs-*.csv
 # next time a feed was replaced. Ignore the CONVENTION, not each instance.
 benchmarks/experiments/results/*.pre-*
 benchmarks/experiments/results/runs.jsonl.*
+# THE CONVENTION, not the instance -- which is what the comment above already
+# said and this file then failed to do. Every scratch and derived feed added
+# since matched none of the exact paths above: runs_smoke.jsonl,
+# runs_smoke_pass2.jsonl, runs_smoke_prefix.jsonl, runs_cacheab.jsonl,
+# runs_cachesweep.jsonl, runs_backfill.jsonl. On the bench host that left 528
+# untracked files under results/, one `git add -A` from being committed.
+#
+# runs_paper.csv is the frozen canonical selection and IS tracked; it ends in
+# .csv, so this rule cannot reach it. Verified: no tracked file matches
+# runs_*.jsonl.
+benchmarks/experiments/results/runs_*.jsonl
+# Per-cell driver output. Regenerable, and the row in runs.jsonl is the record.
+benchmarks/experiments/results/raw/
+# Written by a queue script to scope the monitor's window.
+benchmarks/experiments/results/.campaign_start
 
 # --- benchmarks/python-bindings ---------------------------------------------
 # The binding-level suite (graph/vector/tabular through the Python API, plus
@@ -609,4 +624,3 @@ benchmarks/python-bindings/jpype_overhead/dbs_*/
 benchmarks/python-bindings/jpype_overhead/data_*/
 benchmarks/python-bindings/jpype_overhead/results/*.log
 benchmarks/python-bindings/jpype_overhead/*.class
-
