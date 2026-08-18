@@ -1160,7 +1160,25 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         # merge bench output ONLY on clean exit: a stale or partial out file
         # must never masquerade as results for a failed/killed cell
         if rc == 0 and os.path.exists(out_path):
-            row.update(json.load(open(out_path)))
+            # A None FROM THE DRIVER NEVER ERASES A VALUE THE RUNNER SET.
+            #
+            # The driver's row is merged over the runner's, and bench_common
+            # stamps `heap` from ARCADEDB_HEAP -- which runner.py exports only
+            # for arcadedb backends. So an Elasticsearch cell arrived here with
+            # the runner's correct heap="16g" and had it overwritten by the
+            # driver's heap=None. The row then read server_heap=16g against
+            # heap=None, and make_paper_tables' ES guard -- which exists to
+            # catch a 4g run wearing a 16g label -- dropped all five rows at
+            # small and all five at medium. The tier silently reverted to
+            # 2026-08-08 data while every sibling in the table was fresh.
+            #
+            # The runner knows what it requested; the driver knows what it
+            # observed. Neither should be able to blank the other by omission.
+            _payload = json.load(open(out_path))
+            for _k, _v in _payload.items():
+                if _v is None and row.get(_k) is not None:
+                    continue
+                row[_k] = _v
     finally:
         mib = lambda b: round((b or 0) / 2**20, 1)
         # Disk BEFORE the samplers are torn down and the containers removed:
