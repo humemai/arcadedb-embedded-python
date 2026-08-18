@@ -289,6 +289,19 @@ class ArcadeEmbedded(Base):
         cache = os.environ.get("BENCH_DENSE_BUILD_CACHE", "100000").strip()
         extra = (f"{extra} -Darcadedb.vectorIndex.graphBuildCacheSize={cache}").strip()
         self.build_cache_size = int(cache)
+        # THE OTHER HALF OF THE AUTO POLICY. graphBuildCacheSize=0 caches the
+        # whole corpus WHEN IT FITS this percentage of heap, so the percentage
+        # is what decides whether auto-sizing degrades to eviction or takes
+        # everything. At deep10m the corpus cache is 5.36 GiB against a 6.0 GiB
+        # budget at the default 25% of a 24g heap: it fits by 11%, so the
+        # engine grants the full cache and the build is left short. Lowering
+        # the percentage is therefore the knob that could make AUTO-SIZING work
+        # rather than the knob that bypasses it, which is the difference
+        # between testing Luca's mechanism and routing around it.
+        pct = os.environ.get("BENCH_DENSE_BUILD_CACHE_PCT", "").strip()
+        if pct:
+            extra = f"{extra} -Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent={pct}"
+            self.build_cache_pct = int(pct)
         self.db = arcadedb.create_database(
             "/tmp/l3d_arcade",
             jvm_kwargs={"heap_size": heap,
@@ -746,6 +759,9 @@ def main():
     # THE OVERRIDE, ON THE ROW. A disclosed fairness override that only lives in
     # a comment is not disclosed to anyone reading the artifact.
     _bc = getattr(b, "build_cache_size", None)
+    _bp = getattr(b, "build_cache_pct", None)
+    if _bp is not None:
+        out["graph_build_cache_pct"] = _bp
     if _bc is not None:
         out["graph_build_cache_size"] = _bc
         out["graph_build_cache_policy"] = (

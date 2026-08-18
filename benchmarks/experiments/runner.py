@@ -1056,7 +1056,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    "BENCH_DENSE_DATA", "BENCH_DENSE_M",
                    # the HNSW build-cache bound; unset means the lane's
                    # disclosed default of 100000, 0 means engine auto-sizing
-                   "BENCH_DENSE_BUILD_CACHE",
+                   "BENCH_DENSE_BUILD_CACHE", "BENCH_DENSE_BUILD_CACHE_PCT",
                    "BENCH_TPC_DATA", "BENCH_TPC_SF", "BENCH_GAV",
                    "BENCH_NEO4J_PAGECACHE"):
             if os.environ.get(_k):
