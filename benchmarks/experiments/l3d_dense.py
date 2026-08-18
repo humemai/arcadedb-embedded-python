@@ -672,10 +672,33 @@ class QdrantInt8(Qdrant):
     """Qdrant with scalar quantization (int8), its documented compact mode.
 
     quantile=0.99 and always_ram are Qdrant's own recommended defaults for
-    scalar quantization; rescore stays ON, which is Qdrant's default and the
-    configuration a user gets by asking for quantization.
+    scalar quantization.
+
+    RESCORE MUST BE ASKED FOR AT SEARCH TIME, and assuming otherwise cost a
+    whole tier of rows. The first version of this arm configured quantization
+    on the collection and inherited Qdrant's plain search params, so every
+    query was answered from int8 approximations alone with no re-ranking
+    against the stored vectors. Recall came out at 0.2355 where every other
+    dense arm sits between 0.93 and 1.00 -- caught by the monitor's recall
+    range rule, not by reading the code.
+
+    Rescore is what makes a quantized index a compression technique rather than
+    a different algorithm: the int8 vectors narrow the candidate set and the
+    originals decide the order. Without it the comparison would have published
+    Qdrant-at-int8 as catastrophically inaccurate, which would have been our
+    misconfiguration reported as their result -- the exact failure this lane's
+    matched-operating-point rule exists to prevent.
     """
     name = "qdrant_dense_int8"
+
+    def search(self, qvec, k):
+        from qdrant_client import models as qm
+        res = self.cl.query_points(
+            "articles", query=qvec.tolist(), limit=k,
+            search_params=qm.SearchParams(
+                hnsw_ef=EF_SEARCH,
+                quantization=qm.QuantizationSearchParams(rescore=True)))
+        return [int(p.id) for p in res.points]
 
     def build(self, vecs):
         from qdrant_client import models as qm
