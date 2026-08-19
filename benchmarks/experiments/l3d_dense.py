@@ -824,9 +824,29 @@ def main():
     # settles a roughly fixed 30-87 MB, against nothing at all for an
     # already-settled comparator. An unrecorded close is an unpriced one, and
     # the row cannot be told apart from a lane that never settles.
-    _t = time.perf_counter()
-    b.close()
-    out["close_s"] = round(time.perf_counter() - _t, 3)
+    # BENCH_SKIP_CLOSE=1 runs the cell WITHOUT closing the database.
+    #
+    # It exists for exactly one question: is the fp32 deep10m failure a BUILD
+    # cost or a CLOSE cost? Since #5747 (fixed in main, NOT in the 26.8.1 we
+    # pin) LSMVectorIndex.flush() rebuilds the graph whenever graphState is
+    # LOADING -- which means "not resident", not "not on disk" -- so a close
+    # constructs a second graph while the first index and its caches are still
+    # referenced. close_s tracks build_s on every dense embedded arm, and the
+    # one OutOfMemoryError we saw was thrown INSIDE close().
+    #
+    # If the cell completes with the close skipped, the build never needed more
+    # heap and the whole "26.8.1 needs 36g" conclusion is the close bug. The arm
+    # RECORDS that it skipped, because a cell that silently omits a phase is
+    # not comparable with one that does not.
+    if os.environ.get("BENCH_SKIP_CLOSE") == "1":
+        out["close_s"] = None
+        out["close_skipped"] = True
+        out["close_skip_reason"] = ("diagnostic: isolating build cost from the "
+                                    "#5747 close-time graph rebuild")
+    else:
+        _t = time.perf_counter()
+        b.close()
+        out["close_s"] = round(time.perf_counter() - _t, 3)
     # 0.0 MUST MEAN "nothing to release", NEVER "we did not ask". Without this
     # the dense table would read ArcadeDB 157.5 s against six flat zeros, four
     # of which were simply unmeasured.
