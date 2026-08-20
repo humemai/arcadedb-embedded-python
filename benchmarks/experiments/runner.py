@@ -591,6 +591,37 @@ BACKENDS = {
     },
 }
 
+# ---------------------------------------------------------------- local engine
+# FAST-ITERATION MODE. The project page is no longer pinned to a PyPI release: the
+# embedded arm can be a wheel built from a specific commit of this fork. When it is,
+# the SERVER arm has to be the same commit, or a table that carries both compares two
+# engines while appearing to compare transports. That is F5, and it is what made T5's
+# server build cell wrong once already.
+#
+# So the two are set together or not at all. Setting one alone is refused here rather
+# than discovered later in a row that looks fine.
+_LOCAL_WHEEL = os.environ.get("ARCADEDB_WHEEL", "").strip()
+_LOCAL_SERVER_IMAGE = os.environ.get("ARCADEDB_SERVER_IMAGE", "").strip()
+if bool(_LOCAL_WHEEL) != bool(_LOCAL_SERVER_IMAGE):
+    raise SystemExit(
+        "ARCADEDB_WHEEL and ARCADEDB_SERVER_IMAGE must be set together (F5: one engine "
+        "line per table).\n"
+        f"  ARCADEDB_WHEEL       = {_LOCAL_WHEEL or '(unset)'}\n"
+        f"  ARCADEDB_SERVER_IMAGE= {_LOCAL_SERVER_IMAGE or '(unset)'}\n"
+        "Build both from one commit: bindings/python/scripts/build.sh for the wheel, and\n"
+        "package/src/main/docker/Dockerfile over package/target/arcadedb-*.dir for the server."
+    )
+if _LOCAL_SERVER_IMAGE:
+    _swapped = 0
+    for _name, _cfg in BACKENDS.items():
+        _img = _cfg.get("server_image") or ""
+        if _img.startswith("arcadedata/arcadedb"):
+            _cfg["server_image"] = _LOCAL_SERVER_IMAGE
+            _swapped += 1
+    print(f"[engine] local build: wheel={os.path.basename(_LOCAL_WHEEL)} "
+          f"server={_LOCAL_SERVER_IMAGE} ({_swapped} server arms swapped)")
+
+
 # Which backends run on a JVM, and therefore have a heap worth recording and
 # checking. Substring match against the backend name.
 JVM_BACKENDS = ("arcadedb", "neo4j", "elasticsearch", "questdb")
