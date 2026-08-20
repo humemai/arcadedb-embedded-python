@@ -249,6 +249,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
   // This prevents vectorNeighbors queries from blocking for minutes on large indexes.
   private volatile Thread  asyncRebuildThread     = null;
   private volatile boolean asyncRebuildInProgress = false;
+  // When the last online rebuild was declined for lack of heap (issue #6503). A deferral does not consume the
+  // mutations that triggered it - only a successful build does - so without this the trigger is still true the
+  // instant the deferred cycle ends, and rebuildGraphBeforeSearch() runs on EVERY query: one rebuild thread, one
+  // JVM-wide permit acquire and one WARNING per search, precisely when the JVM is already short of memory.
+  private volatile long    lastRebuildDeferralMs  = 0L;
   // Incremented each time a graph build snapshots its start mutation counter. Lets callers (and tests) observe
   // that a build has passed the point after which further mutations are preserved rather than folded into the
   // build's own snapshot (issue #3683).
@@ -1535,7 +1540,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // Force rebuild from on-disk pages, bypassing mutation thresholds and lazy-load behavior.
       graphState = GraphState.LOADING;
       mutationsSinceSerialize.set(0);
-      buildGraphFromScratchWithRetry(graphCallback, false);
+      buildGraphFromScratchWithRetry(graphCallback, false, false);
     } finally {
       status.set(INDEX_STATUS.AVAILABLE);
     }
@@ -1703,7 +1708,44 @@ public class LSMVectorIndex implements Index, IndexInternal {
   private void buildGraphFromScratch(final GraphBuildCallback graphCallback, final boolean compactDataFile) {
     // buildGraphFromScratchWithRetry() reads pages directly and rebuilds vectorIndex
     // No need to reload here - just call the retry logic directly
-    buildGraphFromScratchWithRetry(graphCallback, compactDataFile);
+    buildGraphFromScratchWithRetry(graphCallback, compactDataFile, false);
+  }
+
+  /**
+   * Rebuilds the way {@link #flush()} does on the close path: releases everything holding the OLD graph on the
+   * heap before starting, instead of at the end. A from-scratch build otherwise retains that graph plus its own
+   * full working set (build cache, JVector builder, ordinal map) for the whole build, which is what makes a
+   * rebuild cost about 1.7x what building the same corpus from nothing costs and what runs a large index out of
+   * heap (issue #6503). Releasing first roughly halves the peak.
+   * <p>
+   * <b>All three references have to go, not just {@link #graphIndex}.</b> {@link #searchVectorCache} is the
+   * obvious second one. The third is the searcher pool: a pooled searcher holds the {@code ImmutableGraphIndex}
+   * it was pooled under, so a populated pool pins the old graph however many times {@code graphIndex} is nulled.
+   * That is not hypothetical on the path this method exists for - {@code LocalDatabase.closeDurableParts()}
+   * calls {@code index.flush()} BEFORE {@code index.releaseBackgroundResources()}, so on a database close the
+   * pool is still full when this runs, and clearing it here rather than relying on the caller having done it is
+   * what makes the release actually release anything.
+   * <p>
+   * <b>Safe only because no search can be in flight.</b> {@code flush()} has already CAS-ed {@link #status} to
+   * {@code UNAVAILABLE}, and a database close does not return requests to the pool afterwards. That is a
+   * caller-side contract, though, not something this class enforces: the search methods gate on
+   * {@code lock.readLock()} alone and never consult {@link #status}. A reader that violated it would not crash
+   * or read torn state - it takes the {@code graphIndex == null} branch and is served from the delta scan - but
+   * it would get an incomplete result set, and for the whole duration of the rebuild rather than for the instant
+   * around the swap. Degrading rather than corrupting is why this is acceptable on a path where the contract
+   * holds, and exactly why it must not be used where it does not.
+   * <p>
+   * Deliberately not used by an online rebuild ({@link #rebuildGraphBeforeSearch()}, {@link #startAsyncGraphRebuild()},
+   * an explicit {@link #buildVectorGraphNow(GraphBuildCallback)}, or {@code compact()}): none of those gate
+   * concurrent searches on {@link #status}, so the old graph and cache must stay resident until the new one is
+   * ready to swap in.
+   * <p>
+   * Package-private so tests can drive it directly with a progress callback.
+   *
+   * @param graphCallback optional progress callback invoked during graph construction/persistence
+   */
+  void buildGraphFromScratchReleasingResidentGraph(final GraphBuildCallback graphCallback) {
+    buildGraphFromScratchWithRetry(graphCallback, false, true);
   }
 
   /**
@@ -1712,7 +1754,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
    *
    * @param graphCallback Optional callback for graph build progress
    */
-  private void buildGraphFromScratchWithRetry(final GraphBuildCallback graphCallback, final boolean compactDataFile) {
+  private void buildGraphFromScratchWithRetry(final GraphBuildCallback graphCallback, final boolean compactDataFile,
+      final boolean releaseResidentGraphFirst) {
     // Serialize graph builds for this index. The index write lock used to do this implicitly by covering the
     // whole preparation phase; now that the O(index size) validation runs unlocked (issue #5391), two builds
     // could interleave their vectorIndex re-sync and their ordinal-map publication and leave a searcher with an
@@ -1720,13 +1763,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // and inserts never touch it, so it does not reintroduce the stall.
     graphBuildLock.lock();
     try {
-      buildGraphFromScratchExclusively(graphCallback, compactDataFile);
+      buildGraphFromScratchExclusively(graphCallback, compactDataFile, releaseResidentGraphFirst);
     } finally {
       graphBuildLock.unlock();
     }
   }
 
-  private void buildGraphFromScratchExclusively(final GraphBuildCallback graphCallback, final boolean compactDataFile) {
+  private void buildGraphFromScratchExclusively(final GraphBuildCallback graphCallback, final boolean compactDataFile,
+      final boolean releaseResidentGraphFirst) {
     // Reset live builder — full rebuild creates a new graph with different ordinal mapping
     if (liveBuilder != null) {
       try {
@@ -1735,6 +1779,20 @@ public class LSMVectorIndex implements Index, IndexInternal {
       }
       liveBuilder = null;
       liveVectorValues = null;
+    }
+
+    if (releaseResidentGraphFirst) {
+      // See buildGraphFromScratchReleasingResidentGraph() for why this is safe only on that path, and why the
+      // searcher pool has to be emptied too: a pooled searcher holds the graph it was pooled under, so leaving
+      // the pool populated would keep the old graph reachable and release nothing.
+      lock.writeLock().lock();
+      try {
+        this.graphIndex = null;
+        this.searchVectorCache = null;
+        releasePooledSearchers();
+      } finally {
+        lock.writeLock().unlock();
+      }
     }
 
     // Snapshot the next vector ID so we know which delta entries were included in this build
@@ -1967,6 +2025,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // worker threads cannot lookupByRID without a transaction context bound to the thread.
       final boolean inlineQuantization = metadata.quantizationType == VectorQuantizationType.INT8
           || metadata.quantizationType == VectorQuantizationType.BINARY;
+      // ORDERING: this now budgets off AVAILABLE heap (issue #6503), so it must stay AFTER the
+      // releaseResidentGraphFirst block at the top of this method. On the close path that block has already
+      // dropped the old graph, the search cache and the pooled searchers, so this sizes against a heap that no
+      // longer counts them. Move this call above that block - or that block below this call - and the close-path
+      // rebuild would shrink its own build cache to make room for memory it is in the act of freeing, which is
+      // the slow-build failure mode this change exists to avoid rather than cause.
       final int graphBuildCacheSize = computeGraphBuildCacheCapacity(expectedSize, inlineQuantization);
       // Never preload more than the cache can hold: the surplus used to be read, boxed and then dropped.
       final int preloadBudget = Math.min(expectedSize, graphBuildCacheSize);
@@ -2118,6 +2182,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
         try {
           this.ordinalToVectorId = filteredVectorIds;
           this.graphIndex = null;
+          // Nulling the field is not enough to free the graph: a pooled searcher holds the graph it was pooled
+          // under (issue #6503). Normally borrow() drains the pool when it notices the identity moved, but this
+          // path leaves no graph to search, and findNeighborsFromVector() returns on `graphIndex == null` BEFORE
+          // it ever borrows - so nothing would ever drain it, and an index whose vectors were all deleted would
+          // keep its last full graph resident for the life of the index object.
+          releasePooledSearchers();
           mutationsSinceSerialize.addAndGet(-mutationsAtBuildStart);
           this.graphState = deltaVectors.isEmpty() ? GraphState.IMMUTABLE : GraphState.MUTABLE;
         } finally {
@@ -2460,8 +2530,18 @@ public class LSMVectorIndex implements Index, IndexInternal {
       lock.writeLock().lock();
       try {
         this.graphIndex = builtGraph;
+        // Hand the PREVIOUS generation back now rather than at the next search. borrow() drains the pool when it
+        // sees the identity has moved, so this is not a correctness fix - a stale searcher is never handed out -
+        // but "the next search" is not a promise on an index that has just rebuilt and gone quiet, which is the
+        // ordinary shape after an inactivity-timer rebuild. Until that search arrives the pool keeps the whole
+        // old graph reachable, and this is the exact moment heap is tightest: the new graph is live and the
+        // build's working set has not been collected yet (issue #6503).
+        releasePooledSearchers();
         // Track graph rebuild metric
         metrics.incrementGraphRebuildCount();
+        // A build got through, so whatever heap shortage deferred the last online attempt is no longer in the
+        // way: clear the cooldown rather than let a stale deferral keep gating triggers (issue #6503).
+        lastRebuildDeferralMs = 0L;
         // Reset page tracking since we rebuilt from persisted pages
         currentInsertPageNum = -1;
 
@@ -2604,7 +2684,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
               buildAndPersistPQ(vectors);
             }
           }
-        } catch (final Exception e) {
+        } catch (final Throwable e) {
+          // Throwable, not Exception: an OutOfMemoryError raised anywhere in this block - most likely while
+          // persisting a graph large enough that the old graph plus the new one no longer both fit - is an Error,
+          // and used to escape this handler entirely. That skipped both the rollback below and markUnusable(),
+          // so a build that died mid-persist left a dangling transaction and a manifest that still vouched for
+          // whatever the pages happened to hold (issue #6503).
+          //
           // Rollback on error
           if (startedTransaction) {
             try {
@@ -3051,6 +3137,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (asyncRebuildInProgress)
       return; // Another rebuild is already running
 
+    // Still cooling down from a rebuild that did not fit the heap (issue #6503). Checked HERE, before the thread
+    // is spawned, rather than inside admitOnlineRebuild(): the point is to not pay for the attempt at all - no
+    // daemon thread, no JVM-wide permit acquire and release, no O(allocated chunks) getActiveCount() - on a path
+    // that a search reaches on every single query while the trigger condition stays true.
+    if (isCoolingDownFromRebuildDeferral())
+      return;
+
     asyncRebuildInProgress = true;
     final int mutations = mutationsSinceSerialize.get();
 
@@ -3093,13 +3186,18 @@ public class LSMVectorIndex implements Index, IndexInternal {
         LogManager.instance().log(this, Level.INFO,
             "Acquired rebuild permit for index: %s (available permits: %d)",
             indexName, REBUILD_SEMAPHORE.availablePermits());
+        // Measured here, holding the permit, rather than at scheduling time: this is the moment the memory is
+        // actually about to be claimed, and any other index's rebuild has by now released whatever it held.
+        if (!admitOnlineRebuild())
+          return;
         buildGraphFromScratch();
         completed = true;
         LogManager.instance().log(this, Level.INFO,
             "Async graph rebuild completed for index: %s", indexName);
-      } catch (final Exception | AssertionError e) {
-        // AssertionError too: JVector validates with `assert`, and an escaping one would kill this daemon
-        // thread past the point where the in-progress flag is cleared.
+      } catch (final Throwable e) {
+        // Throwable, not just Exception|AssertionError: an OutOfMemoryError from a rebuild that no longer fits
+        // (issue #6503) is an Error too, and an escaping one would kill this daemon thread past the point where
+        // the in-progress flag is cleared, the same way an escaping AssertionError would.
         //
         // Checked by exception type first, not just isInterrupted(): releaseBackgroundResources() cancels
         // the build's ForkJoinTask directly (issue #5872), which unblocks this thread's join() with a
@@ -3131,6 +3229,98 @@ public class LSMVectorIndex implements Index, IndexInternal {
     }, "VectorIndex-AsyncRebuild-" + indexName);
     asyncRebuildThread.setDaemon(true);
     asyncRebuildThread.start();
+  }
+
+  /**
+   * Decides whether an ONLINE rebuild - one that keeps the old graph resident so searches keep working - is going
+   * to fit the heap that is actually available, and declines the cycle when it will not (issue #6503).
+   * <p>
+   * There was no such gate before: {@code REBUILD_SEMAPHORE} bounds how many rebuilds run at once, which is not
+   * the same question, and nothing else consulted memory at all. A rebuild that did not fit was simply attempted,
+   * and died with an {@link OutOfMemoryError}. Declining costs a longer delta scan per query until the next
+   * trigger retries; dying costs the rebuild, and used to cost the manifest's integrity with it.
+   * <p>
+   * Only the online path is gated. A first build, a rebuild on close, {@code REBUILD INDEX} and
+   * {@code COMPACT INDEX} are lifecycle- or operator-driven, have no later trigger to retry them, and in the
+   * close case have already released the old graph - declining one of those would turn "slower" into "never".
+   * <p>
+   * Package-private so tests can drive the decision directly rather than through a background thread.
+   *
+   * @return true to proceed with the rebuild
+   */
+  boolean admitOnlineRebuild() {
+    final int percent = getDatabase().getConfiguration()
+        .getValueAsInteger(GlobalConfiguration.VECTOR_INDEX_REBUILD_MAX_HEAP_PERCENT);
+    if (percent <= 0)
+      return true; // gate disabled by configuration
+
+    final ImmutableGraphIndex resident = graphIndex;
+    if (resident == null)
+      return true; // nothing built yet: this is a first build in all but name, and must not be declined
+
+    final long nodes = Math.max(resident.getIdUpperBound(), vectorIndex.getActiveCount());
+    final boolean inlineQuantization = metadata.quantizationType == VectorQuantizationType.INT8
+        || metadata.quantizationType == VectorQuantizationType.BINARY;
+    final long buildCacheCapacity = computeGraphBuildCacheCapacity((int) Math.min(nodes, Integer.MAX_VALUE / 2),
+        inlineQuantization);
+
+    final long estimate = VectorHeapBudget.estimateRebuildHeapBytes(nodes, metadata.dimensions, buildCacheCapacity,
+        true);
+    final long budget = VectorHeapBudget.budgetBytes(percent);
+    if (estimate <= budget)
+      return true;
+
+    metrics.incrementRebuildsDeferredForMemory();
+    // Start the cooldown BEFORE logging, so the timestamp is set no matter what the log call does.
+    lastRebuildDeferralMs = System.currentTimeMillis();
+    LogManager.instance().log(this, Level.WARNING,
+        "Deferring the graph rebuild of vector index %s: it needs about %d MB (%d nodes, keeping the old graph "
+            + "resident so searches keep working) against %d MB of the %d MB currently available heap that %s "
+            + "allows it. The %d pending vectors stay searchable through the delta scan, and the next mutation or "
+            + "inactivity trigger retries - but until one fits, every query pays that scan. Give the JVM more "
+            + "heap, lower %s, or set %s to 0 to attempt the rebuild regardless",
+        indexName, estimate / (1024 * 1024), nodes, budget / (1024 * 1024),
+        VectorHeapBudget.availableHeapBytes() / (1024 * 1024),
+        GlobalConfiguration.VECTOR_INDEX_REBUILD_MAX_HEAP_PERCENT.getKey(), mutationsSinceSerialize.get(),
+        GlobalConfiguration.VECTOR_INDEX_GRAPH_BUILD_CACHE_MAX_HEAP_PERCENT.getKey(),
+        GlobalConfiguration.VECTOR_INDEX_REBUILD_MAX_HEAP_PERCENT.getKey());
+    return false;
+  }
+
+  /**
+   * Whether an online rebuild declined for lack of heap is still within its retry cooldown (issue #6503).
+   * <p>
+   * The cooldown exists because a deferral leaves its own trigger intact: {@code mutationsSinceSerialize} is only
+   * decremented by a build that actually ran, so the moment the deferred cycle ends the condition
+   * {@link #rebuildGraphBeforeSearch()} tests is true again - and that method runs on every query. Without a
+   * cooldown a large, heap-constrained index spawns a rebuild thread, acquires and releases the JVM-wide permit
+   * and logs a WARNING once per search, adding thread churn and contention exactly when memory is already tight.
+   * <p>
+   * Nothing is lost by waiting: the pending vectors stay searchable through the delta scan throughout, which is
+   * what a deferral costs in the first place.
+   *
+   * @return true when another attempt must be skipped for now
+   */
+  private boolean isCoolingDownFromRebuildDeferral() {
+    final long deferredAt = lastRebuildDeferralMs;
+    if (deferredAt == 0L)
+      return false; // nothing has been deferred yet
+
+    final long cooldownMs = getDatabase().getConfiguration()
+        .getValueAsLong(GlobalConfiguration.VECTOR_INDEX_REBUILD_DEFERRAL_COOLDOWN_MS);
+    if (cooldownMs <= 0)
+      return false; // cooldown disabled: retry on the next trigger, as before
+
+    final long elapsed = System.currentTimeMillis() - deferredAt;
+    // A backwards clock step would otherwise park the index for as long as the step lasted: treat any negative
+    // elapsed time as "the cooldown is over" rather than trusting the arithmetic.
+    if (elapsed < 0 || elapsed >= cooldownMs)
+      return false;
+
+    LogManager.instance().log(this, Level.FINE,
+        "Skipping the rebuild trigger for vector index %s: still %d ms into the %d ms cooldown from the last "
+            + "rebuild deferred for lack of heap", indexName, elapsed, cooldownMs);
+    return true;
   }
 
   /**
@@ -4175,7 +4365,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             // Explicit efSearch: use fixed beam width (per-query or index default override)
             final int effectiveEfSearch = Math.max(k, efSearch);
             searchResult = searcher.search(ssp, k, effectiveEfSearch, 0.0f, 0.0f, bitsFilter);
-          } else if (metadata.efSearch != 100) {
+          } else if (metadata.efSearchConfigured) {
             // User configured efSearch in index metadata: use their value
             final int effectiveEfSearch = Math.max(k, metadata.efSearch);
             searchResult = searcher.search(ssp, k, effectiveEfSearch, 0.0f, 0.0f, bitsFilter);
@@ -4414,7 +4604,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           final int effectiveEfSearch;
           if (efSearch > 0)
             effectiveEfSearch = Math.max(maxRows, efSearch);
-          else if (metadata.efSearch != 100)
+          else if (metadata.efSearchConfigured)
             effectiveEfSearch = Math.max(maxRows, metadata.efSearch);
           else
             // The doubling is the second multiplication issue #6066 covers. maxRows is already clamped to the
@@ -5604,6 +5794,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // the next restart is barely better than one that was dropped at creation (issue #5639). LSMVectorIndexMetadata
     // reads each of these back, and a value equal to its default round-trips as itself.
     json.put("efSearch", metadata.efSearch);
+    json.put("efSearchConfigured", metadata.efSearchConfigured);
     json.put("neighborOverflowFactor", metadata.neighborOverflowFactor);
     json.put("alphaDiversityRelaxation", metadata.alphaDiversityRelaxation);
     json.put("locationCacheSize", metadata.locationCacheSize);
@@ -5677,14 +5868,33 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // that already exists. initializeGraphIndex() already draws exactly this
       // distinction with the same predicate.
       final boolean graphAlreadyOnDisk = graphFile != null && graphFile.hasPersistedGraph();
-      if (vectorIndex.size() > 0 && (graphState == GraphState.MUTABLE
-          || (graphState == GraphState.LOADING && !graphAlreadyOnDisk))) {
+      final boolean needsBuild = vectorIndex.size() > 0 && (graphState == GraphState.MUTABLE
+          || (graphState == GraphState.LOADING && !graphAlreadyOnDisk));
+
+      if (needsBuild && !valid) {
+        // Background resources are already gone, so there is no build pool to run this on - and asking for one
+        // would not fail, it would quietly BUILD one: getOrCreateGraphBuildPool() replaces a shut-down pool, and
+        // nothing would ever shut the replacement down, because the releasing step has already happened
+        // (issue #6518). Skipping costs a rebuild on the next open; building here would cost a leaked pool for
+        // the life of the process. WARNING rather than FINE precisely because this should not be reachable: both
+        // close paths flush BEFORE releasing, so seeing this means a caller inverted them.
+        LogManager.instance().log(this, Level.WARNING,
+            "Not building the graph of vector index %s on flush: its background resources have already been "
+                + "released, so the build has no pool to run on and would leak a new one. The %d pending vectors "
+                + "stay on disk and are re-indexed on the next open. This means flush() was called after "
+                + "releaseBackgroundResources() - both close paths are supposed to do the reverse",
+            indexName, mutationsSinceSerialize.get());
+      } else if (needsBuild) {
         try {
           LogManager.instance()
               .log(this, Level.FINE, "Building graph before close for index: %s (this may take 1-2 minutes for large datasets)",
                   indexName);
           final long startTime = System.currentTimeMillis();
-          buildGraphFromScratch();
+          // Releases the resident graph, the search cache and the pooled searchers before building the
+          // replacement (issue #6503): status is UNAVAILABLE by this point and a closing database sends no
+          // further requests, so nothing can still be reading them, and a from-scratch build otherwise retains
+          // all three for the whole build on top of its own working set.
+          buildGraphFromScratchReleasingResidentGraph(null);
           final long elapsed = System.currentTimeMillis() - startTime;
           LogManager.instance().log(this, Level.FINE, "Graph building completed in %d seconds", elapsed / 1000);
         } catch (final Exception e) {
@@ -5700,10 +5910,21 @@ public class LSMVectorIndex implements Index, IndexInternal {
     }
   }
 
+  /**
+   * Flush FIRST, release SECOND - the same order {@code LocalDatabase.closeDurableParts()} uses, and for the
+   * reason stated there: an index whose graceful shutdown is a graph build needs its build pool alive for it.
+   * <p>
+   * The reverse order silently leaked a whole pool (issue #6518). {@link #releaseBackgroundResources()} shuts the
+   * graph-build pool down, and {@link #getOrCreateGraphBuildPool()} treats a shut-down pool as one to REPLACE, so
+   * a {@link #flush()} that followed it built a brand new pool, ran the rebuild on that, and left it running -
+   * nothing shuts a pool down after the release step has already happened. Measured on a dirty 200-vector index:
+   * 17 live worker threads on an index that is closed and marked invalid, with the graph persisted correctly, so
+   * nothing failed and nothing said anything. That is what issue #5418 was filed for, reached through another door.
+   */
   @Override
   public void close() {
-    releaseBackgroundResources();
     flush();
+    releaseBackgroundResources();
   }
 
   /**
@@ -6201,7 +6422,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
     try {
       // Build graph from scratch (already reads from pages)
-      buildGraphFromScratchWithRetry(graphCallback, false);
+      buildGraphFromScratchWithRetry(graphCallback, false, false);
 
       // Persist graph with chunking callback
       final ChunkCommitCallback chunkCallback = bytesWritten -> {
@@ -6467,6 +6688,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
    *       materializes anyway: bounding the cache below it (issue #3144) threw the vectors away right after
    *       reading them and made a from-scratch fp32 build re-read almost every vector, hundreds of times each.</li>
    * </ul>
+   * The budget is a share of the heap actually AVAILABLE, not of the whole heap (issue #6503): a rebuild keeps the
+   * old graph and its search cache resident for its whole duration, and sizing off the ceiling made the cache ask
+   * for the same amount whether that headroom existed or not - which is also why raising {@code -Xmx} did not help,
+   * since it grew the cache proportionally. See {@link VectorHeapBudget} for how availability is measured.
    *
    * @param expectedSize        number of vectors the build will walk
    * @param inlineQuantization  whether vectors are readable from index pages without a record lookup
@@ -6481,18 +6706,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (inlineQuantization)
       return ArcadePageVectorValues.DEFAULT_CACHE_SIZE;
 
-    // Per-entry cost: the float payload plus the VectorFloat wrapper, the cache entry and the array slot
-    final long bytesPerVector = (long) metadata.dimensions * Float.BYTES + 64;
-
-    int heapPercent = mutable.getDatabase().getConfiguration()
+    final int heapPercent = mutable.getDatabase().getConfiguration()
         .getValueAsInteger(GlobalConfiguration.VECTOR_INDEX_GRAPH_BUILD_CACHE_MAX_HEAP_PERCENT);
     if (heapPercent <= 0)
       return ArcadePageVectorValues.DEFAULT_CACHE_SIZE;
-    if (heapPercent > 90)
-      heapPercent = 90;
 
-    final long heapBudget = Runtime.getRuntime().maxMemory() / 100 * heapPercent;
-    final long affordable = Math.max(ArcadePageVectorValues.DEFAULT_CACHE_SIZE, heapBudget / bytesPerVector);
+    final long heapBudget = VectorHeapBudget.budgetBytes(heapPercent);
+    final long affordable = Math.max(ArcadePageVectorValues.DEFAULT_CACHE_SIZE,
+        heapBudget / VectorHeapBudget.bytesPerCachedVector(metadata.dimensions));
     final long wanted = Math.max(1, expectedSize);
 
     return (int) Math.min(Math.min(affordable, wanted), Integer.MAX_VALUE / 2);
@@ -6549,6 +6770,26 @@ public class LSMVectorIndex implements Index, IndexInternal {
   }
 
   /**
+   * Drops every pooled searcher, and with them the references they hold to the graph they were pooled under.
+   * <p>
+   * Call this wherever {@link #graphIndex} stops pointing at the graph the pool was populated for. Nulling or
+   * replacing that field frees nothing on its own: a pooled searcher keeps its own reference to the graph, so
+   * the outgoing generation stays reachable until something empties the pool (issue #6503). {@code borrow()}
+   * does empty it on the next search that notices the identity moved, which is why this is a memory concern and
+   * never a correctness one - but "the next search" is not a promise, and on the two paths that call this it is
+   * either far away (an index that rebuilt and went idle) or never (an index emptied of vectors, where the
+   * search path returns before it borrows).
+   * <p>
+   * Cheap enough to call under the write lock: the pool is bounded at a small multiple of the core count, and
+   * closing an on-heap searcher's view is a documented no-op.
+   */
+  private void releasePooledSearchers() {
+    final GraphSearcherPool searchers = searcherPool;
+    if (searchers != null)
+      searchers.clear();
+  }
+
+  /**
    * Epoch used to decide whether a pooled searcher (and the graph view it holds) is still valid. It must change on
    * anything that can alter what a search would see: a graph rebuild swaps {@link #graphIndex} and advances
    * {@link #rebuildSnapshotGeneration}, and every insert/update/delete bumps {@link #mutationsSinceSerialize}.
@@ -6570,7 +6811,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * <p>
    * An explicit {@code arcadedb.vectorIndex.searchCacheSize} wins. Otherwise the cache is sized to hold the
    * whole corpus - which is the point: a working set that fits never touches disk again - but capped at the
-   * configured share of the heap so a corpus larger than RAM degrades to eviction instead of OOM.
+   * configured share of the heap actually AVAILABLE (issue #6503, see {@link VectorHeapBudget}) so a corpus
+   * larger than RAM degrades to eviction instead of OOM. The cache only ever grows, so a reading taken while the
+   * heap is tight simply declines to grow it further rather than shrinking what is already there.
    *
    * @return the number of vectors to hold, or 0 when caching is disabled
    */
@@ -6582,18 +6825,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (configured > 0)
       return configured;
 
-    // Per-entry cost: the float payload plus the VectorFloat wrapper, the cache entry and the array slot
-    final long bytesPerVector = (long) metadata.dimensions * Float.BYTES + 64;
-
-    int heapPercent = mutable.getDatabase().getConfiguration()
+    final int heapPercent = mutable.getDatabase().getConfiguration()
         .getValueAsInteger(GlobalConfiguration.VECTOR_INDEX_SEARCH_CACHE_MAX_HEAP_PERCENT);
     if (heapPercent <= 0)
       return 0;
-    if (heapPercent > 90)
-      heapPercent = 90;
 
-    final long heapBudget = Runtime.getRuntime().maxMemory() / 100 * heapPercent;
-    final long affordable = Math.max(MIN_SEARCH_CACHE_SIZE, heapBudget / bytesPerVector);
+    final long heapBudget = VectorHeapBudget.budgetBytes(heapPercent);
+    final long affordable = Math.max(MIN_SEARCH_CACHE_SIZE,
+        heapBudget / VectorHeapBudget.bytesPerCachedVector(metadata.dimensions));
 
     final long corpus = Math.max(MIN_SEARCH_CACHE_SIZE, vectorIndex.size());
 
@@ -6655,11 +6894,53 @@ public class LSMVectorIndex implements Index, IndexInternal {
   }
 
   /**
+   * Decide whether the inactivity rebuild timer should actually rebuild the graph.
+   * <p>
+   * A rebuild is only expensive - O(current graph size) - once the graph has grown past
+   * {@link #ASYNC_REBUILD_MIN_GRAPH_SIZE}; below that, {@link #rebuildGraphBeforeSearch()} itself
+   * rebuilds synchronously on every threshold check with no threshold gate at all, because doing so
+   * is already fast enough not to matter. The timer used to mirror only the top half of that: it
+   * rebuilt on {@code pending > 0} alone regardless of graph size, so a single insert into a large
+   * settled index cost a full O(N) rebuild on the next quiet period (issue #6496). The fix is not to
+   * gate small graphs too - that would defer a rebuild that was never expensive to begin with, taking
+   * away the guarantee that a handful of buffered vectors get flushed out of the linear-scan delta
+   * buffer promptly - but to apply the same threshold the search path uses, and only where the search
+   * path would also apply it: once the graph is large enough that a rebuild is no longer free.
+   *
+   * @return {@code true} when pending mutations justify (or exceed) a rebuild
+   */
+  private boolean inactivityRebuildIsWorthIt() {
+    final int pending = mutationsSinceSerialize.get();
+    if (pending <= 0)
+      return false;
+
+    final ImmutableGraphIndex graph = this.graphIndex;
+    if (graph == null || graph.size() < ASYNC_REBUILD_MIN_GRAPH_SIZE)
+      // Small graph (or none yet): a rebuild is cheap regardless of how many mutations are
+      // pending, same as rebuildGraphBeforeSearch()'s unconditional synchronous rebuild for this
+      // case. Any pending mutation is worth flushing promptly.
+      return true;
+
+    final int threshold = getEffectiveMutationsBeforeRebuild();
+    // Rebuild once the mutation-driven threshold is reached...
+    if (pending >= threshold)
+      return true;
+
+    // ...or when enough of it has accumulated to justify a full rebuild.
+    // The floor prevents a single insert from triggering a full O(N) rebuild
+    // on every quiet period while still eventually absorbing a trickle of writes.
+    final int floor = Math.max(threshold / 10, 1);
+    return pending >= floor;
+  }
+
+  /**
    * Schedule or reset the inactivity rebuild timer (issue #3737).
    * Called after each mutation when mutations are below the rebuild threshold.
    * If a timer is already scheduled, it is cancelled and a new one is started,
    * effectively resetting the inactivity window.
-   * When the timer fires, it triggers an async graph rebuild regardless of the mutation count.
+   * When the timer fires, it triggers a rebuild for any pending mutation count on a small graph, or
+   * once pending mutations reach {@link #inactivityRebuildIsWorthIt() a threshold-derived floor} on a
+   * large one (issue #6496) - see that method for why the two cases are treated differently.
    */
   private synchronized void scheduleInactivityRebuild() {
     if (!isValid())
@@ -6669,8 +6950,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (timeoutMs <= 0)
       return; // Disabled
 
-    if (mutationsSinceSerialize.get() <= 0)
-      return; // Nothing to rebuild
+    if (!inactivityRebuildIsWorthIt())
+      return; // Nothing worth rebuilding (issue #6496)
 
     // Cancel any previously scheduled task (reset on new mutation) and purge the cancelled
     // entry from the Timer's queue so a high write rate does not let cancelled tasks pile up.
@@ -6684,8 +6965,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
     final TimerTask task = new TimerTask() {
       @Override
       public void run() {
-        // Double-check: only rebuild if there are still pending mutations
-        if (mutationsSinceSerialize.get() <= 0)
+        // Double-check: only rebuild if there are still enough pending mutations
+        // to justify a full O(N) rebuild (issue #6496)
+        if (!inactivityRebuildIsWorthIt())
           return;
 
         LogManager.instance().log(this, Level.INFO,
@@ -6714,10 +6996,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
               scheduleInactivityRebuild();
             }
           }
-        } catch (final Exception | AssertionError e) {
-          // AssertionError too: JVector validates with `assert`, so a build over an index whose vectors can no
-          // longer be read (a closing database, say) throws one straight through. Letting it escape kills the
-          // shared TimerThread, and the failure then surfaces on whatever unrelated work runs next.
+        } catch (final Throwable e) {
+          // Throwable, not just Exception|AssertionError: an OutOfMemoryError from a rebuild that no longer fits
+          // (issue #6503) is an Error too. AssertionError already mattered here because JVector validates with
+          // `assert`, so a build over an index whose vectors can no longer be read (a closing database, say)
+          // throws one straight through - either way, letting it escape kills this index's own TimerThread, and
+          // every inactivity rebuild after it silently stops firing until the database is reopened.
           LogManager.instance().log(this, Level.WARNING,
               "Error during inactivity rebuild for index %s: %s", indexName, e.getMessage());
         }
